@@ -8,6 +8,7 @@ import {
   PLUGIN_PROCESS_EARLY_DATA_CAP_BYTES,
   PLUGIN_PROCESS_EARLY_DATA_RETENTION_MS,
   type ManagedChildProcess,
+  type ResolvedDuplexSpawn,
   type ResolvedProcessSpawn,
   type ResolvedPtySpawn,
 } from "../PluginProcessManager.js";
@@ -35,6 +36,22 @@ function pipeConfig(overrides: Partial<ResolvedProcessSpawn> = {}): ResolvedProc
   } as ResolvedProcessSpawn;
 }
 
+/**
+ * Spawn config for duplex mode (#11871) — a plain child like pipe mode, but with
+ * a writable stdin. Modelled on a stdio JSON-RPC peer.
+ */
+function duplexConfig(overrides: Partial<ResolvedDuplexSpawn> = {}): ResolvedDuplexSpawn {
+  return {
+    mode: "duplex",
+    command: "codex",
+    args: ["app-server", "--stdio"],
+    cwd: undefined,
+    env: {},
+    panelId: null,
+    ...overrides,
+  };
+}
+
 /** Spawn config for interactive mode. */
 function ptyConfig(overrides: Partial<ResolvedPtySpawn> = {}): ResolvedPtySpawn {
   return {
@@ -54,10 +71,18 @@ function ptyConfig(overrides: Partial<ResolvedPtySpawn> = {}): ResolvedPtySpawn 
  * Controllable fake child. Drives stdout/stderr via the passthroughs and a
  * manual `emitExit` so tests can assert streaming + the real exit code/signal.
  */
-function makeFakeChild(opts?: { pid?: number }) {
+function makeFakeChild(opts?: { pid?: number; duplex?: boolean }) {
   const emitter = new EventEmitter();
   const stdout = new PassThrough();
   const stderr = new PassThrough();
+  // Only a duplex child has a writable input, mirroring Node handing back `null`
+  // for a stdio slot spawned as "ignore".
+  const stdin = opts?.duplex === true ? new PassThrough() : null;
+  const stdinWrites: string[] = [];
+  if (stdin) {
+    stdin.setEncoding("utf-8");
+    stdin.on("data", (chunk: string) => stdinWrites.push(chunk));
+  }
   const killSignals: Array<NodeJS.Signals | undefined> = [];
   let exited = false;
 
@@ -65,6 +90,7 @@ function makeFakeChild(opts?: { pid?: number }) {
     pid: opts?.pid ?? 4242,
     stdout,
     stderr,
+    stdin,
     kill(signal) {
       killSignals.push(signal);
       return true;
@@ -78,6 +104,9 @@ function makeFakeChild(opts?: { pid?: number }) {
   return {
     child,
     killSignals,
+    /** Everything the manager has written to this child's stdin, in order. */
+    stdinWrites,
+    stdin,
     writeStdout: (chunk: string) => stdout.write(chunk),
     writeStderr: (chunk: string) => stderr.write(chunk),
     emitExit: (code: number | null, signal: NodeJS.Signals | null) => {
@@ -162,7 +191,9 @@ function makeHarness(opts?: { killGraceMs?: number; noPtySpawner?: boolean }): H
     streamSink: (pluginId, event, panelId) => events.push({ pluginId, event, panelId }),
     spawner: (config) => {
       spawnConfigs.push(config);
-      const fake = makeFakeChild();
+      // Build the child the requested mode implies, so a test can't assert a
+      // write landed on a stdin the real spawner would never have opened.
+      const fake = makeFakeChild({ duplex: config.mode === "duplex" });
       fakes.push(fake);
       return fake.child;
     },
@@ -901,5 +932,335 @@ describe("PluginProcessManager", () => {
       expect(fake.kills).toContain("SIGKILL");
       expect(fake.disposed).toBe(true);
     });
+  });
+
+  describe("duplex mode (#11871)", () => {
+    it("keeps stdout and stderr apart instead of merging them like a PTY", async () => {
+      const h = makeHarness();
+      const handle = await h.manager.spawn("acme.tool", duplexConfig());
+
+      expect(handle.mode).toBe("duplex");
+      expect(h.spawnConfigs[0]?.mode).toBe("duplex");
+      // No PTY involved — that is the whole point: a PTY would merge the streams.
+      expect(h.ptyConfigs).toHaveLength(0);
+
+      const chunks: PluginProcessDataChunk[] = [];
+      handle.onData((chunk) => chunks.push(chunk));
+
+      const fake = h.fakes[0]!;
+      fake.writeStdout('{"jsonrpc":"2.0","id":1}\n');
+      fake.writeStderr("debug: listening\n");
+      await flushMicrotasks();
+
+      // Group by stream rather than assuming one write is one event.
+      const byStream = (name: string): string =>
+        chunks
+          .filter((c) => c.stream === name)
+          .map((c) => c.chunk)
+          .join("");
+      expect(byStream("stdout")).toBe('{"jsonrpc":"2.0","id":1}\n');
+      expect(byStream("stderr")).toBe("debug: listening\n");
+      // The diagnostic never contaminates the protocol stream.
+      expect(byStream("stdout")).not.toContain("debug");
+      // "data" is the PTY-only combined stream; duplex must never emit it.
+      expect(chunks.some((c) => c.stream === "data")).toBe(false);
+    });
+
+    it("delivers write() to the child's stdin verbatim", async () => {
+      const h = makeHarness();
+      const handle = await h.manager.spawn("acme.tool", duplexConfig());
+
+      handle.write('{"jsonrpc":"2.0","method":"initialize"}\n');
+      handle.write('{"jsonrpc":"2.0","method":"ping"}\n');
+      await flushMicrotasks();
+
+      // Verbatim and in order — the host adds no framing of its own.
+      expect(h.fakes[0]!.stdinWrites.join("")).toBe(
+        '{"jsonrpc":"2.0","method":"initialize"}\n{"jsonrpc":"2.0","method":"ping"}\n'
+      );
+    });
+
+    it("ignores a non-string write without reaching stdin", async () => {
+      const h = makeHarness();
+      const handle = await h.manager.spawn("acme.tool", duplexConfig());
+
+      (handle.write as (data: unknown) => void)(42);
+      (handle.write as (data: unknown) => void)(undefined);
+      await flushMicrotasks();
+
+      expect(h.fakes[0]!.stdinWrites).toEqual([]);
+    });
+
+    it("makes write() a no-op after the child exits rather than throwing", async () => {
+      const h = makeHarness();
+      const handle = await h.manager.spawn("acme.tool", duplexConfig());
+      const fake = h.fakes[0]!;
+
+      fake.emitExit(0, null);
+      await flushMicrotasks();
+
+      // Fire-and-forget contract: a write racing the exit behaves like kill() on
+      // a dead process, not an exception thrown inside a plugin's timer.
+      expect(() => handle.write("late\n")).not.toThrow();
+      expect(fake.stdinWrites).toEqual([]);
+    });
+
+    it("makes write() a no-op once stdin has been destroyed", async () => {
+      const h = makeHarness();
+      const handle = await h.manager.spawn("acme.tool", duplexConfig());
+      const fake = h.fakes[0]!;
+
+      // The child died and Node tore its pipe down, but the manager has not yet
+      // seen the 'exit' event — the guard, not the status check, must catch this.
+      fake.stdin!.destroy();
+      expect(() => handle.write("orphaned\n")).not.toThrow();
+      await flushMicrotasks();
+      expect(fake.stdinWrites).toEqual([]);
+    });
+
+    it("respawns as duplex on restart and writes reach the replacement stdin", async () => {
+      const h = makeHarness();
+      const handle = await h.manager.spawn("acme.tool", duplexConfig());
+      const first = h.fakes[0]!;
+
+      await handle.restart();
+      const second = h.fakes[1]!;
+      expect(second).toBeDefined();
+      // The restart must not silently demote the child to pipe mode.
+      expect(h.spawnConfigs[1]?.mode).toBe("duplex");
+
+      handle.write("after-restart\n");
+      await flushMicrotasks();
+
+      expect(second.stdinWrites.join("")).toBe("after-restart\n");
+      // The detached predecessor receives nothing.
+      expect(first.stdinWrites).toEqual([]);
+    });
+
+    it("counts duplex processes against the per-plugin concurrency cap", async () => {
+      const h = makeHarness();
+      for (let i = 0; i < PLUGIN_PROCESS_MAX_CONCURRENT; i++) {
+        await h.manager.spawn("acme.tool", duplexConfig());
+      }
+      expect(h.manager.runningCount("acme.tool")).toBe(PLUGIN_PROCESS_MAX_CONCURRENT);
+      await expect(h.manager.spawn("acme.tool", duplexConfig())).rejects.toThrow(
+        PluginProcessConcurrencyError
+      );
+    });
+
+    it("records duplex spawns in the audit trail", async () => {
+      const h = makeHarness();
+      await h.manager.spawn("acme.tool", duplexConfig({ command: "codex" }));
+      expect(h.auditCalls).toEqual([{ pluginId: "acme.tool", command: "codex" }]);
+    });
+
+    it("tears duplex children down on unload", async () => {
+      const h = makeHarness();
+      await h.manager.spawn("acme.tool", duplexConfig());
+      await h.manager.spawn("acme.tool", duplexConfig());
+
+      h.manager.killAll("acme.tool");
+
+      expect(h.fakes[0]!.killSignals).toContain("SIGTERM");
+      expect(h.fakes[1]!.killSignals).toContain("SIGTERM");
+    });
+
+    it("leaves resize inert on a duplex process — there is no terminal", async () => {
+      const h = makeHarness();
+      const handle = await h.manager.spawn("acme.tool", duplexConfig());
+      expect(() => handle.resize(120, 40)).not.toThrow();
+      expect(h.ptys).toHaveLength(0);
+    });
+
+    it("leaves pipe-mode writes inert even though the write path now exists", async () => {
+      const h = makeHarness();
+      const handle = await h.manager.spawn("acme.tool", pipeConfig());
+
+      expect(() => handle.write("x")).not.toThrow();
+      expect(h.fakes[0]!.stdinWrites).toEqual([]);
+    });
+
+    it("no-ops when stdin has ended rather than writing after end", async () => {
+      const writes: string[] = [];
+      // Isolates the `writableEnded` branch. A real PassThrough that has been
+      // `end()`ed also reports destroyed and writable:false, so asserting
+      // against one would pass even with this branch deleted; this fake trips
+      // ONLY writableEnded. Writing to a genuinely ended stream would raise
+      // ERR_STREAM_WRITE_AFTER_END.
+      const stdin = {
+        write: (chunk: string) => {
+          writes.push(chunk);
+          return true;
+        },
+        writable: true,
+        writableEnded: true,
+        destroyed: false,
+        on: () => undefined,
+      } as unknown as NodeJS.WritableStream;
+      const manager = new PluginProcessManager({
+        streamSink: () => {},
+        spawner: () => ({ ...makeFakeChild({ duplex: true }).child, stdin }),
+      });
+
+      const handle = await manager.spawn("acme.tool", duplexConfig());
+      expect(() => handle.write("after-end\n")).not.toThrow();
+      expect(writes).toEqual([]);
+    });
+
+    it("no-ops when the stream reports itself no longer writable", async () => {
+      const writes: string[] = [];
+      // Reports `writable: false` while NOT being ended or destroyed — the third
+      // guard branch, which the PassThrough-based fakes can't reach.
+      const stdin = {
+        write: (chunk: string) => {
+          writes.push(chunk);
+          return true;
+        },
+        writable: false,
+        writableEnded: false,
+        destroyed: false,
+        on: () => undefined,
+      } as unknown as NodeJS.WritableStream;
+      const manager = new PluginProcessManager({
+        streamSink: () => {},
+        spawner: () => ({ ...makeFakeChild({ duplex: true }).child, stdin }),
+      });
+
+      const handle = await manager.spawn("acme.tool", duplexConfig());
+      expect(() => handle.write("nope\n")).not.toThrow();
+      expect(writes).toEqual([]);
+    });
+
+    it("no-ops when a duplex child came back without a stdin at all", async () => {
+      const manager = new PluginProcessManager({
+        streamSink: () => {},
+        // A spawner that hands back a child with no stdin despite duplex mode.
+        spawner: () => ({ ...makeFakeChild().child, stdin: null }),
+      });
+
+      const handle = await manager.spawn("acme.tool", duplexConfig());
+      expect(() => handle.write("nowhere\n")).not.toThrow();
+    });
+
+    it("absorbs an EPIPE raised by the write itself instead of crashing", async () => {
+      const errorListeners: Array<(err: Error) => void> = [];
+      // Reports itself fully open, so `write()` clears every guard and actually
+      // calls through — then fails the way a child that died mid-write does.
+      // Without the once-per-child listener installed in startChild, this error
+      // would surface unhandled and take the main process down.
+      const stdin = {
+        write: () => {
+          const err = new Error("write EPIPE") as Error & { code: string };
+          err.code = "EPIPE";
+          for (const listener of errorListeners) listener(err);
+          return false;
+        },
+        writable: true,
+        writableEnded: false,
+        destroyed: false,
+        on: (event: string, listener: (err: Error) => void) => {
+          if (event === "error") errorListeners.push(listener);
+          return undefined;
+        },
+      } as unknown as NodeJS.WritableStream;
+      const manager = new PluginProcessManager({
+        streamSink: () => {},
+        spawner: () => ({ ...makeFakeChild({ duplex: true }).child, stdin }),
+      });
+
+      const handle = await manager.spawn("acme.tool", duplexConfig());
+      // Exactly one listener, installed at spawn — not one per write, which
+      // would accumulate on a chatty plugin.
+      expect(errorListeners).toHaveLength(1);
+
+      expect(() => handle.write("boom\n")).not.toThrow();
+      handle.write("boom-again\n");
+      expect(errorListeners).toHaveLength(1);
+    });
+
+    // The one test that exercises the REAL default spawner. Asserting the
+    // `stdio` array the implementation passes would be tautological; driving an
+    // actual child proves fd 0 is genuinely piped, that fd 1 and fd 2 arrive
+    // separately, and that minimalSpawnEnv still filters the host environment.
+    it("drives a real child over stdio with a filtered environment", async () => {
+      const SECRET = "DAINTREE_TEST_DUPLEX_SECRET";
+      const previousSecret = process.env[SECRET];
+      process.env[SECRET] = "must-not-leak";
+      const events: Array<{ event: PluginProcessStreamEvent }> = [];
+      // No `spawner` override — this uses the production defaultSpawner.
+      const manager = new PluginProcessManager({
+        streamSink: (_pluginId, event) => events.push({ event }),
+      });
+
+      const byKind = (kind: "stdout" | "stderr"): string =>
+        events
+          .map((e) => e.event)
+          .filter((e) => e.kind === kind)
+          .map((e) => (e.kind === kind ? e.chunk : ""))
+          .join("");
+
+      try {
+        // Echoes the line back on stdout and reports what it can see of the
+        // environment on stderr. It deliberately does NOT call process.exit():
+        // writes to a pipe are asynchronous, so exiting on top of them can
+        // truncate the output and Node's 'exit' can beat the parent's last
+        // 'data' event. Waiting on the bytes we actually assert on — rather
+        // than on exit — keeps this deterministic. The child is killed below.
+        const script = [
+          "let buf = '';",
+          "process.stdin.setEncoding('utf8');",
+          "process.stdin.on('data', (d) => {",
+          "  buf += d;",
+          "  const i = buf.indexOf('\\n');",
+          "  if (i === -1) return;",
+          "  const line = buf.slice(0, i);",
+          "  buf = buf.slice(i + 1);",
+          "  process.stdout.write('echo:' + line + '\\n');",
+          "  process.stderr.write('flag=' + String(process.env.PLUGIN_FLAG) +",
+          "    ' secret=' + String(process.env." + SECRET + ") + '\\n');",
+          "});",
+        ].join("");
+
+        const handle = await manager.spawn("acme.tool", {
+          mode: "duplex",
+          command: process.execPath,
+          args: ["-e", script],
+          cwd: undefined,
+          env: { PLUGIN_FLAG: "on" },
+          panelId: null,
+        });
+
+        handle.write("hello\n");
+
+        // Poll until BOTH streams have delivered, bounded well inside the
+        // test timeout so a failure still runs `finally` and reports what did
+        // arrive instead of hanging until the framework kills the test.
+        const deadline = Date.now() + 10_000;
+        // The stderr predicate waits for the COMPLETE expected string, not a
+        // `secret=` prefix: a chunk boundary can land mid-value, and stopping
+        // there would assert against a partial read and fail spuriously.
+        while (!(
+          byKind("stdout").includes("echo:hello") && byKind("stderr").includes("secret=undefined")
+        )) {
+          if (Date.now() > deadline) break;
+          await new Promise((r) => setTimeout(r, 10));
+        }
+
+        // fd 0 really was piped: the child received what we wrote and answered.
+        expect(byKind("stdout")).toContain("echo:hello");
+        // fd 2 arrived on its own stream, NOT mixed into the protocol stream.
+        expect(byKind("stderr")).toContain("flag=on");
+        expect(byKind("stdout")).not.toContain("flag=");
+        // minimalSpawnEnv still applies: the explicit plugin entry reached the
+        // child, but the host-only secret did not.
+        expect(byKind("stderr")).toContain("secret=undefined");
+      } finally {
+        // Runs even when an assertion above throws, so no real child outlives
+        // the test and no env mutation leaks into another file's worker.
+        manager.killAll("acme.tool");
+        if (previousSecret === undefined) delete process.env[SECRET];
+        else process.env[SECRET] = previousSecret;
+      }
+    }, 20_000);
   });
 });

@@ -19,6 +19,7 @@ import type {
   PluginHostApi,
   PluginIpcContext,
   PluginProcessHandle,
+  PluginDuplexProcessHandle,
   PluginPtyProcessHandle,
   PluginProcessSpawnOptions,
   PluginProcessMode,
@@ -67,12 +68,24 @@ const logger = createLogger("main:PluginDevWorkerBridge");
 
 /**
  * Structural narrowing for an interactive process handle (#11300). The host adds
- * `write`/`resize` only for a real PTY, so their presence — not what the worker
- * requested — is what decides whether the interactive relay is available.
+ * `resize` only for a real PTY, so its presence — not what the worker
+ * requested — is what decides whether the resize relay is available.
+ *
+ * Must be tested BEFORE {@link isWritableHandle}: a PTY handle satisfies both.
  */
 function isPtyHandle(handle: PluginProcessHandle): handle is PluginPtyProcessHandle {
   const candidate = handle as Partial<PluginPtyProcessHandle>;
   return typeof candidate.write === "function" && typeof candidate.resize === "function";
+}
+
+/**
+ * Structural narrowing for any handle whose input the plugin can drive (#11871)
+ * — a duplex child's stdin or a PTY. Same principle as {@link isPtyHandle}: the
+ * shape the host actually built decides what the relay forwards, so a worker
+ * cannot fabricate a `write` onto a pipe-mode process that has no stdin.
+ */
+function isWritableHandle(handle: PluginProcessHandle): handle is PluginDuplexProcessHandle {
+  return typeof (handle as Partial<PluginDuplexProcessHandle>).write === "function";
 }
 
 export interface PluginDevWorkerMainBridgeDeps {
@@ -500,8 +513,13 @@ export class PluginDevWorkerMainBridge {
         );
         // Report the mode from the handle the host actually built, not from what
         // the worker asked for, so the proxy can't hand a plugin `write()` on a
-        // process that has no writable input.
-        const mode: PluginProcessMode = isPtyHandle(handle) ? "pty" : "pipe";
+        // process that has no writable input. PTY is tested first — it satisfies
+        // the writable check too.
+        const mode: PluginProcessMode = isPtyHandle(handle)
+          ? "pty"
+          : isWritableHandle(handle)
+            ? "duplex"
+            : "pipe";
         // Disposed or reloaded while the spawn was settling — the worker that
         // requested it is gone; kill the orphan rather than leak it.
         if (this.disposed || generation !== this.reloadGeneration) {
@@ -704,10 +722,10 @@ export class PluginDevWorkerMainBridge {
         const p = params as ProcessWriteParams;
         const handle = this.processHandles.get(p.processId);
         // Silently ignored for a pipe-mode handle: the worker proxy only exposes
-        // `write` on an interactive handle, so reaching here means a plugin
-        // fabricated the call. Warn rather than throw — this is a notify.
-        if (!handle || !isPtyHandle(handle)) {
-          logger.warn(`[${this.pluginId}] process.write on non-interactive "${p.processId}"`);
+        // `write` on a writable handle (duplex or PTY), so reaching here means a
+        // plugin fabricated the call. Warn rather than throw — this is a notify.
+        if (!handle || !isWritableHandle(handle)) {
+          logger.warn(`[${this.pluginId}] process.write on non-writable "${p.processId}"`);
           return;
         }
         if (typeof p.data !== "string") return;
@@ -717,6 +735,7 @@ export class PluginDevWorkerMainBridge {
       case "process.resize": {
         const p = params as ProcessResizeParams;
         const handle = this.processHandles.get(p.processId);
+        // Stays PTY-only: a duplex child has no terminal to resize.
         if (!handle || !isPtyHandle(handle)) {
           logger.warn(`[${this.pluginId}] process.resize on non-interactive "${p.processId}"`);
           return;

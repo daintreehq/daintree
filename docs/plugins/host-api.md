@@ -523,7 +523,7 @@ Toasts route through Daintree's standard `notify()` path, so quiet-hours and inb
 const handle = await host.process.spawn("npm", {
   args: ["run", "dev"],
   cwd: "/path/to/project", // defaults to the active worktree, then the host cwd
-  env: { PORT: "5173" }, // merged over the host environment
+  env: { PORT: "5173" }, // added to a minimal allowlist, NOT the host environment
 });
 
 handle.onExit(({ exitCode, signal }) =>
@@ -540,7 +540,52 @@ handle.kill();
 
 `host.process` lets a process- or task-orchestrator plugin (dev server, CI runner, watcher) spawn and supervise real child processes instead of hijacking a user terminal. It is the **first host method gated on a declared capability**: a `spawn` from a plugin that did not declare `shell:exec` rejects with a `PERMISSION_REQUIRED:` error — unlike the disclosure-first capabilities, this one is enforced at runtime. Argv is passed verbatim (no shell, so no shell-injection surface).
 
-The returned `PluginProcessHandle` carries `id`, `kill()` (clean `SIGTERM`, then `SIGKILL` after a grace period), `restart()` (respawns with the same command/args/cwd/env, reusing the id and bumping a restart counter), and `onExit`/`onCrash` lifecycle subscriptions carrying the real exit code/signal — `onCrash` fires only on an unexpected (non-zero / signalled) exit you did not request. The child's stdout/stderr stream to your panels over `postToPanel("process", …)` keyed by the handle id; subscribe with `plugin.on(pluginId, "process")` in your view and discriminate on the event `kind` (`stdout` / `stderr` / `exit` / `crash`).
+The returned `PluginProcessHandle` carries `id`, `kill()` (clean `SIGTERM`, then `SIGKILL` after a grace period), `restart()` (respawns with the same command/args/cwd/env, reusing the id and bumping a restart counter), and `onExit`/`onCrash` lifecycle subscriptions carrying the real exit code/signal — `onCrash` fires only on an unexpected (non-zero / signalled) exit you did not request. The child's stdout/stderr stream to your panels over `postToPanel("process", …)` keyed by the handle id; subscribe with `plugin.on(pluginId, "process")` in your view and discriminate on the event `kind` (`stdout` / `stderr` / `exit` / `crash`, or `data` for the single merged stream a `"pty"` child produces).
+
+### Modes
+
+`spawn` takes a `mode` that decides how the child's three stdio streams are wired. The returned handle's shape follows from it, so TypeScript gives you exactly the operations the backend can actually perform:
+
+| `mode`             | stdin    | stdout / stderr                   | Handle adds           |
+| ------------------ | -------- | --------------------------------- | --------------------- |
+| `"pipe"` (default) | closed   | separate                          | —                     |
+| `"duplex"`         | writable | separate                          | `write()`             |
+| `"pty"`            | writable | **merged** into one `data` stream | `write()`, `resize()` |
+
+Use `"duplex"` to drive a child that speaks a protocol over stdio — an MCP, LSP or ACP server, or anything else carrying JSON-RPC. Those need both a writable stdin _and_ a stdout the child's stderr diagnostics are not mixed into, which is exactly what `"pty"` cannot give you: a pseudo-terminal merges the two streams by construction.
+
+The host is framing-agnostic — it moves bytes, you delimit messages. MCP and ACP use newline-delimited JSON; LSP uses `Content-Length` headers. The example below is NDJSON.
+
+```ts
+const rpc = await host.process.spawn("codex", {
+  mode: "duplex",
+  args: ["app-server", "--stdio"],
+});
+
+// onData hands you RAW chunks — the host does no framing, so a chunk may split
+// or coalesce protocol messages. Buffer and split on the delimiter yourself.
+let buffer = "";
+rpc.onData(({ stream, chunk }) => {
+  if (stream !== "stdout") return; // stderr stays separate — log it, don't parse it
+  buffer += chunk;
+  let i: number;
+  while ((i = buffer.indexOf("\n")) !== -1) {
+    const line = buffer.slice(0, i);
+    buffer = buffer.slice(i + 1);
+    if (line) handleMessage(JSON.parse(line));
+  }
+});
+
+// write() is verbatim and fire-and-forget: you supply the terminator, and it is
+// a no-op (never a throw) once the process has exited.
+rpc.write(`${JSON.stringify({ jsonrpc: "2.0", id: 1, method: "initialize" })}\n`);
+```
+
+`resize()` exists only on a `"pty"` handle — a duplex child has no terminal to resize.
+
+`write()` is fire-and-forget: it queues on the child's stdin and does not report backpressure, which suits the low-volume control-plane traffic this is built for. Don't stream bulk data through it — if you write faster than the child reads, that buffer grows unboundedly.
+
+One caveat inherited from the pipe-mode streaming path: output still in flight when the child exits can be dropped, because the handle settles on the process's `exit` rather than on its streams closing. That's a non-issue for a long-lived server you shut down yourself, but a one-shot command that writes its final reply and immediately exits may have that reply lost — don't build a request/response round trip on a child that exits to signal completion.
 
 Every spawned process is tied to your plugin's lifetime: on unload/disable/revoke the host SIGTERMs (then SIGKILLs) every outstanding process — a dev server can't leak past a reload. A per-plugin concurrency cap bounds how many processes can run at once; a `spawn` past the cap rejects rather than queueing. `process.spawn` is NOT revoke-guarded — call it from timers and subscription callbacks — but once the plugin unloads it rejects rather than spawning. Spawns are recorded in the plugin audit trail so process execution stays observable. The child does **not** inherit Daintree's full environment — only an allowlist of essentials (`PATH`, locale, temp, OS basics) plus whatever you pass in `env`, so the main process's tokens never leak to a `shell:exec` child; pass anything else the command needs explicitly. `cwd` is a process concern, not an `fs` scope — it is not contained to `scopes.fs.allowedPaths` (it defaults to the active worktree).
 

@@ -1,6 +1,11 @@
 import { describe, expect, it, vi } from "vitest";
 import { createMockHost } from "../createMockHost.js";
-import type { PluginActionContribution, PluginWorktreeSnapshot } from "../../types/plugin.js";
+import type {
+  PluginActionContribution,
+  PluginProcessHandle,
+  PluginPtyProcessHandle,
+  PluginWorktreeSnapshot,
+} from "../../types/plugin.js";
 import type { PluginActionManifestEntry } from "../../types/actions.js";
 
 const sampleSnapshot: PluginWorktreeSnapshot = {
@@ -851,6 +856,48 @@ describe("createMockHost", () => {
       await host.storage.set("draft", "from-B", "worktree");
       expect(cb).toHaveBeenCalledTimes(2);
       expect(cb).toHaveBeenLastCalledWith("from-B");
+    });
+  });
+
+  describe("process.spawn handle parity (#11871)", () => {
+    /**
+     * The widest handle shape, with every mode-specific method optional — the
+     * view a runtime check needs, without reaching for `any`.
+     */
+    type MaybeWritableHandle = PluginProcessHandle & Partial<PluginPtyProcessHandle>;
+
+    // The mock's handle shape is what a plugin's own tests assert against, so it
+    // has to match the real host per mode — otherwise a plugin can "pass" a test
+    // calling a method production would never have given it.
+    it("gives pipe mode no writable input", async () => {
+      const host = createMockHost();
+      const handle: MaybeWritableHandle = await host.process.spawn("node", { args: ["x.js"] });
+      expect(handle.write).toBeUndefined();
+      expect(handle.resize).toBeUndefined();
+    });
+
+    it("gives duplex mode write but not resize", async () => {
+      const host = createMockHost();
+      const handle: MaybeWritableHandle = await host.process.spawn("codex", { mode: "duplex" });
+      expect(typeof handle.write).toBe("function");
+      expect(handle.resize).toBeUndefined();
+    });
+
+    it("gives pty mode both write and resize", async () => {
+      const host = createMockHost();
+      const handle: MaybeWritableHandle = await host.process.spawn("flutter", { mode: "pty" });
+      expect(typeof handle.write).toBe("function");
+      expect(typeof handle.resize).toBe("function");
+    });
+
+    it("records every spawn with the options it was given", async () => {
+      const host = createMockHost();
+      await host.process.spawn("codex", { mode: "duplex", args: ["app-server"] });
+      await host.process.spawn("node");
+      expect(host.spawnCalls).toEqual([
+        { command: "codex", options: { mode: "duplex", args: ["app-server"] } },
+        { command: "node", options: undefined },
+      ]);
     });
   });
 

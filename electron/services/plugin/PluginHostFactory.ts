@@ -67,6 +67,8 @@ import type {
   PluginProcessHandle,
   PluginProcessSpawnOptions,
   PluginProcessMode,
+  PluginDuplexProcessHandle,
+  PluginDuplexProcessSpawnOptions,
   PluginPtyProcessHandle,
   PluginPtyProcessSpawnOptions,
   PluginFsApi,
@@ -1234,8 +1236,9 @@ export function createHost(
 function buildProcessApi(deps: PluginHostFactoryDeps, pluginId: string): PluginProcessApi {
   const spawn = async (
     command: string,
-    options?: PluginProcessSpawnOptions | PluginPtyProcessSpawnOptions
-  ): Promise<PluginProcessHandle | PluginPtyProcessHandle> => {
+    options?:
+      PluginProcessSpawnOptions | PluginDuplexProcessSpawnOptions | PluginPtyProcessSpawnOptions
+  ): Promise<PluginProcessHandle | PluginDuplexProcessHandle | PluginPtyProcessHandle> => {
     if (!deps.plugins.has(pluginId)) {
       throw new Error(`Plugin "${pluginId}" process.spawn: plugin is no longer loaded`);
     }
@@ -1255,12 +1258,13 @@ function buildProcessApi(deps: PluginHostFactoryDeps, pluginId: string): PluginP
       throw new Error(`Plugin "${pluginId}" process.spawn: command must be a non-empty string`);
     }
     const rawMode: unknown = options?.mode;
-    if (rawMode !== undefined && rawMode !== "pipe" && rawMode !== "pty") {
+    if (rawMode !== undefined && rawMode !== "pipe" && rawMode !== "duplex" && rawMode !== "pty") {
       throw new Error(
-        `Plugin "${pluginId}" process.spawn: mode must be "pipe" or "pty": ${String(rawMode)}`
+        `Plugin "${pluginId}" process.spawn: mode must be "pipe", "duplex", or "pty": ${String(rawMode)}`
       );
     }
-    const mode: PluginProcessMode = rawMode === "pty" ? "pty" : "pipe";
+    const mode: PluginProcessMode =
+      rawMode === "pty" ? "pty" : rawMode === "duplex" ? "duplex" : "pipe";
     // `undefined` and `null` both mean broadcast, matching postToPanel. An empty
     // string is an authoring mistake — it would silently match no subscriber —
     // so reject it loudly rather than coercing.
@@ -1341,8 +1345,11 @@ function buildProcessApi(deps: PluginHostFactoryDeps, pluginId: string): PluginP
       onCrash: (cb) => handle.onCrash(cb),
       onData: (cb) => handle.onData(cb),
     };
-    if (mode !== "pty") return base;
-    return {
+    if (mode === "pipe") return base;
+    // Both writable modes get `write`; only a PTY additionally gets `resize`.
+    // Membership-gated like kill/restart so a handle retained by a leaked timer
+    // can't drive a child after the plugin unloads.
+    const writable: PluginDuplexProcessHandle = {
       ...base,
       get id() {
         return handle.id;
@@ -1350,6 +1357,13 @@ function buildProcessApi(deps: PluginHostFactoryDeps, pluginId: string): PluginP
       write: (data) => {
         if (!deps.plugins.has(pluginId) || typeof data !== "string") return;
         handle.write(data);
+      },
+    };
+    if (mode === "duplex") return writable;
+    return {
+      ...writable,
+      get id() {
+        return handle.id;
       },
       resize: (nextCols, nextRows) => {
         if (!deps.plugins.has(pluginId)) return;

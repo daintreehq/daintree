@@ -74,6 +74,8 @@ export type {
   PluginProcessSpawnOptions,
   PluginProcessMode,
   PluginProcessDataChunk,
+  PluginDuplexProcessHandle,
+  PluginDuplexProcessSpawnOptions,
   PluginPtyProcessHandle,
   PluginPtyProcessSpawnOptions,
   PluginFsApi,
