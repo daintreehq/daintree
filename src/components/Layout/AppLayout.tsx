@@ -40,6 +40,7 @@ import { appClient } from "@/clients";
 import type { CliAvailability, AgentSettings } from "@shared/types";
 import { useLayoutState, useOverlayOpen } from "@/hooks";
 import { useKeepMounted } from "@/hooks/useKeepMounted";
+import { useGlobalBannerHeightVar } from "@/hooks/useGlobalBannerHeightVar";
 import { useWorkspaceRoot } from "@/hooks/useWorkspaceRoot";
 import type { UseProjectSwitcherPaletteReturn } from "@/hooks";
 import {
@@ -127,6 +128,15 @@ export const DEFAULT_SIDEBAR_WIDTH = 350;
 // this the lock releases anyway so the grid still measures (pre-#10827 visible
 // behavior) rather than staying blank. Far longer than a healthy restore.
 const SIDEBAR_HYDRATION_UNLOCK_FALLBACK_MS = 5000;
+
+// #11893: top edge for the body-portaled full-height overlays (ThemeBrowser,
+// PortalDock). They are position:fixed and paint under the z-[60] toolbar, so a
+// static top-12 clipped their top strip the moment a global banner pushed the
+// toolbar down. `3rem` is the toolbar's own h-12; the var carries the banner
+// height, which is content-driven (description length, action count) and so has
+// no constant to hardcode. The 0px fallback keeps the no-banner case identical
+// to the old top-12.
+const OVERLAY_TOP_OFFSET = "calc(3rem + var(--global-banner-height, 0px))";
 
 export function AppLayout({
   children,
@@ -803,6 +813,14 @@ export function AppLayout({
 
   const effectiveSidebarWidth = showSidebar ? sidebarWidth : 0;
 
+  const [bannerEl, setBannerEl] = useState<HTMLDivElement | null>(null);
+
+  // Feeds OVERLAY_TOP_OFFSET. Only the banner is measured — FleetArmingRibbon
+  // is deliberately excluded: it carries no positive z-index, so these overlays
+  // paint over it and it clips nothing, and offsetting below it would resize the
+  // PortalDock's native WebContentsView on every ribbon toggle.
+  useGlobalBannerHeightVar(bannerEl);
+
   useEffect(() => {
     const portalOffset = layout.portalOpen ? layout.portalWidth : 0;
     // Two separate vars because they encode different layout truths.
@@ -840,9 +858,15 @@ export function AppLayout({
       }}
     >
       <PortalVisibilityController />
-      <Suspense fallback={null}>
-        <LazyGlobalBannerCoordinator />
-      </Suspense>
+      {/* Wraps the coordinator and nothing else so its height IS the banner
+          height, which useGlobalBannerHeightVar measures (#11893). shrink-0
+          keeps #9530's guarantee that the banner's height is subtracted from
+          the flex-1 content area rather than squeezed out of the banner. */}
+      <div ref={setBannerEl} className="shrink-0">
+        <Suspense fallback={null}>
+          <LazyGlobalBannerCoordinator />
+        </Suspense>
+      </div>
       <div {...(chromeInert ? { inert: true } : {})}>
         <Toolbar
           onLaunchAgent={handleLaunchAgent}
@@ -1029,11 +1053,13 @@ export function AppLayout({
               {/* Offset the panel below the top toolbar. The toolbar is z-[60]
                   / h-12 (Toolbar.tsx) and paints over the viewport's top 48px, so
                   a top-0 panel had its top strip (hero ✕ close, any top bar) hidden
-                  behind it. Start at top-12 (= toolbar h-12) so the whole panel —
-                  including the close button — is visible. */}
+                  behind it. OVERLAY_TOP_OFFSET adds the measured global-banner
+                  height on top of the toolbar's h-12, because a banner pushes the
+                  toolbar further down (#11893). */}
               <div
-                className="fixed top-12 bottom-0 z-40 pointer-events-auto"
+                className="fixed bottom-0 z-40 pointer-events-auto"
                 style={{
+                  top: OVERLAY_TOP_OFFSET,
                   right: "var(--right-obstruction-offset, 0px)",
                 }}
               >
@@ -1052,7 +1078,8 @@ export function AppLayout({
                 WebContentsView is already hidden via PortalVisibilityController. */}
             <div
               {...(chromeInert ? { inert: true } : {})}
-              className="fixed top-12 right-0 bottom-0 z-50 shadow-2xl border-l border-daintree-border"
+              className="fixed right-0 bottom-0 z-50 shadow-2xl border-l border-daintree-border"
+              style={{ top: OVERLAY_TOP_OFFSET }}
             >
               <PortalDock />
             </div>
