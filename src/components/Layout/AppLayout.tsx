@@ -40,6 +40,7 @@ import { appClient } from "@/clients";
 import type { CliAvailability, AgentSettings } from "@shared/types";
 import { useLayoutState, useOverlayOpen } from "@/hooks";
 import { useKeepMounted } from "@/hooks/useKeepMounted";
+import { useResizeObserverRaf } from "@/hooks/useResizeObserverRaf";
 import { useWorkspaceRoot } from "@/hooks/useWorkspaceRoot";
 import type { UseProjectSwitcherPaletteReturn } from "@/hooks";
 import {
@@ -127,6 +128,15 @@ export const DEFAULT_SIDEBAR_WIDTH = 350;
 // this the lock releases anyway so the grid still measures (pre-#10827 visible
 // behavior) rather than staying blank. Far longer than a healthy restore.
 const SIDEBAR_HYDRATION_UNLOCK_FALLBACK_MS = 5000;
+
+// #11893: top edge for the body-portaled full-height overlays (ThemeBrowser,
+// PortalDock). They are position:fixed and paint under the z-[60] toolbar, so a
+// static top-12 clipped their top strip the moment a global banner pushed the
+// toolbar down. `3rem` is the toolbar's own h-12; the var carries the banner
+// height, which is content-driven (description length, action count) and so has
+// no constant to hardcode. The 0px fallback keeps the no-banner case identical
+// to the old top-12.
+const OVERLAY_TOP_OFFSET = "calc(3rem + var(--global-banner-height, 0px))";
 
 export function AppLayout({
   children,
@@ -803,6 +813,43 @@ export function AppLayout({
 
   const effectiveSidebarWidth = showSidebar ? sidebarWidth : 0;
 
+  const [contentRowEl, setContentRowEl] = useState<HTMLDivElement | null>(null);
+  const toolbarWrapRef = useRef<HTMLDivElement>(null);
+
+  // --global-banner-height: how far GlobalBannerCoordinator has pushed the
+  // toolbar down, or 0px when no banner is up. There is no store value to read:
+  // the coordinator can hold a slot while still rendering nothing (HostCrashBanner
+  // has a 400ms Doherty gate), so `slot !== null` is not a height.
+  //
+  // The toolbar wrapper's top edge IS the banner height (the root sits at
+  // viewport y=0 and never scrolls). We read that position but observe the
+  // content row's SIZE: the row is flex-1 with overflow:hidden, so its
+  // automatic minimum height resolves to 0 and it absorbs every top-chrome
+  // height change, making it the reliable trigger. Reading the row's own top
+  // instead would fold in FleetArmingRibbon height — the ribbon is normal-flow
+  // with no z-index, so these overlays paint over it and it clips nothing, and
+  // offsetting below it would resize the PortalDock's native WebContentsView on
+  // every ribbon toggle.
+  //
+  // rAF-coalesced per the house convention (see rendererGlobalErrorHandlers.ts).
+  // The trade is one frame of stale offset when a banner mounts while an overlay
+  // is already open; both overlays open on user action, long after this
+  // observer's initial fire, so the common path is never stale.
+  useResizeObserverRaf(contentRowEl, () => {
+    const bannerHeight = toolbarWrapRef.current?.getBoundingClientRect().top ?? 0;
+    document.documentElement.style.setProperty(
+      "--global-banner-height",
+      `${Math.max(0, bannerHeight)}px`
+    );
+  });
+
+  useEffect(() => {
+    const rootStyle = document.documentElement.style;
+    return () => {
+      rootStyle.removeProperty("--global-banner-height");
+    };
+  }, []);
+
   useEffect(() => {
     const portalOffset = layout.portalOpen ? layout.portalWidth : 0;
     // Two separate vars because they encode different layout truths.
@@ -843,7 +890,7 @@ export function AppLayout({
       <Suspense fallback={null}>
         <LazyGlobalBannerCoordinator />
       </Suspense>
-      <div {...(chromeInert ? { inert: true } : {})}>
+      <div {...(chromeInert ? { inert: true } : {})} ref={toolbarWrapRef}>
         <Toolbar
           onLaunchAgent={handleLaunchAgent}
           onSettings={handleSettings}
@@ -864,6 +911,7 @@ export function AppLayout({
       <MoveOrRenameProjectDialog />
       <div
         {...(chromeInert ? { inert: true } : {})}
+        ref={setContentRowEl}
         className="flex-1 flex flex-col overflow-hidden"
         style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}
       >
@@ -1029,11 +1077,13 @@ export function AppLayout({
               {/* Offset the panel below the top toolbar. The toolbar is z-[60]
                   / h-12 (Toolbar.tsx) and paints over the viewport's top 48px, so
                   a top-0 panel had its top strip (hero ✕ close, any top bar) hidden
-                  behind it. Start at top-12 (= toolbar h-12) so the whole panel —
-                  including the close button — is visible. */}
+                  behind it. OVERLAY_TOP_OFFSET adds the measured global-banner
+                  height on top of the toolbar's h-12, because a banner pushes the
+                  toolbar further down (#11893). */}
               <div
-                className="fixed top-12 bottom-0 z-40 pointer-events-auto"
+                className="fixed bottom-0 z-40 pointer-events-auto"
                 style={{
+                  top: OVERLAY_TOP_OFFSET,
                   right: "var(--right-obstruction-offset, 0px)",
                 }}
               >
@@ -1052,7 +1102,8 @@ export function AppLayout({
                 WebContentsView is already hidden via PortalVisibilityController. */}
             <div
               {...(chromeInert ? { inert: true } : {})}
-              className="fixed top-12 right-0 bottom-0 z-50 shadow-2xl border-l border-daintree-border"
+              className="fixed right-0 bottom-0 z-50 shadow-2xl border-l border-daintree-border"
+              style={{ top: OVERLAY_TOP_OFFSET }}
             >
               <PortalDock />
             </div>

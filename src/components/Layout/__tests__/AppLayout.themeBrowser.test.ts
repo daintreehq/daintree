@@ -62,9 +62,19 @@ describe("AppLayout theme browser overlay structure — issue #5791", () => {
 
   it("anchors the panel with fixed positioning below the toolbar", () => {
     // Bug 3: absolute + h-full inside <main> was bounded by the flex cell.
-    // fixed top-12 bottom-0 anchors to the viewport (below the h-12 toolbar)
-    // regardless of docks/panels below.
-    expect(source).toMatch(/className="fixed top-12 bottom-0 z-40 pointer-events-auto"/);
+    // fixed + bottom-0 anchors to the viewport regardless of docks/panels below.
+    expect(source).toMatch(/className="fixed bottom-0 z-40 pointer-events-auto"/);
+  });
+
+  it("tracks the global banner height instead of a static top-12 — issue #11893", () => {
+    // A global banner pushes the z-[60] toolbar below 48px, so the old static
+    // top-12 left the panel's top strip (hero ✕ close) painted under it. Banner
+    // height is content-driven, so the offset must compose the toolbar's own
+    // h-12 with the measured banner height — no constant can replace it.
+    expect(source).toMatch(/var\(--global-banner-height, 0px\)/);
+    expect(source).toContain("top: OVERLAY_TOP_OFFSET,");
+    // The static offset must not come back.
+    expect(source).not.toMatch(/className="fixed top-12 bottom-0 z-40 pointer-events-auto"/);
   });
 
   it("drops the static backdrop-blur from the main-content wrapper", () => {

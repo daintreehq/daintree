@@ -367,6 +367,12 @@ describe("AppLayout portal viewport coverage — issue #6629", () => {
     // fixed` lets the Portal escape <main>'s width and overlay the Assistant.
     expect(source).toMatch(/\{layout\.portalOpen &&\s*\n\s*createPortal\(/);
     expect(source).toContain(
+      '"fixed right-0 bottom-0 z-50 shadow-2xl border-l border-daintree-border"'
+    );
+    // Issue #11893: the top edge tracks the global banner height rather than a
+    // static top-12, which a banner-shifted toolbar painted over.
+    expect(source).toContain("style={{ top: OVERLAY_TOP_OFFSET }}");
+    expect(source).not.toContain(
       '"fixed top-12 right-0 bottom-0 z-50 shadow-2xl border-l border-daintree-border"'
     );
     // The portal target must be document.body to escape the inert subtrees and
