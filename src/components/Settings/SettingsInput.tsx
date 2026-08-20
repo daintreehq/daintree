@@ -43,15 +43,7 @@ export function SettingsInput({
     undefined;
 
   const scopeBadge = scope ? (
-    <span
-      className={`text-[10px] px-1.5 py-0.5 rounded-sm font-medium ${
-        scope === "project"
-          ? "bg-status-info/10 text-status-info"
-          : scope === "global"
-            ? "bg-status-info/10 text-status-info"
-            : "bg-text-secondary/10 text-text-secondary dark:bg-text-secondary/20"
-      }`}
-    >
+    <span className="text-[10px] px-1.5 py-0.5 rounded-sm font-medium bg-text-secondary/10 text-text-secondary dark:bg-text-secondary/20">
       {scope === "project" ? "Project" : scope === "global" ? "Global" : "Default"}
     </span>
   ) : null;

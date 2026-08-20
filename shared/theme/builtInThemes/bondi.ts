@@ -9,27 +9,54 @@ export const theme: BuiltInThemeSource = {
   heroImage: "/themes/bondi.webp",
   palette: {
     type: "light",
-    // One warm sand/stone family; content lifts toward white — never a darker
-    // fill on a light container. Water is detail only (accent, search, info,
-    // heat, terminal), never a field surface.
+    // One cream family, hue 81. The lightness of every tier is deliberately
+    // unchanged from the theme this replaces — only hue and chroma move
+    // (94 -> 81, grid C 0.019 -> 0.027), so the app gets warmer without getting
+    // darker. Body text gains on canvas (+0.085) and panel (+0.048); the worst
+    // case anywhere is the sidebar at -0.002, which is nothing.
+    // Chroma is also carried further up the ladder than before (panel 0.0090 vs
+    // 0.0067) so the warmth survives into the content tiers instead of fading to
+    // neutral white; `elevated` stays pure white because the top tier's job is
+    // maximum lift for popovers.
+    //
+    // The grid -> sidebar step is 2.7x the others. That is intentional and
+    // inherited: the grid is the gutter the panels sit in and wants to be
+    // clearly below them. Evening the ramp out costs perceived lightness on the
+    // three tiers you actually read on, which is a bad trade.
+    // Water is a highlight only (accent, links, focus, heat ramp, terminal),
+    // never a field surface: a blue plane at this lightness reads as nursery,
+    // not ocean.
     surfaces: {
-      grid: "#DCD8CA",
-      sidebar: "#EDEAE0",
-      canvas: "#F3F1EA",
-      panel: "#F9F8F3",
+      grid: "#E1D7C5",
+      sidebar: "#F2E9DA",
+      canvas: "#F7F1E7",
+      panel: "#FBF8F2",
       elevated: "#FFFFFF",
     },
     text: {
-      // Near-neutral ink; muted ≥ 5.2:1 on the grid, 6.0:1 on canvas.
+      // Cool ink against warm paper — the counterpoint that stops cream from
+      // going sepia. muted bottoms out at 4.81:1 on the grid, 5.89:1 on canvas.
       primary: "#1C2028",
       secondary: "#454D56",
       muted: "#555B62",
       inverse: "#FDFDFE",
     },
-    border: "#D1CDC3",
-    accent: "#178463",
-    accentSecondary: "#0A7E8C",
-    // Status colors render as text — keep ≥ 4.5:1 on every surface up to #FFFFFF.
+    // Deepened from 1.56:1 on white (the long-shipped value was 1.59:1): on a
+    // light theme the border
+    // is the main definition channel, and a hairline that faint let panel
+    // headers and controls dissolve into the surfaces behind them.
+    border: "#CFC7B8",
+    // Deep water. Dark enough to carry near-white CTA text at 9:1, and far
+    // enough from svalbard's arctic blue (ΔE 0.14) that the two cool light
+    // themes stop reading as siblings — the previous accent was ΔE 0.04 from
+    // bali's green and, worse, ΔE 0.03 from this theme's own "agent working".
+    accent: "#004E6B",
+    // Deep seagrass, not a second blue. `auditCrossThemeAccents` only compares
+    // primary-to-primary, so the previous secondary sat DeltaE 0.041 from
+    // svalbard's PRIMARY unreported; this clears it at 0.133 and also clears
+    // status.info (0.125) and status.success (0.100).
+    accentSecondary: "#0C5D55",
+    // Status colors render as text — every one clears 3:1 on all five surfaces.
     status: {
       success: "#1C7B54",
       warning: "#9D6309",
@@ -40,14 +67,20 @@ export const theme: BuiltInThemeSource = {
       active: "#1C7B54",
       idle: "#5F6A76",
       working: "#1C7B54",
-      waiting: "#97680D",
+      // Deeper than status.warning: on a light field loudness is depth, so
+      // waiting has to out-weigh a warning rather than tie with it.
+      waiting: "#8F6100",
     },
-    // Warm ink: a cool overlay tint reads as grime on the sand field.
+    // Warm ink: a cool overlay tint reads as grime on the cream field.
     overlayTint: "#322E26",
     terminal: {
-      background: "#1E252E",
+      // Deep water rather than slate. Every AUDITED ANSI slot gains margin
+      // against it (worst dL 0.296 vs 0.285 on the old background). Derived
+      // `terminal-black` moves the other way (0.0186 -> 0.0078) but the
+      // terminal audit excludes it by design.
+      background: "#16242B",
       foreground: "#C8D0D9",
-      // 3.38:1 on the terminal background.
+      // 3.47:1 on the terminal background.
       muted: "#6B7783",
       cursor: "#F5B814",
       selection: "#123941",
@@ -75,9 +108,10 @@ export const theme: BuiltInThemeSource = {
       // Keyword L pinned at 0.46: needs ΔL ≥ 0.18 on the terminal bg, 4.5:1 on canvas.
       keyword: "#644395",
       function: "#1C68A8",
-      link: "#10704F",
+      // Links join the water family rather than sitting in the success green.
+      link: "#005F77",
       quote: "#5A6878",
-      chip: "#0A7E8C",
+      chip: "#0C5D55",
     },
     strategy: {
       shadowStyle: "light",
@@ -85,35 +119,72 @@ export const theme: BuiltInThemeSource = {
       materialSaturation: 115,
       // The granular tile replaces the universal photographic noise.
       grainCharacter: "coarse",
+      // The engine's light border ink is a cool near-black (#0f141b), which
+      // puts a faintly blue line on every divider and subtle border in a warm
+      // theme. Atacama already overrides it for the same reason.
+      borderInkOverride: "#2A231A",
     },
   },
   tokens: {
-    "accent-muted": "rgba(23,132,99,0.30)",
-    "accent-soft": "rgba(23,132,99,0.18)",
-    // De-aliased from accent/accentSecondary hues so worktree colors and
-    // pills never read as the focus signal.
-    "category-green": "oklch(0.53 0.15 142)",
-    "category-teal": "oklch(0.5 0.075 187)",
-    "category-cyan": "oklch(0.6 0.09 218)",
+    "accent-muted": "rgba(0,78,107,0.30)",
+    // Bondi's selection vocabulary is "elevate to white, mark with a rail" — it
+    // never fills with accent. `accent-soft`'s single consumer is QuickRun's
+    // selected autocomplete row, where the derived blue composited to #D6E3E7:
+    // a pale blue field, which is exactly what this palette must not produce.
+    // Warm raised tint instead, matching `overlay-raised`.
+    "accent-soft": "rgba(174,136,68,0.16)",
     // Alpha baked into the tile — the token replaces the engine value wholesale.
+    // `--color-category-*-text` is the base mixed 85% toward text-primary and
+    // painted on a 12-20% tint of the same base (src/index.css). Five of the
+    // twelve engine defaults land at 4.09-4.49:1 on that pill (green 4.093,
+    // cyan 4.178, teal 4.192, amber 4.331, blue 4.494) — under AA for small
+    // labels. Orange already cleared at 4.668 but is re-cut with them to keep
+    // the family even. The contrast matrix skips all twelve because their
+    // values are oklch(). These are darkened just far enough to clear 4.55:1
+    // in BOTH the canvas/12% and elevated/20% compositions, and now measure
+    // 4.62-5.33:1; the other six already passed.
+    "category-blue": "oklch(0.53 0.14 242)",
+    "category-cyan": "oklch(0.52 0.11 198)",
+    "category-green": "oklch(0.5 0.14 155)",
+    "category-amber": "oklch(0.545 0.15 65)",
+    "category-orange": "oklch(0.555 0.16 38)",
+    "category-teal": "oklch(0.51 0.12 178)",
     "chrome-noise-texture":
       "url(\"data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='sand'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='3' stitchTiles='stitch'/%3E%3CfeColorMatrix type='saturate' values='0'/%3E%3C/filter%3E%3Crect width='160' height='160' filter='url(%23sand)' opacity='0.018'/%3E%3C/svg%3E\"), radial-gradient(circle at 78% 115%, rgb(15 20 28 / 0.02), transparent 60%)",
-    "focus-ring": "rgba(23,132,99,0.35)",
+    // The derived light ladder (0.085/0.09/0.18) is very faint on a cream
+    // field — a divider at 1.19:1 barely separates anything, and on a light
+    // theme the border IS the structure. Raised roughly a third; still a
+    // hairline, but one you can see.
+    "border-divider": "rgba(42,35,26,0.12)",
+    "border-subtle": "rgba(42,35,26,0.13)",
+    "border-strong": "rgba(42,35,26,0.22)",
+    "focus-ring": "rgba(0,78,107,0.38)",
+    // The engine derives this as status-info mixed 90% toward black, landing at
+    // #19608B — DeltaE 0.073 from the accent, on persistent dots and rails in
+    // Settings where accent markers also live. Mixing toward white instead
+    // keeps the conventional "modified" blue and clears the accent at 0.160.
+    // Must stay in color-mix() form; a plain hex fails builtInThemes.test.ts.
+    "state-modified": "color-mix(in oklab, #1E6FA0 92%, #FFFFFF)",
     "grain-opacity": "0.03",
     "overlay-hover": "rgba(50,46,38,0.08)",
     // Derived 3% is sub-threshold over near-white surfaces.
     "overlay-soft": "rgba(50,46,38,0.055)",
     // Opaque elevate-to-select for menu/palette rows on white popovers.
-    "overlay-raised": "#ECEAE2",
-    // GitHub-brand defaults fail AA on the near-white panel.
+    "overlay-raised": "#F6F0E7",
+    // Deliberate hue choices, kept from the previous palette. Note this is no
+    // longer an AA repair: the current engine defaults (#7544CC / #5C6571)
+    // score 6.08:1 and 5.91:1 on white.
     "pr-merged": "#7644CC",
     "pr-draft": "#646B73",
-    "scrollbar-thumb": "#7B766C",
-    "scrollbar-thumb-hover": "color-mix(in oklab, #7B766C 85%, #1C2028)",
+    "scrollbar-thumb": "#857F77",
+    "scrollbar-thumb-hover": "color-mix(in oklab, #857F77 85%, #1C2028)",
     "scrim-soft": "rgba(50,46,38,0.16)",
     "scrim-medium": "rgba(50,46,38,0.28)",
     "scrim-strong": "rgba(50,46,38,0.46)",
     "scrim-blur": "16px",
+    // Never set before, so `dock-shadow` (which extracts shadow-color channels)
+    // was casting pure black while every authored shadow here uses warm ink.
+    "shadow-color": "rgba(43,38,31,0.12)",
     "search-highlight-background": "rgba(35,94,150,0.14)",
     "search-highlight-text": "#235E96",
     "search-match-badge-background": "rgba(35,94,150,0.14)",
@@ -121,104 +192,128 @@ export const theme: BuiltInThemeSource = {
     "search-selected-result-border": "rgba(35,94,150,0.34)",
     "search-selected-result-icon": "#235E96",
     // Two-layer contact+spread: the engine "light" single penumbra has no
-    // contact edge on a near-white field.
-    "shadow-ambient": "0 1px 2px rgba(43,38,31,0.10), 0 6px 16px rgba(43,38,31,0.10)",
+    // contact edge on a near-white field. Deepened because panels sit on the
+    // cream gutter with only ~0.04 OKLab lightness between them — the dark
+    // themes get 0.074 plus a border that reads at 2.6:1 against their grid,
+    // and on light the way to make up that difference is elevation, not a
+    // heavier outline (border-default also paints every input and divider).
+    "shadow-ambient": "0 1px 2px rgba(43,38,31,0.17), 0 8px 20px rgba(43,38,31,0.13)",
     // Dialogs sit a full z-tier above menus/popovers.
     "shadow-dialog": "0 2px 6px rgba(43,38,31,0.10), 0 24px 60px rgba(43,38,31,0.18)",
     "shadow-floating": "0 1px 3px rgba(43,38,31,0.12), 0 12px 32px rgba(43,38,31,0.14)",
-    "surface-inset": "#F1EFE8",
+    "surface-inset": "#F7F2EA",
     // Inputs are raised on light, never recessed (overrides the engine's
     // recessed derivation).
-    "surface-input": "#FDFCF8",
-    "surface-toolbar": "#EFEEE9",
+    "surface-input": "#FDFBF7",
+    "surface-toolbar": "#F3ECE0",
     // Dim tier floor: ≥ 3:1 on the terminal background.
     "terminal-bright-black": "#66727F",
     "terminal-white": "#C8D0D9",
-    "text-link": "#0F5B41",
-    // 4.3:1 on the raised input.
-    "text-placeholder": "rgba(28,32,40,0.60)",
+    "text-link": "#105269",
+    // Placeholders render on more than the input surface — real consumers also
+    // sit on the canvas, sidebar and grid. The previous 0.60 scored 4.10-4.36:1
+    // there; 0.62 still missed on three of six. 0.66 is the first value that
+    // clears AA on every background it actually paints on (4.54-5.27:1). The
+    // contrast matrix only enforces 3:1 here, so this passed silently.
+    "text-placeholder": "rgba(28,32,40,0.66)",
   },
   extensions: {
-    "dock-bg": "#EFEEE9",
-    "dock-input-bg": "#FDFCF8",
+    "dock-bg": "#F3ECE0",
+    "dock-input-bg": "#FDFBF7",
     // Lifts to white; the accent hairline border fallback stays as the one
     // signal, matching the worktree-card white-plus-rail idiom.
     "dock-item-bg-active": "#FFFFFF",
-    // Registry format guard: shadow-color channels, alpha ≥ 0.25.
-    "dock-shadow": "0 -2px 8px rgb(from var(--theme-shadow-color) r g b / 0.25)",
-    // Panel title bars join the sand chrome; the focused pane's cap brightens.
-    "panel-header-bg": "#E4E1D5",
-    "panel-header-focus-bg": "#F7F6F2",
+    // Registry format guard: shadow-color channels, alpha >= 0.25 — so the
+    // weight has to come out of the geometry, not the alpha. At -2px/8px this
+    // threw a broad dark band up the shell, heavier than anything else in the
+    // chrome; -1px/5px keeps the contact edge and drops the halo.
+    "dock-shadow": "0 -1px 5px rgb(from var(--theme-shadow-color) r g b / 0.25)",
+    // Panel title bars sit clearly between the grid gutter and the panel body
+    // (dL 0.042 above the gutter, 0.055 below it). They previously landed at the
+    // same lightness as the gutter, so an unfocused pane's cap dissolved into
+    // the grid behind it and the panel lost its top edge. The focused pane's cap
+    // goes all the way to white.
+    "panel-header-bg": "#EDE5D8",
+    "panel-header-focus-bg": "#FFFFFF",
     // Warm ink only, never accent — the white-card-plus-rail selection stays
     // the region's one accent signal. Selected and focused share this border.
     "panel-focus-border": "rgba(43,38,31,0.50)",
     "panel-focus-shadow": "0 1px 2px rgba(43,38,31,0.12)",
     // The audited flat grid hex stays the final layer; surfaces.grid is
     // untouched so the ramp audit is unaffected.
-    "panel-grid-bg": "linear-gradient(180deg, #DDDACC 0%, #DAD5C7 100%), #DCD8CA",
+    "panel-grid-bg": "linear-gradient(180deg, #E3D9C7 0%, #DFD4C1 100%), #E1D7C5",
     // White-gloss lift for emoji tiles (the dark wash renders murky on light).
     "project-tile-wash":
       "linear-gradient(to bottom, rgba(255,255,255,0.40), rgba(255,255,255,0.10))",
     "project-tile-shadow": "inset 0 1px 1px rgba(43,38,31,0.10), 0 0 0 1px rgba(44,39,31,0.10)",
-    "pulse-before-bg": "#DAD9CF",
+    "pulse-before-bg": "#EDE5D8",
     "pulse-card-bg": "#FFFFFF",
-    "pulse-card-header-bg": "#F9F8F2",
+    "pulse-card-header-bg": "#FCF9F5",
     "pulse-card-shadow": "0 1px 2px rgba(43,38,31,0.10), 0 4px 10px rgba(43,38,31,0.08)",
     "pulse-control-hover-bg": "rgba(50,46,38,0.05)",
-    "pulse-empty-bg": "#F3F1EA",
-    // Bathymetric heat ramp: opaque stops (these supersede the
-    // heat-color/opacity keys at the consumer).
-    "pulse-heat-1": "#CAF1F0",
-    "pulse-heat-2": "#6BC9CC",
-    "pulse-heat-3": "#0099A2",
-    "pulse-heat-4": "#006171",
-    "pulse-range-bg": "#F3F1EA",
+    "pulse-empty-bg": "#F7F1E7",
+    // Bathymetric ramp: dry sand → shallows → ocean → the accent itself. The
+    // light end stays warm on purpose; a pale blue first step reads as nursery
+    // against cream, which is the one thing this palette must not do.
+    "pulse-heat-1": "#E3DCCD",
+    "pulse-heat-2": "#AFC3C4",
+    "pulse-heat-3": "#55879E",
+    "pulse-heat-4": "#004E6B",
+    "pulse-range-bg": "#F7F1E7",
     "pulse-ring-offset": "#FFFFFF",
-    "pulse-skeleton-gradient": "linear-gradient(90deg, #DCD8CA 25%, #F3F1EA 50%, #DCD8CA 75%)",
-    "dialog-header-bg": "#FAF9F5",
-    "review-commit-input-bg": "#FDFCF8",
-    "settings-kbd-bg": "#F1EFE8",
-    "settings-kbd-border": "#D1CDC3",
+    "pulse-skeleton-gradient": "linear-gradient(90deg, #E1D7C5 25%, #F6F1E8 50%, #E1D7C5 75%)",
+    "dialog-header-bg": "#FCF9F5",
+    "review-commit-input-bg": "#FDFBF7",
+    "settings-kbd-bg": "#F7F2EA",
+    "settings-kbd-border": "#CFC7B8",
     // Nav selection elevates to white + the 2px accent marker.
     "settings-nav-active-bg": "#FFFFFF",
     "settings-nav-active-shadow": "none",
     "settings-nav-hover-bg": "rgba(58,48,30,0.05)",
     // Scope pill elevates to white on the tinted settings sidebar.
     "settings-scope-bg": "#FFFFFF",
-    "settings-sidebar-bg": "rgba(237,234,224,0.60)",
-    // Composited settings-sidebar-bg over the shell.
-    "settings-sidebar-scroll-fade": "#F2F0E8",
+    "settings-sidebar-bg": "rgba(242,233,218,0.60)",
+    // The 60% sidebar wash composited over the shell it actually sits on,
+    // which is `.settings-shell` = surface-panel (#FBF8F2), NOT white. The
+    // over-white result is #F7F2E9, and using it left the fade lighter than
+    // the sidebar it exists to erase.
+    "settings-sidebar-scroll-fade": "#F6EFE4",
     "sidebar-action-hover-bg": "rgba(58,48,30,0.05)",
-    // idle < hover < selected (audit-enforced); contact shadow only, no ring —
+    // idle < hover < selected; only hover < selected is test-enforced, the rest
+    // is held by hand. Contact shadow only, no ring —
     // selection = bg + right accent rail.
-    "sidebar-card-bg": "#F8F6EF",
+    "sidebar-card-bg": "#F7F2E9",
     "sidebar-card-shadow": "0 1px 2px rgba(48,40,28,0.05)",
     "sidebar-active-bg": "#FFFFFF",
-    "sidebar-hover-bg": "#FCFBF7",
+    "sidebar-hover-bg": "#FBF8F3",
     "toolbar-agent-hover-bg": "rgba(28,32,40,0.06)",
     "toolbar-control-hover-bg": "rgba(28,32,40,0.06)",
     // Accent restraint: hover affordance is the bg, not an accent foreground.
     "toolbar-control-hover-fg": "#1C2028",
     "toolbar-control-hover-shadow": "none",
-    "toolbar-divider": "rgba(211,208,199,0.7)",
+    "toolbar-divider": "rgba(207,199,184,0.7)",
     "toolbar-pill-radius": "0.5rem",
-    // Pills sit lighter than the chrome strip (raised, like all content).
+    // Pills sit lighter than the chrome strip (raised, like all content). The
+    // base has to out-run this pill's own two washes: at #F6F0E7 the composed
+    // gradient landed at L 0.9453 against a strip at L 0.9453 — zero lift,
+    // while the sibling stats pill sat 0.012 above. #F9F4EC composes back to
+    // 0.9568/0.9571, level with stats again.
     "toolbar-project-bg":
-      "linear-gradient(180deg, rgba(245,184,20,0.07), rgba(28,32,40,0.02)), #F9F8F4",
-    "toolbar-project-border": "rgba(211,208,199,0.75)",
+      "linear-gradient(180deg, rgba(245,184,20,0.07), rgba(28,32,40,0.02)), #F9F4EC",
+    "toolbar-project-border": "rgba(207,199,184,0.75)",
     "toolbar-project-chip-bg": "rgba(28,32,40,0.04)",
-    "toolbar-project-chip-border": "rgba(211,208,199,0.75)",
+    "toolbar-project-chip-border": "rgba(207,199,184,0.75)",
     "toolbar-project-shadow": "inset 0 1px 0 rgba(255,255,255,0.5)",
     "toolbar-shadow": "0 1px 2px rgba(43,38,31,0.06)",
-    "toolbar-stats-bg": "#F9F8F4",
-    "toolbar-stats-border": "rgba(211,208,199,0.7)",
-    "toolbar-stats-divider": "rgba(211,208,199,0.7)",
-    "toolbar-stats-hover-bg": "#FCFBF7",
+    "toolbar-stats-bg": "#F6F0E7",
+    "toolbar-stats-border": "rgba(207,199,184,0.7)",
+    "toolbar-stats-divider": "rgba(207,199,184,0.7)",
+    "toolbar-stats-hover-bg": "#F9F4ED",
     // Filter rail sits flush on the field; the raised search input carries it.
-    "worktree-filter-bar-bg": "#EDEAE0",
+    "worktree-filter-bar-bg": "#F2E9DA",
     // Active quick-state tab lifts to white under its inset underline.
     "worktree-quick-state-active-bg": "#FFFFFF",
-    "worktree-search-input-bg": "#FDFCF8",
+    "worktree-search-input-bg": "#FDFBF7",
     "worktree-section-hover-bg": "rgba(58,48,30,0.05)",
   },
 };
