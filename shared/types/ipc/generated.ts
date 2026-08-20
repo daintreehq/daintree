@@ -162,6 +162,18 @@ export interface GeneratedIpcInvokeMap {
     args: [context?: import("../commands.js").CommandContext | undefined];
     result: import("../commands.js").CommandManifestEntry[];
   };
+  "config-bundle:apply-import": {
+    args: [payload: { bundleJson: string }];
+    result: import("../configBundle.js").ConfigImportReport;
+  };
+  "config-bundle:export": {
+    args: [];
+    result: import("../configBundle.js").ConfigExportResult;
+  };
+  "config-bundle:preview-import": {
+    args: [];
+    result: import("../configBundle.js").ConfigBundlePreview;
+  };
   "connectivity:get-state": {
     args: [];
     result: import("./connectivity.js").ServiceConnectivitySnapshot;

@@ -38,6 +38,7 @@ import { buildClipboardPreloadBindings } from "./ipc/handlers/clipboard.preload.
 import { buildSlashCommandsPreloadBindings } from "./ipc/handlers/slashCommands.preload.js";
 import { buildGlobalEnvPreloadBindings } from "./ipc/handlers/globalEnv.preload.js";
 import { buildAccessibilityPreloadBindings } from "./ipc/handlers/accessibility.preload.js";
+import { buildConfigBundlePreloadBindings } from "./ipc/handlers/configBundle.preload.js";
 import { buildHelpPreloadBindings } from "./ipc/handlers/help.preload.js";
 import { buildEventInspectorPreloadBindings } from "./ipc/handlers/eventInspector.preload.js";
 import { buildCommandsPreloadBindings } from "./ipc/handlers/commands.preload.js";
@@ -2166,6 +2167,9 @@ function buildElectronApi(): ElectronAPI {
 
       importColorScheme: () => _unwrappingInvoke(CHANNELS.TERMINAL_CONFIG_IMPORT_COLOR_SCHEME),
     },
+
+    // Configuration export/import API (#11889)
+    configBundle: buildConfigBundlePreloadBindings(_unwrappingInvoke),
 
     // Accessibility API
     accessibility: {

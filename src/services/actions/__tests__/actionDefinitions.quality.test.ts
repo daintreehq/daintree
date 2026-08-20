@@ -679,6 +679,7 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "devPreview.reinstallAndRestart",
   "artifact.applyPatch",
   "agentSettings.reset",
+  "app.importConfig",
   "forge.createPR",
   "forge.closePR",
   "forge.reopenPR",
@@ -706,6 +707,7 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
  * in source — runs via `npm run check:confirm-wiring`.
  */
 const CONFIRMED_WIRED: ReadonlyArray<ActionId> = [
+  "app.importConfig",
   "terminal.kill",
   "terminal.killAll",
   "terminal.restart",

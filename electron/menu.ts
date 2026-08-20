@@ -650,6 +650,16 @@ export function createApplicationMenu(
           click: (_item, browserWindow) =>
             sendAction("app.reloadConfig", getTargetBrowserWindow(browserWindow)),
         },
+        {
+          label: "Export Configuration…",
+          click: (_item, browserWindow) =>
+            sendAction("app.exportConfig", getTargetBrowserWindow(browserWindow)),
+        },
+        {
+          label: "Import Configuration…",
+          click: (_item, browserWindow) =>
+            sendAction("app.importConfig", getTargetBrowserWindow(browserWindow)),
+        },
         { type: "separator" },
         {
           label: "Learn More",
