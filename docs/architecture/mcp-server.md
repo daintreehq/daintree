@@ -278,30 +278,28 @@ tools/call(actionId, args)
   │      └─ yes → return SESSION_GONE (business, do not retry) before any audit,
   │               denial counter, grant lookup, dedup entry or dispatch
   │
-  ├─1 Tier floor: isTierPermitted(tier, actionId)?
-  │      ├─ no → grantCache.check(sessionId, actionId)
-  │      │      ├─ granted → proceed (capture issuedAt for post-dispatch refresh;
-  │      │      │            widens the floor only — never bypasses confirm)
-  │      │      └─ denied  → peekNativeGrant(sessionId, actionId)
-  │      │             ├─ granted → proceed (capture grantId: widens the floor
-  │      │             │            AND pre-authorizes confirm)
-  │      │             └─ denied  → incrementDenial → maybe notifyTierMismatch (banner,
-  │      │                          suppressed after MCP_DENIAL_SILENCE_THRESHOLD) →
-  │      │                          recordDenial(abusePolicy); if tripped → revokeSession →
-  │      │                          return TIER_NOT_PERMITTED
-  │      └─ yes → peekNativeGrant(sessionId, actionId)  (#11878)
-  │             └─ granted → capture grantId for confirm pre-authorization
+  ├─1 Admission — did anything OTHER than a native grant let this call in?
+  │      ├─ isTierPermitted(tier, actionId) → yes: admitted by the floor
+  │      └─ no → grantCache.check(sessionId, actionId)
+  │             └─ granted → admitted (capture issuedAt for post-dispatch
+  │                          refresh; widens the floor only, never bypasses
+  │                          confirm)
   │
-  │      The native peek runs on BOTH legs because a native grant does two
-  │      jobs and only the first is a tier concern: it widens past the floor,
-  │      and it pre-authorizes the confirm modal. Nesting it under denial made
-  │      it unreachable for a tool the tier already permitted — worktree.delete
-  │      is danger:"confirm" but system-tier permitted, so pre-authorizing it
-  │      in Settings did nothing. The per-tool grant is denial-only: it widens
-  │      the floor and nothing else, so it has no say once the floor admits.
-  │
-  ├─2 Rate limit: consumeRateLimitToken(sessionId, actionId)
-  │      └─ empty bucket → return MCP_RATE_LIMITED (retryAfter; retriable)
+  ├─2 Native grant: peekNativeGrant(sessionId, actionId)  (#11878)
+  │      │  Runs independently of gate 1, because a native grant answers a
+  │      │  different question: it both widens the floor AND pre-authorizes
+  │      │  the confirm modal. Nesting it under either admission source left
+  │      │  it unreachable — worktree.delete is danger:"confirm" but
+  │      │  system-tier permitted, so pre-authorizing it in Settings did
+  │      │  nothing; the same held when a per-tool grant had just admitted it.
+  │      │  Skipped only for an already-admitted introspection carrier, which
+  │      │  can never raise a modal, so a peek would just drain the budget.
+  │      ├─ granted → capture grantId (widens the floor AND pre-authorizes
+  │      │            confirm; the use is charged later, at commit-to-dispatch)
+  │      └─ neither gate 1 nor a grant admitted it → incrementDenial → maybe
+  │                   notifyTierMismatch (banner, suppressed after
+  │                   MCP_DENIAL_SILENCE_THRESHOLD) → recordDenial(abusePolicy);
+  │                   if tripped → revokeSession → return TIER_NOT_PERMITTED
   │
   ├─3 Dedup (creation-tool allowlist only):
   │      ├─ cached result within TTL & same args → return cached (audit: dedup)
@@ -331,7 +329,7 @@ tools/call(actionId, args)
   └─7 Audit: appendAuditRecord({ toolId, tier, args, durationMs, outcome })
 ```
 
-Gate order is load-bearing: rate-limit is charged **after** the tier/grant check (an unauthorized call shouldn't consume tokens) but **before** dedup (dedup is an idempotency guard, not a rate-limit bypass — a tight loop replaying one dedup key must still be bounded).
+Gate order is load-bearing: a native grant's use is charged **after** admission and after the workspace-bound confirm ceiling — an unauthorized or refused call must never burn one — but **before** dedup, so a replayed duplicate spends a use without dispatching. The per-call rate limiter that used to sit between admission and dedup was removed in #10764.
 
 ### Rate limits and dedup
 

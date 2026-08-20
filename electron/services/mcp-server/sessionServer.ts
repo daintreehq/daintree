@@ -620,20 +620,18 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     //      live grant exists, the dispatch proceeds and the grant's TTL
     //      is refreshed on success.
     //
-    //   3. Native session-scoped automation grants (#10648) — these do two
-    //      jobs, and only the first is a tier concern: they widen past the
-    //      static floor, AND they pre-authorise the `danger: "confirm"` modal.
-    //      The second job is orthogonal to the floor, so the lookup runs on
-    //      BOTH legs of the tier check (#11878). Nesting it under denial (as
-    //      it originally was) made every grant unreachable for a tool the tier
-    //      already permitted — `worktree.delete` is `danger: "confirm"` but
-    //      system-tier permitted, so pre-authorising it in Settings did
-    //      nothing and the modal still fired on every call.
+    //   3. Native session-scoped automation grants (#10648) — the only layer
+    //      that both widens past the floor AND pre-authorises the
+    //      `danger: "confirm"` modal. Because that second job answers a
+    //      different question from "may this call run at all", the lookup is
+    //      independent of whichever layer admitted the call (#11878).
     //
     // The order means a session whose static tier already permits the action
     // never consults the per-tool grant cache — those grants only widen the
     // floor and never bypass confirmation, so they have nothing to add once
-    // the floor allows the call.
+    // the floor allows the call. Native grants are not ordered that way: see
+    // the peek below for why nesting them under any one admission source is
+    // what made them unreachable in the first place.
     const tierPermitted = isTierPermitted(tier, actionId);
     let grantIssuedAt: number | undefined;
     // Set when a native session-scoped automation grant (#10648) authorized
@@ -641,105 +639,105 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // grant's TTL window, and so the `danger: "confirm"` modal is bypassed —
     // a native grant is an explicit user approval of the tool's scope.
     let nativeGrantId: string | undefined;
+    // True once something OTHER than a native grant has admitted this call —
+    // the static floor, or a per-tool "Approve once" grant. It decides two
+    // things below: whether a missing native grant is fatal, and how a lost
+    // one is handled at the consume site.
+    let authorizedWithoutNativeGrant = tierPermitted;
     if (!tierPermitted) {
       const grant = sessionStore.grantCache.check(sessionId, actionId);
-      const native = grant.granted
-        ? null
-        : sessionStore.grantCache.peekNativeGrant(sessionId, actionId);
       if (grant.granted) {
         // Grant authorised the call. Capture the `issuedAt` token so the
         // post-dispatch refresh can verify the entry wasn't revoked and
         // re-issued under us (race guard, lesson #2243).
         grantIssuedAt = grant.issuedAt;
-      } else if (native?.granted) {
-        // A native automation grant covers this tool and has a use left. It
-        // overrides the static tier floor only because the user explicitly
-        // approved this tool's scope — the grant's allowlist gates which tools
-        // `peekNativeGrant` authorizes. The use is NOT charged here: it is
-        // consumed only once the call is committed to dispatching (below), so
-        // an unauthorized call can't burn a use.
-        nativeGrantId = native.grantId;
-      } else {
-        // Increment first, then ask the cache whether to suppress. The
-        // post-increment count reflects "this denial counted"; the cache's
-        // threshold compares against that. With threshold=2 the 1st and
-        // 2nd denials fire the banner and the 3rd+ are suppressed.
-        sessionStore.grantCache.incrementDenial(sessionId, actionId);
-        const suppressBanner = sessionStore.grantCache.shouldSuppressBanner(sessionId, actionId);
-        try {
-          appendAuditRecord({
-            toolId: actionId,
-            sessionId,
-            tier,
-            args,
-            durationMs: Date.now() - startedAt,
-            outcome: { kind: "unauthorized" },
-            bannerSuppressed: suppressBanner ? true : undefined,
-            capturedTurnId,
-          });
-        } catch (err) {
-          console.error("[MCP] Failed to append audit record:", err);
-        }
-        if (notifyTierMismatch && !suppressBanner) {
-          try {
-            notifyTierMismatch({
-              sessionId,
-              toolId: actionId,
-              tier,
-              targetTier: minimumPermittingTier(actionId),
-            });
-          } catch (err) {
-            console.error("[MCP] Failed to notify tier-mismatch:", err);
-          }
-        }
-        if (recordDenial) {
-          const result = recordDenial(sessionId, "tierMismatch");
-          if (result.tripped) {
-            const pinnedId = sessionStore.sessionWebContentsMap.get(sessionId);
-            // Snapshot ownership with the pin, before revocation clears both.
-            const rendererOwned = sessionStore.isRendererOwnedOrigin(sessionId);
-            sessionStore.revokeSession(sessionId);
-            clearDenialState?.(sessionId);
-            if (notifySessionRevoked) {
-              try {
-                notifySessionRevoked({
-                  sessionId,
-                  denialKind: "tierMismatch",
-                  pinnedWebContentsId: pinnedId,
-                  rendererOwned,
-                });
-              } catch (err) {
-                console.error("[MCP] Failed to notify session-revoked:", err);
-              }
-            }
-          }
-        }
-        return buildToolError({
-          code: TIER_NOT_PERMITTED_CODE,
-          message: `action '${actionId}' is not permitted for the '${tier}' tier.`,
-        });
+        authorizedWithoutNativeGrant = true;
       }
-    } else {
-      // The floor already admits this call, so nothing here can widen it —
-      // the peek exists purely to learn whether a live native grant should
-      // pre-authorise the `danger: "confirm"` modal below (#11878). Only
-      // native grants are consulted: a per-tool "Approve once" grant widens
-      // the floor and nothing else, so it has no say once the floor allows
-      // the call.
-      //
-      // A match charges a use at the single consume site below, exactly as on
-      // the denied leg. That also charges tools in the grant's `allowedTools`
-      // that are NOT confirm-gated, where the grant buys the call nothing.
-      // Accepted deliberately: `maxUses` is a budget of matching dispatches,
-      // and over-charging fails toward MORE confirmation, never less. Spending
-      // a use only on calls that truly need one would mean resolving the
-      // action's effective danger — the async manifest plus args-conditional
-      // elevation — before this point, which is a far larger change than the
-      // bug warrants.
+    }
+    // A native automation grant does two jobs, and only the first is a floor
+    // concern: it widens past the floor, AND it pre-authorises the
+    // `danger: "confirm"` modal. The second is orthogonal to whatever admitted
+    // the call, so the peek cannot be nested under any one admission source
+    // (#11878). It used to sit inside the tier-denied branch, behind the
+    // per-tool check — which left the grant unreachable both for a tool the
+    // tier already permitted (`worktree.delete` is `danger: "confirm"` but
+    // system-tier permitted) and for one a per-tool grant had just admitted.
+    // Either way the modal still fired on every call despite an explicit
+    // Settings pre-authorisation.
+    //
+    // The one exception: an introspection carrier is never confirm-gated, so
+    // once the call is already admitted a grant buys it nothing — peeking
+    // would only spend a use and evict entries on a discovery call. When the
+    // call is NOT otherwise admitted the peek still runs, because there the
+    // grant is doing its first job and is load-bearing for authorization.
+    if (!authorizedWithoutNativeGrant || !INTROSPECTION_TOOL_IDS.has(actionId)) {
+      // The use is NOT charged here: it is consumed only once the call is
+      // committed to dispatching (below), so an unauthorized call can't burn
+      // a use. The grant's allowlist gates which tools this authorizes.
       const native = sessionStore.grantCache.peekNativeGrant(sessionId, actionId);
       if (native.granted) {
         nativeGrantId = native.grantId;
       }
+    }
+    if (!authorizedWithoutNativeGrant && nativeGrantId === undefined) {
+      // Increment first, then ask the cache whether to suppress. The
+      // post-increment count reflects "this denial counted"; the cache's
+      // threshold compares against that. With threshold=2 the 1st and
+      // 2nd denials fire the banner and the 3rd+ are suppressed.
+      sessionStore.grantCache.incrementDenial(sessionId, actionId);
+      const suppressBanner = sessionStore.grantCache.shouldSuppressBanner(sessionId, actionId);
+      try {
+        appendAuditRecord({
+          toolId: actionId,
+          sessionId,
+          tier,
+          args,
+          durationMs: Date.now() - startedAt,
+          outcome: { kind: "unauthorized" },
+          bannerSuppressed: suppressBanner ? true : undefined,
+          capturedTurnId,
+        });
+      } catch (err) {
+        console.error("[MCP] Failed to append audit record:", err);
+      }
+      if (notifyTierMismatch && !suppressBanner) {
+        try {
+          notifyTierMismatch({
+            sessionId,
+            toolId: actionId,
+            tier,
+            targetTier: minimumPermittingTier(actionId),
+          });
+        } catch (err) {
+          console.error("[MCP] Failed to notify tier-mismatch:", err);
+        }
+      }
+      if (recordDenial) {
+        const result = recordDenial(sessionId, "tierMismatch");
+        if (result.tripped) {
+          const pinnedId = sessionStore.sessionWebContentsMap.get(sessionId);
+          // Snapshot ownership with the pin, before revocation clears both.
+          const rendererOwned = sessionStore.isRendererOwnedOrigin(sessionId);
+          sessionStore.revokeSession(sessionId);
+          clearDenialState?.(sessionId);
+          if (notifySessionRevoked) {
+            try {
+              notifySessionRevoked({
+                sessionId,
+                denialKind: "tierMismatch",
+                pinnedWebContentsId: pinnedId,
+                rendererOwned,
+              });
+            } catch (err) {
+              console.error("[MCP] Failed to notify session-revoked:", err);
+            }
+          }
+        }
+      }
+      return buildToolError({
+        code: TIER_NOT_PERMITTED_CODE,
+        message: `action '${actionId}' is not permitted for the '${tier}' tier.`,
+      });
     }
 
     // Confirm-gated tools are unreachable for a workspace-bound external
@@ -865,16 +863,27 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // use. A `false` return is purely defensive: the grant was live at the
     // peek, so it can only have aged out or been revoked in between.
     //
-    // How that failure lands depends on which leg peeked (#11878). On the
-    // denied leg the grant WAS the authorization, so losing it fails closed.
-    // On the permitted leg it only bought a confirmation bypass, and the tier
-    // still admits the call — so drop the bypass and let the normal modal
+    // How that failure lands depends on what else admitted the call (#11878).
+    // When the grant WAS the authorization, losing it fails closed. When the
+    // floor or a per-tool grant already admitted it, the grant only bought a
+    // confirmation bypass — so drop the bypass and let the normal modal
     // decide. Refusing there would answer a `system`-tier `worktree.delete`
     // with "not permitted for the 'system' tier", which is simply untrue.
+    //
+    // Accounting note: a matching call spends a use even when the tool is not
+    // confirm-gated, so the grant buys it nothing. Charging only where the
+    // bypass is actually needed would mean resolving effective danger — the
+    // async manifest plus args-conditional elevation — before this point,
+    // which is a far larger change than the bug warrants. Two consequences
+    // are worth knowing rather than assuming away: a matching call also
+    // slides the whole grant's TTL, so a harmless tool in a mixed grant can
+    // extend a confirm-gated sibling's bypass window (bounded by the hard
+    // lifetime ceiling), and because this site precedes dedup, a replayed
+    // duplicate spends a use without dispatching.
     if (nativeGrantId !== undefined) {
       const consumed = sessionStore.grantCache.consumeNativeGrantUse(nativeGrantId, actionId);
       if (!consumed) {
-        if (!tierPermitted) {
+        if (!authorizedWithoutNativeGrant) {
           return buildToolError({
             code: TIER_NOT_PERMITTED_CODE,
             message: `action '${actionId}' is not permitted for the '${tier}' tier.`,
