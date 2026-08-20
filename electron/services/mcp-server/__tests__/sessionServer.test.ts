@@ -1579,7 +1579,8 @@ describe("sessionServer tier-mismatch notifier", () => {
     // The reported symptom: in no tier allowlist, the primitive resolved to
     // targetTier null, and HelpPanelBanners withholds both "Approve once" and
     // "Always allow" on a null target — a denial the user cannot act on at any
-    // tier, including system. A non-null target is what restores those.
+    // tier. A non-null target is what restores those, so an action-tier
+    // overlay that needs it can still ask rather than being told no twice.
     const notify = vi.fn();
     const deps = fakeDeps({ notifyTierMismatch: notify });
     const server = createSessionServer("session-C2", deps);
@@ -1590,7 +1591,7 @@ describe("sessionServer tier-mismatch notifier", () => {
     expect(notify).toHaveBeenCalledWith(
       expect.objectContaining({
         toolId: "worktree.create",
-        targetTier: "action",
+        targetTier: "system",
       })
     );
   });
@@ -2773,13 +2774,14 @@ describe("MCP_DEDUP_ALLOWLIST criterion correction (#11534)", () => {
 });
 
 describe("worktree.create redispatch (#11880)", () => {
-  // The primitive became LLM-callable when it joined the action tier, which is
+  // The primitive became LLM-callable when it joined the system tier, which is
   // the first time dedup could apply to it at all. It must stay out: deleting
   // a worktree leaves its branch behind and the host reuses that stale branch
   // on the next create (#6463), so create -> delete -> recreate with identical
   // arguments is a supported workflow. Caching the first id would return a
-  // worktree that no longer exists. The session tier is `action`, so a
-  // reverted tier fix shows up here as zero dispatches rather than two.
+  // worktree that no longer exists. The session tier is `system`, the tier the
+  // first-party assistant is forced to, so a reverted tier fix shows up here
+  // as zero dispatches rather than two.
   const twoDistinctDispatches = () =>
     vi
       .fn()
@@ -2793,7 +2795,7 @@ describe("worktree.create redispatch (#11880)", () => {
 
   it("recreates after a delete instead of replaying the original worktree id", async () => {
     const dispatchAction = twoDistinctDispatches();
-    const deps = fakeDeps({ sessionStore: fakeSessionStore("action"), dispatchAction });
+    const deps = fakeDeps({ sessionStore: fakeSessionStore("system"), dispatchAction });
     const server = createSessionServer("recreate-11880", deps);
 
     await callTool(server, { name: "worktree.create", arguments: createArgs });
