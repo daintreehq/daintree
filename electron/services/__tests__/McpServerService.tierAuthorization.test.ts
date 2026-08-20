@@ -1102,6 +1102,12 @@ describe("McpServerService", () => {
           "Move the target terminal from the dock back into the grid. Accepts an optional terminalId; defaults to the currently focused terminal.",
       }),
       createManifestEntry({
+        id: "terminal.moveToWorktree" as ActionId,
+        title: "Move to Worktree",
+        description:
+          "Move the target terminal to another worktree. Accepts an optional terminalId; defaults to the currently focused terminal.",
+      }),
+      createManifestEntry({
         id: "terminal.toggleDock" as ActionId,
         title: "Toggle Dock",
         description:

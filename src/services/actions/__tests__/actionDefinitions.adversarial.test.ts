@@ -518,6 +518,68 @@ describe("terminal action hardening", () => {
       }
     );
 
+    // moveToWorktree is reachable from the assistant's action tier (#11877), and
+    // its side effect is a worktreeId change rather than a location change, so
+    // the table above could not prove it stayed put — these assert the mutation
+    // each action actually performs.
+    it("moveToWorktree rejects agent dispatch that names no terminal, leaving the focused panel in its worktree", async () => {
+      const actions = buildRegistry(registerTerminalActions);
+      const moveToWorktree = actions.get("terminal.moveToWorktree")!();
+
+      usePanelStore.setState({
+        panelsById: { focused: createTerminal({ id: "focused", worktreeId: "wt-1" }) },
+        panelIds: ["focused"],
+        focusedId: "focused",
+      });
+
+      await expect(
+        moveToWorktree.run({ worktreeId: "wt-2" } as never, { dispatchSource: "agent" } as never)
+      ).rejects.toThrow(
+        /requires an explicit `terminalId` when dispatched by an agent or MCP client/
+      );
+
+      // The move mutates worktreeId, not location, so this is the only
+      // assertion that would fail if the guard let the action through.
+      expect(usePanelStore.getState().panelsById.focused?.worktreeId).toBe("wt-1");
+    });
+
+    it("moveToNewWorktree refuses agent dispatch outright rather than hanging its dialog at a headless caller", async () => {
+      const actions = buildRegistry(registerTerminalActions);
+      const moveToNewWorktree = actions.get("terminal.moveToNewWorktree")!();
+
+      const openCreateFlow = vi.fn();
+      // Swapped back in `finally`: the suite's beforeEach resets store DATA but
+      // not store METHODS, so leaving the stub in place would silently poison
+      // every later test that reaches the real one.
+      const realMoveToNewWorktree = usePanelStore.getState().moveToNewWorktree;
+      usePanelStore.setState({
+        panelsById: { focused: createTerminal({ id: "focused", worktreeId: "wt-1" }) },
+        panelIds: ["focused"],
+        focusedId: "focused",
+        moveToNewWorktree: openCreateFlow,
+      } as never);
+
+      try {
+        // Named target too: the objection is the interactive dialog, so naming
+        // a terminal must not buy a way past it the way it does for siblings
+        // whose only worry is which panel an unbound call would land on.
+        await expect(
+          moveToNewWorktree.run(
+            { terminalId: "focused" } as never,
+            {
+              dispatchSource: "agent",
+            } as never
+          )
+        ).rejects.toThrow(
+          /opens the new-worktree dialog, which a headless caller can never answer/
+        );
+
+        expect(openCreateFlow).not.toHaveBeenCalled();
+      } finally {
+        usePanelStore.setState({ moveToNewWorktree: realMoveToNewWorktree } as never);
+      }
+    });
+
     it("toggleDock moves the terminal the agent named, not the focused one", async () => {
       const actions = buildRegistry(registerTerminalActions);
       const toggleDock = actions.get("terminal.toggleDock")!();

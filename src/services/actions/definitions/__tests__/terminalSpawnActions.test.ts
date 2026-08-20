@@ -70,11 +70,11 @@ function setupActions(overrides?: { activeWorktreeId?: string | undefined }) {
       "activeWorktreeId" in (overrides ?? {}) ? overrides!.activeWorktreeId : "wt-1",
   } as unknown as ActionCallbacks;
   registerTerminalSpawnActions(actions, callbacks);
-  return async (id: string, args?: unknown): Promise<unknown> => {
+  return async (id: string, args?: unknown, ctx?: unknown): Promise<unknown> => {
     const factory = actions.get(id);
     if (!factory) throw new Error(`missing ${id}`);
     const def = factory() as AnyActionDefinition;
-    return def.run(args, {} as never);
+    return def.run(args, (ctx ?? {}) as never);
   };
 }
 
@@ -737,6 +737,28 @@ describe("terminal.moveToNewWorktree", () => {
 
     expect(moveToNewWorktree).not.toHaveBeenCalled();
   });
+
+  // The gesture IS the interactive create-worktree dialog, so there is no
+  // argument that makes this answerable headlessly — naming the terminal must
+  // not help (#11877).
+  it.each([undefined, {}, { terminalId: "p1" }])(
+    "refuses agent dispatch (%j) instead of opening the dialog",
+    async (args) => {
+      const moveToNewWorktree = vi.fn();
+      setPanelState({
+        focusedId: "p1",
+        panels: [{ id: "p1", location: "grid", worktreeId: "wt-1" }],
+        moveToNewWorktree,
+      });
+      const run = setupActions();
+
+      await expect(
+        run("terminal.moveToNewWorktree", args, { dispatchSource: "agent" })
+      ).rejects.toThrow(/opens the new-worktree dialog, which a headless caller can never answer/);
+
+      expect(moveToNewWorktree).not.toHaveBeenCalled();
+    }
+  );
 });
 
 describe("terminal.moveToWorktree", () => {
@@ -795,5 +817,51 @@ describe("terminal.moveToWorktree", () => {
 
     expect(moveTerminalToWorktreeAndFollowRescueMock).not.toHaveBeenCalled();
     expect(pushLayoutSnapshotMock).not.toHaveBeenCalled();
+  });
+
+  // Reachable from the assistant's action tier since #11877, so the focused
+  // fallback above must not be reachable by an unbound agent call: focus drifts
+  // across the MCP round trip, and this relocates a panel across worktrees
+  // rather than merely rearranging it (#11532).
+  it("rejects agent dispatch that names no terminal, without moving the focused panel", async () => {
+    setPanelState({
+      focusedId: "p-focused",
+      panels: [{ id: "p-focused", location: "grid", worktreeId: "wt-1" }],
+    });
+    const run = setupActions();
+
+    await expect(
+      run("terminal.moveToWorktree", { worktreeId: "wt-2" }, { dispatchSource: "agent" })
+    ).rejects.toThrow(
+      /requires an explicit `terminalId` when dispatched by an agent or MCP client/
+    );
+
+    expect(moveTerminalToWorktreeAndFollowRescueMock).not.toHaveBeenCalled();
+    // The snapshot is pushed just before the move, so an unpushed stack proves
+    // the guard fired before any layout mutation, not merely before the helper.
+    expect(pushLayoutSnapshotMock).not.toHaveBeenCalled();
+  });
+
+  it("still moves the terminal an agent names explicitly", async () => {
+    setPanelState({
+      focusedId: "p-focused",
+      panels: [
+        { id: "p-focused", location: "grid", worktreeId: "wt-1" },
+        { id: "p-named", location: "grid", worktreeId: "wt-1" },
+      ],
+    });
+    const run = setupActions();
+
+    await run(
+      "terminal.moveToWorktree",
+      { terminalId: "p-named", worktreeId: "wt-2" },
+      { dispatchSource: "agent" }
+    );
+
+    // The named panel, never the focused one — the whole point of the guard.
+    expect(moveTerminalToWorktreeAndFollowRescueMock).toHaveBeenCalledExactlyOnceWith(
+      "p-named",
+      "wt-2"
+    );
   });
 });

@@ -13,6 +13,7 @@ import { buildResumePanelOptions } from "@/services/agentResume";
 import { getDefaultTitle } from "@/store/slices/panelRegistry/helpers";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { TerminalSpawnSourceSchema, AddPanelFocusPolicySchema } from "./schemas";
+import { requireExplicitTerminalIdForAgentDispatch } from "./terminalTargetBinding";
 import type { AddPanelOptions } from "@/store/slices/panelRegistry/types";
 import type { PtyPanelData, TerminalSpawnSource } from "@shared/types/panel";
 import { isPtyPanel } from "@shared/types/panel";
@@ -259,7 +260,8 @@ export function registerTerminalSpawnActions(
     description:
       "Move a terminal panel to a different worktree. The process is never restarted: a live " +
       "agent keeps running in the directory it launched from, and its pane offers to tell it " +
-      "to continue in the destination.",
+      "to continue in the destination. The panel move is reversible. Name the target " +
+      "explicitly — an automated caller cannot see what the user has focused.",
     category: "terminal",
     kind: "command",
     // Relabelling a panel is reversible — drag it back — and nothing here
@@ -272,8 +274,9 @@ export function registerTerminalSpawnActions(
       terminalId: z.string().optional(),
       worktreeId: z.string(),
     }),
-    run: async (args: unknown) => {
+    run: async (args: unknown, ctx) => {
       const { terminalId, worktreeId } = args as { terminalId?: string; worktreeId: string };
+      requireExplicitTerminalIdForAgentDispatch("terminal.moveToWorktree", terminalId, ctx);
       const state = usePanelStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (targetId) {
@@ -297,8 +300,23 @@ export function registerTerminalSpawnActions(
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
-    run: async (args: unknown) => {
+    run: async (args: unknown, ctx) => {
       const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
+      // Deliberately not in any tier allowlist, and guarded here anyway as
+      // defense in depth — the same treatment `terminal.toggleMaximize` gets.
+      // This action's whole gesture is the interactive create-worktree dialog
+      // (#11853): the move happens in the dialog's `onCreated` callback, which
+      // a headless caller can never answer, and `run()` has already returned by
+      // then. Allowlisting it would hang a modal in front of the user and
+      // report a move that never happened (#11532, #11877). An agent that wants
+      // a panel in a fresh worktree creates the worktree with the headless
+      // worktree-creation capability, then moves the panel to the id it
+      // returns.
+      if (ctx.dispatchSource === "agent") {
+        throw new Error(
+          "terminal.moveToNewWorktree can't be dispatched by an agent or MCP client — it opens the new-worktree dialog, which a headless caller can never answer. Create the worktree first, then move the panel into it by id."
+        );
+      }
       const state = usePanelStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (!targetId) return;
