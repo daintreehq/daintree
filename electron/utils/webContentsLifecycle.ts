@@ -1,29 +1,33 @@
 /**
- * webContentsLifecycle — Shared CDP helpers for per-renderer freeze and CPU throttle.
+ * webContentsLifecycle: Shared CDP helpers for per-renderer freeze and CPU throttle.
  *
  * Wraps `Page.setWebLifecycleState` and `Emulation.setCPUThrottlingRate` so callers
- * don't need to know about `debugger.attach`, `Page.enable`, or the swallow-list of
- * expected CDP errors that surface during teardown/navigation races.
+ * do not need to know about `debugger.attach`, `Page.enable`, or expected CDP errors
+ * during teardown and navigation races.
  *
  * Why CDP instead of `WebContents.setBackgroundThrottling`: since Electron 28,
  * `setBackgroundThrottling(false)` on any view in a BrowserWindow disables timer
- * throttling for ALL sibling WebContents in that window. With one always-active
- * view per window, that silently un-throttled every cached sibling and made the
- * cached-view `setBackgroundThrottling(true)` ineffective (#8599).
- * `Emulation.setCPUThrottlingRate` is per-target — it slows the V8/Blink clock
- * for one renderer only while leaving the event loop, IPC, and MessagePort
- * dispatch running, so it is safe for cached views that still receive
- * worktree/workspace messages.
+ * throttling for all sibling WebContents in that window. With one always-active
+ * view per window, that makes cached-view `setBackgroundThrottling(true)` ineffective
+ * (#8599). `Emulation.setCPUThrottlingRate` is per-target and slows one renderer while
+ * leaving its event loop, IPC, and MessagePort dispatch live, which cached views need
+ * for worktree and workspace messages.
  *
- * Chromium 146 does NOT auto-resume a frozen renderer on focus or re-attach —
- * an explicit `"active"` call is required. Callers that activate a previously
- * deactivated view must call `unfreezeWebContents` before relying on the
- * renderer's event loop.
+ * Frozen renderers do not auto-resume on focus or reattach. Callers activating a
+ * frozen view must call `unfreezeWebContents` before relying on its event loop.
  *
- * Audit: electron/main.ts and electron/bootstrap.ts checked — no
- * `disable-renderer-backgrounding` or `disable-background-timer-throttling`
- * appendSwitch calls. If either is reintroduced, CDP freeze silently no-ops
- * (lesson #4683).
+ * Do not verify freeze with Playwright. It unconditionally enables focus emulation
+ * on every page target and forces the renderer visible, so a
+ * `Page.setWebLifecycleState` freeze reports success without freezing. A second CDP
+ * session cannot release Playwright's per-session capture. Use
+ * `npm run test:freeze-harness`. See the `test:freeze-harness` section in
+ * `docs/e2e-testing.md` (#11846).
+ *
+ * Audit: `electron/main.ts` and `electron/setup/environment.ts` have no `appendSwitch`
+ * calls for `disable-renderer-backgrounding` or `disable-background-timer-throttling`.
+ * Do not add either. The former removes cached-renderer OS priority demotion and the
+ * latter removes hidden-page timer throttling, raising idle CPU. Neither disables CDP
+ * freeze or CPU throttling.
  */
 
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
