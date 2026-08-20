@@ -8,6 +8,10 @@ const layoutUndoMock = vi.hoisted(() => ({
   getState: vi.fn(() => ({ pushLayoutSnapshot: pushLayoutSnapshotMock })),
 }));
 const moveTerminalToWorktreeAndFollowRescueMock = vi.hoisted(() => vi.fn());
+// Defaults to "no view store mounted", which is how every pre-existing test in
+// this file ran before the destination check existed — the check degrades to a
+// pass when nothing can answer, so those cases stay untouched.
+const getCurrentViewStoreOrNullMock = vi.hoisted(() => vi.fn(() => null as unknown));
 const buildPanelDuplicateOptionsMock = vi.hoisted(() => vi.fn());
 const resolveInheritedPanelCwdMock = vi.hoisted(() => vi.fn());
 const flushOptimisticClosesMock = vi.hoisted(() => vi.fn());
@@ -27,6 +31,9 @@ vi.mock("@/services/terminal/optimisticPanelClose", () => ({
 }));
 vi.mock("@/services/terminal/crossWorktreeMove", () => ({
   moveTerminalToWorktreeAndFollowRescue: moveTerminalToWorktreeAndFollowRescueMock,
+}));
+vi.mock("@/store/createWorktreeStore", () => ({
+  getCurrentViewStoreOrNull: getCurrentViewStoreOrNullMock,
 }));
 vi.mock("@/services/agentResume", () => ({
   buildResumePanelOptions: buildResumePanelOptionsMock,
@@ -115,6 +122,9 @@ function setPanelState(options: {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // clearAllMocks resets calls but not implementations, so a destination-map
+  // stub set by one test would otherwise answer for every test after it.
+  getCurrentViewStoreOrNullMock.mockReturnValue(null);
   listAgentSessionsMock.mockResolvedValue([]);
   (globalThis as unknown as { window: { electron: unknown } }).window = {
     ...(globalThis as unknown as { window?: object }).window,
@@ -840,6 +850,73 @@ describe("terminal.moveToWorktree", () => {
     // The snapshot is pushed just before the move, so an unpushed stack proves
     // the guard fired before any layout mutation, not merely before the helper.
     expect(pushLayoutSnapshotMock).not.toHaveBeenCalled();
+  });
+
+  it("rejects an agent's unknown destination worktree instead of filing the panel under it", async () => {
+    setPanelState({ panels: [{ id: "p1", location: "grid", worktreeId: "wt-1" }] });
+    getCurrentViewStoreOrNullMock.mockReturnValue({
+      getState: () => ({ worktrees: new Map([["wt-live", {}]]) }),
+    });
+    const run = setupActions();
+
+    await expect(
+      run(
+        "terminal.moveToWorktree",
+        { terminalId: "p1", worktreeId: "wt-hallucinated" },
+        { dispatchSource: "agent" }
+      )
+    ).rejects.toThrow(/no open worktree with that `worktreeId`/);
+
+    // Filing it anyway would hide a live process under a worktree no view can
+    // select, which is the whole reason the check exists.
+    expect(moveTerminalToWorktreeAndFollowRescueMock).not.toHaveBeenCalled();
+    expect(pushLayoutSnapshotMock).not.toHaveBeenCalled();
+  });
+
+  it("moves to a destination the view store confirms is live", async () => {
+    setPanelState({ panels: [{ id: "p1", location: "grid", worktreeId: "wt-1" }] });
+    getCurrentViewStoreOrNullMock.mockReturnValue({
+      getState: () => ({ worktrees: new Map([["wt-2", {}]]) }),
+    });
+    const run = setupActions();
+
+    await run(
+      "terminal.moveToWorktree",
+      { terminalId: "p1", worktreeId: "wt-2" },
+      { dispatchSource: "agent" }
+    );
+
+    expect(moveTerminalToWorktreeAndFollowRescueMock).toHaveBeenCalledExactlyOnceWith("p1", "wt-2");
+  });
+
+  it("leaves the destination unchecked for a drag or menu caller, which can only name a real row", async () => {
+    setPanelState({ panels: [{ id: "p1", location: "grid", worktreeId: "wt-1" }] });
+    getCurrentViewStoreOrNullMock.mockReturnValue({
+      getState: () => ({ worktrees: new Map([["wt-live", {}]]) }),
+    });
+    const run = setupActions();
+
+    await run("terminal.moveToWorktree", { terminalId: "p1", worktreeId: "wt-unlisted" });
+
+    expect(moveTerminalToWorktreeAndFollowRescueMock).toHaveBeenCalledExactlyOnceWith(
+      "p1",
+      "wt-unlisted"
+    );
+  });
+
+  it("tells an agent its named panel is gone rather than reporting a move that did not happen", async () => {
+    setPanelState({ panels: [] });
+    const run = setupActions();
+
+    await expect(
+      run(
+        "terminal.moveToWorktree",
+        { terminalId: "ghost", worktreeId: "wt-2" },
+        { dispatchSource: "agent" }
+      )
+    ).rejects.toThrow(/found no panel with that `terminalId`/);
+
+    expect(moveTerminalToWorktreeAndFollowRescueMock).not.toHaveBeenCalled();
   });
 
   it("still moves the terminal an agent names explicitly", async () => {

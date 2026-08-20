@@ -14,6 +14,7 @@ import { getDefaultTitle } from "@/store/slices/panelRegistry/helpers";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { TerminalSpawnSourceSchema, AddPanelFocusPolicySchema } from "./schemas";
 import { requireExplicitTerminalIdForAgentDispatch } from "./terminalTargetBinding";
+import { getCurrentViewStoreOrNull } from "@/store/createWorktreeStore";
 import type { AddPanelOptions } from "@/store/slices/panelRegistry/types";
 import type { PtyPanelData, TerminalSpawnSource } from "@shared/types/panel";
 import { isPtyPanel } from "@shared/types/panel";
@@ -260,8 +261,10 @@ export function registerTerminalSpawnActions(
     description:
       "Move a terminal panel to a different worktree. The process is never restarted: a live " +
       "agent keeps running in the directory it launched from, and its pane offers to tell it " +
-      "to continue in the destination. The panel move is reversible. Name the target " +
-      "explicitly — an automated caller cannot see what the user has focused.",
+      "to continue in the destination. A panel that shares a tab group travels with the " +
+      "rest of that group, so this can relocate more than the one panel named. The move is " +
+      "reversible. Name the target explicitly — an automated caller cannot see what the " +
+      "user has focused.",
     category: "terminal",
     kind: "command",
     // Relabelling a panel is reversible — drag it back — and nothing here
@@ -272,7 +275,7 @@ export function registerTerminalSpawnActions(
     scope: "renderer",
     argsSchema: z.object({
       terminalId: z.string().optional(),
-      worktreeId: z.string(),
+      worktreeId: z.string().min(1),
     }),
     run: async (args: unknown, ctx) => {
       const { terminalId, worktreeId } = args as { terminalId?: string; worktreeId: string };
@@ -281,8 +284,34 @@ export function registerTerminalSpawnActions(
       const targetId = terminalId ?? state.focusedId;
       if (targetId) {
         const terminal = state.panelsById[targetId];
+        // A named-but-missing panel is a normal race for an agent: it can be
+        // closed between the listing and this call. The drag paths can only
+        // name a panel they are holding, so they keep the quiet return, but an
+        // agent told "OK" for a move that never happened would go on to reason
+        // about a panel that is no longer there (#11877).
+        if (!terminal && ctx.dispatchSource === "agent") {
+          throw new Error(
+            "terminal.moveToWorktree found no panel with that `terminalId` — it may have been closed. Re-read the terminal listing and pass a current panel id."
+          );
+        }
         if (!terminal || terminal.worktreeId === worktreeId) {
           return;
+        }
+        // The destination is a bare string, and until this action was reachable
+        // by an agent it could only ever come from a real worktree row. A
+        // hallucinated or stale id would file the panel — and every panel in its
+        // tab group — under a worktree no view can select, hiding a live process
+        // while the caller is told the move succeeded. Verified only when a view
+        // store can answer: a null registry means no project view is mounted
+        // (unit tests, teardown), which is a wiring gap rather than a bad
+        // argument, so it degrades the way the project-location resolver does.
+        if (ctx.dispatchSource === "agent") {
+          const worktrees = getCurrentViewStoreOrNull()?.getState().worktrees;
+          if (worktrees && !worktrees.has(worktreeId)) {
+            throw new Error(
+              "terminal.moveToWorktree found no open worktree with that `worktreeId`. Pass an id from the worktree listing, or create the worktree first and use the id it returns."
+            );
+          }
         }
 
         useLayoutUndoStore.getState().pushLayoutSnapshot();
@@ -314,7 +343,7 @@ export function registerTerminalSpawnActions(
       // returns.
       if (ctx.dispatchSource === "agent") {
         throw new Error(
-          "terminal.moveToNewWorktree can't be dispatched by an agent or MCP client — it opens the new-worktree dialog, which a headless caller can never answer. Create the worktree first, then move the panel into it by id."
+          "terminal.moveToNewWorktree can't be dispatched by an agent or MCP client — it opens the new-worktree dialog, which a headless caller can never answer. Don't retry it. Create the worktree headlessly with `worktree.createWithRecipe` (pass `branchName`, and omit `recipeId` when no recipe is wanted), then call `terminal.moveToWorktree` with the original `terminalId` and the `worktreeId` it returns."
         );
       }
       const state = usePanelStore.getState();
