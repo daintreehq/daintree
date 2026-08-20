@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import type {
-  BrowserPanelData,
-  DockPanelData,
-  FilePanelData,
-  PtyPanelData,
-} from "@shared/types/panel";
+import type { BrowserPanelData, FilePanelData, PtyPanelData } from "@shared/types/panel";
 import type { TabGroup } from "@/types";
 import { buildDockRenderItems } from "../dockRenderItems";
 
@@ -167,8 +162,6 @@ describe("buildDockRenderItems", () => {
     expect(items[0]?.group.panelIds).toEqual(["live-panel"]);
   });
 
-  // ── #11873: order is driven by the ordered panel list ──────────────────
-
   it("emits chips in the ordered panel list's order", () => {
     // The regression: a dock reorder rewrites only `panelIds`, so the ordered
     // list is the sole signal that anything moved. Order must come from it,
@@ -245,8 +238,6 @@ describe("buildDockRenderItems", () => {
     expect(items[0]?.group.panelIds).toEqual(["a", "b"]);
     expect(items[0]?.group.activeTabId).toBe("b");
   });
-
-  // ── Worktree scope ─────────────────────────────────────────────────────
 
   it("ignores a group scoped to another worktree, rendering its members standalone", () => {
     const items = buildDockRenderItems(
@@ -343,8 +334,6 @@ describe("buildDockRenderItems", () => {
     expect(idsOf(items)).toEqual(["a", "b"]);
   });
 
-  // ── Malformed input ────────────────────────────────────────────────────
-
   it("renders a panel once when two groups both claim it", () => {
     // Overlapping membership is invalid state, but it must not put the same
     // panel under two chips — two sortables would share one dnd-kit id.
@@ -367,11 +356,14 @@ describe("buildDockRenderItems", () => {
   });
 
   it("does not mutate the groups or panels it is given", () => {
-    const stored = Object.freeze(
-      group(["a", "closed"], "closed", { id: "pair" })
-    ) as unknown as TabGroup;
+    // Freeze as statements so the bindings keep their mutable types — the
+    // builder's parameters are already readonly, and casting back would just
+    // trade a real assertion for a type assertion.
+    const stored = group(["a", "closed"], "closed", { id: "pair" });
+    Object.freeze(stored);
     Object.freeze(stored.panelIds);
-    const panels = Object.freeze([terminal("a")]) as unknown as DockPanelData[];
+    const panels = [terminal("a")];
+    Object.freeze(panels);
 
     const items = buildDockRenderItems(panels, groupMap(stored), null);
 

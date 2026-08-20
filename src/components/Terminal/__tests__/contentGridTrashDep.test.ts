@@ -57,9 +57,15 @@ describe("ContentGrid tabGroups memo includes trashedTerminals dep (trash-visibi
 describe("ContentDock excludes trashed panels through a compiler-safe dataflow", () => {
   it("filters trashed panels out of the ordered dock selector", async () => {
     const content = await readFile(DOCK_PATH, "utf-8");
-    const selector = content.slice(content.indexOf("const dockTerminalsRaw = usePanelStore("));
-    expect(selector).not.toBe("");
-    expect(selector.slice(0, selector.indexOf("\n  );"))).toContain("trashedTerminals");
+    // Assert both slice markers resolve. An unfound marker yields -1, which
+    // silently widens the slice to most of the file and lets an unrelated
+    // `trashedTerminals` read elsewhere in ContentDock satisfy the check.
+    const start = content.indexOf("const dockTerminalsRaw = usePanelStore(");
+    expect(start).toBeGreaterThanOrEqual(0);
+    const end = content.indexOf("\n  );", start);
+    expect(end).toBeGreaterThan(start);
+
+    expect(content.slice(start, end)).toContain("state.trashedTerminals.has(");
   });
 
   it("does not call the tab-group store getters during render", async () => {
