@@ -119,9 +119,6 @@ async function makeBundledHelpFolder(root: string): Promise<string> {
       permissions: {
         allow: [
           "Read(**)",
-          "Glob(**)",
-          "Grep(**)",
-          "LS(**)",
           "WebFetch",
           "mcp__daintree-docs__*",
           "Bash(gh *)",
@@ -2641,9 +2638,6 @@ describe("HelpSessionService", () => {
           permissions: {
             allow: [
               "Read(**)",
-              "Glob(**)",
-              "Grep(**)",
-              "LS(**)",
               "WebFetch",
               "mcp__daintree-docs__*",
               "Bash(gh *)",

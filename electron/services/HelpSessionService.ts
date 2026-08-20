@@ -1863,10 +1863,11 @@ export class HelpSessionService {
     return {
       permissions: {
         allow: [
+          // `Read(...)` covers every file-reading tool (Glob, Grep, LS).
+          // Separate `Glob(**)`/`Grep(**)`/`LS(**)` entries are never matched
+          // by the file permission checks and make Claude Code print a warning
+          // on every session start.
           "Read(**)",
-          "Glob(**)",
-          "Grep(**)",
-          "LS(**)",
           "WebFetch",
           "mcp__daintree-docs__*",
           "Bash(gh *)",
