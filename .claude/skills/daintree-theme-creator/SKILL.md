@@ -1,6 +1,6 @@
 ---
 name: daintree-theme-creator
-description: Guide for creating or modifying Daintree themes. Use when working on theme palettes, semantic tokens, component extensions, or built-in theme definitions.
+description: Guide for creating or modifying Daintree themes. Use when working on theme palettes, semantic tokens, component extensions, built-in theme definitions, or bundled theme preview imagery.
 ---
 
 # Daintree Theme Creator
@@ -9,6 +9,8 @@ Before starting, read the architecture documentation for full context:
 
 - `docs/themes/theme-system.md` — Three-layer pipeline, core model, component override pattern, runtime application, import flow
 - `docs/themes/theme-tokens.md` — Complete token reference (142 tokens), authoring vs resolved contracts, derivation defaults, contrast rules
+
+When creating or replacing a built-in theme hero image or thumbnail, read [`resources/theme-preview-images.md`](resources/theme-preview-images.md) before generating anything. It defines the visual goal, reference-image workflow, exact asset sizes, hero and thumbnail source-crop workflows, and review gates.
 
 ## Three-Layer Pipeline
 
