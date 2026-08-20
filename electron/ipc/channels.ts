@@ -331,6 +331,8 @@ export const CHANNELS = {
 
   ACCESSIBILITY_GET_ENABLED: "accessibility:get-enabled",
   ACCESSIBILITY_SUPPORT_CHANGED: "accessibility:support-changed",
+  /** Broadcast after a configuration bundle applied, so every view refreshes its mirrors (#11889). */
+  CONFIG_BUNDLE_IMPORTED: "config-bundle:imported",
 
   GIT_GET_FILE_DIFF: "git:get-file-diff",
   GIT_GET_PROJECT_PULSE: "git:get-project-pulse",

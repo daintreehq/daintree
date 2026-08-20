@@ -102,6 +102,18 @@ vi.mock("../getSoundService.js", () => ({
 
 vi.mock("../ProjectStore.js", () => ({ projectStore: mockProjectStore }));
 
+// Stand-in for the real scheme schema: the theme tests are about which schemes
+// survive validation, not about the token shape itself. A scheme is "valid"
+// here when it has an id and a name.
+vi.mock("../../schemas/customSchemes.js", async () => {
+  const { z } = await import("zod");
+  return {
+    appCustomSchemesWriteSchema: z.array(
+      z.object({ id: z.string().min(1), name: z.string().min(1) }).passthrough()
+    ),
+  };
+});
+
 const { ConfigBundleService } = await import("../ConfigBundleService.js");
 
 function agent(id: string, overrides: Record<string, unknown> = {}) {
@@ -127,7 +139,7 @@ beforeEach(() => {
     keybindingOverrides: { overrides: {} },
     appTheme: {},
     notificationSettings: { completedSoundFile: "chime.wav", quietHoursEnabled: false },
-    worktreeConfig: { pathPattern: "../{project}-worktrees/{branch}" },
+    worktreeConfig: { pathPattern: "{parent-dir}/{repo-name}-worktrees/{branch-slug}" },
   };
   mockProjectStore.recipes = [];
   vi.clearAllMocks();
@@ -167,7 +179,7 @@ describe("ConfigBundleService.apply", () => {
     const bundle = {
       userAgentRegistry: { helper: agent("helper") },
       keybindingOverrides: { "app.settings": ["Cmd+,"] },
-      worktreeConfig: { pathPattern: "../trees/{branch}" },
+      worktreeConfig: { pathPattern: "worktrees/{branch-slug}" },
     };
 
     const first = await service.apply(bundle);
@@ -252,7 +264,9 @@ describe("ConfigBundleService.apply", () => {
     const report = await service.apply({ worktreeConfig: { pathPattern: "   " } });
 
     expect(statusFor(report, "worktreeConfig", "pathPattern")?.status).toBe("skipped");
-    expect(mockStore.get("worktreeConfig.pathPattern")).toBe("../{project}-worktrees/{branch}");
+    expect(mockStore.get("worktreeConfig.pathPattern")).toBe(
+      "{parent-dir}/{repo-name}-worktrees/{branch-slug}"
+    );
   });
 
   it("rolls earlier sections back when a later one throws", async () => {
@@ -260,20 +274,22 @@ describe("ConfigBundleService.apply", () => {
     const { service } = makeService();
 
     const report = await service.apply({
-      worktreeConfig: { pathPattern: "../trees/{branch}" },
+      worktreeConfig: { pathPattern: "worktrees/{branch-slug}" },
       globalRecipes: [{ id: "r1", name: "Fleet", terminals: [] }],
     });
 
     expect(report.outcome).toBe("rolled-back");
     expect(report.rolledBack).toBe(true);
     // The section that had already succeeded is back at its pre-import value.
-    expect(mockStore.get("worktreeConfig.pathPattern")).toBe("../{project}-worktrees/{branch}");
+    expect(mockStore.get("worktreeConfig.pathPattern")).toBe(
+      "{parent-dir}/{repo-name}-worktrees/{branch-slug}"
+    );
   });
 
   it("rebuilds the menu only when keybindings actually changed", async () => {
     const { service, rebuildMenu } = makeService();
 
-    await service.apply({ worktreeConfig: { pathPattern: "../trees/{branch}" } });
+    await service.apply({ worktreeConfig: { pathPattern: "worktrees/{branch-slug}" } });
     expect(rebuildMenu).not.toHaveBeenCalled();
 
     await service.apply({ keybindingOverrides: { "app.settings": ["Cmd+,"] } });
@@ -283,10 +299,123 @@ describe("ConfigBundleService.apply", () => {
   it("marks a section absent from the bundle as not present", async () => {
     const { service } = makeService();
 
-    const report = await service.apply({ worktreeConfig: { pathPattern: "../trees/{branch}" } });
+    const report = await service.apply({
+      worktreeConfig: { pathPattern: "worktrees/{branch-slug}" },
+    });
 
     expect(report.sections.find((s) => s.section === "appTheme")?.present).toBe(false);
     expect(report.sections.find((s) => s.section === "worktreeConfig")?.present).toBe(true);
+  });
+
+  it("does not delete an existing theme when the imported one under that id is invalid", async () => {
+    const good = { id: "mine", name: "Mine" };
+    mockStore.set("appTheme", { customSchemes: [good] });
+    const { service } = makeService();
+
+    const report = await service.apply({
+      appTheme: { customSchemes: [{ id: "mine", nonsense: true }] },
+    });
+
+    expect(statusFor(report, "appTheme", "theme:mine")?.status).toBe("skipped");
+    // The pre-existing scheme is still there — a rejected import must not
+    // take the user's working theme down with it.
+    const stored = mockStore.get("appTheme.customSchemes") as Array<{ id: string }>;
+    expect(stored.map((s) => s.id)).toEqual(["mine"]);
+  });
+
+  it("keeps a pre-existing theme that the current schema would reject", async () => {
+    const legacy = { id: "legacy", somethingOld: true }; // no name -> invalid today
+    const fresh = { id: "fresh", name: "Fresh" };
+    mockStore.set("appTheme", { customSchemes: [legacy] });
+    const { service } = makeService();
+
+    await service.apply({ appTheme: { customSchemes: [fresh] } });
+
+    const stored = mockStore.get("appTheme.customSchemes") as Array<{ id: string }>;
+    expect(stored.map((s) => s.id).sort()).toEqual(["fresh", "legacy"]);
+  });
+
+  it("converges on a clamped value instead of reporting a change forever", async () => {
+    const { service } = makeService();
+    // 1ms is below the supported floor, so the sanitizer clamps it.
+    const bundle = { notificationSettings: { waitingEscalationDelayMs: 1 } };
+
+    const first = await service.apply(bundle);
+    const second = await service.apply(bundle);
+
+    expect(statusFor(first, "notificationSettings", "waitingEscalationDelayMs")?.status).toBe(
+      "applied"
+    );
+    // Without normalize-before-compare this stays "applied" on every re-import,
+    // because the raw request never equals the clamped stored value.
+    expect(statusFor(second, "notificationSettings", "waitingEscalationDelayMs")?.status).toBe(
+      "unchanged"
+    );
+  });
+
+  it("reports an agent carrying only retired keys as skipped", async () => {
+    const { service } = makeService();
+
+    const report = await service.apply({ agentSettings: { helper: { selected: true } } });
+
+    expect(statusFor(report, "agentSettings", "helper")?.status).toBe("skipped");
+  });
+
+  it("says nothing changed when the very first section fails outright", async () => {
+    mockProjectStore.getGlobalRecipes.mockRejectedValue(new Error("recipes.json unreadable"));
+    const { service } = makeService();
+
+    const report = await service.apply({ globalRecipes: [{ id: "r1", name: "F", terminals: [] }] });
+
+    expect(report.outcome).toBe("rolled-back");
+    // Nothing was applied, so there was nothing to roll back — claiming a
+    // rollback happened would be as wrong as claiming the import succeeded.
+    expect(report.rolledBack).toBe(false);
+    expect(report.errors[0]).toContain("Nothing was changed");
+  });
+
+  it("admits when the rollback itself failed rather than claiming a clean undo", async () => {
+    const { service } = makeService();
+    mockProjectStore.addGlobalRecipe.mockRejectedValue(new Error("disk full"));
+    // The worktree section applies first, then its restore also fails.
+    const originalSet = mockStore.set.getMockImplementation()!;
+    let applied = false;
+    mockStore.set.mockImplementation((path: string, value: unknown) => {
+      if (path === "worktreeConfig.pathPattern") {
+        if (applied) throw new Error("store is read-only");
+        applied = true;
+      }
+      return originalSet(path, value);
+    });
+
+    const report = await service.apply({
+      worktreeConfig: { pathPattern: "worktrees/{branch-slug}" },
+      globalRecipes: [{ id: "r1", name: "Fleet", terminals: [] }],
+    });
+
+    expect(report.outcome).toBe("rolled-back");
+    expect(report.rolledBack).toBe(false);
+    expect(report.errors[0]).toContain("worktreeConfig");
+  });
+
+  it("restores a recipe exactly, dropping fields the import added", async () => {
+    mockProjectStore.recipes = [{ id: "r1", name: "Original", terminals: [], createdAt: 1 }];
+    const { service } = makeService();
+    // globalRecipes is the last section, so make a LATER failure impossible and
+    // instead drive restore() directly through a failing second section.
+    mockProjectStore.updateGlobalRecipe.mockImplementation(async () => {
+      throw new Error("update not supported");
+    });
+
+    const report = await service.apply({
+      globalRecipes: [{ id: "r1", name: "Imported", terminals: [], showInEmptyState: true }],
+    });
+
+    expect(report.outcome).toBe("rolled-back");
+    const restored = mockProjectStore.recipes.find((r) => r.id === "r1");
+    expect(restored?.name).toBe("Original");
+    // The field the import introduced must be gone, not merged away.
+    expect(restored).not.toHaveProperty("showInEmptyState");
   });
 
   it("merges global recipes by id so a repeat import adds no duplicate", async () => {
@@ -326,7 +455,9 @@ describe("ConfigBundleService.preview", () => {
   it("omits sections the bundle doesn't carry", async () => {
     const { service } = makeService();
 
-    const preview = await service.preview({ worktreeConfig: { pathPattern: "../x/{branch}" } });
+    const preview = await service.preview({
+      worktreeConfig: { pathPattern: "trees/{branch-slug}" },
+    });
 
     expect(preview.map((p) => p.section)).toEqual(["worktreeConfig"]);
   });
@@ -343,7 +474,7 @@ describe("ConfigBundleService.collect", () => {
     expect(collected.userAgentRegistry).toEqual({ helper: agent("helper") });
     expect(collected.keybindingOverrides).toEqual({ "app.settings": ["Cmd+,"] });
     expect(collected.worktreeConfig).toEqual({
-      pathPattern: "../{project}-worktrees/{branch}",
+      pathPattern: "{parent-dir}/{repo-name}-worktrees/{branch-slug}",
     });
   });
 

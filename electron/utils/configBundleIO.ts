@@ -45,7 +45,12 @@ function walk(value: unknown, path: string, omitted: string[]): OmitWalkResult {
     const next: unknown[] = [];
     for (let i = 0; i < value.length; i++) {
       const result = walk(value[i], `${path}[${i}]`, omitted);
-      if (result !== OMIT) next.push(result);
+      // Dropping one element and keeping the rest would silently rewrite a
+      // positional list — an agent's `args` of ["--token", "<secret>"] would
+      // export as ["--token"], which is a different (broken) command rather
+      // than a redacted one. Withhold the whole array instead.
+      if (result === OMIT) return OMIT;
+      next.push(result);
     }
     return next;
   }
@@ -54,7 +59,16 @@ function walk(value: unknown, path: string, omitted: string[]): OmitWalkResult {
     const next: Record<string, unknown> = {};
     for (const [key, child] of Object.entries(value as Record<string, unknown>)) {
       const result = walk(child, childPath(path, key), omitted);
-      if (result !== OMIT) next[key] = result;
+      if (result === OMIT) continue;
+      // defineProperty, not `next[key] = …`: a key literally named `__proto__`
+      // would otherwise hit the legacy prototype setter, changing the object's
+      // prototype and losing the value. Agent settings allow arbitrary keys.
+      Object.defineProperty(next, key, {
+        value: result,
+        enumerable: true,
+        writable: true,
+        configurable: true,
+      });
     }
     return next;
   }
@@ -101,6 +115,10 @@ export function buildConfigBundle(
     if (payload === undefined) continue;
     const { value, omitted } = omitSecretValues(payload, id);
     omittedSecretPaths.push(...omitted);
+    // A section can be withheld entirely (its whole value looked like a secret).
+    // JSON.stringify would drop the undefined key anyway, so reporting the
+    // section as included would overstate what the file actually carries.
+    if (value === undefined) continue;
     cleaned[id] = value;
     included.push(id);
   }
@@ -142,7 +160,9 @@ function failure(error: string): ParseConfigBundleResult {
  * left alone, so a bundle from a newer build still applies what overlaps.
  */
 export function parseConfigBundle(json: string): ParseConfigBundleResult {
-  if (json.length > CONFIG_BUNDLE_MAX_BYTES) {
+  // Byte length, not string length: a bundle full of multi-byte characters
+  // would otherwise sail past a cap that advertises itself in bytes.
+  if (Buffer.byteLength(json, "utf8") > CONFIG_BUNDLE_MAX_BYTES) {
     return failure(`File too large (max ${Math.floor(CONFIG_BUNDLE_MAX_BYTES / 1024)}KB)`);
   }
 

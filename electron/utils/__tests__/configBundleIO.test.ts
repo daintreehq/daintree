@@ -170,3 +170,67 @@ describe("parseConfigBundle", () => {
     expect(result.ok).toBe(true);
   });
 });
+
+describe("omitSecretValues — arrays and hostile keys", () => {
+  it("withholds a whole positional array rather than resequencing it", () => {
+    // ["--token", "<secret>"] must not export as ["--token"] — that is a
+    // different command, not a redacted one.
+    const { value, omitted } = omitSecretValues({ args: ["--token", SECRETISH] }, "agent");
+
+    expect(value).not.toHaveProperty("args");
+    expect(omitted).toEqual(["agent.args[1]"]);
+  });
+
+  it("keeps an array whose elements are all safe", () => {
+    const { value } = omitSecretValues({ args: ["--verbose", "--json"] }, "agent");
+    expect(value).toEqual({ args: ["--verbose", "--json"] });
+  });
+
+  it("drops only the offending key inside an array of objects", () => {
+    const { value } = omitSecretValues(
+      { terminals: [{ env: { TOKEN: SECRETISH, MODE: "fast" } }, { env: { MODE: "slow" } }] },
+      "recipe"
+    );
+
+    expect(value).toEqual({
+      terminals: [{ env: { MODE: "fast" } }, { env: { MODE: "slow" } }],
+    });
+  });
+
+  it("keeps a key named __proto__ as an own property without moving the prototype", () => {
+    const { value } = omitSecretValues(
+      JSON.parse('{"agents":{"__proto__":{"polluted":true},"real":{"ok":true}}}'),
+      ""
+    );
+
+    const agents = (value as { agents: Record<string, unknown> }).agents;
+    expect(Object.getPrototypeOf(agents)).toBe(Object.prototype);
+    expect(Object.prototype.hasOwnProperty.call(agents, "__proto__")).toBe(true);
+    expect(({} as Record<string, unknown>).polluted).toBeUndefined();
+  });
+});
+
+describe("buildConfigBundle — fully withheld sections", () => {
+  it("does not report a section it could not write", () => {
+    const { json, sections } = buildConfigBundle(
+      { worktreeConfig: { pathPattern: "../{n}" }, keybindingOverrides: [SECRETISH] },
+      EXPORTED_AT
+    );
+
+    expect(sections).toEqual(["worktreeConfig"]);
+    expect(Object.keys(JSON.parse(json).sections)).toEqual(["worktreeConfig"]);
+  });
+});
+
+describe("parseConfigBundle — byte cap", () => {
+  it("measures the cap in bytes, not UTF-16 code units", () => {
+    // Each of these is 4 UTF-8 bytes but 2 string units, so a length-based cap
+    // would let a file roughly twice the advertised limit through.
+    const multibyte = "😀".repeat(Math.ceil(CONFIG_BUNDLE_MAX_BYTES / 4) + 10);
+    expect(multibyte.length).toBeLessThan(CONFIG_BUNDLE_MAX_BYTES);
+
+    const result = parseConfigBundle(multibyte);
+    expect(result.ok).toBe(false);
+    expect(result.errors[0]).toContain("too large");
+  });
+});

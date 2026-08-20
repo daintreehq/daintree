@@ -2,14 +2,17 @@ import { dialog, BrowserWindow } from "electron";
 import { promises as fs } from "node:fs";
 import path from "node:path";
 import { defineIpcNamespace, op } from "../define.js";
+import { CHANNELS } from "../channels.js";
 import { CONFIG_BUNDLE_METHOD_CHANNELS } from "./configBundle.preload.js";
 import type { HandlerDependencies } from "../types.js";
+import { getAppWebContents } from "../../window/webContentsRegistry.js";
 import { ConfigBundleService } from "../../services/ConfigBundleService.js";
 import { buildConfigBundle, parseConfigBundle } from "../../utils/configBundleIO.js";
-import type {
-  ConfigBundlePreview,
-  ConfigExportResult,
-  ConfigImportReport,
+import {
+  CONFIG_BUNDLE_MAX_BYTES,
+  type ConfigBundlePreview,
+  type ConfigExportResult,
+  type ConfigImportReport,
 } from "../../../shared/types/configBundle.js";
 
 /**
@@ -28,7 +31,26 @@ import type {
 
 const BUNDLE_FILTERS = [{ name: "Daintree Configuration", extensions: ["json"] }];
 
+/**
+ * Tell every view to refresh its config mirrors.
+ *
+ * Each project view is its own V8 context with its own theme and notification
+ * stores, and `app.reloadConfig` reconciles neither. Without this, importing
+ * from one window leaves every other window showing the previous theme until
+ * restart.
+ */
+function broadcastConfigImported(): void {
+  for (const win of BrowserWindow.getAllWindows()) {
+    if (win.isDestroyed()) continue;
+    const wc = getAppWebContents(win);
+    if (!wc.isDestroyed()) wc.send(CHANNELS.CONFIG_BUNDLE_IMPORTED);
+  }
+}
+
 export function registerConfigBundleHandlers(deps: HandlerDependencies): () => void {
+  /** Serializes `applyImport` across all windows; see the op for why. */
+  let applyChain: Promise<void> = Promise.resolve();
+
   const rebuildMenu = async () => {
     const win =
       deps.mainWindow && !deps.mainWindow.isDestroyed()
@@ -47,15 +69,8 @@ export function registerConfigBundleHandlers(deps: HandlerDependencies): () => v
       export: op(
         CONFIG_BUNDLE_METHOD_CHANNELS.export,
         async (ctx): Promise<ConfigExportResult> => {
-          const sections = await service.collect();
-          const {
-            json,
-            omittedSecretPaths,
-            sections: included,
-          } = buildConfigBundle(sections, new Date().toISOString());
-
           const saveOpts: Electron.SaveDialogOptions = {
-            title: "Export Configuration",
+            title: "Export configuration",
             defaultPath: "daintree-config.json",
             filters: BUNDLE_FILTERS,
           };
@@ -68,6 +83,17 @@ export function registerConfigBundleHandlers(deps: HandlerDependencies): () => v
           if (canceled || !filePath) {
             return { outcome: "canceled", sections: [], omittedSecretPaths: [] };
           }
+
+          // Collected after the destination is chosen, so the file reflects the
+          // configuration as of the moment it was written rather than the moment
+          // the dialog opened — another window may have changed a setting while
+          // the picker sat open.
+          const sections = await service.collect();
+          const {
+            json,
+            omittedSecretPaths,
+            sections: included,
+          } = buildConfigBundle(sections, new Date().toISOString());
 
           await fs.writeFile(filePath, json, "utf-8");
           return {
@@ -84,7 +110,7 @@ export function registerConfigBundleHandlers(deps: HandlerDependencies): () => v
         CONFIG_BUNDLE_METHOD_CHANNELS.previewImport,
         async (ctx): Promise<ConfigBundlePreview> => {
           const openOpts: Electron.OpenDialogOptions = {
-            title: "Import Configuration",
+            title: "Import configuration",
             filters: BUNDLE_FILTERS,
             properties: ["openFile"],
           };
@@ -99,6 +125,21 @@ export function registerConfigBundleHandlers(deps: HandlerDependencies): () => v
           }
 
           const fileName = path.basename(filePaths[0]);
+
+          // Size-check before reading, not after: `parseConfigBundle` enforces
+          // the same cap, but only once the whole file is already resident in
+          // the main process.
+          const { size } = await fs.stat(filePaths[0]);
+          if (size > CONFIG_BUNDLE_MAX_BYTES) {
+            return {
+              outcome: "rejected",
+              fileName,
+              sections: [],
+              unknownSections: [],
+              errors: [`File too large (max ${Math.floor(CONFIG_BUNDLE_MAX_BYTES / 1024)}KB)`],
+            };
+          }
+
           const json = await fs.readFile(filePaths[0], "utf-8");
           const parsed = parseConfigBundle(json);
           if (!parsed.ok) {
@@ -146,7 +187,21 @@ export function registerConfigBundleHandlers(deps: HandlerDependencies): () => v
             };
           }
 
-          return service.apply(parsed.sections);
+          // Serialized across every window: two imports interleaving their
+          // section writes could roll one back over the other's changes, since
+          // each holds its own pre-import snapshot.
+          const run = applyChain.then(
+            () => service.apply(parsed.sections),
+            () => service.apply(parsed.sections)
+          );
+          applyChain = run.then(
+            () => undefined,
+            () => undefined
+          );
+          const report = await run;
+
+          if (report.outcome === "applied") broadcastConfigImported();
+          return report;
         }
       ),
     },

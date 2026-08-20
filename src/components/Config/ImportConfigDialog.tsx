@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { notify } from "@/lib/notify";
 import { logError } from "@/utils/logger";
@@ -71,52 +71,70 @@ function skippedReasons(report: ConfigImportReport): string[] {
 export function ImportConfigDialog() {
   const [preview, setPreview] = useState<ConfigBundlePreview | null>(null);
   const [isApplying, setIsApplying] = useState(false);
+  const [applyError, setApplyError] = useState<string | null>(null);
+  /**
+   * Synchronous single-flight gate. `isApplying` is state and settles a render
+   * later, so two activations in the same tick would both pass a state check —
+   * opening two native pickers, or applying the same bundle twice.
+   */
+  const inFlight = useRef(false);
 
-  const close = useCallback(() => setPreview(null), []);
+  const close = useCallback(() => {
+    setPreview(null);
+    setApplyError(null);
+  }, []);
 
   const beginImport = useCallback(async () => {
-    let result: ConfigBundlePreview;
+    if (inFlight.current) return;
+    inFlight.current = true;
     try {
-      result = await window.electron.configBundle.previewImport();
-    } catch (error) {
-      logError("[importConfig] Failed to read configuration bundle", error);
-      // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
-      notify({
-        type: "error",
-        priority: "high",
-        message: `Import failed — couldn't read that file. ${formatErrorMessage(error, "")}`.trim(),
-        supersedeKey: IMPORT_CONFIG_ACTION_ID,
-      });
-      return;
+      let result: ConfigBundlePreview;
+      try {
+        result = await window.electron.configBundle.previewImport();
+      } catch (error) {
+        logError("[importConfig] Failed to read configuration bundle", error);
+        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+        notify({
+          type: "error",
+          priority: "high",
+          message:
+            `Import failed — couldn't read that file. ${formatErrorMessage(error, "")}`.trim(),
+          supersedeKey: IMPORT_CONFIG_ACTION_ID,
+        });
+        return;
+      }
+
+      if (result.outcome === "canceled") return;
+
+      if (result.outcome === "rejected") {
+        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+        notify({
+          type: "error",
+          priority: "high",
+          message: `Import failed — ${result.errors[0] ?? "that file isn't a Daintree configuration bundle"}`,
+          supersedeKey: IMPORT_CONFIG_ACTION_ID,
+        });
+        return;
+      }
+
+      const changes = result.sections.reduce((sum, section) => sum + changeCount(section), 0);
+      if (changes === 0) {
+        // Nothing to overwrite means nothing destructive to confirm — importing
+        // the same bundle twice lands here, which is what makes it idempotent.
+        notify({
+          type: "info",
+          priority: "low",
+          message: "Configuration already matches that bundle — nothing to import",
+          supersedeKey: IMPORT_CONFIG_ACTION_ID,
+        });
+        return;
+      }
+
+      setApplyError(null);
+      setPreview(result);
+    } finally {
+      inFlight.current = false;
     }
-
-    if (result.outcome === "canceled") return;
-
-    if (result.outcome === "rejected") {
-      // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
-      notify({
-        type: "error",
-        priority: "high",
-        message: `Import failed — ${result.errors[0] ?? "that file isn't a Daintree configuration bundle"}`,
-        supersedeKey: IMPORT_CONFIG_ACTION_ID,
-      });
-      return;
-    }
-
-    const changes = result.sections.reduce((sum, section) => sum + changeCount(section), 0);
-    if (changes === 0) {
-      // Nothing to overwrite means nothing destructive to confirm — importing
-      // the same bundle twice lands here, which is what makes it idempotent.
-      notify({
-        type: "info",
-        priority: "low",
-        message: "Configuration already matches that bundle — nothing to import",
-        supersedeKey: IMPORT_CONFIG_ACTION_ID,
-      });
-      return;
-    }
-
-    setPreview(result);
   }, []);
 
   useEffect(() => {
@@ -127,27 +145,38 @@ export function ImportConfigDialog() {
     return () => window.removeEventListener(IMPORT_CONFIG_EVENT, handler);
   }, [beginImport]);
 
+  // An import applied in any window has to reach this one too — each project
+  // view holds its own theme and notification stores, and `app.reloadConfig`
+  // reconciles neither.
+  useEffect(() => {
+    return window.electron.configBundle.onImported(() => {
+      void refreshImportedConfig();
+    });
+  }, []);
+
   const handleConfirm = useCallback(async () => {
-    if (!preview?.bundleJson) return;
+    if (!preview?.bundleJson || inFlight.current) return;
+    inFlight.current = true;
     setIsApplying(true);
+    setApplyError(null);
+    let succeeded = false;
     try {
       const report = await window.electron.configBundle.applyImport({
         bundleJson: preview.bundleJson,
       });
 
       if (report.outcome === "rolled-back") {
-        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
-        notify({
-          type: "error",
-          priority: "high",
-          message: `Import failed — ${report.errors[0] ?? "the bundle couldn't be applied"}`,
-          supersedeKey: IMPORT_CONFIG_ACTION_ID,
-        });
+        // Kept open rather than dismissed: the dialog is the only surface that
+        // still holds what the user was importing, so closing it would take the
+        // retry away along with the explanation.
+        setApplyError(report.errors[0] ?? "The bundle couldn't be applied");
         return;
       }
 
-      // Main has written; the renderer's own mirrors still hold the old values.
+      // Main has written; this view's own mirrors still hold the old values.
+      // Other views are covered by the main-process broadcast.
       await refreshImportedConfig();
+      succeeded = true;
 
       const reasons = skippedReasons(report);
       notify({
@@ -161,16 +190,11 @@ export function ImportConfigDialog() {
       });
     } catch (error) {
       logError("[importConfig] Failed to apply configuration bundle", error);
-      // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
-      notify({
-        type: "error",
-        priority: "high",
-        message: `Import failed — ${formatErrorMessage(error, "the bundle couldn't be applied")}`,
-        supersedeKey: IMPORT_CONFIG_ACTION_ID,
-      });
+      setApplyError(formatErrorMessage(error, "The bundle couldn't be applied"));
     } finally {
+      inFlight.current = false;
       setIsApplying(false);
-      close();
+      if (succeeded) close();
     }
   }, [preview, close]);
 
@@ -187,8 +211,8 @@ export function ImportConfigDialog() {
           ? `Import configuration from '${preview.fileName}'?`
           : "Import configuration?"
       }
-      description="These settings will be replaced with the values in the bundle. Anything not listed here is left alone, and this can't be undone."
-      confirmLabel="Import configuration"
+      description="These settings will be replaced with the values in the bundle. Anything not listed stays as it is. Daintree keeps no copy of the current values, so restoring them means importing a bundle that has them."
+      confirmLabel={applyError ? "Try again" : "Import configuration"}
       variant="destructive"
       isConfirmLoading={isApplying}
       onConfirm={handleConfirm}
@@ -209,6 +233,11 @@ export function ImportConfigDialog() {
           {preview.unknownSections.length === 1
             ? "1 section in this bundle isn't supported by this version and will be ignored"
             : `${preview.unknownSections.length} sections in this bundle aren't supported by this version and will be ignored`}
+        </p>
+      )}
+      {applyError && (
+        <p className="mt-3 text-sm text-status-error" role="alert">
+          {applyError}
         </p>
       )}
     </ConfirmDialog>

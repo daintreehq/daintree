@@ -1831,6 +1831,11 @@ export interface IpcEventMap {
 
   // Accessibility events
   "accessibility:support-changed": { enabled: boolean };
+  /**
+   * A configuration bundle was applied (#11889). No payload — each view
+   * re-reads the config it mirrors rather than trusting a pushed snapshot.
+   */
+  "config-bundle:imported": undefined;
 
   // Hibernation events
   "hibernation:project-hibernated": HibernationProjectHibernatedPayload;

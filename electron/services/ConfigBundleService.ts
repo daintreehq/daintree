@@ -216,29 +216,60 @@ export class ConfigBundleService {
           errors: [],
         });
       } catch (error) {
-        errors.push(
-          `${id}: ${error instanceof Error ? error.message : String(error)}. No changes were kept.`
-        );
-        await this.rollback(snapshots);
-        rolledBack = true;
-        return { outcome: "rolled-back", sections, errors, rolledBack };
+        const reason = error instanceof Error ? error.message : String(error);
+        // `snapshots` only ever holds sections whose apply was entered, so a
+        // failure in the very first section's `read()` leaves nothing to undo.
+        const restorable = snapshots.filter((s) => s.handler.id !== id);
+        const failedRestores = await this.rollback(restorable);
+        rolledBack = restorable.length > 0 && failedRestores.length === 0;
+
+        if (failedRestores.length > 0) {
+          // Saying "no changes were kept" here would be a claim we just watched
+          // fail. Name the sections that are now in an unknown state instead.
+          errors.push(
+            `${id}: ${reason}. Undoing the earlier sections also failed, so ${failedRestores.join(", ")} may be partly changed.`
+          );
+        } else if (restorable.length > 0) {
+          errors.push(`${id}: ${reason}. No changes were kept.`);
+        } else {
+          errors.push(`${id}: ${reason}. Nothing was changed.`);
+        }
+
+        // Leaves recorded before the failure describe writes that have since
+        // been undone, so they would misreport the final state.
+        const settled = rolledBack
+          ? sections.map((section) =>
+              section.present
+                ? { ...section, applied: 0, unchanged: 0, skipped: 0, failed: 0, leaves: [] }
+                : section
+            )
+          : sections;
+
+        return { outcome: "rolled-back", sections: settled, errors, rolledBack };
       }
     }
 
     return { outcome: "applied", sections, errors, rolledBack };
   }
 
-  /** Restore in reverse order so later sections unwind before earlier ones. */
+  /**
+   * Restore in reverse order so later sections unwind before earlier ones.
+   * Returns the ids that could not be restored — a failed restore is exactly
+   * the case the caller must not describe as "nothing changed".
+   */
   private async rollback(
     snapshots: Array<{ handler: SectionHandler; snapshot: unknown }>
-  ): Promise<void> {
+  ): Promise<ConfigBundleSectionId[]> {
+    const failed: ConfigBundleSectionId[] = [];
     for (const { handler, snapshot } of [...snapshots].reverse()) {
       try {
         await handler.restore(snapshot);
       } catch (error) {
         console.error(`[ConfigBundleService] Failed to roll back ${handler.id}:`, error);
+        failed.push(handler.id);
       }
     }
+    return failed;
   }
 
   // --- Sections ---
@@ -329,13 +360,28 @@ export class ConfigBundleService {
             results.push(unchangedLeaf(agentId));
             continue;
           }
-          // Mirrors the `agentSettings:set` handler: retired legacy keys are
-          // never written back.
-          const { selected: _selected, enabled: _enabled, ...safeEntry } = entry;
-          merged[agentId] = {
+          // Mirrors the `agentSettings:set` handler: merge over the existing
+          // entry, then drop retired legacy keys so they are never written back
+          // (stripping after the merge also clears one already persisted).
+          const mergedEntry = {
             ...(isRecord(currentRecord[agentId]) ? currentRecord[agentId] : {}),
-            ...safeEntry,
+            ...entry,
           };
+          const { selected: _selected, enabled: _enabled, ...safeEntry } = mergedEntry;
+
+          // Compared against `{}` when the agent is new, so an entry made up
+          // entirely of retired keys reads as "nothing to write" rather than as
+          // a difference from `undefined`.
+          const existingEntry = isRecord(currentRecord[agentId]) ? currentRecord[agentId] : {};
+          if (sameValue(safeEntry, existingEntry)) {
+            // Every field the bundle carried for this agent was a retired key,
+            // so nothing it asked for can land. Reporting it applied would
+            // credit a write that never happens.
+            results.push(skippedLeaf(agentId, "Only retired settings, nothing to apply"));
+            continue;
+          }
+
+          merged[agentId] = safeEntry;
           pending.push(agentId);
         }
 
@@ -507,48 +553,45 @@ export class ConfigBundleService {
             : [];
 
           const mergedById = new Map(currentSchemes.map((s) => [String(s.id), s]));
-          const pending: string[] = [];
+          // Validate each incoming scheme on its own BEFORE it can displace the
+          // existing entry. Merging first and filtering the merged array
+          // afterwards would delete the user's existing scheme whenever the
+          // imported one under the same id turned out to be invalid — and would
+          // drop any unrelated pre-existing scheme that no longer validates.
+          const pending = new Map<string, Record<string, unknown>>();
           for (const scheme of incomingSchemes) {
             const id = String(scheme.id);
             if (sameValue(scheme, mergedById.get(id))) {
               results.push(unchangedLeaf(`theme:${id}`));
               continue;
             }
+            if (!appCustomSchemesWriteSchema.safeParse([scheme]).success) {
+              results.push(skippedLeaf(`theme:${id}`, "Theme definition is not valid"));
+              continue;
+            }
+            // Last one wins if the bundle repeats an id, so each id reports once.
             mergedById.set(id, scheme);
-            pending.push(id);
+            pending.set(id, scheme);
           }
 
-          if (pending.length > 0) {
-            const nextSchemes = [...mergedById.values()];
-            const parsed = appCustomSchemesWriteSchema.safeParse(nextSchemes);
-            if (!parsed.success) {
-              // One bad scheme would reject the whole array, so retry with only
-              // the schemes that validate individually rather than losing all.
-              const survivors = nextSchemes.filter(
-                (s) => appCustomSchemesWriteSchema.safeParse([s]).success
+          if (pending.size > 0) {
+            // Existing schemes are carried through untouched rather than
+            // re-parsed, so a forward-compatible field written by a newer build
+            // isn't stripped off a scheme this import never mentioned.
+            store.set("appTheme.customSchemes", [...mergedById.values()] as never);
+
+            const persisted = readTheme().customSchemes;
+            const readBackById = new Map(
+              (Array.isArray(persisted) ? (persisted as unknown[]) : [])
+                .filter(isRecord)
+                .map((s) => [String(s.id), s] as const)
+            );
+            for (const [id, scheme] of pending) {
+              results.push(
+                sameValue(readBackById.get(id), scheme)
+                  ? { key: `theme:${id}`, status: "applied" }
+                  : skippedLeaf(`theme:${id}`, "Value did not persist")
               );
-              store.set("appTheme.customSchemes", survivors as never);
-              const survivorIds = new Set(survivors.map((s) => String(s.id)));
-              for (const id of pending) {
-                results.push(
-                  survivorIds.has(id)
-                    ? { key: `theme:${id}`, status: "applied" }
-                    : skippedLeaf(`theme:${id}`, "Theme definition is not valid")
-                );
-              }
-            } else {
-              store.set("appTheme.customSchemes", parsed.data as never);
-              const readBack = readTheme().customSchemes;
-              const readBackIds = new Set(
-                (Array.isArray(readBack) ? readBack : []).filter(isRecord).map((s) => String(s.id))
-              );
-              for (const id of pending) {
-                results.push(
-                  readBackIds.has(id)
-                    ? { key: `theme:${id}`, status: "applied" }
-                    : skippedLeaf(`theme:${id}`, "Value did not persist")
-                );
-              }
             }
           }
         }
@@ -607,27 +650,18 @@ export class ConfigBundleService {
         if (!isRecord(incoming)) return results;
         const currentRecord = isRecord(current) ? current : {};
 
-        const requested = Object.entries(incoming).filter(
-          ([key, value]) => !sameValue(value, currentRecord[key])
-        );
-        for (const [key, value] of Object.entries(incoming)) {
-          if (sameValue(value, currentRecord[key])) results.push(unchangedLeaf(key));
-        }
-        if (requested.length === 0) return results;
-
-        // Same sanitizer the settings UI writes through. Anything it drops was
-        // rejected — most often a sound file that doesn't exist on this machine.
+        // Normalize BEFORE comparing, not after. The sanitizer clamps
+        // (a 1ms escalation delay becomes 30s, a fractional quiet-hour minute is
+        // floored), so comparing the raw request against the stored value would
+        // report a difference that no write can ever close — the same bundle
+        // would show a pending change on every future import.
         const sanitized = sanitizeNotificationSettingsPatch(
-          Object.fromEntries(requested),
+          incoming,
           await getAllowedSoundFiles()
-        );
+        ) as Record<string, unknown>;
 
-        for (const [field, value] of Object.entries(sanitized)) {
-          store.set(`notificationSettings.${field}` as never, value as never);
-        }
-
-        const readBack = readSettings();
-        for (const [key] of requested) {
+        const pending: string[] = [];
+        for (const key of Object.keys(incoming)) {
           if (!(key in sanitized)) {
             results.push(
               skippedLeaf(
@@ -639,8 +673,21 @@ export class ConfigBundleService {
             );
             continue;
           }
+          if (sameValue(sanitized[key], currentRecord[key])) {
+            results.push(unchangedLeaf(key));
+            continue;
+          }
+          pending.push(key);
+        }
+
+        for (const key of pending) {
+          store.set(`notificationSettings.${key}` as never, sanitized[key] as never);
+        }
+
+        const readBack = readSettings();
+        for (const key of pending) {
           results.push(
-            sameValue(readBack[key], (sanitized as Record<string, unknown>)[key])
+            sameValue(readBack[key], sanitized[key])
               ? { key, status: "applied" }
               : skippedLeaf(key, "Value did not persist")
           );
@@ -761,12 +808,27 @@ export class ConfigBundleService {
 
         if (pending.length === 0) return results;
 
+        const incomingById = byId(incoming);
         const readBackById = byId(await projectStore.getGlobalRecipes());
         for (const id of pending) {
+          const stored = readBackById.get(id);
+          if (!stored) {
+            results.push(skippedLeaf(id, "Recipe did not persist"));
+            continue;
+          }
+          // Compare the fields the bundle actually asked for. Checking only that
+          // the id exists would report a recipe as applied even when the store
+          // stripped half of it on the way in. `createdAt`/`projectId` are the
+          // target store's to own, so they are excluded from the comparison.
+          const requested = incomingById.get(id) ?? {};
+          const mismatched = Object.keys(requested).filter(
+            (key) =>
+              key !== "createdAt" && key !== "projectId" && !sameValue(requested[key], stored[key])
+          );
           results.push(
-            readBackById.has(id)
+            mismatched.length === 0
               ? { key: id, status: "applied" }
-              : skippedLeaf(id, "Recipe did not persist")
+              : skippedLeaf(id, `Stored without ${mismatched.join(", ")}`)
           );
         }
         return results;
@@ -776,12 +838,12 @@ export class ConfigBundleService {
         const liveById = byId(await projectStore.getGlobalRecipes());
 
         for (const [id, recipe] of snapshotById) {
-          if (liveById.has(id)) {
-            const { id: _id, projectId: _projectId, createdAt: _createdAt, ...updates } = recipe;
-            await projectStore.updateGlobalRecipe(id, updates as Partial<TerminalRecipe>);
-          } else {
-            await projectStore.addGlobalRecipe(recipe as unknown as TerminalRecipe);
-          }
+          // Delete-then-add rather than update: `updateGlobalRecipe` merges a
+          // partial, so a field the import ADDED to a recipe that never had it
+          // would survive the "restore" — leaving the rollback incomplete.
+          // Replacing the record outright is the only exact inverse available.
+          if (liveById.has(id)) await projectStore.deleteGlobalRecipe(id);
+          await projectStore.addGlobalRecipe(recipe as unknown as TerminalRecipe);
         }
         for (const id of liveById.keys()) {
           if (!snapshotById.has(id)) await projectStore.deleteGlobalRecipe(id);

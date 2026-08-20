@@ -43,7 +43,11 @@ async function refreshTheme(): Promise<void> {
     // These setters only touch store state and the DOM — main has already
     // persisted the imported values, so nothing is written twice.
     const next = useAppThemeStore.getState();
-    if (config.colorSchemeId) next.setSelectedSchemeIdSilent(config.colorSchemeId);
+    // Always re-inject, even when the bundle carried no scheme id: imported
+    // custom schemes can change how the *current* id resolves, and skipping the
+    // injection would leave the DOM painted with the pre-import palette.
+    next.setSelectedSchemeIdSilent(config.colorSchemeId || next.selectedSchemeId);
+    // After the injection, so it layers onto the new scheme rather than the old.
     next.setColorVisionMode(config.colorVisionMode ?? "default");
   } catch (error) {
     logError("[importConfig] Failed to refresh theme after import", error);

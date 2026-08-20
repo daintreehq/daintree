@@ -989,6 +989,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   accessibility: GeneratedElectronAPI["accessibility"] & {
     onSupportChanged(callback: (data: { enabled: boolean }) => void): () => void;
   };
+  // export / previewImport / applyImport come from GeneratedElectronAPI;
+  // onImported is a renderer-only subscription (#11889).
+  configBundle: GeneratedElectronAPI["configBundle"] & {
+    onImported(callback: () => void): () => void;
+  };
   // create / show / hide / resize / navigate / goBack / goForward / reload /
   // closeTab / showNewTabMenu come from GeneratedElectronAPI; the rest are
   // renderer-only subscriptions.
