@@ -143,6 +143,8 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
         notify({
           type: "success",
           priority: "high",
+          transient: true,
+          context: { eventKind: "settings" },
           message:
             omitted > 0
               ? `Configuration exported — ${omitted} ${omitted === 1 ? "value that looked like a secret was" : "values that looked like secrets were"} left out`
@@ -151,11 +153,17 @@ export function registerAppActions(actions: ActionRegistry, callbacks: ActionCal
         });
       } catch (error) {
         logError("[app.exportConfig] Failed to export configuration", error);
-        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
         notify({
           type: "error",
           priority: "high",
+          context: { eventKind: "settings" },
           message: "Export failed — couldn't write the configuration file.",
+          action: {
+            label: "Try again",
+            onClick: () => {
+              void actionService.dispatch("app.exportConfig", undefined, { source: "user" });
+            },
+          },
         });
       }
     },

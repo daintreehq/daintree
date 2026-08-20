@@ -9,6 +9,7 @@ import { getValidatedOverrides } from "./keybindingOverridesStore.js";
 import { getAllowedSoundFiles } from "./getSoundService.js";
 import { appCustomSchemesWriteSchema } from "../schemas/customSchemes.js";
 import { sanitizeNotificationSettingsPatch } from "../utils/notificationSettingsPatch.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { UserAgentConfigSchema } from "../../shared/types/index.js";
 import type { TerminalRecipe, UserAgentConfig } from "../../shared/types/index.js";
 import {
@@ -216,7 +217,7 @@ export class ConfigBundleService {
           errors: [],
         });
       } catch (error) {
-        const reason = error instanceof Error ? error.message : String(error);
+        const reason = formatErrorMessage(error, "the section could not be applied");
         // `snapshots` only ever holds sections whose apply was entered, so a
         // failure in the very first section's `read()` leaves nothing to undo.
         const restorable = snapshots.filter((s) => s.handler.id !== id);

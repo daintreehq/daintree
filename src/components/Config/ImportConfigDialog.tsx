@@ -15,6 +15,15 @@ import { IMPORT_CONFIG_EVENT } from "./importConfigEvent";
 /** Groups this dialog's notifications so a repeat import replaces the last report. */
 const IMPORT_CONFIG_ACTION_ID = "app.importConfig";
 
+/**
+ * Re-enter the flow from a toast action by firing the same event the menu item
+ * fires, rather than reaching back into the component — one entry point, and no
+ * self-reference from inside the callback that defines it.
+ */
+function retryImport(): void {
+  window.dispatchEvent(new CustomEvent(IMPORT_CONFIG_EVENT));
+}
+
 function changeCount(section: ConfigBundlePreviewSection): number {
   return section.add + section.update;
 }
@@ -93,13 +102,14 @@ export function ImportConfigDialog() {
         result = await window.electron.configBundle.previewImport();
       } catch (error) {
         logError("[importConfig] Failed to read configuration bundle", error);
-        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
         notify({
           type: "error",
           priority: "high",
           message:
             `Import failed — couldn't read that file. ${formatErrorMessage(error, "")}`.trim(),
           supersedeKey: IMPORT_CONFIG_ACTION_ID,
+          context: { eventKind: "settings" },
+          action: { label: "Try again", onClick: () => retryImport() },
         });
         return;
       }
@@ -107,12 +117,14 @@ export function ImportConfigDialog() {
       if (result.outcome === "canceled") return;
 
       if (result.outcome === "rejected") {
-        // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
         notify({
           type: "error",
           priority: "high",
           message: `Import failed — ${result.errors[0] ?? "that file isn't a Daintree configuration bundle"}`,
           supersedeKey: IMPORT_CONFIG_ACTION_ID,
+          context: { eventKind: "settings" },
+          // Picking a different file is the recovery, so reopen the picker.
+          action: { label: "Choose another file", onClick: () => retryImport() },
         });
         return;
       }
@@ -123,9 +135,11 @@ export function ImportConfigDialog() {
         // the same bundle twice lands here, which is what makes it idempotent.
         notify({
           type: "info",
-          priority: "low",
+          priority: "high",
+          transient: true,
           message: "Configuration already matches that bundle — nothing to import",
           supersedeKey: IMPORT_CONFIG_ACTION_ID,
+          context: { eventKind: "settings" },
         });
         return;
       }
@@ -182,6 +196,8 @@ export function ImportConfigDialog() {
       notify({
         type: reasons.length > 0 ? "warning" : "success",
         priority: "high",
+        transient: true,
+        context: { eventKind: "settings" },
         message:
           reasons.length > 0
             ? `Configuration imported — ${summarizeReport(report)}. ${reasons[0]}`
