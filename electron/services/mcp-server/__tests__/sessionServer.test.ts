@@ -2465,6 +2465,40 @@ describe("sessionServer grant cache fallback (#8442)", () => {
     sessionStore.grantCache.dispose();
   });
 
+  it("a per-tool grant keeps a lost native grant from failing the call closed (#11878)", async () => {
+    // The floor denies, so only the per-tool grant admits this — which is why
+    // the consume-failure guard has to ask "did anything else admit this?"
+    // rather than "did the tier permit this?". Under the narrower question
+    // this call would be refused as tier-denied even though a live grant
+    // admitted it.
+    const sessionStore = fakeSessionStore("workbench");
+    sessionStore.grantCache.issueGrant("s", "worktree.delete");
+    const grant = sessionStore.grantCache.issueNativeGrant({
+      sessionId: "s",
+      actorId: "help-1",
+      actorType: "help-session",
+      allowedTools: ["worktree.delete"],
+      maxUses: 2,
+    });
+    const consumeSpy = vi
+      .spyOn(sessionStore.grantCache, "consumeNativeGrantUse")
+      .mockReturnValue(false);
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: { ok: 1 } } });
+    const deps = fakeDeps({ sessionStore, dispatchAction });
+    const server = createSessionServer("s", deps);
+    await server.connect(makeMockTransport());
+
+    const result = (await callTool(server, {
+      name: "worktree.delete",
+      arguments: {},
+    })) as { isError?: boolean };
+
+    expect(consumeSpy).toHaveBeenCalledWith(grant.id, "worktree.delete");
+    expect(result.isError).not.toBe(true);
+    expect(dispatchAction).toHaveBeenCalledWith("worktree.delete", expect.any(Object), false);
+    sessionStore.grantCache.dispose();
+  });
+
   it("a tier-permitted non-confirm tool in the grant's allowlist still spends a use (#11878)", async () => {
     // Decision lock, not an endorsement: `maxUses` is a budget of matching
     // dispatches, and spending one only where the bypass is actually needed
@@ -2516,6 +2550,9 @@ describe("sessionServer grant cache fallback (#8442)", () => {
 
     await callTool(server, { name: "actions.search", arguments: { query: "worktree" } });
 
+    // The dispatch assertion keeps this honest: skipping the peek must be the
+    // guard doing its job, not the call bailing out before it gets there.
+    expect(dispatchAction).toHaveBeenCalled();
     expect(peekSpy).not.toHaveBeenCalled();
     expect(sessionStore.grantCache._peekNative(grant.id)?.remainingUses).toBe(2);
     sessionStore.grantCache.dispose();
