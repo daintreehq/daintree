@@ -1040,7 +1040,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
           // Sanitizing drives the predicate only — `title:` still passes the
           // raw string so the pane matches what the recipe editor shows. The
           // recipe sanitizer keeps titles verbatim (unlike command/args), so
-          // a whitespace- or control-only title would pass plain truthiness;
+          // a whitespace- or C0/DEL-only title would pass plain truthiness;
           // `sanitizeTerminalName` returns "" for those, leaving them
           // unpinned and eligible for the derived title as before. Derived
           // per terminal, never hoisted above the map: one pane's title must

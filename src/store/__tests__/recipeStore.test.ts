@@ -769,12 +769,13 @@ describe("recipeStore", () => {
     });
 
     it("pins a retried terminal from its own index, not its place in the retry", async () => {
-      // `terminalIndices` carries original recipe indices; reading the title
-      // off the filtered spawn list would pin from the wrong pane.
+      // `terminalIndices` carries original recipe indices, and the retry list
+      // holds one entry at offset 0. Index 0 is blank so an offset read leaves
+      // the retried pane unpinned rather than coincidentally pinning it.
       const spawned = await runWithTerminals(
         [
-          { type: "terminal", title: "SKIPPED", command: "a", env: {} },
-          { type: "terminal", title: "", command: "b", env: {} },
+          { type: "terminal", title: "", command: "a", env: {} },
+          { type: "terminal", title: "SKIPPED", command: "b", env: {} },
           { type: "terminal", title: "DEV5", command: "c", env: {} },
         ],
         [2]
@@ -782,6 +783,23 @@ describe("recipeStore", () => {
 
       expect(spawned).toHaveLength(1);
       expect(spawned[0]).toMatchObject({ title: "DEV5", titleMode: "custom" });
+    });
+
+    it("leaves a retried blank terminal unpinned even when index 0 is named", async () => {
+      // The same mix-up in the other direction: an offset read would pin this
+      // pane from "TEAMLEAD" and freeze a name the recipe never gave it.
+      const spawned = await runWithTerminals(
+        [
+          { type: "terminal", title: "TEAMLEAD", command: "a", env: {} },
+          { type: "terminal", title: "SKIPPED", command: "b", env: {} },
+          { type: "terminal", title: "", command: "c", env: {} },
+        ],
+        [2]
+      );
+
+      expect(spawned).toHaveLength(1);
+      expect(spawned[0]).toMatchObject({ title: "" });
+      expect(spawned[0].titleMode).toBeUndefined();
     });
 
     it("leaves a blank title unpinned so the derived title still applies", async () => {
@@ -3266,12 +3284,15 @@ describe("recipeStore", () => {
 
     it("a failed frecency write does not fail the spawn", async () => {
       useRecipeStore.getState().setPluginRecipes([pluginRecipe()]);
+      addTerminalMock.mockResolvedValue("terminal-1");
       pluginRecordUseMock.mockRejectedValueOnce(new Error("disk full"));
-      await expect(
-        useRecipeStore
-          .getState()
-          .runRecipeWithResults("acme.tools.deploy", "/tmp/wt", "wt-1", undefined)
-      ).resolves.toBeDefined();
+      // Resolving is not the claim: the spawn has to have actually landed, or
+      // this passes just as well when nothing spawned at all.
+      const results = await useRecipeStore
+        .getState()
+        .runRecipeWithResults("acme.tools.deploy", "/tmp/wt", "wt-1", undefined);
+      expect(results.spawned).toHaveLength(1);
+      expect(results.failed).toHaveLength(0);
     });
 
     it("routes an empty-state pin to the plugin sidecar, not the global store", async () => {
