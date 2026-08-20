@@ -1384,7 +1384,6 @@ function TerminalPaneComponent({
           <TerminalSubmitStatusBanner
             terminalId={id}
             status={submitStatus}
-            onRestart={handleRestart}
             isRestarting={isRestarting}
           />
         )}

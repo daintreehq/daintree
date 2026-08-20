@@ -6,6 +6,16 @@ import type { TerminalSubmitStatusState } from "@shared/types";
  *  overwhelming majority case — submits that complete normally report nothing. */
 export type TerminalSubmitStatus = Exclude<TerminalSubmitStatusState, "settled"> | null;
 
+/** State is tagged with the terminal it describes. A tab group renders one
+ *  unkeyed pane fiber for whichever tab is active, so on a tab switch this
+ *  hook's state survives into a commit that already carries the new id —
+ *  untagged, that paints terminal A's banner under terminal B's name for a
+ *  frame, with a restart button pointed at the wrong process. */
+interface TaggedStatus {
+  terminalId: string;
+  status: TerminalSubmitStatus;
+}
+
 /**
  * Pane-local view of one terminal's submit lane (#11875).
  *
@@ -14,30 +24,33 @@ export type TerminalSubmitStatus = Exclude<TerminalSubmitStatusState, "settled">
  * worth persisting or restoring. It mirrors how the other pane banners are fed.
  *
  * `reset` is keyed on the things that mean "the process this status described
- * is gone" — a restart, an exit, or the pane being pointed at a different
- * terminal. Without that, a status from a killed process would sit on the
- * restarted pane forever, since the new process has no reason to emit
- * `settled`.
+ * is gone" — a restart or an exit. Without that, a status from a killed
+ * process would sit on the restarted pane, since the new process has no reason
+ * to emit `settled`.
  */
 export function useTerminalSubmitStatus(
   terminalId: string,
   reset: { isRestarting?: boolean; isExited?: boolean } = {}
 ): TerminalSubmitStatus {
-  const [status, setStatus] = useState<TerminalSubmitStatus>(null);
+  const [tagged, setTagged] = useState<TaggedStatus | null>(null);
   const { isRestarting, isExited } = reset;
 
   useEffect(() => {
     return terminalClient.onSubmitStatus((payload) => {
       if (payload.id !== terminalId) return;
-      setStatus(payload.state === "settled" ? null : payload.state);
+      setTagged(
+        payload.state === "settled"
+          ? null
+          : { terminalId, status: payload.state as TerminalSubmitStatus }
+      );
     });
   }, [terminalId]);
 
-  // Clearing on id change is handled by this effect too — the state is per-pane
-  // and a new id means the previous terminal's status is meaningless here.
   useEffect(() => {
-    setStatus(null);
+    setTagged(null);
   }, [terminalId, isRestarting, isExited]);
 
-  return status;
+  // Read through the tag rather than trusting the stored value: on the commit
+  // where `terminalId` changes, this runs before the reset effect above.
+  return tagged?.terminalId === terminalId ? tagged.status : null;
 }

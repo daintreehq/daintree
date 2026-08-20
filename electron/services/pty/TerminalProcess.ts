@@ -1222,9 +1222,9 @@ export class TerminalProcess {
    * swallowed by `logWriteError`. Returns `{ ok: true }` on success and
    * `{ ok: false, error: NodeJS.ErrnoException }` when `pty.write()` throws.
    *
-   * Falls back to `write()` (queued chunking) for payloads >512 bytes; the
-   * caller cannot meaningfully observe failures in the chunked async path,
-   * but broadcast keystrokes are always single chunks so this is fine.
+   * Falls back to `write()` for payloads >512 bytes, which reports failures
+   * through `logWriteError` rather than returning them; broadcast keystrokes
+   * are always well under that, so the distinction never bites in practice.
    */
   tryWrite(data: string, traceId?: string): { ok: boolean; error?: NodeJS.ErrnoException } {
     return this.inputController.tryWrite(data, traceId);

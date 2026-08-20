@@ -128,7 +128,10 @@ export class WriteQueue {
    *
    * The status timer is cleared because the caller is tearing this terminal's
    * input down: escalating a submit to "stalled" mid-shutdown would report a
-   * problem the user can do nothing about.
+   * problem the user can do nothing about. If a status was already reported,
+   * it is retracted in the same breath — dropping the timer without a closing
+   * event would strand the pill or banner on a submit nothing is tracking any
+   * more.
    *
    * Note this cannot recall bytes already handed to node-pty — its own write
    * queue owns them. What it stops is everything Daintree has not yet written.
@@ -137,14 +140,25 @@ export class WriteQueue {
     if (this.disposed) return;
     this.submitQueue = [];
     this.clearSubmitStatusTimer();
+    if (this.submitStatusReported) {
+      this.submitStatusReported = false;
+      this.emitSubmitStatus("settled");
+    }
   }
 
   /**
-   * Drop pending submits, stop status reporting, and mark the queue disposed.
-   * Idempotent. Any in-flight `waitForOutputSettle` resolves on its next poll
-   * because the `disposed` flag short-circuits the loop — without this, an
-   * in-flight `performSubmit` mid-settle would deadlock and leak
+   * Drop pending submits, stop threshold reporting, and mark the queue
+   * disposed. Idempotent. Any in-flight `waitForOutputSettle` resolves on its
+   * next poll because the `disposed` flag short-circuits the loop — without
+   * this, an in-flight `performSubmit` mid-settle would deadlock and leak
    * `submitInFlight`.
+   *
+   * This stops the slow/stalled TIMERS, not the terminal event: a submit still
+   * running at dispose will emit its `settled`/`failed` when it unwinds. That
+   * is deliberate — the closing event is what clears the renderer, so
+   * suppressing it would be the one way to strand a pill. `PtyManager` drops
+   * events from a superseded incarnation, so a late one cannot land on a
+   * restarted terminal.
    */
   dispose(): void {
     if (this.disposed) return;
@@ -185,13 +199,19 @@ export class WriteQueue {
     this.submitStatusTimer = timer;
   }
 
-  private armSlowSubmitReporting(): void {
+  /**
+   * `startedAt` is captured by the caller before `performSubmit` runs, so the
+   * escalation lands at SUBMIT_STALLED_THRESHOLD_MS measured from the submit's
+   * actual start. Re-arming for a fixed remainder instead would drift: if a
+   * blocked event loop delayed the slow callback, "stalled" would fire that
+   * much late on top.
+   */
+  private armSlowSubmitReporting(startedAt: number): void {
     this.armSubmitStatusTimer(SUBMIT_SLOW_THRESHOLD_MS, () => {
       this.submitStatusReported = true;
       this.emitSubmitStatus("slow");
-      // Remainder of the window, not another full one: escalation belongs at
-      // SUBMIT_STALLED_THRESHOLD_MS total.
-      this.armSubmitStatusTimer(SUBMIT_STALLED_THRESHOLD_MS - SUBMIT_SLOW_THRESHOLD_MS, () => {
+      const remaining = Math.max(0, startedAt + SUBMIT_STALLED_THRESHOLD_MS - Date.now());
+      this.armSubmitStatusTimer(remaining, () => {
         this.emitSubmitStatus("stalled");
       });
     });
@@ -206,8 +226,9 @@ export class WriteQueue {
         try {
           // Await the submit itself — never a race against the timer. The timer
           // reports; it does not release the lane (#11875).
+          const startedAt = Date.now();
           const work = this.options.performSubmit(next);
-          this.armSlowSubmitReporting();
+          this.armSlowSubmitReporting(startedAt);
           await work;
           if (this.submitStatusReported) {
             this.emitSubmitStatus("settled");

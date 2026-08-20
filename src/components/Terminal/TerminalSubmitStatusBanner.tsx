@@ -1,12 +1,12 @@
-import { RotateCcw, SendHorizonal } from "lucide-react";
+import { RotateCcw, SendHorizontal } from "lucide-react";
 import { InlineStatusBanner } from "./InlineStatusBanner";
+import { actionService } from "@/services/ActionService";
 
 export interface TerminalSubmitStatusBannerProps {
   terminalId: string;
   /** Only the two escalated states reach this banner; `slow` stays an ambient
    *  header pill and never renders here. */
   status: "stalled" | "failed";
-  onRestart: (id: string) => void;
   isRestarting?: boolean;
   className?: string;
 }
@@ -16,13 +16,11 @@ const BANNER_COPY = {
     title: "Prompt send stalled",
     description:
       "Daintree is still waiting for this prompt to finish sending. Later prompts stay queued so they can't merge into it.",
-    icon: SendHorizonal,
   },
   failed: {
     title: "Prompt send failed",
     description:
       "The terminal couldn't finish sending this prompt. Restart it before trying again so a partial prompt doesn't merge with the next one.",
-    icon: SendHorizonal,
   },
 } as const;
 
@@ -34,11 +32,17 @@ const BANNER_COPY = {
  * second send would submit the prompt twice. Restarting the terminal is the
  * only recovery that actually resolves the ambiguity, so it is the only action
  * offered.
+ *
+ * Restart goes through `ActionService` rather than the store primitive the
+ * sibling error banners call. Those fire on a dead or failed terminal, where
+ * there is nothing running to lose; this one fires while a submit is in
+ * flight, which is exactly the running-agent case `terminal.restart`'s
+ * `danger: "confirm"` gate exists to catch (D1, docs/architecture/
+ * destructive-action-safeguards.md).
  */
 export function TerminalSubmitStatusBanner({
   terminalId,
   status,
-  onRestart,
   isRestarting = false,
   className,
 }: TerminalSubmitStatusBannerProps) {
@@ -46,16 +50,18 @@ export function TerminalSubmitStatusBanner({
 
   return (
     <InlineStatusBanner
-      icon={copy.icon}
+      icon={SendHorizontal}
       title={copy.title}
       description={copy.description}
-      severity={status === "failed" ? "error" : "warning"}
+      severity="error"
       action={{
         id: "restart",
         label: "Restart terminal",
         icon: RotateCcw,
         variant: "primary",
-        onClick: () => onRestart(terminalId),
+        onClick: () => {
+          void actionService.dispatch("terminal.restart", { terminalId }, { source: "user" });
+        },
         ariaLabel: "Restart terminal",
         loading: isRestarting,
       }}

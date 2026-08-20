@@ -903,23 +903,32 @@ describe("TerminalProcess.gracefulShutdown — input lock (#11851)", () => {
     await expect(promise).resolves.toBe("locked");
   });
 
-  it("drops input still pacing through the write queue", async () => {
-    // A chunked paste mid-flight would otherwise keep emitting its chunks on
-    // the pacing timer, straight into the shutdown exchange.
+  it("leaves no application-paced remainder to leak into the shutdown exchange", async () => {
+    // This used to assert that a chunked paste stopped dripping once the lock
+    // engaged. There is no chunk queue any more (#11875) — a large write goes
+    // to node-pty in one call — so the guarantee is now stronger and simpler:
+    // nothing of ours is left pending to interleave with the Ctrl-C exchange.
+    // Written as a timer-advance rather than a one-shot count so a
+    // reintroduced pacing lane would fail here.
     const handles = createMockPty();
     const terminal = createAgentTerminal(handles, "codex");
 
-    terminal.write("x".repeat(4096));
-    const queuedBefore = handles.writeMock.mock.calls.length;
-    expect(queuedBefore).toBeGreaterThan(0);
+    const paste = "x".repeat(4096);
+    terminal.write(paste);
+
+    const pasteWrites = handles.writeMock.mock.calls.filter((c) => c[0] === paste);
+    expect(pasteWrites).toHaveLength(1);
+    const writesBefore = handles.writeMock.mock.calls.length;
 
     const promise = terminal.gracefulShutdown();
     await Promise.resolve();
     await Promise.resolve();
 
-    // Only the Ctrl-C press was added; the rest of the paste is gone.
-    expect(handles.writeMock.mock.calls.length).toBe(queuedBefore + 1);
+    // Only the Ctrl-C press was added.
+    expect(handles.writeMock.mock.calls.length).toBe(writesBefore + 1);
     await vi.advanceTimersByTimeAsync(CODEX_PER_PRESS_TIMEOUT_MS);
+
+    // No further fragment of the payload arrived on any timer.
     const written = handles.writeMock.mock.calls.map((c) => c[0]);
     expect(written.filter((chunk) => chunk.startsWith("x"))).toHaveLength(1);
 

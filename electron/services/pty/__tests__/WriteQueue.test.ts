@@ -175,9 +175,11 @@ describe("WriteQueue.cancelPendingInput", () => {
     expect(m.performSubmit).toHaveBeenCalledWith("after-cancel");
   });
 
-  it("stops the slow submit from escalating once input is being torn down", async () => {
+  it("retracts a reported status instead of stranding it, and stops escalating", async () => {
     // Escalating to "stalled" mid-shutdown would report a problem the user can
-    // do nothing about.
+    // do nothing about. But dropping the timer WITHOUT a closing event would
+    // leave the pill up on a submit nothing is tracking any more, so the
+    // retraction is what keeps the renderer from getting stuck.
     const m = makeOptions();
     m.performSubmit.mockImplementation(neverSettles);
     const queue = new WriteQueue(m.options);
@@ -187,9 +189,21 @@ describe("WriteQueue.cancelPendingInput", () => {
     expect(m.statuses).toEqual(["slow"]);
 
     queue.cancelPendingInput();
-    await vi.advanceTimersByTimeAsync(STALLED_MS);
+    expect(m.statuses).toEqual(["slow", "settled"]);
 
-    expect(m.statuses).toEqual(["slow"]);
+    await vi.advanceTimersByTimeAsync(STALLED_MS);
+    expect(m.statuses).toEqual(["slow", "settled"]);
+  });
+
+  it("stays silent on cancel when nothing was ever reported", async () => {
+    const m = makeOptions();
+    m.performSubmit.mockImplementation(neverSettles);
+    const queue = new WriteQueue(m.options);
+
+    queue.submit("stuck");
+    queue.cancelPendingInput();
+
+    expect(m.statuses).toEqual([]);
   });
 });
 
@@ -348,6 +362,29 @@ describe("WriteQueue slow-submit reporting", () => {
     await vi.advanceTimersByTimeAsync(STALLED_MS - SLOW_MS - 1);
     expect(m.statuses).toEqual(["slow"]);
 
+    await vi.advanceTimersByTimeAsync(1);
+    expect(m.statuses).toEqual(["slow", "stalled"]);
+  });
+
+  it("anchors the stalled deadline to the submit's start, not to when slow fired", async () => {
+    // Re-arming for a fixed remainder would drift: a blocked event loop that
+    // delays the slow callback would push stalled out by the same amount. The
+    // contract is STALLED_MS measured from the submit, so once the clock is
+    // already past that point stalled is due immediately.
+    const m = makeOptions();
+    m.performSubmit.mockImplementation(neverSettles);
+    const wq = new WriteQueue(m.options);
+
+    wq.submit("stuck");
+
+    // Jump the wall clock past the stalled deadline while the slow timer is
+    // still pending, then let it fire.
+    vi.setSystemTime(Date.now() + STALLED_MS);
+    await vi.advanceTimersByTimeAsync(SLOW_MS);
+    expect(m.statuses).toEqual(["slow"]);
+
+    // Deadline already passed, so escalation is due immediately rather than
+    // another full window away — 1ms is enough, 27_000ms would not be.
     await vi.advanceTimersByTimeAsync(1);
     expect(m.statuses).toEqual(["slow", "stalled"]);
   });
