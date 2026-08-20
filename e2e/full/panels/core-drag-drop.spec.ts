@@ -5,6 +5,7 @@ import { openAndOnboardProject } from "../../helpers/project";
 import {
   getGridPanelIds,
   getDockPanelIds,
+  getDockChipIds,
   getGridPanelCount,
   getDockPanelCount,
   getPanelById,
@@ -162,6 +163,10 @@ test.describe.serial("Core: Panel Drag & Drop", () => {
     await test.step("Keyboard-drag the first chip and verify the dock order changes", async () => {
       const dockIdsBefore = await getDockPanelIds(window);
       expect(dockIdsBefore).toHaveLength(2);
+      const chipIdsBefore = await getDockChipIds(window);
+      // The rail paints the same order as the offscreen containers to begin
+      // with — the bug only shows up after a reorder (#11873).
+      expect(chipIdsBefore).toEqual(dockIdsBefore);
 
       const chips = window.locator(`${SEL.dock.rail} ${SEL.dock.chip}`);
       await expect.poll(() => chips.count(), { timeout: T_MEDIUM }).toBeGreaterThanOrEqual(2);
@@ -180,6 +185,12 @@ test.describe.serial("Core: Panel Drag & Drop", () => {
       // Same panels, different order — the chip moved past its neighbour.
       expect([...dockIdsAfter].sort()).toEqual([...dockIdsBefore].sort());
       expect(dockIdsAfter[0]).not.toBe(dockIdsBefore[0]);
+
+      // The rail must repaint, not just the store. Reordering writes only
+      // `panelIds`, which the offscreen containers above mirror directly — they
+      // stayed green while every chip snapped back to its pre-drag slot
+      // (#11873), so the visible order is the assertion that matters.
+      await expect.poll(() => getDockChipIds(window), { timeout: T_MEDIUM }).toEqual(dockIdsAfter);
     });
   });
 

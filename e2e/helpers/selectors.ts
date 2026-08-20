@@ -144,6 +144,8 @@ export const SEL = {
     container: "#dock-container",
     rail: '[role="toolbar"][aria-label="Docked panels"]',
     chip: "[data-dock-item]",
+    /** Sortable wrapper around each chip — carries the panel id the rail sorts on. */
+    chipId: "[data-dock-item-id]",
     chipByTitle: (title: string) => `[data-dock-item][aria-label^="${title}"]`,
     tablist: '[role="tablist"][aria-label="Dock panel tabs"]',
     tabByPanelId: (id: string) => `[data-tab-id="${id}"]`,

@@ -129,7 +129,21 @@ export function SortableDockItem({
       {...remainingAttributes}
       aria-roledescription="sortable item"
     >
-      <div ref={setNodeRef} style={style} role="listitem" className={cn("relative flex-shrink-0")}>
+      {/*
+        `data-dock-item-id` carries the sortable id — the same id dnd-kit sorts
+        on — so the rendered rail order is readable from the DOM. The offscreen
+        panel containers already expose `data-panel-id`, but those mirror
+        `panelIds` directly and stayed correct while the rail painted a stale
+        order, which is how #11873 went unnoticed. A distinct attribute name
+        keeps `[data-panel-id="…"]` locators matching exactly one element.
+      */}
+      <div
+        ref={setNodeRef}
+        style={style}
+        role="listitem"
+        data-dock-item-id={terminal.id}
+        className={cn("relative flex-shrink-0")}
+      >
         {dropDirection !== null && (
           <div
             aria-hidden="true"
