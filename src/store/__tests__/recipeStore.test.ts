@@ -265,6 +265,39 @@ describe("recipeStore", () => {
       expect(devEntry?.agentLaunchFlags).toBeUndefined();
     });
 
+    it("captures owned titles and drops derived ones so the clone can't pin them (#11872)", () => {
+      panelStoreState.panelIds = ["panel-derived", "panel-custom", "panel-user"];
+      panelStoreState.panelsById = {
+        // Detection wrote this one — it must stay free to promote in the clone.
+        "panel-derived": {
+          id: "panel-derived",
+          kind: "terminal",
+          title: "Claude",
+          worktreeId: "wt-1",
+          location: "grid",
+        },
+        "panel-custom": {
+          id: "panel-custom",
+          kind: "terminal",
+          title: "TEAMLEAD",
+          titleMode: "custom",
+          worktreeId: "wt-1",
+          location: "grid",
+        },
+        "panel-user": {
+          id: "panel-user",
+          kind: "terminal",
+          title: "DEV1",
+          titleMode: "user",
+          worktreeId: "wt-1",
+          location: "grid",
+        },
+      };
+
+      const terminals = useRecipeStore.getState().generateRecipeFromActiveTerminals("wt-1");
+      expect(terminals.map((t) => t.title)).toEqual([undefined, "TEAMLEAD", "DEV1"]);
+    });
+
     it("captures dock placement and omits location for grid-equivalent panels (#9764)", () => {
       panelStoreState.panelIds = ["panel-dock", "panel-grid", "panel-overlay"];
       panelStoreState.panelsById = {
@@ -272,6 +305,7 @@ describe("recipeStore", () => {
           id: "panel-dock",
           kind: "terminal",
           title: "Docked",
+          titleMode: "user",
           worktreeId: "wt-1",
           location: "dock",
           command: "npm test",
@@ -280,6 +314,7 @@ describe("recipeStore", () => {
           id: "panel-grid",
           kind: "terminal",
           title: "Grid",
+          titleMode: "user",
           worktreeId: "wt-1",
           location: "grid",
         },
@@ -287,6 +322,7 @@ describe("recipeStore", () => {
           id: "panel-overlay",
           kind: "terminal",
           title: "Overlay",
+          titleMode: "user",
           worktreeId: "wt-1",
           location: "overlay",
         },
