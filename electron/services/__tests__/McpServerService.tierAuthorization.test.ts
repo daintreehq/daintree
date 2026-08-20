@@ -1494,7 +1494,7 @@ describe("McpServerService", () => {
 
       const ids = (await client.listTools()).tools.map((tool) => tool.name);
       expect(ids).toContain("worktree.list");
-      expect(ids).not.toContain("worktree.create");
+      expect(ids).toContain("worktree.create");
       expect(ids).toContain("worktree.createWithRecipe");
       for (const id of ACTION_TIER_ADDONS) {
         expect(ids).toContain(id);
@@ -1519,7 +1519,7 @@ describe("McpServerService", () => {
 
       const ids = (await client.listTools()).tools.map((tool) => tool.name);
       expect(ids).toContain("worktree.list");
-      expect(ids).not.toContain("worktree.create");
+      expect(ids).toContain("worktree.create");
       expect(ids).toContain("worktree.createWithRecipe");
       for (const id of ACTION_TIER_ADDONS) {
         expect(ids).toContain(id);

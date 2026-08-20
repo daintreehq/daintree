@@ -48,7 +48,7 @@ export function registerWorktreeCreateActions(
       id: "worktree.create",
       title: "Create Worktree",
       description:
-        "Create a new worktree. Args: `worktreeId` or `worktreePath` (required) — the repository root to branch from (`rootPath` is accepted as a legacy alias for `worktreePath`); `options` (required) — baseBranch, newBranch, and the new worktree's path. Errors when either argument is missing. There is deliberately no active-worktree default: creation anchors on the repo root, and the active worktree is usually a linked one.",
+        "Create a git worktree with its branch, without launching terminals. Prefer the recipe-backed creation path when the worktree should also track a pull request or start a recipe's terminals. It writes to disk, may check out a remote or existing branch, and can provision a configured resource. Creation anchors on the repository root, not the active worktree, which is usually a linked one; setup can still fail after the worktree exists.",
       category: "worktree",
       kind: "command",
       danger: "safe",

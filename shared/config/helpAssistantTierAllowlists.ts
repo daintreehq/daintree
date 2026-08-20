@@ -97,6 +97,7 @@ export const WORKBENCH_TIER_TOOLS = [
 ] as const satisfies readonly BuiltInActionId[];
 
 export const ACTION_TIER_ADDONS = [
+  "worktree.create",
   "worktree.createWithRecipe",
   "worktree.setActive",
   "worktree.refresh",

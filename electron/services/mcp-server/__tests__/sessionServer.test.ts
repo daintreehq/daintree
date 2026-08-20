@@ -2752,6 +2752,73 @@ describe("MCP_DEDUP_ALLOWLIST criterion correction (#11534)", () => {
   });
 });
 
+describe("worktree.create dedup (#11880)", () => {
+  // The primitive only became LLM-callable when it joined the action tier, so
+  // a lost response is newly able to leave a worktree stranded. It is deduped
+  // on the `forge.createPR` grounds: the replay creates nothing because the
+  // path is taken, and the cached id beats the error a redispatch would raise.
+  // The session tier here is `action`, so these also fail if the tier fix is
+  // reverted.
+  const twoDistinctDispatches = () =>
+    vi
+      .fn()
+      .mockResolvedValueOnce({ result: { ok: true, result: "wt-first" } })
+      .mockResolvedValueOnce({ result: { ok: true, result: "wt-second" } });
+
+  const createArgs = (path: string) => ({
+    worktreePath: "/repo",
+    options: { baseBranch: "develop", newBranch: "feature/x", path },
+  });
+
+  it("replays the original worktree id for a repeated identical create", async () => {
+    const dispatchAction = twoDistinctDispatches();
+    const deps = fakeDeps({ sessionStore: fakeSessionStore("action"), dispatchAction });
+    const server = createSessionServer("dedup-11880", deps);
+
+    const args = createArgs("/repo-wt-a");
+    const first = await callTool(server, { name: "worktree.create", arguments: args });
+    const second = await callTool(server, { name: "worktree.create", arguments: args });
+
+    expect(dispatchAction).toHaveBeenCalledTimes(1);
+    expect(second).toEqual(first);
+    expect(JSON.stringify(second)).not.toContain("wt-second");
+  });
+
+  it("shares one dispatch between concurrent identical creates", async () => {
+    const dispatchAction = twoDistinctDispatches();
+    const deps = fakeDeps({ sessionStore: fakeSessionStore("action"), dispatchAction });
+    const server = createSessionServer("dedup-11880-inflight", deps);
+
+    const args = createArgs("/repo-wt-a");
+    const [first, second] = await Promise.all([
+      callTool(server, { name: "worktree.create", arguments: args }),
+      callTool(server, { name: "worktree.create", arguments: args }),
+    ]);
+
+    expect(dispatchAction).toHaveBeenCalledTimes(1);
+    expect(second).toEqual(first);
+    expect(JSON.stringify(second)).not.toContain("wt-second");
+  });
+
+  it("still dispatches a create for a different worktree in the same session", async () => {
+    // Keyed on the canonical args hash, so setting up two worktrees in one
+    // turn must not collapse into one — the failure mode that would make this
+    // entry worse than the retry it absorbs.
+    const dispatchAction = twoDistinctDispatches();
+    const deps = fakeDeps({ sessionStore: fakeSessionStore("action"), dispatchAction });
+    const server = createSessionServer("dedup-11880-distinct", deps);
+
+    await callTool(server, { name: "worktree.create", arguments: createArgs("/repo-wt-a") });
+    const second = await callTool(server, {
+      name: "worktree.create",
+      arguments: createArgs("/repo-wt-b"),
+    });
+
+    expect(dispatchAction).toHaveBeenCalledTimes(2);
+    expect(JSON.stringify(second)).toContain("wt-second");
+  });
+});
+
 describe("CallTool rate limiter removal (#10764)", () => {
   it("dispatches a burst of mutation calls without ever rejecting with MCP_RATE_LIMITED", async () => {
     // The mutation tier used to cap git.commit at 10/min — a burst past the
