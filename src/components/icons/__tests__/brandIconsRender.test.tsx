@@ -48,8 +48,8 @@ describe("brand icons paint from the badge ink", () => {
         <Icon />
       </BrandMark>
     );
-    const wrapper = container.querySelector("span") as HTMLElement;
+    const wrapper = container.querySelector<HTMLElement>("span")!;
     expect(wrapper.style.color).toBe("rgb(255, 255, 255)");
-    expect((container.querySelector("svg") as SVGElement).style.color).toBe("inherit");
+    expect(container.querySelector<SVGElement>("svg")!.style.color).toBe("inherit");
   });
 });

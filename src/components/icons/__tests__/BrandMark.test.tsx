@@ -68,14 +68,13 @@ describe("BrandMark", () => {
 
       const span = container.querySelector("span");
       expect(span).not.toBeNull();
-      const { backgroundColor, color } = (span as HTMLElement).style;
+      const { backgroundColor, color } = span!.style;
       // jsdom normalizes hex to rgb(); compare through the same lens.
       expect(backgroundColor).toBe("rgb(204, 120, 92)");
       // The ink must be one of the two candidates AND the better of them — an
       // empty or stray color would otherwise be credited with black's contrast.
-      const inks = { "rgb(255, 255, 255)": "#FFFFFF", "rgb(0, 0, 0)": "#000000" } as const;
-      const ink = inks[color as keyof typeof inks];
-      expect(ink).toBeDefined();
+      expect(["rgb(255, 255, 255)", "rgb(0, 0, 0)"]).toContain(color);
+      const ink = color === "rgb(255, 255, 255)" ? "#FFFFFF" : "#000000";
       const other = ink === "#FFFFFF" ? "#000000" : "#FFFFFF";
       expect(contrastRatio(ink, "#CC785C")).toBeGreaterThan(contrastRatio(other, "#CC785C"));
     });
@@ -87,7 +86,7 @@ describe("BrandMark", () => {
         <BrandMark brandColor="#000000">
           <TestIcon />
         </BrandMark>
-      ).container.querySelector("span") as HTMLElement;
+      ).container.querySelector<HTMLElement>("span")!;
 
       expect(preset.style.backgroundColor).toBe("rgb(0, 0, 0)");
       expect(preset.style.color).toBe("rgb(255, 255, 255)");
@@ -102,7 +101,7 @@ describe("BrandMark", () => {
 
       // A dark tile needs a light ring, and it has to be translucent — an opaque
       // or same-polarity ring is not the edge this is here to draw.
-      expect((container.querySelector("span") as HTMLElement).style.boxShadow).toBe(
+      expect(container.querySelector<HTMLElement>("span")!.style.boxShadow).toBe(
         "inset 0 0 0 1px rgba(255, 255, 255, 0.15)"
       );
     });
@@ -127,7 +126,7 @@ describe("BrandMark", () => {
         <BrandMark brandColor="#10a37f">
           <TestIcon />
         </BrandMark>
-      ).container.querySelector("span") as HTMLElement;
+      ).container.querySelector<HTMLElement>("span")!;
       expect(inferred.style.width).toBeTruthy();
       expect(inferred.style.height).toBe(inferred.style.width);
 
@@ -136,7 +135,7 @@ describe("BrandMark", () => {
         <BrandMark brandColor="#10a37f" size={24}>
           <TestIcon />
         </BrandMark>
-      ).container.querySelector("span") as HTMLElement;
+      ).container.querySelector<HTMLElement>("span")!;
       expect([explicit.style.width, explicit.style.height]).toEqual(["24px", "24px"]);
 
       // Sized by class: no inline box, so the class stays in control.
@@ -144,7 +143,7 @@ describe("BrandMark", () => {
         <BrandMark brandColor="#10a37f" className="w-8 h-8">
           <TestIcon />
         </BrandMark>
-      ).container.querySelector("span") as HTMLElement;
+      ).container.querySelector<HTMLElement>("span")!;
       expect(sized.style.width).toBe("");
     });
 
