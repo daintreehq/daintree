@@ -277,10 +277,6 @@ export const SEMANTIC_BUFFER_MAX_LINES = 50;
 export const SEMANTIC_BUFFER_MAX_LINE_LENGTH = 1000;
 export const SEMANTIC_FLUSH_INTERVAL_MS = 100;
 
-// Input chunking constants
-export const WRITE_MAX_CHUNK_SIZE = 50;
-export const WRITE_INTERVAL_MS = 5;
-
 // Scrollback configuration
 // All PTY panels get the same headless-mirror scrollback; there is no "agent
 // tier" scrollback decision any more. This is the pty-host analysis mirror, NOT

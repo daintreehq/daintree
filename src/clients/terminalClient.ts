@@ -8,6 +8,7 @@ import type {
   BackendTerminalInfo,
   TerminalReconnectResult,
   TerminalStatusPayload,
+  TerminalSubmitStatusPayload,
   BroadcastWriteResultPayload,
   SpawnResult,
   SerializedTerminalSnapshot,
@@ -836,6 +837,15 @@ export const terminalClient = {
       ipcCleanup();
     };
   },
+
+  /**
+   * Listen for submit-lane status on any terminal (#11875). Unlike `onStatus`
+   * this is a plain event-bus passthrough — there is no MessagePort path,
+   * because a slow submit is a rare per-terminal transition rather than a
+   * throughput pulse. Callers filter by `payload.id` themselves.
+   */
+  onSubmitStatus: (callback: (data: TerminalSubmitStatusPayload) => void): (() => void) =>
+    window.electron.terminal.onSubmitStatus(callback),
 
   /**
    * Listen for terminal reliability metrics (pause-start/end, suspend,

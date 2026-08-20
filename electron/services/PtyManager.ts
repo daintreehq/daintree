@@ -473,6 +473,15 @@ export class PtyManager extends EventEmitter {
               this.registry.delete(termId);
             }
           },
+          onSubmitStatus: (termId, state) => {
+            // Same staleness guard as onExit: a submit unwinding after the
+            // terminal was replaced must not report onto its successor, or a
+            // late "settled" would clear a pill the new process owns.
+            if (this.registry.get(termId) !== terminalProcess) {
+              return;
+            }
+            this.emit("submit-status", termId, state);
+          },
           onPreserved: (termId) => {
             // Preserved terminals retain their full scrollback snapshot in
             // memory and aren't otherwise removed until trash/kill or project

@@ -98,6 +98,8 @@ export interface ContentPanelProps extends BasePanelProps {
   lastCommand?: string;
   queueCount?: number;
   flowStatus?: PersistableFlowStatus;
+  /** Submit-lane state, forwarded to the auto-constructed TerminalHeaderContent (#11875). */
+  submitStatus?: "slow" | "stalled" | "failed";
   /**
    * True when the agent transitioned to `completed` and the worktree's
    * changed-file count is zero. Drives the "Finished, no changes" pill
@@ -234,6 +236,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     lastCommand,
     queueCount = 0,
     flowStatus,
+    submitStatus,
     completedWithNoChanges = false,
     onRestart,
     isPinged,
@@ -442,6 +445,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
           exitCode={exitCode}
           queueCount={queueCount}
           flowStatus={flowStatus}
+          submitStatus={submitStatus}
           completedWithNoChanges={completedWithNoChanges}
           isHibernated={isHibernated}
         />
@@ -460,6 +464,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
     exitCode,
     queueCount,
     flowStatus,
+    submitStatus,
     completedWithNoChanges,
     isHibernated,
   ]);

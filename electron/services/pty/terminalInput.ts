@@ -7,7 +7,6 @@ import {
   containsFullBracketedPaste,
 } from "../../../shared/utils/terminalInputProtocol.js";
 import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
-import { WRITE_MAX_CHUNK_SIZE } from "./types.js";
 
 export { BRACKETED_PASTE_START, BRACKETED_PASTE_END, PASTE_THRESHOLD_CHARS };
 
@@ -80,29 +79,4 @@ export function isBracketedPaste(data: string): boolean {
 // occasional sequence whose payload happens to contain CSI I/O (#8865).
 export function isFocusReport(data: string): boolean {
   return data === "\x1b[I" || data === "\x1b[O";
-}
-
-export function chunkInput(data: string): string[] {
-  if (data.length === 0) {
-    return [];
-  }
-  if (data.length <= WRITE_MAX_CHUNK_SIZE) {
-    return [data];
-  }
-
-  const chunks: string[] = [];
-  let start = 0;
-
-  for (let i = 0; i < data.length - 1; i++) {
-    if (i - start + 1 >= WRITE_MAX_CHUNK_SIZE || data[i + 1] === "\x1b") {
-      chunks.push(data.substring(start, i + 1));
-      start = i + 1;
-    }
-  }
-
-  if (start < data.length) {
-    chunks.push(data.substring(start));
-  }
-
-  return chunks;
 }

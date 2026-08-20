@@ -156,6 +156,7 @@ export interface KeybindingImportResult {
 }
 import type {
   TerminalStatusPayload,
+  TerminalSubmitStatusPayload,
   PtyHostActivityTier,
   SpawnResult,
   TerminalResourceBatchPayload,
@@ -311,6 +312,9 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     requestWorkerIngestPort(id: string): Promise<{ token: string } | null>;
     releaseWorkerIngestPort(id: string): Promise<void>;
     onStatus(callback: (data: TerminalStatusPayload) => void): () => void;
+    /** Submit-lane status for one terminal (#11875). Fires only for submits that
+     *  cross the slow/stalled threshold or fail. */
+    onSubmitStatus(callback: (data: TerminalSubmitStatusPayload) => void): () => void;
     onReliabilityMetric(callback: (data: TerminalReliabilityMetricPayload) => void): () => void;
     /**
      * Geometry the PTY actually holds after each resize it processed. Compare

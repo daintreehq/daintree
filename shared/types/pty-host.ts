@@ -513,6 +513,11 @@ export type PtyHostEvent =
   // stale exit arriving after a same-id respawn can't close the successor.
   | { type: "exit"; id: string; exitCode: number; signal?: number; launchGeneration?: number }
   | { type: "error"; id: string; error: string }
+  // Typed submit-lane status (#11875). Deliberately NOT folded into the `error`
+  // carrier above: "this prompt is taking a while" is not an error, and the
+  // renderer needs a closed state union it can drive a pill/banner from rather
+  // than a free-form string it would have to pattern-match.
+  | { type: "submit-status"; id: string; state: TerminalSubmitStatusState }
   | { type: "spawn-result"; id: string; result: SpawnResult }
   | { type: "resize-result"; id: string; result: TerminalResizeResult }
   | { type: "kill-by-project-result"; requestId: string; killed: number }
@@ -958,6 +963,36 @@ export interface TerminalStatusPayload {
   /** Byte count discarded — only set when status is "data-loss". */
   droppedBytes?: number;
   timestamp: number;
+}
+
+/**
+ * Lifecycle of one submit operation's ownership of an agent's composer (#11875).
+ *
+ * A submit owns the composer from its first body byte until it writes its
+ * trailing Enter; the submit queue serialises that ownership so two prompts
+ * can never merge into one. These states report on a submit that is taking
+ * too long WITHOUT breaking that serialisation — the slow submit keeps the
+ * lane, because the alternative (starting the next one) is what corrupted the
+ * composer in the first place, and bytes already handed to the PTY cannot be
+ * withdrawn.
+ *
+ * Only reported for submits that cross a threshold: a normal fast submit emits
+ * nothing at all.
+ *
+ * - `slow`     — still in flight at SUBMIT_SLOW_THRESHOLD_MS. Ambient signal only.
+ * - `stalled`  — still in flight at SUBMIT_STALLED_THRESHOLD_MS. Needs recovery.
+ * - `settled`  — finished after having been reported slow or stalled. Clears the UI.
+ * - `failed`   — `performSubmit` rejected. The submit is over, so the lane drains
+ *                normally; the composer may hold a partial body, which is why this
+ *                surfaces rather than being logged silently.
+ */
+export type TerminalSubmitStatusState = "slow" | "stalled" | "settled" | "failed";
+
+/** Payload for submit-status events. One in-flight submit per terminal, so the
+ *  terminal id is a sufficient correlator — no submission id is needed. */
+export interface TerminalSubmitStatusPayload {
+  id: string;
+  state: TerminalSubmitStatusState;
 }
 
 /**

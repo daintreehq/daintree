@@ -162,6 +162,24 @@ describe("routeHostEvent", () => {
     expect(errorListener).toHaveBeenCalledWith("t1", "boom");
   });
 
+  it("emits submit-status as a single typed payload, not an error string", () => {
+    // #11875. The state has to survive the host->Main hop as a closed union the
+    // renderer can switch on; folding it into the `error` string carrier is
+    // exactly what this event exists to avoid.
+    const { deps, emitter } = makeDeps();
+    const listener = vi.fn();
+    const errorListener = vi.fn();
+    emitter.on("submit-status", listener);
+    emitter.on("error", errorListener);
+
+    routeHostEvent({ type: "submit-status", id: "t1", state: "slow" }, deps);
+    routeHostEvent({ type: "submit-status", id: "t1", state: "settled" }, deps);
+
+    expect(listener).toHaveBeenNthCalledWith(1, { id: "t1", state: "slow" });
+    expect(listener).toHaveBeenNthCalledWith(2, { id: "t1", state: "settled" });
+    expect(errorListener).not.toHaveBeenCalled();
+  });
+
   it("calls onReady when the host emits ready", () => {
     const { deps, callbacks } = makeDeps();
     routeHostEvent({ type: "ready" }, deps);
