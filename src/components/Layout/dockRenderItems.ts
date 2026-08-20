@@ -44,6 +44,12 @@ export function buildDockRenderItems(
   // group — and falls through to a standalone chip below. Groups are scoped by
   // their own worktree as well as their members' so a group pinned to another
   // worktree can't surface through a global member.
+  //
+  // A panel belongs to at most one chip: claiming ids as they resolve means the
+  // first group wins and a later group can't re-list an id already taken. The
+  // store guards against overlapping membership, but a corrupt or hand-edited
+  // group would otherwise render the same panel under two chips — with two
+  // sortables sharing one dnd-kit id.
   const resolvedGroups = new Map<string, { group: TabGroup; panels: PtyPanelData[] }>();
   const groupIdByPanelId = new Map<string, string>();
   for (const group of tabGroups.values()) {
@@ -52,18 +58,24 @@ export function buildDockRenderItems(
 
     const panels: PtyPanelData[] = [];
     for (const id of group.panelIds) {
+      if (groupIdByPanelId.has(id)) continue;
       const panel = panelsById.get(id);
-      if (panel && isPtyPanel(panel)) panels.push(panel);
+      if (!panel || !isPtyPanel(panel)) continue;
+      panels.push(panel);
+      groupIdByPanelId.set(id, group.id);
     }
     if (panels.length === 0) continue;
 
     resolvedGroups.set(group.id, { group, panels });
-    for (const panel of panels) groupIdByPanelId.set(panel.id, group.id);
   }
 
   const items: DockRenderItem[] = [];
   const emittedGroupIds = new Set<string>();
+  const emittedPanelIds = new Set<string>();
   for (const panel of orderedPanels) {
+    if (emittedPanelIds.has(panel.id)) continue;
+    emittedPanelIds.add(panel.id);
+
     const groupId = groupIdByPanelId.get(panel.id);
 
     if (groupId === undefined) {

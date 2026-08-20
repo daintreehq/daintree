@@ -163,13 +163,16 @@ test.describe.serial("Core: Panel Drag & Drop", () => {
     await test.step("Keyboard-drag the first chip and verify the dock order changes", async () => {
       const dockIdsBefore = await getDockPanelIds(window);
       expect(dockIdsBefore).toHaveLength(2);
-      const chipIdsBefore = await getDockChipIds(window);
-      // The rail paints the same order as the offscreen containers to begin
-      // with — the bug only shows up after a reorder (#11873).
-      expect(chipIdsBefore).toEqual(dockIdsBefore);
 
       const chips = window.locator(`${SEL.dock.rail} ${SEL.dock.chip}`);
       await expect.poll(() => chips.count(), { timeout: T_MEDIUM }).toBeGreaterThanOrEqual(2);
+
+      // Both panels were docked individually, so no tab group formed and each
+      // one owns a chip. Poll rather than read once — the rail can be a render
+      // behind the offscreen containers the setup above waited on. This also
+      // pins the ungrouped precondition the final assertion depends on: a
+      // multi-panel group would collapse N panels into one chip.
+      await expect.poll(() => getDockChipIds(window), { timeout: T_MEDIUM }).toEqual(dockIdsBefore);
 
       let dockIdsAfter = dockIdsBefore;
       // Try moving right, then fall back to left, mirroring the grid-reorder

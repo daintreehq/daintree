@@ -57,17 +57,18 @@ describe("ContentGrid tabGroups memo includes trashedTerminals dep (trash-visibi
 describe("ContentDock excludes trashed panels through a compiler-safe dataflow", () => {
   it("filters trashed panels out of the ordered dock selector", async () => {
     const content = await readFile(DOCK_PATH, "utf-8");
-    expect(content).toContain("!state.trashedTerminals.has(terminal.id)");
+    const selector = content.slice(content.indexOf("const dockTerminalsRaw = usePanelStore("));
+    expect(selector).not.toBe("");
+    expect(selector.slice(0, selector.indexOf("\n  );"))).toContain("trashedTerminals");
   });
 
-  it("derives dock render items from the ordered selector, not a store getter", async () => {
+  it("does not call the tab-group store getters during render", async () => {
     const content = await readFile(DOCK_PATH, "utf-8");
-    expect(content).toContain(
-      "buildDockRenderItems(dockTerminals, storeTabGroups, activeWorktreeId)"
-    );
     // `getTabGroups`/`getTabGroupPanels` are store actions: stable references
     // the compiler happily caches against while their hidden state moves under
-    // it. Calling one during render is how the rail went stale (#11873).
+    // them. Calling one during render is how the rail went stale (#11873) — the
+    // dock reads reactive snapshots instead. This is the invariant, so it holds
+    // across renames of the values those snapshots are bound to.
     expect(content).not.toMatch(/\bgetTabGroups\(/);
     expect(content).not.toMatch(/\bgetTabGroupPanels\(/);
   });

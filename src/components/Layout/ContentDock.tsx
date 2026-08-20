@@ -161,14 +161,19 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
   // Candidate ids come from `collectUngroupedCandidateIds`, the same helper
   // `getTabGroups` uses, so a panel committed mid-spawn-batch — eagerly in the
   // worktree index while `panelIds` only appends at flush — still paints on
-  // first mount (#9649).
+  // first mount (#9649). Pass the active worktree, not `undefined`: the scoped
+  // call orders pending ids active-bucket-then-global, while the unscoped one
+  // follows `panelIdsByWorktreeId`'s insertion order. Only the pending tail
+  // differs, and only while a batch is open, but the downstream worktree filter
+  // can't restore the order — so scope it here and stay identical to
+  // `getTabGroups`. Committed `panelIds` order is unaffected either way.
   const dockTerminalsRaw = usePanelStore(
     useShallow((state) => {
       const result: DockPanelData[] = [];
       for (const id of collectUngroupedCandidateIds(
         state.panelIds,
         state.panelIdsByWorktreeId,
-        undefined
+        activeWorktreeId ?? undefined
       )) {
         const terminal = getRenderablePanel(state.panelsById, id);
         if (

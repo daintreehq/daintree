@@ -1,5 +1,10 @@
 import { describe, expect, it } from "vitest";
-import type { BrowserPanelData, FilePanelData, PtyPanelData } from "@shared/types/panel";
+import type {
+  BrowserPanelData,
+  DockPanelData,
+  FilePanelData,
+  PtyPanelData,
+} from "@shared/types/panel";
 import type { TabGroup } from "@/types";
 import { buildDockRenderItems } from "../dockRenderItems";
 
@@ -262,5 +267,148 @@ describe("buildDockRenderItems", () => {
     );
 
     expect(idsOf(items)).toEqual(["pair"]);
+  });
+
+  it("orders two explicit groups by their earliest rail member, not map order", () => {
+    // Positioning a group at `orderedPanels.indexOf(group.panelIds[0])`, or
+    // simply preserving the map's insertion order, passes every single-group
+    // test above but gets this one wrong.
+    const groups = groupMap(
+      group(["a", "b"], "a", { id: "g1" }),
+      group(["c", "d"], "c", { id: "g2" })
+    );
+
+    expect(
+      idsOf(
+        buildDockRenderItems(
+          [terminal("c"), terminal("d"), terminal("solo"), terminal("a"), terminal("b")],
+          groups,
+          null
+        )
+      )
+    ).toEqual(["g2", "solo", "g1"]);
+
+    expect(
+      idsOf(
+        buildDockRenderItems(
+          [terminal("a"), terminal("b"), terminal("solo"), terminal("c"), terminal("d")],
+          groups,
+          null
+        )
+      )
+    ).toEqual(["g1", "solo", "g2"]);
+  });
+
+  it("emits a group at its earliest rail member even when that is not its first tab", () => {
+    const items = buildDockRenderItems(
+      [terminal("b"), terminal("solo"), terminal("a")],
+      groupMap(group(["a", "b"], "a", { id: "pair" })),
+      null
+    );
+
+    expect(idsOf(items)).toEqual(["pair", "solo"]);
+    expect(items[0]?.group.panelIds).toEqual(["a", "b"]);
+  });
+
+  it("repairs activeTabId when the active tab is a non-PTY member", () => {
+    const items = buildDockRenderItems(
+      [browserPanel("docs"), terminal("t2"), filePanel("spec"), terminal("t1")],
+      groupMap(group(["t1", "docs", "t2", "spec"], "docs", { id: "mixed" })),
+      null
+    );
+
+    expect(idsOf(items)).toEqual(["docs", "mixed", "spec"]);
+    const mixed = items[1];
+    expect(mixed?.panels.map((panel) => panel.id)).toEqual(["t1", "t2"]);
+    expect(mixed?.group.activeTabId).toBe("t1");
+  });
+
+  it("renders every member standalone when a group has no PTY members at all", () => {
+    const items = buildDockRenderItems(
+      [filePanel("spec"), browserPanel("docs")],
+      groupMap(group(["docs", "spec"], "docs")),
+      null
+    );
+
+    expect(idsOf(items)).toEqual(["spec", "docs"]);
+  });
+
+  it("ignores a group stored against the grid", () => {
+    const items = buildDockRenderItems(
+      [terminal("a"), terminal("b")],
+      groupMap(group(["a", "b"], "a", { id: "pair", location: "grid" })),
+      null
+    );
+
+    expect(idsOf(items)).toEqual(["a", "b"]);
+  });
+
+  // ── Malformed input ────────────────────────────────────────────────────
+
+  it("renders a panel once when two groups both claim it", () => {
+    // Overlapping membership is invalid state, but it must not put the same
+    // panel under two chips — two sortables would share one dnd-kit id.
+    const items = buildDockRenderItems(
+      [terminal("a"), terminal("b"), terminal("c")],
+      groupMap(group(["a", "b"], "a", { id: "g1" }), group(["a", "c"], "a", { id: "g2" })),
+      null
+    );
+
+    const rendered = items.flatMap((item) => item.panels.map((panel) => panel.id));
+    expect(rendered).toEqual([...new Set(rendered)]);
+    expect([...rendered].sort()).toEqual(["a", "b", "c"]);
+  });
+
+  it("renders a duplicated ordered panel once", () => {
+    const dupe = terminal("a");
+    const items = buildDockRenderItems([dupe, dupe], NO_GROUPS, null);
+
+    expect(idsOf(items)).toEqual(["a"]);
+  });
+
+  it("does not mutate the groups or panels it is given", () => {
+    const stored = Object.freeze(
+      group(["a", "closed"], "closed", { id: "pair" })
+    ) as unknown as TabGroup;
+    Object.freeze(stored.panelIds);
+    const panels = Object.freeze([terminal("a")]) as unknown as DockPanelData[];
+
+    const items = buildDockRenderItems(panels, groupMap(stored), null);
+
+    expect(items[0]?.group.panelIds).toEqual(["a"]);
+    expect(items[0]?.group.activeTabId).toBe("a");
+    // The stored group is the live Zustand object — it must come back untouched.
+    expect(stored.panelIds).toEqual(["a", "closed"]);
+    expect(stored.activeTabId).toBe("closed");
+  });
+
+  it("groups a global group under a global scope", () => {
+    const items = buildDockRenderItems(
+      [terminal("a"), terminal("b")],
+      groupMap(group(["a", "b"], "a", { id: "pair" })),
+      null
+    );
+
+    expect(idsOf(items)).toEqual(["pair"]);
+  });
+
+  it("groups a worktree-scoped group under its own worktree", () => {
+    const items = buildDockRenderItems(
+      [terminal("a", "wt-a"), terminal("b", "wt-a")],
+      groupMap(group(["a", "b"], "a", { id: "pair", worktreeId: "wt-a" })),
+      "wt-a"
+    );
+
+    expect(idsOf(items)).toEqual(["pair"]);
+  });
+
+  it("ignores a worktree-scoped group under the global scope", () => {
+    const items = buildDockRenderItems(
+      [terminal("a", "wt-a"), terminal("b", "wt-a")],
+      groupMap(group(["a", "b"], "a", { id: "pair", worktreeId: "wt-a" })),
+      null
+    );
+
+    expect(idsOf(items)).toEqual(["a", "b"]);
   });
 });
