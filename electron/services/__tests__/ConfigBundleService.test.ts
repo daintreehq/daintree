@@ -129,7 +129,12 @@ function agent(id: string, overrides: Record<string, unknown> = {}) {
 }
 
 function makeService(rebuildMenu = vi.fn().mockResolvedValue(undefined)) {
-  return { service: new ConfigBundleService({ rebuildMenu }), rebuildMenu };
+  const refreshTitleBar = vi.fn().mockResolvedValue(undefined);
+  return {
+    service: new ConfigBundleService({ rebuildMenu, refreshTitleBar }),
+    rebuildMenu,
+    refreshTitleBar,
+  };
 }
 
 beforeEach(() => {
@@ -416,6 +421,51 @@ describe("ConfigBundleService.apply", () => {
     expect(restored?.name).toBe("Original");
     // The field the import introduced must be gone, not merged away.
     expect(restored).not.toHaveProperty("showInEmptyState");
+  });
+
+  it("rolls back the writes a section already made before it threw", async () => {
+    // globalRecipes is the LAST section, so the only snapshot in play is its
+    // own. Excluding the failing section from the rollback strands r1.
+    mockProjectStore.addGlobalRecipe.mockImplementation(async (recipe: Record<string, unknown>) => {
+      if (recipe.id === "r2") throw new Error("recipes.json is read-only");
+      mockProjectStore.recipes.push(recipe);
+    });
+    const { service } = makeService();
+
+    const report = await service.apply({
+      globalRecipes: [
+        { id: "r1", name: "First", terminals: [] },
+        { id: "r2", name: "Second", terminals: [] },
+      ],
+    });
+
+    expect(report.outcome).toBe("rolled-back");
+    expect(report.rolledBack).toBe(true);
+    expect(report.errors[0]).toContain("No changes were kept");
+    // The write that landed before the throw must be gone, or the report above
+    // is a claim the service never made good on.
+    expect(mockProjectStore.recipes).toEqual([]);
+  });
+
+  it("refreshes the caption strip after the theme section writes", async () => {
+    const { service, refreshTitleBar } = makeService();
+
+    await service.apply({ worktreeConfig: { pathPattern: "worktrees/{branch-slug}" } });
+    expect(refreshTitleBar).not.toHaveBeenCalled();
+
+    await service.apply({ appTheme: { colorSchemeId: "movile" } });
+    expect(refreshTitleBar).toHaveBeenCalled();
+  });
+
+  it("reports a prototype-chain key as unsupported rather than unchanged", async () => {
+    const { service } = makeService();
+
+    const report = await service.apply({
+      notificationSettings: JSON.parse('{"toString": "nope", "constructor": 1}'),
+    });
+
+    expect(statusFor(report, "notificationSettings", "toString")?.status).toBe("skipped");
+    expect(statusFor(report, "notificationSettings", "constructor")?.status).toBe("skipped");
   });
 
   it("merges global recipes by id so a repeat import adds no duplicate", async () => {

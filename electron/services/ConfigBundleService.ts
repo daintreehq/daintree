@@ -51,6 +51,13 @@ import type { ConfigBundleSections } from "../utils/configBundleIO.js";
 export interface ConfigBundleServiceDeps {
   /** Rebuilds the application menu after keybinding overrides change. */
   rebuildMenu: () => Promise<void>;
+  /**
+   * Repaints the Windows native caption strip after the theme changes. Writing
+   * `appTheme` through the store alone leaves the strip in the previous theme's
+   * colours until an OS appearance change reapplies them (#11766), which is why
+   * the real theme setters call this on every write.
+   */
+  refreshTitleBar: () => Promise<void>;
 }
 
 interface SectionDiff {
@@ -218,9 +225,12 @@ export class ConfigBundleService {
         });
       } catch (error) {
         const reason = formatErrorMessage(error, "the section could not be applied");
-        // `snapshots` only ever holds sections whose apply was entered, so a
-        // failure in the very first section's `read()` leaves nothing to undo.
-        const restorable = snapshots.filter((s) => s.handler.id !== id);
+        // The FAILING section is rolled back too: its snapshot is only pushed
+        // once `read()` resolved, and every section can write more than once
+        // before throwing, so excluding it would strand exactly the partial
+        // writes this rollback exists to undo. A failure inside `read()` pushes
+        // nothing, so the "nothing was changed" case is still reported honestly.
+        const restorable = snapshots;
         const failedRestores = await this.rollback(restorable);
         rolledBack = restorable.length > 0 && failedRestores.length === 0;
 
@@ -542,6 +552,7 @@ export class ConfigBundleService {
         const results: ConfigImportLeafResult[] = [];
         if (!isRecord(incoming)) return results;
         const currentRecord = isRecord(current) ? current : {};
+        let wrote = false;
 
         // Custom schemes first: a colorSchemeId pointing at an imported scheme
         // only resolves once that scheme exists.
@@ -580,6 +591,7 @@ export class ConfigBundleService {
             // re-parsed, so a forward-compatible field written by a newer build
             // isn't stripped off a scheme this import never mentioned.
             store.set("appTheme.customSchemes", [...mergedById.values()] as never);
+            wrote = true;
 
             const persisted = readTheme().customSchemes;
             const readBackById = new Map(
@@ -612,12 +624,16 @@ export class ConfigBundleService {
           const normalized =
             typeof value === "string" && field !== "accentColorOverride" ? value.trim() : value;
           store.set(`appTheme.${field}` as never, normalized as never);
+          wrote = true;
           results.push(
             sameValue(readTheme()[field], normalized)
               ? { key: field, status: "applied" }
               : skippedLeaf(field, "Value did not persist")
           );
         }
+
+        // Same follow-up the real theme setters make after their own store.set.
+        if (wrote) await this.deps.refreshTitleBar();
 
         return results;
       },
@@ -632,6 +648,9 @@ export class ConfigBundleService {
           else next[field] = snapshotRecord[field];
         }
         store.set("appTheme", next as never);
+        // A rollback that left the caption strip on the imported theme would be
+        // the same stale-strip bug, just reached from the other direction.
+        await this.deps.refreshTitleBar();
       },
     };
   }
@@ -663,7 +682,10 @@ export class ConfigBundleService {
 
         const pending: string[] = [];
         for (const key of Object.keys(incoming)) {
-          if (!(key in sanitized)) {
+          // `in` would walk the prototype chain, so a section key like
+          // `toString` or `__proto__` (an own property once JSON.parse made it)
+          // would pass this gate and then be misreported as "unchanged".
+          if (!Object.prototype.hasOwnProperty.call(sanitized, key)) {
             results.push(
               skippedLeaf(
                 key,

@@ -5,7 +5,7 @@ import { defineIpcNamespace, op } from "../define.js";
 import { CHANNELS } from "../channels.js";
 import { CONFIG_BUNDLE_METHOD_CHANNELS } from "./configBundle.preload.js";
 import type { HandlerDependencies } from "../types.js";
-import { getAppWebContents } from "../../window/webContentsRegistry.js";
+import { broadcastToRenderer } from "../utils.js";
 import { ConfigBundleService } from "../../services/ConfigBundleService.js";
 import { buildConfigBundle, parseConfigBundle } from "../../utils/configBundleIO.js";
 import {
@@ -38,13 +38,16 @@ const BUNDLE_FILTERS = [{ name: "Daintree Configuration", extensions: ["json"] }
  * stores, and `app.reloadConfig` reconciles neither. Without this, importing
  * from one window leaves every other window showing the previous theme until
  * restart.
+ *
+ * `broadcastToRenderer` — the same helper `APP_CONFIG_RELOADED` uses — reaches
+ * CACHED project views as well as the active one. Walking windows and taking
+ * each one's active web contents would miss exactly the backgrounded views that
+ * go stale: `notificationSettingsStore.hydrate()` early-returns once hydrated,
+ * so a view that never hears this keeps the pre-import values when the user
+ * switches back to it.
  */
 function broadcastConfigImported(): void {
-  for (const win of BrowserWindow.getAllWindows()) {
-    if (win.isDestroyed()) continue;
-    const wc = getAppWebContents(win);
-    if (!wc.isDestroyed()) wc.send(CHANNELS.CONFIG_BUNDLE_IMPORTED);
-  }
+  broadcastToRenderer(CHANNELS.CONFIG_BUNDLE_IMPORTED);
 }
 
 export function registerConfigBundleHandlers(deps: HandlerDependencies): () => void {
@@ -61,7 +64,14 @@ export function registerConfigBundleHandlers(deps: HandlerDependencies): () => v
     createApplicationMenu(win, deps.cliAvailabilityService);
   };
 
-  const service = new ConfigBundleService({ rebuildMenu });
+  // Lazily imported for the same reason `rebuildMenu` is: this handler is
+  // registered at boot and neither module belongs on that path.
+  const refreshTitleBar = async () => {
+    const { refreshTitleBarOverlayTheme } = await import("./appTheme.js");
+    refreshTitleBarOverlayTheme();
+  };
+
+  const service = new ConfigBundleService({ rebuildMenu, refreshTitleBar });
 
   const namespace = defineIpcNamespace({
     name: "configBundle",
