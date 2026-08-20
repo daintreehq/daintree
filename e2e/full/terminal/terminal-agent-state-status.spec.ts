@@ -1,5 +1,5 @@
 import { test, expect, type Locator, type Page } from "@playwright/test";
-import { chmodSync, mkdirSync, writeFileSync } from "fs";
+import { writeFileSync } from "fs";
 import { execSync } from "child_process";
 import path from "path";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
@@ -18,14 +18,22 @@ import { getGridPanelIds } from "../../helpers/panels";
 import { SEL } from "../../helpers/selectors";
 import { T_LONG, T_MEDIUM, T_SHORT } from "../../helpers/timeouts";
 import { dismissBlockingPalette } from "../../helpers/overlays";
+import {
+  installFakeAgent,
+  fakeAgentEnv,
+  FAKE_AGENT_STOP,
+  FAKE_AGENT_IDLE,
+} from "../../helpers/fakeAgent";
 
 let ctx: AppContext;
 let fixtureDir: string;
 let fakeBinDir: string;
 let fixtureCleanup: (() => void) | undefined;
 
-const FAKE_CLAUDE_STOP = "__DAINTREE_FAKE_CLAUDE_STOP__";
-const FAKE_CLAUDE_IDLE = "__DAINTREE_FAKE_CLAUDE_IDLE__";
+// The fake CLI itself lives in helpers/fakeAgent.ts so the theme-review harness
+// can drive the same real FSM transition; this spec still owns the assertions.
+const FAKE_CLAUDE_STOP = FAKE_AGENT_STOP;
+const FAKE_CLAUDE_IDLE = FAKE_AGENT_IDLE;
 
 // The waiting transition is governed by the 8s idle debounce in
 // ActivityMonitor (`IDLE_DEBOUNCE_MS` for agent terminals). The OSC heartbeat
@@ -125,82 +133,7 @@ function prepareFixture(): void {
   const { dir, cleanup } = createFixtureRepo({ name: "terminal-agent-state-status" });
   fixtureDir = dir;
   fixtureCleanup = cleanup;
-  // Keep a space in the fake CLI path so toolbar launches exercise the same
-  // quoted absolute executable form that real resolved paths can use.
-  fakeBinDir = path.join(fixtureDir, ".e2e bin");
-  mkdirSync(fakeBinDir, { recursive: true });
-
-  const fakeClaudeImplName = process.platform === "win32" ? "claude.js" : "claude";
-  const fakeClaude = path.join(fakeBinDir, fakeClaudeImplName);
-
-  writeFileSync(
-    fakeClaude,
-    [
-      "#!/usr/bin/env node",
-      "if (process.argv.includes('--version')) {",
-      "  console.log('claude code v9.9.9');",
-      "  process.exit(0);",
-      "}",
-      `const stopToken = ${JSON.stringify(FAKE_CLAUDE_STOP)};`,
-      `const idleToken = ${JSON.stringify(FAKE_CLAUDE_IDLE)};`,
-      // OSC 9;4 taskbar-progress: state 1 = working, state 0 = idle hint.
-      "const OSC_WORKING = '\\u001b]9;4;1;0\\u0007';",
-      "const OSC_IDLE = '\\u001b]9;4;0;0\\u0007';",
-      "console.log('Accessing workspace:');",
-      "console.log('');",
-      "console.log(' ' + process.cwd());",
-      "console.log('');",
-      "console.log(' Quick safety check: Is this a project you created or one you trust?');",
-      "console.log('');",
-      "console.log(' ❯ 1. Yes, I trust this folder');",
-      "console.log('   2. No, exit');",
-      "console.log('');",
-      "console.log(' Enter to confirm · Esc to cancel');",
-      "process.stdin.resume();",
-      "process.stdin.setEncoding('utf8');",
-      "let trusted = false;",
-      "let workingTimer = null;",
-      "const keepAlive = setInterval(() => {}, 1000);",
-      "const startWorking = () => {",
-      "  if (workingTimer) return;",
-      "  process.stdout.write(OSC_WORKING);",
-      "  workingTimer = setInterval(() => process.stdout.write(OSC_WORKING), 1000);",
-      "};",
-      "const stopWorking = () => {",
-      "  if (workingTimer) { clearInterval(workingTimer); workingTimer = null; }",
-      "  process.stdout.write(OSC_IDLE);",
-      "};",
-      "const shutdown = () => {",
-      "  stopWorking();",
-      "  console.log('FAKE_CLAUDE_EXIT');",
-      "  clearInterval(keepAlive);",
-      "  process.exit(0);",
-      "};",
-      "process.stdin.on('data', (chunk) => {",
-      "  const input = String(chunk);",
-      "  if (!trusted && /[\\r\\n]/.test(input)) {",
-      "    trusted = true;",
-      "    console.log('FAKE_CLAUDE_READY');",
-      "    startWorking();",
-      "    return;",
-      "  }",
-      "  if (!trusted) return;",
-      "  if (input.includes(stopToken)) { shutdown(); return; }",
-      "  if (input.includes(idleToken)) { stopWorking(); return; }",
-      "});",
-      "process.on('SIGINT', shutdown);",
-      "process.on('SIGTERM', shutdown);",
-      "",
-    ].join("\n")
-  );
-  chmodSync(fakeClaude, 0o755);
-
-  if (process.platform === "win32") {
-    writeFileSync(
-      path.join(fakeBinDir, "claude.cmd"),
-      ["@echo off", 'node "%~dp0claude.js" %*', ""].join("\r\n")
-    );
-  }
+  fakeBinDir = installFakeAgent(fixtureDir);
 
   writeFileSync(
     path.join(fixtureDir, "package.json"),
@@ -220,11 +153,7 @@ test.describe.serial("Full: terminal agent-state and status surfaces", () => {
   test.beforeAll(async () => {
     prepareFixture();
     ctx = await launchApp({
-      env: {
-        PATH: `${fakeBinDir}${path.delimiter}${process.env.PATH ?? ""}`,
-        DAINTREE_CLI_PATH_PREPEND: fakeBinDir,
-        DAINTREE_IDENTITY_DEBUG_PASS: "1",
-      },
+      env: fakeAgentEnv(fakeBinDir),
     });
     ctx.window = await openAndOnboardProject(
       ctx.app,

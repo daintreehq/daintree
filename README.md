@@ -63,7 +63,7 @@ What that looks like in practice:
 - **Worktree Dashboard.** Every branch in one view. Auto PR and issue detection, dev-server lifecycle, commit composer.
 - **Context Injection.** Select files, ship structured context into any agent's terminal. Built on [CopyTree](https://github.com/gregpriday/copytree).
 - **MCP Server.** Agents call Daintree actions directly. Per-tier authorization, audit log, idempotency.
-- **Action Palette + 14 themes.** Over 300 keyboard-first actions and a palette-based theme system with accessibility tokens.
+- **Action Palette + 15 themes.** Over 300 keyboard-first actions and a palette-based theme system with accessibility tokens.
 - **Notification Center.** Agents run unattended. The inbox tells you what needs you and what can wait.
 - **Voice input.** OpenAI Realtime dictation for quick prompts. Optional, needs an API key.
 

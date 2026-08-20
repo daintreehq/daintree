@@ -114,6 +114,8 @@
     "test:smoke": "node scripts/run-smoke.mjs",
     "test:freeze-harness": "node scripts/run-freeze-harness.mjs",
     "test:smoke:packaged": "node scripts/run-packaged-smoke.mjs",
+    "theme:tour": "cross-env DAINTREE_TOUR=1 npx playwright test --project=screenshots theme-tour --workers=1 --reporter=list",
+    "theme:tour:shots": "cross-env DAINTREE_TOUR=1 DAINTREE_TOUR_AUTO=1 npx playwright test --project=screenshots theme-tour --workers=1 --reporter=list",
     "test:e2e": "npx playwright test",
     "test:e2e:core": "npx playwright test --project=core",
     "test:e2e:full": "npx playwright test --project=full-terminal --project=full-worktree --project=full-presets --project=full-platform --project=full-panels --project=full-resilience --project=full-plugins",

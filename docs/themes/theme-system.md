@@ -16,7 +16,7 @@ Daintree's theming system is a three-layer pipeline shared between the renderer 
 
 ## Built-In Themes
 
-14 built-in themes, each in its own file under `shared/theme/builtInThemes/`:
+15 built-in themes, each in its own file under `shared/theme/builtInThemes/`:
 
 | Theme          | File                | Type  |
 | -------------- | ------------------- | ----- |
@@ -27,6 +27,7 @@ Daintree's theming system is a three-layer pipeline shared between the renderer 
 | Highlands      | `highlands.ts`      | dark  |
 | Namib          | `namib.ts`          | dark  |
 | Redwoods       | `redwoods.ts`       | dark  |
+| Movile         | `movile.ts`         | dark  |
 | Bondi          | `bondi.ts`          | light |
 | Table Mountain | `table-mountain.ts` | light |
 | Atacama        | `atacama.ts`        | light |
@@ -120,6 +121,24 @@ Extensions are applied as bare CSS custom properties on `:root` (e.g., `"toolbar
 - Do not add recipe-style theme tokens or alias compatibility layers.
 - Keep terminal colors first-class and independent from workbench surfaces.
 - Keep search highlighting independent from accent when a theme needs it.
+
+## Reviewing a theme in the real app
+
+Token values do not tell you whether a theme reads. `e2e/screenshots/theme-tour.spec.ts` boots the built app on a rich multi-worktree fixture, applies a theme, and drives it through 17 review scenes. It works on any built-in, light or dark.
+
+```bash
+npm run build:e2e          # required — the harness launches the built app
+npm run theme:tour         # interactive: real Electron window + control panel
+npm run theme:tour:shots   # unattended: walks every scene, writes PNGs, exits
+
+DAINTREE_TOUR_THEME=bondi DAINTREE_TOUR_COMPARE=movile npm run theme:tour
+```
+
+Interactive mode injects a control panel (bottom-right, shadow-rooted and deliberately unthemed) with a clickable scene list, prev/next, a **compare** button that hot-swaps two themes without leaving the scene, and a live contrast readout computed from the CSS variables actually painted. Auto mode writes `artifacts/theme-tour/<theme>/NN-<scene>.png` (gitignored).
+
+Scenes cover the workbench, a multi-pane fleet, terminal with seeded ANSI, sidebar hover and search, context menu, filter popover, action palette, project switcher, notifications, review hub, settings, the theme picker with hero art, the destructive confirm dialog, an agent **working**, an agent **waiting**, and the dock. The two agent scenes drive the real agent-state FSM via `e2e/helpers/fakeAgent.ts` rather than faking a CSS class.
+
+The full authoring-and-review process — including the Codex review loop, the tier model for contrast budgets, and the traps that pass every test in the repo — lives in `.claude/skills/daintree-theme-creator/resources/theme-review-workflow.md`.
 
 ## Design review checklist
 
