@@ -40,7 +40,7 @@ import { appClient } from "@/clients";
 import type { CliAvailability, AgentSettings } from "@shared/types";
 import { useLayoutState, useOverlayOpen } from "@/hooks";
 import { useKeepMounted } from "@/hooks/useKeepMounted";
-import { useResizeObserverRaf } from "@/hooks/useResizeObserverRaf";
+import { useGlobalBannerHeightVar } from "@/hooks/useGlobalBannerHeightVar";
 import { useWorkspaceRoot } from "@/hooks/useWorkspaceRoot";
 import type { UseProjectSwitcherPaletteReturn } from "@/hooks";
 import {
@@ -814,41 +814,14 @@ export function AppLayout({
   const effectiveSidebarWidth = showSidebar ? sidebarWidth : 0;
 
   const [contentRowEl, setContentRowEl] = useState<HTMLDivElement | null>(null);
-  const toolbarWrapRef = useRef<HTMLDivElement>(null);
+  const [toolbarWrapEl, setToolbarWrapEl] = useState<HTMLDivElement | null>(null);
 
-  // --global-banner-height: how far GlobalBannerCoordinator has pushed the
-  // toolbar down, or 0px when no banner is up. There is no store value to read:
-  // the coordinator can hold a slot while still rendering nothing (HostCrashBanner
-  // has a 400ms Doherty gate), so `slot !== null` is not a height.
-  //
-  // The toolbar wrapper's top edge IS the banner height (the root sits at
-  // viewport y=0 and never scrolls). We read that position but observe the
-  // content row's SIZE: the row is flex-1 with overflow:hidden, so its
-  // automatic minimum height resolves to 0 and it absorbs every top-chrome
-  // height change, making it the reliable trigger. Reading the row's own top
-  // instead would fold in FleetArmingRibbon height — the ribbon is normal-flow
-  // with no z-index, so these overlays paint over it and it clips nothing, and
-  // offsetting below it would resize the PortalDock's native WebContentsView on
-  // every ribbon toggle.
-  //
-  // rAF-coalesced per the house convention (see rendererGlobalErrorHandlers.ts).
-  // The trade is one frame of stale offset when a banner mounts while an overlay
-  // is already open; both overlays open on user action, long after this
-  // observer's initial fire, so the common path is never stale.
-  useResizeObserverRaf(contentRowEl, () => {
-    const bannerHeight = toolbarWrapRef.current?.getBoundingClientRect().top ?? 0;
-    document.documentElement.style.setProperty(
-      "--global-banner-height",
-      `${Math.max(0, bannerHeight)}px`
-    );
-  });
-
-  useEffect(() => {
-    const rootStyle = document.documentElement.style;
-    return () => {
-      rootStyle.removeProperty("--global-banner-height");
-    };
-  }, []);
+  // Feeds OVERLAY_TOP_OFFSET. Measuring the toolbar wrapper's top edge (rather
+  // than the content row's) deliberately excludes FleetArmingRibbon height: the
+  // ribbon carries no positive z-index, so these overlays paint over it and it
+  // clips nothing, and offsetting below it would resize the PortalDock's native
+  // WebContentsView on every ribbon toggle.
+  useGlobalBannerHeightVar(toolbarWrapEl, contentRowEl);
 
   useEffect(() => {
     const portalOffset = layout.portalOpen ? layout.portalWidth : 0;
@@ -890,7 +863,7 @@ export function AppLayout({
       <Suspense fallback={null}>
         <LazyGlobalBannerCoordinator />
       </Suspense>
-      <div {...(chromeInert ? { inert: true } : {})} ref={toolbarWrapRef}>
+      <div {...(chromeInert ? { inert: true } : {})} ref={setToolbarWrapEl}>
         <Toolbar
           onLaunchAgent={handleLaunchAgent}
           onSettings={handleSettings}

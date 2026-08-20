@@ -46,36 +46,26 @@ describe("AppLayout publishes the global banner height — issue #11893", () => 
     source = await fs.readFile(APP_LAYOUT_PATH, "utf-8");
   });
 
-  it("measures the banner and publishes it as --global-banner-height", () => {
-    // The body-portaled overlays are position:fixed under the z-[60] toolbar, so
-    // they need the toolbar's live bottom edge. A banner's height is
-    // content-driven and the coordinator can hold a slot while rendering nothing
-    // (HostCrashBanner's Doherty gate), so measurement is the only source.
-    expect(source).toContain('import { useResizeObserverRaf } from "@/hooks/useResizeObserverRaf"');
-    expect(source).toMatch(/setProperty\(\s*"--global-banner-height",/);
+  // What the publisher DOES — measure, clamp, republish, clean up — is covered
+  // behaviorally in src/hooks/__tests__/useGlobalBannerHeightVar.test.tsx. This
+  // suite only pins the wiring that a source scan can see: that AppLayout hands
+  // the hook the two elements it needs.
+
+  it("hands the hook the toolbar wrapper, whose top edge is the banner height", () => {
+    // Argument order matters: the wrapper is what gets MEASURED (its top edge is
+    // the banner height, since the app root sits at viewport y=0), the content
+    // row is only a resize trigger.
+    expect(source).toMatch(/useGlobalBannerHeightVar\(toolbarWrapEl, contentRowEl\)/);
+    expect(source).toMatch(/<div(?=[^>]*ref=\{setToolbarWrapEl\})[^>]*>\s*<Toolbar\b/);
   });
 
-  it("observes the content row's size but reads the toolbar wrapper's position", () => {
-    // The content row is flex-1 + overflow:hidden, so it absorbs every top-chrome
-    // height change and is the reliable resize trigger. Its own top edge would
-    // fold in FleetArmingRibbon height — the ribbon is normal-flow with no
-    // z-index, so these overlays paint over it and it clips nothing, and
-    // offsetting below it would resize PortalDock's native WebContentsView on
-    // every ribbon toggle.
-    expect(source).toMatch(/useResizeObserverRaf\(contentRowEl,/);
-    expect(source).toMatch(/toolbarWrapRef\.current\?\.getBoundingClientRect\(\)\.top/);
-    expect(source).toContain("ref={setContentRowEl}");
-    // The ref must sit AFTER the inert spread so the mount-order regex above
-    // keeps matching the toolbar wrapper.
-    expect(source).toContain(
-      "<div {...(chromeInert ? { inert: true } : {})} ref={toolbarWrapRef}>"
+  it("attaches the trigger ref to the flex-1 content row", () => {
+    // The row is flex-1 + overflow:hidden, so its automatic minimum height
+    // resolves to 0 and it absorbs banner growth. A ref on any shrink-0 sibling
+    // would never report the change.
+    expect(source).toMatch(
+      /<div(?=[^>]*ref=\{setContentRowEl\})(?=[^>]*className="(?=[^"]*\bflex-1\b)(?=[^"]*\boverflow-hidden\b)[^"]*")[^>]*>/
     );
-  });
-
-  it("removes the custom property on unmount", () => {
-    // Mirrors the --right-obstruction-offset effect: the var lives on
-    // documentElement, so a stale value would outlive this AppLayout instance.
-    expect(source).toMatch(/removeProperty\("--global-banner-height"\)/);
   });
 });
 

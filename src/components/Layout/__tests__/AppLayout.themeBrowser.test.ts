@@ -62,19 +62,25 @@ describe("AppLayout theme browser overlay structure — issue #5791", () => {
 
   it("anchors the panel with fixed positioning below the toolbar", () => {
     // Bug 3: absolute + h-full inside <main> was bounded by the flex cell.
-    // fixed + bottom-0 anchors to the viewport regardless of docks/panels below.
-    expect(source).toMatch(/className="fixed bottom-0 z-40 pointer-events-auto"/);
+    // fixed + bottom-0 anchors to the viewport regardless of docks/panels below,
+    // and the top edge is driven by OVERLAY_TOP_OFFSET (see #11893 below).
+    expect(source).toMatch(
+      /<div(?=[^>]*className="(?=[^"]*\bfixed\b)(?=[^"]*\bbottom-0\b)[^"]*")(?=[^>]*style=\{\{[\s\S]{0,200}?\btop:\s*OVERLAY_TOP_OFFSET\b)[^>]*>\s*<ThemeBrowser\s*\/>/
+    );
   });
 
-  it("tracks the global banner height instead of a static top-12 — issue #11893", () => {
+  it("offsets the panel by the toolbar height PLUS the banner height — issue #11893", () => {
     // A global banner pushes the z-[60] toolbar below 48px, so the old static
-    // top-12 left the panel's top strip (hero ✕ close) painted under it. Banner
-    // height is content-driven, so the offset must compose the toolbar's own
-    // h-12 with the measured banner height — no constant can replace it.
-    expect(source).toMatch(/var\(--global-banner-height, 0px\)/);
-    expect(source).toContain("top: OVERLAY_TOP_OFFSET,");
+    // top-12 left the panel's top strip (hero ✕ close) painted under it. The
+    // offset must ADD the measured banner height to the toolbar's own height —
+    // replacing one with the other would just move the clipping around. The
+    // toolbar's base height is deliberately not pinned here: changing it should
+    // not force a mirrored test edit.
+    expect(source).toMatch(
+      /const OVERLAY_TOP_OFFSET = "calc\([^"+]+\+\s*var\(--global-banner-height,\s*0px\)\)"/
+    );
     // The static offset must not come back.
-    expect(source).not.toMatch(/className="fixed top-12 bottom-0 z-40 pointer-events-auto"/);
+    expect(source).not.toContain("fixed top-12 bottom-0");
   });
 
   it("drops the static backdrop-blur from the main-content wrapper", () => {
