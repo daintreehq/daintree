@@ -165,6 +165,13 @@ export const ACTION_TIER_ADDONS = [
 ] as const satisfies readonly BuiltInActionId[];
 
 export const SYSTEM_TIER_ADDONS = [
+  // Deliberately above `worktree.createWithRecipe`, which is heavier but
+  // confined to the current project because it derives its own root. This one
+  // takes an explicit root that is not validated against the session's
+  // project, so an action-tier overlay could create a tree in another repo.
+  // System keeps that with the first-party assistant (forced to this tier in
+  // `HelpSessionService`) and leaves overlays a scoped grant (#11880).
+  "worktree.create",
   "worktree.delete",
   "worktree.resource.teardown",
 

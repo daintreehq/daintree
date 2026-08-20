@@ -598,6 +598,10 @@ describe("McpServerService", () => {
         "forge.getChecks",
         "worktree.reviewReadiness",
         "project.runCheck",
+        // System-tier but never external (#11880) — same reasoning as the cuts
+        // above: without it here, the workbench, action and external "not
+        // listed" assertions would pass on an empty fixture, not on the filter.
+        "worktree.create",
       ];
       return ids.map((id) =>
         createManifestEntry({
@@ -1519,7 +1523,7 @@ describe("McpServerService", () => {
 
       const ids = (await client.listTools()).tools.map((tool) => tool.name);
       expect(ids).toContain("worktree.list");
-      expect(ids).not.toContain("worktree.create");
+      expect(ids).toContain("worktree.create");
       expect(ids).toContain("worktree.createWithRecipe");
       for (const id of ACTION_TIER_ADDONS) {
         expect(ids).toContain(id);
