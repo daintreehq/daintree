@@ -429,6 +429,28 @@ async function enrichPRPageWithRequiredStatus(repo: RepoRef, items: PR[]): Promi
 }
 
 /**
+ * The `is:` qualifier for a PR search, mirroring {@link mapPRGraphQLStates}'s
+ * exhaustive shape rather than interpolating `state` into the query text.
+ * `listCacheState` is typed, but the raw forge IPC path hands `opts` through
+ * unvalidated — a bogus state would splice itself in here as an extra
+ * qualifier while the connection path quietly fell back to OPEN, which is the
+ * search-vs-list disagreement this whole mapping exists to prevent.
+ *
+ * `state:` is the issues-path spelling and is wrong here: GitHub accepts only
+ * open/closed after `state:` for pull requests, so `state:merged` matches
+ * nothing at all.
+ */
+function prSearchStateQualifier(state: "open" | "closed" | "merged" | "all"): string {
+  if (state === "merged") return " is:merged";
+  // Bare, not `is:closed is:unmerged` — the connection path maps `closed` to
+  // ["CLOSED", "MERGED"], so narrowing it here would drop every merged PR the
+  // moment a caller added a search term.
+  if (state === "closed") return " is:closed";
+  if (state === "all") return "";
+  return " is:open";
+}
+
+/**
  * Text-search path for `listPRs` — routes through GitHub's search API instead
  * of the repository pull requests connection. Results are typed-input ephemera:
  * they use a `search:`-prefixed in-flight dedupe key and are never written to
@@ -458,7 +480,7 @@ async function searchPRsImpl(repo: RepoRef, search: string, opts: ListOptions): 
   // Free text is appended unquoted and truncated to the budget the qualifiers
   // leave inside GitHub's 256-char query cap — same construction, and the same
   // reasoning, as `searchIssuesImpl`.
-  const stateQualifier = state === "all" ? "" : ` is:${state}`;
+  const stateQualifier = prSearchStateQualifier(state);
   const sortQualifier = `sort:${normalizeListSortOrder(opts.sort)}-${normalizeListDirection(opts.direction)}`;
   const prefix = `repo:${repo.owner}/${repo.repo} is:pr${stateQualifier} ${sortQualifier} `;
   const available = 256 - prefix.length;
@@ -486,11 +508,16 @@ async function searchPRsImpl(repo: RepoRef, search: string, opts: ListOptions): 
         }
       | undefined;
     const nodes = (result?.nodes ?? []) as Array<Record<string, unknown>>;
+    // `is:pr` is query text, not a type constraint: a caller fragment holding
+    // an `OR` branch widens the result set past it, and SEARCH_QUERY selects
+    // both node kinds. Without this an issue would map through `toForgePR`
+    // into a PR-shaped row with empty refs and `merged: false`.
+    const prNodes = nodes.filter((node) => node?.__typename === "PullRequest");
     return {
       // `issueCount` counts search matches, not the repo's open PRs, so it
       // must not reach `updateRepoStatsCount` the way the list path's
       // `totalCount` does — that value backs the toolbar's repo-wide badge.
-      items: await enrichPRPageWithRequiredStatus(repo, nodes.filter(Boolean).map(toForgePR)),
+      items: await enrichPRPageWithRequiredStatus(repo, prNodes.map(toForgePR)),
       nextCursor: result?.pageInfo?.endCursor ?? null,
       hasMore: result?.pageInfo?.hasNextPage ?? false,
       ...(typeof result?.issueCount === "number" ? { totalCount: result.issueCount } : {}),

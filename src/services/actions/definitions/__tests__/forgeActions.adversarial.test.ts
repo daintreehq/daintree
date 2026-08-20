@@ -882,6 +882,23 @@ describe("forge list arg validation rejects rather than strips", () => {
     expect(parse("forge.listIssues", { sort: "updated", direction: "asc" }).success).toBe(true);
   });
 
+  it("carries a PR search through validation into the provider call", async () => {
+    // The handler test above runs raw args. That would still pass if the
+    // schema parsed `search` to `undefined`, because production forwards
+    // `validation.data`, not the raw input — so run the parsed output.
+    const args = { state: "closed", search: "is:draft -label:wip", perPage: 10 };
+    const parsed = parse("forge.listPRs", args);
+    expect(parsed.success).toBe(true);
+
+    forgeClientMock.listPRs.mockResolvedValue({ items: [], nextCursor: null, hasMore: false });
+    await runAction("forge.listPRs", parsed.success ? parsed.data : args, {
+      activeWorktreePath: "/repo",
+    });
+
+    const [, opts] = forgeClientMock.listPRs.mock.calls[0]!;
+    expect(opts).toMatchObject(args);
+  });
+
   it("carries the issue's motivating query through validation into the provider call", async () => {
     // Parsing alone proves nothing — the OLD schema also "accepted" this, by
     // silently dropping perPage. What matters is that every field survives
