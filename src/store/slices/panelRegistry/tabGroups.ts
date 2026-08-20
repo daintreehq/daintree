@@ -16,7 +16,7 @@ import {
 } from "./helpers";
 import {
   buildWorktreeIndex,
-  NO_WORKTREE,
+  collectUngroupedCandidateIds,
   panelMatchesWorktreeScope,
   transferBetweenWorktreeIndex,
 } from "./worktreeIndex";
@@ -24,51 +24,6 @@ import { getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
 
 type Set = PanelRegistryStoreApi["setState"];
 type Get = PanelRegistryStoreApi["getState"];
-
-/**
- * Candidate panel ids for the ungrouped-panel scan in `getTabGroups`.
- *
- * Iterates `panelIds` first (preserving committed order so explicit/virtual
- * group ordering and drag-reorder via `reorderTabGroups` stay correct), then
- * appends any ids present in `panelIdsByWorktreeId` but not yet in `panelIds`.
- *
- * That tail is the fix for #9649: during a `beginSpawnBatch`/`flushSpawnBatch`
- * window, the worktree index is updated eagerly at panel creation while
- * `panelIds` only appends at flush. Reading `panelIds` alone left freshly-
- * batched recipe panels out of every virtual group until a worktree switch
- * forced a re-derive. `gridPanelIds` in `useContentGridContext` already reads
- * the index, so including its pending ids keeps the ungrouped source consistent
- * with the grid's structural dep — the panel paints on first mount.
- *
- * For a concrete `worktreeId`, the tail scans that worktree's bucket plus the
- * `NO_WORKTREE` bucket (dock-global panels are visible in every worktree-scoped
- * dock — the per-panel `panelMatchesWorktreeScope` filter inside the loop keeps
- * them out of grid queries). For `worktreeId === undefined`, it scans every
- * bucket.
- */
-function collectUngroupedCandidateIds(
-  panelIds: string[],
-  panelIdsByWorktreeId: Record<string, string[]>,
-  worktreeId: string | undefined
-): string[] {
-  const seen = new Set(panelIds);
-  const buckets =
-    worktreeId === undefined
-      ? Object.values(panelIdsByWorktreeId)
-      : [panelIdsByWorktreeId[worktreeId], panelIdsByWorktreeId[NO_WORKTREE]];
-
-  let pending: string[] | undefined;
-  for (const bucket of buckets) {
-    if (!bucket) continue;
-    for (const id of bucket) {
-      if (seen.has(id)) continue;
-      seen.add(id);
-      (pending ??= []).push(id);
-    }
-  }
-
-  return pending ? [...panelIds, ...pending] : panelIds;
-}
 
 function getPanelTabGroupLocation(
   panel: PanelInstance | CarrierPanel | undefined

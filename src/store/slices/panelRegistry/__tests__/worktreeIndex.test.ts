@@ -4,7 +4,9 @@ import {
   removeFromWorktreeIndex,
   transferBetweenWorktreeIndex,
   buildWorktreeIndex,
+  collectUngroupedCandidateIds,
   panelMatchesWorktreeScope,
+  NO_WORKTREE,
   type PanelIdsByWorktreeId,
 } from "../worktreeIndex";
 
@@ -188,6 +190,70 @@ describe("worktreeIndex", () => {
         p3: { worktreeId: "wt-A" },
       });
       expect(index["wt-A"]).toEqual(["p3", "p1", "p2"]);
+    });
+  });
+
+  describe("collectUngroupedCandidateIds", () => {
+    it("returns the committed list untouched when no id is pending", () => {
+      const panelIds = ["a", "b"];
+      const result = collectUngroupedCandidateIds(panelIds, { "wt-a": ["a", "b"] }, "wt-a");
+
+      // Same array reference — the common path must not allocate.
+      expect(result).toBe(panelIds);
+    });
+
+    it("appends ids the worktree index knows about but panelIds has not revealed", () => {
+      // #9649: during a spawn batch the index is written eagerly while panelIds
+      // only appends at flush, so the pending panel must still surface.
+      const result = collectUngroupedCandidateIds(["a"], { "wt-a": ["a", "pending"] }, "wt-a");
+
+      expect(result).toEqual(["a", "pending"]);
+    });
+
+    it("orders pending ids active-worktree-first, then global", () => {
+      // The dock renders global panels alongside the active worktree's, so the
+      // two buckets both contribute pending ids. Insertion order of the index
+      // object must not decide their relative position (#11873).
+      const index: PanelIdsByWorktreeId = {
+        [NO_WORKTREE]: ["global-committed", "global-pending"],
+        "wt-a": ["local-committed", "local-pending"],
+      };
+
+      expect(
+        collectUngroupedCandidateIds(["global-committed", "local-committed"], index, "wt-a")
+      ).toEqual(["global-committed", "local-committed", "local-pending", "global-pending"]);
+    });
+
+    it("ignores buckets for other worktrees when scoped", () => {
+      const index: PanelIdsByWorktreeId = {
+        "wt-a": ["a", "a-pending"],
+        "wt-b": ["b-pending"],
+      };
+
+      expect(collectUngroupedCandidateIds(["a"], index, "wt-a")).toEqual(["a", "a-pending"]);
+    });
+
+    it("scans every bucket when unscoped", () => {
+      const index: PanelIdsByWorktreeId = {
+        "wt-a": ["a", "a-pending"],
+        "wt-b": ["b-pending"],
+      };
+
+      expect(collectUngroupedCandidateIds(["a"], index, undefined)).toEqual([
+        "a",
+        "a-pending",
+        "b-pending",
+      ]);
+    });
+
+    it("never repeats an id already committed to panelIds", () => {
+      const result = collectUngroupedCandidateIds(
+        ["a", "b"],
+        { "wt-a": ["a", "b"], [NO_WORKTREE]: ["b"] },
+        "wt-a"
+      );
+
+      expect(result).toEqual(["a", "b"]);
     });
   });
 });
