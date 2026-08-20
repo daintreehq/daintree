@@ -149,6 +149,7 @@ const runHistoryAppendMock = vi.fn().mockResolvedValue(undefined);
 
 import { useRecipeStore } from "../recipeStore";
 import { usePanelLimitStore } from "../panelLimitStore";
+import type { RecipeTerminal } from "@shared/types/project";
 
 describe("recipeStore", () => {
   beforeEach(() => {
@@ -164,6 +165,10 @@ describe("recipeStore", () => {
     // hoisted default so each test starts from an empty agent-settings shape
     // instead of inheriting a prior test's mockResolvedValue.
     getAgentSettingsMock.mockResolvedValue({ agents: {} });
+    // Same reason: without this, a test that never sets up addPanel inherits
+    // whichever spawn ids the previous test installed, so it passes in the
+    // suite and fails in isolation.
+    addTerminalMock.mockReset().mockResolvedValue(undefined);
     pluginRecordUseMock.mockResolvedValue(undefined);
     pluginUpdateMetadataMock.mockImplementation(async (id: string) => ({
       id,
@@ -260,6 +265,39 @@ describe("recipeStore", () => {
       expect(devEntry?.agentLaunchFlags).toBeUndefined();
     });
 
+    it("captures owned titles and drops derived ones so the clone can't pin them (#11872)", () => {
+      panelStoreState.panelIds = ["panel-derived", "panel-custom", "panel-user"];
+      panelStoreState.panelsById = {
+        // Detection wrote this one — it must stay free to promote in the clone.
+        "panel-derived": {
+          id: "panel-derived",
+          kind: "terminal",
+          title: "Claude",
+          worktreeId: "wt-1",
+          location: "grid",
+        },
+        "panel-custom": {
+          id: "panel-custom",
+          kind: "terminal",
+          title: "TEAMLEAD",
+          titleMode: "custom",
+          worktreeId: "wt-1",
+          location: "grid",
+        },
+        "panel-user": {
+          id: "panel-user",
+          kind: "terminal",
+          title: "DEV1",
+          titleMode: "user",
+          worktreeId: "wt-1",
+          location: "grid",
+        },
+      };
+
+      const terminals = useRecipeStore.getState().generateRecipeFromActiveTerminals("wt-1");
+      expect(terminals.map((t) => t.title)).toEqual([undefined, "TEAMLEAD", "DEV1"]);
+    });
+
     it("captures dock placement and omits location for grid-equivalent panels (#9764)", () => {
       panelStoreState.panelIds = ["panel-dock", "panel-grid", "panel-overlay"];
       panelStoreState.panelsById = {
@@ -267,6 +305,7 @@ describe("recipeStore", () => {
           id: "panel-dock",
           kind: "terminal",
           title: "Docked",
+          titleMode: "user",
           worktreeId: "wt-1",
           location: "dock",
           command: "npm test",
@@ -275,6 +314,7 @@ describe("recipeStore", () => {
           id: "panel-grid",
           kind: "terminal",
           title: "Grid",
+          titleMode: "user",
           worktreeId: "wt-1",
           location: "grid",
         },
@@ -282,6 +322,7 @@ describe("recipeStore", () => {
           id: "panel-overlay",
           kind: "terminal",
           title: "Overlay",
+          titleMode: "user",
           worktreeId: "wt-1",
           location: "overlay",
         },
@@ -647,6 +688,192 @@ describe("recipeStore", () => {
         spawnedBy: "mcp",
       })
     );
+  });
+
+  describe("recipe title pinning (#11872)", () => {
+    interface SpawnedOptions {
+      kind?: string;
+      title?: string;
+      titleMode?: string;
+    }
+
+    beforeEach(() => {
+      let callIndex = 0;
+      addTerminalMock.mockImplementation(() => Promise.resolve(`terminal-${++callIndex}`));
+    });
+
+    const runWithTerminals = async (terminals: RecipeTerminal[], terminalIndices?: number[]) => {
+      useRecipeStore.setState({
+        recipes: [
+          {
+            id: "recipe-titles",
+            name: "Fleet",
+            projectId: "project-1",
+            terminals,
+            createdAt: Date.now(),
+          },
+        ],
+        isLoading: false,
+        currentProjectId: "project-1",
+      });
+      await useRecipeStore
+        .getState()
+        .runRecipe(
+          "recipe-titles",
+          "/tmp/worktree",
+          "worktree-1",
+          undefined,
+          terminalIndices ? { terminalIndices } : undefined
+        );
+      return addTerminalMock.mock.calls.map((call) => call[0]);
+    };
+
+    const spawnedTitled = (spawned: SpawnedOptions[], title: string): SpawnedOptions | undefined =>
+      spawned.find((options) => options.title === title);
+
+    it("pins a named agent pane so detection cannot rename it", async () => {
+      const spawned = await runWithTerminals([{ type: "claude", title: "TEAMLEAD", env: {} }]);
+
+      expect(spawned).toHaveLength(1);
+      expect(addTerminalMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "terminal",
+          launchAgentId: "claude",
+          title: "TEAMLEAD",
+          titleMode: "custom",
+        })
+      );
+    });
+
+    it("pins a named plain terminal, which can still be handed an agent later", async () => {
+      const spawned = await runWithTerminals([
+        { type: "terminal", title: "DEVOPS", command: "zsh", env: {} },
+      ]);
+
+      expect(spawned).toHaveLength(1);
+      expect(addTerminalMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          kind: "terminal",
+          title: "DEVOPS",
+          titleMode: "custom",
+        })
+      );
+    });
+
+    it("pins by title content, not by agent type or pane shape", async () => {
+      // Every pane kind the spawn loop reaches, mixed in one run. Titles are
+      // the assertion key rather than call order: the agent branch awaits CLI
+      // resolution, so it can finish after a plain terminal queued later.
+      const spawned = await runWithTerminals([
+        { type: "codex", title: "ARCHITECT", env: {} },
+        { type: "terminal", title: "runner", command: "zsh", env: {} },
+        { type: "claude", title: "DEV1", env: {} },
+        { type: "terminal", title: "0", command: "zsh", env: {} },
+        { type: "dev-preview", title: "Web", devCommand: "npm run dev", env: {} },
+      ]);
+
+      expect(spawned).toHaveLength(5);
+      // A non-Claude agent, a lowercase name, and "0" all pin. Keying off the
+      // agent id, off casing, or off a length floor would still satisfy the
+      // role-name cases above, so those are the mutants these catch.
+      for (const title of ["ARCHITECT", "runner", "DEV1", "0"]) {
+        expect(spawnedTitled(spawned, title)?.titleMode).toBe("custom");
+      }
+      // A dev preview has no PTY and so no detection to fend off; pinning one
+      // would be inert, and reaching it at all means the branch order moved.
+      expect(spawnedTitled(spawned, "Web")).toMatchObject({ kind: "dev-preview" });
+      expect(spawnedTitled(spawned, "Web")?.titleMode).toBeUndefined();
+    });
+
+    it("decides each pane's pin from its own title", async () => {
+      const spawned = await runWithTerminals([
+        { type: "claude", title: "ARCHITECT", env: {} },
+        { type: "claude", title: "", env: {} },
+        { type: "terminal", title: "", command: "zsh", env: {} },
+        { type: "terminal", title: "DEV1", command: "zsh", env: {} },
+      ]);
+
+      expect(spawned).toHaveLength(4);
+      const named = spawned.filter((options) => options.title);
+      const unnamed = spawned.filter((options) => !options.title);
+      expect(named.map((options) => options.title).sort()).toEqual(["ARCHITECT", "DEV1"]);
+      for (const options of named) {
+        expect(options.titleMode).toBe("custom");
+      }
+      // Unnamed panes are interleaved with named ones in both branches, so a
+      // pin hoisted above the loop or cached per branch would leak onto them.
+      expect(unnamed).toHaveLength(2);
+      for (const options of unnamed) {
+        expect(options.titleMode).toBeUndefined();
+      }
+    });
+
+    it("pins a retried terminal from its own index, not its place in the retry", async () => {
+      // `terminalIndices` carries original recipe indices, and the retry list
+      // holds one entry at offset 0. Index 0 is blank so an offset read leaves
+      // the retried pane unpinned rather than coincidentally pinning it.
+      const spawned = await runWithTerminals(
+        [
+          { type: "terminal", title: "", command: "a", env: {} },
+          { type: "terminal", title: "SKIPPED", command: "b", env: {} },
+          { type: "terminal", title: "DEV5", command: "c", env: {} },
+        ],
+        [2]
+      );
+
+      expect(spawned).toHaveLength(1);
+      expect(spawned[0]).toMatchObject({ title: "DEV5", titleMode: "custom" });
+    });
+
+    it("leaves a retried blank terminal unpinned even when index 0 is named", async () => {
+      // The same mix-up in the other direction: an offset read would pin this
+      // pane from "TEAMLEAD" and freeze a name the recipe never gave it.
+      const spawned = await runWithTerminals(
+        [
+          { type: "terminal", title: "TEAMLEAD", command: "a", env: {} },
+          { type: "terminal", title: "SKIPPED", command: "b", env: {} },
+          { type: "terminal", title: "", command: "c", env: {} },
+        ],
+        [2]
+      );
+
+      expect(spawned).toHaveLength(1);
+      expect(spawned[0]).toMatchObject({ title: "" });
+      expect(spawned[0].titleMode).toBeUndefined();
+    });
+
+    it("leaves a blank title unpinned so the derived title still applies", async () => {
+      // Omitted, empty, whitespace-only, and control-only all mean "no name":
+      // the pane keeps today's behaviour of taking a derived title and letting
+      // detection update it.
+      const spawned = await runWithTerminals([
+        { type: "terminal", command: "a", env: {} },
+        { type: "terminal", title: "", command: "b", env: {} },
+        { type: "terminal", title: "   ", command: "c", env: {} },
+        // The recipe sanitizer keeps titles verbatim (unlike command/args), so
+        // control-only text arrives truthy; plain truthiness would pin it.
+        { type: "terminal", title: "\u0001\u007f", command: "d", env: {} },
+      ]);
+
+      expect(spawned).toHaveLength(4);
+      for (const options of spawned) {
+        expect(options.titleMode).toBeUndefined();
+      }
+    });
+
+    it("passes the recipe title through verbatim, sanitizing only to decide the pin", async () => {
+      // The pane has to show what the recipe editor shows, so padding and
+      // embedded controls survive into `title`; sanitizing is the predicate
+      // here, not a rewrite of the string being handed over.
+      const spawned = await runWithTerminals([
+        { type: "terminal", title: "  DEV1  ", command: "a", env: {} },
+        { type: "terminal", title: "DEV\u00012", command: "b", env: {} },
+      ]);
+
+      expect(spawned).toHaveLength(2);
+      expect(spawnedTitled(spawned, "  DEV1  ")?.titleMode).toBe("custom");
+      expect(spawnedTitled(spawned, "DEV\u00012")?.titleMode).toBe("custom");
+    });
   });
 
   describe("runRecipeWithResults", () => {
@@ -3097,12 +3324,15 @@ describe("recipeStore", () => {
 
     it("a failed frecency write does not fail the spawn", async () => {
       useRecipeStore.getState().setPluginRecipes([pluginRecipe()]);
+      addTerminalMock.mockResolvedValue("terminal-1");
       pluginRecordUseMock.mockRejectedValueOnce(new Error("disk full"));
-      await expect(
-        useRecipeStore
-          .getState()
-          .runRecipeWithResults("acme.tools.deploy", "/tmp/wt", "wt-1", undefined)
-      ).resolves.toBeDefined();
+      // Resolving is not the claim: the spawn has to have actually landed, or
+      // this passes just as well when nothing spawned at all.
+      const results = await useRecipeStore
+        .getState()
+        .runRecipeWithResults("acme.tools.deploy", "/tmp/wt", "wt-1", undefined);
+      expect(results.spawned).toHaveLength(1);
+      expect(results.failed).toHaveLength(0);
     });
 
     it("routes an empty-state pin to the plugin sidecar, not the global store", async () => {

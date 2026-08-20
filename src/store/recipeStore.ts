@@ -34,6 +34,7 @@ import {
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { replaceRecipeVariables, type RecipeContext } from "@/utils/recipeVariables";
+import { sanitizeTerminalName } from "@/utils/agentLaunchValidation";
 import { sanitizeRecipeTerminals, MAX_TERMINALS_PER_RECIPE } from "@shared/utils/recipeSanitizer";
 import type { ActionSource } from "@shared/types/actions";
 import type { AgentCliDetail } from "@shared/types/ipc";
@@ -161,7 +162,10 @@ function terminalToRecipeTerminal(terminal: PtyPanelData | DevPreviewPanelData):
 
   return {
     type,
-    title: terminal.title || undefined,
+    // Derived titles are runtime identity, not a name the author chose — capturing
+    // one would pin it on spawn and freeze the pane out of promotion (#11872).
+    title:
+      (terminal.titleMode ?? "default") === "default" ? undefined : terminal.title || undefined,
     command: terminal.command || undefined,
     devCommand: undefined,
     env: {},
@@ -1029,6 +1033,25 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
             });
           }
 
+          // A recipe that names its panes owns those names: pin them as
+          // "custom" so agent detection can't rewrite them on promotion or
+          // demote them on exit. Recipes are how a fleet gets launched and
+          // role titles (TEAMLEAD, DEV1...) are how its panes are told apart,
+          // so losing them defeats the point of naming (#11872). Mirrors the
+          // caller-name pin `agent.launch` has had since #10439.
+          //
+          // Sanitizing drives the predicate only — `title:` still passes the
+          // raw string so the pane matches what the recipe editor shows. The
+          // recipe sanitizer keeps titles verbatim (unlike command/args), so
+          // a whitespace- or C0/DEL-only title would pass plain truthiness;
+          // `sanitizeTerminalName` returns "" for those, leaving them
+          // unpinned and eligible for the derived title as before. Derived
+          // per terminal, never hoisted above the map: one pane's title must
+          // not decide another's pin (#10794).
+          const titlePin = sanitizeTerminalName(terminal.title ?? "")
+            ? { titleMode: "custom" as const }
+            : {};
+
           if (isAgentRecipeType(terminal.type)) {
             const agentId = terminal.type as string;
             const agentConfig = getAgentConfig(agentId);
@@ -1133,6 +1156,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
               launchAgentId: agentId,
               command,
               title: terminal.title,
+              ...titlePin,
               cwd: worktreePath,
               worktreeId: worktreeId,
               agentLaunchFlags,
@@ -1151,6 +1175,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
           return terminalStore.addPanel({
             kind: "terminal",
             title: terminal.title,
+            ...titlePin,
             cwd: worktreePath,
             command: terminal.command?.trim() || "",
             worktreeId: worktreeId,
