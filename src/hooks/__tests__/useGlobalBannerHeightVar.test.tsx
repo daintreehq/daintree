@@ -3,31 +3,42 @@ import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { renderHook } from "@testing-library/react";
 import { useGlobalBannerHeightVar, GLOBAL_BANNER_HEIGHT_VAR } from "../useGlobalBannerHeightVar";
 
-/** One observed element plus the callback the hook registered for it. */
-interface Registered {
-  callback: (entries: ResizeObserverEntry[]) => void;
-  observed: Element[];
-}
-
 function readVar(): string {
   return document.documentElement.style.getPropertyValue(GLOBAL_BANNER_HEIGHT_VAR);
 }
 
-/** A div whose measured top edge is `top`, standing in for the toolbar wrapper. */
-function elementWithTop(top: number): HTMLDivElement {
-  const el = document.createElement("div");
-  el.getBoundingClientRect = () =>
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-    ({ top, bottom: top, left: 0, right: 0, width: 0, height: 0, x: 0, y: top }) as DOMRect;
-  return el;
-}
-
 describe("useGlobalBannerHeightVar", () => {
-  let registered: Registered[] = [];
+  let observerCallback: ((entries: ResizeObserverEntry[]) => void) | null = null;
+  let observed: Element[] = [];
   let rafCallbacks: (() => void)[] = [];
 
+  /** A stand-in banner wrapper whose measured height is controlled by `height`. */
+  function bannerWrapper(height: number) {
+    const el = document.createElement("div");
+    let current = height;
+    el.getBoundingClientRect = () =>
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+      ({
+        height: current,
+        top: 0,
+        bottom: current,
+        left: 0,
+        right: 0,
+        width: 0,
+        x: 0,
+        y: 0,
+      }) as DOMRect;
+    return {
+      el,
+      setHeight(next: number) {
+        current = next;
+      },
+    };
+  }
+
   beforeEach(() => {
-    registered = [];
+    observerCallback = null;
+    observed = [];
     rafCallbacks = [];
 
     vi.stubGlobal(
@@ -36,11 +47,10 @@ describe("useGlobalBannerHeightVar", () => {
         this: ResizeObserver | void,
         cb: (entries: ResizeObserverEntry[]) => void
       ) {
-        const entry: Registered = { callback: cb, observed: [] };
-        registered.push(entry);
+        observerCallback = cb;
         // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
         return {
-          observe: vi.fn((el: Element) => entry.observed.push(el)),
+          observe: vi.fn((el: Element) => observed.push(el)),
           unobserve: vi.fn(),
           disconnect: vi.fn(),
         } as unknown as ResizeObserver;
@@ -67,119 +77,95 @@ describe("useGlobalBannerHeightVar", () => {
     document.documentElement.style.removeProperty(GLOBAL_BANNER_HEIGHT_VAR);
   });
 
-  function flushRaf() {
+  /** Deliver a resize notification and run the rAF the hook coalesces onto. */
+  function fireResize(el: Element) {
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    observerCallback?.([{ target: el } as unknown as ResizeObserverEntry]);
     const cbs = [...rafCallbacks];
     rafCallbacks = [];
     for (const cb of cbs) cb();
   }
 
-  /** Drive the observer that was subscribed to `el`. */
-  function fireResizeFor(el: Element) {
-    const match = registered.find((r) => r.observed.includes(el));
-    if (!match) throw new Error("no observer subscribed to that element");
-    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-    match.callback([{ target: el } as unknown as ResizeObserverEntry]);
-    flushRaf();
-  }
+  it("publishes the measured banner height", () => {
+    const banner = bannerWrapper(72);
 
-  it("publishes the toolbar wrapper's top edge as the banner height", () => {
-    const toolbarWrap = elementWithTop(72);
-    const contentRow = document.createElement("div");
+    renderHook(() => useGlobalBannerHeightVar(banner.el));
+    fireResize(banner.el);
 
-    renderHook(() => useGlobalBannerHeightVar(toolbarWrap, contentRow));
-    fireResizeFor(contentRow);
-
-    // A 72px top edge means a 72px banner is sitting above the toolbar.
     expect(readVar()).toBe("72px");
   });
 
-  it("publishes 0px when no banner is pushing the toolbar down", () => {
-    const toolbarWrap = elementWithTop(0);
-    const contentRow = document.createElement("div");
+  it("publishes 0px when the coordinator renders no banner", () => {
+    // GlobalBannerCoordinator returns null with no active slot, collapsing the
+    // wrapper — which must resolve to the same offset as the pre-#11893 top-12.
+    const banner = bannerWrapper(0);
 
-    renderHook(() => useGlobalBannerHeightVar(toolbarWrap, contentRow));
-    fireResizeFor(contentRow);
+    renderHook(() => useGlobalBannerHeightVar(banner.el));
+    fireResize(banner.el);
 
     expect(readVar()).toBe("0px");
   });
 
-  it("clamps a negative top edge to 0px", () => {
+  it("clamps a negative measurement to 0px", () => {
     // Guards the Math.max: a negative offset would pull the overlays UP, back
     // under the toolbar — the exact clipping this fix exists to prevent.
-    const toolbarWrap = elementWithTop(-30);
-    const contentRow = document.createElement("div");
+    const banner = bannerWrapper(-30);
 
-    renderHook(() => useGlobalBannerHeightVar(toolbarWrap, contentRow));
-    fireResizeFor(contentRow);
+    renderHook(() => useGlobalBannerHeightVar(banner.el));
+    fireResize(banner.el);
 
     expect(readVar()).toBe("0px");
   });
 
-  it("republishes when the banner height changes", () => {
-    let top = 40;
-    const toolbarWrap = document.createElement("div");
-    toolbarWrap.getBoundingClientRect = () =>
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      ({ top, bottom: top, left: 0, right: 0, width: 0, height: 0, x: 0, y: top }) as DOMRect;
-    const contentRow = document.createElement("div");
+  it("republishes when the banner reflows to a taller height", () => {
+    const banner = bannerWrapper(40);
 
-    renderHook(() => useGlobalBannerHeightVar(toolbarWrap, contentRow));
-    fireResizeFor(contentRow);
+    renderHook(() => useGlobalBannerHeightVar(banner.el));
+    fireResize(banner.el);
     expect(readVar()).toBe("40px");
 
-    // Banner text reflows to a second line: the content row shrinks, so the
-    // observer fires again and the published value must follow.
-    top = 64;
-    fireResizeFor(contentRow);
+    // Banner description wraps to a second line.
+    banner.setHeight(64);
+    fireResize(banner.el);
     expect(readVar()).toBe("64px");
   });
 
-  it("also republishes when only the toolbar wrapper resizes", () => {
-    // FleetArmingRibbon toggling changes the wrapper's own height without
-    // necessarily changing the content row's — e.g. a banner that grows by
-    // exactly as much as the ribbon shrinks. Without this second subscription
-    // that cancellation would leave the published value stale.
-    let top = 40;
-    const toolbarWrap = document.createElement("div");
-    toolbarWrap.getBoundingClientRect = () =>
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
-      ({ top, bottom: top, left: 0, right: 0, width: 0, height: 0, x: 0, y: top }) as DOMRect;
-    const contentRow = document.createElement("div");
+  it("does not publish synchronously — the write is rAF-coalesced", () => {
+    // The house convention (rendererGlobalErrorHandlers.ts) is that our own
+    // observers rAF-defer rather than writing layout-affecting values inside the
+    // ResizeObserver callback.
+    const banner = bannerWrapper(72);
 
-    renderHook(() => useGlobalBannerHeightVar(toolbarWrap, contentRow));
+    renderHook(() => useGlobalBannerHeightVar(banner.el));
+    // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
+    observerCallback?.([{ target: banner.el } as unknown as ResizeObserverEntry]);
 
-    top = 96;
-    fireResizeFor(toolbarWrap);
-    expect(readVar()).toBe("96px");
+    expect(readVar()).toBe("");
   });
 
-  it("observes both the content row and the toolbar wrapper", () => {
-    const toolbarWrap = elementWithTop(0);
-    const contentRow = document.createElement("div");
+  it("observes the element it was given", () => {
+    const banner = bannerWrapper(0);
 
-    renderHook(() => useGlobalBannerHeightVar(toolbarWrap, contentRow));
+    renderHook(() => useGlobalBannerHeightVar(banner.el));
 
-    const allObserved = registered.flatMap((r) => r.observed);
-    expect(allObserved).toContain(contentRow);
-    expect(allObserved).toContain(toolbarWrap);
+    expect(observed).toContain(banner.el);
   });
 
   it("removes the custom property on unmount", () => {
     // The var lives on documentElement, so a stale value would outlive the
     // AppLayout instance that published it.
-    const toolbarWrap = elementWithTop(72);
-    const contentRow = document.createElement("div");
+    const banner = bannerWrapper(72);
 
-    const { unmount } = renderHook(() => useGlobalBannerHeightVar(toolbarWrap, contentRow));
-    fireResizeFor(contentRow);
+    const { unmount } = renderHook(() => useGlobalBannerHeightVar(banner.el));
+    fireResize(banner.el);
     expect(readVar()).toBe("72px");
 
     unmount();
     expect(readVar()).toBe("");
   });
 
-  it("subscribes nothing until the elements exist", () => {
-    renderHook(() => useGlobalBannerHeightVar(null, null));
+  it("subscribes nothing before the wrapper exists", () => {
+    renderHook(() => useGlobalBannerHeightVar(null));
 
     expect(ResizeObserver).not.toHaveBeenCalled();
     expect(readVar()).toBe("");

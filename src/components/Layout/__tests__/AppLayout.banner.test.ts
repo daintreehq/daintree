@@ -33,8 +33,11 @@ describe("AppLayout global banner mount — issue #9530", () => {
     // 100vh AppLayout root overflowed the viewport and clipped the dock. The
     // banner must be a direct child of the h-screen flex column so its
     // shrink-0 height is subtracted from the flex-1 content area instead.
+    // Since #11893 the coordinator sits inside a measured wrapper, which is now
+    // the direct flex child carrying shrink-0 — the ordering invariant is
+    // unchanged, and the wrapper must hold the coordinator and nothing else.
     expect(source).toMatch(
-      /<PortalVisibilityController \/>\s*<Suspense fallback=\{null\}>\s*<LazyGlobalBannerCoordinator \/>\s*<\/Suspense>\s*<div \{\.\.\.\(chromeInert \? \{ inert: true \}/
+      /<PortalVisibilityController \/>\s*(?:\{\/\*[\s\S]*?\*\/\}\s*)?<div(?=[^>]*className="shrink-0")[^>]*>\s*<Suspense fallback=\{null\}>\s*<LazyGlobalBannerCoordinator \/>\s*<\/Suspense>\s*<\/div>\s*<div \{\.\.\.\(chromeInert \? \{ inert: true \}/
     );
   });
 });
@@ -51,20 +54,16 @@ describe("AppLayout publishes the global banner height — issue #11893", () => 
   // suite only pins the wiring that a source scan can see: that AppLayout hands
   // the hook the two elements it needs.
 
-  it("hands the hook the toolbar wrapper, whose top edge is the banner height", () => {
-    // Argument order matters: the wrapper is what gets MEASURED (its top edge is
-    // the banner height, since the app root sits at viewport y=0), the content
-    // row is only a resize trigger.
-    expect(source).toMatch(/useGlobalBannerHeightVar\(toolbarWrapEl, contentRowEl\)/);
-    expect(source).toMatch(/<div(?=[^>]*ref=\{setToolbarWrapEl\})[^>]*>\s*<Toolbar\b/);
-  });
-
-  it("attaches the trigger ref to the flex-1 content row", () => {
-    // The row is flex-1 + overflow:hidden, so its automatic minimum height
-    // resolves to 0 and it absorbs banner growth. A ref on any shrink-0 sibling
-    // would never report the change.
+  it("measures the wrapper that holds the coordinator and nothing else", () => {
+    // The measured element must contain ONLY the coordinator, so its height IS
+    // the banner height. Measuring a neighbour instead (the toolbar wrapper's
+    // top edge, or the content row's size) goes stale in the degenerate cases:
+    // a banner that grows while FleetArmingRibbon shrinks by the same amount, or
+    // one that grows after the content area has collapsed to 0 — both leave
+    // every other element's size untouched.
+    expect(source).toMatch(/useGlobalBannerHeightVar\(bannerEl\)/);
     expect(source).toMatch(
-      /<div(?=[^>]*ref=\{setContentRowEl\})(?=[^>]*className="(?=[^"]*\bflex-1\b)(?=[^"]*\boverflow-hidden\b)[^"]*")[^>]*>/
+      /<div(?=[^>]*ref=\{setBannerEl\})[^>]*>\s*<Suspense fallback=\{null\}>\s*<LazyGlobalBannerCoordinator \/>\s*<\/Suspense>\s*<\/div>/
     );
   });
 });

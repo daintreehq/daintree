@@ -813,15 +813,13 @@ export function AppLayout({
 
   const effectiveSidebarWidth = showSidebar ? sidebarWidth : 0;
 
-  const [contentRowEl, setContentRowEl] = useState<HTMLDivElement | null>(null);
-  const [toolbarWrapEl, setToolbarWrapEl] = useState<HTMLDivElement | null>(null);
+  const [bannerEl, setBannerEl] = useState<HTMLDivElement | null>(null);
 
-  // Feeds OVERLAY_TOP_OFFSET. Measuring the toolbar wrapper's top edge (rather
-  // than the content row's) deliberately excludes FleetArmingRibbon height: the
-  // ribbon carries no positive z-index, so these overlays paint over it and it
-  // clips nothing, and offsetting below it would resize the PortalDock's native
-  // WebContentsView on every ribbon toggle.
-  useGlobalBannerHeightVar(toolbarWrapEl, contentRowEl);
+  // Feeds OVERLAY_TOP_OFFSET. Only the banner is measured — FleetArmingRibbon
+  // is deliberately excluded: it carries no positive z-index, so these overlays
+  // paint over it and it clips nothing, and offsetting below it would resize the
+  // PortalDock's native WebContentsView on every ribbon toggle.
+  useGlobalBannerHeightVar(bannerEl);
 
   useEffect(() => {
     const portalOffset = layout.portalOpen ? layout.portalWidth : 0;
@@ -860,10 +858,16 @@ export function AppLayout({
       }}
     >
       <PortalVisibilityController />
-      <Suspense fallback={null}>
-        <LazyGlobalBannerCoordinator />
-      </Suspense>
-      <div {...(chromeInert ? { inert: true } : {})} ref={setToolbarWrapEl}>
+      {/* Wraps the coordinator and nothing else so its height IS the banner
+          height, which useGlobalBannerHeightVar measures (#11893). shrink-0
+          keeps #9530's guarantee that the banner's height is subtracted from
+          the flex-1 content area rather than squeezed out of the banner. */}
+      <div ref={setBannerEl} className="shrink-0">
+        <Suspense fallback={null}>
+          <LazyGlobalBannerCoordinator />
+        </Suspense>
+      </div>
+      <div {...(chromeInert ? { inert: true } : {})}>
         <Toolbar
           onLaunchAgent={handleLaunchAgent}
           onSettings={handleSettings}
@@ -884,7 +888,6 @@ export function AppLayout({
       <MoveOrRenameProjectDialog />
       <div
         {...(chromeInert ? { inert: true } : {})}
-        ref={setContentRowEl}
         className="flex-1 flex flex-col overflow-hidden"
         style={{ flex: 1, display: "flex", flexDirection: "column", overflow: "hidden" }}
       >
