@@ -37,8 +37,13 @@ import {
   FAKE_AGENT_IDLE,
   FAKE_AGENT_READY,
 } from "../helpers/fakeAgent";
-import { getTerminalText, waitForTerminalText, writeTerminalInput } from "../helpers/terminal";
-import { getGridPanelIds } from "../helpers/panels";
+import {
+  getTerminalText,
+  getTerminalSelection,
+  waitForTerminalText,
+  writeTerminalInput,
+} from "../helpers/terminal";
+import { getDockChipIds, getGridPanelIds } from "../helpers/panels";
 import { SEL } from "../helpers/selectors";
 import { T_LONG } from "../helpers/timeouts";
 
@@ -169,8 +174,51 @@ async function reset(page: Page): Promise<void> {
   await settle(page, 250);
 }
 
+/**
+ * The one command both terminal scenes seed with: every ANSI base slot plus the
+ * dim slot, then coloured `git log`/`git status`. Shared so the selection scene
+ * can recognise a pane it did not seed itself.
+ */
+const SEEDED_ANSI_COMMAND =
+  "printf '\\e[31mred \\e[32mgreen \\e[33myellow \\e[34mblue \\e[35mmagenta \\e[36mcyan \\e[90mdim\\e[0m\\n'; git log --oneline --color=always | head -4; git status --short";
+
+/**
+ * The rendered result of SEEDED_ANSI_COMMAND, not the command itself.
+ *
+ * Matching on a single word like "magenta" false-positives: the shell echoes the
+ * whole `printf` back, so the word is on screen whether or not the command ever
+ * ran. Only the space-joined output row proves the ANSI actually painted.
+ */
+const SEEDED_ANSI_OUTPUT = "red green yellow blue magenta cyan dim";
+
 interface TourScene extends TourSceneMeta {
   run: (page: Page) => Promise<void>;
+}
+
+/**
+ * Assert, loudly and without failing, that a scene reached the surface its note
+ * claims to be showing.
+ *
+ * The tour has no assertions by design — the point is the pixels, and a scene
+ * that throws costs the reviewer the other eighteen. But the failure mode that
+ * replaces it is worse: `review-hub` shipped for months capturing a hub whose
+ * file list was still collapsed, so the PNG held no diff at all while the
+ * scene's note told the reviewer they were looking at diff washes and syntax.
+ * A capture that silently asserts a surface it never reached is worse than a
+ * missing one, because someone signs it off.
+ *
+ * So every scene that drives toward something specific ends by checking a
+ * postcondition — the thing itself being on screen, not the thing that was
+ * supposed to summon it — and says so on the console when it is absent.
+ */
+async function requireSurface(label: string, present: () => Promise<boolean>): Promise<boolean> {
+  const ok = await present().catch(() => false);
+  if (!ok) {
+    console.warn(
+      `[tour] WARNING: "${label}" did not reach its surface — this capture does NOT show what its note claims. Do not review it.`
+    );
+  }
+  return ok;
 }
 
 /**
@@ -234,7 +282,7 @@ const SCENES: TourScene[] = [
   {
     id: "workbench",
     label: "Workbench",
-    note: "The resting state. Does a pane read as a pane against the gutter, with the ladder this flat?",
+    note: "The resting state. Does a pane read as a pane against the gutter, and is the loudest thing on screen something that has earned it?",
     run: async () => {},
   },
   {
@@ -250,12 +298,14 @@ const SCENES: TourScene[] = [
         await page.waitForTimeout(700);
       }
       await settle(page, 1400);
+      // The note promises "with this many panels" — so the count is the claim.
+      await requireSurface("fleet", async () => (await getGridPanelIds(page)).length >= 4);
     },
   },
   {
     id: "terminal",
     label: "Terminal + ANSI",
-    note: "ANSI held near 45% saturation. Are logs and diffs still parseable without shouting?",
+    note: "Seeded ANSI plus coloured git output. Are logs parseable without shouting, and is the dim slot (ANSI 90) actually readable?",
     run: async (page) => {
       await page
         .locator(SEL.toolbar.openTerminal)
@@ -272,17 +322,90 @@ const SCENES: TourScene[] = [
         .first()
         .click()
         .catch(() => {});
-      await page.keyboard.type(
-        "printf '\\e[31mred \\e[32mgreen \\e[33myellow \\e[34mblue \\e[35mmagenta \\e[36mcyan \\e[90mdim\\e[0m\\n'; git log --oneline --color=always | head -4; git status --short"
-      );
+      await page.keyboard.type(SEEDED_ANSI_COMMAND);
       await page.keyboard.press("Enter");
       await settle(page, 1600);
+      // The seeded output, not the keystrokes. A command that was typed into an
+      // unfocused pane leaves a capture with no ANSI in it at all.
+      await requireSurface("terminal", async () =>
+        (await getTerminalText(page.locator(SEL.panel.gridPanel).first()).catch(() => "")).includes(
+          SEEDED_ANSI_OUTPUT
+        )
+      );
+    },
+  },
+  {
+    id: "terminal-selection",
+    label: "Terminal — selection",
+    note: "Drag-select in the terminal. The fill is a fill, not a glyph: it has to be findable without reading as a highlight, and text over it must stay legible.",
+    run: async (page) => {
+      // Find the pane that already holds the seeded ANSI line rather than
+      // assuming the first grid panel is it. An interactive reviewer can jump
+      // straight here, and the grid re-flows as panes are added, so "first
+      // panel" and "the terminal with content in it" are routinely different
+      // panes — dragging across the wrong one produced an empty selection under
+      // a note promising coloured glyphs.
+      const findSeeded = async (): Promise<string | null> => {
+        for (const id of await getGridPanelIds(page).catch(() => [] as string[])) {
+          const text = await getTerminalText(page.locator(`[data-panel-id="${id}"]`)).catch(
+            () => ""
+          );
+          if (text.includes(SEEDED_ANSI_OUTPUT)) return id;
+        }
+        return null;
+      };
+
+      let panelId = await findSeeded();
+      if (!panelId) {
+        const before = new Set(await getGridPanelIds(page).catch(() => [] as string[]));
+        await page
+          .locator(SEL.toolbar.openTerminal)
+          .click()
+          .catch(() => {});
+        for (let i = 0; i < 40 && !panelId; i++) {
+          const ids = await getGridPanelIds(page).catch(() => [] as string[]);
+          panelId = ids.find((id) => !before.has(id)) ?? null;
+          if (!panelId) await page.waitForTimeout(250);
+        }
+        if (panelId) {
+          const fresh = page.locator(`[data-panel-id="${panelId}"]`);
+          await settle(page, 1200);
+          await fresh.click().catch(() => {});
+          await page.keyboard.type(SEEDED_ANSI_COMMAND);
+          await page.keyboard.press("Enter");
+          await settle(page, 1600);
+        }
+      }
+
+      if (!panelId) {
+        await requireSurface("terminal-selection", async () => false);
+        return;
+      }
+
+      const panel = page.locator(`[data-panel-id="${panelId}"]`);
+      const box = await panel.boundingBox().catch(() => null);
+      if (!box) {
+        await requireSurface("terminal-selection", async () => false);
+        return;
+      }
+      // Drag across the seeded ANSI line so the selection fill is judged under
+      // coloured glyphs and not just prose.
+      await page.mouse.move(box.x + 24, box.y + 96);
+      await page.mouse.down();
+      await page.mouse.move(box.x + box.width - 80, box.y + 168, { steps: 24 });
+      await page.mouse.up();
+      await settle(page, 700);
+      // The postcondition is xterm reporting a non-empty selection. A completed
+      // mouse gesture proves only that the mouse moved.
+      await requireSurface("terminal-selection", async () =>
+        Boolean((await getTerminalSelection(panel).catch(() => "")).trim())
+      );
     },
   },
   {
     id: "sidebar-hover",
     label: "Sidebar — hover",
-    note: "Hover is 3.5% white on near-black. Perceptible, or did the field swallow it?",
+    note: "Row hover. Perceptible, or did the field swallow it?",
     run: async (page) => {
       await page
         .locator('[data-worktree-branch="fix/retry-backoff-jitter"]')
@@ -295,18 +418,23 @@ const SCENES: TourScene[] = [
   {
     id: "sidebar-search",
     label: "Sidebar — search",
-    note: "Search runs on the cool water lane, not the bone accent — the accent is too neutral to highlight with.",
+    note: "Search highlight and match badges. Does the match read at a glance without borrowing the accent's job?",
     run: async (page) => {
       const search = page.locator(SEL.worktree.searchInput);
       await search.click().catch(() => {});
       await search.fill("retry").catch(() => {});
       await settle(page, 700);
+      // The filtered result is the surface, not the text in the box: a query
+      // that matched nothing still leaves the input reading "retry".
+      await requireSurface("sidebar-search", () =>
+        page.locator('[data-worktree-branch="fix/retry-backoff-jitter"]').first().isVisible()
+      );
     },
   },
   {
     id: "context-menu",
     label: "Context menu",
-    note: "Floating chrome. Shadows are off, so the only edge is a hairline ring plus the frosted material.",
+    note: "Floating chrome. Whatever this theme separates with — shadow, hairline ring, material, or the ladder — does the menu sit above the surface behind it?",
     run: async (page) => {
       await page
         .locator(SEL.worktree.mainCard)
@@ -317,6 +445,7 @@ const SCENES: TourScene[] = [
         .waitFor({ state: "visible", timeout: 4000 })
         .catch(() => {});
       await settle(page, 400);
+      await requireSurface("context-menu", () => page.locator('[role="menu"]').first().isVisible());
     },
   },
   {
@@ -333,6 +462,9 @@ const SCENES: TourScene[] = [
         .waitFor({ state: "visible", timeout: 4000 })
         .catch(() => {});
       await settle(page, 400);
+      await requireSurface("filter-popover", () =>
+        page.locator(SEL.worktree.filterPopover).first().isVisible()
+      );
     },
   },
   {
@@ -340,48 +472,64 @@ const SCENES: TourScene[] = [
     label: "Action palette",
     note: "Selected row = raised fill + selection-outline, no accent. Is the selected row unambiguous?",
     run: async (page) => {
-      await page.keyboard.press("Shift");
-      await page.keyboard.press("Shift");
       const dialog = page.locator(SEL.actionPalette.dialog);
-      if (!(await dialog.isVisible({ timeout: 2000 }).catch(() => false))) {
-        await page.keyboard.press(process.platform === "darwin" ? "Meta+K" : "Control+K");
+      // Double-Shift is the only route to THIS palette. The Cmd/Ctrl+K fallback
+      // that used to sit here opens the separate Command Picker, which then
+      // rendered on top of the action palette — so the capture showed two
+      // stacked surfaces and the scene's note described neither of them.
+      for (let i = 0; i < 3; i++) {
+        await page.keyboard.press("Shift");
+        await page.keyboard.press("Shift");
+        if (await dialog.isVisible({ timeout: 1500 }).catch(() => false)) break;
+        await page.waitForTimeout(200);
       }
-      await dialog.waitFor({ state: "visible", timeout: 5000 }).catch(() => {});
       await page
         .locator(SEL.actionPalette.searchInput)
         .fill("worktree")
         .catch(() => {});
       await settle(page, 700);
+      await requireSurface(
+        "action-palette",
+        async () =>
+          (await dialog.isVisible()) && !(await page.locator(SEL.commandPicker.dialog).isVisible())
+      );
     },
   },
   {
     id: "project-switcher",
     label: "Project switcher",
-    note: "An anchored popover — no scrim here, so its ring, its occlusion and the 14px material are the whole separation story.",
+    note: "An anchored popover. No scrim here, so its edge, its occlusion and its material are the whole separation story.",
     run: async (page) => {
       await page
         .locator(SEL.toolbar.projectSwitcherTrigger)
         .click()
         .catch(() => {});
       await settle(page, 700);
+      await requireSurface("project-switcher", () =>
+        page.locator(SEL.projectSwitcher.palette).first().isVisible()
+      );
     },
   },
   {
     id: "notifications",
     label: "Notifications",
-    note: "Inbox chrome and any status washes — statusSurfaceOpacity is dialled to 0.75 here.",
+    note: "Inbox chrome and the status wash behind a row. The fixture raises warnings only, so judge the warning tier and the chrome — not the full four-colour status spread.",
     run: async (page) => {
       await page
         .locator(SEL.notifications.bellButton)
         .click()
         .catch(() => {});
       await settle(page, 700);
+      // The inbox is a popover, not a dialog or menu: its list is the surface.
+      await requireSurface("notifications", () =>
+        page.locator('[role="list"][aria-label="Notifications"]').first().isVisible()
+      );
     },
   },
   {
     id: "review-hub",
     label: "Review hub + diff",
-    note: "Diff washes and syntax on the canvas. Insert/delete tints on a field this dark are the risk.",
+    note: "The diff: insert and delete washes, word-level edits, gutters, and syntax over all of them. Do additions and deletions carry equal weight, and does syntax survive both washes?",
     run: async (page) => {
       await page
         .locator(SEL.worktree.mainCard)
@@ -396,11 +544,59 @@ const SCENES: TourScene[] = [
         .waitFor({ state: "visible", timeout: 15_000 })
         .catch(() => {});
       await settle(page, 1200);
-      const diffBtn = page.locator(SEL.reviewHub.fileDiffButton("src/index.ts"));
-      if (await diffBtn.isVisible({ timeout: 2500 }).catch(() => false)) {
-        await diffBtn.click().catch(() => {});
-        await settle(page, 1200);
+      // The file list starts collapsed behind "Show files (n)". Gate on the
+      // toggle's own `aria-expanded` rather than on whether the diff button
+      // happens to be visible yet — during the list's first paint the button is
+      // absent while the list is already open, and clicking then COLLAPSES it.
+      const toggle = page.locator(SEL.reviewHub.fileListToggle).first();
+      if ((await toggle.getAttribute("aria-expanded").catch(() => null)) !== "true") {
+        await toggle.click().catch(() => {});
+        await settle(page, 600);
       }
+      const diffBtn = page.locator(SEL.reviewHub.fileDiffButton("src/index.ts"));
+      await diffBtn.waitFor({ state: "visible", timeout: 4000 }).catch(() => {});
+      await diffBtn.click().catch(() => {});
+      await settle(page, 1400);
+      // The postcondition is the diff itself, not the button that opens it.
+      await requireSurface("review-hub", () =>
+        page.locator(SEL.reviewHub.diffMode).first().isVisible({ timeout: 4000 })
+      );
+    },
+  },
+  {
+    id: "file-viewer",
+    label: "File viewer — syntax",
+    note: "Syntax roles on surface-canvas, not on the terminal — this is where the file viewer paints them. Comment and quote run a 3:1 soft floor; every other role owes AA.",
+    run: async (page) => {
+      // Scope to the toolbar: the sidebar's workspace-root row carries the same
+      // accessible name, and `.first()` across the document picks whichever the
+      // DOM happens to order first.
+      await page
+        .locator(`[role="toolbar"][aria-label="Main toolbar"] [aria-label="Browse files"]`)
+        .first()
+        .click()
+        .catch(() => {});
+      await page
+        .locator('[role="tree"]')
+        .first()
+        .waitFor({ state: "visible", timeout: 10_000 })
+        .catch(() => {});
+      await settle(page, 800);
+      await page
+        .locator('[role="treeitem"][aria-label="src"]')
+        .first()
+        .click()
+        .catch(() => {});
+      await settle(page, 700);
+      const file = page.locator('[role="treeitem"][aria-label="index.ts"]').first();
+      await file.waitFor({ state: "visible", timeout: 4000 }).catch(() => {});
+      await file.click().catch(() => {});
+      await settle(page, 1600);
+      // The postcondition is the viewer showing THIS file — a tree row that was
+      // visible before the click proves nothing about what opened after it.
+      await requireSurface("file-viewer", () =>
+        page.locator('[role="treeitem"][aria-label="index.ts"][aria-current="true"]').isVisible()
+      );
     },
   },
   {
@@ -419,12 +615,15 @@ const SCENES: TourScene[] = [
         .waitFor({ state: "visible", timeout: 8000 })
         .catch(() => {});
       await settle(page, 1000);
+      await requireSurface("settings", () =>
+        page.locator(SEL.settings.heading).first().isVisible()
+      );
     },
   },
   {
     id: "appearance",
     label: "Theme picker + hero",
-    note: "The hero art next to the UI it produced. Do the cave and the chrome read as the same place?",
+    note: "The hero art next to the UI it produced. Do the artwork and the chrome read as the same place?",
     run: async (page) => {
       const openSettings = page.locator(SEL.toolbar.openSettings);
       if (await openSettings.isVisible({ timeout: 2000 }).catch(() => false)) {
@@ -439,12 +638,22 @@ const SCENES: TourScene[] = [
       const appearance = page.getByRole("tab", { name: "Appearance" }).first();
       await appearance.click().catch(() => {});
       await settle(page, 1400);
+      // The hero art is the point of this scene, so an Appearance tab that
+      // opened but rendered no theme card is still a failed capture.
+      // `isVisible()` passes for an <img> that has laid out but not decoded, so
+      // check the bitmap actually arrived.
+      await requireSurface("appearance", () =>
+        page
+          .locator('img[src*="/themes/"]')
+          .first()
+          .evaluate((el) => el instanceof HTMLImageElement && el.complete && el.naturalWidth > 0)
+      );
     },
   },
   {
     id: "confirm",
     label: "Confirm dialog (danger)",
-    note: "The second loud thing. Destructive chrome should be the brightest surface on screen after waiting.",
+    note: "Destructive chrome. Is it unmistakably the most serious thing on screen, without outshouting a waiting agent?",
     run: async (page) => {
       await page
         .locator('[data-worktree-branch="chore/bump-electron-42"]')
@@ -458,19 +667,19 @@ const SCENES: TourScene[] = [
       const del = page.getByRole("menuitem", { name: /delete/i }).first();
       await del.waitFor({ state: "visible", timeout: 3000 }).catch(() => {});
       await del.click().catch(() => {});
-      await page
+      const confirmDialog = page
         .locator('[role="alertdialog"], [role="dialog"]')
         .filter({ hasText: /delete/i })
-        .last()
-        .waitFor({ state: "visible", timeout: 5000 })
-        .catch(() => {});
+        .last();
+      await confirmDialog.waitFor({ state: "visible", timeout: 5000 }).catch(() => {});
       await settle(page, 500);
+      await requireSurface("confirm", () => confirmDialog.isVisible());
     },
   },
   {
     id: "agent-working",
     label: "Agent — working",
-    note: "A live agent mid-task. `activity.working` is a QUIET colour here (4.45:1) — it should read as ambient, not as a summons.",
+    note: "A live agent mid-task. `activity.working` should read as ambient — present, but not a summons. Compare it against the waiting scene.",
     run: async (page) => {
       agentPanelId = await launchWorkingAgent(page);
       await settle(page, 1200);
@@ -479,7 +688,7 @@ const SCENES: TourScene[] = [
   {
     id: "agent-waiting",
     label: "Agent — WAITING",
-    note: "The whole theme. `activity.waiting` at 13.09:1 is the brightest thing the palette can produce — across the pane, its chip and the dock, is it unmissable?",
+    note: "The loudest state the theme can produce. Across the pane, its chip and the dock — is a waiting agent unmissable at a glance, and is it clearly louder than working?",
     run: async (page) => {
       if (!agentPanelId) agentPanelId = await launchWorkingAgent(page);
       if (!agentPanelId) return;
@@ -511,7 +720,7 @@ const SCENES: TourScene[] = [
   {
     id: "dock",
     label: "Dock",
-    note: "Minimised panes. Dock sits on the sidebar tone with a 12% limestone hairline above it.",
+    note: "Minimised panes. Does the dock separate from the grid above it, and do the chips carry their panes' states?",
     run: async (page) => {
       await page
         .locator(SEL.toolbar.openTerminal)
@@ -519,10 +728,11 @@ const SCENES: TourScene[] = [
         .catch(() => {});
       await settle(page, 1600);
       const minimize = page.locator(SEL.panel.minimize).first();
-      if (await minimize.isVisible({ timeout: 2500 }).catch(() => false)) {
-        await minimize.click().catch(() => {});
-        await settle(page, 1000);
-      }
+      await minimize.waitFor({ state: "visible", timeout: 2500 }).catch(() => {});
+      await minimize.click().catch(() => {});
+      await settle(page, 1000);
+      // The postcondition is a chip in the dock, not a click on minimize.
+      await requireSurface("dock", async () => (await getDockChipIds(page)).length > 0);
     },
   },
 ];

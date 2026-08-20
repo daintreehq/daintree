@@ -146,7 +146,7 @@ Token values do not tell you whether a theme reads. There is a purpose-built har
 ```bash
 npm run build:e2e          # required: the harness launches the BUILT app
 npm run theme:tour         # interactive — opens the real Electron window
-npm run theme:tour:shots   # unattended — walks all 17 scenes, writes PNGs, exits
+npm run theme:tour:shots   # unattended — walks all 19 scenes, writes PNGs, exits
 
 DAINTREE_TOUR_THEME=bondi DAINTREE_TOUR_COMPARE=movile npm run theme:tour
 ```
@@ -155,7 +155,9 @@ Interactive mode gives you the app with a control panel bottom-right: a scene li
 
 Auto mode writes `artifacts/theme-tour/<theme>/NN-<scene>.png`. Those PNGs are what you hand to Codex.
 
-Scenes: workbench, multi-pane fleet, terminal with seeded ANSI, sidebar hover, sidebar search, context menu, filter popover, action palette, project switcher, notifications, review hub, settings, theme picker with hero art, destructive confirm dialog, **agent working**, **agent waiting**, dock.
+Scenes: workbench, multi-pane fleet, terminal with seeded ANSI, **terminal selection**, sidebar hover, sidebar search, context menu, filter popover, action palette, project switcher, notifications, **review hub with the diff open**, **file viewer (syntax on the canvas)**, settings, theme picker with hero art, destructive confirm dialog, **agent working**, **agent waiting**, dock.
+
+Every scene that drives toward a specific surface ends by checking **that surface**, and warns to the console when it is absent. Take that seriously: `review-hub` used to capture a hub with the file list still collapsed, so the PNG contained no diff at all while the scene's own note claimed to be showing diff washes and syntax. A capture that quietly asserts a surface it never reached is worse than a missing capture, because a reviewer signs it off.
 
 The two agent scenes drive the genuine agent-state FSM through `e2e/helpers/fakeAgent.ts` (a fake `claude` emitting OSC 9;4 heartbeats), not a faked CSS class — essential for any theme that encodes agent state, because that is the claim most likely to be wrong and the hardest to check by eye.
 
@@ -213,7 +215,9 @@ Run `npm run theme:tour:shots`, then take three from `artifacts/theme-tour/<them
 
 1. **`01-workbench.png`** — the resting state, the theme's identity in one frame
 2. **`03-terminal.png`** — terminal with seeded ANSI and git output, the fastest read on syntax and ANSI legibility
-3. **`16-agent-waiting.png`** — the loudest state the theme can produce; swap in `13-appearance.png` (the picker with hero art) when the PR introduces new artwork and the theme does not lean on agent state
+3. **`18-agent-waiting.png`** — the loudest state the theme can produce; swap in `15-appearance.png` (the picker with hero art) when the PR introduces new artwork and the theme does not lean on agent state
+
+For a **refinement** PR, that third slot is better spent on whatever the change actually touched — `13-file-viewer.png`, `12-review-hub.png` or `04-terminal-selection.png` — since the reader needs to see the thing that moved, not the thing that did not. Check the numbers against the current scene list before copying a filename; adding a scene renumbers everything after it.
 
 Commit the three (downscaled) under `docs/themes/review/<theme>/` on the branch and reference them by raw URL in the PR body — a relative path 404s until merge:
 

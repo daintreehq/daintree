@@ -69,14 +69,16 @@ Token values do not tell you whether the app reads. Build and run the theme tour
 npm run build:e2e          # required — the harness launches the built app
 npm run theme:tour         # interactive, movile vs daintree
 DAINTREE_TOUR_THEME=<id> DAINTREE_TOUR_COMPARE=<other> npm run theme:tour
-npm run theme:tour:shots   # unattended: walks all 17 scenes, writes PNGs, exits
+npm run theme:tour:shots   # unattended: walks all 19 scenes, writes PNGs, exits
 ```
 
 The tour is theme-agnostic — it works on any built-in, light or dark, and is the tool for refining the existing themes as much as for building new ones.
 
 Interactive mode opens the real Electron window with a control panel in the bottom-right: a scene list, prev/next, a **compare** button that hot-swaps between two themes without leaving the scene, and a **live contrast-budget readout** computed from the painted CSS variables. Auto mode (`theme:tour:shots`) walks every scene unattended and writes `artifacts/theme-tour/<theme>/NN-<scene>.png` — that is what you hand to a reviewer.
 
-Scenes cover: workbench, multi-pane fleet, terminal with seeded ANSI, sidebar hover and search, context menu, filter popover, action palette, project switcher, notifications, review hub, settings, the theme picker with the hero art, the destructive confirm dialog, **a real agent working**, **a real agent waiting**, and the dock.
+Scenes cover: workbench, multi-pane fleet, terminal with seeded ANSI, **a terminal selection**, sidebar hover and search, context menu, filter popover, action palette, project switcher, notifications, **the review hub with a diff open**, **the file viewer (syntax on `surface-canvas`, not on the terminal)**, settings, the theme picker with the hero art, the destructive confirm dialog, **a real agent working**, **a real agent waiting**, and the dock.
+
+**A scene that cannot reach its surface must say so.** `review-hub` shipped for months capturing a hub whose file list was still collapsed behind "Show files (n)" — so the PNG held no diff at all, while the scene's own note told the reviewer they were looking at diff washes and syntax. Every scene that drives toward a specific surface now ends by checking **that surface** — not the control that was supposed to summon it — and `console.warn`s when it is absent. The check caught two more the day it went in: a `terminal-selection` scene dragging across the wrong pane, and an `action-palette` scene whose fallback shortcut opened a second, different palette on top of the one being reviewed. A capture that silently asserts a surface it never reached is worse than no capture, because someone signs it off.
 
 The two agent scenes matter more than the rest combined for any theme that encodes agent state. They drive the genuine FSM through `e2e/helpers/fakeAgent.ts` (a fake `claude` emitting OSC 9;4 heartbeats), not a faked CSS class — so what you are looking at is the state the app actually produces.
 
@@ -127,7 +129,9 @@ Capture them with `npm run theme:tour:shots`, then pick three from `artifacts/th
 
 1. **`01-workbench.png`** — the resting state. The theme's identity in one frame.
 2. **`03-terminal.png`** — terminal with seeded ANSI and git output. Where the user actually spends their time, and the fastest read on whether the syntax and ANSI palettes are legible.
-3. **`16-agent-waiting.png`** — the loudest state the theme can produce. For a theme that encodes agent state this is the whole claim; for one that does not, swap in `13-appearance.png` (the picker with the hero art) when the PR introduces new artwork.
+3. **`18-agent-waiting.png`** — the loudest state the theme can produce. For a theme that encodes agent state this is the whole claim; for one that does not, swap in `15-appearance.png` (the picker with the hero art) when the PR introduces new artwork.
+
+On a **refinement** PR, spend that third slot on the surface the change actually moved — `13-file-viewer.png`, `12-review-hub.png`, `04-terminal-selection.png` — rather than re-showing something that did not change. And re-check the numbers against the current scene list before copying a filename: adding a scene renumbers every scene after it.
 
 GitHub will not take a local path in a PR body, so commit the three under `docs/themes/review/<theme>/` on the branch and reference them by raw URL, which resolves immediately rather than 404ing until merge:
 

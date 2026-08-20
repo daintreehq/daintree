@@ -57,6 +57,7 @@ vi.mock("../TerminalAddonManager", () => ({
 const E2E_TERMINAL_GLOBALS = [
   "__daintreeReadTerminalBuffer",
   "__daintreeSelectTerminalAll",
+  "__daintreeGetTerminalSelection",
   "__daintreeGetTerminalBufferLength",
   "__daintreeGetTerminalDimensions",
   "__daintreeProposeTerminalDimensions",

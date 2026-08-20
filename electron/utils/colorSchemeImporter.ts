@@ -1,6 +1,7 @@
 import { readFile } from "fs/promises";
 import path from "path";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import { BUILT_IN_APP_SCHEMES } from "../../shared/theme/themes.js";
 
 interface ImportedSchemeColors {
   background?: string;
@@ -36,30 +37,46 @@ export interface ImportedScheme {
 
 export type ImportResult = { ok: true; scheme: ImportedScheme } | { ok: false; errors: string[] };
 
-const DAINTREE_DEFAULTS: Required<ImportedSchemeColors> = {
-  background: "#19191a",
-  foreground: "#e4e4e7",
-  cursor: "#36CE94",
-  cursorAccent: "#19191a",
-  selectionBackground: "#1a2c22",
-  selectionForeground: "#e4e4e7",
-  black: "#19191a",
-  red: "#f87171",
-  green: "#10b981",
-  yellow: "#fbbf24",
-  blue: "#38bdf8",
-  magenta: "#a855f7",
-  cyan: "#22d3ee",
-  white: "#e4e4e7",
-  brightBlack: "#52525b",
-  brightRed: "#fca5a5",
-  brightGreen: "#34d399",
-  brightYellow: "#fcd34d",
-  brightBlue: "#7dd3fc",
-  brightMagenta: "#c084fc",
-  brightCyan: "#67e8f9",
-  brightWhite: "#fafafa",
-};
+/**
+ * What an imported scheme falls back to for slots it does not supply.
+ *
+ * Derived from the compiled `daintree` tokens rather than transcribed. The
+ * hand-written copy this replaced had drifted a long way from the theme whose
+ * name it carried — its ANSI slots were stock Tailwind (`#f87171`, `#10b981`,
+ * `#38bdf8`), none of which daintree has used in a long time, and it still
+ * carried the pre-refinement `#1a2c22` selection and `#52525b` bright-black.
+ * A partial import therefore inherited a theme that no longer existed.
+ */
+function daintreeImportDefaults(): Required<ImportedSchemeColors> {
+  const t = BUILT_IN_APP_SCHEMES.find((s) => s.id === "daintree")?.tokens;
+  if (!t) throw new Error("colorSchemeImporter: built-in daintree scheme is missing");
+  return {
+    background: t["terminal-background"],
+    foreground: t["terminal-foreground"],
+    cursor: t["terminal-cursor"],
+    cursorAccent: t["terminal-cursor-accent"],
+    selectionBackground: t["terminal-selection"],
+    selectionForeground: t["terminal-foreground"],
+    black: t["terminal-black"],
+    red: t["terminal-red"],
+    green: t["terminal-green"],
+    yellow: t["terminal-yellow"],
+    blue: t["terminal-blue"],
+    magenta: t["terminal-magenta"],
+    cyan: t["terminal-cyan"],
+    white: t["terminal-white"],
+    brightBlack: t["terminal-bright-black"],
+    brightRed: t["terminal-bright-red"],
+    brightGreen: t["terminal-bright-green"],
+    brightYellow: t["terminal-bright-yellow"],
+    brightBlue: t["terminal-bright-blue"],
+    brightMagenta: t["terminal-bright-magenta"],
+    brightCyan: t["terminal-bright-cyan"],
+    brightWhite: t["terminal-bright-white"],
+  };
+}
+
+const DAINTREE_DEFAULTS: Required<ImportedSchemeColors> = daintreeImportDefaults();
 
 function generateSchemeId(name: string): string {
   return `custom-${name
