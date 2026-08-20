@@ -452,8 +452,8 @@ export function AgentButton({
         </span>
         <span data-zone="label" className="flex min-w-0 flex-1 items-center py-1.5">
           <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
-            <BrandMark brandColor={presetColor} userChosen={!!preset.color}>
-              <config.icon brandColor={presetColor} />
+            <BrandMark brandColor={presetColor}>
+              <config.icon />
             </BrandMark>
           </span>
           {preset.displayTitle ?? preset.name.replace(/^CCR:\s*/, "")}
@@ -466,7 +466,7 @@ export function AgentButton({
   const iconElement = (
     <div className="relative">
       <BrandMark brandColor={toolbarBrandColor}>
-        <config.icon brandColor={toolbarBrandColor} />
+        <config.icon />
       </BrandMark>
       <span
         className={cn("toolbar-pip toolbar-badge", dotColor)}
@@ -714,7 +714,7 @@ export function AgentButton({
                 <span data-zone="label" className="flex min-w-0 flex-1 items-center py-1.5">
                   <span className="inline-flex h-4 w-4 items-center justify-center shrink-0 mr-1.5">
                     <BrandMark brandColor={getBrandColorHex(type)}>
-                      <config.icon brandColor={getBrandColorHex(type)} />
+                      <config.icon />
                     </BrandMark>
                   </span>
                   Agent default

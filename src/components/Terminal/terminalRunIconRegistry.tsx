@@ -5,7 +5,6 @@ import { getAgentConfig } from "@/config/agents";
 export interface TerminalRunIconProps {
   className?: string;
   size?: number;
-  brandColor?: string;
 }
 
 /**

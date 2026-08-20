@@ -256,6 +256,13 @@ async function launchPreset(
   return { id: terminalId, panel };
 }
 
+/** `#rrggbb` as the `rgb(r, g, b)` string getComputedStyle returns. */
+function hexToRgb(hex: string): string {
+  const body = hex.replace("#", "");
+  const [r, g, b] = [0, 2, 4].map((i) => parseInt(body.slice(i, i + 2), 16));
+  return `rgb(${r}, ${g}, ${b})`;
+}
+
 async function expectAgentIconColor(
   panel: Locator,
   agentId: "claude" | "codex",
@@ -265,15 +272,22 @@ async function expectAgentIconColor(
   await expect(panel).toHaveAttribute("data-runtime-icon-id", agentId, { timeout: T_LONG });
   const icon = panel.locator(`[data-terminal-icon-id="${agentId}"]`).first();
   await expect(icon).toHaveAttribute("data-terminal-icon-color", color, { timeout: T_LONG });
-  // BrandMark may apply a contrast-clearing tint on light themes. The marker
-  // above is the canonical preset color contract; the SVG must still be
-  // concretely painted rather than falling back to currentColor.
+  // The marker is the preset-color contract; this asserts the color is actually
+  // painted. Since #11895 the color is the badge tile and the glyph is knocked
+  // out of it, so the mark is the wrapper's background — not a path fill, which
+  // now correctly inherits the badge ink.
+  const expected = hexToRgb(color);
   await expect
-    .poll(() => icon.locator("path").first().getAttribute("fill"), {
-      timeout: T_LONG,
-      intervals: [250, 500],
-    })
-    .toMatch(/^#[0-9a-f]{6}$/i);
+    .poll(
+      () =>
+        icon
+          .locator("span")
+          .first()
+          .evaluate((el) => getComputedStyle(el).backgroundColor),
+      { timeout: T_LONG, intervals: [250, 500] }
+    )
+    .toBe(expected);
+  await expect(icon.locator("path").first()).toHaveAttribute("fill", "currentColor");
 }
 
 async function quitAgentOrWaitForDemotion(page: Page, panel: Locator): Promise<void> {
@@ -330,7 +344,7 @@ test.describe.serial("Core: Agent preset icon color", () => {
     fixtureCleanup?.();
   });
 
-  test("preset color tints launch, survives app restart, and reapplies after quit/restart", async () => {
+  test("preset color marks launch, survives app restart, and reapplies after quit/restart", async () => {
     test.setTimeout(180_000);
 
     await test.step("Disable hybrid input so /quit reaches the fake agent stdin", async () => {
@@ -344,7 +358,7 @@ test.describe.serial("Core: Agent preset icon color", () => {
     });
 
     let claude!: Awaited<ReturnType<typeof launchPreset>>;
-    await test.step("Launch Claude preset and verify icon color tints with preset color", async () => {
+    await test.step("Launch Claude preset and verify the icon badge carries the preset color", async () => {
       await expectPersistedPresetColor(ctx.window, "claude", CLAUDE_PRESET_ID, CLAUDE_COLOR);
       claude = await launchPreset(ctx.window, "claude", CLAUDE_PRESET_ID);
       await expectAgentIconColor(claude.panel, "claude", CLAUDE_COLOR);

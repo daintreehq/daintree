@@ -20,7 +20,6 @@ import { resolveAgentIcon } from "./agentIcons";
 export interface AgentIconProps {
   className?: string;
   size?: number;
-  brandColor?: string;
 }
 
 export interface AgentConfig extends BaseAgentConfig {

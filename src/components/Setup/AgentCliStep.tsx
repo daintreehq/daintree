@@ -10,8 +10,7 @@ import {
   AlertCircle,
 } from "lucide-react";
 import { AGENT_REGISTRY, getAgentConfig } from "@/config/agents";
-import { resolveBrandChip } from "@/lib/brandIcon";
-import { useActiveAppScheme } from "@/hooks/useActiveAppScheme";
+import { BrandMark } from "@/components/icons";
 import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
 import {
   extractInspectUrl,
@@ -61,7 +60,6 @@ export function AgentCliStep({
   }, [cardStatuses]);
 
   const selectedAgentIds = useMemo(() => AGENT_ORDER.filter((id) => selections[id]), [selections]);
-  const activeScheme = useActiveAppScheme();
 
   useEffect(() => {
     mountedRef.current = true;
@@ -224,7 +222,6 @@ export function AgentCliStep({
           const currentMethodIdx = selectedMethodIndex[agentId] ?? 0;
           const currentBlock = blocks?.[currentMethodIdx] ?? blocks?.[0];
           const Icon = config.icon;
-          const brandChip = resolveBrandChip(config.color, activeScheme);
           const description = AGENT_DESCRIPTIONS[agentId] ?? config.tooltip ?? "";
           const isInstalling = status === "installing";
           const isInstalled = status === "installed";
@@ -247,14 +244,12 @@ export function AgentCliStep({
                         : "bg-daintree-bg/30 border-daintree-border"
                 }`}
               >
-                <div
-                  className="w-8 h-8 rounded-[var(--radius-sm)] flex items-center justify-center shrink-0"
-                  style={{
-                    backgroundColor: brandChip?.background ?? `${config.color}15`,
-                  }}
+                <BrandMark
+                  brandColor={config.color}
+                  className="w-8 h-8 rounded-[var(--radius-sm)] shrink-0"
                 >
-                  <Icon size={18} brandColor={brandChip?.tint ?? config.color} />
-                </div>
+                  <Icon />
+                </BrandMark>
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-medium text-daintree-text">{config.name}</div>
                   {description && (

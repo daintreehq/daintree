@@ -360,13 +360,6 @@ export const EXTENSION_KEYS = [
   "review-commit-input-bg",
 
   // Welcome screen
-  // Ambient restraint on third-party brand marks (agent/product logos). A
-  // saturation multiplier consumed by `.brand-mark` in src/index.css; 1 (the
-  // fallback) leaves every existing theme byte-for-byte unchanged. Themes that
-  // run a contrast budget can damp brand chroma so a row of vendor logos stops
-  // out-shouting the theme's own signals.
-  "brand-mark-saturation",
-
   "welcome-field-wash",
   "welcome-mark-color",
 

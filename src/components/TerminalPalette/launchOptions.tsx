@@ -1,5 +1,6 @@
 import { SquareTerminal, Globe, Settings } from "lucide-react";
 import { getBrandColorHex } from "@/lib/colorUtils";
+import { BrandMark } from "@/components/icons";
 import type { PanelKind } from "@/types";
 import { AGENT_REGISTRY } from "@/config/agents";
 import { getEffectiveAgentIds, getEffectiveAgentConfig } from "@shared/config/agentRegistry";
@@ -36,7 +37,11 @@ export function getLaunchOptions(): LaunchOption[] {
         launchAgentId: id,
         label: config?.name ?? id,
         description: `${description}${presetSuffix}`.trim(),
-        icon: <Icon className="w-4 h-4" brandColor={getBrandColorHex(id)} />,
+        icon: (
+          <BrandMark brandColor={getBrandColorHex(id)} className="w-4 h-4">
+            <Icon />
+          </BrandMark>
+        ),
       };
     });
 
