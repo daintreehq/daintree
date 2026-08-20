@@ -4764,7 +4764,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "terminal",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Move a terminal panel to a different worktree. The process is never restarted: a live agent keeps running in the directory it launched from, and its pane offers to tell it to continue in the destination.",
+    "description": "Move a terminal panel to a different worktree. The process is never restarted: a live agent keeps running in the directory it launched from, and its pane offers to tell it to continue in the destination. A panel that shares a tab group travels with the rest of that group, so this can relocate more than the one panel named. The move is reversible. Name the target explicitly — an automated caller cannot see what the user has focused.",
     "examples": undefined,
     "id": "terminal.moveToWorktree",
     "keywords": undefined,

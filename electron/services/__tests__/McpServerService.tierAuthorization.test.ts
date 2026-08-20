@@ -1102,6 +1102,27 @@ describe("McpServerService", () => {
           "Move the target terminal from the dock back into the grid. Accepts an optional terminalId; defaults to the currently focused terminal.",
       }),
       createManifestEntry({
+        id: "terminal.moveToWorktree" as ActionId,
+        title: "Move to Worktree",
+        description:
+          "Move the named terminal to another worktree. An agent caller must name the terminal and a live destination worktree.",
+        requiresArgs: true,
+        inputSchema: {
+          type: "object",
+          properties: { terminalId: { type: "string" }, worktreeId: { type: "string" } },
+          required: ["worktreeId"],
+        },
+      }),
+      // Present in the manifest but in no tier allowlist (#11877), so the
+      // absence assertions below are answered by the tier gate rather than by
+      // a fixture that simply never offered it.
+      createManifestEntry({
+        id: "terminal.moveToNewWorktree" as ActionId,
+        title: "Move to New Worktree…",
+        description:
+          "Open the new-worktree dialog and move a terminal into the worktree it creates",
+      }),
+      createManifestEntry({
         id: "terminal.toggleDock" as ActionId,
         title: "Toggle Dock",
         description:
@@ -1534,6 +1555,74 @@ describe("McpServerService", () => {
       })) as TextToolResult;
       expect(denied.isError).toBe(true);
       expect(denied.content[0]?.text).toContain("TIER_NOT_PERMITTED");
+      expect(dispatchMock).not.toHaveBeenCalled();
+    });
+
+    // Fixed ids, not a loop over ACTION_TIER_ADDONS: the derived loops above
+    // shrink with the allowlist, so dropping the entry again would leave them
+    // green. These two pin the #11877 decision itself — the cross-worktree move
+    // is reachable, and its dialog-bound sibling is deliberately not.
+    it("lets the action tier move a terminal across worktrees (#11877)", async () => {
+      paneTokenTiers.set("token-action", "action");
+      const dispatchMock = vi.fn((): ActionDispatchResult => ({ ok: true, result: undefined }));
+      const { window } = createMockWindow({
+        getManifest: tierManifest,
+        dispatchAction: dispatchMock,
+      });
+
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!, {
+        Authorization: "Bearer token-action",
+      });
+      transports.push(transport);
+
+      const ids = (await client.listTools()).tools.map((tool) => tool.name);
+      expect(ids).toContain("terminal.moveToWorktree");
+
+      const moved = (await client.callTool({
+        name: "terminal.moveToWorktree",
+        arguments: { terminalId: "panel-1", worktreeId: "wt-2" },
+      })) as TextToolResult;
+
+      expect(moved.isError).toBeFalsy();
+      expect(dispatchMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actionId: "terminal.moveToWorktree",
+          args: { terminalId: "panel-1", worktreeId: "wt-2" },
+        })
+      );
+    });
+
+    it("keeps the dialog-bound move-to-new-worktree off every tier (#11877)", async () => {
+      paneTokenTiers.set("token-sys", "system");
+      const dispatchMock = vi.fn((): ActionDispatchResult => ({
+        ok: true,
+        result: "should-not-run",
+      }));
+      const { window } = createMockWindow({
+        getManifest: tierManifest,
+        dispatchAction: dispatchMock,
+      });
+
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!, {
+        Authorization: "Bearer token-sys",
+      });
+      transports.push(transport);
+
+      // System is the widest tier, so absence here covers the narrower ones.
+      const ids = (await client.listTools()).tools.map((tool) => tool.name);
+      expect(ids).not.toContain("terminal.moveToNewWorktree");
+
+      const denied = (await client.callTool({
+        name: "terminal.moveToNewWorktree",
+        arguments: { terminalId: "panel-1" },
+      })) as TextToolResult;
+
+      expect(denied.isError).toBe(true);
+      expect(denied.content[0]?.text).toContain("TIER_NOT_PERMITTED");
+      // Never reaches the renderer, so its own defense-in-depth throw is a
+      // second line rather than the one doing the work.
       expect(dispatchMock).not.toHaveBeenCalled();
     });
 
