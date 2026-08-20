@@ -47,6 +47,12 @@ export interface ManagedChildProcess {
   pid: number | undefined;
   stdout: NodeJS.ReadableStream | null;
   stderr: NodeJS.ReadableStream | null;
+  /**
+   * Writable input, present only in `duplex` mode (#11871) — `pipe` mode spawns
+   * with stdin `"ignore"`, so Node hands back `null` there and every write is a
+   * no-op. Mirrors `ChildProcessWithoutNullStreams["stdin"]`.
+   */
+  stdin: NodeJS.WritableStream | null;
   /** Send a termination signal. Returns false if the process is already gone. */
   kill(signal?: NodeJS.Signals): boolean;
   /** Subscribe to the child's terminal `exit` (code, signal). */
@@ -74,20 +80,32 @@ export interface ResolvedProcessSpawnBase {
 /** Resolved spawn config, discriminated by execution backend. */
 export type ResolvedProcessSpawn =
   | (ResolvedProcessSpawnBase & { mode: "pipe" })
+  | (ResolvedProcessSpawnBase & { mode: "duplex" })
   | (ResolvedProcessSpawnBase & { mode: "pty"; cols: number; rows: number });
 
-/** The pipe-mode half of {@link ResolvedProcessSpawn}, as the spawner sees it. */
+/** The pipe-mode arm of {@link ResolvedProcessSpawn}. */
 export type ResolvedPipeSpawn = Extract<ResolvedProcessSpawn, { mode: "pipe" }>;
-/** The PTY half of {@link ResolvedProcessSpawn}. */
+/** The duplex arm of {@link ResolvedProcessSpawn} (#11871). */
+export type ResolvedDuplexSpawn = Extract<ResolvedProcessSpawn, { mode: "duplex" }>;
+/** The PTY arm of {@link ResolvedProcessSpawn}. */
 export type ResolvedPtySpawn = Extract<ResolvedProcessSpawn, { mode: "pty" }>;
+/**
+ * The plain-child arms, as the spawner sees them — everything that runs through
+ * `node:child_process` rather than the pty-host. Both share one lifecycle; they
+ * differ only in whether fd 0 is piped.
+ */
+export type ResolvedChildSpawn = ResolvedPipeSpawn | ResolvedDuplexSpawn;
+/** The plain-child modes, for narrowing at a `startChild` call boundary. */
+export type ChildProcessMode = ResolvedChildSpawn["mode"];
 
 /**
  * Spawn shim, injected so unit tests substitute a controllable fake. Production
  * wiring uses `node:child_process.spawn` with the plugin's `env` applied over
  * the safe-key allowlist, `shell: false` (no shell interpolation — argv is
- * passed verbatim), and `windowsHide: true`.
+ * passed verbatim), and `windowsHide: true`. `config.mode` selects fd 0:
+ * `duplex` pipes it, `pipe` leaves it closed.
  */
-export type ProcessSpawner = (config: ResolvedPipeSpawn) => ManagedChildProcess;
+export type ProcessSpawner = (config: ResolvedChildSpawn) => ManagedChildProcess;
 
 /**
  * Allocator for the interactive backend (#11300). Injected for the same reason
@@ -336,11 +354,38 @@ export class PluginProcessManager {
     };
   }
 
-  /** Write to an interactive process's input. No-op for pipe mode or after exit. */
+  /**
+   * Write to a writable process's input — a PTY's terminal input, or a duplex
+   * child's stdin (#11871). No-op for pipe mode (stdin was never opened) and
+   * after exit, matching the handle's fire-and-forget `void` contract.
+   */
   write(id: string, data: string): void {
     const managed = this.processes.get(id);
-    if (!managed || managed.mode !== "pty" || typeof data !== "string") return;
-    managed.ptyBackend?.write(data);
+    if (!managed || typeof data !== "string") return;
+    if (managed.mode === "pty") {
+      managed.ptyBackend?.write(data);
+      return;
+    }
+    if (managed.mode !== "duplex" || managed.status !== "running") return;
+    const stdin = managed.child?.stdin;
+    if (!stdin) return;
+    // Same closed-stream predicate as PluginMcpSupervisor.writeFrame — these
+    // properties exist on every Node writable but not on the structural
+    // NodeJS.WritableStream. Unlike writeFrame this NO-OPS rather than throwing:
+    // `write()` is `void` in the plugin contract, so a write racing the child's
+    // exit must behave like `kill()` on a dead process, not blow up in a timer.
+    const writable = stdin as NodeJS.WritableStream & {
+      writable?: boolean;
+      writableEnded?: boolean;
+      destroyed?: boolean;
+    };
+    if (writable.writableEnded || writable.destroyed || writable.writable === false) return;
+    // Deliberately fire-and-forget: the boolean backpressure signal is dropped
+    // rather than surfaced, because `write()` is synchronous `void` across the
+    // dev-worker bridge too and this is a low-volume control-plane channel. The
+    // once-per-child 'error' listener installed in startChild absorbs an EPIPE
+    // landing in the gap between the guard above and this call.
+    stdin.write(data);
   }
 
   /**
@@ -500,7 +545,10 @@ export class PluginProcessManager {
       await this.startPty(managed);
       return;
     }
-    this.startChild(managed);
+    // Pass the narrowed mode explicitly: `ManagedProcess.mode` is the full
+    // PluginProcessMode, so the control-flow narrowing above would be lost at
+    // the call boundary and a new backend could silently spawn as `pipe`.
+    this.startChild(managed, managed.mode);
   }
 
   private async startPty(managed: ManagedProcess): Promise<void> {
@@ -662,11 +710,11 @@ export class PluginProcessManager {
     queueMicrotask(() => this.emitTerminal(managed, { exitCode: null, signal: null }, crashed));
   }
 
-  private startChild(managed: ManagedProcess): void {
+  private startChild(managed: ManagedProcess, mode: ChildProcessMode): void {
     let child: ManagedChildProcess;
     try {
       child = this.spawner({
-        mode: "pipe",
+        mode,
         command: managed.command,
         args: managed.args,
         cwd: managed.cwd,
@@ -699,6 +747,15 @@ export class PluginProcessManager {
         formatErrorMessage(err, "process error")
       );
     });
+
+    // Swallow async 'error' events on stdin (EPIPE when the child dies between
+    // `write()`'s guard and the write itself). Installed once per incarnation —
+    // never inside `write()`, which would pile up listeners on a chatty plugin —
+    // and deliberately never removed: stdio can still emit between the child's
+    // 'exit' and the stream's close. The closure captures nothing, so it pins no
+    // plugin state. Without it the unhandled stream error would take the main
+    // process down under Electron's strict rejection handling.
+    child.stdin?.on("error", () => {});
 
     this.attachStream(managed, child, "stdout");
     this.attachStream(managed, child, "stderr");
@@ -910,7 +967,10 @@ export class PluginProcessManager {
     managed.signal = null;
     managed.terminalOutcome = null;
     managed.spawnedAt = Date.now();
-    this.startChild(managed);
+    // Respawn in the SAME plain-child mode: a duplex restart must come back with
+    // a writable stdin, not silently demote to pipe. Narrowed by the
+    // `mode === "pty"` early return at the top of `restart`.
+    this.startChild(managed, managed.mode);
   }
 
   /**
@@ -1000,7 +1060,11 @@ const defaultSpawner: ProcessSpawner = (config) => {
     // Do NOT inherit the full host env — that would leak the main process's
     // tokens to any shell:exec plugin. Allowlist essentials + plugin-provided.
     env: minimalSpawnEnv(config.env),
-    stdio: ["ignore", "pipe", "pipe"],
+    // fd 0 is the only difference between the two plain-child modes: duplex
+    // pipes stdin so the plugin can drive the child (#11871), pipe leaves it
+    // closed. fd 1 and fd 2 stay separate in BOTH — that separation is the
+    // whole reason a stdio JSON-RPC peer can't use `mode: "pty"`.
+    stdio: [config.mode === "duplex" ? "pipe" : "ignore", "pipe", "pipe"],
     // No shell — argv is passed verbatim, closing the shell-injection vector a
     // process-orchestrator plugin would otherwise carry.
     shell: false,

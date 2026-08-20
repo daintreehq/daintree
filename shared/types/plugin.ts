@@ -1558,15 +1558,21 @@ export interface PluginConfirmOptions {
 export type ActionHandler = (args: unknown) => unknown | Promise<unknown>;
 
 /**
- * Execution backend for a managed process (#11300).
+ * Execution backend for a managed process (#11300, #11871).
  *
  * - `pipe` (the default): a plain child process with stdin closed and
  *   stdout/stderr piped. Output arrives split by stream.
+ * - `duplex`: as `pipe`, but stdin is piped too, so the child can be driven via
+ *   {@link PluginDuplexProcessHandle.write}. stdout and stderr stay separate.
+ *   This is the mode for a child speaking a protocol over stdio — MCP, LSP and
+ *   ACP servers all frame line-delimited JSON-RPC on stdout while using stderr
+ *   for diagnostics, so they need a writable input AND an output stream the
+ *   diagnostics are not mixed into.
  * - `pty`: the command runs under a real pseudo-terminal, so it sees a TTY,
  *   accepts input via {@link PluginPtyProcessHandle.write}, and can be resized.
  *   A PTY merges stdout and stderr into one stream by construction.
  */
-export type PluginProcessMode = "pipe" | "pty";
+export type PluginProcessMode = "pipe" | "duplex" | "pty";
 
 /**
  * One chunk of output from a managed process, delivered to
@@ -1574,8 +1580,9 @@ export type PluginProcessMode = "pipe" | "pty";
  */
 export interface PluginProcessDataChunk {
   /**
-   * `stdout` / `stderr` in pipe mode. `data` in PTY mode — a pseudo-terminal
-   * has a single combined stream, so there is no split to report.
+   * `stdout` / `stderr` in pipe and duplex mode — both keep the child's two
+   * output streams apart. `data` in PTY mode only: a pseudo-terminal has a
+   * single combined stream, so there is no split to report.
    */
   readonly stream: "stdout" | "stderr" | "data";
   /** The decoded UTF-8 chunk. */
@@ -1605,13 +1612,28 @@ export interface PluginProcessSpawnOptions {
    * a key the plugin does not pass and the allowlist does not cover is absent.
    */
   env?: Record<string, string>;
-  /** Execution backend. Omit (or pass `"pipe"`) for the default piped child. */
+  /**
+   * Execution backend. Omit (or pass `"pipe"`) for the default piped child.
+   * Pass `"duplex"` ({@link PluginDuplexProcessSpawnOptions}) to also get a
+   * writable stdin, or `"pty"` ({@link PluginPtyProcessSpawnOptions}) for a
+   * pseudo-terminal.
+   */
   mode?: "pipe";
   /**
    * Route this process's stream events to a single panel instead of every panel
    * the plugin owns. `undefined` / `null` broadcast, matching `postToPanel`.
    */
   panelId?: string | null;
+}
+
+/**
+ * Options for a stdio-driven {@link PluginProcessApi.spawn}. Same anchoring and
+ * environment rules as {@link PluginProcessSpawnOptions} — the only difference
+ * is that stdin is piped rather than closed. Selecting `mode: "duplex"` narrows
+ * the returned handle to {@link PluginDuplexProcessHandle}.
+ */
+export interface PluginDuplexProcessSpawnOptions extends Omit<PluginProcessSpawnOptions, "mode"> {
+  mode: "duplex";
 }
 
 /**
@@ -1679,21 +1701,39 @@ export interface PluginProcessHandle {
 }
 
 /**
- * A {@link PluginProcessHandle} for a process spawned with `mode: "pty"`. Adds
- * the two operations a pseudo-terminal makes possible: writing to the child's
- * input and telling it the window changed size.
+ * A {@link PluginProcessHandle} for a process whose input the plugin can drive
+ * — spawned with `mode: "duplex"` (stdin piped, stdout/stderr still separate)
+ * or `mode: "pty"` (a pseudo-terminal, which also brings `resize`).
  *
- * Both are no-ops once the process has exited, and both are safe to call
- * immediately after `spawn()` resolves. A `resize()` issued while a `restart()`
- * is still allocating the replacement PTY is retained (last write wins) and
- * folded into that PTY's initial size rather than replayed as a late SIGWINCH.
+ * `write()` is fire-and-forget and never throws: it is a no-op once the process
+ * has exited or its input has closed, mirroring `kill()`. It is safe to call
+ * immediately after `spawn()` resolves.
  */
-export interface PluginPtyProcessHandle extends PluginProcessHandle {
+export interface PluginDuplexProcessHandle extends PluginProcessHandle {
   /**
    * Write to the child's input. Passed through verbatim — the caller supplies
-   * its own line terminator (`"\n"`) when the command expects one.
+   * its own line terminator (`"\n"`) when the command expects one, so a
+   * line-delimited JSON-RPC peer writes `JSON.stringify(msg) + "\n"`.
+   *
+   * Framing is the caller's job in both directions: {@link PluginProcessHandle.onData}
+   * delivers raw chunks that may split or coalesce protocol frames, so a plugin
+   * speaking NDJSON buffers and splits on `"\n"` itself.
    */
   write(data: string): void;
+}
+
+/**
+ * A {@link PluginDuplexProcessHandle} for a process spawned with `mode: "pty"`.
+ * Adds the one operation only a pseudo-terminal makes possible on top of
+ * `write()`: telling the child the window changed size.
+ *
+ * Like `write()`, `resize()` is a no-op once the process has exited and is safe
+ * to call immediately after `spawn()` resolves. A `resize()` issued while a
+ * `restart()` is still allocating the replacement PTY is retained (last write
+ * wins) and folded into that PTY's initial size rather than replayed as a late
+ * SIGWINCH.
+ */
+export interface PluginPtyProcessHandle extends PluginDuplexProcessHandle {
   /** Report a new terminal size to the child. Both values must be positive integers. */
   resize(cols: number, rows: number): void;
 }
@@ -1718,6 +1758,21 @@ export interface PluginProcessApi {
    * take the app down with it.
    */
   spawn(command: string, options: PluginPtyProcessSpawnOptions): Promise<PluginPtyProcessHandle>;
+  /**
+   * Spawn a child with its stdin piped as well as its stdout/stderr, and return
+   * a handle that adds `write()`. Use this to drive a command that speaks a
+   * protocol over stdio — an MCP, LSP or ACP server, or anything else framing
+   * line-delimited JSON-RPC — where the reply stream must stay free of the
+   * diagnostics the child writes to stderr. Output arrives split by stream on
+   * {@link PluginProcessHandle.onData}, exactly as in pipe mode; the host does
+   * no framing, so the plugin owns buffering and message splitting.
+   *
+   * Rejects on the same conditions as the pipe-mode overload.
+   */
+  spawn(
+    command: string,
+    options: PluginDuplexProcessSpawnOptions
+  ): Promise<PluginDuplexProcessHandle>;
   /**
    * Spawn a child process on the plugin's behalf and return a live handle. The
    * child's stdout/stderr stream to the plugin's panels over

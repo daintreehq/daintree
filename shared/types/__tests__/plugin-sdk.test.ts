@@ -33,6 +33,7 @@ import type {
   PluginIpcHandler,
   PluginProcessApi,
   PluginProcessHandle,
+  PluginDuplexProcessHandle,
   PluginPtyProcessHandle,
   PluginProcessDataChunk,
   PluginProcessSpawnOptions,
@@ -126,6 +127,7 @@ describe("plugin-sdk boundary", () => {
     it("exports managed-process contract", () => {
       expectTypeOf<PluginProcessApi>().toMatchTypeOf<object>();
       expectTypeOf<PluginProcessHandle>().toMatchTypeOf<object>();
+      expectTypeOf<PluginDuplexProcessHandle>().toMatchTypeOf<object>();
       expectTypeOf<PluginProcessSpawnOptions>().toMatchTypeOf<object>();
     });
 
@@ -433,6 +435,11 @@ describe("plugin-sdk boundary", () => {
         expectTypeOf(
           await api.spawn("cmd", { mode: "pty" })
         ).toEqualTypeOf<PluginPtyProcessHandle>();
+        // …and `mode: "duplex"` selects the writable-stdio overload (#11871),
+        // which must NOT collapse into either neighbour.
+        expectTypeOf(
+          await api.spawn("cmd", { mode: "duplex" })
+        ).toEqualTypeOf<PluginDuplexProcessHandle>();
       };
       // Compile-time only: `assertTypes` is deliberately never invoked (its
       // `expectTypeOf` arguments would be evaluated against an empty object).
@@ -440,15 +447,27 @@ describe("plugin-sdk boundary", () => {
       void assertTypes;
     });
 
-    it("only the interactive handle carries write/resize", () => {
+    it("gates write on a writable handle and resize on a PTY handle", () => {
       const pipeHandle = {} as PluginProcessHandle;
+      const duplexHandle = {} as PluginDuplexProcessHandle;
       const ptyHandle = {} as PluginPtyProcessHandle;
       const assertNoPipeWrite = (handle: PluginProcessHandle): void => {
         // @ts-expect-error — a pipe-mode process has no writable stdin
         handle.write("x");
       };
       void assertNoPipeWrite;
+      const assertNoDuplexResize = (handle: PluginDuplexProcessHandle): void => {
+        // @ts-expect-error — a duplex child has no terminal to resize
+        handle.resize(80, 24);
+      };
+      void assertNoDuplexResize;
+      // `write` is the shared contract of both writable backends…
+      expectTypeOf(duplexHandle.write).toEqualTypeOf<(data: string) => void>();
       expectTypeOf(ptyHandle.write).toEqualTypeOf<(data: string) => void>();
+      // …so a PTY handle satisfies the duplex contract, while the reverse fails.
+      expectTypeOf(ptyHandle).toMatchTypeOf<PluginDuplexProcessHandle>();
+      expectTypeOf(duplexHandle).not.toMatchTypeOf<PluginPtyProcessHandle>();
+      // …and `resize` remains PTY-only.
       expectTypeOf(ptyHandle.resize).toEqualTypeOf<(cols: number, rows: number) => void>();
       // onData is on the BASE handle: a pipe-mode plugin must be able to read
       // its own child's stdout/stderr, not just stream it to panels.
