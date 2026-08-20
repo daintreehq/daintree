@@ -3533,6 +3533,17 @@ if (typeof window !== "undefined" && window.__DAINTREE_E2E_MODE__ === true) {
     return true;
   };
 
+  // What xterm believes is selected right now. The theme tour's selection scene
+  // needs a postcondition: a completed mouse drag proves the mouse moved, not
+  // that a selection exists, and under the WebGL renderer the fill is painted
+  // into the canvas so there is no DOM node to look for. Attached via
+  // Object.assign (not a window cast) so it doesn't add to the
+  // no-unsafe-type-assertion lint ratchet.
+  Object.assign(window, {
+    __daintreeGetTerminalSelection: (panelId: string): string =>
+      terminalInstanceService.getInstanceForE2E(panelId)?.terminal.getSelection() ?? "",
+  });
+
   (window as unknown as Record<string, unknown>).__daintreeGetTerminalBufferLength = (
     panelId: string
   ): number => {
