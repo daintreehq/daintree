@@ -428,7 +428,80 @@ async function enrichPRPageWithRequiredStatus(repo: RepoRef, items: PR[]): Promi
   });
 }
 
+/**
+ * Text-search path for `listPRs` — routes through GitHub's search API instead
+ * of the repository pull requests connection. Results are typed-input ephemera:
+ * they use a `search:`-prefixed in-flight dedupe key and are never written to
+ * `forgePRListCache`, so a search response can't be served later as the
+ * unfiltered background-poll list. `runQuery`'s short-TTL response cache still
+ * coalesces identical search terms.
+ *
+ * State is expressed with `is:` rather than the issues path's `state:`, which
+ * GitHub only accepts as `open`/`closed` for pull requests — `state:merged` is
+ * not a qualifier it understands. `closed` deliberately stays bare instead of
+ * the legacy `GitHubPRs.listPullRequests` form `is:closed is:unmerged`: the
+ * connection path maps `closed` to `["CLOSED", "MERGED"]`
+ * (see {@link mapPRGraphQLStates}), so narrowing it here would make adding a
+ * search term silently change which PRs a `state: "closed"` request means.
+ *
+ * Searched rows go through {@link enrichPRPageWithRequiredStatus} like the
+ * list path's do. Skipping it would hand the dropdown a coarse rollup while
+ * the sidebar renders the required-check-aware value — the exact disagreement
+ * #11251 removed, reintroduced for searched pages only.
+ */
+async function searchPRsImpl(repo: RepoRef, search: string, opts: ListOptions): Promise<Page<PR>> {
+  // Read once, before `dedupe()` defers the fetch — see `listIssuesImpl`.
+  const state = listCacheState(opts);
+  const bypass = opts.bypassCache === true;
+  const limit = normalizeListPerPage(opts.perPage);
+  const cursor = opts.cursor ?? null;
+  // Free text is appended unquoted and truncated to the budget the qualifiers
+  // leave inside GitHub's 256-char query cap — same construction, and the same
+  // reasoning, as `searchIssuesImpl`.
+  const stateQualifier = state === "all" ? "" : ` is:${state}`;
+  const sortQualifier = `sort:${normalizeListSortOrder(opts.sort)}-${normalizeListDirection(opts.direction)}`;
+  const prefix = `repo:${repo.owner}/${repo.repo} is:pr${stateQualifier} ${sortQualifier} `;
+  const available = 256 - prefix.length;
+  const searchQuery = `${prefix}${available > 0 ? search.slice(0, available) : ""}`.trim();
+  const dedupeKey = `search:${searchQuery}:${cursor ?? ""}:${limit}`;
+
+  return dedupe(listPRsInflight, dedupeKey, bypass, async () => {
+    const response = await runQuery(
+      SEARCH_QUERY,
+      {
+        searchQuery,
+        type: "ISSUE",
+        cursor,
+        limit,
+      },
+      "SEARCH_QUERY",
+      bypass
+    );
+
+    const result = response?.search as
+      | {
+          nodes?: unknown[];
+          pageInfo?: { hasNextPage?: boolean; endCursor?: string | null };
+          issueCount?: number;
+        }
+      | undefined;
+    const nodes = (result?.nodes ?? []) as Array<Record<string, unknown>>;
+    return {
+      // `issueCount` counts search matches, not the repo's open PRs, so it
+      // must not reach `updateRepoStatsCount` the way the list path's
+      // `totalCount` does — that value backs the toolbar's repo-wide badge.
+      items: await enrichPRPageWithRequiredStatus(repo, nodes.filter(Boolean).map(toForgePR)),
+      nextCursor: result?.pageInfo?.endCursor ?? null,
+      hasMore: result?.pageInfo?.hasNextPage ?? false,
+      ...(typeof result?.issueCount === "number" ? { totalCount: result.issueCount } : {}),
+    };
+  });
+}
+
 export async function listPRsImpl(repo: RepoRef, opts: ListOptions): Promise<Page<PR>> {
+  const searchTerm = opts.search?.trim();
+  if (searchTerm) return searchPRsImpl(repo, searchTerm, opts);
+
   // Read once, before `dedupe()` defers the fetch — see `listIssuesImpl`.
   const state = listCacheState(opts);
   const sortOrder = normalizeListSortOrder(opts.sort);
@@ -437,9 +510,8 @@ export async function listPRsImpl(repo: RepoRef, opts: ListOptions): Promise<Pag
   const states = mapPRGraphQLStates(opts.state);
   const cursor = opts.cursor ?? null;
   const bypass = opts.bypassCache === true;
-  // The PR list query ignores `opts.search` (advisory — see ListOptions), so
-  // it's kept out of the cache key. Wiring it would mean routing to
-  // SEARCH_QUERY like `searchIssuesImpl` does for issues.
+  // The unfiltered list path keeps `search` out of the cache key — search
+  // routes through `searchPRsImpl` above and never touches this cache.
   const cacheKey = buildListCacheKey({
     type: "pr",
     owner: repo.owner,

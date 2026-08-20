@@ -2007,7 +2007,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "forge",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "List repository pull requests from the active forge provider, one page at a time. Use this to discover or filter PRs; use the issue listing for issues, and the single-PR lookup when the number is already known. There is no text search here — no provider on the roster can query PRs, so asking for one is rejected rather than quietly returning an unfiltered page. Summary results keep responses small, and bypassing the cache spends a live provider round trip.",
+    "description": "List repository pull requests from the active forge provider, one page at a time. Use this to discover or filter PRs; use the issue listing for issues, and the single-PR lookup when the number is already known. Search takes a provider-native query fragment rather than plain text and routes through the provider's search API, which isn't served from the list cache that pagination uses. Summary results keep responses small, and bypassing the cache spends a live provider round trip.",
     "examples": undefined,
     "id": "forge.listPRs",
     "keywords": undefined,
