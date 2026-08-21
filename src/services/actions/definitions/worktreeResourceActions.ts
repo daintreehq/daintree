@@ -122,7 +122,7 @@ export function registerWorktreeResourceActions(
       id: "worktree.resource.teardown",
       title: "Teardown Resource",
       description:
-        "Run the project's configured teardown commands for a worktree's remote resource, typically to destroy a cloud devbox. These are arbitrary commands the project defines, so what they destroy — and whether anything can be recovered — depends entirely on that configuration; read it before running this. The project's pause commands are the intended lighter-weight path when the resource is still needed.",
+        "Run the project's configured teardown commands for a worktree's remote resource, typically to destroy a cloud devbox. These are arbitrary commands the project defines, so what they destroy, and whether anything can be recovered, depends entirely on that configuration; read it before running this. The project's pause commands are the lighter path when the resource is still needed.",
       category: "worktree",
       kind: "command",
       danger: "confirm",

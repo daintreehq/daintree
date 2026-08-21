@@ -15,6 +15,8 @@ vi.mock("../../McpPaneConfigService.js", () => ({
 
 import {
   buildAnnotations,
+  buildToolInputSchema,
+  buildToolOutputSchema,
   extractBearerToken,
   filterIntrospectionResultForSession,
   getTierPermittedActionIds,
@@ -31,6 +33,7 @@ import {
   ACTIONS_SEARCH_MAX_LIMIT,
   INTROSPECTION_TOOL_IDS,
 } from "../tierAuth.js";
+import { findWireStrippedKeywords } from "../../../../shared/utils/mcpWireSchema.js";
 import { TIER_ALLOWLISTS } from "../shared.js";
 import { BUILT_IN_ACTION_IDS } from "../../../../shared/config/actionIds.js";
 import type { ActionManifestEntry } from "../../../../shared/types/actions.js";
@@ -305,6 +308,86 @@ function makeEntry(overrides: Partial<ActionManifestEntry> = {}): ActionManifest
     ...overrides,
   };
 }
+
+/**
+ * The wire/validation split, asserted against the SHIPPED builders rather than
+ * against a reimplementation of them. This is the pair `sessionServer` calls to
+ * fill `tools/list`, so deleting the projection from `buildToolInputSchema` —
+ * or accidentally adding one to `buildToolOutputSchema` — fails here.
+ *
+ * The budget suite in `src/services/actions/__tests__/mcpWireBudget.test.ts`
+ * measures the same projection over the live registry, but it necessarily
+ * re-applies it in the renderer (these builders are main-process modules). That
+ * makes it a measurement of the standard, not proof of the production path;
+ * this is the proof.
+ */
+describe("wire/validation schema split", () => {
+  const CONSTRAINED_SCHEMA = {
+    type: "object",
+    properties: {
+      limit: { type: "integer", minimum: 1, maximum: 100, description: "How many" },
+      tags: { type: "array", items: { type: "string", maxLength: 8 }, minItems: 1 },
+      // A property NAMED after a keyword: it must survive as an advertised argument.
+      pattern: { type: "string", pattern: "^a", description: "The glob" },
+    },
+    required: ["limit", "pattern"],
+  } as const;
+
+  it("advertises no value-range keyword on the input schema", () => {
+    const wire = buildToolInputSchema(
+      makeEntry({ inputSchema: structuredClone(CONSTRAINED_SCHEMA) as Record<string, unknown> })
+    );
+
+    expect(findWireStrippedKeywords(wire)).toEqual([]);
+  });
+
+  it("keeps every argument the schema declares, including keyword-named ones", () => {
+    const wire = buildToolInputSchema(
+      makeEntry({ inputSchema: structuredClone(CONSTRAINED_SCHEMA) as Record<string, unknown> })
+    );
+
+    const properties = (wire as { properties: Record<string, unknown> }).properties;
+    expect(Object.keys(properties).sort()).toEqual(["limit", "pattern", "tags"]);
+    // Prose and the mask-relevant keywords survive; only the bounds go.
+    expect(properties["pattern"]).toEqual({ type: "string", description: "The glob" });
+    expect((wire as { required: string[] }).required).toEqual(["limit", "pattern"]);
+  });
+
+  it("always advertises additionalProperties:false", () => {
+    // Load-bearing for strict/grammar-constrained backends, so it must survive
+    // the projection AND be added to a schema that omitted it.
+    expect(
+      buildToolInputSchema(makeEntry({ inputSchema: { type: "object", properties: {} } }))
+    ).toMatchObject({ additionalProperties: false });
+    expect(buildToolInputSchema(makeEntry())).toMatchObject({ additionalProperties: false });
+  });
+
+  it("does not mutate the manifest entry it projects", () => {
+    const inputSchema = structuredClone(CONSTRAINED_SCHEMA) as Record<string, unknown>;
+    const before = JSON.stringify(inputSchema);
+    buildToolInputSchema(makeEntry({ inputSchema }));
+
+    expect(JSON.stringify(inputSchema)).toBe(before);
+  });
+
+  it("leaves the OUTPUT schema unprojected", () => {
+    // An advertised `outputSchema` is compiled and enforced by the MCP SDK's AJV
+    // pass on the client, and main-process tools never get the `resultSchema`
+    // check that covers renderer dispatches. Stripping bounds here would delete
+    // real validation rather than dead prompt text.
+    const outputSchema = {
+      type: "object",
+      properties: { hash: { type: "string", pattern: "^[0-9a-f]{64}$", minLength: 64 } },
+    };
+
+    expect(buildToolOutputSchema(makeEntry({ outputSchema }))).toEqual(outputSchema);
+  });
+
+  it("still refuses a non-object output schema", () => {
+    expect(buildToolOutputSchema(makeEntry({ outputSchema: { type: "string" } }))).toBeUndefined();
+    expect(buildToolOutputSchema(makeEntry())).toBeUndefined();
+  });
+});
 
 describe("shouldExposeTool", () => {
   it("exposes core entries when tier-permitted", () => {

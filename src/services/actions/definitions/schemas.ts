@@ -12,13 +12,13 @@ import {
 export const AgentIdSchema = z
   .union([z.enum([...BUILT_IN_AGENT_IDS, "terminal", "browser", "dev-preview"]), z.string().min(1)])
   .describe(
-    "Which agent CLI to run. The enumerated ids are the built-ins; any other non-empty string is accepted so user- and plugin-contributed agents work, which means an unrecognised id fails at launch rather than at validation. Query the agent-listing capability for the ids actually installed and launchable."
+    "Which agent CLI to run, from the agent-listing capability. Enumerated ids are built-ins; any other non-empty string is accepted, so a bad id fails at launch, not validation."
   );
 
 export const LaunchLocationSchema = z
   .enum(["grid", "dock", "overlay"])
   .describe(
-    'Where to place the panel. "grid" places it in the main panel grid (default). "dock" places it in the sidebar dock. "overlay" places it in a floating overlay (e.g. the Daintree Assistant), outside the grid and dock.'
+    'Where to place the panel: "grid" the main panel grid (default), "dock" the sidebar dock, "overlay" a floating overlay outside both.'
   );
 
 /**
@@ -32,7 +32,7 @@ export const LaunchLocationSchema = z
 export const TerminalSpawnSourceSchema = z
   .enum(["quickrun", "recipe", "agent", "palette", "mcp", "assistant"])
   .describe(
-    "Records which surface asked for the spawn, for provenance and run history only; it never changes what is launched. Leave it unset when dispatching over MCP — the bridge stamps its own origin."
+    "Provenance for run history only; never changes what is launched. Leave unset over MCP, where the bridge stamps its own origin."
   );
 
 /**
@@ -41,7 +41,7 @@ export const TerminalSpawnSourceSchema = z
 export const AddPanelFocusPolicySchema = z
   .enum(["auto", "preserve", "take"])
   .describe(
-    'Whether creating the panel moves keyboard focus to it. "auto" (the effective default) moves focus except while the assistant owns input, "preserve" always leaves focus where it is, and "take" always moves it. Prefer "preserve" when spawning in the background so the user\'s typing is not interrupted.'
+    'Whether the new panel takes keyboard focus: "auto" (default) takes it unless the assistant owns input, "preserve" never takes it, "take" always does. Prefer preserve for background spawns so the user is not interrupted.'
   );
 
 // Derived from the settingsTabIds tuples so the action schema can't drift from
@@ -156,7 +156,18 @@ export function paginationShape(options: PaginationOptions = {}): Record<string,
     : z.number().int().positive();
 
   const shape: Record<string, z.ZodTypeAny> = {
-    limit: limitField.optional().describe("Maximum number of items to return."),
+    // The ceiling is stated in prose, not left to `.max()` alone. The wire view
+    // strips value-range keywords (`shared/utils/mcpWireSchema.ts`), so a bound
+    // that lives only in the schema reaches no caller — it would surface as a
+    // validation error naming a cap the model was never shown. Interpolated from
+    // the same value that enforces it, so the two cannot drift.
+    limit: limitField
+      .optional()
+      .describe(
+        maxLimit
+          ? `Maximum number of items to return (max ${maxLimit}).`
+          : "Maximum number of items to return."
+      ),
   };
   if (offset) {
     shape.offset = z
@@ -277,7 +288,7 @@ export const CopyTreeOptionsSchema = z
       .union([z.string().min(1), z.array(z.string().min(1)).min(1)])
       .optional()
       .describe(
-        "Selects which files to include, as worktree-relative exact file paths or glob patterns. Patterns match file paths, so a folder needs a glob: pass 'src/panels/**', not 'src/panels'; prefer `scopePaths` when selecting a folder. Combined with `includePaths` when both are given; omit both to include the whole worktree."
+        "Selects which files to include, as worktree-relative exact file paths or glob patterns. Patterns match file paths, so a folder needs a glob: pass 'src/panels/**', not 'src/panels'; prefer `scopePaths` when selecting a folder. Combined with `includePaths` when both are given; omit both to include the whole worktree. An empty list or blank entry is rejected rather than read as no filter."
       ),
     exclude: z.union([z.string(), z.array(z.string())]).optional(),
     // Undocumented on the wire until #11750, which is how a caller ended up
@@ -314,11 +325,36 @@ export const CopyTreeOptionsSchema = z
       ),
     modified: z.boolean().optional(),
     changed: z.string().optional(),
-    maxFileSize: z.number().int().positive().optional(),
-    maxTotalSize: z.number().int().positive().optional(),
-    maxFileCount: z.number().int().positive().optional(),
+    // Positivity is enforced but no longer advertised — the wire view strips
+    // value-range keywords — so each budget states its unit and that omitting it
+    // means "no cap from this field", which is not guessable from the name.
+    maxFileSize: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe("Per-file size cap in bytes; must be positive. Omit for no per-file cap."),
+    maxTotalSize: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe("Total bundle size cap in bytes; must be positive. Omit for no total cap."),
+    maxFileCount: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe(
+        "Maximum number of files to include; must be positive. Omit for no file-count cap."
+      ),
     withLineNumbers: z.boolean().optional(),
-    charLimit: z.number().int().positive().optional(),
+    charLimit: z
+      .number()
+      .int()
+      .positive()
+      .optional()
+      .describe("Character cap on the rendered bundle; must be positive. Omit for no cap."),
     // These actions validate against their own copy of the options schema, so a
     // field only the IPC schema knows about is stripped before the request ever
     // leaves the renderer. `sort` was missing here while `CopyTreeOptions` and the

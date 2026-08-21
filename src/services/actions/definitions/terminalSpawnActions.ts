@@ -262,10 +262,9 @@ export function registerTerminalSpawnActions(
     description:
       "Move a terminal panel to a different worktree. The process is never restarted: a live " +
       "agent keeps running in the directory it launched from, and its pane offers to tell it " +
-      "to continue in the destination. A panel that shares a tab group travels with the " +
-      "rest of that group, so this can relocate more than the one panel named. The move is " +
-      "reversible. Name the target explicitly — an automated caller cannot see what the " +
-      "user has focused.",
+      "to continue there. A panel sharing a tab group travels with the rest of that group, " +
+      "so this can relocate more than the panel named. The move is reversible. Name the " +
+      "target: an automated caller cannot see what the user focused.",
     category: "terminal",
     kind: "command",
     // Relabelling a panel is reversible — drag it back — and nothing here

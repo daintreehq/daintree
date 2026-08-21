@@ -62,7 +62,7 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
     id: "help.displayImage",
     title: "Display documentation image",
     description:
-      "Show a documentation image inline in the assistant panel so an answer can point at it. Use this only when an image genuinely illustrates the answer, not for decorative ones. Reference the returned figure label as plain text at the insertion point rather than as markdown image syntax, which command-line renderers strip. Figure numbers are assigned by the app in sequence and must never be chosen yourself.",
+      "Show a documentation image inline in the assistant panel so an answer can point at it. Use this only when an image genuinely illustrates the answer, not for decorative ones. Reference the returned figure label as plain text at the insertion point rather than as markdown image syntax, which command-line renderers strip. Figure numbers are assigned in sequence and must never be chosen yourself.",
     category: "help",
     kind: "command",
     danger: "safe",

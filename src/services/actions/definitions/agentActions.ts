@@ -292,7 +292,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "agent.launch",
     title: "Launch Agent",
     description:
-      "Start an AI agent in a new terminal and report where it landed, so parallel launches can be told apart without re-resolving the target. Success means the panel was created and its process is starting, not that the agent is ready — poll its state or a terminal status snapshot for that. A failure to launch may mean the agent's CLI is missing, in which case a setup diagnostic panel is opened instead. Launching consumes real resources, so keep concurrent launches modest.",
+      "Start an AI agent in a new terminal and report where it landed, so parallel launches can be told apart without re-resolving the target. Success means the panel was created and its process is starting, not that the agent is ready; poll its state or a terminal status snapshot for that. A missing CLI opens a setup diagnostic panel instead. Keep concurrent launches modest.",
     category: "agent",
     kind: "command",
     danger: "safe",
@@ -353,7 +353,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         .boolean()
         .optional()
         .describe(
-          "Keeps the terminal out of the saved session, so it does not come back after a restart. It also hides the panel from terminal listings, status snapshots and agent-state reads, and spares it from bulk close and kill — so the launching caller cannot find or poll the terminal afterwards. Use for throwaway work the user should not inherit."
+          "Keeps the terminal out of the saved session, so it does not return after a restart. It also hides the panel from listings, status snapshots and agent-state reads, and spares it from bulk close and kill, so the caller cannot find or poll it afterwards. Use for throwaway work."
         ),
       removeOnExit: z
         .boolean()
@@ -386,7 +386,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         .max(200)
         .optional()
         .describe(
-          'Always provide a short, task-descriptive name for the terminal tab (e.g. "Claude: auth refactor") so the user can tell parallel agents apart. Pins the title so agent detection cannot overwrite it. Empty/whitespace falls back to the default title.'
+          'Always provide a short, task-descriptive name for the terminal tab, at most 200 characters (e.g. "Claude: auth refactor"), so the user can tell parallel agents apart. Pins the title so agent detection cannot overwrite it. Empty/whitespace falls back to the default title.'
         ),
     }),
     // Top-level object, never `.nullable()`: `buildToolOutputSchema` (tierAuth)
@@ -832,7 +832,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "agentSessionHistory.list",
     title: "List Resumable Sessions",
     description:
-      "List closed agent sessions that can be relaunched, read from the on-disk journal. This is a faithful record of which sessions exist, not a summary of what happened in them — it carries no transcript text. It must be scoped to a worktree or project and fails rather than listing every project when no scope can be resolved. Old sessions are pruned by the journal's retention policy, so absence does not mean a session never existed.",
+      "List closed agent sessions that can be relaunched, read from the on-disk journal. This is a faithful record of which sessions exist, not a summary of what happened in them: it carries no transcript text. It must be scoped to a worktree or project and fails rather than listing every project when no scope resolves. Old sessions are pruned by retention, so absence does not prove one never existed.",
     category: "agent",
     kind: "query",
     danger: "safe",
@@ -1096,7 +1096,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "agent.listAvailable",
     title: "List Available Agents",
     description:
-      "List every registered agent — built-in, user-defined and plugin-contributed — from the authoritative registry, including ones that are not currently launchable. Use this before launching so an id is known to exist, and read each entry's launchability rather than assuming membership implies it. Those fields appear only once a live probe of each CLI finishes, and the result says so while that is incomplete.",
+      "List every registered agent, built-in, user-defined and plugin-contributed, from the authoritative registry, including ones not currently launchable. Use this before launching so an id is known to exist, and read each entry's launchability rather than assuming membership implies it. Those fields appear only once a live probe of each CLI finishes, and the result says so while that is incomplete.",
     category: "agent",
     kind: "query",
     danger: "safe",

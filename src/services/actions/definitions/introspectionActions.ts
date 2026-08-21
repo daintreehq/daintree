@@ -32,7 +32,7 @@ export function registerIntrospectionActions(
     id: "actions.list",
     title: "List Actions",
     description:
-      "Enumerate the available actions as lightweight entries, filtered by domain or substring and returned a page at a time. Use ranked search instead when looking for a capability by intent; use this when the goal is to walk a domain systematically. Entries omit argument and result schemas to stay small — fetch one action's schema before dispatching it. Ordering is stable, so paging cannot skip or repeat entries.",
+      "Enumerate the available actions as lightweight entries, filtered by domain or substring and returned a page at a time. Use ranked search instead when looking for a capability by intent; use this when walking a domain systematically. Entries omit argument and result schemas to stay small, so fetch one action's schema before dispatching. Ordering is stable, so paging cannot skip or repeat entries.",
     category: "introspection",
     kind: "query",
     danger: "safe",
@@ -288,7 +288,7 @@ export function registerIntrospectionActions(
     id: "actions.search",
     title: "Search Actions",
     description:
-      "Find actions by describing what you want to do, ranked by how well each matches. This is the discovery path: start here, then fetch the chosen action's schema before dispatching it. Use the plain listing instead when walking a domain systematically rather than searching by intent. Results omit argument and result schemas to stay small, and matching nothing returns an empty list rather than failing.",
+      "Find actions by describing what you want to do, ranked by how well each matches. This is the discovery path: start here, then fetch the chosen action's schema before dispatching it. Use the plain listing when walking a domain systematically rather than searching by intent. Results omit argument and result schemas to stay small, and matching nothing returns an empty list rather than failing.",
     category: "introspection",
     kind: "query",
     danger: "safe",

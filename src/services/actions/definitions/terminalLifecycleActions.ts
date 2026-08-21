@@ -82,7 +82,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.close",
     title: "Close Terminal",
     description:
-      "Close a panel, usually moving it to the trash where it stays briefly recoverable before its process is killed. Recovery is not universal — panels set to remove on exit, and dialog panels, are discarded outright. This is not limited to terminals. Name the panel you mean; closing the wrong one discards someone's work. An untracked panel is rejected rather than reported closed, and the result names what actually closed — already gone from the listing when an automated caller sees it.",
+      "Close a panel, usually to the trash, where it is briefly recoverable before its process is killed. Recovery is not universal: remove-on-exit and dialog panels are discarded outright. Not limited to terminals. Name the panel you mean; the wrong one discards someone's work. An untracked panel is rejected, not reported closed; the result names what closed, already gone from the listing by then.",
     category: "terminal",
     kind: "command",
     danger: "safe",
@@ -203,7 +203,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.kill",
     title: "Kill Terminal",
     description:
-      "Permanently destroy a panel and any process behind it, with no trash step and no recovery. This is not limited to terminals — whatever panel the id names is removed. A panel running an agent session is left untouched unless the call itself is marked confirmed, so read back its state rather than assuming it went. Identify it explicitly: an automated caller cannot see what the user has focused. Close it instead when recoverability matters.",
+      "Permanently destroy a panel and its process, with no trash step and no recovery. Not limited to terminals: whatever the id names is removed. A panel running an agent session is untouched unless the call is marked confirmed, so read back its state rather than assume it went. Identify it explicitly: an automated caller cannot see what the user focused. Close it instead when recovery matters.",
     category: "terminal",
     kind: "command",
     danger: "confirm",
@@ -250,7 +250,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.restart",
     title: "Restart Terminal",
     description:
-      "Begin restarting a terminal's process in place, keeping the pane. This returns before the restart has finished, so the terminal is not ready yet when it does — watch its status before sending anything. A terminal running an agent session is left untouched unless the call itself is marked confirmed; otherwise whatever was running is terminated and unsaved in-process state is lost. A panel with no process is ignored rather than reported as an error.",
+      "Restart a terminal's process in place, keeping the pane. This returns before the restart finishes, so it is not ready when it does; watch its status before sending anything. A terminal running an agent session is left untouched unless the call is marked confirmed; otherwise whatever was running is terminated and unsaved state is lost. A panel with no process is ignored, not an error.",
     category: "terminal",
     kind: "command",
     danger: "confirm",
@@ -570,7 +570,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.killAll",
     title: "Kill All Terminals",
     description:
-      "Permanently destroy every panel in the project at once — across all worktrees, of every kind, including trashed and backgrounded ones — with no trash step and no recovery. This takes the user's own shells and other agents' running work with it; only tooling-internal and dialog-hosted panels are spared. While any agent session is running it destroys nothing unless the call itself is marked confirmed. There is essentially never a reason for an automated caller to use this.",
+      "Permanently destroy every panel in the project, across all worktrees and kinds, including trashed and backgrounded, with no trash step and no recovery. It takes the user's own shells and other agents' work with it; only tooling-internal and dialog-hosted panels are spared. While an agent session runs it destroys nothing unless the call is marked confirmed. Automated callers should never need this.",
     category: "terminal",
     kind: "command",
     danger: "confirm",

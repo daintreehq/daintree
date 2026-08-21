@@ -10,7 +10,13 @@ const getConsoleMessagesArgsSchema = z
   .object({
     terminalId: z.string().optional(),
     level: z.enum(["log", "info", "warning", "error"]).optional(),
-    limit: z.number().int().positive().max(500).optional(),
+    limit: z
+      .number()
+      .int()
+      .positive()
+      .max(500)
+      .optional()
+      .describe("Maximum messages to return, newest first (max 500). Omit for all captured."),
   })
   .optional();
 

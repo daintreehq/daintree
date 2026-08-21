@@ -67,7 +67,7 @@ const selectorField = (description: string) => z.string().min(1).optional().desc
  * so a literal `worktree.list` here refers to a name the model never sees.
  */
 const worktreeIdField = selectorField(
-  "Identifies the worktree to act on, using an id from the worktree-listing capability. Omit this and the path to target the active worktree; the call fails when neither is given and no worktree is active."
+  "The worktree to act on, by id from the worktree-listing capability. Omit this and the path to target the active worktree, which fails when none is active."
 );
 
 /**
@@ -78,15 +78,19 @@ const worktreeIdField = selectorField(
  * description, so emitting the fallback text here contradicted it on the wire.
  */
 const worktreeIdRequiredField = selectorField(
-  "Identifies the worktree to act on, using an id from the worktree-listing capability. This action has no active-worktree fallback: supply this or the path, or the call is rejected."
+  "The worktree to act on, by id from the worktree-listing capability. No active-worktree fallback here: supply this or the path, or the call is rejected."
 );
 
 const worktreePathField = selectorField(
-  "Identifies the worktree to act on by absolute root path, as an alternative to its id. The id wins when both are given, and the path is used as given — it is never silently replaced by the active worktree."
+  "The worktree to act on, by absolute root path, as an alternative to its id. The id wins when both are given; the path is never swapped for the active one."
 );
 
+// The trailing qualifier is load-bearing, not hedging: `resolveProjectLocation`
+// rejects an unknown id only when the project index can prove it unknown, and
+// falls back to the context project when the index is unavailable. Dropping it
+// would make this text claim a guarantee the resolver does not give.
 const projectIdField = selectorField(
-  "Identifies the project to act on, using an id from the project-listing capability. Omit this and the path to target the active project; an id naming no open project is rejected rather than silently retargeted, as long as the set of open projects is known."
+  "The project to act on, by id from the project-listing capability. Omit this and the path for the active project; an unknown id is rejected rather than retargeted, as long as the open-project set is known."
 );
 
 const projectPathField = selectorField(

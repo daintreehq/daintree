@@ -146,7 +146,7 @@ const copyTreeRunNameField = z
   .string()
   .optional()
   .describe(
-    "Short human-readable label for this copy tree, shown in the user's copy-tree history and in the completion notification. Use 2 to 4 words describing what the context is for, for example 'auth flow context'. Omit it and the notification stays unlabelled, while the history entry keeps the label it already has or, if this selection is new, one derived from it."
+    "Short human-readable label for this copy tree, shown in the user's copy-tree history and in the completion notification. Use 2 to 4 words, for example 'auth flow context'. Omitted, the notification is unlabelled and the history entry keeps or derives its own label."
   );
 
 /**
@@ -285,7 +285,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       id: "system.getResourceProfileSnapshot",
       title: "Get Resource Profile Snapshot",
       description:
-        "Read how much pressure the host machine is under and which adaptive performance mode is in effect. Use this to judge whether there is headroom before launching more agents or heavy work. Some readings are platform-specific and report as unknown elsewhere. It never fails — while the service is still starting it returns a neutral baseline, so treat an unremarkable reading early in a session with some caution.",
+        "Read how much pressure the host machine is under and which adaptive performance mode is in effect. Use this to judge whether there is headroom before launching more agents or heavy work. Some readings are platform-specific and report as unknown elsewhere. It never fails: while the service is starting it returns a neutral baseline, so treat an unremarkable early reading with caution.",
       category: "system",
       kind: "query",
       danger: "safe",
@@ -466,7 +466,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       id: "copyTree.generate",
       title: "Generate CopyTree Context",
       description:
-        "Bundle a worktree's file tree and selected file contents into a context dump written to a temporary file, and return its path. Use this to hand a large codebase context to something that can read a file; inject directly into a terminal instead when the target is an agent. The bundle routinely runs to tens of megabytes and is never returned inline. Check the budget flags before trusting it as complete, and read the file promptly — it is pruned by age.",
+        "Bundle a worktree's file tree and selected file contents into a context dump on disk, and return its path. Use it to hand a large codebase context to something that can read a file; inject into a terminal when the target is an agent. The bundle routinely runs to tens of megabytes and is never returned inline. Check the budget flags before trusting it, and read it promptly: it is pruned by age.",
       category: "copyTree",
       kind: "query",
       danger: "safe",
@@ -595,7 +595,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       id: "copyTree.generateAndCopyFile",
       title: "Generate And Copy Context",
       description:
-        "Bundle a worktree's context to a file and put it on the system clipboard, replacing what the user had copied. Selection can mix exact files with globs, so this assembles a curated bundle of scattered related files, their supporting code and tests, rather than the whole worktree. Agent and MCP callers must name the worktree instead of relying on whichever is active. macOS and Linux copy the file, Windows its path. Never returned inline; check the budget flags for completeness.",
+        "Bundle a worktree's context to a file and onto the system clipboard, replacing what the user had copied. Selection mixes exact files with globs, so this assembles a curated bundle rather than the whole worktree. Agent and MCP callers must name the worktree, not rely on the active one. macOS and Linux copy the file, Windows its path. Never returned inline; check the budget flags for completeness.",
       category: "copyTree",
       kind: "command",
       danger: "safe",
