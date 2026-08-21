@@ -10,6 +10,8 @@ import { getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import type { AddPanelOptions } from "@shared/types/addPanelOptions";
 import type { AgentSessionRecord } from "@shared/types/ipc/agentSessionHistory";
 import { useAgentSettingsStore } from "@/store/agentSettingsStore";
+import { usePanelStore } from "@/store/panelStore";
+import { isPtyPanel } from "@shared/types/panel";
 
 /**
  * Reconciles a resumed session's persisted launch flags against the current
@@ -90,4 +92,128 @@ export function buildResumePanelOptions(
     location: "grid",
     agentSessionId: session.sessionId,
   };
+}
+
+/**
+ * Message shown when a record cannot be turned into a resume launch — either it
+ * is malformed or its agent has no buildable resume command. Shared so the
+ * human surface (a toast) and the deterministic action (a thrown tool error)
+ * say the same thing about the same failure.
+ */
+export const RESUME_UNAVAILABLE_MESSAGE =
+  "Couldn't resume this session — its agent may no longer support resuming.";
+
+/** What {@link resumeSessionIntoPanel} did, for callers that must report it. */
+export interface ResumeSessionOutcome {
+  /** The panel now carrying the session — newly spawned or already live. */
+  terminalId: string;
+  /** Whether a pane was spawned or an existing one was brought to the front. */
+  outcome: "created" | "activatedExisting";
+  /** The worktree the pane belongs to, `null` for an unscoped record. */
+  worktreeId: string | null;
+}
+
+/**
+ * In-flight resumes keyed by `${sessionId}::${worktreeId ?? ""}`.
+ *
+ * Records are non-destructive, so two dispatches that both pass the live-pane
+ * scan would each spawn a terminal against ONE provider transcript. The scan
+ * alone cannot prevent that: `addPanel` is async, and the second caller runs its
+ * scan inside the first one's await window, before any panel exists to find.
+ *
+ * A `Map` of promises rather than a `Set` of keys because this is now shared
+ * with a caller that must RETURN the resumed terminal id: a second dispatch
+ * awaits the first one's result and reports the same pane, instead of silently
+ * doing nothing and leaving an MCP caller with no id. Module-scoped — one
+ * instance per project view, mirroring `reopenJournalInFlight` in
+ * terminal.reopenLast.
+ */
+const inFlightResumes = new Map<string, Promise<ResumeSessionOutcome>>();
+
+/**
+ * The id of a live pane already resuming `sessionId` in `worktreeId`, if any.
+ *
+ * Scoped by worktree as well as session so a pane moved to another worktree
+ * can't answer for this one. Trashed panels are pending cleanup and dialog
+ * panels are ephemeral modal content — neither is a pane the caller can be
+ * handed. Background panels ARE eligible: a hibernated mirror still owns the
+ * transcript, so spawning a second resume beside it is the duplicate this
+ * guards against.
+ */
+export function findLiveResumePanelId(
+  sessionId: string,
+  worktreeId: string | null | undefined
+): string | null {
+  const panelStore = usePanelStore.getState();
+  const found = panelStore.panelIds.find((id) => {
+    const panel = panelStore.panelsById[id];
+    return (
+      panel !== undefined &&
+      isPtyPanel(panel) &&
+      panel.location !== "trash" &&
+      panel.location !== "dialog" &&
+      panel.agentSessionId === sessionId &&
+      (panel.worktreeId ?? null) === (worktreeId ?? null)
+    );
+  });
+  return found ?? null;
+}
+
+/**
+ * Focus the pane already resuming this session, or spawn one that does.
+ *
+ * The single implementation behind BOTH resume surfaces — the human palette
+ * hook and the deterministic `agentSessionHistory.resume` action. They must not
+ * drift: if one treated a pane location as reusable and the other didn't, the
+ * same session would focus from one entry point and duplicate from the other,
+ * putting two live agents on one provider transcript.
+ *
+ * `onBeforeSpawn` runs only on the spawning path, inside the in-flight guard and
+ * before `addPanel`. That ordering is load-bearing for the human surface, which
+ * uses it to switch to the session's own worktree first — `addPanel` backgrounds
+ * a grid panel whose worktree differs from the active one, so switching
+ * afterwards would leave the pane off-screen. Agent callers deliberately pass
+ * nothing, keeping an assistant-driven resume from yanking the user's view.
+ *
+ * @throws when the record has no buildable resume command
+ *   ({@link RESUME_UNAVAILABLE_MESSAGE}), or when the panel is gone by the time
+ *   `addPanel` settles. Never resolves with a fabricated id.
+ */
+export async function resumeSessionIntoPanel(
+  session: AgentSessionRecord,
+  target: { cwd: string; worktreeId?: string },
+  options: { onBeforeSpawn?: () => void } = {}
+): Promise<ResumeSessionOutcome> {
+  const worktreeId = target.worktreeId ?? null;
+
+  const existingId = findLiveResumePanelId(session.sessionId, worktreeId);
+  if (existingId) {
+    usePanelStore.getState().activateTerminal(existingId);
+    return { terminalId: existingId, outcome: "activatedExisting", worktreeId };
+  }
+
+  const inFlightKey = `${session.sessionId}::${target.worktreeId ?? ""}`;
+  const pending = inFlightResumes.get(inFlightKey);
+  if (pending) return pending;
+
+  const run = (async (): Promise<ResumeSessionOutcome> => {
+    options.onBeforeSpawn?.();
+    const panelOptions = buildResumePanelOptions(session, target);
+    if (!panelOptions) throw new Error(RESUME_UNAVAILABLE_MESSAGE);
+    const terminalId = await usePanelStore.getState().addPanel(panelOptions);
+    // `addPanel` resolves null when the panel was removed during its async tail
+    // (a PTY prewarm await, a project switch, an explicit removePanel). There is
+    // no pane to hand back, so fail rather than report a success with no id.
+    if (!terminalId) {
+      throw new Error("Resume started but its terminal was closed before it finished opening.");
+    }
+    return { terminalId, outcome: "created", worktreeId };
+  })();
+
+  inFlightResumes.set(inFlightKey, run);
+  try {
+    return await run;
+  } finally {
+    inFlightResumes.delete(inFlightKey);
+  }
 }

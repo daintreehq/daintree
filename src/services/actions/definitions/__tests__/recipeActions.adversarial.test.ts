@@ -1,4 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { z } from "zod";
 import type { ActionCallbacks, ActionRegistry, AnyActionDefinition } from "../../actionTypes";
 
 const recipeStoreMock = vi.hoisted(() => ({
@@ -40,6 +41,14 @@ function setupActions(): (
     const def = factory() as AnyActionDefinition;
     return def.run(args, (ctx ?? {}) as never);
   };
+}
+
+function definitionFor(id: string): AnyActionDefinition {
+  const actions: ActionRegistry = new Map();
+  registerRecipeActions(actions, {} as unknown as ActionCallbacks);
+  const factory = actions.get(id);
+  if (!factory) throw new Error(`missing ${id}`);
+  return factory() as AnyActionDefinition;
 }
 
 const dispatchSpy = vi.fn<(event: Event) => boolean>(() => true);
@@ -386,24 +395,153 @@ describe("recipeActions adversarial", () => {
   });
 
   it("recipe.editor.open dispatches with exact detail payload", async () => {
-    setRecipeState({});
+    setRecipeState({ recipes: [{ id: "r1", worktreeId: "wt-a", terminals: [] }] });
 
     const run = setupActions();
-    await run("recipe.editor.open", {
-      worktreeId: "wt-a",
-      recipeId: "r1",
-      initialTerminals: [{ title: "x" }],
-    });
+    await run("recipe.editor.open", { worktreeId: "wt-a", recipeId: "r1" });
 
     const event = dispatchSpy.mock.calls[0]![0] as unknown as {
       type: string;
-      detail: { worktreeId: string; recipeId: string; initialTerminals: unknown };
+      detail: { worktreeId: string; recipeId: string };
     };
     expect(event.type).toBe("daintree:open-recipe-editor");
-    expect(event.detail).toEqual({
-      worktreeId: "wt-a",
-      recipeId: "r1",
-      initialTerminals: [{ title: "x" }],
+    expect(event.detail).toEqual({ worktreeId: "wt-a", recipeId: "r1" });
+  });
+
+  // #11908 — these two are on the assistant's action tier, so their result is a
+  // model-facing claim. The editor's own listener silently returns when it gets
+  // no usable worktree, which is exactly the case a naive `opened: true` would
+  // misreport.
+  describe("recipe editor handoff results (#11908)", () => {
+    it("reports a blank draft opened for the named worktree", async () => {
+      setRecipeState({});
+
+      const run = setupActions();
+      const result = await run("recipe.editor.open", { worktreeId: "wt-a" });
+
+      expect(result).toEqual({
+        opened: true,
+        mode: "blankDraft",
+        worktreeId: "wt-a",
+        recipeId: null,
+        terminalCount: 0,
+      });
+    });
+
+    it("reports loading an existing recipe, with its own worktree and pane count", async () => {
+      setRecipeState({
+        recipes: [
+          { id: "r1", worktreeId: "wt-b", terminals: [{ type: "terminal" }, { type: "claude" }] },
+        ],
+      });
+
+      const run = setupActions();
+      const result = await run("recipe.editor.open", { worktreeId: "wt-a", recipeId: "r1" });
+
+      expect(result).toEqual({
+        opened: true,
+        mode: "existingRecipe",
+        worktreeId: "wt-b",
+        recipeId: "r1",
+        terminalCount: 2,
+      });
+    });
+
+    it("falls back to the dispatch context's worktree when none is named", async () => {
+      setRecipeState({});
+
+      const run = setupActions();
+      const result = await run("recipe.editor.open", {}, { activeWorktreeId: "wt-ctx" });
+
+      expect(result).toMatchObject({ worktreeId: "wt-ctx" });
+      const event = dispatchSpy.mock.calls[0]![0] as unknown as {
+        detail: { worktreeId: string };
+      };
+      expect(event.detail.worktreeId).toBe("wt-ctx");
+    });
+
+    it("throws instead of claiming an editor opened that the listener would drop", async () => {
+      setRecipeState({});
+
+      const run = setupActions();
+
+      await expect(run("recipe.editor.open", {})).rejects.toThrow(/No worktree/i);
+      expect(dispatchSpy).not.toHaveBeenCalled();
+    });
+
+    it("reports the captured pane count from a live layout", async () => {
+      setRecipeState({
+        generateRecipeFromActiveTerminals: vi.fn(() => [{ type: "terminal" }, { type: "claude" }]),
+      });
+
+      const run = setupActions();
+      const result = await run("recipe.editor.openFromLayout", { worktreeId: "wt-a" });
+
+      expect(result).toEqual({
+        opened: true,
+        mode: "fromLayout",
+        worktreeId: "wt-a",
+        recipeId: null,
+        terminalCount: 2,
+      });
+    });
+
+    it("never reports a save — neither handoff writes a recipe", async () => {
+      const saveToRepo = vi.fn().mockResolvedValue(undefined);
+      const deleteRecipe = vi.fn().mockResolvedValue(undefined);
+      setRecipeState({
+        saveToRepo,
+        deleteRecipe,
+        generateRecipeFromActiveTerminals: vi.fn(() => [{ type: "terminal" }]),
+      });
+
+      const run = setupActions();
+      const blank = await run("recipe.editor.open", { worktreeId: "wt-a" });
+      const layout = await run("recipe.editor.openFromLayout", { worktreeId: "wt-a" });
+
+      for (const result of [blank, layout]) {
+        expect(Object.keys(result as object)).not.toContain("saved");
+        expect(Object.keys(result as object)).not.toContain("recipeSaved");
+      }
+      // The write half stays off every tier, so there is no save to report.
+      expect(saveToRepo).not.toHaveBeenCalled();
+      expect(deleteRecipe).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("recipe editor argument schema (#11908)", () => {
+    it("rejects a blank selector rather than treating it as absent", () => {
+      const def = definitionFor("recipe.editor.open");
+
+      expect(def.argsSchema?.safeParse({ worktreeId: "" }).success).toBe(false);
+      expect(def.argsSchema?.safeParse({ worktreeId: "wt-a", recipeId: "" }).success).toBe(false);
+    });
+
+    it("advertises only the two selectors, not a hand-authored terminal list", () => {
+      // `initialTerminals` was dropped when these went on the tool surface: it
+      // had no caller, and typing it meant 1.8 KB of nested schema on a tool
+      // that opens a window. Capturing real panes is openFromLayout's job.
+      const def = definitionFor("recipe.editor.open");
+      const json = def.argsSchema
+        ? (z.toJSONSchema(def.argsSchema, { io: "input" }) as {
+            properties?: Record<string, unknown>;
+          })
+        : undefined;
+
+      expect(Object.keys(json?.properties ?? {}).sort()).toEqual(["recipeId", "worktreeId"]);
+    });
+
+    it("advertises a structured result over MCP for both handoffs", () => {
+      for (const id of ["recipe.editor.open", "recipe.editor.openFromLayout"]) {
+        const def = definitionFor(id);
+        expect(def.mcpOutputSchema).toBe(true);
+        // A non-object top level emits no outputSchema, so structuredContent
+        // would silently never populate (#11547).
+        const json = def.resultSchema
+          ? z.toJSONSchema(def.resultSchema, { io: "output" })
+          : undefined;
+        expect(json?.["type"]).toBe("object");
+      }
     });
   });
 

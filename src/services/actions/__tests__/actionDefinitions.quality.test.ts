@@ -306,7 +306,12 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // payloads that exist: what a third-party client is sent, and the largest
   // set the in-app assistant can be sent.
   const MAX_EXTERNAL_TOTAL_BYTES = 9_600;
-  const MAX_COHORT_TOTAL_BYTES = 48_000;
+  // Raised from 48_000 by #11908, which put seven tools on the in-app surface
+  // (a deterministic session resume, the four bookmark mutations, and the two
+  // recipe-editor handoffs). Each sits under the 400 B per-description ceiling
+  // in `mcpWireBudget.test.ts`; the total simply reflects seven more of them.
+  // The external half is untouched — none of the seven is externally advertised.
+  const MAX_COHORT_TOTAL_BYTES = 50_400;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 
