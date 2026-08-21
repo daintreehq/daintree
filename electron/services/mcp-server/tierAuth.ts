@@ -5,13 +5,15 @@ import { toWireSchema } from "../../../shared/utils/mcpWireSchema.js";
 import type { ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 import { mcpPaneConfigService } from "../McpPaneConfigService.js";
 import type { HelpTokenValidator } from "./shared.js";
-import { type McpTier, TIER_ALLOWLISTS } from "./shared.js";
+import { type McpTier, TIER_ALLOWLISTS, minimumPermittingTier } from "./shared.js";
 import {
   ACTIONS_LIST_DEFAULT_LIMIT,
   ACTIONS_LIST_MAX_LIMIT,
   ACTIONS_SEARCH_DEFAULT_LIMIT,
   ACTIONS_SEARCH_MAX_LIMIT,
 } from "../../../shared/config/mcpIntrospection.js";
+import { canonicalJson, toCompatibilityShape } from "./compatibilityHash.js";
+import type { McpTargetPolicy, McpTargetTier } from "../../../shared/types/mcpTargetPolicy.js";
 
 export { deriveBand, BAND_OVERRIDES };
 
@@ -293,6 +295,204 @@ function isIntrospectableForSession(
 }
 
 /**
+ * Shape version of the `actions.getSchema` policy record (#11910). Bump by hand
+ * when a field is added, removed, or given new meaning — never for a change in
+ * what one target's policy evaluates to, which is what the per-target hash is
+ * for.
+ *
+ * Lives here rather than beside the payload types in `shared/` for the same
+ * reason {@link MCP_SURFACE_MANIFEST_VERSION} does: main is the only process
+ * that stamps it, so the shared module stays a type-only import from here and
+ * its `zod` value import never becomes an eager edge on main's boot path.
+ */
+export const MCP_TARGET_POLICY_VERSION = 1;
+
+/**
+ * The session facts a target policy is evaluated against, captured once at
+ * dispatch start so every field of one record describes the same instant.
+ *
+ * Passed in rather than read here so this module stays pure and testable
+ * without a session store, matching {@link filterIntrospectionResultForSession}.
+ */
+export interface TargetPolicySessionSnapshot {
+  /** The tier the session was admitted at. */
+  tier: McpTier;
+  /**
+   * Whether this session's ORIGIN can hold grants at all —
+   * `sessionStore.isRendererOwnedOrigin`.
+   *
+   * Not derivable from {@link tier}, which is why it is threaded rather than
+   * inferred. `resolveTokenTier` falls back to `workbench` for any bearer token
+   * it does not recognise, while `getOrigin` defaults an unknown session to
+   * `external`, so a session can hold a ladder tier and a non-renderer origin at
+   * once. Grant issuance gates on the origin (`issueGrant` /
+   * `issueNativeGrant` both refuse a session that is not renderer-owned), so
+   * reporting grantability off the tier would promise an api-key client an
+   * approval flow it can never reach.
+   */
+  rendererOwnedOrigin: boolean;
+  /** Live per-tool grants, from the non-evicting snapshot. */
+  perToolGrantedActionIds: ReadonlySet<string>;
+  /** Live native automation grants' `allowedTools`, unioned. */
+  nativeGrantedActionIds: ReadonlySet<string>;
+}
+
+/** The `recipeId` argument that elevates a safe dispatch to confirm (#11860). */
+const RECIPE_ID_ARG = "recipeId";
+
+/**
+ * Whether this target's own arguments can raise it from `safe` to
+ * confirmation-gated.
+ *
+ * Read off the declared input schema rather than an action allowlist, mirroring
+ * `resolveEffectiveActionDanger`, which keys the elevation on the ARGUMENT for
+ * exactly that reason: an allowlist would need updating for every future
+ * composite and would silently under-gate the one someone forgets. A target that
+ * cannot accept a `recipeId` can never be elevated by one.
+ */
+function acceptsRecipeId(inputSchema: unknown): boolean {
+  if (inputSchema === null || typeof inputSchema !== "object" || Array.isArray(inputSchema)) {
+    return false;
+  }
+  const properties = (inputSchema as { properties?: unknown }).properties;
+  if (properties === null || typeof properties !== "object" || Array.isArray(properties)) {
+    return false;
+  }
+  return RECIPE_ID_ARG in (properties as Record<string, unknown>);
+}
+
+/**
+ * The authoritative policy record for one already-authorized target (#11910).
+ *
+ * Returns `null` — never a partial record — for anything it cannot describe
+ * truthfully: a malformed entry, a danger outside the two callable values, or a
+ * target whose tier membership it cannot establish. The caller collapses that
+ * onto the same `NOT_FOUND` an unknown id returns, so missing or malformed
+ * policy metadata fails closed rather than shipping a record a client would
+ * trust.
+ *
+ * Only ever called for an id that has already passed
+ * {@link isIntrospectableForSession}, so `null` here is a fail-closed backstop
+ * rather than the ordinary denial path.
+ */
+export function buildTargetPolicy(
+  entry: unknown,
+  snapshot: TargetPolicySessionSnapshot
+): McpTargetPolicy | null {
+  const id = readEntryId(entry);
+  if (id === null) return null;
+  const record = entry as Partial<ActionManifestEntry>;
+
+  // `restricted` and `hidden` are already refused upstream; re-checking here
+  // keeps this function safe to call on its own and makes the fail-closed
+  // contract local rather than inherited.
+  if (record.mcpVisibility === "hidden") return null;
+  const danger = record.danger;
+  if (danger !== "safe" && danger !== "confirm") return null;
+  const kind = record.kind;
+  if (kind !== "command" && kind !== "query") return null;
+
+  // Grants only count where the origin can hold them. In practice an external
+  // session never has any — both issuance paths refuse a non-renderer-owned
+  // origin — so this is belt-and-braces against a stale entry outliving the
+  // origin that minted it, and it keeps the reported authorization identical to
+  // the one the dispatch gate would reach.
+  const grantsReachable = snapshot.rendererOwnedOrigin;
+  const perToolGranted = grantsReachable && snapshot.perToolGrantedActionIds.has(id);
+  const nativeGranted = grantsReachable && snapshot.nativeGrantedActionIds.has(id);
+
+  // The caller's own ladder, never a rung it cannot climb. An external
+  // allowlist is a flat peer of the in-app ladder, so `minimumPermittingTier` —
+  // which answers "how far would an in-app session have to elevate" — reports
+  // either a rung this caller can never reach or nothing at all for a tool that
+  // is external-only.
+  const minimumTier: McpTargetTier | null =
+    snapshot.tier === "external"
+      ? TIER_ALLOWLISTS.external.has(id)
+        ? "external"
+        : null
+      : minimumPermittingTier(id);
+  // A ladder target with no permitting tier cannot be described honestly, and
+  // cannot legitimately be granted either: both issuance paths refuse a tool
+  // `minimumPermittingTier` does not place. Fail closed.
+  if (minimumTier === null) return null;
+
+  // Resolved in the dispatch gate's own order — static floor, then per-tool
+  // grant, then native grant — so a client reading this learns which mechanism
+  // would actually admit its next call, and therefore whether that access can
+  // lapse.
+  const authorizedBy = TIER_ALLOWLISTS[snapshot.tier].has(id)
+    ? "tier"
+    : perToolGranted
+      ? "grant"
+      : nativeGranted
+        ? "nativeGrant"
+        : null;
+  if (authorizedBy === null) return null;
+
+  const callable = record.enabled !== false;
+  const annotations = buildAnnotations(record as ActionManifestEntry);
+  const confirmationMayEscalate = danger === "safe" && acceptsRecipeId(record.inputSchema);
+
+  // The digest covers only what a caller's own code is built against. Live
+  // session state is deliberately absent: `callable`, `effectiveTier`,
+  // `requiresConfirmation`, `authorizedBy` and `grantable` all move as grants
+  // come and go, and a hash that flapped on a timer would describe a target no
+  // lookup ever returned. `grantable` is additionally redundant — it is fully
+  // determined by `minimumTier` plus the caller's own class.
+  //
+  // Descriptions are excluded here and inside the schemas, matching
+  // `buildSurfaceManifest`: they are model-facing prose that is reworded often,
+  // and a compatibility check that cried drift on every wording edit is one
+  // clients would learn to ignore.
+  const hash = createHash("sha256")
+    .update(
+      canonicalJson({
+        policyVersion: MCP_TARGET_POLICY_VERSION,
+        id,
+        kind,
+        minimumTier,
+        danger,
+        confirmationMayEscalate,
+        dynamicInvocation: "allowed",
+        preferredTool: null,
+        readOnlyHint: annotations.readOnlyHint ?? null,
+        idempotentHint: annotations.idempotentHint ?? null,
+        destructiveHint: annotations.destructiveHint ?? null,
+        openWorldHint: annotations.openWorldHint ?? null,
+        deprecated: record.deprecated ?? null,
+        inputSchema: toCompatibilityShape(record.inputSchema ?? null),
+        outputSchema: toCompatibilityShape(
+          buildToolOutputSchema(record as ActionManifestEntry) ?? null
+        ),
+      })
+    )
+    .digest("hex");
+
+  return {
+    version: MCP_TARGET_POLICY_VERSION,
+    hash,
+    callable,
+    unavailableReason: callable ? null : "DISABLED",
+    minimumTier,
+    effectiveTier: snapshot.tier,
+    danger,
+    // A native grant is an explicit user approval of the tool's scope, so it
+    // pre-authorises the modal (`dispatchConfirmed` in `sessionServer`). A
+    // per-tool grant only widens the floor and never bypasses confirmation.
+    requiresConfirmation: danger === "confirm" && !nativeGranted,
+    confirmationMayEscalate,
+    // Exactly the two checks `issueGrant` enforces, minus the runtime
+    // caller-pin: the origin must be able to hold a grant, and the tool must be
+    // one some non-external tier already permits.
+    grantable: grantsReachable && minimumPermittingTier(id) !== null,
+    authorizedBy,
+    dynamicInvocation: "allowed",
+    preferredTool: null,
+  };
+}
+
+/**
  * Narrow an introspection tool's result to the ids the calling session can
  * actually dispatch. Pure: takes one immutable permission snapshot, returns a
  * new payload, and never reads the session store or the grant cache.
@@ -309,6 +509,14 @@ export function filterIntrospectionResultForSession(
     callerLimit: number;
     requestedActionId?: string;
     listPaging?: { offset: number; limit: number };
+    /**
+     * The session facts `actions.getSchema`'s policy record is built from
+     * (#11910). Absent means no policy can be built, and a schema read without
+     * one collapses to `NOT_FOUND` — the same fail-closed direction a malformed
+     * entry takes, so a caller can never receive an entry whose policy is
+     * silently missing.
+     */
+    policySnapshot?: TargetPolicySessionSnapshot;
   }
 ): ActionDispatchResult {
   if (!result.ok) return result;
@@ -382,7 +590,17 @@ export function filterIntrospectionResultForSession(
       requestedId !== undefined &&
       readEntryId(payload.entry) === requestedId;
     if (answersTheRequest && isIntrospectableForSession(payload.entry, permittedActionIds)) {
-      return { ok: true, result: { ok: true, entry: payload.entry } };
+      // The renderer has no session, tier, or grant state, so it returns
+      // `policy: null` and main substitutes the real record here — the same
+      // rebuild-from-scratch point that strips any sibling key the renderer
+      // attached. A snapshot that cannot produce a policy denies the read
+      // rather than returning an entry a client would treat as unrestricted.
+      const policy = options.policySnapshot
+        ? buildTargetPolicy(payload.entry, options.policySnapshot)
+        : null;
+      if (policy !== null) {
+        return { ok: true, result: { ok: true, entry: payload.entry, policy, error: null } };
+      }
     }
     // Collapse onto the shape the renderer already returns for an unknown,
     // hidden, or restricted id rather than minting a tier-specific error: a
@@ -390,10 +608,16 @@ export function filterIntrospectionResultForSession(
     // reach it (grants are issued off a denied *dispatch*, not a schema read).
     // The renderer's own denial is rebuilt rather than forwarded, so the
     // message can only ever name the id the caller asked about.
+    //
+    // `entry` and `policy` are present-and-null rather than absent, matching
+    // the renderer's own denial: one shape for both branches means a client
+    // reads `ok` rather than probing for which keys arrived.
     return {
       ok: true,
       result: {
         ok: false,
+        entry: null,
+        policy: null,
         error: {
           code: "NOT_FOUND",
           message: `No action found with id "${requestedId ?? "unknown"}". Use actions.search to find available actions.`,

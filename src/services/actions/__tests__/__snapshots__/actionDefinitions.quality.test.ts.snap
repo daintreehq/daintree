@@ -42,7 +42,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "introspection",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Fetch one action's full manifest entry, including the exact arguments it accepts and the shape it returns. Use this after finding a candidate by search or listing, before dispatching it, so the arguments are known rather than guessed. An unknown, hidden or restricted id comes back as a structured failure in the result rather than as a thrown error.",
+    "description": "Fetch one action's full manifest entry — the exact arguments it accepts, the shape it returns, and a policy record saying whether this session can call it, at which tier, and whether confirmation applies. Use it after finding a candidate by search or listing, before dispatching. An unknown, hidden or restricted id comes back as a structured failure rather than a thrown error.",
     "examples": [
       {
         "args": {

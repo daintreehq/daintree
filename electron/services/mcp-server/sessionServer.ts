@@ -77,6 +77,7 @@ import {
   buildStructuredContent,
   parseToolArguments,
   filterIntrospectionResultForSession,
+  type TargetPolicySessionSnapshot,
   getTierPermittedActionIds,
   readSearchLimit,
   readListPaging,
@@ -582,18 +583,40 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // would delete expired entries and push spurious `grant.expired` lifecycle
     // events on every discovery call.
     const introspectionSurface = INTROSPECTION_TOOL_IDS.has(actionId)
-      ? {
-          permittedActionIds: new Set<string>([
-            ...getTierPermittedActionIds(tier),
-            ...sessionStore.grantCache.getLiveGrants(sessionId).map((grant) => grant.toolId),
-            ...sessionStore.grantCache
+      ? (() => {
+          // Snapshotted once and reused for both the permitted set and the
+          // policy record (#11910), so the surface a lookup is filtered against
+          // and the authorization it reports can never describe two different
+          // instants.
+          const perToolGrantedActionIds = new Set<string>(
+            sessionStore.grantCache.getLiveGrants(sessionId).map((grant) => grant.toolId)
+          );
+          const nativeGrantedActionIds = new Set<string>(
+            sessionStore.grantCache
               .getLiveNativeGrants(sessionId)
-              .flatMap((grant) => [...grant.allowedTools]),
-          ]),
-          callerLimit: searchLimit ?? ACTIONS_SEARCH_DEFAULT_LIMIT,
-          requestedActionId: readRequestedActionId(args),
-          ...(listPaging ? { listPaging } : {}),
-        }
+              .flatMap((grant) => [...grant.allowedTools])
+          );
+          return {
+            permittedActionIds: new Set<string>([
+              ...getTierPermittedActionIds(tier),
+              ...perToolGrantedActionIds,
+              ...nativeGrantedActionIds,
+            ]),
+            callerLimit: searchLimit ?? ACTIONS_SEARCH_DEFAULT_LIMIT,
+            requestedActionId: readRequestedActionId(args),
+            ...(listPaging ? { listPaging } : {}),
+            policySnapshot: {
+              tier,
+              // Asked of the ORIGIN, never inferred from the tier: an
+              // unrecognised bearer token resolves to `workbench` while its
+              // origin still defaults to `external`, and grant issuance gates
+              // on the origin.
+              rendererOwnedOrigin: sessionStore.isRendererOwnedOrigin(sessionId),
+              perToolGrantedActionIds,
+              nativeGrantedActionIds,
+            } satisfies TargetPolicySessionSnapshot,
+          };
+        })()
       : null;
     // `actions.search` ranks and slices in the renderer, before main can see
     // tier. Over-fetching the schema's maximum page makes that slice the

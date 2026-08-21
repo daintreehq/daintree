@@ -60,12 +60,20 @@ function fakeSessionStore(
   // eviction via the optional `now` clock when they need to assert
   // expiry, and they call dispose() at teardown.
   const grantCache = new GrantCache({ sweepIntervalMs: 0 });
+  // Derived from `sessionOriginMap` exactly as the real store derives it, so a
+  // test that seeds an origin gets the grant-eligibility answer the shipped
+  // code would give rather than a hard-coded one (#11910).
+  const sessionOriginMap = new Map<string, string>();
   const store = {
     sessions: new Map(),
     httpSessions: new Map(),
     sessionTierMap: new Map(),
     sessionWebContentsMap: new Map(),
-    sessionOriginMap: new Map(),
+    sessionOriginMap,
+    isRendererOwnedOrigin: vi.fn((sessionId: string) => {
+      const origin = sessionOriginMap.get(sessionId) ?? "external";
+      return origin === "help" || origin === "assistant-pane";
+    }),
     sessionWorkspaceMap: new Map(),
     resourceSubscriptions: new Map(),
     dedupInFlight: new Map(),
@@ -3835,6 +3843,125 @@ describe("sessionServer introspection tier filtering", () => {
     const body = payload<{ totalMatches: number; results: ActionManifestEntry[] }>(res);
     expect(body.results.map((r) => r.id)).toEqual(["terminal.list"]);
     expect(body.totalMatches).toBe(1);
+  });
+
+  describe("actions.getSchema policy record (#11910)", () => {
+    interface GetSchemaBody {
+      ok: boolean;
+      entry: ActionManifestEntry | null;
+      policy: Record<string, unknown> | null;
+      error: { code: string; message: string } | null;
+    }
+
+    function schemaDeps(
+      tier: "workbench" | "action" | "system" | "external",
+      target: ActionManifestEntry,
+      overrides?: Partial<SessionServerDeps>
+    ) {
+      // The renderer's real return shape: it fills `entry` and leaves `policy`
+      // for main, which is the substitution under test.
+      return introspectionDeps(
+        tier,
+        { ok: true, entry: target, policy: null, error: null },
+        overrides
+      );
+    }
+
+    async function lookup(
+      deps: SessionServerDeps,
+      actionId: string,
+      sessionId = "s1"
+    ): Promise<GetSchemaBody> {
+      const server = createSessionServer(sessionId, deps);
+      const res = await callTool(server, {
+        name: ACTIONS_GET_SCHEMA_TOOL_ID,
+        arguments: { actionId },
+      });
+      return payload<GetSchemaBody>(res);
+    }
+
+    it("substitutes a real policy for the renderer's null placeholder", async () => {
+      const deps = schemaDeps("workbench", entry("terminal.list"));
+      const body = await lookup(deps, "terminal.list");
+
+      expect(body.ok).toBe(true);
+      expect(body.entry).not.toBeNull();
+      expect(body.error).toBeNull();
+      expect(body.policy).toMatchObject({
+        callable: true,
+        unavailableReason: null,
+        authorizedBy: "tier",
+        effectiveTier: "workbench",
+        minimumTier: "workbench",
+        danger: "safe",
+        requiresConfirmation: false,
+        dynamicInvocation: "allowed",
+        preferredTool: null,
+      });
+    });
+
+    // The origin is what grant issuance gates on, and a session that never
+    // declared one defaults to `external` — so the honest answer for it is that
+    // no approval flow exists, whatever tier admitted the call.
+    it("reports grantability from the session origin, not its tier", async () => {
+      const unowned = schemaDeps("workbench", entry("terminal.list"));
+      expect((await lookup(unowned, "terminal.list")).policy).toMatchObject({
+        grantable: false,
+      });
+
+      const owned = schemaDeps("workbench", entry("terminal.list"));
+      owned.sessionStore.sessionOriginMap.set("s1", "help");
+      expect((await lookup(owned, "terminal.list")).policy).toMatchObject({
+        grantable: true,
+      });
+    });
+
+    it("reports the flat external tier for an api-key caller", async () => {
+      const deps = schemaDeps("external", entry("terminal.list"));
+      const body = await lookup(deps, "terminal.list");
+
+      expect(body.ok).toBe(true);
+      expect(body.policy).toMatchObject({
+        minimumTier: "external",
+        effectiveTier: "external",
+        grantable: false,
+      });
+    });
+
+    // A live grant widens discovery, and the record must name the grant as what
+    // admits the call — the client's cue that this access can lapse.
+    it("names a live per-tool grant as the admitting mechanism", async () => {
+      const deps = schemaDeps("workbench", entry("git.push"));
+      deps.sessionStore.sessionOriginMap.set("s1", "help");
+      deps.sessionStore.grantCache.issueGrant("s1", "git.push");
+
+      const body = await lookup(deps, "git.push");
+
+      expect(body.ok).toBe(true);
+      expect(body.policy).toMatchObject({
+        authorizedBy: "grant",
+        minimumTier: "system",
+        effectiveTier: "workbench",
+      });
+    });
+
+    it("still collapses a tier-denied target with no policy attached", async () => {
+      const deps = schemaDeps("workbench", entry("git.push"));
+      const body = await lookup(deps, "git.push");
+
+      expect(body.ok).toBe(false);
+      expect(body.entry).toBeNull();
+      expect(body.policy).toBeNull();
+      expect(body.error?.code).toBe("NOT_FOUND");
+    });
+
+    it("never attaches a policy to a hidden target", async () => {
+      const deps = schemaDeps("workbench", entry("terminal.list", { mcpVisibility: "hidden" }));
+      const body = await lookup(deps, "terminal.list");
+
+      expect(body.ok).toBe(false);
+      expect(body.policy).toBeNull();
+    });
   });
 
   it("over-fetches the search page so denied top hits cannot starve it", async () => {
