@@ -65,7 +65,7 @@ function useRecipeDialogState(): UseRecipeDialogStateReturn {
         worktreeId?: unknown;
         recipeId?: unknown;
         initialTerminals?: unknown;
-        acknowledge?: unknown;
+        acknowledge?: () => void;
       };
       // The dispatcher can pass a callback to learn that this listener actually
       // took the request (#11908). Without it an action that only fires the
@@ -74,7 +74,7 @@ function useRecipeDialogState(): UseRecipeDialogStateReturn {
       // way. Called on each path that really opens the editor, never on the
       // early returns below.
       const acknowledge = () => {
-        if (typeof d.acknowledge === "function") (d.acknowledge as () => void)();
+        d.acknowledge?.();
       };
 
       if (typeof d.recipeId === "string") {

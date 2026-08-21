@@ -6,6 +6,7 @@ import { useProjectStore } from "@/store/projectStore";
 import { resumeSessionIntoPanel } from "@/services/agentResume";
 import { resolveResumeLaunchTarget } from "@/utils/resumeLaunch";
 import { notify } from "@/lib/notify";
+import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { AgentSessionRecord } from "@shared/types/ipc/agentSessionHistory";
 
 /**
@@ -91,7 +92,10 @@ export function useResumeAgentSession() {
         notify({
           type: "error",
           title: "Resume failed",
-          message: error instanceof Error ? error.message : String(error),
+          message: formatErrorMessage(
+            error,
+            "Couldn't resume this session — its agent may no longer support resuming."
+          ),
           priority: "high",
           context: { eventKind: "agent" },
         });

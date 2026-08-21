@@ -59,7 +59,7 @@ function definitionFor(id: string): AnyActionDefinition {
  * editor-open test asserting against the unmounted path.
  */
 const acknowledgeDispatchedEvent = (event: Event): boolean => {
-  const detail = (event as CustomEvent<{ acknowledge?: () => void }>).detail;
+  const { detail } = event as unknown as { detail?: { acknowledge?: () => void } };
   detail?.acknowledge?.();
   return true;
 };
