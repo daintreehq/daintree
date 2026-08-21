@@ -126,15 +126,18 @@ const PROJECT_RUN_CHECK_TOOL = "project.runCheck";
  */
 const OWNED_CLEANUP_TOOLS: Record<
   string,
-  { kind: OwnedResourceKind; delegateTo: string; idArg: string }
+  { resourceKind: OwnedResourceKind; delegateTo: string; idArg: string }
 > = {
+  // `resourceKind`, not `kind`: this repo uses a bare `kind` for panel kinds
+  // and guards comparisons against it with a lint rule, and an ownership
+  // resource kind is a different taxonomy that would otherwise trip it.
   "terminal.closeOwned": {
-    kind: "terminal",
+    resourceKind: "terminal",
     delegateTo: "terminal.close",
     idArg: "terminalId",
   },
   "worktree.deleteOwned": {
-    kind: "worktree",
+    resourceKind: "worktree",
     delegateTo: "worktree.delete",
     idArg: "worktreeId",
   },
@@ -723,12 +726,16 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       if (ownedCleanup !== undefined) {
         if (ownedResourceId === undefined || !envelope.result.ok) return;
         if (
-          ownedCleanup.kind === "terminal" &&
+          ownedCleanup.resourceKind === "terminal" &&
           !closedIdsInclude(envelope.result.result, ownedResourceId)
         ) {
           return;
         }
-        sessionStore.resourceOwnership.release(sessionId, ownedCleanup.kind, ownedResourceId);
+        sessionStore.resourceOwnership.release(
+          sessionId,
+          ownedCleanup.resourceKind,
+          ownedResourceId
+        );
         return;
       }
       const drafts = extractOwnedResourcesFromDispatch(actionId, envelope.result);
@@ -1183,7 +1190,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
           }
           const record = sessionStore.resourceOwnership.get(
             sessionId,
-            ownedCleanup.kind,
+            ownedCleanup.resourceKind,
             resourceId
           );
           // One message for "never existed", "another session's", and "the
@@ -1202,7 +1209,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             record.workspaceId !== boundWorkspaceId;
           if (record === undefined || workspaceMismatch) {
             const message =
-              `No ${ownedCleanup.kind} with id '${resourceId}' was created by this session, so ` +
+              `No ${ownedCleanup.resourceKind} with id '${resourceId}' was created by this session, so ` +
               `'${actionId}' will not act on it. This tool only cleans up resources this ` +
               `connection created; ids from listings may belong to the user, another client, or a plugin.`;
             outcome = {
