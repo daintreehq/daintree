@@ -247,6 +247,24 @@ export const SESSION_GONE = "SESSION_GONE";
 export const MCP_DEDUP_KEY_COLLISION_CODE = "MCP_DEDUP_KEY_COLLISION";
 export const PRE_AUTH_FAILED_CODE = "PRE_AUTH_FAILED";
 export const INVALID_URL_CODE = "INVALID_URL";
+/**
+ * The named resource is not one this session created, so an `*Owned` cleanup
+ * tool will not act on it (#11909).
+ *
+ * Deliberately one code for three situations — the id never existed, it belongs
+ * to another MCP session, or it belongs to the user, a plugin, or the in-app
+ * assistant. Distinguishing them would turn the cleanup tools into an
+ * enumeration oracle: a caller could probe ids and read "exists but not yours"
+ * apart from "no such thing", learning the shape of a view it was never granted
+ * (`terminal.list` shows it the bound view's panels, not other workspaces').
+ * The refusal is also uniform in time — it is a Map lookup either way — and it
+ * lands BEFORE the delegated dispatch, so a refused call never reaches the
+ * renderer at all.
+ *
+ * Schema-invalid arguments still fail as ordinary validation errors; this code
+ * is only for a well-formed id the session has no authority over.
+ */
+export const RESOURCE_NOT_OWNED_CODE = "RESOURCE_NOT_OWNED";
 
 /**
  * Re-exported from its canonical home in `shared/types/ipc/mcpServer.ts`, which
@@ -612,6 +630,14 @@ const MCP_DEDUP_ALLOWLIST_ENTRIES = [
   "workflow.startWorkOnIssue",
   "worktree.resource.provision",
   "worktree.delete",
+  // `worktree.deleteOwned` is deliberately NOT here, though the "replay the
+  // original success" argument for `worktree.delete` above reads like it should
+  // be. Worktree ids are paths, and create → delete → recreate with the same
+  // path is a supported workflow — the very reason `worktree.create` is absent
+  // from this list. Caching a delete would then suppress a genuine second
+  // deletion of a genuinely different worktree and report success for it. The
+  // replay it would have absorbed is only a confusing `RESOURCE_NOT_OWNED` on a
+  // redundant call, which is a worse error message but an honest one (#11909).
 
   // Forge writes worth absorbing a replay for. `createIssue`,
   // `addIssueComment`, `commentOnPR`, `approvePR` and `requestChanges` each

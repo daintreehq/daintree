@@ -145,6 +145,47 @@ export function registerTerminalLifecycleActions(
     },
   }));
 
+  // Registered here purely for manifest metadata — schema, description, tier
+  // and audit registration. Execution lives in the MCP CallTool handler
+  // (electron/services/mcp-server/sessionServer.ts) because the authorization
+  // it needs is session state: the ownership ledger is keyed by MCP session id,
+  // which the renderer cannot see and must never be told. Main checks ownership
+  // first, then delegates to `terminal.close` for the actual close, so trash
+  // recovery and the "reports the exact panel closed" contract are the ones
+  // already shipped rather than a second implementation (#11909). `run()`
+  // throws if the renderer ever invokes it directly.
+  actions.set("terminal.closeOwned", () => ({
+    id: "terminal.closeOwned",
+    title: "Close Owned Terminal",
+    description:
+      "Close a panel this session itself created, usually to the trash, where it is briefly recoverable before its process is killed. Only panels created by this connection can be closed: a panel opened by the user, another client, or a plugin is refused outright, as is an id that never existed. The result names what closed, already gone from the listing by then.",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    keywords: ["trash", "dismiss", "cleanup", "owned"],
+    // Hidden from the palette: it is dispatchable only through the MCP
+    // main-process path, so a user picking it here would get the `run()` throw
+    // below rather than a closed panel. `terminal.close` is the palette's
+    // version of this.
+    palette: { mode: "hidden" },
+    argsSchema: z.object({
+      terminalId: z
+        .string()
+        .min(1)
+        .describe(
+          "The panel to close, as an `id` this session received when it created the panel. Required — there is no focused-panel fallback, because the focused panel is rarely one this session owns."
+        ),
+    }),
+    resultSchema: PanelCloseResultSchema,
+    mcpOutputSchema: true,
+    run: async () => {
+      throw new Error(
+        "terminal.closeOwned must be invoked through the MCP main-process path, not renderer dispatch."
+      );
+    },
+  }));
+
   actions.set("terminal.trash", () => ({
     id: "terminal.trash",
     title: "Trash Terminal",

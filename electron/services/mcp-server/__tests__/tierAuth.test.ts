@@ -556,11 +556,19 @@ describe("external tool surface invariants (#10701, #11537)", () => {
 // Both pick which of our tools survive, and neither tells us. A budget here is
 // what keeps "just add one more" from walking the surface back over the line.
 describe("external tool surface budget (#11585)", () => {
-  // Sized just above the current 23 so a considered addition or two fits, but
-  // "just add one more" hits a wall well before the surface drifts back toward
-  // the client caps. The description payload is budgeted separately in
-  // actionDefinitions.quality.test.ts, where the live registry text is reachable.
-  const EXTERNAL_BUDGET_MAX = 26;
+  // The surface currently sits AT this ceiling, which is the intended state:
+  // the next addition has to raise the number, and raising it is the decision
+  // this budget exists to force into the open. The description payload is
+  // budgeted separately in actionDefinitions.quality.test.ts, where the live
+  // registry text is reachable.
+  //
+  // 26 → 28 for #11909's `terminal.closeOwned` and `worktree.deleteOwned`. They
+  // are the two halves of one capability the surface was missing outright — an
+  // external orchestrator could create terminals and worktrees but not clean up
+  // after itself — rather than two independent conveniences, and neither
+  // widens what the caller can reach: both act only on resources the session
+  // itself created.
+  const EXTERNAL_BUDGET_MAX = 28;
 
   it(`advertises at most ${EXTERNAL_BUDGET_MAX} tools`, () => {
     expect(TIER_ALLOWLISTS.external.size).toBeLessThanOrEqual(EXTERNAL_BUDGET_MAX);

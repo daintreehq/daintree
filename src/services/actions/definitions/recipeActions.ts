@@ -204,6 +204,15 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
       resultSchema: z.object({
         spawnedCount: z.number().int().nonnegative(),
         failedCount: z.number().int().nonnegative(),
+        // The ids of the panels that actually started, in spawn order. A count
+        // cannot be acted on: an automated caller needs these to poll the
+        // terminals it just created, and the MCP server needs them to attribute
+        // each one to the session that asked for the run (#11909).
+        spawnedTerminalIds: z
+          .array(z.string())
+          .describe(
+            "The panels this run actually started, in spawn order. Use these ids to read output from or close the terminals; the count alone identifies nothing."
+          ),
         failedTerminals: z.array(
           z.object({ index: z.number().int().nonnegative(), reason: z.string() })
         ),
@@ -253,6 +262,7 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
         return {
           spawnedCount: results.spawned.length,
           failedCount: results.failed.length,
+          spawnedTerminalIds: results.spawned.map((s) => s.terminalId),
           failedTerminals: results.failed.map((f) => ({ index: f.index, reason: f.error })),
         };
       },

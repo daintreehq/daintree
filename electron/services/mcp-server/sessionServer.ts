@@ -48,6 +48,7 @@ import {
   SESSION_BINDING_GONE,
   SESSION_GONE,
   INVALID_URL_CODE,
+  RESOURCE_NOT_OWNED_CODE,
   buildToolError,
   buildMcpErrorPayload,
   withResolvedWorkspace,
@@ -91,6 +92,7 @@ import {
 } from "./tierAuth.js";
 import { buildToolCallResult } from "./toolCallResult.js";
 import { buildSurfaceManifest, MCP_SURFACE_TOOL_ID } from "./surfaceManifest.js";
+import { extractOwnedResourcesFromDispatch, type OwnedResourceKind } from "./resourceOwnership.js";
 
 /**
  * Backstop on the `actions.list` page walk. The registry is a few hundred
@@ -105,6 +107,74 @@ const BROWSER_CAPTURE_SCREENSHOT_TOOL = "browser.captureScreenshot";
 const SKILLS_SEARCH_TOOL = "skills.search";
 const SKILLS_LOAD_TOOL = "skills.load";
 const PROJECT_RUN_CHECK_TOOL = "project.runCheck";
+/**
+ * The session-scoped cleanup tools (#11909), and the action each one delegates
+ * to once ownership checks out.
+ *
+ * They run here rather than as ordinary renderer actions because the thing they
+ * authorize against — which session created which resource — is main-process
+ * state keyed by the MCP transport session id. The renderer never sees that id
+ * and must not: handing it over would make "am I allowed to close this?" a
+ * question the caller's own dispatch could answer about itself.
+ *
+ * Delegation, not reimplementation. The check happens here; the close and the
+ * delete are the shipped actions, dispatched under their own ids so
+ * `terminal.close`'s trash/recovery behaviour and `worktree.delete`'s D2
+ * confirmation with its real file-count preview
+ * (`resolveMcpConfirmPreviewTarget` in `useMcpBridge`, which matches on the
+ * literal action id) apply unchanged.
+ */
+const OWNED_CLEANUP_TOOLS: Record<
+  string,
+  { resourceKind: OwnedResourceKind; delegateTo: string; idArg: string }
+> = {
+  // `resourceKind`, not `kind`: this repo uses a bare `kind` for panel kinds
+  // and guards comparisons against it with a lint rule, and an ownership
+  // resource kind is a different taxonomy that would otherwise trip it.
+  "terminal.closeOwned": {
+    resourceKind: "terminal",
+    delegateTo: "terminal.close",
+    idArg: "terminalId",
+  },
+  "worktree.deleteOwned": {
+    resourceKind: "worktree",
+    delegateTo: "worktree.delete",
+    idArg: "worktreeId",
+  },
+};
+
+/**
+ * Whether a `terminal.close` result reports the named panel as actually closed.
+ *
+ * Structural rather than trusting the action id: an empty `closedIds` is
+ * `terminal.close`'s documented "nothing closed" answer, and the ownership
+ * release must be able to tell that apart from a real close.
+ */
+function closedIdsInclude(result: unknown, id: string): boolean {
+  if (typeof result !== "object" || result === null || Array.isArray(result)) return false;
+  const closedIds = (result as { closedIds?: unknown }).closedIds;
+  return Array.isArray(closedIds) && closedIds.includes(id);
+}
+
+/**
+ * The resource id an `*Owned` cleanup call names, or `undefined` when the
+ * argument is missing, the wrong type, or blank.
+ *
+ * Read here rather than trusting the renderer's schema validation, because the
+ * ownership check runs before the dispatch that would perform it — and a
+ * whitespace-only id must not reach a Map lookup that could only ever miss.
+ */
+function readOwnedResourceId(args: unknown, key: string): string | undefined {
+  if (typeof args !== "object" || args === null || Array.isArray(args)) return undefined;
+  const value = (args as Record<string, unknown>)[key];
+  if (typeof value !== "string") return undefined;
+  // Blankness is judged on the trimmed form, but the ORIGINAL is returned: the
+  // ledger stores ids exactly as the creating action reported them, and
+  // `agent.launch`'s `requestedId` lets a caller create one with surrounding
+  // whitespace. Handing the trimmed form to the lookup would make that
+  // resource permanently uncleanable.
+  return value.trim().length === 0 ? undefined : value;
+}
 
 /**
  * Narrow a `browser.captureScreenshot` result to its base64-PNG payload so the
@@ -632,6 +702,59 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         ? { ...(args as Record<string, unknown>), limit: ACTIONS_SEARCH_MAX_LIMIT }
         : args;
 
+    // Set once the ownership gate inside the IIFE has cleared, and read by the
+    // delegated dispatch and the post-cleanup release. Undefined for every
+    // other tool and for a refused cleanup, so neither of those paths can
+    // accidentally rewrite an action id or drop an ownership record (#11909).
+    const ownedCleanup = OWNED_CLEANUP_TOOLS[actionId];
+    let ownedResourceId: string | undefined;
+
+    /**
+     * Fold a completed dispatch into the session's ownership ledger (#11909):
+     * record what it created, and release what it cleaned up.
+     *
+     * Both halves read the envelope the action returned — never the caller's
+     * arguments — which is what makes the ledger an authorization boundary
+     * rather than a claim the caller writes about itself.
+     *
+     * The release half is deliberately conditional on the resource actually
+     * being gone. `terminal.close` reports an empty `closedIds` when it found
+     * nothing to close, and dropping the record on that would let one no-op
+     * call revoke the session's authority over a panel that is still running.
+     */
+    const recordDispatchOwnership = (envelope: DispatchEnvelope): void => {
+      if (ownedCleanup !== undefined) {
+        if (ownedResourceId === undefined || !envelope.result.ok) return;
+        if (
+          ownedCleanup.resourceKind === "terminal" &&
+          !closedIdsInclude(envelope.result.result, ownedResourceId)
+        ) {
+          return;
+        }
+        sessionStore.resourceOwnership.release(
+          sessionId,
+          ownedCleanup.resourceKind,
+          ownedResourceId
+        );
+        return;
+      }
+      const drafts = extractOwnedResourcesFromDispatch(actionId, envelope.result);
+      if (drafts.length === 0) return;
+      // Liveness guard, mirroring the dedup completion hook below: a creation
+      // admitted before the session was revoked can land after
+      // `clearSessionBinding` already dropped the ledger. Writing then would
+      // resurrect a dead session's authority — and, worse, claim the id away
+      // from whoever legitimately records it next.
+      if (!sessionStore.sessions.has(sessionId) && !sessionStore.httpSessions.has(sessionId)) {
+        return;
+      }
+      sessionStore.resourceOwnership.record(
+        sessionId,
+        drafts,
+        envelope.dispatchedWorkspace?.workspaceId
+      );
+    };
+
     // Layered authorization (#8442):
     //   1. Static tier floor (`TIER_ALLOWLISTS`) — workbench/action/system
     //      membership stays the default. The "Always allow" project setting
@@ -1047,6 +1170,57 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // hook that fires before any other awaiter sees the resolved result.
     const dispatchPromise: Promise<CallToolResultLike> = (async () => {
       try {
+        // Ownership gate for the `*Owned` cleanup tools (#11909). Placed at the
+        // very top of the IIFE: a session that does not own the named resource
+        // is refused here, before the activity strip is told a call started,
+        // before any confirmation is raised, and — the acceptance criterion
+        // that matters — before anything reaches a renderer, so a refused call
+        // cannot have mutated a panel or a worktree.
+        if (ownedCleanup !== undefined) {
+          const resourceId = readOwnedResourceId(args, ownedCleanup.idArg);
+          if (resourceId === undefined) {
+            const message =
+              `Action '${actionId}' requires a non-empty '${ownedCleanup.idArg}' naming a resource ` +
+              `this session created.`;
+            outcome = {
+              kind: "result",
+              value: { ok: false, error: { code: "VALIDATION_ERROR", message } },
+            };
+            return buildToolError({ code: "VALIDATION_ERROR", message });
+          }
+          const record = sessionStore.resourceOwnership.get(
+            sessionId,
+            ownedCleanup.resourceKind,
+            resourceId
+          );
+          // One message for "never existed", "another session's", and "the
+          // user's" — see RESOURCE_NOT_OWNED_CODE for why the three must not be
+          // distinguishable. The bound-workspace comparison below is
+          // defence-in-depth only and fails OPEN when either side is unknown:
+          // panel ids carry a UUID and worktree ids are absolute paths, so a
+          // cross-workspace collision is not a live risk, and a strict check
+          // would strand a caller's own cleanup whenever the creating dispatch
+          // could not resolve its workspace.
+          const boundWorkspaceId = sessionStore.sessionWorkspaceMap.get(sessionId);
+          const workspaceMismatch =
+            record !== undefined &&
+            record.workspaceId !== undefined &&
+            boundWorkspaceId !== undefined &&
+            record.workspaceId !== boundWorkspaceId;
+          if (record === undefined || workspaceMismatch) {
+            const message =
+              `No ${ownedCleanup.resourceKind} with id '${resourceId}' was created by this session, so ` +
+              `'${actionId}' will not act on it. This tool only cleans up resources this ` +
+              `connection created; ids from listings may belong to the user, another client, or a plugin.`;
+            outcome = {
+              kind: "result",
+              value: { ok: false, error: { code: RESOURCE_NOT_OWNED_CODE, message } },
+            };
+            return buildToolError({ code: RESOURCE_NOT_OWNED_CODE, message });
+          }
+          ownedResourceId = resourceId;
+        }
+
         // Short-circuit: terminal.waitUntilIdle runs in the main process. The
         // action manifest entry handles schema, tier, and audit registration; the
         // execution must bypass renderer dispatch because (a) the MCP AbortSignal
@@ -1437,9 +1611,22 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         };
 
         try {
+          // An `*Owned` cleanup that cleared the gate above delegates to the
+          // real action under its own id, with arguments rebuilt from scratch
+          // rather than forwarded (#11909). Rebuilding is the enforcement: the
+          // renderer validates against `worktree.delete`'s schema, which still
+          // accepts `force`, `deleteBranch` and `closeTerminals`, so anything
+          // the caller sent beyond the id would otherwise pass straight
+          // through the narrower tool that deliberately omits them.
           const envelope = listPaging
             ? await collectListPages()
-            : await dispatchAction(actionId, dispatchArgs, dispatchConfirmed);
+            : ownedCleanup !== undefined && ownedResourceId !== undefined
+              ? await dispatchAction(
+                  ownedCleanup.delegateTo,
+                  { [ownedCleanup.idArg]: ownedResourceId },
+                  dispatchConfirmed
+                )
+              : await dispatchAction(actionId, dispatchArgs, dispatchConfirmed);
           // Narrow registry-enumerating results to this session's effective
           // surface before anything downstream reads them (#11525). Placed
           // ahead of the `outcome` assignment so the text content, the
@@ -1457,6 +1644,14 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                 )
               : envelope.result,
           };
+          // Ownership bookkeeping, from the envelope the action actually
+          // returned rather than from anything the caller said (#11909).
+          // Reads `envelope.result`, not `outcome.value`: the introspection
+          // filter above rewrites results for the discovery tools, and the
+          // ledger must observe the unnarrowed truth. Recorded for every tier
+          // — "this session created it" is a fact about the session, not about
+          // its privileges.
+          recordDispatchOwnership(envelope);
           confirmationDecision = confirmationDecision ?? envelope.confirmationDecision;
           dispatchedWorkspace = envelope.dispatchedWorkspace;
         } catch (err) {
