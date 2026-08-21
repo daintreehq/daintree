@@ -396,6 +396,55 @@ describe("RunCommandDetector", () => {
       expect(taskCommands.map((cmd) => cmd.id)).toEqual(["task-build"]);
     });
 
+    it("resolves YAML merge keys so an inherited desc still registers the task", async () => {
+      await fs.writeFile(
+        path.join(tempDir, "Taskfile.yml"),
+        [
+          "version: '3'",
+          "x-shared: &shared",
+          "  desc: Shared description",
+          "tasks:",
+          "  build:",
+          "    <<: *shared",
+          "    cmds:",
+          "      - go build .",
+        ].join("\n"),
+        "utf-8"
+      );
+
+      const commands = await detector.detect(tempDir);
+      const build = commands.find((cmd) => cmd.id === "task-build");
+
+      expect(build?.description).toBe("Shared description");
+    });
+
+    it("resolves YAML merge keys so an inherited internal flag still excludes the task", async () => {
+      await fs.writeFile(
+        path.join(tempDir, "Taskfile.yml"),
+        [
+          "version: '3'",
+          "x-hidden: &hidden",
+          "  internal: true",
+          "tasks:",
+          "  setup:",
+          "    <<: *hidden",
+          "    desc: Setup dependencies",
+          "    cmds:",
+          "      - npm install",
+          "  build:",
+          "    desc: Build",
+          "    cmds:",
+          "      - npm run build",
+        ].join("\n"),
+        "utf-8"
+      );
+
+      const commands = await detector.detect(tempDir);
+      const taskCommands = commands.filter((cmd) => cmd.id.startsWith("task-"));
+
+      expect(taskCommands.map((cmd) => cmd.id)).toEqual(["task-build"]);
+    });
+
     it("excludes string shorthand tasks", async () => {
       await fs.writeFile(
         path.join(tempDir, "Taskfile.yml"),

@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import { fileURLToPath } from "url";
 import path from "path";
-import yaml from "js-yaml";
+import { load } from "js-yaml";
 
 // Regression guard for #10030: the arm64 Windows build must smoke-test its
 // own NSIS installer (on the arm64 runner) before the artifact is uploaded,
@@ -14,7 +14,7 @@ const workflowPath = path.resolve(
   path.dirname(fileURLToPath(import.meta.url)),
   "../../.github/workflows/release-windows.yml"
 );
-const workflow = yaml.load(readFileSync(workflowPath, "utf8"));
+const workflow = load(readFileSync(workflowPath, "utf8"));
 
 function stepNames(job) {
   return job.steps.map((s) => s.name);

@@ -265,20 +265,23 @@ describe("compareMetadata", () => {
     expect(compareMetadata(baseLocal, remote)).toContain("files[0]: remote entry is not an object");
   });
 
-  it("handles Date objects in releaseDate (js-yaml timestamp schema)", () => {
-    const local = { ...baseLocal, releaseDate: new Date("2024-01-01T00:00:00.000Z") };
-    const remote = { ...baseLocal, releaseDate: new Date("2024-01-01T00:00:00.000Z") };
-    expect(compareMetadata(local, remote)).toBeNull();
-  });
-
-  it("handles mixed Date/string releaseDate comparison", () => {
-    const local = { ...baseLocal, releaseDate: new Date("2024-01-01T00:00:00.000Z") };
-    const remote = { ...baseLocal, releaseDate: "2024-01-01T00:00:00.000Z" };
-    const consoleWarn = vi.spyOn(console, "warn").mockImplementation(() => {});
+  // js-yaml v5 loads with CORE_SCHEMA, which has no !!timestamp tag — a bare
+  // `releaseDate: 2024-01-01` now parses as a string where v4 produced a Date.
+  // electron-updater reads these files as strings, so pin the type here: a
+  // regression back to Date would slip through compareMetadata, which only
+  // warns on releaseDate differences and returns null either way.
+  it("parses releaseDate as a string, not a Date", async () => {
+    const dir = await mkdtemp(path.join(os.tmpdir(), "verify-r2-metadata-test-"));
     try {
-      expect(compareMetadata(local, remote)).toBeNull();
+      const yml = path.join(dir, "latest-mac.yml");
+      await writeFile(
+        yml,
+        "version: 1.0.0\nfiles:\n  - url: mac.zip\n    sha512: aaa\n    size: 100\npath: mac.zip\nsha512: aaa\nreleaseDate: 2024-01-01\n"
+      );
+      const result = loadLocalMetadata(dir, "latest-mac.yml");
+      expect(result.releaseDate).toBe("2024-01-01");
     } finally {
-      consoleWarn.mockRestore();
+      await rm(dir, { recursive: true, force: true });
     }
   });
 });

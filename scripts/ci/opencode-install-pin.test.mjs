@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync, readdirSync } from "fs";
 import { fileURLToPath } from "url";
 import path from "path";
-import yaml from "js-yaml";
+import { load } from "js-yaml";
 
 import { OPENCODE_PACKAGE_SPEC, buildInstallArgs, runInstall } from "./install-opencode.mjs";
 
@@ -46,7 +46,7 @@ function workflowFiles() {
 }
 
 function parse(file) {
-  return yaml.load(readFileSync(path.join(workflowsDir, file), "utf8"));
+  return load(readFileSync(path.join(workflowsDir, file), "utf8"));
 }
 
 function stepsOf(file) {

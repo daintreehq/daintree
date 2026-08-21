@@ -960,4 +960,51 @@ describe("CopyTreeService against the installed CopyTree", () => {
       expect((result.files ?? []).map((file) => file.path)).toContain("src/landscape/preview.ts");
     });
   });
+  // Project profiles are discovered automatically — `userConfig: false` disables
+  // the user's global config but not `.copytree.yml` — so a profile the SDK
+  // cannot parse fails the whole run. copytree 1.0.0-rc.2 shipped a js-yaml v5
+  // bump whose default schema drops the `!!merge` tag, which left `<<:` in the
+  // parsed profile as a literal key and turned every anchor-using profile into
+  // `ERR_PROFILE_INVALID`. Nothing here used a profile, so the suite stayed green.
+  describe("project profile parsing", () => {
+    beforeEach(async () => {
+      await fs.writeFile(path.join(tempDir, "second.ts"), "export const b = 2;\n");
+    });
+
+    // `maxFileCount` rather than a flag: it is inherited only through the merge,
+    // so if `<<:` stops resolving the limit silently vanishes and both files come
+    // back — a failure a "did not throw" assertion would sail straight past.
+    it("resolves a merge key so an inherited option takes effect", async () => {
+      await fs.writeFile(
+        path.join(tempDir, ".copytree.yml"),
+        "x-shared: &shared\n  maxFileCount: 1\noptions:\n  <<: *shared\n"
+      );
+
+      const result = await copyTreeService.testConfig(tempDir);
+
+      expect(result.error).toBeUndefined();
+      expect(result.files).toHaveLength(1);
+    });
+
+    it("resolves a merge key anchored on a profile's own option block", async () => {
+      await fs.writeFile(
+        path.join(tempDir, ".copytree.yml"),
+        "options: &opts\n  maxFileCount: 1\noutput:\n  <<: *opts\n"
+      );
+
+      const result = await copyTreeService.testConfig(tempDir);
+
+      expect(result.error).toBeUndefined();
+      expect(result.files).toHaveLength(1);
+    });
+
+    it("reads an empty profile as an empty profile rather than a parse failure", async () => {
+      await fs.writeFile(path.join(tempDir, ".copytree.yml"), "");
+
+      const result = await copyTreeService.testConfig(tempDir);
+
+      expect(result.error).toBeUndefined();
+      expect(result.files?.map((file) => file.path)).toContain("small.ts");
+    });
+  });
 });

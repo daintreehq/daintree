@@ -1,6 +1,7 @@
 import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
 import { load as parseYaml } from "js-yaml";
+import { YAML_MERGE_SCHEMA } from "../../utils/yamlMergeSchema.js";
 import { resolveContainedPath } from "./pluginFsContainment.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import type { SkillContribution } from "../../../shared/types/plugin.js";
@@ -67,10 +68,11 @@ export function parseSkillMarkdown(raw: string): { description: string | null; b
   const normalized = raw.replace(/^\uFEFF/, "");
   // Match a leading `---` fenced block. The closing `---` must be its own full
   // line (`(?=\r?\n|$)`), so a body line like `---notclose` or a horizontal
-  // rule is NOT mistaken for the fence. The frontmatter content is optional so
-  // an empty block (`---\n---`) parses cleanly. Trailing blank line(s) between
-  // the fence and the body are consumed, so the body starts at its first
-  // content line.
+  // rule is NOT mistaken for the fence. The frontmatter content is optional: an
+  // empty block (`---\n---`) makes js-yaml throw (v5 rejects an empty document
+  // rather than returning undefined), which the catch below funnels to the same
+  // `description: null` result. Trailing blank line(s) between the fence and the
+  // body are consumed, so the body starts at its first content line.
   const match = normalized.match(
     /^---[ \t]*\r?\n(?:([\s\S]*?)\r?\n)?---[ \t]*(?=\r?\n|$)(?:\r?\n)*/
   );
@@ -82,7 +84,7 @@ export function parseSkillMarkdown(raw: string): { description: string | null; b
   let description: string | null = null;
   if (Buffer.byteLength(frontmatter, "utf8") <= FRONTMATTER_MAX_BYTES) {
     try {
-      const parsed = parseYaml(frontmatter);
+      const parsed = parseYaml(frontmatter, { schema: YAML_MERGE_SCHEMA });
       if (parsed !== null && typeof parsed === "object" && !Array.isArray(parsed)) {
         const value = (parsed as Record<string, unknown>).description;
         if (typeof value === "string" && value.trim().length > 0) {
@@ -90,7 +92,7 @@ export function parseSkillMarkdown(raw: string): { description: string | null; b
         }
       }
     } catch {
-      // Malformed YAML — leave description null and keep the body.
+      // Malformed or empty YAML — leave description null and keep the body.
     }
   }
   return { description, body };

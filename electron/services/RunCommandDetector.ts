@@ -5,6 +5,7 @@ import { load } from "js-yaml";
 import { parse as parseToml } from "smol-toml";
 import type { RunCommand } from "../types/index.js";
 import { Cache } from "../utils/cache.js";
+import { YAML_MERGE_SCHEMA } from "../utils/yamlMergeSchema.js";
 
 const RESERVED_SCRIPT_NAMES = new Set(["__proto__", "constructor", "prototype"]);
 const COMPOSER_LIFECYCLE_SCRIPTS = new Set([
@@ -285,7 +286,10 @@ export class RunCommandDetector {
 
     try {
       const content = await fs.readFile(taskfilePath, "utf-8");
-      const doc = load(content) as Record<string, unknown> | null;
+      // Merge schema: Taskfiles share `desc`/`internal` across tasks via anchors,
+      // and without it a task inheriting `desc` vanishes from the run list while
+      // one inheriting `internal: true` leaks into it.
+      const doc = load(content, { schema: YAML_MERGE_SCHEMA }) as Record<string, unknown> | null;
       if (!doc || typeof doc !== "object") return [];
 
       const tasks = doc.tasks;
