@@ -19,7 +19,11 @@ import {
   type AuditResult,
 } from "./oklch.js";
 
-const DISPLAY_SURFACES: AppThemeTokenKey[] = [
+// The surfaces a UI element can actually land on. Exported because the brand-mark
+// resolver (`src/lib/brandIcon.ts`) answers to the same set: a mark carries no
+// surface provenance, so it has to clear the floor against all of them at once,
+// and its matrix test iterates this rather than a second copy that could drift.
+export const DISPLAY_SURFACES: AppThemeTokenKey[] = [
   "surface-grid",
   "surface-sidebar",
   "surface-canvas",

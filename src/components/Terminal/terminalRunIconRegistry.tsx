@@ -1,11 +1,12 @@
-import type { ComponentType } from "react";
+import type { ComponentType, CSSProperties } from "react";
 import { AGENT_ICON_MAP } from "@/config/agentIcons";
 import { getAgentConfig } from "@/config/agents";
 
 export interface TerminalRunIconProps {
   className?: string;
   size?: number;
-  brandColor?: string;
+  /** Set by `BrandMark`, which publishes the resolved rest/hover inks here. */
+  style?: CSSProperties;
 }
 
 /**

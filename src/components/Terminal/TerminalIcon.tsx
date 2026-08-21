@@ -52,18 +52,9 @@ export interface TerminalIconProps {
   chrome?: TerminalChromeDescriptor;
   className?: string;
   brandColor?: string;
-  /** Marks `brandColor` as a deliberate user choice (e.g. a preset color),
-   * which bypasses the dark-theme white-tile fallback in `BrandMark`. */
-  userChosen?: boolean;
 }
 
-export function TerminalIcon({
-  kind,
-  chrome,
-  className,
-  brandColor,
-  userChosen,
-}: TerminalIconProps) {
+export function TerminalIcon({ kind, chrome, className, brandColor }: TerminalIconProps) {
   const resolvedChrome = chrome ?? deriveTerminalChrome({ kind });
   const iconId = resolvedChrome.iconId ?? "terminal";
   const finalProps = {
@@ -119,12 +110,8 @@ export function TerminalIcon({
   if (RunIcon) {
     const runBrandColor = brandColor ?? resolvedChrome.color;
     return withIconMarker(
-      <BrandMark
-        brandColor={runBrandColor}
-        userChosen={userChosen}
-        className={finalProps.className}
-      >
-        <RunIcon {...finalProps} brandColor={runBrandColor} />
+      <BrandMark brandColor={runBrandColor} className={finalProps.className}>
+        <RunIcon {...finalProps} />
       </BrandMark>
     );
   }

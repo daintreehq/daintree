@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, type ComponentType } from "react";
+import { useState, useEffect, useRef, type ComponentType, type CSSProperties } from "react";
 import { cn } from "@/lib/utils";
 import { Settings2, ChevronDown, Search } from "lucide-react";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
@@ -8,7 +8,7 @@ export interface AgentOption {
   id: string;
   name: string;
   color: string;
-  Icon: ComponentType<{ size?: number; brandColor?: string; className?: string }>;
+  Icon: ComponentType<{ size?: number; style?: CSSProperties; className?: string }>;
   selected: boolean;
   dangerousEnabled: boolean;
   hasCustomFlags: boolean;
@@ -104,8 +104,8 @@ export function AgentSelectorDropdown({
         >
           {selectedAgent ? (
             <>
-              <BrandMark brandColor={selectedAgent.color} size={16}>
-                <selectedAgent.Icon size={16} brandColor={selectedAgent.color} />
+              <BrandMark brandColor={selectedAgent.color}>
+                <selectedAgent.Icon size={16} />
               </BrandMark>
               <span className="flex-1 text-left truncate">{selectedAgent.name}</span>
               {(!selectedAgent.selected || selectedAgent.dangerousEnabled) && (
@@ -212,8 +212,8 @@ export function AgentSelectorDropdown({
                   </>
                 ) : (
                   <>
-                    <BrandMark brandColor={item.agent.color} size={16} className="shrink-0">
-                      <item.agent.Icon size={16} brandColor={item.agent.color} />
+                    <BrandMark brandColor={item.agent.color} className="shrink-0">
+                      <item.agent.Icon size={16} />
                     </BrandMark>
                     <span className="flex-1 min-w-0 truncate">{item.agent.name}</span>
                     {(!item.agent.selected || item.agent.dangerousEnabled) && (

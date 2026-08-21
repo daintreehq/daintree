@@ -22,10 +22,9 @@ export function PortalIcon({ icon, size = "launchpad" }: PortalIconProps) {
     const config = getAgentConfig(icon);
     if (config) {
       const Icon = config.icon;
-      const pixelSize = size === "launchpad" ? 32 : 12;
       return (
-        <BrandMark brandColor={config.color} size={pixelSize} className={iconClass}>
-          <Icon className={iconClass} brandColor={config.color} />
+        <BrandMark brandColor={config.color} className={iconClass}>
+          <Icon className={iconClass} />
         </BrandMark>
       );
     }

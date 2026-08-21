@@ -16,8 +16,8 @@ export function PanelKindIcon({ iconId, color, size = 16, className }: PanelKind
     const AgentIcon = agentConfig.icon;
     const brandColor = color ?? agentConfig.color;
     return (
-      <BrandMark brandColor={brandColor} size={size} className={cn("shrink-0", className)}>
-        <AgentIcon brandColor={brandColor} size={size} aria-hidden="true" />
+      <BrandMark brandColor={brandColor} className={cn("shrink-0", className)}>
+        <AgentIcon size={size} aria-hidden="true" />
       </BrandMark>
     );
   }

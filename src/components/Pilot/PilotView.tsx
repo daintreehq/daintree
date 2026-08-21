@@ -350,7 +350,6 @@ function RunRow({
           chrome={row.chrome}
           className="h-4 w-4"
           brandColor={row.presetColor ?? row.chrome.color}
-          userChosen={row.presetColor !== undefined}
         />
       </span>
 

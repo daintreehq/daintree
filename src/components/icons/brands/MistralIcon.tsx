@@ -7,11 +7,10 @@ import { cn } from "@/lib/utils";
 
 type MistralIconProps = SVGProps<SVGSVGElement> & {
   size?: number;
-  brandColor?: string;
 };
 
-export function MistralIcon({ className, size = 16, brandColor, ...props }: MistralIconProps) {
-  const fill = brandColor || "currentColor";
+export function MistralIcon({ className, size = 16, ...props }: MistralIconProps) {
+  const fill = "currentColor";
   return (
     <svg
       width={size}

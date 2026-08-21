@@ -265,15 +265,28 @@ async function expectAgentIconColor(
   await expect(panel).toHaveAttribute("data-runtime-icon-id", agentId, { timeout: T_LONG });
   const icon = panel.locator(`[data-terminal-icon-id="${agentId}"]`).first();
   await expect(icon).toHaveAttribute("data-terminal-icon-color", color, { timeout: T_LONG });
-  // BrandMark may apply a contrast-clearing tint on light themes. The marker
-  // above is the canonical preset color contract; the SVG must still be
-  // concretely painted rather than falling back to currentColor.
+  // The marker above is the canonical preset color contract. Nothing hands a
+  // colour to a glyph any more: the SVG stays on `currentColor` and `BrandMark`
+  // publishes the resolved resting and hover inks as custom properties on it.
+  // Both being real hexes proves the resolver ran on this arbitrary preset hex,
+  // which is the whole "a new CLI is just a preset we shipped" guarantee.
+  await expect(icon.locator("path").first()).toHaveAttribute("fill", "currentColor");
+  const svg = icon.locator("svg").first();
   await expect
-    .poll(() => icon.locator("path").first().getAttribute("fill"), {
-      timeout: T_LONG,
-      intervals: [250, 500],
-    })
-    .toMatch(/^#[0-9a-f]{6}$/i);
+    .poll(
+      () =>
+        svg.evaluate((el) => ({
+          rest: getComputedStyle(el).getPropertyValue("--brand-mark-rest").trim(),
+          hover: getComputedStyle(el).getPropertyValue("--brand-mark-hover").trim(),
+          painted: getComputedStyle(el).color,
+        })),
+      { timeout: T_LONG, intervals: [250, 500] }
+    )
+    .toEqual({
+      rest: expect.stringMatching(/^#[0-9a-f]{6}$/i),
+      hover: expect.stringMatching(/^#[0-9a-f]{6}$/i),
+      painted: expect.stringMatching(/^rgba?\(/),
+    });
 }
 
 async function quitAgentOrWaitForDemotion(page: Page, panel: Locator): Promise<void> {

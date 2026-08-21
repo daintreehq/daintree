@@ -1143,8 +1143,8 @@ export function HelpPanel({
 
   // Each empty-state CTA wears the mark of the agent it would actually launch,
   // so the button says what's about to start. Rendered bare: the Button variant
-  // sizes descendant svgs and no brandColor is passed, so the glyph inherits the
-  // accent fill's foreground rather than painting itself the brand hue. Falls
+  // sizes descendant svgs and it is not wrapped in `BrandMark`, so the glyph
+  // inherits the accent fill's foreground rather than the brand hue. Falls
   // back to the generic mark when an id outlives its registry entry — stored
   // preferences are only revalidated on hydration, and uninstalling a CLI flips
   // availability without dropping its config, so the live gap is an entry that
