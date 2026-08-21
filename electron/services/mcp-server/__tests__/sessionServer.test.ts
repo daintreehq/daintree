@@ -6120,7 +6120,7 @@ describe("session-scoped resource ownership (#11909)", () => {
       // error that would confirm the id exists while offering no way to reach
       // it. Agreement here means "does not hand back the schema", not "raises
       // a different error from the other four surfaces".
-      const schema = payloadOf<{ ok: boolean; error?: { code: string }; entry?: unknown }>(
+      const schema = payloadOf<{ ok: boolean; error?: { code: string }; entry: unknown }>(
         await callTool(server, {
           name: "actions.getSchema",
           arguments: { actionId: "worktree.deleteOwned" },
@@ -6128,7 +6128,7 @@ describe("session-scoped resource ownership (#11909)", () => {
       );
       expect(schema.ok).toBe(false);
       expect(schema.error?.code).toBe("NOT_FOUND");
-      expect(schema.entry).toBeUndefined();
+      expect(schema.entry).toBeNull();
 
       const called = await callTool(server, {
         name: "worktree.deleteOwned",

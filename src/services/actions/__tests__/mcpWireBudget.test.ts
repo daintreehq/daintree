@@ -296,7 +296,12 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // panels they created were unidentifiable, and no wording change buys that
   // back.
   const MAX_EXTERNAL_PAYLOAD_BYTES = 45_500;
-  const MAX_COHORT_PAYLOAD_BYTES = 190_000;
+  // 190_000 → 192_700 for the same 2_048 B the external half above pays for.
+  // Every byte #11909 spends sits on an externally advertised tool, so both
+  // totals moved by the identical amount. Only this one needed the ratchet
+  // raised: #11908's seven in-app tools had already taken the cohort to
+  // 189_743, leaving 257 B of headroom that #11909 could not fit under.
+  const MAX_COHORT_PAYLOAD_BYTES = 192_700;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;
 
