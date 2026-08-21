@@ -2,7 +2,6 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import {
   requireExplicitWorktreeForAgentDispatch,
   requireWorktreeId,
-  resolveWorktreeLocation,
   withWorktreeLocation,
 } from "./locationArgs";
 import { resumeSessionIntoPanel } from "@/services/agentResume";
