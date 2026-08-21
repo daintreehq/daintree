@@ -8,7 +8,7 @@ This is the Daintree-side half of a standard shared with the assistant CLI. The 
 
 The tool region is the largest single part of an MCP request, it is re-sent on every round including tool-continuation rounds where nothing the user typed changed, and clients cap what they will accept — Cursor silently truncates past its cap, Copilot hard-errors at 128 tools. #11585 already cut the external surface from 100 tools to 26 for exactly this reason. That cut attacked tool _count_; this standard attacks _bytes per tool_, which is the axis left over.
 
-Measured against the live registry, the wire surface is roughly 41 KB for a third-party client (26 tools) and 181 KB for the full in-app surface (152 tools).
+Measured against the live registry, the wire surface is roughly 42 KB for a third-party client (26 tools) and 184 KB for the full in-app surface (152 tools).
 
 ## The idempotency contract
 
@@ -94,7 +94,7 @@ Enforced by [`src/services/actions/__tests__/mcpWireBudget.test.ts`](../../src/s
 | Field description                | 160 B     | target, ratcheted by count                       |
 | Field description                | 320 B     | hard ceiling                                     |
 | Tool `parameters`                | 1,500 B   | hard ceiling, justified allowlist                |
-| External wire surface            | 42,000 B  | aggregate ratchet                                |
+| External wire surface            | 43,000 B  | aggregate ratchet                                |
 | Full in-app wire surface         | 190,000 B | aggregate ratchet                                |
 | Value-range keywords on the wire | zero      | hard                                             |
 
