@@ -1140,6 +1140,52 @@ describe("McpServerService", () => {
       }),
       waitUntilIdleManifestEntry(),
       waitUntilIdleBatchManifestEntry(),
+      // Session continuity + recipe-editor handoffs added to ACTION_TIER_ADDONS
+      // by #11908. The coverage loops below iterate the live allowlist, so an
+      // id tiered without an entry here fails as a missing tool rather than as
+      // the fixture gap it actually is.
+      createManifestEntry({
+        id: "agentSessionHistory.resume" as ActionId,
+        title: "Resume Agent Session",
+        description:
+          "Relaunch one closed agent session by its exact id and hand back the pane carrying it.",
+      }),
+      createManifestEntry({
+        id: "session.bookmarkAndClose" as ActionId,
+        title: "Bookmark and close",
+        danger: "confirm",
+        description:
+          "Save a live agent pane's conversation as a durable bookmark, then close the pane.",
+      }),
+      createManifestEntry({
+        id: "session.bookmark.promote" as ActionId,
+        title: "Add bookmark to session",
+        description: "Pin a session that is already in history as a durable bookmark.",
+      }),
+      createManifestEntry({
+        id: "session.bookmark.rename" as ActionId,
+        title: "Rename bookmark",
+        description: "Change the label on an existing bookmark.",
+      }),
+      createManifestEntry({
+        id: "session.bookmark.delete" as ActionId,
+        title: "Delete bookmark",
+        danger: "confirm",
+        description:
+          "Remove a bookmark, demoting its session back to ordinary time-limited history.",
+      }),
+      createManifestEntry({
+        id: "recipe.editor.open" as ActionId,
+        title: "Open Recipe Editor",
+        description:
+          "Put a recipe draft in front of the user in the editor. A handoff, not a write.",
+      }),
+      createManifestEntry({
+        id: "recipe.editor.openFromLayout" as ActionId,
+        title: "Open Recipe Editor From Layout",
+        description:
+          "Turn a worktree's live terminals into a recipe draft and open the editor on it.",
+      }),
       createManifestEntry({
         id: "recipe.list" as ActionId,
         title: "List Recipes",

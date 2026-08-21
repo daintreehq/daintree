@@ -5,14 +5,109 @@ import type { ActionContext } from "@shared/types/actions";
 import type { TerminalRecipe } from "@shared/types";
 import { isPluginRecipe } from "@shared/types/project";
 import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
+import { MAX_TERMINALS_PER_RECIPE } from "@shared/utils/recipeSanitizer";
 import { useRecipeStore } from "@/store/recipeStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
+import { getWorktreePathIndex } from "@/store/storeAccessors";
 import { notifyRecipeSpawnFailures } from "@/utils/recipeNotify";
 import {
   TerminalSpawnSourceSchema,
   RecipeSummarySchema,
   AddPanelFocusPolicySchema,
 } from "./schemas";
+
+/**
+ * `initialTerminals` is validated at the element's edge, not through its whole
+ * shape.
+ *
+ * It was `z.any()` before #11908, and no in-tree caller passes it — but a
+ * plugin can dispatch built-in actions, so dropping the key outright would
+ * silently strip an argument the manifest used to accept. Typing it fully
+ * instead meant advertising the whole nested `RecipeTerminal` shape: 1.8 KB of
+ * schema on a tool whose job is to open a window, past the per-tool parameter
+ * budget in `mcpWireBudget.test.ts`.
+ *
+ * The middle ground: require the one field the editor actually reads (`type`)
+ * and let the rest through, capped at the same terminal count a recipe can hold
+ * anyway. That keeps a plugin's existing well-formed payload working, costs
+ * ~150 bytes of schema, and stops the two things an unbounded `unknown[]` would
+ * have handed a model now that this is agent-reachable — a pane list longer
+ * than any recipe can be, and elements the editor's `RecipeTerminal[]` cast
+ * would misrepresent. The description points at the from-layout capability,
+ * which reads real panes rather than asking a model to compose them, and
+ * nothing here is saved until a person reviews the draft.
+ */
+/**
+ * Fire the editor-open event and report whether anything took it.
+ *
+ * These actions hand off through a DOM event, which tells the dispatcher
+ * nothing — `dispatchEvent` returns true whether one listener ran or none
+ * exist. Both actions promise their caller `opened: true`, so that promise has
+ * to be earned: the listener calls `acknowledge` on the paths that really open
+ * the editor, and an unacknowledged dispatch throws instead of reporting a
+ * handoff that never reached the screen.
+ */
+function dispatchRecipeEditorOpen(detail: Record<string, unknown>): void {
+  let acknowledged = false;
+  window.dispatchEvent(
+    new CustomEvent("daintree:open-recipe-editor", {
+      detail: {
+        ...detail,
+        acknowledge: () => {
+          acknowledged = true;
+        },
+      },
+    })
+  );
+  if (!acknowledged) {
+    throw new Error(
+      "The recipe editor didn't open — no editor surface is mounted to receive it right now."
+    );
+  }
+}
+
+const RecipeEditorOpenArgsSchema = z.object({
+  worktreeId: z
+    .string()
+    .min(1)
+    .optional()
+    .describe("Worktree the draft belongs to. Defaults to the one this call came from."),
+  recipeId: z
+    .string()
+    .min(1)
+    .optional()
+    .describe("Load an existing recipe. An unknown id opens a blank draft instead."),
+  initialTerminals: z
+    .array(z.looseObject({ type: z.string().min(1) }))
+    .max(MAX_TERMINALS_PER_RECIPE)
+    .optional()
+    .describe(
+      "Prefilled panes, for callers that already hold them. Capture a live layout instead."
+    ),
+});
+
+const RecipeEditorFromLayoutArgsSchema = z.object({
+  worktreeId: z
+    .string()
+    .min(1)
+    .describe("Worktree whose live terminals become the draft. Must have at least one open."),
+});
+
+/**
+ * Shared by both editor handoffs so a caller reads one shape either way.
+ *
+ * `opened` is the explicit "the user-facing editor is on screen" signal these
+ * actions owe their caller — both throw rather than resolving false, so a
+ * success is never a silent no-op. Nothing here reports a save, because neither
+ * action performs one (#11908).
+ */
+const RecipeEditorHandoffResultSchema = z.object({
+  opened: z.boolean(),
+  mode: z.enum(["blankDraft", "existingRecipe", "fromLayout"]),
+  worktreeId: z.string().nullable(),
+  recipeId: z.string().nullable(),
+  terminalCount: z.number(),
+});
 
 export function registerRecipeActions(actions: ActionRegistry, _callbacks: ActionCallbacks): void {
   /**
@@ -168,22 +263,66 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
     defineAction({
       id: "recipe.editor.open",
       title: "Open Recipe Editor",
-      description: "Open the recipe editor for a worktree",
+      description:
+        "Put a recipe draft in front of the user in the editor, either blank for a worktree or loaded from an existing recipe. This is a handoff, not a write: nothing is saved or deleted until the person reviews the draft and saves it, so a success here means the editor is open, never that the recipe exists. An unknown recipe opens a blank draft rather than failing.",
       category: "recipes",
       kind: "command",
       danger: "safe",
       scope: "renderer",
-      argsSchema: z.object({
-        worktreeId: z.string().optional(),
-        recipeId: z.string().optional(),
-        initialTerminals: z.any().optional(),
-      }),
-      run: async ({ worktreeId, recipeId, initialTerminals }) => {
-        window.dispatchEvent(
-          new CustomEvent("daintree:open-recipe-editor", {
-            detail: { worktreeId, recipeId, initialTerminals },
-          })
-        );
+      // An agent dispatch carrying a recipeId is elevated to "confirm" by
+      // `resolveEffectiveActionDanger`, which keys on the argument rather than
+      // on the action. Its generic rationale says the call spawns the recipe's
+      // terminals — true of the composites it was written for, false here, and a
+      // confirmation dialog that misstates what it is gating is worse than none.
+      // A definition's own rationale wins over the elevation's, so state what
+      // this call actually does.
+      dangerRationale:
+        "Opens the recipe editor on an existing recipe for the user to review. It starts no terminals and saves nothing on its own.",
+      argsSchema: RecipeEditorOpenArgsSchema,
+      resultSchema: RecipeEditorHandoffResultSchema,
+      mcpOutputSchema: true,
+      examples: [
+        {
+          args: { worktreeId: "wt-1" },
+          description: "Open a blank recipe draft scoped to one worktree",
+        },
+      ],
+      run: async (args, ctx: ActionContext) => {
+        const { worktreeId, recipeId, initialTerminals } = args;
+        // The editor's event listener hard-requires a string worktreeId and
+        // silently returns without one (unless an existing recipe matched, which
+        // carries its own). Resolving and checking here is what keeps the
+        // returned `opened` honest: without it this action reports a handoff
+        // that never reached the screen.
+        const resolvedWorktreeId = worktreeId ?? ctx.activeWorktreeId;
+        const existing = recipeId ? useRecipeStore.getState().getRecipeById(recipeId) : undefined;
+        if (!existing) {
+          if (!resolvedWorktreeId) {
+            throw new Error(
+              "No worktree to scope the recipe draft to — name one, or open the editor from a worktree."
+            );
+          }
+          // A blank draft carries no scope of its own, so an unknown worktree id
+          // would open an editor pinned to a worktree that isn't there — and the
+          // person would only find out when they tried to save. An existing
+          // recipe is exempt: it brings its own stored worktree.
+          const index = getWorktreePathIndex();
+          if (index && !index.has(resolvedWorktreeId)) {
+            throw new Error("Unknown worktree — no worktree with that id is open in this project.");
+          }
+        }
+        dispatchRecipeEditorOpen({
+          worktreeId: resolvedWorktreeId,
+          recipeId,
+          initialTerminals,
+        });
+        return {
+          opened: true,
+          mode: existing ? ("existingRecipe" as const) : ("blankDraft" as const),
+          worktreeId: existing ? (existing.worktreeId ?? null) : (resolvedWorktreeId ?? null),
+          recipeId: existing ? existing.id : null,
+          terminalCount: existing ? existing.terminals.length : (initialTerminals?.length ?? 0),
+        };
       },
     })
   );
@@ -245,22 +384,34 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
     defineAction({
       id: "recipe.editor.openFromLayout",
       title: "Open Recipe Editor From Layout",
-      description: "Open the recipe editor with terminals from the current layout",
+      description:
+        "Turn a worktree's live terminals into a recipe draft and put it in front of the user in the editor. Use this to capture a layout someone already has open; the plain editor capability starts from nothing. It only hands off — the draft is not a recipe until the person saves it. A worktree with no live terminals is rejected.",
       category: "recipes",
       kind: "command",
       danger: "safe",
       scope: "renderer",
-      argsSchema: z.object({ worktreeId: z.string() }),
+      argsSchema: RecipeEditorFromLayoutArgsSchema,
+      resultSchema: RecipeEditorHandoffResultSchema,
+      mcpOutputSchema: true,
+      examples: [
+        {
+          args: { worktreeId: "wt-1" },
+          description: "Capture one worktree's open terminals as a draft recipe",
+        },
+      ],
       run: async ({ worktreeId }) => {
         const terminals = useRecipeStore.getState().generateRecipeFromActiveTerminals(worktreeId);
         if (terminals.length === 0) {
-          throw new Error("No active terminals in this worktree to save");
+          throw new Error("No active terminals in this worktree to capture");
         }
-        window.dispatchEvent(
-          new CustomEvent("daintree:open-recipe-editor", {
-            detail: { worktreeId, initialTerminals: terminals },
-          })
-        );
+        dispatchRecipeEditorOpen({ worktreeId, initialTerminals: terminals });
+        return {
+          opened: true,
+          mode: "fromLayout" as const,
+          worktreeId,
+          recipeId: null,
+          terminalCount: terminals.length,
+        };
       },
     })
   );

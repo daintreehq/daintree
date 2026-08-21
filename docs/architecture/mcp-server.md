@@ -189,6 +189,31 @@ There is deliberately **no** third state where a tool is withheld from `tools/li
 
 The introspection tools (`actions.list`, `actions.search`, `actions.getSchema`) are narrowed by a third gate, `filterIntrospectionResultForSession`, applied in main to the dispatch result (#11525). It layers `isTierPermitted`'s allowlist — widened by any live per-tool or native automation grant — on top of the `hidden`/`restricted` ceilings, so discovery returns what the session can actually call. Introspection therefore _describes_ the session's surface (argument shapes, enabled state, live grants) rather than reaching past it.
 
+### Session continuity and the human handoff boundary (#11908)
+
+The in-app assistant can carry a session across a close and back, and can draft a recipe for the user. None of the tools below writes a recipe to disk. The split runs along one line: **the assistant proposes, the person commits.**
+
+Reads stay at `workbench` (`agentSessionHistory.list`, `session.bookmarks.list`). Everything that changes something sits at `action`:
+
+| Tool | Why it is where it is |
+| --- | --- |
+| `agentSessionHistory.resume` | Spawns a pane, so it belongs with the other spawn tools rather than with the listings it reads from. |
+| `session.bookmark.promote` / `.rename` | Reversible metadata edits. Scoped in the action: the journal is keyed by `sessionId` alone and main matches it across every project's records, so each mutation first proves the id is in the caller's own project — an id lifted from another project is refused with the same not-found error an unknown id gets. |
+| `session.bookmarkAndClose` / `session.bookmark.delete` | `danger: "confirm"` — each removes something the person can see (a live pane, a durable bookmark), so the renderer's own dialog gates the mutation. The first-party assistant is pinned to a WebContents rather than workspace-bound, so the confirm-withholding rule above (which keys on the `external` tier) never applies and the tools stay listed. Pinning supplies a route, not an audience: if that renderer is gone or nobody is looking, the dispatch times out rather than proceeding. |
+| `recipe.editor.open` / `recipe.editor.openFromLayout` | Handoffs, not writes — see below. |
+
+`terminal.resumeSessions` is deliberately on **no** tier. It opens the human resume palette: no session id in, no terminal id out, nothing an agent can act on. `agentSessionHistory.resume` is the callable form, and it is stricter than the palette in three ways that matter:
+
+- **The record owns the launch directory, not the caller.** Resume is directory-coupled — the CLI locates a conversation from the launch cwd (#4781) — so a `worktreeId` argument scopes the _lookup_ and is never treated as a relocation. A session recorded in another worktree is refused rather than re-homed, because relaunching it elsewhere would silently produce a fresh session wearing a resumed session's id.
+- **It focuses rather than duplicates.** A live pane already carrying that session in that worktree is brought forward and its id returned (`outcome: "activatedExisting"`), and overlapping dispatches collapse onto one spawn. Records are non-destructive, so without this two agents would end up on one provider transcript.
+- **It does not move the user's view.** An agent-sourced dispatch never switches the active worktree, so a pane resumed into a non-active worktree opens off-screen; the caller addresses it by the returned `terminalId`. Foreground dispatches still switch, which is why the shared helper takes the switch as a callback rather than performing it itself.
+
+**The recipe-editor handoff.** `recipe.editor.open` and `recipe.editor.openFromLayout` put a draft on screen and stop there. They return `{ opened, mode, worktreeId, recipeId, terminalCount }` — deliberately nothing that reports a save, because neither performs one. `opened` is earned rather than assumed: the handoff travels as a DOM event, which tells its dispatcher nothing, so the editor's listener acknowledges the request and an unacknowledged dispatch throws instead of claiming a screen that never changed. `recipe.saveToRepo` and `recipe.delete` are on no tier at all, so the write half of recipe authoring has no MCP surface — nothing in this section turns a draft into a tracked file under `.daintree/recipes/`.
+
+One wrinkle worth knowing: `recipe.editor.open` is `danger: "safe"`, but an agent dispatch carrying a `recipeId` is elevated to `"confirm"` by `resolveEffectiveActionDanger`, which keys on the argument rather than the action (#11860). The elevation is deliberate over-gating; the action carries its own `dangerRationale` so the dialog says what this call actually does — open an editor — rather than the generic "spawns the recipe's terminals" text written for the composites that do.
+
+That boundary is a property of the tool surface, not a rule the model is asked to follow — which is the point. But be precise about what it guarantees: **no recipe tool writes a recipe**, not "the assistant cannot write one". The assistant also holds terminal tools, and a recipe file is just JSON on disk, so the editor is the only _exposed_ path, not the only reachable one. Anything that widens the assistant's ability to write tracked recipe files — a new tool, a shell helper, a broader path allowance — is re-opening this decision and belongs in review as such.
+
 ### Risk bands and `danger`
 
 `deriveBand` / `BAND_OVERRIDES` / `RISK_BAND_OPEN_WORLD_CATEGORIES` (`shared/utils/actionRiskBand.ts`) classify each action into a `RiskBand` (`reversible` | `external-effect` | `destructive-local` | `destructive-network`) from its `danger` + `category`, with per-id overrides (`git.push` → `external-effect`, `copyTree.generateAndCopyFile` → `destructive-local`). The band drives the renderer's blast-radius preview and the MCP tool annotations (`buildAnnotations`).

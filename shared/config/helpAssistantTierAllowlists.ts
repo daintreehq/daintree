@@ -55,7 +55,8 @@ export const WORKBENCH_TIER_TOOLS = [
   "agent.listPresets",
   "agentSessionHistory.list",
   // Read-only bookmark metadata (#11288) — same workbench tier as the history
-  // listing. Bookmark mutation actions are intentionally NOT tier-exposed.
+  // listing. The mutations sit at action tier (#11908); listing stays here so a
+  // read-only session can still see what has been kept.
   "session.bookmarks.list",
 
   "agentSettings.get",
@@ -122,6 +123,12 @@ export const ACTION_TIER_ADDONS = [
 
   "recipe.list",
   "recipe.run",
+  // Editor handoffs (#11908). Safe because they only put a draft on screen for
+  // the user to review — the write half (`recipe.saveToRepo`, `recipe.delete`)
+  // is deliberately absent from every tier, so the assistant can propose a
+  // recipe but never commit one to `.daintree/recipes/` on its own.
+  "recipe.editor.open",
+  "recipe.editor.openFromLayout",
 
   "copyTree.injectToTerminal",
 
@@ -133,6 +140,18 @@ export const ACTION_TIER_ADDONS = [
   "agent.focusNextWorking",
   "agent.focusNextAgent",
   "agent.focusPreviousAgent",
+
+  // Session continuity (#11908). Resume spawns a pane, so it belongs beside the
+  // other spawn tools rather than with the workbench-tier listings it reads
+  // from. The bookmark mutations are reversible and project-scoped; the two
+  // that remove something a person can see — a live pane, a durable bookmark —
+  // keep `danger: "confirm"` and are gated by the renderer's own dialog, which
+  // the first-party assistant is pinned to a window for.
+  "agentSessionHistory.resume",
+  "session.bookmarkAndClose",
+  "session.bookmark.promote",
+  "session.bookmark.rename",
+  "session.bookmark.delete",
 
   "panel.focus",
 
