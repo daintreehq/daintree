@@ -370,14 +370,5 @@ export const theme: BuiltInThemeSource = {
     "pulse-skeleton-gradient": "linear-gradient(90deg, #15120F 25%, #1F1B18 50%, #15120F 75%)",
 
     "worktree-section-hover-bg": "rgba(255,255,255,0.035)",
-
-    // Third-party brand marks (Claude orange, OpenCode green, Gemini blue...)
-    // carry vendor hexes from `AgentConfig.color`, so they are the one family of
-    // colour the token system cannot reach — and in the resting workbench they
-    // were the loudest thing on screen, which is precisely the failure this
-    // theme exists to prevent. Damped to 40% saturation at rest; `.brand-mark`
-    // in src/index.css restores full brand colour on hover of the containing
-    // control, so identity survives where the user is actually looking.
-    "brand-mark-saturation": "0.4",
   },
 };

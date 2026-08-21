@@ -26,8 +26,8 @@ function ServiceIcon({ name, size = 16 }: { name: string; size?: number }) {
     if (config) {
       const Icon = config.icon;
       return (
-        <BrandMark brandColor={config.color} size={size} className={className}>
-          <Icon className={className} brandColor={config.color} />
+        <BrandMark brandColor={config.color} className={className}>
+          <Icon className={className} />
         </BrandMark>
       );
     }

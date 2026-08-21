@@ -217,7 +217,7 @@ describe("WorktreeTerminalSection summary icon", () => {
     expect(screen.getByTestId("agent-icon")).toBeDefined();
   });
 
-  it("does not pass brandColor to the agent icon (renders in currentColor)", () => {
+  it("does not paint the agent icon directly (renders in currentColor)", () => {
     renderSection({
       terminals: [makeTerminal({ detectedAgentId: "claude" })],
       counts: { ...baseCounts, total: 1 },

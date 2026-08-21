@@ -1169,8 +1169,8 @@ export function CompleteStep({
                 data-testid={`agent-card-${id}`}
                 className="flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] border border-status-success/20 bg-status-success/5"
               >
-                <BrandMark brandColor={agent.color} size={18}>
-                  <Icon size={18} brandColor={agent.color} />
+                <BrandMark brandColor={agent.color}>
+                  <Icon size={18} />
                 </BrandMark>
                 <span className="text-sm text-daintree-text font-medium">{agent.name}</span>
                 {presetCount > 1 && (

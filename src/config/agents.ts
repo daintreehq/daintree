@@ -1,4 +1,4 @@
-import type { ComponentType } from "react";
+import type { ComponentType, CSSProperties } from "react";
 import {
   AGENT_REGISTRY as BASE_AGENT_REGISTRY,
   type AgentConfig as BaseAgentConfig,
@@ -20,7 +20,8 @@ import { resolveAgentIcon } from "./agentIcons";
 export interface AgentIconProps {
   className?: string;
   size?: number;
-  brandColor?: string;
+  /** Set by `BrandMark`, which publishes the resolved rest/hover inks here. */
+  style?: CSSProperties;
 }
 
 export interface AgentConfig extends BaseAgentConfig {

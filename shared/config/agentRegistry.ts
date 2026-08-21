@@ -187,7 +187,7 @@ export interface AgentPreset {
    * config→types import cycle.
    */
   inlineMode?: boolean | "inherit" | "on" | "off";
-  /** Optional brand color (CSS hex) used to tint the agent icon for this preset */
+  /** Optional brand color (CSS hex) this preset's mark inks are derived from */
   color?: string;
   /** Optional free-form panel/button title; falls back to `name` when unset */
   displayTitle?: string;

@@ -23,7 +23,7 @@ export interface PilotRow {
   title: string;
   /** Icon/colour identity, so the row renders the panel's own brand mark. */
   chrome: TerminalChromeDescriptor;
-  /** Preset colour when the user picked one, which `BrandMark` treats as deliberate. */
+  /** Preset colour when the user picked one; the mark wears it like any other brand hex. */
   presetColor: string | undefined;
   /**
    * What the run is doing, in the same words the switcher uses for the same

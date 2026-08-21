@@ -3,25 +3,87 @@ import { render } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { BrandMark } from "../BrandMark";
 
-const resolveBrandChipMock = vi.hoisted(() => vi.fn());
+const resolveInkMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/brandIcon", () => ({
-  resolveBrandChip: resolveBrandChipMock,
+  resolveBrandMarkInk: resolveInkMock,
 }));
 vi.mock("@/hooks/useActiveAppScheme", () => ({
   useActiveAppScheme: () => ({ type: "dark", tokens: {} }),
 }));
 
-function TestIcon({ className }: { className?: string }) {
-  return <svg data-testid="icon" className={className} />;
+function TestIcon({ className, style }: { className?: string; style?: React.CSSProperties }) {
+  return <svg data-testid="icon" className={className} style={style} />;
 }
 
+const INK = { rest: "#9a8b84", hover: "#cc785c" };
+
 beforeEach(() => {
-  resolveBrandChipMock.mockReset();
+  resolveInkMock.mockReset();
 });
 
 describe("BrandMark", () => {
-  it("forwards className onto the child SVG when no chip is rendered", () => {
-    resolveBrandChipMock.mockReturnValue(null);
+  it("publishes both inks as custom properties on the glyph", () => {
+    resolveInkMock.mockReturnValue(INK);
+
+    const { getByTestId } = render(
+      <BrandMark brandColor="#cc785c">
+        <TestIcon />
+      </BrandMark>
+    );
+
+    const icon = getByTestId("icon");
+    expect(icon.style.getPropertyValue("--brand-mark-rest")).toBe(INK.rest);
+    expect(icon.style.getPropertyValue("--brand-mark-hover")).toBe(INK.hover);
+    expect(icon.getAttribute("class")).toContain("brand-mark");
+  });
+
+  it("never sets colour inline, so the hover rule can win", () => {
+    // An inline `color` outranks `button:hover .brand-mark` and would strand the
+    // mark at its resting tint for the whole interaction.
+    resolveInkMock.mockReturnValue(INK);
+
+    const { getByTestId } = render(
+      <BrandMark brandColor="#cc785c">
+        <TestIcon />
+      </BrandMark>
+    );
+
+    const { style } = getByTestId("icon");
+    expect(style.color).toBe("");
+    expect(style.backgroundColor).toBe("");
+    expect(style.filter).toBe("");
+  });
+
+  it("renders no wrapper element around the glyph", () => {
+    // The tile is what #11903 backed out: a mark is a glyph, not a plate.
+    resolveInkMock.mockReturnValue(INK);
+
+    const { container } = render(
+      <BrandMark brandColor="#cc785c">
+        <TestIcon />
+      </BrandMark>
+    );
+
+    expect(container.querySelector("span")).toBeNull();
+    expect(container.firstElementChild?.tagName.toLowerCase()).toBe("svg");
+  });
+
+  it("preserves styles the child already carried", () => {
+    resolveInkMock.mockReturnValue(INK);
+
+    const { getByTestId } = render(
+      <BrandMark brandColor="#cc785c">
+        <TestIcon style={{ opacity: 0.5 }} />
+      </BrandMark>
+    );
+
+    const { style } = getByTestId("icon");
+    expect(style.opacity).toBe("0.5");
+    expect(style.getPropertyValue("--brand-mark-rest")).toBe(INK.rest);
+  });
+
+  it("forwards className onto the child SVG", () => {
+    resolveInkMock.mockReturnValue(null);
 
     const { getByTestId, container } = render(
       <BrandMark className="w-3.5 h-3.5 mr-2">
@@ -34,7 +96,7 @@ describe("BrandMark", () => {
   });
 
   it("merges existing child className with the BrandMark className", () => {
-    resolveBrandChipMock.mockReturnValue(null);
+    resolveInkMock.mockReturnValue(null);
 
     const { getByTestId } = render(
       <BrandMark className="mr-2">
@@ -46,7 +108,7 @@ describe("BrandMark", () => {
   });
 
   it("preserves child size classes when BrandMark adds spacing (DockLaunchMenuItems shape)", () => {
-    resolveBrandChipMock.mockReturnValue(null);
+    resolveInkMock.mockReturnValue(null);
 
     const { getByTestId } = render(
       <BrandMark className="w-3.5 h-3.5 mr-2">
@@ -57,47 +119,31 @@ describe("BrandMark", () => {
     expect(getByTestId("icon").getAttribute("class")).toBe("w-3.5 h-3.5 mr-2");
   });
 
-  it("renders bare child unchanged when no className is supplied", () => {
-    resolveBrandChipMock.mockReturnValue(null);
+  it("leaves the child untouched when no ink resolves and nothing is added", () => {
+    resolveInkMock.mockReturnValue(null);
 
-    const { getByTestId, container } = render(
+    const { getByTestId } = render(
       <BrandMark>
         <TestIcon />
       </BrandMark>
     );
 
-    expect(container.querySelector("span")).toBeNull();
-    expect(getByTestId("icon").hasAttribute("class")).toBe(false);
+    const icon = getByTestId("icon");
+    expect(icon.hasAttribute("class")).toBe(false);
+    expect(icon.style.getPropertyValue("--brand-mark-rest")).toBe("");
   });
 
-  it("applies className to the chip wrapper, not the child, when a chip is returned", () => {
-    resolveBrandChipMock.mockReturnValue({ background: "#F5F5F5" });
+  it("tags the glyph only when an ink actually resolved", () => {
+    // A generic or plugin glyph reaching BrandMark without a brand hex must keep
+    // inheriting its context's colour rather than resolving to an empty variable.
+    resolveInkMock.mockReturnValue(null);
 
-    const { getByTestId, container } = render(
-      <BrandMark className="w-3.5 h-3.5 mr-2">
+    const { getByTestId } = render(
+      <BrandMark className="mr-2">
         <TestIcon />
       </BrandMark>
     );
 
-    const span = container.querySelector("span");
-    expect(span).not.toBeNull();
-    const spanClass = span?.getAttribute("class") ?? "";
-    expect(spanClass).toContain("mr-2");
-    expect(getByTestId("icon").hasAttribute("class")).toBe(false);
-  });
-
-  it("threads userChosen through to resolveBrandChip and renders no chip wrapper", () => {
-    // A user-chosen color bypasses the white tile in the resolver (returns null),
-    // so the child renders directly without a <span> wrapper.
-    resolveBrandChipMock.mockReturnValue(null);
-
-    const { container } = render(
-      <BrandMark brandColor="#000000" userChosen>
-        <TestIcon />
-      </BrandMark>
-    );
-
-    expect(resolveBrandChipMock).toHaveBeenCalledWith("#000000", expect.anything(), true);
-    expect(container.querySelector("span")).toBeNull();
+    expect(getByTestId("icon").getAttribute("class")).not.toContain("brand-mark");
   });
 });

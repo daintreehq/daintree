@@ -405,10 +405,11 @@ async function flushAsyncWork() {
 // reference is what has to stay stable — minting one per lookup would remount
 // the glyph each render. `data-agent-icon` is a test-only handle rather than a
 // copy of any production name, and `data-brand-color` records whether the CTA
-// passed a brandColor (it must not: the glyph inherits the button foreground).
+// wrapped in BrandMark (it must not: the glyph inherits the button foreground).
 function makeAgentIconStub(agentId: string) {
-  return function AgentIconStub({ brandColor }: { brandColor?: string }) {
-    return <svg data-agent-icon={agentId} data-brand-color={brandColor ?? "inherit"} />;
+  return function AgentIconStub({ style }: { style?: React.CSSProperties }) {
+    const ink = (style as Record<string, string> | undefined)?.["--brand-mark-rest"];
+    return <svg data-agent-icon={agentId} data-brand-color={ink ?? "inherit"} />;
   };
 }
 const CLAUDE_ICON_STUB = makeAgentIconStub("claude");
@@ -958,7 +959,7 @@ describe("HelpPanel — empty-state CTA wears the launching agent's mark (#11834
     const startButton = await findByTestId("help-start-assistant");
 
     expect(agentIconMarkerIn(startButton)).toBe("codex");
-    // No brandColor reaches the glyph, so it inherits the button's own
+    // No resolved ink reaches the glyph, so it inherits the button's own
     // foreground instead of painting itself the agent's brand hue.
     expect(startButton.querySelector("[data-agent-icon]")?.getAttribute("data-brand-color")).toBe(
       "inherit"

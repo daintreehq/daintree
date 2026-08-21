@@ -265,15 +265,48 @@ async function expectAgentIconColor(
   await expect(panel).toHaveAttribute("data-runtime-icon-id", agentId, { timeout: T_LONG });
   const icon = panel.locator(`[data-terminal-icon-id="${agentId}"]`).first();
   await expect(icon).toHaveAttribute("data-terminal-icon-color", color, { timeout: T_LONG });
-  // BrandMark may apply a contrast-clearing tint on light themes. The marker
-  // above is the canonical preset color contract; the SVG must still be
-  // concretely painted rather than falling back to currentColor.
+  // The marker above is the canonical preset color contract. Nothing hands a
+  // colour to a glyph any more: the SVG stays on `currentColor` and `BrandMark`
+  // publishes the resolved inks as custom properties that `.brand-mark` reads.
+  // Asserting the painted colour EQUALS the resting ink is what proves the whole
+  // chain ran — resolver, custom property and stylesheet rule — rather than just
+  // that some variable exists and the glyph inherited a colour from somewhere.
+  await expect(icon.locator("path").first()).toHaveAttribute("fill", "currentColor");
+  const svg = icon.locator("svg").first();
   await expect
-    .poll(() => icon.locator("path").first().getAttribute("fill"), {
-      timeout: T_LONG,
-      intervals: [250, 500],
-    })
-    .toMatch(/^#[0-9a-f]{6}$/i);
+    .poll(
+      () =>
+        svg.evaluate((el) => {
+          const computed = getComputedStyle(el);
+          const rest = computed.getPropertyValue("--brand-mark-rest").trim();
+          const hover = computed.getPropertyValue("--brand-mark-hover").trim();
+          const toRgb = (hex: string): string => {
+            const raw = hex.replace("#", "");
+            const body =
+              raw.length === 3
+                ? raw
+                    .split("")
+                    .map((c) => c + c)
+                    .join("")
+                : raw;
+            const [r, g, b] = [0, 2, 4].map((i) => parseInt(body.slice(i, i + 2), 16));
+            return `rgb(${r}, ${g}, ${b})`;
+          };
+          return {
+            restIsHex: /^#[0-9a-f]{6}$/i.test(rest),
+            hoverIsHex: /^#[0-9a-f]{6}$/i.test(hover),
+            paintedMatchesRest: rest !== "" && computed.color === toRgb(rest),
+            hasBrandClass: el.classList.contains("brand-mark"),
+          };
+        }),
+      { timeout: T_LONG, intervals: [250, 500] }
+    )
+    .toEqual({
+      restIsHex: true,
+      hoverIsHex: true,
+      paintedMatchesRest: true,
+      hasBrandClass: true,
+    });
 }
 
 async function quitAgentOrWaitForDemotion(page: Page, panel: Locator): Promise<void> {
@@ -330,7 +363,7 @@ test.describe.serial("Core: Agent preset icon color", () => {
     fixtureCleanup?.();
   });
 
-  test("preset color tints launch, survives app restart, and reapplies after quit/restart", async () => {
+  test("preset color drives the mark on launch, survives app restart, and reapplies after quit/restart", async () => {
     test.setTimeout(180_000);
 
     await test.step("Disable hybrid input so /quit reaches the fake agent stdin", async () => {
@@ -344,7 +377,7 @@ test.describe.serial("Core: Agent preset icon color", () => {
     });
 
     let claude!: Awaited<ReturnType<typeof launchPreset>>;
-    await test.step("Launch Claude preset and verify icon color tints with preset color", async () => {
+    await test.step("Launch Claude preset and verify the mark is derived from the preset color", async () => {
       await expectPersistedPresetColor(ctx.window, "claude", CLAUDE_PRESET_ID, CLAUDE_COLOR);
       claude = await launchPreset(ctx.window, "claude", CLAUDE_PRESET_ID);
       await expectAgentIconColor(claude.panel, "claude", CLAUDE_COLOR);
@@ -376,7 +409,6 @@ test.describe.serial("Core: Agent preset icon color", () => {
       await waitForTerminalText(codex.panel, "FAKE_CODEX_READY", T_LONG);
       await waitForTerminalText(codex.panel, `FAKE_CODEX_COLOR=${CODEX_COLOR}`, T_LONG);
       await waitForTerminalText(codex.panel, "FAKE_CODEX_PROVIDER=green-provider", T_LONG);
-      expect(CODEX_COLOR).not.toBe(CLAUDE_COLOR);
     });
   });
 });

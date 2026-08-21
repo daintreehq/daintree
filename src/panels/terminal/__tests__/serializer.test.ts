@@ -77,7 +77,7 @@ describe("serializePtyPanel — other fields are unaffected by agentPresetId", (
 // ── adversarial: agentPresetColor must survive the serialise/restore round-trip ─
 // Bug: serializePtyPanel does not write agentPresetColor into the snapshot.
 // After an Electron reload the panel re-opens with agentPresetColor=undefined,
-// so the dock icon loses its tint and falls back to the default brand color —
+// so the dock icon loses its preset-derived mark ink and falls back to the default brand color —
 // even when the preset is still present in settings.
 
 describe("serializePtyPanel — agentPresetColor (Bug: not serialized)", () => {
