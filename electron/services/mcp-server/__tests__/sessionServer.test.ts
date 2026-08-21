@@ -5589,6 +5589,35 @@ describe("session-scoped resource ownership (#11909)", () => {
       expect(store.resourceOwnership.owns("s-composite", "terminal", "terminal-2")).toBe(true);
     });
 
+    it("reports a partial composite failure as non-retriable", async () => {
+      // Before #11909 this arrived as `EXECUTION_ERROR`, which the retriable
+      // set includes — so a conductor was being told to try again, and a retry
+      // of a composite that already made a worktree makes a SECOND one. The
+      // provenance code carries the honest answer: the call is not repeatable.
+      const { server } = harness("s-retriable", {
+        "worktree.createWithRecipe": {
+          result: {
+            ok: false,
+            error: {
+              code: "PARTIAL_SUCCESS",
+              message: formatPartialSuccessMessage("recipe blew up", {
+                worktreeId: "/tmp/wt-retriable",
+              }),
+            },
+          },
+        },
+      });
+
+      const result = await callTool(server, {
+        name: "worktree.createWithRecipe",
+        arguments: { branchName: "x", recipeId: "r1" },
+      });
+
+      const payload = payloadOf<{ retriable: boolean; code: string }>(result);
+      expect(payload.code).toBe("PARTIAL_SUCCESS");
+      expect(payload.retriable).toBe(false);
+    });
+
     it("records the worktree a partially-failed composite left behind", async () => {
       // The caller has to be able to clean up the mess its own call made, and
       // the failure arrives as `ok: false` because ActionService flattens the
@@ -6108,9 +6137,11 @@ describe("session-scoped resource ownership (#11909)", () => {
       expect(called.isError).toBe(true);
     });
 
-    it("keeps both tools on every surface for an unbound external session", async () => {
-      // The counterpart assertion, so the test above cannot pass by the tools
-      // being missing from the manifest entirely.
+    it("lists both tools for an unbound external session", async () => {
+      // The counterpart assertion, so the test above cannot pass merely by the
+      // tools being absent from the manifest. Scoped to `tools/list` on
+      // purpose: the four other surfaces are only interesting when something
+      // is being withheld, which is the bound case above.
       const store = makeStore();
       seedLiveSession(store, "s-unbound-surface", "external");
       store.sessionOriginMap.set("s-unbound-surface", "external");
