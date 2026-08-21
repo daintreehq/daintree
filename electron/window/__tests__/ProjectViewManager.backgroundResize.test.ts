@@ -222,6 +222,29 @@ describe("ProjectViewManager — background resize forwarding", () => {
     expect(sends[0][1]).toEqual({ width: 1440, height: 900 });
   });
 
+  it("replays the skipped notification on restore, which fires no resize of its own", async () => {
+    // Deminiaturizing to the same frame emits `restore` and nothing else, so the
+    // notification declined during the minimize has to be re-driven from that
+    // event or a cached view keeps its pre-minimize geometry indefinitely.
+    await manager.switchTo("proj-b", "/path/b");
+    const restoreCall = win.on.mock.calls.find(([event]) => event === "restore");
+    if (!restoreCall) throw new Error("restore handler not registered");
+
+    win.isMinimized.mockReturnValue(true);
+    fireResize();
+    vi.advanceTimersByTime(300);
+    expect(backgroundResizeSends(initialWc)).toHaveLength(0);
+
+    win.isMinimized.mockReturnValue(false);
+    win.getContentBounds.mockReturnValue({ x: 0, y: 0, width: 1440, height: 900 });
+    (restoreCall[1] as () => void)();
+    vi.advanceTimersByTime(300);
+
+    const sends = backgroundResizeSends(initialWc);
+    expect(sends).toHaveLength(1);
+    expect(sends[0][1]).toEqual({ width: 1440, height: 900 });
+  });
+
   it("never sends to the active view", async () => {
     await manager.switchTo("proj-b", "/path/b");
     const activeWc = manager.getActiveView()!.webContents as unknown as ReturnType<

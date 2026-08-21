@@ -20,9 +20,11 @@ const SETTLED_RESIZE_DELAY_MS = 500;
  * A box of a few pixels does not fail loudly — `colsForWidth` floors at 2 and
  * `rowsForHeight` at 1, matching FitAddon, so it succeeds at 2x1 and both grids
  * adopt it. A cached pane keeps parsing bytes through that, and xterm re-wraps
- * committed scrollback to two columns on the way; reflow cannot undo it when
- * real layout returns, so the history stays a vertical strip until it scrolls
- * away (#11900). `applyBackgroundWindowResize` produces exactly such a box by
+ * committed scrollback to two columns on the way. Widening does unwrap ordinary
+ * soft-wrapped lines, so the strip is not always permanent — but a rewrap that
+ * narrow multiplies the line count, and whatever overflows the scrollback cap is
+ * evicted and gone, as is anything the app hard-wrapped at two columns while the
+ * PTY was that size (#11900). `applyBackgroundWindowResize` produces such a box by
  * scaling every pane's origin against the window content bounds Main forwards
  * on a resize, maximize or full-screen transition — one implausible bound
  * shrinks every cached pane at once.
@@ -645,6 +647,14 @@ export class TerminalResizeController {
     }
     const managed = this.deps.getInstance(id);
     if (!managed) return null;
+    // The box cleared the pixel floor, but the grid it derives is what actually
+    // reflows, and that also depends on the gutter and the cell. Ask before
+    // touching anything: the checks below discard the alt-buffer stash, replace
+    // the lock stash and cancel queued work, so learning at the helper that this
+    // box was never usable would cost real geometry to reject an unusable one.
+    if (this.derivesFloorGrid(managed, width)) {
+      return null;
+    }
     // Choke point for the alt-screen exclusion: a live full-screen TUI paints an
     // absolutely-positioned frame that xterm never reflows, and racing its own
     // SIGWINCH redraw is the #10805/#10632 corruption. Leaving BOTH grids at the
@@ -710,6 +720,21 @@ export class TerminalResizeController {
     return { cols: grid.cols, rows: grid.rows };
   }
 
+  /**
+   * Whether `width` divides down to the column floor for this pane's cached
+   * cell — the signal that a box passed the pixel floor and still describes no
+   * usable pane (#11900).
+   *
+   * Answers `false` when cell metrics are missing: that is a separate condition
+   * with its own handling further in, and reporting it as a floor grid here
+   * would reroute it.
+   */
+  private derivesFloorGrid(managed: ManagedTerminal, width: number): boolean {
+    const cellDims = getXtermCellDimensions(managed.terminal);
+    if (!cellDims) return false;
+    return colsForWidth(managed.terminal, width, cellDims.width) <= FIT_MIN_COLS;
+  }
+
   // Computes cols/rows from cached cell metrics with no DOM reads — a hidden or
   // detached view has no live layout to measure. Pure computation + state
   // update; the caller owns the commit policy, and the two callers differ in
@@ -741,16 +766,18 @@ export class TerminalResizeController {
     // The pixel floor is necessary but not sufficient. It is a fixed count of
     // pixels, while the grid those pixels become also depends on the gutter and
     // the cell: at the largest supported font a box sitting exactly on that
-    // floor still divides to FIT_MIN_COLS. Landing on the column floor means the
-    // arithmetic bottomed out rather than measured a pane, and re-wrapping
-    // committed scrollback that narrow is the damage #11900 is about — columns
-    // are what reflow rewraps, so this is checked on cols alone.
+    // floor still divides to FIT_MIN_COLS. Checked on columns alone because
+    // columns are what reflow rewraps.
     //
-    // Only these cached-metric paths take it. They have no live layout to sanity
-    // check against, and nothing is lost by declining: both grids stay where
-    // they are, and the reveal-time `reconcileGeometryFresh` sizes the pane from
-    // real bounds. A visible pane keeps its floor grid, which is the honest
-    // answer when the container really is that narrow.
+    // A conservative classification, not a proof — a genuine many-way split at
+    // maximum font size can measure this narrow. These paths are where that
+    // trade is worth taking: they extrapolate from a cached cell with no live
+    // layout to check against, and declining costs only staleness, since both
+    // grids stay put and the reveal-time `reconcileGeometryFresh` measures the
+    // pane for real. `applyBackgroundResize` asks the same question up front, so
+    // by here this is the backstop for anything that reaches the conversion
+    // another way; a visible pane keeps its floor grid, the honest answer when
+    // the container really is that narrow (#11900).
     if (cols <= FIT_MIN_COLS) {
       return null;
     }
