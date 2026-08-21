@@ -525,6 +525,21 @@ describe("recipeActions adversarial", () => {
   });
 
   describe("recipe editor argument schema (#11908)", () => {
+    it("bounds and shape-checks the prefilled pane list it now advertises", () => {
+      const def = definitionFor("recipe.editor.open");
+      const parse = (initialTerminals: unknown) =>
+        def.argsSchema?.safeParse({ worktreeId: "wt-a", initialTerminals }).success;
+
+      // The one field the editor actually reads has to be there — the listener
+      // casts straight to RecipeTerminal[], so a bare string would be rendered
+      // as a pane.
+      expect(parse([{ type: "claude", title: "Reviewer", anythingElse: 1 }])).toBe(true);
+      expect(parse(["claude"])).toBe(false);
+      expect(parse([{ title: "no type" }])).toBe(false);
+      // Longer than any recipe can hold, so nothing legitimate is turned away.
+      expect(parse(Array.from({ length: 11 }, () => ({ type: "terminal" })))).toBe(false);
+    });
+
     it("rejects a blank selector rather than treating it as absent", () => {
       const def = definitionFor("recipe.editor.open");
 

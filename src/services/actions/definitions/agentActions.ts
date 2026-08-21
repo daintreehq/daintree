@@ -1017,13 +1017,31 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       // the asserted id and pass an id-only check while launching somewhere the
       // caller never named. The cwd is what the CLI actually resolves the
       // conversation from (#4781), so it is what has to be inside the worktree.
-      if (record.cwd && inferWorktreeIdFromCwd(record.cwd, worktreeList) !== requestedWorktreeId) {
-        throw new Error(
-          "That session was recorded in a different directory. Resume it from the worktree it belongs to — relaunching it elsewhere would start a new conversation, not continue this one."
-        );
+      // An empty string is not a directory. `resolveResumeLaunchTarget` uses `??`,
+      // so `""` is "present" and survives all the way to the spawn, where main
+      // falls back to the project root or home — a different directory than the
+      // one asserted, arrived at silently.
+      const recordedCwd = record.cwd?.trim() ? record.cwd : undefined;
+      if (recordedCwd) {
+        // `inferWorktreeIdFromCwd` matches lexically, so a path that walks back
+        // out through `..` still carries the worktree root as its prefix and
+        // would be classified as inside it. Journal cwds come from terminals
+        // Daintree itself spawned, so this is belt-and-braces rather than a live
+        // attack path — but the cost of being wrong is launching an agent in a
+        // directory nobody asked for.
+        if (recordedCwd.split(/[\\/]/).includes("..")) {
+          throw new Error(
+            "That session's recorded directory can't be verified — it walks outside the worktree it was journaled under."
+          );
+        }
+        if (inferWorktreeIdFromCwd(recordedCwd, worktreeList) !== requestedWorktreeId) {
+          throw new Error(
+            "That session was recorded in a different directory. Resume it from the worktree it belongs to — relaunching it elsewhere would start a new conversation, not continue this one."
+          );
+        }
       }
       const target = resolveResumeLaunchTarget(
-        record,
+        { worktreeId: record.worktreeId, cwd: recordedCwd },
         { defaultTerminalCwd: requestedWorktreePath, activeWorktreeId: requestedWorktreeId },
         worktreeList
       );
@@ -1087,7 +1105,12 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
   async function requireSessionInCallerProject(sessionId: string, ctx: ActionContext) {
     const projectScope = ctx.projectId ?? ctx.scratchId;
     if (!projectScope) {
-      if (ctx.dispatchSource === "agent") {
+      // Both headless sources are refused, named explicitly rather than via
+      // `!isForegroundDispatch`: that helper treats an ABSENT source as
+      // non-foreground, which would reject the bare `run(args, {})` shape the
+      // action unit tests use throughout. Same reasoning as
+      // `requireExplicitWorktreeForAgentDispatch`.
+      if (ctx.dispatchSource === "agent" || ctx.dispatchSource === "plugin") {
         throw new Error(
           "No project in scope — this call can't be checked against a project, so it is refused."
         );

@@ -192,6 +192,24 @@ describe("agentSessionHistory.resume — launch directory containment", () => {
     expect(resumeMock.mock.calls[0]?.[1]).toEqual({ cwd: WT_A, worktreeId: WT_A });
   });
 
+  it("refuses a recorded directory that walks back out of the worktree", async () => {
+    // Lexical prefix matching classifies this as inside WT_A, so the containment
+    // check has to reject the traversal itself.
+    listMock.mockResolvedValue([record({ worktreeId: null, cwd: `${WT_A}/../outside` })]);
+    await expect(run({ worktreeId: WT_A, sessionId: "sess-1" }, agentCtx)).rejects.toThrow(
+      /walks outside/i
+    );
+    expect(resumeMock).not.toHaveBeenCalled();
+  });
+
+  it("treats an empty recorded directory as absent rather than a launch path", async () => {
+    // `resolveResumeLaunchTarget` uses `??`, so "" is "present" and would reach
+    // the spawn, where main quietly falls back to the project root or home.
+    listMock.mockResolvedValue([record({ cwd: "   " })]);
+    await run({ worktreeId: WT_A, sessionId: "sess-1" }, agentCtx);
+    expect(resumeMock.mock.calls[0]?.[1]?.cwd).toBe(WT_A);
+  });
+
   it("fails closed when the worktree index is unavailable", async () => {
     // Degrading here would mean launching a process into a directory nothing
     // verified is open.

@@ -12,11 +12,13 @@ const agentSettingsStoreMock = vi.hoisted(() => ({ getState: vi.fn() }));
 // `resumeSessionIntoPanel` reads the panel store directly, the same way the
 // action definitions it is shared with do.
 const activateTerminalMock = vi.hoisted(() => vi.fn());
+const restoreBackgroundTerminalMock = vi.hoisted(() => vi.fn());
 const addPanelMock = vi.hoisted(() => vi.fn());
 const panelState = vi.hoisted(() => ({
   panelIds: [] as string[],
   panelsById: {} as Record<string, unknown>,
   activateTerminal: activateTerminalMock,
+  restoreBackgroundTerminal: restoreBackgroundTerminalMock,
   addPanel: addPanelMock,
 }));
 
@@ -204,6 +206,29 @@ describe("findLiveResumePanelId", () => {
   it("still matches a backgrounded pane, which already owns the transcript", () => {
     setPanels(pane("term-1", { location: "background" }));
     expect(findLiveResumePanelId("s-1", "wt-1")).toBe("term-1");
+  });
+
+  it("reveals a backgrounded pane rather than reporting a focus nothing can see", async () => {
+    // `activateTerminal` moves selection but never restores location, so
+    // activating a hidden pane on its own would report `activatedExisting`
+    // while the grid stayed unchanged.
+    setPanels(pane("term-1", { location: "background" }));
+    const result = await resumeSessionIntoPanel(baseSession, {
+      cwd: "/active",
+      worktreeId: "wt-1",
+    });
+
+    expect(restoreBackgroundTerminalMock).toHaveBeenCalledWith("term-1");
+    expect(activateTerminalMock).toHaveBeenCalledWith("term-1");
+    expect(result.outcome).toBe("activatedExisting");
+  });
+
+  it("does not try to restore a pane that is already in the grid", async () => {
+    setPanels(pane("term-1"));
+    await resumeSessionIntoPanel(baseSession, { cwd: "/active", worktreeId: "wt-1" });
+
+    expect(restoreBackgroundTerminalMock).not.toHaveBeenCalled();
+    expect(activateTerminalMock).toHaveBeenCalledWith("term-1");
   });
 
   it("treats an absent worktree on both sides as the same scope", () => {

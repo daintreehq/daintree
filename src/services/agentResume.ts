@@ -201,7 +201,12 @@ export async function resumeSessionIntoPanel(
     // out of the grid. Restore first, then activate, the same order the quick
     // switcher uses for the identical case.
     if (panelStore.panelsById[existingId]?.location === "background") {
-      panelStore.restoreBackgroundTerminal(existingId, worktreeId ?? undefined);
+      // No explicit target worktree: the pane matched on worktree already, so
+      // naming one could only re-home it to where it is. Passing it would also
+      // override `restoreBackgroundTerminal`'s own rescue branch, which adopts
+      // the active worktree for a worktree-less panel that would otherwise
+      // strand in the global grid bucket.
+      panelStore.restoreBackgroundTerminal(existingId);
     }
     panelStore.activateTerminal(existingId);
     return { terminalId: existingId, outcome: "activatedExisting", worktreeId };

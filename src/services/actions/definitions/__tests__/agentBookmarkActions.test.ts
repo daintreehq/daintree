@@ -510,13 +510,17 @@ describe("bookmark mutations are project-scoped (#11908)", () => {
   });
 
   it.each(MUTATIONS)(
-    "%s refuses an agent dispatch with no project in scope",
+    "%s refuses a headless dispatch with no project in scope",
     async (id, args, ipc) => {
       const actions = setupActions();
 
-      await expect(
-        callAction(actions, id, { ...args, sessionId: "ours" }, { dispatchSource: "agent" })
-      ).rejects.toThrow(/No project in scope/i);
+      // Both headless sources, not just agents: a plugin dispatch during a
+      // scope-less renderer state would otherwise reach the global journal.
+      for (const dispatchSource of ["agent", "plugin"] as const) {
+        await expect(
+          callAction(actions, id, { ...args, sessionId: "ours" }, { dispatchSource })
+        ).rejects.toThrow(/No project in scope/i);
+      }
       expect(agentSessionHistoryMock[ipc]).not.toHaveBeenCalled();
     }
   );

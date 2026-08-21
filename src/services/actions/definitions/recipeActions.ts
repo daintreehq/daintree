@@ -5,6 +5,7 @@ import type { ActionContext } from "@shared/types/actions";
 import type { TerminalRecipe } from "@shared/types";
 import { isPluginRecipe } from "@shared/types/project";
 import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
+import { MAX_TERMINALS_PER_RECIPE } from "@shared/utils/recipeSanitizer";
 import { useRecipeStore } from "@/store/recipeStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { getWorktreePathIndex } from "@/store/storeAccessors";
@@ -16,21 +17,25 @@ import {
 } from "./schemas";
 
 /**
- * `initialTerminals` stays an opaque array rather than the full `RecipeTerminal`
+ * `initialTerminals` is validated at the element's edge, not through its whole
  * shape.
  *
  * It was `z.any()` before #11908, and no in-tree caller passes it — but a
  * plugin can dispatch built-in actions, so dropping the key outright would
- * silently strip an argument the manifest used to accept. Typing it properly
+ * silently strip an argument the manifest used to accept. Typing it fully
  * instead meant advertising the whole nested `RecipeTerminal` shape: 1.8 KB of
  * schema on a tool whose job is to open a window, past the per-tool parameter
  * budget in `mcpWireBudget.test.ts`.
  *
- * So it keeps working exactly as it did and the description points a model at
- * the from-layout capability instead, which reads real panes rather than asking
- * the model to compose them. The editor validates the array itself
- * (`Array.isArray`, then its own rendering), and nothing here is saved until a
- * person reviews the draft.
+ * The middle ground: require the one field the editor actually reads (`type`)
+ * and let the rest through, capped at the same terminal count a recipe can hold
+ * anyway. That keeps a plugin's existing well-formed payload working, costs
+ * ~150 bytes of schema, and stops the two things an unbounded `unknown[]` would
+ * have handed a model now that this is agent-reachable — a pane list longer
+ * than any recipe can be, and elements the editor's `RecipeTerminal[]` cast
+ * would misrepresent. The description points at the from-layout capability,
+ * which reads real panes rather than asking a model to compose them, and
+ * nothing here is saved until a person reviews the draft.
  */
 /**
  * Fire the editor-open event and report whether anything took it.
@@ -73,7 +78,8 @@ const RecipeEditorOpenArgsSchema = z.object({
     .optional()
     .describe("Load an existing recipe. An unknown id opens a blank draft instead."),
   initialTerminals: z
-    .array(z.unknown())
+    .array(z.looseObject({ type: z.string().min(1) }))
+    .max(MAX_TERMINALS_PER_RECIPE)
     .optional()
     .describe(
       "Prefilled panes, for callers that already hold them. Capture a live layout instead."
