@@ -317,7 +317,7 @@ describe("evaluateScenarioBudget — calibrating scenarios", () => {
   });
 });
 
-describe("evaluateScenarioBudget — metric ceilings", () => {
+describe("evaluateScenarioBudget — metric-only budgets (no p95Ms)", () => {
   it("fails closed when a configured metric is not emitted", () => {
     // A renamed or dropped metric silently removes its gate otherwise, which is
     // the same silent-rot class as a missing baseline.

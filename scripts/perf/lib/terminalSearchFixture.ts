@@ -173,8 +173,7 @@ export async function createSearchableTerminal(
     resetDecorationCount: () => {
       decorations = 0;
     },
-    markerCount: () =>
-      (terminal as unknown as { _core?: { _markers?: unknown[] } })._core?._markers?.length ?? 0,
+    markerCount: () => terminal.markers.length,
     invalidateLineCache: () =>
       new Promise<void>((resolve) => {
         terminal.write("\r\n", () => resolve());
