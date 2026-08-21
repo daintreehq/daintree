@@ -60,12 +60,20 @@ function fakeSessionStore(
   // eviction via the optional `now` clock when they need to assert
   // expiry, and they call dispose() at teardown.
   const grantCache = new GrantCache({ sweepIntervalMs: 0 });
+  // Derived from `sessionOriginMap` exactly as the real store derives it, so a
+  // test that seeds an origin gets the grant-eligibility answer the shipped
+  // code would give rather than a hard-coded one (#11910).
+  const sessionOriginMap = new Map<string, string>();
   const store = {
     sessions: new Map(),
     httpSessions: new Map(),
     sessionTierMap: new Map(),
     sessionWebContentsMap: new Map(),
-    sessionOriginMap: new Map(),
+    sessionOriginMap,
+    isRendererOwnedOrigin: vi.fn((sessionId: string) => {
+      const origin = sessionOriginMap.get(sessionId) ?? "external";
+      return origin === "help" || origin === "assistant-pane";
+    }),
     sessionWorkspaceMap: new Map(),
     resourceSubscriptions: new Map(),
     dedupInFlight: new Map(),
@@ -3837,6 +3845,149 @@ describe("sessionServer introspection tier filtering", () => {
     expect(body.totalMatches).toBe(1);
   });
 
+  describe("actions.getSchema policy record (#11910)", () => {
+    interface GetSchemaBody {
+      ok: boolean;
+      entry: ActionManifestEntry | null;
+      policy: Record<string, unknown> | null;
+      error: { code: string; message: string } | null;
+    }
+
+    function schemaDeps(
+      tier: "workbench" | "action" | "system" | "external",
+      target: ActionManifestEntry,
+      overrides?: Partial<SessionServerDeps>
+    ) {
+      // The renderer's real return shape: it fills `entry` and leaves `policy`
+      // for main, which is the substitution under test.
+      return introspectionDeps(
+        tier,
+        { ok: true, entry: target, policy: null, error: null },
+        overrides
+      );
+    }
+
+    async function lookup(
+      deps: SessionServerDeps,
+      actionId: string,
+      sessionId = "s1"
+    ): Promise<GetSchemaBody> {
+      const server = createSessionServer(sessionId, deps);
+      const res = await callTool(server, {
+        name: ACTIONS_GET_SCHEMA_TOOL_ID,
+        arguments: { actionId },
+      });
+      return payload<GetSchemaBody>(res);
+    }
+
+    it("substitutes a real policy for the renderer's null placeholder", async () => {
+      const deps = schemaDeps("workbench", entry("terminal.list"));
+      const body = await lookup(deps, "terminal.list");
+
+      // The renderer sent `policy: null`; anything non-null here is main's
+      // substitution, which is the wiring under test.
+      expect(body.ok).toBe(true);
+      expect(body.entry).not.toBeNull();
+      expect(body.error).toBeNull();
+      expect(body.policy).toMatchObject({ callable: true, authorizedBy: "tier" });
+    });
+
+    // The origin is what grant issuance gates on, and a session that never
+    // declared one defaults to `external` — so the honest answer for it is that
+    // no approval flow exists, whatever tier admitted the call.
+    it("reports grantability from the session origin, not its tier", async () => {
+      const unowned = schemaDeps("workbench", entry("terminal.list"));
+      expect((await lookup(unowned, "terminal.list")).policy).toMatchObject({
+        grantable: false,
+      });
+
+      const owned = schemaDeps("workbench", entry("terminal.list"));
+      owned.sessionStore.sessionOriginMap.set("s1", "help");
+      expect((await lookup(owned, "terminal.list")).policy).toMatchObject({
+        grantable: true,
+      });
+    });
+
+    it("reports the flat external tier for an api-key caller", async () => {
+      const deps = schemaDeps("external", entry("terminal.list"));
+      const body = await lookup(deps, "terminal.list");
+
+      // The point of the external branch: `minimumPermittingTier` never returns
+      // "external", so a tier derived from it alone would be wrong here.
+      expect(body.ok).toBe(true);
+      expect(body.policy).toMatchObject({ minimumTier: "external" });
+    });
+
+    // A live grant widens discovery, and the record must name the grant as what
+    // admits the call — the client's cue that this access can lapse.
+    it("names a live per-tool grant as the admitting mechanism", async () => {
+      const deps = schemaDeps("workbench", entry("git.push"));
+      deps.sessionStore.sessionOriginMap.set("s1", "help");
+      deps.sessionStore.grantCache.issueGrant("s1", "git.push");
+
+      const body = await lookup(deps, "git.push");
+
+      expect(body.ok).toBe(true);
+      expect(body.policy).toMatchObject({ authorizedBy: "grant", minimumTier: "system" });
+      // The grant is bridging a real gap rather than rubber-stamping a target
+      // the tier already allowed — stated as the relation, so it keeps meaning
+      // if the fixture's tier changes.
+      expect(body.policy?.effectiveTier).not.toBe(body.policy?.minimumTier);
+    });
+
+    it("still collapses a tier-denied target with no policy attached", async () => {
+      const deps = schemaDeps("workbench", entry("git.push"));
+      const body = await lookup(deps, "git.push");
+
+      expect(body.ok).toBe(false);
+      expect(body.entry).toBeNull();
+      expect(body.policy).toBeNull();
+      expect(body.error?.code).toBe("NOT_FOUND");
+    });
+
+    it("never attaches a policy to a hidden or restricted target", async () => {
+      for (const overrides of [
+        { mcpVisibility: "hidden" as const },
+        { danger: "restricted" as const },
+      ]) {
+        const deps = schemaDeps("workbench", entry("terminal.list", overrides));
+        const body = await lookup(deps, "terminal.list");
+
+        expect(body).toEqual({
+          ok: false,
+          entry: null,
+          policy: null,
+          error: { code: "NOT_FOUND", message: expect.stringContaining("terminal.list") },
+        });
+      }
+    });
+
+    // The policy is a snapshot, not a lease. A grant that lapses between two
+    // reads must stop admitting the target on the second one — otherwise a
+    // client caches an authorization the dispatch gate would already refuse.
+    it("stops reporting a grant once its TTL has lapsed", async () => {
+      let now = 1000;
+      const grantCache = new GrantCache({ ttlMs: 100, sweepIntervalMs: 0, now: () => now });
+      const store = fakeSessionStore("workbench");
+      (store as unknown as { grantCache: GrantCache }).grantCache = grantCache;
+      store.sessionOriginMap.set("s1", "help");
+
+      const deps = schemaDeps("workbench", entry("git.push"), { sessionStore: store });
+      grantCache.issueGrant("s1", "git.push");
+
+      const whileLive = await lookup(deps, "git.push");
+      expect(whileLive.ok).toBe(true);
+      expect(whileLive.policy).toMatchObject({ authorizedBy: "grant" });
+
+      now = 50_000;
+      const afterExpiry = await lookup(deps, "git.push");
+      expect(afterExpiry.ok).toBe(false);
+      expect(afterExpiry.policy).toBeNull();
+
+      grantCache.dispose();
+    });
+  });
+
   it("over-fetches the search page so denied top hits cannot starve it", async () => {
     // 40 denied hits outrank the permitted ones. A renderer honouring the
     // caller's limit of 3 would return only denied entries, so without the
@@ -4598,6 +4749,82 @@ describe("workspace-bound external sessions (#11789)", () => {
       await server.connect(makeMockTransport());
 
       expect((await listTools(server)).tools.map((t) => t.name)).toContain("recipe.run");
+    });
+
+    // The binding ceiling is applied by deleting withheld ids from
+    // `permittedActionIds` after the grant union, so a schema lookup must be
+    // refused the same way `tools/list` withholds the name — policy included.
+    // Handing back a policy here would describe a target this session provably
+    // cannot dispatch (#11910).
+    it("withholds the schema and policy for the confirm-gated tool", async () => {
+      const deps = boundDeps({
+        // `actions.getSchema` itself must be in the bound workspace's surface,
+        // or the guard that refuses a tool this workspace cannot describe fires
+        // before the lookup is ever filtered.
+        requestManifest: vi
+          .fn()
+          .mockResolvedValue([makeManifestEntry(ACTIONS_GET_SCHEMA_TOOL_ID), recipeRun()]),
+        dispatchAction: vi.fn().mockResolvedValue({
+          result: { ok: true, result: { ok: true, entry: recipeRun(), policy: null, error: null } },
+        }),
+      });
+      const server = createSessionServer(SESSION, deps);
+      await server.connect(makeMockTransport());
+
+      const res = await callTool(server, {
+        name: ACTIONS_GET_SCHEMA_TOOL_ID,
+        arguments: { actionId: "recipe.run" },
+      });
+      const body = JSON.parse((res.content as Array<{ text: string }>)[0]!.text) as {
+        ok: boolean;
+        entry: unknown;
+        policy: unknown;
+        error: { code: string } | null;
+      };
+
+      expect(body.ok).toBe(false);
+      expect(body.entry).toBeNull();
+      expect(body.policy).toBeNull();
+      expect(body.error?.code).toBe("NOT_FOUND");
+    });
+
+    it("still answers the schema lookup for a tool the binding does not withhold", async () => {
+      // Guards the test above against passing for the wrong reason — a bound
+      // session that could not answer ANY lookup would satisfy it too.
+      const deps = boundDeps({
+        requestManifest: vi
+          .fn()
+          .mockResolvedValue([
+            makeManifestEntry(ACTIONS_GET_SCHEMA_TOOL_ID),
+            makeManifestEntry("terminal.list"),
+            recipeRun(),
+          ]),
+        dispatchAction: vi.fn().mockResolvedValue({
+          result: {
+            ok: true,
+            result: {
+              ok: true,
+              entry: makeManifestEntry("terminal.list"),
+              policy: null,
+              error: null,
+            },
+          },
+        }),
+      });
+      const server = createSessionServer(SESSION, deps);
+      await server.connect(makeMockTransport());
+
+      const res = await callTool(server, {
+        name: ACTIONS_GET_SCHEMA_TOOL_ID,
+        arguments: { actionId: "terminal.list" },
+      });
+      const body = JSON.parse((res.content as Array<{ text: string }>)[0]!.text) as {
+        ok: boolean;
+        policy: { minimumTier: string } | null;
+      };
+
+      expect(body.ok).toBe(true);
+      expect(body.policy).toMatchObject({ minimumTier: "external" });
     });
 
     it("omits it from mcp.surface too, so discovery and listing agree", async () => {

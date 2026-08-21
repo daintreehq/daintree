@@ -3,6 +3,7 @@ import type { ActionContext, ActionManifestEntry } from "@shared/types/actions";
 import { z } from "zod";
 import { PersistedStoreInfoSchema } from "./schemas";
 import { McpSurfaceResultSchema } from "@shared/types/mcpSurface";
+import { McpGetSchemaResultSchema } from "@shared/types/mcpTargetPolicy";
 import {
   ACTIONS_LIST_DEFAULT_LIMIT,
   ACTIONS_LIST_MAX_LIMIT,
@@ -392,7 +393,7 @@ export function registerIntrospectionActions(
     id: "actions.getSchema",
     title: "Get Action Schema",
     description:
-      "Fetch one action's full manifest entry, including the exact arguments it accepts and the shape it returns. Use this after finding a candidate by search or listing, before dispatching it, so the arguments are known rather than guessed. An unknown, hidden or restricted id comes back as a structured failure in the result rather than as a thrown error.",
+      "Fetch one action's full manifest entry — the exact arguments it accepts, the shape it returns, and a policy record saying whether this session can call it, at which tier, and whether confirmation applies. Use it after finding a candidate by search or listing, before dispatching. An unknown, hidden or restricted id comes back as a structured failure rather than a thrown error.",
     category: "introspection",
     kind: "query",
     danger: "safe",
@@ -413,13 +414,15 @@ export function registerIntrospectionActions(
           "Inspect the input and output schema of a terminal status tool before calling it",
       },
     ],
-    resultSchema: z.union([
-      z.object({ ok: z.literal(true), entry: z.unknown() }),
-      z.object({
-        ok: z.literal(false),
-        error: z.object({ code: z.string(), message: z.string() }),
-      }),
-    ]),
+    // Validated but deliberately NOT advertised as an MCP `outputSchema`. It
+    // would be the more useful contract — clients AJV-validate
+    // `structuredContent` against an advertised schema — but this tool is on
+    // `MCP_EXTERNAL_TIER_TOOLS`, where the emitted JSON Schema measured 1,611
+    // bytes past `mcpWireBudget`'s 43,000-byte external ceiling. That is ~4% of
+    // the whole third-party surface spent on one introspection tool's return
+    // shape, and the policy record rides the text result either way. Revisit if
+    // that budget ever gains real headroom; do not raise the ratchet for it.
+    resultSchema: McpGetSchemaResultSchema,
     run: async (args: unknown, ctx: ActionContext) => {
       const { actionId } = args as { actionId: string };
       const entry = actionService.get(actionId, ctx);
@@ -427,6 +430,8 @@ export function registerIntrospectionActions(
       if (!entry || entry.mcpVisibility === "hidden" || entry.danger === "restricted") {
         return {
           ok: false,
+          entry: null,
+          policy: null,
           error: {
             code: "NOT_FOUND",
             message: `No action found with id "${actionId}". Use actions.search to find available actions.`,
@@ -434,7 +439,14 @@ export function registerIntrospectionActions(
         };
       }
 
-      return { ok: true, entry };
+      // `policy` is main's to fill: this runs in the renderer, which has no
+      // session, tier, or grant state to evaluate one against. Main rebuilds
+      // this payload in `filterIntrospectionResultForSession` and substitutes
+      // the real record there, or denies the read if it cannot build one. The
+      // null placeholder is what lets that field stay required-and-nullable in
+      // the declared schema rather than optional. `McpGetSchemaWireResultSchema`
+      // is the stricter shape a client sees once main has filled it in.
+      return { ok: true, entry, policy: null, error: null };
     },
   }));
 }

@@ -32,11 +32,19 @@ import {
   ACTIONS_SEARCH_DEFAULT_LIMIT,
   ACTIONS_SEARCH_MAX_LIMIT,
   INTROSPECTION_TOOL_IDS,
+  buildTargetPolicy,
+  MCP_TARGET_POLICY_VERSION,
+  type TargetPolicySessionSnapshot,
 } from "../tierAuth.js";
 import { findWireStrippedKeywords } from "../../../../shared/utils/mcpWireSchema.js";
 import { TIER_ALLOWLISTS } from "../shared.js";
 import { BUILT_IN_ACTION_IDS } from "../../../../shared/config/actionIds.js";
 import type { ActionManifestEntry } from "../../../../shared/types/actions.js";
+import type { McpTargetPolicy } from "../../../../shared/types/mcpTargetPolicy.js";
+import {
+  McpGetSchemaResultSchema,
+  McpGetSchemaWireResultSchema,
+} from "../../../../shared/types/mcpTargetPolicy.js";
 
 beforeEach(() => {
   mockPaneConfigService.isValidPaneToken.mockReset();
@@ -1117,68 +1125,159 @@ describe("filterIntrospectionResultForSession", () => {
   });
 
   describe("actions.getSchema", () => {
-    it("returns a permitted entry unchanged", () => {
-      const entry = makeEntry({ id: "terminal.list" });
-      const filtered = filterIntrospectionResultForSession(
+    // A renderer-owned ladder session with no grants: the ordinary case, and the
+    // baseline every policy assertion below varies one axis away from.
+    function snapshot(
+      overrides: Partial<TargetPolicySessionSnapshot> = {}
+    ): TargetPolicySessionSnapshot {
+      return {
+        tier: "workbench",
+        rendererOwnedOrigin: true,
+        perToolGrantedActionIds: new Set<string>(),
+        nativeGrantedActionIds: new Set<string>(),
+        ...overrides,
+      };
+    }
+
+    function lookup(
+      entry: ActionManifestEntry,
+      opts: {
+        requestedActionId?: string;
+        permittedActionIds?: ReadonlySet<string>;
+        policySnapshot?: TargetPolicySessionSnapshot | null;
+      } = {}
+    ) {
+      const { policySnapshot = snapshot() } = opts;
+      return filterIntrospectionResultForSession(
         "actions.getSchema",
-        { ok: true as const, result: { ok: true, entry } },
-        permitted,
-        { callerLimit: 20, requestedActionId: "terminal.list" }
+        { ok: true as const, result: { ok: true, entry, policy: null, error: null } },
+        opts.permittedActionIds ?? permitted,
+        {
+          callerLimit: 20,
+          requestedActionId: opts.requestedActionId ?? entry.id,
+          ...(policySnapshot ? { policySnapshot } : {}),
+        }
       );
-      expect(filtered).toEqual({ ok: true, result: { ok: true, entry } });
+    }
+
+    function payloadOf(result: ReturnType<typeof filterIntrospectionResultForSession>) {
+      return (
+        result as {
+          result: {
+            ok: boolean;
+            entry: unknown;
+            policy: McpTargetPolicy | null;
+            error: { code: string; message: string } | null;
+          };
+        }
+      ).result;
+    }
+
+    function policyOf(result: ReturnType<typeof filterIntrospectionResultForSession>) {
+      const policy = payloadOf(result).policy;
+      if (policy === null) throw new Error("expected a policy record");
+      return policy;
+    }
+
+    it("returns a permitted entry alongside its policy", () => {
+      const entry = makeEntry({ id: "terminal.list" });
+      const payload = payloadOf(lookup(entry));
+
+      expect(payload.ok).toBe(true);
+      expect(payload.entry).toEqual(entry);
+      expect(payload.error).toBeNull();
+      expect(payload.policy).not.toBeNull();
     });
 
     it("keeps a core-marked entry reachable (visibility is not the gate)", () => {
       const entry = makeEntry({ id: "worktree.list", mcpVisibility: "core" });
-      const filtered = filterIntrospectionResultForSession(
-        "actions.getSchema",
-        { ok: true as const, result: { ok: true, entry } },
-        permitted,
-        { callerLimit: 20, requestedActionId: "worktree.list" }
-      );
-      expect(filtered).toEqual({ ok: true, result: { ok: true, entry } });
+      const payload = payloadOf(lookup(entry));
+
+      expect(payload.ok).toBe(true);
+      expect(payload.entry).toEqual(entry);
     });
 
     it("strips fields the renderer attached alongside an authorized entry", () => {
       const entry = makeEntry({ id: "terminal.list" });
       const filtered = filterIntrospectionResultForSession(
         "actions.getSchema",
-        { ok: true as const, result: { ok: true, entry, leaked: makeEntry({ id: "git.push" }) } },
+        {
+          ok: true as const,
+          result: {
+            ok: true,
+            entry,
+            policy: null,
+            error: null,
+            leaked: makeEntry({ id: "git.push" }),
+          },
+        },
         permitted,
-        { callerLimit: 20, requestedActionId: "terminal.list" }
+        { callerLimit: 20, requestedActionId: "terminal.list", policySnapshot: snapshot() }
       );
-      expect(filtered).toEqual({ ok: true, result: { ok: true, entry } });
+
+      expect(Object.keys(payloadOf(filtered)).sort()).toEqual(["entry", "error", "ok", "policy"]);
+    });
+
+    // The renderer cannot fill `policy` — it has no session state — so a read
+    // that reaches main without the session facts to build one has nothing
+    // authoritative to say about the target. Denying beats answering with an
+    // entry a client would read as unrestricted.
+    it("fails closed when no policy snapshot accompanies the read", () => {
+      const payload = payloadOf(
+        lookup(makeEntry({ id: "terminal.list" }), { policySnapshot: null })
+      );
+
+      expect(payload.ok).toBe(false);
+      expect(payload.policy).toBeNull();
+      expect(payload.error?.code).toBe("NOT_FOUND");
+    });
+
+    it("fails closed on a target no tier permits, even when a grant names it", () => {
+      // Neither issuance path can mint a grant for an id `minimumPermittingTier`
+      // does not place, so this is a stale-metadata backstop rather than a
+      // reachable state — and its safe answer is the same denial.
+      const orphan = "actions.persistedStores";
+      const payload = payloadOf(
+        lookup(makeEntry({ id: orphan }), {
+          permittedActionIds: new Set([...permitted, orphan]),
+          policySnapshot: snapshot({ perToolGrantedActionIds: new Set([orphan]) }),
+        })
+      );
+
+      expect(payload.ok).toBe(false);
+      expect(payload.policy).toBeNull();
     });
 
     it("fails closed when no requested id accompanies the answer", () => {
       const filtered = filterIntrospectionResultForSession(
         "actions.getSchema",
-        { ok: true as const, result: { ok: true, entry: makeEntry({ id: "terminal.list" }) } },
+        {
+          ok: true as const,
+          result: {
+            ok: true,
+            entry: makeEntry({ id: "terminal.list" }),
+            policy: null,
+            error: null,
+          },
+        },
         permitted,
-        { callerLimit: 20 }
+        { callerLimit: 20, policySnapshot: snapshot() }
       );
-      expect((filtered as { result: { ok: boolean } }).result.ok).toBe(false);
+      expect(payloadOf(filtered).ok).toBe(false);
     });
 
     // NOT_FOUND rather than a tier error: a distinct code would confirm the id
     // exists while offering no route to it, since grants are minted off a
     // denied dispatch and never off a schema read.
     it("collapses a denied entry onto the existing NOT_FOUND data shape", () => {
-      const result = {
-        ok: true as const,
-        result: { ok: true, entry: makeEntry({ id: "git.push" }) },
-      };
-      const filtered = filterIntrospectionResultForSession("actions.getSchema", result, permitted, {
-        callerLimit: 20,
-        requestedActionId: "git.push",
-      });
-      const payload = (
-        filtered as { result: { ok: boolean; error: { code: string; message: string } } }
-      ).result;
+      const payload = payloadOf(lookup(makeEntry({ id: "git.push" })));
+
       expect(payload.ok).toBe(false);
-      expect(payload.error.code).toBe("NOT_FOUND");
-      expect(payload.error.message).toContain("git.push");
-      expect(payload.error.message).toContain("actions.search");
+      expect(payload.entry).toBeNull();
+      expect(payload.policy).toBeNull();
+      expect(payload.error?.code).toBe("NOT_FOUND");
+      expect(payload.error?.message).toContain("git.push");
+      expect(payload.error?.message).toContain("actions.search");
     });
 
     it("collapses a denied hidden or restricted entry the same way", () => {
@@ -1186,14 +1285,10 @@ describe("filterIntrospectionResultForSession", () => {
         makeEntry({ id: "terminal.list", mcpVisibility: "hidden" }),
         makeEntry({ id: "terminal.list", danger: "restricted" }),
       ]) {
-        const filtered = filterIntrospectionResultForSession(
-          "actions.getSchema",
-          { ok: true as const, result: { ok: true, entry } },
-          permitted,
-          { callerLimit: 20, requestedActionId: "terminal.list" }
-        );
-        expect((filtered as { result: unknown }).result).toEqual({
+        expect(payloadOf(lookup(entry))).toEqual({
           ok: false,
+          entry: null,
+          policy: null,
           error: { code: "NOT_FOUND", message: expect.stringContaining("terminal.list") },
         });
       }
@@ -1211,13 +1306,364 @@ describe("filterIntrospectionResultForSession", () => {
           },
         },
         permitted,
-        { callerLimit: 20, requestedActionId: "git.push" }
+        { callerLimit: 20, requestedActionId: "git.push", policySnapshot: snapshot() }
       );
       // The smuggled `entry` is gone and the message names the requested id.
-      expect((filtered as { result: unknown }).result).toEqual({
+      expect(payloadOf(filtered)).toEqual({
         ok: false,
+        entry: null,
+        policy: null,
         error: { code: "NOT_FOUND", message: expect.stringContaining("git.push") },
       });
+    });
+
+    describe("policy record (#11910)", () => {
+      it("reports the tier as the admitting mechanism for a tier-permitted target", () => {
+        const policy = policyOf(lookup(makeEntry({ id: "terminal.list" })));
+
+        expect(policy.authorizedBy).toBe("tier");
+        expect(policy.callable).toBe(true);
+        expect(policy.unavailableReason).toBeNull();
+        expect(policy.effectiveTier).toBe("workbench");
+        expect(policy.minimumTier).toBe("workbench");
+        expect(policy.version).toBe(MCP_TARGET_POLICY_VERSION);
+        expect(policy.hash).toMatch(/^[0-9a-f]{64}$/);
+      });
+
+      // The distinction a client acts on: tier access is durable for the
+      // session, a grant lapses. Reporting only `callable` would collapse them.
+      it("reports a grant as the admitting mechanism, with the tier it would need", () => {
+        const policy = policyOf(
+          lookup(makeEntry({ id: "git.push" }), {
+            permittedActionIds: new Set([...permitted, "git.push"]),
+            policySnapshot: snapshot({ perToolGrantedActionIds: new Set(["git.push"]) }),
+          })
+        );
+
+        expect(policy.authorizedBy).toBe("grant");
+        expect(policy.minimumTier).toBe("system");
+        expect(policy.effectiveTier).toBe("workbench");
+        expect(policy.callable).toBe(true);
+      });
+
+      it("reports a native grant as the admitting mechanism", () => {
+        const policy = policyOf(
+          lookup(makeEntry({ id: "git.push" }), {
+            permittedActionIds: new Set([...permitted, "git.push"]),
+            policySnapshot: snapshot({ nativeGrantedActionIds: new Set(["git.push"]) }),
+          })
+        );
+
+        expect(policy.authorizedBy).toBe("nativeGrant");
+      });
+
+      // A native grant is an explicit user approval of the tool's scope, so the
+      // dispatch gate sets `dispatchConfirmed` from it. A per-tool grant only
+      // widens the floor, and the modal still fires.
+      it("clears requiresConfirmation for a native grant but not a per-tool grant", () => {
+        const confirmEntry = makeEntry({ id: "worktree.list", danger: "confirm" });
+
+        const nativelyGranted = policyOf(
+          lookup(confirmEntry, {
+            policySnapshot: snapshot({ nativeGrantedActionIds: new Set(["worktree.list"]) }),
+          })
+        );
+        expect(nativelyGranted.danger).toBe("confirm");
+        expect(nativelyGranted.requiresConfirmation).toBe(false);
+
+        const perToolGranted = policyOf(
+          lookup(confirmEntry, {
+            policySnapshot: snapshot({ perToolGrantedActionIds: new Set(["worktree.list"]) }),
+          })
+        );
+        expect(perToolGranted.requiresConfirmation).toBe(true);
+      });
+
+      it("reports the flat external tier rather than a rung the caller cannot climb", () => {
+        const policy = policyOf(
+          lookup(makeEntry({ id: "terminal.list" }), {
+            policySnapshot: snapshot({ tier: "external", rendererOwnedOrigin: false }),
+          })
+        );
+
+        expect(policy.minimumTier).toBe("external");
+        expect(policy.effectiveTier).toBe("external");
+        expect(policy.grantable).toBe(false);
+      });
+
+      // The divergence `resolveTokenTier` makes reachable: an unrecognised
+      // bearer token resolves to `workbench` while the origin still defaults to
+      // `external`. Both grant-issuance paths gate on the ORIGIN, so a
+      // tier-derived answer here would promise an approval flow that always
+      // throws.
+      it("reports grantable:false for a ladder tier whose origin cannot hold grants", () => {
+        const rendererOwned = policyOf(lookup(makeEntry({ id: "terminal.list" })));
+        expect(rendererOwned.grantable).toBe(true);
+
+        const foreignOrigin = policyOf(
+          lookup(makeEntry({ id: "terminal.list" }), {
+            policySnapshot: snapshot({ rendererOwnedOrigin: false }),
+          })
+        );
+        expect(foreignOrigin.grantable).toBe(false);
+      });
+
+      // A grant whose origin could not have been issued never admits the call at
+      // the dispatch gate either, so the policy must not claim it does.
+      it("ignores grants a non-renderer-owned origin could not have been issued", () => {
+        const payload = payloadOf(
+          lookup(makeEntry({ id: "git.push" }), {
+            permittedActionIds: new Set([...permitted, "git.push"]),
+            policySnapshot: snapshot({
+              rendererOwnedOrigin: false,
+              perToolGrantedActionIds: new Set(["git.push"]),
+            }),
+          })
+        );
+
+        expect(payload.ok).toBe(false);
+        expect(payload.policy).toBeNull();
+      });
+
+      it("reports a disabled target as reachable but not callable", () => {
+        const policy = policyOf(
+          lookup(makeEntry({ id: "terminal.list", enabled: false, disabledReason: "no terminals" }))
+        );
+
+        expect(policy.callable).toBe(false);
+        expect(policy.unavailableReason).toBe("DISABLED");
+        // Still authorized — this is a transient state of a visible action, not
+        // an authorization denial, so it does not collapse to NOT_FOUND.
+        expect(policy.authorizedBy).toBe("tier");
+      });
+
+      // `resolveEffectiveActionDanger` keys the elevation on the ARGUMENT, so a
+      // target that cannot accept a `recipeId` can never be elevated by one.
+      it("flags only targets whose arguments can escalate confirmation", () => {
+        const escalatable = policyOf(
+          lookup(
+            makeEntry({
+              id: "terminal.list",
+              inputSchema: { type: "object", properties: { recipeId: { type: "string" } } },
+            })
+          )
+        );
+        expect(escalatable.danger).toBe("safe");
+        expect(escalatable.confirmationMayEscalate).toBe(true);
+
+        const plain = policyOf(
+          lookup(
+            makeEntry({
+              id: "terminal.list",
+              inputSchema: { type: "object", properties: { limit: { type: "number" } } },
+            })
+          )
+        );
+        expect(plain.confirmationMayEscalate).toBe(false);
+      });
+
+      it("never reports escalation for a target already declared confirm", () => {
+        const policy = policyOf(
+          lookup(
+            makeEntry({
+              id: "worktree.list",
+              danger: "confirm",
+              inputSchema: { type: "object", properties: { recipeId: { type: "string" } } },
+            })
+          )
+        );
+
+        expect(policy.confirmationMayEscalate).toBe(false);
+      });
+
+      // The renderer's own `resultSchema` check runs before main substitutes the
+      // policy, so it only ever validates the null placeholder. Nothing else
+      // validates what main builds — this is the check that the finished record
+      // satisfies the contract the companion CLI codes against.
+      it("builds a record that satisfies the published wire contract", () => {
+        for (const target of [
+          makeEntry({ id: "terminal.list" }),
+          makeEntry({ id: "worktree.list", danger: "confirm" }),
+          makeEntry({ id: "terminal.list", enabled: false }),
+        ]) {
+          const parsed = McpGetSchemaWireResultSchema.safeParse(payloadOf(lookup(target)));
+          expect(parsed.success).toBe(true);
+        }
+      });
+
+      it("emits a denial that satisfies the same wire contract", () => {
+        const parsed = McpGetSchemaWireResultSchema.safeParse(
+          payloadOf(lookup(makeEntry({ id: "git.push" })))
+        );
+        expect(parsed.success).toBe(true);
+      });
+
+      // The looser staging schema exists only so the renderer's half-built value
+      // validates; it must not be mistaken for the wire contract.
+      it("rejects the renderer's staging shape as a wire result", () => {
+        const staging = {
+          ok: true,
+          entry: makeEntry({ id: "terminal.list" }),
+          policy: null,
+          error: null,
+        };
+
+        expect(McpGetSchemaResultSchema.safeParse(staging).success).toBe(true);
+        expect(McpGetSchemaWireResultSchema.safeParse(staging).success).toBe(false);
+      });
+
+      // The record is the caller's own authorization boundary and nothing more.
+      // Grant expiry, issuance times, actor ids and denial counts are either
+      // cross-session or abuse-signal internals with no legitimate client use,
+      // so a new field cannot arrive here without a deliberate edit to this list.
+      it("exposes exactly the agreed fields and no grant internals", () => {
+        const policy = policyOf(
+          lookup(makeEntry({ id: "terminal.list" }), {
+            policySnapshot: snapshot({ nativeGrantedActionIds: new Set(["terminal.list"]) }),
+          })
+        );
+
+        expect(Object.keys(policy).sort()).toEqual([
+          "authorizedBy",
+          "callable",
+          "confirmationMayEscalate",
+          "danger",
+          "dynamicInvocation",
+          "effectiveTier",
+          "grantable",
+          "hash",
+          "minimumTier",
+          "preferredTool",
+          "requiresConfirmation",
+          "unavailableReason",
+          "version",
+        ]);
+      });
+    });
+
+    describe("per-target hash", () => {
+      const base = makeEntry({
+        id: "terminal.list",
+        inputSchema: { type: "object", properties: { limit: { type: "number", maximum: 100 } } },
+      });
+
+      it("ignores prose so a reworded description is not a compatibility break", () => {
+        const reworded = {
+          ...base,
+          description: "Completely different wording",
+          title: "Renamed",
+          inputSchema: {
+            type: "object",
+            properties: { limit: { type: "number", maximum: 100, description: "how many" } },
+          },
+        };
+
+        expect(policyOf(lookup(reworded)).hash).toBe(policyOf(lookup(base)).hash);
+      });
+
+      it("changes when a constraint a caller's code depends on tightens", () => {
+        const tightened = {
+          ...base,
+          inputSchema: { type: "object", properties: { limit: { type: "number", maximum: 50 } } },
+        };
+
+        expect(policyOf(lookup(tightened)).hash).not.toBe(policyOf(lookup(base)).hash);
+      });
+
+      it("changes when the target's danger changes", () => {
+        const gated = { ...base, id: "worktree.list", danger: "confirm" as const };
+        const plain = { ...base, id: "worktree.list" };
+
+        expect(policyOf(lookup(gated)).hash).not.toBe(policyOf(lookup(plain)).hash);
+      });
+
+      // The output schema is hashed as the LOOKUP HANDS IT OVER, not as
+      // `tools/list` would advertise it. `buildToolOutputSchema` collapses
+      // anything without a top-level `type: "object"` to nothing, so hashing
+      // that view would let a top-level union swap its variants — visible right
+      // there in `entry.outputSchema` — without moving the digest.
+      it("covers an output schema tools/list would refuse to advertise", () => {
+        const union = (variant: string) => ({
+          ...base,
+          outputSchema: {
+            anyOf: [{ type: "object", properties: { [variant]: { type: "string" } } }],
+          },
+        });
+        expect(buildToolOutputSchema(union("a"))).toBeUndefined();
+
+        expect(policyOf(lookup(union("a"))).hash).not.toBe(policyOf(lookup(union("b"))).hash);
+      });
+
+      // Live session state is deliberately outside the preimage: a digest that
+      // flapped as grants came and went would describe a target no lookup ever
+      // returned, and clients would learn to ignore it.
+      it("holds still while only live session state moves", () => {
+        const granted = policyOf(
+          lookup(base, {
+            policySnapshot: snapshot({ nativeGrantedActionIds: new Set(["terminal.list"]) }),
+          })
+        );
+        const plain = policyOf(lookup(base));
+
+        expect(granted.requiresConfirmation).toBe(plain.requiresConfirmation);
+        expect(granted.hash).toBe(plain.hash);
+      });
+
+      // The caller's own ladder is part of the preimage for the same reason the
+      // surface hash carries `tier`: two callers of one build genuinely see
+      // different contracts for the same id.
+      it("differs between an external caller and a ladder caller", () => {
+        const ladder = policyOf(lookup(base));
+        const external = policyOf(
+          lookup(base, {
+            policySnapshot: snapshot({ tier: "external", rendererOwnedOrigin: false }),
+          })
+        );
+
+        expect(external.hash).not.toBe(ladder.hash);
+      });
+    });
+  });
+
+  describe("buildTargetPolicy fail-closed contract", () => {
+    const snap: TargetPolicySessionSnapshot = {
+      tier: "workbench",
+      rendererOwnedOrigin: true,
+      perToolGrantedActionIds: new Set<string>(),
+      nativeGrantedActionIds: new Set<string>(),
+    };
+
+    it("returns null rather than a partial record for anything it cannot describe", () => {
+      const malformed: unknown[] = [
+        null,
+        undefined,
+        "terminal.list",
+        {},
+        { id: 42 },
+        { id: "terminal.list" },
+        makeEntry({ id: "terminal.list", danger: "restricted" }),
+        makeEntry({ id: "terminal.list", mcpVisibility: "hidden" }),
+        { ...makeEntry({ id: "terminal.list" }), kind: "sideways" },
+        // A non-boolean `enabled` must not read as callable.
+        { ...makeEntry({ id: "terminal.list" }), enabled: "false" },
+        { ...makeEntry({ id: "terminal.list" }), enabled: undefined },
+      ];
+
+      for (const entry of malformed) {
+        expect(buildTargetPolicy(entry, snap)).toBeNull();
+      }
+    });
+
+    // A manifest entry is only as well-formed as whatever built it, and
+    // JSON.stringify throws on a cycle. Fail closed rather than letting it
+    // escape the tool call as an exception.
+    it("returns null instead of throwing on a schema that cannot be canonicalised", () => {
+      const cyclic: Record<string, unknown> = { type: "object" };
+      cyclic["self"] = cyclic;
+
+      expect(
+        buildTargetPolicy(makeEntry({ id: "terminal.list", inputSchema: cyclic }), snap)
+      ).toBeNull();
     });
   });
 });
