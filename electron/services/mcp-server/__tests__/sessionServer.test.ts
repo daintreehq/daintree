@@ -3928,11 +3928,11 @@ describe("sessionServer introspection tier filtering", () => {
       const body = await lookup(deps, "git.push");
 
       expect(body.ok).toBe(true);
-      expect(body.policy).toMatchObject({
-        authorizedBy: "grant",
-        minimumTier: "system",
-        effectiveTier: "workbench",
-      });
+      expect(body.policy).toMatchObject({ authorizedBy: "grant", minimumTier: "system" });
+      // The grant is bridging a real gap rather than rubber-stamping a target
+      // the tier already allowed — stated as the relation, so it keeps meaning
+      // if the fixture's tier changes.
+      expect(body.policy?.effectiveTier).not.toBe(body.policy?.minimumTier);
     });
 
     it("still collapses a tier-denied target with no policy attached", async () => {

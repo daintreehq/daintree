@@ -120,7 +120,7 @@ const TIER_VALUES = ["workbench", "action", "system", "external"] as const;
  * shape a client — and `McpGetSchemaWireResultSchema` — checks the finished
  * record against.
  */
-export const McpTargetPolicySchema = z.object({
+export const McpTargetPolicySchema = z.strictObject({
   version: z.number().int().positive(),
   hash: z.string().regex(/^[0-9a-f]{64}$/),
   callable: z.boolean().describe("Whether a dispatch would be admitted now, confirmation aside"),
@@ -178,18 +178,24 @@ export const McpGetSchemaResultSchema = z.object({
  * Discriminated on a literal `ok`, so a consumer narrows on it and gets
  * non-null `entry`/`policy` on the success arm without re-checking. This is the
  * contract the companion CLI (daintreehq/assistant#368) codes against.
+ *
+ * Strict all the way down, which is what makes the conformance test a real
+ * guard: a plain `z.object` silently STRIPS unknown keys, so a field added to
+ * the policy builder but forgotten here would still `safeParse` clean and the
+ * drift would ship. `entry` stays an open record on purpose — it is a manifest
+ * entry, whose own shape is not this contract's to pin down.
  */
 export const McpGetSchemaWireResultSchema = z.discriminatedUnion("ok", [
-  z.object({
+  z.strictObject({
     ok: z.literal(true),
     entry: z.record(z.string(), z.unknown()),
     policy: McpTargetPolicySchema,
     error: z.null(),
   }),
-  z.object({
+  z.strictObject({
     ok: z.literal(false),
     entry: z.null(),
     policy: z.null(),
-    error: z.object({ code: z.literal("NOT_FOUND"), message: z.string() }),
+    error: z.strictObject({ code: z.literal("NOT_FOUND"), message: z.string() }),
   }),
 ]);

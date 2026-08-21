@@ -3,11 +3,16 @@
  * whole-surface hash on `mcp.surface` (#11549) and the per-target hash on an
  * `actions.getSchema` policy record (#11910).
  *
- * Extracted so the two cannot drift. A client that compares a per-target hash
- * against a surface it captured earlier is comparing digests of the same
- * normalised shape — if these normalisers diverged, one of the two would start
- * reporting drift the other never saw, and neither would be wrong from its own
- * side.
+ * Extracted so the NORMALISATION cannot drift: both digests must agree on what
+ * counts as prose, how `required` is ordered, and which keywords are traversed.
+ * Were these two copies, a fix applied to one would silently make the other
+ * report drift it never saw — or miss drift it should have.
+ *
+ * Shared normalisation, not shared preimages. The two digests deliberately
+ * cover different things: `mcp.surface` hashes the `tools/list` projection of a
+ * tool's output schema, while a target policy hashes the schema `getSchema`
+ * hands over verbatim. So a per-target hash can move while the surface hash
+ * holds still, and that is correct — they answer different questions.
  */
 
 /** JSON Schema keywords whose value is itself a schema. */
