@@ -1,19 +1,14 @@
 import { describe, expect, it } from "vitest";
-import {
-  clampChroma,
-  converter,
-  formatHex,
-  modeOklch,
-  modeRgb,
-  useMode as registerMode,
-} from "culori/fn";
-import { blendOverBackground, contrastRatio, parseRgba } from "@shared/theme";
+import { converter, modeOklab, modeOklch, modeRgb, useMode as registerMode } from "culori/fn";
+import { apcaLc, blendOverBackground, contrastRatio, parseRgba } from "@shared/theme";
 import type { AppColorScheme } from "@shared/theme";
-import { resolveBrandMarkInk } from "../brandIcon";
+import { resolveBrandMarkInk, type BrandMarkSurface } from "../brandIcon";
 
 registerMode(modeRgb);
 registerMode(modeOklch);
+registerMode(modeOklab);
 const toOklch = converter("oklch");
+const toOklab = converter("oklab");
 
 const FLOOR = 3;
 
@@ -25,19 +20,25 @@ const SURFACE_KEYS = [
   "surface-panel-elevated",
 ] as const;
 
-function makeScheme(type: "dark" | "light", tokens: Record<string, string>): AppColorScheme {
+function makeScheme(
+  type: "dark" | "light",
+  tokens: Record<string, string>,
+  extensions?: Record<string, string>
+): AppColorScheme {
   return {
     id: "test",
     name: "Test",
     type,
     builtin: true,
     tokens: tokens as AppColorScheme["tokens"],
+    ...(extensions ? { extensions: extensions as AppColorScheme["extensions"] } : null),
   };
 }
 
 const DARK = makeScheme("dark", {
   "text-secondary": "#a8a8a8",
   "overlay-elevated": "rgba(255, 255, 255, 0.06)",
+  "overlay-subtle": "rgba(255, 255, 255, 0.03)",
   "surface-grid": "#141414",
   "surface-sidebar": "#181818",
   "surface-canvas": "#101010",
@@ -48,6 +49,7 @@ const DARK = makeScheme("dark", {
 const LIGHT = makeScheme("light", {
   "text-secondary": "#525252",
   "overlay-elevated": "rgba(0, 0, 0, 0.1)",
+  "overlay-subtle": "rgba(0, 0, 0, 0.04)",
   "surface-grid": "#f4f4f4",
   "surface-sidebar": "#efefef",
   "surface-canvas": "#ffffff",
@@ -55,17 +57,13 @@ const LIGHT = makeScheme("light", {
   "surface-panel-elevated": "#ffffff",
 });
 
-/** Rebuilds the backdrop set independently of the resolver's own helper. */
-function backdrops(scheme: AppColorScheme): string[] {
-  const overlay = parseRgba(scheme.tokens["overlay-elevated"] ?? "");
-  return SURFACE_KEYS.flatMap((key) => {
-    const base = scheme.tokens[key]!;
-    return overlay ? [base, blendOverBackground(overlay.hex, base, overlay.opacity)] : [base];
-  });
-}
+const PANEL: BrandMarkSurface = { surface: "surface-panel" };
 
-function worstRatio(ink: string, scheme: AppColorScheme): number {
-  return Math.min(...backdrops(scheme).map((bg) => contrastRatio(ink, bg)));
+/** The two backdrops a mark on `surface` actually meets: at rest, and under hover. */
+function backdrops(scheme: AppColorScheme, surface: BrandMarkSurface, base?: string) {
+  const overlay = parseRgba(scheme.tokens["overlay-elevated"] ?? "");
+  const rest = base ?? scheme.tokens[surface.surface]!;
+  return { rest, active: blendOverBackground(overlay!.hex, rest, overlay!.opacity) };
 }
 
 /** Channel-wise sRGB interpolation, matching how a `color` transition crossfades. */
@@ -80,6 +78,39 @@ function mix(from: string, to: string, ratio: number): string {
   return `#${channels.join("")}`;
 }
 
+/** Worst contrast across the whole correlated crossfade, both ends included. */
+function worstAcrossFade(
+  rest: string,
+  active: string,
+  pair: { rest: string; active: string }
+): number {
+  let worst = Infinity;
+  for (let step = 0; step <= 40; step++) {
+    const t = step / 40;
+    worst = Math.min(worst, contrastRatio(mix(rest, active, t), mix(pair.rest, pair.active, t)));
+  }
+  return worst;
+}
+
+/** OKLab distance — the space the fade is sized in. */
+function deltaE(a: string, b: string): number {
+  const one = toOklab(a)!;
+  const two = toOklab(b)!;
+  return Math.hypot(one.l - two.l, one.a - two.a, one.b - two.b);
+}
+
+/** Formats an OKLCH-shaped object as the hex the screen would paint. */
+function hexOf(color: { l: number; c?: number; h?: number }): string {
+  const rgb = converter("rgb")({ mode: "oklch", l: color.l, c: color.c ?? 0, h: color.h });
+  return `#${[rgb.r, rgb.g, rgb.b]
+    .map((channel) =>
+      Math.round(Math.max(0, Math.min(1, channel)) * 255)
+        .toString(16)
+        .padStart(2, "0")
+    )
+    .join("")}`;
+}
+
 /** Shortest angular distance between two hues, in degrees. */
 function hueGap(a: number, b: number): number {
   const diff = Math.abs(a - b) % 360;
@@ -87,114 +118,266 @@ function hueGap(a: number, b: number): number {
 }
 
 describe("resolveBrandMarkInk", () => {
-  it("holds the ink's lightness and takes the brand's hue at rest", () => {
-    const ink = resolveBrandMarkInk("#cc785c", DARK)!;
+  it("shows a legible brand colour exactly as the brand ships it", () => {
+    const brand = "#cc785c";
+    const pair = backdrops(DARK, PANEL);
+    expect(contrastRatio(brand, pair.rest)).toBeGreaterThanOrEqual(FLOOR);
+    expect(resolveBrandMarkInk(brand, DARK, PANEL)!.active).toBe(brand);
+  });
+
+  it("rests away from the backdrop, not toward it", () => {
+    // The direction is the whole point. A resting mark drawn toward the backdrop
+    // spends contrast to signal a state the hover background already signals,
+    // and a row of them reads as washed out. Drawn the other way it keeps every
+    // bit of that contrast and the reveal is the brand colour arriving.
+    const backdrop = toOklch(DARK.tokens["surface-panel"])!;
+    const ink = resolveBrandMarkInk("#cc785c", DARK, PANEL)!;
     const rest = toOklch(ink.rest)!;
-    const token = toOklch(DARK.tokens["text-secondary"])!;
-    const brand = toOklch("#cc785c")!;
+    const active = toOklch(ink.active)!;
 
-    expect(rest.l).toBeCloseTo(token.l, 2);
-    expect(hueGap(rest.h!, brand.h!)).toBeLessThan(5);
+    expect(ink.rest).not.toBe(ink.active);
+    expect(hueGap(rest.h!, active.h!)).toBeLessThan(3);
+    expect(Math.abs(rest.l - backdrop.l)).toBeGreaterThan(Math.abs(active.l - backdrop.l));
+    // Which on a dark theme means lighter, and deepening into the brand on hover.
+    expect(rest.l).toBeGreaterThan(active.l);
+    expect(contrastRatio(ink.rest, DARK.tokens["surface-panel"]!)).toBeGreaterThan(
+      contrastRatio(ink.active, DARK.tokens["surface-panel"]!)
+    );
   });
 
-  it("tints two brands of wildly different chroma by the same amount", () => {
-    // The source hexes are all over the place — one of these sits near C=0.11 and
-    // the other near C=0.25. Scaling each brand's own chroma would preserve that
-    // gap; a constant target closes it, which is what makes marks read as equally
-    // tinted rather than one shouting over the other.
-    const warm = toOklch(resolveBrandMarkInk("#cc785c", DARK)!.rest)!;
-    const violet = toOklch(resolveBrandMarkInk("#8b5cf6", DARK)!.rest)!;
-    const sourceGap = Math.abs(toOklch("#cc785c")!.c! - toOklch("#8b5cf6")!.c!);
-    const restGap = Math.abs(warm.c! - violet.c!);
-
-    expect(restGap).toBeLessThan(0.01);
-    expect(sourceGap).toBeGreaterThan(restGap * 5);
+  it("reverses that direction on a light theme without a second rule", () => {
+    const ink = resolveBrandMarkInk("#cc785c", LIGHT, PANEL)!;
+    expect(toOklch(ink.rest)!.l).toBeLessThan(toOklch(ink.active)!.l);
+    expect(contrastRatio(ink.rest, LIGHT.tokens["surface-panel"]!)).toBeGreaterThan(
+      contrastRatio(ink.active, LIGHT.tokens["surface-panel"]!)
+    );
   });
 
-  it("resolves a hueless brand to the plain theme ink", () => {
-    // A goose-style near-black has no hue to borrow, so it stays grey rather
-    // than having one invented for it.
-    expect(resolveBrandMarkInk("#1c1c1c", DARK)!.rest).toBe(DARK.tokens["text-secondary"]);
-    expect(resolveBrandMarkInk("#e8e8e8", LIGHT)!.rest).toBe(LIGHT.tokens["text-secondary"]);
-  });
-
-  it("keeps the resting tint legible on every surface", () => {
-    for (const scheme of [DARK, LIGHT]) {
-      for (const brand of ["#cc785c", "#3ee6eb", "#1c1c1c", "#8b5cf6"]) {
-        expect(worstRatio(resolveBrandMarkInk(brand, scheme)!.rest, scheme)).toBeGreaterThanOrEqual(
-          FLOOR
-        );
-      }
+  it("takes only a slice of the fade out of chroma", () => {
+    // Spending the fade on chroma is the wash this treatment exists to undo: at
+    // rest the mark has to still be the brand's colour, not a grey hint of it.
+    for (const [brand, scheme] of [
+      ["#cc785c", DARK],
+      ["#7c3aed", LIGHT],
+      ["#615ced", DARK],
+    ] as const) {
+      const ink = resolveBrandMarkInk(brand, scheme, PANEL)!;
+      expect(toOklch(ink.rest)!.c!).toBeGreaterThan(toOklch(ink.active)!.c! * 0.7);
     }
   });
 
-  it("leaves a brand colour untouched on hover when it is already legible", () => {
-    const brand = "#ff8a3d";
-    expect(worstRatio(brand, DARK)).toBeGreaterThanOrEqual(FLOOR);
-    expect(resolveBrandMarkInk(brand, DARK)!.hover).toBe(brand);
-  });
-
-  it("corrects an illegible brand colour while holding its hue", () => {
-    const brand = "#102a1e";
-    expect(worstRatio(brand, DARK)).toBeLessThan(FLOOR);
-
-    const ink = resolveBrandMarkInk(brand, DARK)!;
-    expect(ink.hover).not.toBe(brand);
-    expect(worstRatio(ink.hover, DARK)).toBeGreaterThanOrEqual(FLOOR);
-
-    const before = toOklch(brand)!;
-    const after = toOklch(ink.hover)!;
-    expect(hueGap(after.h!, before.h!)).toBeLessThan(5);
-    expect(after.l).toBeGreaterThan(before.l);
-  });
-
-  it("moves lightness no further than legibility requires", () => {
+  it("holds a resting mark to the weight of the row it sits in", () => {
+    // A near-white cyan on a dark theme already starts above the theme's own
+    // icon ink. Another step away from the backdrop would leave the *resting*
+    // mark shouting over every neutral control beside it, so it comes back down
+    // to the row's weight and pays for the fade in chroma instead.
     const brand = "#3ee6eb";
-    const ink = resolveBrandMarkInk(brand, LIGHT)!;
-    const source = toOklch(brand)!;
-    const corrected = toOklch(ink.hover)!;
-    expect(worstRatio(ink.hover, LIGHT)).toBeGreaterThanOrEqual(FLOOR);
+    const surface = DARK.tokens["surface-panel"]!;
+    const ceiling = apcaLc(DARK.tokens["text-secondary"]!, surface) + 11;
+    const ink = resolveBrandMarkInk(brand, DARK, PANEL)!;
 
-    // Give back a fifth of the correction. If that still cleared the floor, the
-    // resolver moved further than it had to — this is what makes the result the
-    // *minimum* correction rather than merely one that happens to pass.
-    const slacker = corrected.l + (source.l - corrected.l) * 0.2;
-    const relaxed = formatHex(
-      clampChroma({ mode: "oklch", l: slacker, c: source.c, h: source.h }, "oklch", "rgb")
-    );
-    expect(worstRatio(relaxed, LIGHT)).toBeLessThan(FLOOR);
+    expect(apcaLc(ink.active, surface)).toBeGreaterThan(ceiling);
+    expect(apcaLc(ink.rest, surface)).toBeLessThanOrEqual(ceiling + 1);
+    // And it is still cyan: the ceiling took weight, not the brand.
+    expect(toOklch(ink.rest)!.c!).toBeGreaterThan(toOklch(ink.active)!.c! * 0.7);
+    expect(toOklch(ink.rest)!.c!).toBeLessThan(toOklch(ink.active)!.c!);
   });
 
-  it("stays legible through the whole crossfade, not just at its ends", () => {
+  it("draws a brand with no colour as the theme's own icon, and reveals by weight", () => {
+    // Black and white are not colours a theme can carry, so those marks stop
+    // pretending: they sit level with the neutral controls and their reveal is
+    // the one axis they still have.
+    for (const [brand, scheme] of [
+      ["#1c1c1c", DARK],
+      ["#e8e8e8", LIGHT],
+    ] as const) {
+      const ink = resolveBrandMarkInk(brand, scheme, PANEL)!;
+      const surface = scheme.tokens["surface-panel"]!;
+      expect(ink.rest).toBe(scheme.tokens["text-secondary"]);
+      expect(apcaLc(ink.active, surface)).toBeGreaterThan(apcaLc(ink.rest, surface));
+      expect(contrastRatio(ink.active, surface)).toBeGreaterThan(contrastRatio(ink.rest, surface));
+    }
+  });
+
+  it("gives a colourless brand the same size of reveal a hued one gets", () => {
+    // The axis differs — weight rather than colour — but the step does not, so a
+    // row of marks reacts by the same amount whatever each one is made of.
+    const ink = resolveBrandMarkInk("#1c1c1c", DARK, PANEL)!;
+    expect(ink.rest).not.toBe(ink.active);
+    expect(deltaE(ink.rest, ink.active)).toBeGreaterThan(0.04);
+  });
+
+  it("keeps both states legible across the whole crossfade, not just at its ends", () => {
     // The control repaints its own background in the same 150ms the glyph
     // recolours, so both ends passing is not the same as the transition passing.
-    const overlay = parseRgba(LIGHT.tokens["overlay-elevated"]!)!;
-    for (const brand of ["#3ee6eb", "#e8e8e8", "#cc785c"]) {
-      const ink = resolveBrandMarkInk(brand, LIGHT)!;
-      for (const key of SURFACE_KEYS) {
-        const base = LIGHT.tokens[key]!;
-        const hovered = blendOverBackground(overlay.hex, base, overlay.opacity);
-        for (let step = 0; step <= 10; step++) {
-          const t = step / 10;
+    for (const scheme of [DARK, LIGHT]) {
+      for (const surface of SURFACE_KEYS) {
+        for (const brand of ["#3ee6eb", "#e8e8e8", "#cc785c", "#1c1c1c", "#615ced"]) {
+          const ink = resolveBrandMarkInk(brand, scheme, { surface })!;
           expect(
-            contrastRatio(mix(ink.rest, ink.hover, t), mix(base, hovered, t))
+            worstAcrossFade(ink.rest, ink.active, backdrops(scheme, { surface }))
           ).toBeGreaterThanOrEqual(FLOOR);
         }
       }
     }
   });
 
-  it("treats an arbitrary runtime preset hex exactly like a shipped brand", () => {
-    // Nothing in the resolver knows this colour. A new CLI is just a preset we
-    // happened to ship, so if this path holds, adding an agent costs one hex.
-    const preset = "#3366ff";
-    const ink = resolveBrandMarkInk(preset, LIGHT)!;
-    expect(worstRatio(ink.rest, LIGHT)).toBeGreaterThanOrEqual(FLOOR);
-    expect(worstRatio(ink.hover, LIGHT)).toBeGreaterThanOrEqual(FLOOR);
+  it("nudges a brand that only just misses, and holds its hue doing it", () => {
+    const brand = "#102a1e";
+    const pair = backdrops(DARK, PANEL);
+    expect(contrastRatio(brand, pair.rest)).toBeLessThan(FLOOR);
+
+    const ink = resolveBrandMarkInk(brand, DARK, PANEL)!;
+    expect(ink.active).not.toBe(brand);
+    expect(contrastRatio(ink.active, pair.rest)).toBeGreaterThanOrEqual(FLOOR);
+
+    const before = toOklch(brand)!;
+    const after = toOklch(ink.active)!;
+    expect(hueGap(after.h!, before.h!)).toBeLessThan(5);
+    expect(after.l).toBeGreaterThan(before.l);
+  });
+
+  it("stops a correction as soon as the mark clears what was holding it back", () => {
+    // Minimality, tested against the conjunction rather than against one of its
+    // halves: on a dark theme it is usually APCA weight that binds and on a
+    // light one the WCAG ratio, so a test that named either would be checking
+    // the wrong constraint half the time. Give a fifth of the correction back
+    // and at least one of the two has to break — otherwise the resolver moved
+    // further than it had to.
+    for (const [brand, scheme] of [
+      ["#3ee6eb", LIGHT],
+      ["#cc785c", LIGHT],
+      ["#615ced", DARK],
+    ] as const) {
+      const ink = resolveBrandMarkInk(brand, scheme, PANEL)!;
+      if (ink.active.toLowerCase() === brand.toLowerCase()) continue;
+
+      const source = toOklch(brand)!;
+      const corrected = toOklch(ink.active)!;
+      // Past the fidelity limit the mark is placed rather than nudged, and
+      // "minimal" stops being the claim — that branch has its own test.
+      if (Math.abs(corrected.l - source.l) > 0.15) continue;
+      const relaxed = hexOf({
+        ...source,
+        l: corrected.l + (source.l - corrected.l) * 0.2,
+      });
+
+      const pair = backdrops(scheme, PANEL);
+      const ratio = Math.min(
+        contrastRatio(relaxed, pair.rest),
+        contrastRatio(relaxed, pair.active)
+      );
+      const weight = Math.min(apcaLc(relaxed, pair.rest), apcaLc(relaxed, pair.active));
+      // 3.05 rather than 3, because the resolver holds a small guard over the
+      // floor to cover the gaps between its crossfade samples.
+      expect(`${brand}/${scheme.type}: ${ratio < 3.05 || weight < 35}`).toBe(
+        `${brand}/${scheme.type}: true`
+      );
+    }
+  });
+
+  it("places a brand it cannot show at a weight that reads, not on the floor", () => {
+    // A near-black mark on a dark theme is going to be grey whatever we do, so
+    // the minimum legal move buys nothing — it just makes it a murkier grey with
+    // nowhere left to fade to.
+    const ink = resolveBrandMarkInk("#1c1c1c", DARK, PANEL)!;
+    const pair = backdrops(DARK, PANEL);
+    expect(apcaLc(ink.active, pair.rest)).toBeGreaterThanOrEqual(58);
+    expect(contrastRatio(ink.rest, pair.rest)).toBeGreaterThan(FLOOR);
+  });
+
+  it("darkens a near-white brand on a light theme instead of letting it vanish", () => {
+    const ink = resolveBrandMarkInk("#e8e8e8", LIGHT, PANEL)!;
+    const pair = backdrops(LIGHT, PANEL);
+    expect(toOklch(ink.active)!.l).toBeLessThan(toOklch("#e8e8e8")!.l);
+    expect(
+      Math.min(contrastRatio(ink.active, pair.rest), contrastRatio(ink.active, pair.active))
+    ).toBeGreaterThanOrEqual(FLOOR);
+  });
+
+  it("answers to the surface it is told it is painted on", () => {
+    // The whole point of threading provenance: the same brand on the theme's
+    // darkest and lightest surfaces is not the same colour problem.
+    const onCanvas = resolveBrandMarkInk("#615ced", DARK, { surface: "surface-canvas" })!;
+    const onElevated = resolveBrandMarkInk("#615ced", DARK, {
+      surface: "surface-panel-elevated",
+    })!;
+    expect(onCanvas.rest).not.toBe(onElevated.rest);
+    expect(contrastRatio(onCanvas.rest, DARK.tokens["surface-canvas"]!)).toBeGreaterThanOrEqual(
+      FLOOR
+    );
+    expect(
+      contrastRatio(onElevated.rest, DARK.tokens["surface-panel-elevated"]!)
+    ).toBeGreaterThanOrEqual(FLOOR);
+  });
+
+  it("measures against the container's own lift, not the bare surface token", () => {
+    const lifted = resolveBrandMarkInk("#615ced", DARK, {
+      surface: "surface-panel",
+      lift: "overlay-subtle",
+    })!;
+    const bare = resolveBrandMarkInk("#615ced", DARK, PANEL)!;
+    expect(lifted.rest).not.toBe(bare.rest);
+    expect(
+      contrastRatio(
+        lifted.rest,
+        blendOverBackground("#ffffff", DARK.tokens["surface-panel"]!, 0.03)
+      )
+    ).toBeGreaterThanOrEqual(FLOOR);
+  });
+
+  it("uses a theme extension that repaints the surface outright", () => {
+    // Several light themes repaint panel title bars through `panel-header-bg`,
+    // so the bare surface token there answers for a pixel never painted.
+    const repainted = makeScheme("light", LIGHT.tokens, { "panel-header-bg": "#c8c8c8" });
+    const ink = resolveBrandMarkInk("#cc785c", repainted, {
+      surface: "surface-panel",
+      extension: "panel-header-bg",
+    })!;
+    expect(contrastRatio(ink.rest, "#c8c8c8")).toBeGreaterThanOrEqual(FLOOR);
+    expect(ink.rest).not.toBe(resolveBrandMarkInk("#cc785c", repainted, PANEL)!.rest);
+  });
+
+  it("composites a translucent extension over the surface below it", () => {
+    const tinted = makeScheme("dark", DARK.tokens, {
+      "panel-header-focus-bg": "rgba(255,255,255,0.06)",
+    });
+    const ink = resolveBrandMarkInk("#615ced", tinted, {
+      surface: "surface-panel",
+      extension: "panel-header-focus-bg",
+    })!;
+    const composited = blendOverBackground("#ffffff", DARK.tokens["surface-panel"]!, 0.06);
+    expect(contrastRatio(ink.rest, composited)).toBeGreaterThanOrEqual(FLOOR);
+  });
+
+  it("stays safe on every surface when it is not told which one it is on", () => {
+    // No provider is a real state — an unwrapped call site, a plugin panel — so
+    // the fallback has to clear the floor everywhere rather than merely somewhere.
+    for (const scheme of [DARK, LIGHT]) {
+      for (const brand of ["#cc785c", "#3ee6eb", "#1c1c1c", "#e8e8e8", "#615ced"]) {
+        const ink = resolveBrandMarkInk(brand, scheme)!;
+        for (const surface of SURFACE_KEYS) {
+          expect(
+            worstAcrossFade(ink.rest, ink.active, backdrops(scheme, { surface }))
+          ).toBeGreaterThanOrEqual(FLOOR);
+        }
+      }
+    }
+  });
+
+  it("falls back rather than declining when the named surface cannot be measured", () => {
+    const translucent = makeScheme("dark", { ...DARK.tokens, "surface-panel": "#1e1e1e80" });
+    const ink = resolveBrandMarkInk("#cc785c", translucent, PANEL);
+    expect(ink).not.toBeNull();
+    // A translucent backdrop composites over whatever is behind it, so it is
+    // never read as opaque — the conservative surface answers instead.
+    expect(ink).toEqual(resolveBrandMarkInk("#cc785c", translucent));
   });
 
   it("accepts the shorthand hex form", () => {
-    expect(resolveBrandMarkInk("#c75", DARK)).toEqual(resolveBrandMarkInk("#cc7755", DARK));
+    expect(resolveBrandMarkInk("#c75", DARK, PANEL)).toEqual(
+      resolveBrandMarkInk("#cc7755", DARK, PANEL)
+    );
   });
 
   it("takes an alpha preset colour at full opacity rather than giving up on it", () => {
@@ -202,43 +385,21 @@ describe("resolveBrandMarkInk", () => {
     // reach here. A translucent mark has no single contrast ratio, so alpha is
     // dropped rather than composited — but dropping the brand treatment
     // entirely would leave the user's chosen colour with no effect at all.
-    expect(resolveBrandMarkInk("#cc785c80", DARK)).toEqual(resolveBrandMarkInk("#cc785c", DARK));
-    expect(resolveBrandMarkInk("#c75f", DARK)).toEqual(resolveBrandMarkInk("#cc7755", DARK));
-  });
-
-  it("declines a theme whose surfaces are translucent, rather than mis-measuring them", () => {
-    // The asymmetry with the brand input above is deliberate. A translucent
-    // FOREGROUND has an opaque colour to fall back to; a translucent BACKDROP
-    // composites over whatever is behind it, so reading it as opaque would
-    // measure a pixel that never gets painted. Declining is the honest answer.
-    const translucent = makeScheme("dark", { ...DARK.tokens, "surface-panel": "#1e1e1e80" });
-    const resolved = resolveBrandMarkInk("#cc785c", translucent)!;
-    const opaqueOnly = backdrops(translucent);
-    expect(opaqueOnly.every((bg) => /^#[0-9a-f]{6}$/i.test(bg) || bg.startsWith("#1e1e1e80"))).toBe(
-      true
+    expect(resolveBrandMarkInk("#cc785c80", DARK, PANEL)).toEqual(
+      resolveBrandMarkInk("#cc785c", DARK, PANEL)
     );
-    // The remaining four surfaces still carry the guarantee.
-    for (const key of SURFACE_KEYS.filter((k) => k !== "surface-panel")) {
-      expect(contrastRatio(resolved.rest, translucent.tokens[key]!)).toBeGreaterThanOrEqual(FLOOR);
-    }
-
-    const allTranslucent = makeScheme("dark", {
-      ...DARK.tokens,
-      "text-secondary": "#a8a8a880",
-    });
-    expect(resolveBrandMarkInk("#cc785c", allTranslucent)).toBeNull();
+    expect(resolveBrandMarkInk("#c75f", DARK, PANEL)).toEqual(
+      resolveBrandMarkInk("#cc7755", DARK, PANEL)
+    );
   });
 
   it("declines colours it cannot measure", () => {
-    expect(resolveBrandMarkInk("not-a-color", DARK)).toBeNull();
-    expect(resolveBrandMarkInk("#12345", DARK)).toBeNull();
-    expect(resolveBrandMarkInk(undefined, DARK)).toBeNull();
+    expect(resolveBrandMarkInk("not-a-color", DARK, PANEL)).toBeNull();
+    expect(resolveBrandMarkInk("#12345", DARK, PANEL)).toBeNull();
+    expect(resolveBrandMarkInk(undefined, DARK, PANEL)).toBeNull();
   });
 
-  it("declines a theme missing the tokens it reads", () => {
-    expect(
-      resolveBrandMarkInk("#cc785c", makeScheme("dark", { "surface-panel": "#1e1e1e" }))
-    ).toBeNull();
+  it("declines a theme with no surface it can read", () => {
     expect(
       resolveBrandMarkInk("#cc785c", makeScheme("dark", { "text-secondary": "#a8a8a8" }))
     ).toBeNull();
@@ -247,8 +408,8 @@ describe("resolveBrandMarkInk", () => {
   it("re-resolves when a theme is edited in place under a stable id", () => {
     // Custom themes keep their id across an edit, so anything cached against the
     // id alone would hand back the pre-edit colour forever.
-    const before = resolveBrandMarkInk("#cc785c", DARK)!;
-    const edited = makeScheme("dark", { ...DARK.tokens, "text-secondary": "#6e6e6e" });
-    expect(resolveBrandMarkInk("#cc785c", edited)!.rest).not.toBe(before.rest);
+    const before = resolveBrandMarkInk("#cc785c", DARK, PANEL)!;
+    const edited = makeScheme("dark", { ...DARK.tokens, "surface-panel": "#3a3a3a" });
+    expect(resolveBrandMarkInk("#cc785c", edited, PANEL)!.rest).not.toBe(before.rest);
   });
 });

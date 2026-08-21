@@ -83,7 +83,7 @@ describe("TerminalIcon", () => {
     const svg = icon?.querySelector("svg");
     expect(svg?.querySelector("path")?.getAttribute("fill")).toBe("currentColor");
     expect(svg?.style.getPropertyValue("--brand-mark-rest")).toMatch(/^#[0-9a-f]{6}$/i);
-    expect(svg?.style.getPropertyValue("--brand-mark-hover")).toMatch(/^#[0-9a-f]{6}$/i);
+    expect(svg?.style.getPropertyValue("--brand-mark-active")).toMatch(/^#[0-9a-f]{6}$/i);
   });
 
   it("lets an explicit brandColor override the chrome color marker", () => {

@@ -2,6 +2,7 @@ export { DaintreeIcon } from "./DaintreeIcon";
 export { McpServerIcon } from "./McpServerIcon";
 export * from "./AgentStateCircles";
 export { BrandMark } from "./BrandMark";
+export { BrandSurface, BrandSurfaceReset, useBrandSurface } from "./BrandSurface";
 export * from "./brands";
 
 // Daintree's product-concept icons resolve to Lucide icons. Re-exported

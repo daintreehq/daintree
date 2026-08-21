@@ -3,12 +3,10 @@ import { render } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import { AGENT_ICON_MAP } from "@/config/agentIcons";
 import { AGENT_REGISTRY } from "@/config/agents";
-import { BUILT_IN_APP_SCHEMES } from "@shared/theme";
 import { BrandMark } from "../BrandMark";
 import { ClaudeIcon } from "../brands/ClaudeIcon";
 import { KiroIcon } from "../brands/KiroIcon";
 
-const scheme = BUILT_IN_APP_SCHEMES[0]!;
 vi.mock("@/hooks/useActiveAppScheme", async () => {
   const { BUILT_IN_APP_SCHEMES: schemes } = await import("@shared/theme");
   return { useActiveAppScheme: () => schemes[0]! };
@@ -103,7 +101,7 @@ describe("brand icons paint from the ink BrandMark chose", () => {
       const svg = result.container.querySelector("svg")!;
       return {
         rest: svg.style.getPropertyValue("--brand-mark-rest"),
-        hover: svg.style.getPropertyValue("--brand-mark-hover"),
+        active: svg.style.getPropertyValue("--brand-mark-active"),
       };
     };
     const warm = read(render1);
@@ -111,15 +109,15 @@ describe("brand icons paint from the ink BrandMark chose", () => {
 
     for (const ink of [warm, cyan]) {
       expect(ink.rest).toMatch(/^#[0-9a-f]{6}$/i);
-      expect(ink.hover).toMatch(/^#[0-9a-f]{6}$/i);
+      expect(ink.active).toMatch(/^#[0-9a-f]{6}$/i);
     }
     // Different brand colours must produce different inks, or the colour is not
     // reaching the resolver at all.
     expect(warm.rest).not.toBe(cyan.rest);
-    expect(warm.hover).not.toBe(cyan.hover);
-    // And the resting ink must actually be derived from the active theme rather
-    // than from the brand hex alone.
+    expect(warm.active).not.toBe(cyan.active);
+    // And the resting ink must be a faded version of the brand rather than the
+    // brand hex handed straight through.
     expect(warm.rest.toLowerCase()).not.toBe("#cc785c");
-    expect(scheme.tokens["text-secondary"]).toBeTruthy();
+    expect(warm.rest.toLowerCase()).not.toBe(warm.active.toLowerCase());
   });
 });

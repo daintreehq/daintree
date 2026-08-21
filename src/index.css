@@ -1930,10 +1930,10 @@ body,
 
 /* Third-party brand marks (agent and product logos). These carry vendor hexes
    from `AgentConfig.color`, not theme tokens, so they sit outside the semantic
-   palette entirely. `BrandMark.tsx` resolves both inks and publishes them here:
-   at rest the mark wears the theme's own icon-ink lightness pulled toward the
-   brand hue, so a row of them reads as icons rather than as logos; the full
-   brand colour is the hover reveal, where identity actually matters.
+   palette entirely. `BrandMark.tsx` resolves both inks against the backdrop the
+   mark is actually painted on and publishes them here: at rest the brand colour
+   one perceptual step back, and the brand colour itself once the mark is active
+   — hovered, keyboard-focused, in a selected tab, or in a focused panel.
 
    Unlayered on purpose — a Tailwind `text-*` utility on the same glyph sits in
    `@layer utilities` and would otherwise win, repainting a mark the resolver
@@ -1950,7 +1950,13 @@ body,
    rule covers a listbox row the keyboard has landed on without the row itself
    taking focus. `label` is here because the onboarding agent rows wrap their
    checkbox in one, and `:focus-within` is that row's keyboard state: focus
-   lands on the input inside, never on the label. */
+   lands on the input inside, never on the label.
+
+   Selection is the third way in, and it is not transient: the selected tab and
+   the focused panel's title bar hold the brand colour for as long as they are
+   the ones you are working in. `[data-brand-active]` is what a container sets
+   when its own notion of "active" is neither hover nor a standard ARIA
+   selection — a focused panel header being the case that asked for it. */
 a:hover .brand-mark,
 button:hover .brand-mark,
 label:hover .brand-mark,
@@ -1964,8 +1970,10 @@ label:focus-within .brand-mark,
 [role="menuitem"]:focus-visible .brand-mark,
 [role="tab"]:focus-visible .brand-mark,
 [role="option"][aria-selected="true"] .brand-mark,
+[role="tab"][aria-selected="true"] .brand-mark,
+[data-brand-active] .brand-mark,
 :focus-visible > .brand-mark {
-  color: var(--brand-mark-hover);
+  color: var(--brand-mark-active);
 }
 
 /* Panel Agent State Borders — grid panel container state-driven styling */

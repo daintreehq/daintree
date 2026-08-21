@@ -268,9 +268,11 @@ async function expectAgentIconColor(
   // The marker above is the canonical preset color contract. Nothing hands a
   // colour to a glyph any more: the SVG stays on `currentColor` and `BrandMark`
   // publishes the resolved inks as custom properties that `.brand-mark` reads.
-  // Asserting the painted colour EQUALS the resting ink is what proves the whole
-  // chain ran — resolver, custom property and stylesheet rule — rather than just
-  // that some variable exists and the glyph inherited a colour from somewhere.
+  // Asserting the painted colour EQUALS the ink for the mark's CURRENT state is
+  // what proves the whole chain ran — resolver, custom property and stylesheet
+  // rule — rather than just that some variable exists and the glyph inherited a
+  // colour from somewhere. The state matters: a title bar in the pane you are
+  // working in wears the active ink, and every other one wears the resting ink.
   await expect(icon.locator("path").first()).toHaveAttribute("fill", "currentColor");
   const svg = icon.locator("svg").first();
   await expect
@@ -279,7 +281,7 @@ async function expectAgentIconColor(
         svg.evaluate((el) => {
           const computed = getComputedStyle(el);
           const rest = computed.getPropertyValue("--brand-mark-rest").trim();
-          const hover = computed.getPropertyValue("--brand-mark-hover").trim();
+          const active = computed.getPropertyValue("--brand-mark-active").trim();
           const toRgb = (hex: string): string => {
             const raw = hex.replace("#", "");
             const body =
@@ -292,10 +294,20 @@ async function expectAgentIconColor(
             const [r, g, b] = [0, 2, 4].map((i) => parseInt(body.slice(i, i + 2), 16));
             return `rgb(${r}, ${g}, ${b})`;
           };
+          // The same ancestors the stylesheet's own selectors name. Deliberately
+          // not `closest(":hover")`: `html` and `body` match that whenever the
+          // pointer is anywhere in the window, which would call every mark on
+          // the page active.
+          const isActive =
+            el.closest("[data-brand-active]") !== null ||
+            el.closest('[role="tab"][aria-selected="true"]') !== null ||
+            el.closest('[role="option"][aria-selected="true"]') !== null;
+          const expected = isActive ? active : rest;
           return {
             restIsHex: /^#[0-9a-f]{6}$/i.test(rest),
-            hoverIsHex: /^#[0-9a-f]{6}$/i.test(hover),
-            paintedMatchesRest: rest !== "" && computed.color === toRgb(rest),
+            activeIsHex: /^#[0-9a-f]{6}$/i.test(active),
+            fadesIntoTheActiveInk: rest !== active,
+            paintedMatchesState: expected !== "" && computed.color === toRgb(expected),
             hasBrandClass: el.classList.contains("brand-mark"),
           };
         }),
@@ -303,8 +315,9 @@ async function expectAgentIconColor(
     )
     .toEqual({
       restIsHex: true,
-      hoverIsHex: true,
-      paintedMatchesRest: true,
+      activeIsHex: true,
+      fadesIntoTheActiveInk: true,
+      paintedMatchesState: true,
       hasBrandClass: true,
     });
 }

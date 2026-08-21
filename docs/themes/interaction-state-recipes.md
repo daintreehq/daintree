@@ -88,6 +88,29 @@ The accent border and the 2px accent rail this recipe used to prescribe were rem
 
 ---
 
+### Brand Mark States
+
+**Role:** Third-party brand marks (agent and product logos) in toolbars, dock rails, panel title bars and palettes. Two inks: the brand colour a step back at rest, the brand colour itself when the mark is active.
+
+```tsx
+<BrandSurface surface="surface-panel" extension="panel-header-focus-bg" lift="overlay-subtle">
+  {/* ...anything rendering a BrandMark... */}
+</BrandSurface>
+```
+
+**Usage:** Never hand a colour to a brand glyph. The SVG stays on `currentColor`, `BrandMark` publishes `--brand-mark-rest` / `--brand-mark-active`, and `.brand-mark` in `src/index.css` owns the swap. Active is reached by `:hover`, `:focus-visible`, `[role="option"]/[role="tab"][aria-selected="true"]`, and `[data-brand-active]` for a container whose own notion of active is none of those — a focused panel title bar being the case that asked for it. Put `data-brand-active` on the glyph's own wrapper, not on a container that also holds other marks, or a focused panel lights up every tab in its strip.
+
+These marks carry vendor hexes from `AgentConfig.color`, not theme tokens, so they are the one colour family the semantic palette cannot reach. `resolveBrandMarkInk` (`src/lib/brandIcon.ts`) places both states against the backdrop the mark is actually painted on:
+
+- **Active** is the brand colour untouched wherever it clears WCAG 1.4.11's 3:1 _and_ APCA Lc 35 against the weaker of its two backdrops (a mark is painted on the hover backdrop when hovered and on the plain surface when it sits in a selected tab or the focused pane). Where it falls short, the smallest move along its own hue line that gets it there — hue held, chroma re-fitted by CSS Color 4 chroma reduction, never by clipping channels. Lc 35 rather than 3:1 alone because a fine outlined glyph and a solid square at the same ratio are not the same thing to read, and several dark violets cleared 3:1 while landing below the resting state they came from.
+- **Rest** is that colour drawn back an OKLab ΔE of 0.07, _away from the backdrop_ — so on a light theme it sits darker than the brand and lightens into it, on a dark theme lighter and deepens into it. Most of the step is lightness; a fifth of the chroma goes with it so the reveal is a bloom of colour as well as a shift in weight. Fading toward the backdrop instead is what made the previous revision read as washed out.
+- **A ceiling** holds the resting mark within 11 Lc of the theme's own `text-secondary` ink. The neutral controls beside a mark are painted in that ink, and a brand arriving near-white on a dark theme would otherwise rest louder than every control around it. What the ceiling takes off the lightness move comes back as chroma, so the fade keeps its size.
+- **A brand with no chroma is not a colour**, so below OKLCH chroma 0.02 the mark is drawn as an icon instead: it rests at `text-secondary` and its active state is that ink one step _further_ from the backdrop. The direction is reversed on purpose — a colourless mark has no colour to gain on hover, so weight is the only reveal it has.
+
+Every state is checked across the whole 150ms crossfade rather than at its endpoints: the control repaints its background in the same 150ms the glyph recolours, so both are moving and the minimum can sit between the ends. Foreground and backdrop are sampled as a grid rather than in lockstep — the glyph eases out while the surfaces under it ease — so any monotone pair of easings is covered without either being assumed. `src/lib/__tests__/brandMarkMatrix.test.ts` runs the whole agent registry against every built-in theme and every surface a mark can land on.
+
+`BrandSurface` is how the backdrop is known. Wrap containers, not call sites — one on a title bar covers the header glyph and its whole tab strip. `extension` names a theme extension that replaces the surface where a theme defines one (several light themes repaint title bars through `panel-header-bg`), and `lift` names the overlay the container composites when it does not. Without a provider the mark answers to every surface at once, which is safe everywhere and generous nowhere. Floating material — menus, popovers — renders `BrandSurfaceReset` for that reason: React context reaches through a portal even though the DOM does not, so a menu opened from the toolbar would otherwise be measured against the toolbar.
+
 ## Focus States
 
 ### Default Focus Ring
