@@ -1359,7 +1359,30 @@ export default defineConfig(({ command, mode }) => {
                 test: /node_modules[\\/]@xterm[\\/]addon-webgl[\\/]/,
                 priority: 75,
               },
-              { name: "vendor-xterm", test: /node_modules[\\/]@xterm[\\/]/, priority: 70 },
+              {
+                // Keep the dynamically imported addons outside the eager xterm
+                // vendor chunk. A broad @xterm rule used to collapse those
+                // import boundaries, making every project view parse image,
+                // search, and Unicode addon code at startup.
+                name: "vendor-xterm",
+                test: /node_modules[\\/]@xterm[\\/](?!addon-(?:image|search|unicode11)[\\/])/,
+                priority: 74,
+              },
+              {
+                name: "vendor-xterm-image",
+                test: /node_modules[\\/]@xterm[\\/]addon-image[\\/]/,
+                priority: 73,
+              },
+              {
+                name: "vendor-xterm-search",
+                test: /node_modules[\\/]@xterm[\\/]addon-search[\\/]/,
+                priority: 73,
+              },
+              {
+                name: "vendor-xterm-unicode11",
+                test: /node_modules[\\/]@xterm[\\/]addon-unicode11[\\/]/,
+                priority: 73,
+              },
               {
                 // Excludes @codemirror/lang-* and @codemirror/legacy-modes so
                 // those per-language parsers split into their own async chunks

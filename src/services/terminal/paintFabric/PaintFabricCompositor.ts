@@ -731,6 +731,11 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
     return this.plane(id).get(id);
   }
 
+  ensureSearchAddon(id: string): Promise<ManagedTerminal["searchAddon"]> {
+    if (this.isViewOwned(id)) return Promise.resolve(null);
+    return this.plane(id).ensureSearchAddon(id);
+  }
+
   getInstanceForE2E(id: string): ManagedTerminal | undefined {
     if (this.isViewOwned(id)) return undefined;
     return this.plane(id).getInstanceForE2E(id);

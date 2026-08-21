@@ -75,7 +75,9 @@ function tsxScript(file: string, fixedArgs: string[] = [], env?: Record<string, 
 }
 
 function harness(mode: PerfMode): Runner {
-  return tsxScript("run.ts", ["--mode", mode]);
+  const scriptPath = path.join(perfDir, "run.ts");
+  return (rest) =>
+    spawnNode(["--expose-gc", "--import", "tsx", scriptPath, "--mode", mode, ...rest]);
 }
 
 function viteAnalyze(): Runner {

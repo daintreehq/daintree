@@ -5,6 +5,7 @@ import { render, screen, fireEvent, act } from "@testing-library/react";
 vi.mock("@/services/TerminalInstanceService", () => ({
   terminalInstanceService: {
     get: vi.fn(),
+    ensureSearchAddon: vi.fn(),
   },
 }));
 
@@ -48,6 +49,9 @@ function createMockManaged(findNextResult = true) {
 describe("TerminalSearchBar", () => {
   beforeEach(() => {
     vi.useFakeTimers();
+    vi.mocked(terminalInstanceService.ensureSearchAddon).mockImplementation(async (id) => {
+      return terminalInstanceService.get(id)?.searchAddon ?? null;
+    });
     useTerminalSearchHistoryStore.setState({
       searches: [],
       caseSensitive: false,
@@ -399,13 +403,14 @@ describe("TerminalSearchBar", () => {
     expect(input.getAttribute("aria-invalid")).toBeNull();
   });
 
-  it("disposes the onDidChangeResults subscription on unmount", () => {
+  it("disposes the onDidChangeResults subscription on unmount", async () => {
     const mock = createMockManaged(true);
     vi.mocked(terminalInstanceService.get).mockReturnValue(
       mock as unknown as ReturnType<typeof terminalInstanceService.get>
     );
 
     const { unmount } = renderSearchBar();
+    await act(async () => Promise.resolve());
     expect(mock._resultsListeners.length).toBe(1);
 
     unmount();
@@ -429,7 +434,7 @@ describe("TerminalSearchBar", () => {
       expect(input.value).toBe("recent");
     });
 
-    it("fires the search on mount when pre-populated from history", () => {
+    it("fires the search on mount when pre-populated from history", async () => {
       useTerminalSearchHistoryStore.setState({
         searches: ["recent"],
         caseSensitive: false,
@@ -441,6 +446,7 @@ describe("TerminalSearchBar", () => {
       );
 
       renderSearchBar();
+      await act(async () => Promise.resolve());
       expect(mock.searchAddon.findNext).toHaveBeenCalledWith("recent", expect.any(Object));
     });
 

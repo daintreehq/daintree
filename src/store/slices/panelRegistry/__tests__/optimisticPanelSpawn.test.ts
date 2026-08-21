@@ -239,7 +239,7 @@ describe("optimistic panel spawn (#5789)", () => {
     }
   });
 
-  it("realizes a declared recipe batch two terminals at a time", async () => {
+  it("realizes a declared recipe batch three terminals at a time", async () => {
     const { terminalClient } = (await import("@/clients")) as unknown as {
       terminalClient: { spawn: ReturnType<typeof vi.fn> };
     };
@@ -276,11 +276,11 @@ describe("optimistic panel spawn (#5789)", () => {
 
     await Promise.all(launches);
     await drainMicrotasks();
-    expect(terminalClient.spawn).toHaveBeenCalledTimes(2);
+    expect(terminalClient.spawn).toHaveBeenCalledTimes(3);
 
     releases[0]!();
     await drainMicrotasks();
-    expect(terminalClient.spawn).toHaveBeenCalledTimes(3);
+    expect(terminalClient.spawn).toHaveBeenCalledTimes(4);
 
     releases[1]!();
     await drainMicrotasks();

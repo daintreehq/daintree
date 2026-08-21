@@ -4,7 +4,6 @@ import type { HandlerDependencies } from "../types.js";
 import type { WhySlowSnapshot } from "../../../shared/types/whySlow.js";
 import type { CompositeMemorySnapshot } from "../../../shared/types/memoryAccounting.js";
 import { WHY_SLOW_METHOD_CHANNELS } from "./whySlow.preload.js";
-import { collectWhySlowSnapshot } from "../../services/DiagnosticsCollector.js";
 import { getCompositeMemorySnapshot } from "../../services/memoryAccounting.js";
 import { recordRendererTerminalDiagnostics } from "../../services/RendererTerminalDiagnosticsCache.js";
 
@@ -33,7 +32,10 @@ export function registerWhySlowHandlers(deps: HandlerDependencies): () => void {
       // On-demand pull for the "why am I slow?" diagnostics dock.
       getWhySlowSnapshot: op(
         WHY_SLOW_METHOD_CHANNELS.getWhySlowSnapshot,
-        async (): Promise<WhySlowSnapshot> => collectWhySlowSnapshot(deps)
+        async (): Promise<WhySlowSnapshot> => {
+          const { collectWhySlowSnapshot } = await import("../../services/DiagnosticsCollector.js");
+          return collectWhySlowSnapshot(deps);
+        }
       ),
       // Composite memory snapshot (Electron working-set + terminal descendant
       // RSS by project) for the resource badge popover. Reads go through

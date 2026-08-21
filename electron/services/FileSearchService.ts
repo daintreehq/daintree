@@ -7,7 +7,11 @@ import type { Dirent } from "fs";
 
 interface FileListCacheEntry {
   files: string[];
+  normalizedFiles: string[];
+  basenameStarts: number[];
   sortedFiles: string[];
+  lastSearchQuery?: string;
+  lastSearchCandidates?: number[];
 }
 
 const FILE_LIST_CACHE = new Cache<string, FileListCacheEntry>({
@@ -74,12 +78,14 @@ function normalizeQuery(rawQuery: string): string {
   return normalized.replace(/\/+/g, "/");
 }
 
-function scorePath(normalizedQuery: string, file: string): number | null {
+function scorePath(
+  normalizedQuery: string,
+  normalizedFile: string,
+  basenameStart: number
+): number | null {
   if (normalizedQuery.length === 0) return 0;
 
-  const fileLower = file.toLowerCase();
-  const normalizedFile = fileLower.endsWith("/") ? fileLower.slice(0, -1) : fileLower;
-  const basename = normalizedFile.slice(normalizedFile.lastIndexOf("/") + 1);
+  const basename = normalizedFile.slice(basenameStart);
 
   if (basename === normalizedQuery) return 0;
   if (normalizedFile === normalizedQuery) return 1;
@@ -104,12 +110,27 @@ function pickTopMatches(entry: FileListCacheEntry, query: string, limit: number)
   }
 
   const best: Array<{ file: string; score: number }> = [];
+  const matchingCandidates: number[] = [];
+  const previousCandidates = entry.lastSearchCandidates;
+  const canNarrowPrevious =
+    previousCandidates !== undefined &&
+    entry.lastSearchQuery !== undefined &&
+    normalizedQuery.startsWith(entry.lastSearchQuery);
+  const candidates = canNarrowPrevious ? previousCandidates : undefined;
   let worstIdx = -1;
   let worstScore = -Infinity;
 
-  for (const file of entry.files) {
-    const score = scorePath(normalizedQuery, file);
+  const candidateCount = candidates?.length ?? entry.files.length;
+  for (let candidateIdx = 0; candidateIdx < candidateCount; candidateIdx++) {
+    const fileIdx = candidates?.[candidateIdx] ?? candidateIdx;
+    const file = entry.files[fileIdx];
+    const score = scorePath(
+      normalizedQuery,
+      entry.normalizedFiles[fileIdx],
+      entry.basenameStarts[fileIdx]
+    );
     if (score === null) continue;
+    matchingCandidates.push(fileIdx);
 
     if (best.length < effectiveLimit) {
       best.push({ file, score });
@@ -133,6 +154,8 @@ function pickTopMatches(entry: FileListCacheEntry, query: string, limit: number)
     }
   }
 
+  entry.lastSearchQuery = normalizedQuery;
+  entry.lastSearchCandidates = matchingCandidates;
   best.sort((a, b) => a.score - b.score || a.file.localeCompare(b.file));
   return best.map((m) => m.file);
 }
@@ -186,11 +209,6 @@ async function loadFilesFromDisk(cwd: string): Promise<string[]> {
 
 async function loadGitFiles(cwd: string): Promise<string[]> {
   const git = await createHardenedGit(cwd);
-  const isRepo = await git.checkIsRepo();
-  if (!isRepo) {
-    return [];
-  }
-
   const gitRootRaw = (await git.revparse(["--show-toplevel"])).trim();
   const gitRoot = path.resolve(gitRootRaw);
   const relativeToRoot = toPosixPath(path.relative(gitRoot, cwd));
@@ -210,7 +228,9 @@ async function loadGitFiles(cwd: string): Promise<string[]> {
     args.push("--", pathspec);
   }
 
-  const output = await (await createHardenedGit(gitRoot)).raw(args);
+  const output = await (gitRoot === path.resolve(cwd) ? git : await createHardenedGit(gitRoot)).raw(
+    args
+  );
   const prefix = pathspec ? `${pathspec.replace(/\/$/, "")}/` : "";
 
   const files = output
@@ -387,7 +407,20 @@ export class FileSearchService {
     const loadPromise: Promise<FileListCacheEntry> = this.loadFileList(resolvedCwd)
       .then((loaded) => {
         const sortedFiles = [...loaded].sort((a, b) => a.length - b.length || a.localeCompare(b));
-        const entry: FileListCacheEntry = { files: loaded, sortedFiles };
+        const normalizedFiles = new Array<string>(loaded.length);
+        const basenameStarts = new Array<number>(loaded.length);
+        for (let i = 0; i < loaded.length; i++) {
+          const lower = loaded[i].toLowerCase();
+          const normalized = lower.endsWith("/") ? lower.slice(0, -1) : lower;
+          normalizedFiles[i] = normalized;
+          basenameStarts[i] = normalized.lastIndexOf("/") + 1;
+        }
+        const entry: FileListCacheEntry = {
+          files: loaded,
+          normalizedFiles,
+          basenameStarts,
+          sortedFiles,
+        };
         if ((FILE_LIST_EPOCHS.get(resolvedCwd) ?? 0) === epoch) {
           FILE_LIST_CACHE.set(resolvedCwd, entry);
         }

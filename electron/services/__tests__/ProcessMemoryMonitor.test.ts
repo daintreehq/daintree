@@ -232,6 +232,22 @@ describe("ProcessMemoryMonitor", () => {
     expect(v8.writeHeapSnapshot).not.toHaveBeenCalled();
   });
 
+  it("does NOT write heap snapshot during E2E performance capture", () => {
+    const previous = process.env.DAINTREE_E2E_MODE;
+    process.env.DAINTREE_E2E_MODE = "1";
+    mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 700 * 1024, 100)]);
+    Object.defineProperty(app, "isPackaged", { value: false, writable: true });
+
+    try {
+      stop = startAppMetricsMonitor();
+      vi.advanceTimersByTime(30_000);
+      expect(v8.writeHeapSnapshot).not.toHaveBeenCalled();
+    } finally {
+      if (previous === undefined) delete process.env.DAINTREE_E2E_MODE;
+      else process.env.DAINTREE_E2E_MODE = previous;
+    }
+  });
+
   it("respects snapshot cooldown — no double-write within 5 minutes", () => {
     mockGetAppMetrics.mockReturnValue([makeMetric("Browser", 700 * 1024, 100)]);
     Object.defineProperty(app, "isPackaged", { value: false, writable: true });

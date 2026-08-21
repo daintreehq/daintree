@@ -158,7 +158,7 @@ class TerminalStartupQueue {
 }
 
 const terminalStartupQueue = new TerminalStartupQueue();
-const RECIPE_TERMINAL_STARTUP_CONCURRENCY = 2;
+const RECIPE_TERMINAL_STARTUP_CONCURRENCY = 3;
 
 export const createAddPanelActions = (
   set: Set,

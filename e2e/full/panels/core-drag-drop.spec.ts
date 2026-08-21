@@ -12,7 +12,7 @@ import {
   getPanelDragHandle,
   openTerminal,
 } from "../../helpers/panels";
-import { keyboardReorderElement, keyboardReorderDockChip } from "../../helpers/dragDrop";
+import { keyboardReorderElement, pointerReorderDockChip } from "../../helpers/dragDrop";
 import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
 
@@ -138,7 +138,7 @@ test.describe.serial("Core: Panel Drag & Drop", () => {
 
   // ── Dock Chip Reorder ────────────────────────────────────
 
-  test("reorder dock chips with keyboard drag", async () => {
+  test("reorder dock chips with pointer drag", async () => {
     const { window } = ctx;
 
     // Move two grid panels to the dock, leaving one in the grid. Emptying the
@@ -160,8 +160,8 @@ test.describe.serial("Core: Panel Drag & Drop", () => {
       await expect.poll(() => getDockPanelCount(window), { timeout: T_MEDIUM }).toBe(2);
     });
 
-    await test.step("Keyboard-drag the first chip and verify the dock order changes", async () => {
-      const dockIdsBefore = await getDockPanelIds(window);
+    await test.step("Pointer-drag the first chip and verify the dock order changes", async () => {
+      const dockIdsBefore = await getDockChipIds(window);
       expect(dockIdsBefore).toHaveLength(2);
 
       const chips = window.locator(`${SEL.dock.rail} ${SEL.dock.chip}`);
@@ -174,15 +174,8 @@ test.describe.serial("Core: Panel Drag & Drop", () => {
       // multi-panel group would collapse N panels into one chip.
       await expect.poll(() => getDockChipIds(window), { timeout: T_MEDIUM }).toEqual(dockIdsBefore);
 
-      let dockIdsAfter = dockIdsBefore;
-      // Try moving right, then fall back to left, mirroring the grid-reorder
-      // test's resilience to dnd-kit's headless collision geometry.
-      for (const direction of ["ArrowRight", "ArrowLeft"] as const) {
-        await keyboardReorderDockChip(window, chips.first(), direction);
-        await window.waitForTimeout(T_SETTLE);
-        dockIdsAfter = await getDockPanelIds(window);
-        if (dockIdsAfter[0] !== dockIdsBefore[0]) break;
-      }
+      await pointerReorderDockChip(window, chips.first(), chips.nth(1));
+      const dockIdsAfter = await getDockChipIds(window);
 
       expect(dockIdsAfter).toHaveLength(2);
       // Same panels, different order — the chip moved past its neighbour.

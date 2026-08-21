@@ -474,7 +474,9 @@ describe("CopyTreeService", () => {
       // silently resurrecting files the caller (or the project's settings)
       // explicitly excluded. The selection has to stay in `filter` alone.
       expect(options.always).toBeUndefined();
-      expect(options.filter).toEqual(["docs/**"]);
+      expect(options.filter).toEqual(
+        expect.arrayContaining(["docs/**", "docs/**/.*", "docs/**/.*/**"])
+      );
       expect(options.exclude).toEqual(["**/*.secret"]);
     });
 

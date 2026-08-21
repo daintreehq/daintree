@@ -641,7 +641,13 @@ class CopyTreeService {
       ...(includePaths ?? []),
       ...(filter === undefined ? [] : Array.isArray(filter) ? filter : [filter]),
     ];
-    return Array.from(new Set(merged));
+    return Array.from(
+      new Set(
+        merged.flatMap((pattern) =>
+          pattern.endsWith("/**") ? [pattern, `${pattern}/.*`, `${pattern}/.*/**`] : [pattern]
+        )
+      )
+    );
   }
 
   /**
@@ -750,6 +756,8 @@ class CopyTreeService {
   }
 
   private buildSdkOptions(options: CopyTreeOptions, signal: AbortSignal): SdkCopyOptions {
+    const filter = CopyTreeService.mergeSelectionPatterns(options.includePaths, options.filter);
+
     return {
       signal,
       display: false,
@@ -757,7 +765,11 @@ class CopyTreeService {
       quiet: true,
       format: options.format || "xml",
 
-      filter: CopyTreeService.mergeSelectionPatterns(options.includePaths, options.filter),
+      filter,
+      // A caller's explicit selection is authoritative, including dotfiles
+      // matched by its globs. The filter still bounds the result, while an
+      // unfiltered whole-project copy retains the SDK's hidden-file default.
+      includeHidden: filter !== undefined,
       // Literal paths, not patterns, and orthogonal to `filter`: the walk starts
       // here but the ignore stack is still built from the root down, so a folder
       // copy drops what a whole-project copy would have dropped.

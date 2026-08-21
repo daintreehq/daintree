@@ -47,7 +47,7 @@ describe("AppLayout theme browser overlay structure — issue #5791", () => {
     // Bug 1: rendering inside the inert main-content wrapper made the picker
     // itself unclickable. Portaling to document.body escapes the inert ancestor.
     expect(source).toMatch(/import \{ createPortal(?:, flushSync)? \} from "react-dom"/);
-    expect(source).toMatch(/createPortal\([\s\S]*?<ThemeBrowser \/>[\s\S]*?document\.body/);
+    expect(source).toMatch(/createPortal\([\s\S]*?<LazyThemeBrowser \/>[\s\S]*?document\.body/);
   });
 
   it("renders scrim as a sibling of the panel, not an ancestor", () => {
@@ -65,7 +65,7 @@ describe("AppLayout theme browser overlay structure — issue #5791", () => {
     // fixed + bottom-0 anchors to the viewport regardless of docks/panels below,
     // and the top edge is driven by OVERLAY_TOP_OFFSET (see #11893 below).
     expect(source).toMatch(
-      /<div(?=[^>]*className="(?=[^"]*\bfixed\b)(?=[^"]*\bbottom-0\b)[^"]*")(?=[^>]*style=\{\{[\s\S]{0,200}?\btop:\s*OVERLAY_TOP_OFFSET\b)[^>]*>\s*<ThemeBrowser\s*\/>/
+      /<div(?=[^>]*className="(?=[^"]*\bfixed\b)(?=[^"]*\bbottom-0\b)[^"]*")(?=[^>]*style=\{\{[\s\S]{0,200}?\btop:\s*OVERLAY_TOP_OFFSET\b)[^>]*>[\s\S]{0,100}?<LazyThemeBrowser\s*\/>/
     );
   });
 

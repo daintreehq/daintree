@@ -8,7 +8,6 @@ import {
   projectViewManagersFrom,
 } from "../../../window/activeProjectIds.js";
 import { broadcastToRenderer, typedHandle, typedHandleWithContext } from "../../utils.js";
-import { projectRelocationCoordinator } from "../../../services/ProjectRelocationCoordinator.js";
 import { resolveScopedProjectForIpcContext } from "../../projectContext.js";
 import { refreshProjectMenuState } from "../../../projectMenuState.js";
 import { notificationService } from "../../../services/NotificationService.js";
@@ -440,6 +439,8 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
     // reattach delegates to the phase-1/2 path. It broadcasts PROJECT_UPDATED to
     // every cached view by immutable id, so the new path reaches windows other
     // than the one that ran the locate flow (#11282).
+    const { projectRelocationCoordinator } =
+      await import("../../../services/ProjectRelocationCoordinator.js");
     projectRelocationCoordinator.configure(deps);
     return projectRelocationCoordinator.relocate({ projectId, mode: "reattach", newPath });
   };

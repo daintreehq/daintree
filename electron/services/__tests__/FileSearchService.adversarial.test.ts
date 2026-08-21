@@ -64,9 +64,8 @@ describe("FileSearchService adversarial", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "file-search-adv-"));
     tempDirs.push(dir);
     const gitClient = createGitClient();
-    const checkDeferred = createDeferred<boolean>();
-    gitClient.checkIsRepo.mockReturnValue(checkDeferred.promise);
-    gitClient.revparse.mockResolvedValue(`${dir}\n`);
+    const rootDeferred = createDeferred<string>();
+    gitClient.revparse.mockReturnValue(rootDeferred.promise);
     gitClient.raw.mockResolvedValue("README.md\0src/main.ts\0");
     createHardenedGitMock.mockReturnValue(gitClient);
 
@@ -74,10 +73,10 @@ describe("FileSearchService adversarial", () => {
     const first = service.search({ cwd: dir, query: "read", limit: 5 });
     const second = service.search({ cwd: dir, query: "main", limit: 5 });
 
-    checkDeferred.resolve(true);
+    rootDeferred.resolve(`${dir}\n`);
 
     await expect(Promise.all([first, second])).resolves.toEqual([["README.md"], ["src/main.ts"]]);
-    expect(gitClient.checkIsRepo).toHaveBeenCalledTimes(1);
+    expect(gitClient.revparse).toHaveBeenCalledTimes(1);
     expect(gitClient.raw).toHaveBeenCalledTimes(1);
   });
 
