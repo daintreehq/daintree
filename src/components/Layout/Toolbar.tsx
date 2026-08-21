@@ -28,7 +28,7 @@ import {
   X,
 } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
-import { FolderTree, Folders } from "@/components/icons";
+import { BrandSurface, FolderTree, Folders } from "@/components/icons";
 import { buildPluginToolbarMeta } from "./pluginToolbarMeta";
 import {
   TOOLBAR_BUTTON_METADATA,
@@ -1986,248 +1986,252 @@ export function Toolbar({
 
   return (
     <header>
-      <div
-        ref={toolbarRef}
-        role="toolbar"
-        aria-label="Main toolbar"
-        onKeyDown={handleToolbarKeyDown}
-        onFocusCapture={handleToolbarFocusCapture}
-        className="@container/toolbar relative z-[60] grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] h-12 items-center px-4 pt-1 shrink-0 app-drag-region surface-toolbar border-b border-divider"
-      >
-        {!isLinux() && <div className="window-resize-strip" />}
-
-        {/* LEFT GROUP */}
+      {/* Brand marks in the toolbar are painted on the toolbar surface, not on
+          whichever surface the theme happens to make hardest. */}
+      <BrandSurface surface="surface-toolbar">
         <div
-          role="group"
-          aria-label="Navigation and agents"
-          className="flex items-center gap-1.5 z-20"
+          ref={toolbarRef}
+          role="toolbar"
+          aria-label="Main toolbar"
+          onKeyDown={handleToolbarKeyDown}
+          onFocusCapture={handleToolbarFocusCapture}
+          className="@container/toolbar relative z-[60] grid grid-cols-[minmax(0,1fr)_auto_minmax(0,1fr)] h-12 items-center px-4 pt-1 shrink-0 app-drag-region surface-toolbar border-b border-divider"
         >
-          {isMac() && (
-            <div
-              data-fullscreen={isFullscreen ? "true" : undefined}
-              className={cn(
-                "shrink-0 transition-[width] duration-200 data-[fullscreen=true]:duration-120",
-                isFullscreen ? "w-0" : "w-16"
-              )}
-            />
-          )}
-          {/* Fixed chrome, never part of buttonRegistry/overflow: this is the
+          {!isLinux() && <div className="window-resize-strip" />}
+
+          {/* LEFT GROUP */}
+          <div
+            role="group"
+            aria-label="Navigation and agents"
+            className="flex items-center gap-1.5 z-20"
+          >
+            {isMac() && (
+              <div
+                data-fullscreen={isFullscreen ? "true" : undefined}
+                className={cn(
+                  "shrink-0 transition-[width] duration-200 data-[fullscreen=true]:duration-120",
+                  isFullscreen ? "w-0" : "w-16"
+                )}
+              />
+            )}
+            {/* Fixed chrome, never part of buttonRegistry/overflow: this is the
               recovery surface for the application menu itself, so it must not
               be hideable or reorderable into an overflow popover (#11813).
               Gated here as well as inside the component so macOS doesn't keep
               an empty flex item, which would add a stray gap-1.5 column. */}
-          {!isMac() && (
-            <div className="app-no-drag">
-              <AppMenuButton />
-            </div>
-          )}
-          <div className="app-no-drag">{buttonRegistry["sidebar-toggle"]!.render()}</div>
-
-          <div className={toolbarDividerClass} />
-
-          <div
-            ref={leftGroupRef}
-            className="flex flex-1 min-w-0 items-center gap-0.5 overflow-hidden"
-          >
-            {renderLeftButtons(effectiveLeftButtons, leftVisibleSet)}
-          </div>
-          <div className="app-no-drag">
-            {renderOverflowMenu(visibleLeftOverflow, "left", leftOverflowSeverity)}
-          </div>
-        </div>
-
-        {/* CENTER GROUP - Grid-centered, shrinks gracefully on narrow windows */}
-        <div
-          role="group"
-          aria-label="Project"
-          className="app-no-drag relative flex items-center justify-center min-w-0 max-w-full pointer-events-none justify-self-center"
-        >
-          {/* Sibling of the pill, not a child — see ProjectIdentityEditor. */}
-          {currentProject && <ProjectIdentityEditor project={currentProject} />}
-          <Tooltip
-            open={workspaceIdentity.kind !== "none" ? pillTooltipOpen : false}
-            onOpenChange={
-              workspaceIdentity.kind !== "none" ? handlePillTooltipOpenChange : undefined
-            }
-          >
-            <ContextMenu>
-              {shouldMountProjectSwitcherDropdown ? (
-                <Suspense fallback={projectSwitcherTrigger}>
-                  <LazyProjectSwitcherPalette
-                    mode="dropdown"
-                    isOpen={isDropdownOpen}
-                    query={projectSwitcher.query}
-                    results={projectSwitcher.results}
-                    selectedIndex={projectSwitcher.selectedIndex}
-                    onQueryChange={projectSwitcher.setQuery}
-                    onSelectPrevious={projectSwitcher.selectPrevious}
-                    onSelectNext={projectSwitcher.selectNext}
-                    onSelect={projectSwitcher.selectRow}
-                    onHoverProject={projectSwitcher.onHoverProject}
-                    onHoverProjectEnd={projectSwitcher.onHoverProjectEnd}
-                    fleetLiveness={projectSwitcher.fleetLiveness}
-                    onClose={handlePillDropdownClose}
-                    onDropdownCloseAutoFocus={suppressPillTooltipForFocusRestore}
-                    onAddProject={projectSwitcher.addProject}
-                    onCloneRepo={projectSwitcher.cloneRepo}
-                    onStopProject={handleStopProject}
-                    onCloseProject={handleCloseProject}
-                    onSleepProject={handleSleepProject}
-                    onLocateProject={handleLocateProject}
-                    onMoveOrRenameProject={handleMoveOrRenameProject}
-                    onTogglePinProject={projectSwitcher.togglePinProject}
-                    onCopyPath={projectSwitcher.copyPath}
-                    onOpenProjectSettings={currentProject ? handleOpenProjectSettings : undefined}
-                    onSelectNewWindow={handleSelectNewWindow}
-                    dropdownAlign="center"
-                    removeConfirmProject={projectSwitcher.removeConfirmProject}
-                    onRemoveConfirmClose={handleRemoveConfirmClose}
-                    onConfirmRemove={projectSwitcher.confirmRemoveProject}
-                    isRemovingProject={projectSwitcher.isRemovingProject}
-                    sleepConfirmProject={projectSwitcher.sleepConfirmProject}
-                    onSleepConfirmClose={() => projectSwitcher.setSleepConfirmProject(null)}
-                    onConfirmSleep={projectSwitcher.confirmSleep}
-                    isSleepingProject={projectSwitcher.isSleepingProject}
-                    rankedSearch={projectSwitcher.isRankedSearch}
-                    scratchResults={projectSwitcher.scratchResults}
-                    onCreateScratch={(name) => void projectSwitcher.createScratch(name)}
-                    onSelectScratch={(scratch) => void projectSwitcher.selectScratch(scratch)}
-                    onRequestDeleteScratch={projectSwitcher.requestDeleteScratch}
-                    deleteScratchConfirm={projectSwitcher.deleteScratchConfirm}
-                    onDismissDeleteScratchConfirm={projectSwitcher.dismissDeleteScratchConfirm}
-                    onConfirmDeleteScratch={() => void projectSwitcher.confirmDeleteScratch()}
-                    isDeletingScratch={projectSwitcher.isDeletingScratch}
-                    onRequestDeleteAllScratches={projectSwitcher.requestDeleteAllScratches}
-                    deleteAllScratchesConfirm={projectSwitcher.deleteAllScratchesConfirm}
-                    onDismissDeleteAllScratchesConfirm={
-                      projectSwitcher.dismissDeleteAllScratchesConfirm
-                    }
-                    onConfirmDeleteAllScratches={() =>
-                      void projectSwitcher.confirmDeleteAllScratches()
-                    }
-                    isDeletingAllScratches={projectSwitcher.isDeletingAllScratches}
-                    onRenameScratch={(scratchId, name) =>
-                      void projectSwitcher.renameScratch(scratchId, name)
-                    }
-                    onSaveAsProject={(scratchId) => void projectSwitcher.saveAsProject(scratchId)}
-                    saveAsProjectConfirm={projectSwitcher.saveAsProjectConfirm}
-                    onDismissSaveAsProjectConfirm={projectSwitcher.dismissSaveAsProjectConfirm}
-                    onConfirmDeleteOriginalScratch={() =>
-                      void projectSwitcher.confirmDeleteOriginalScratch()
-                    }
-                    isDeletingOriginalScratch={projectSwitcher.isDeletingOriginalScratch}
-                  >
-                    {projectSwitcherTrigger}
-                  </LazyProjectSwitcherPalette>
-                </Suspense>
-              ) : (
-                projectSwitcherTrigger
-              )}
-              {currentProject && (
-                <ContextMenuContent
-                  className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto"
-                  onCloseAutoFocus={(e) => {
-                    suppressPillTooltipForFocusRestore();
-                    e.preventDefault();
-                  }}
-                >
-                  <ContextMenuItem onSelect={handlePillTogglePin}>
-                    {activeSearchableProject?.isPinned ? (
-                      <>
-                        <PinOff className="mr-2 h-3.5 w-3.5" />
-                        Unpin project
-                      </>
-                    ) : (
-                      <>
-                        <Pin className="mr-2 h-3.5 w-3.5" />
-                        Pin project
-                      </>
-                    )}
-                  </ContextMenuItem>
-                  <ContextMenuItem onSelect={handleCopyProjectPath}>
-                    <Clipboard className="mr-2 h-3.5 w-3.5" />
-                    Copy path
-                  </ContextMenuItem>
-                  <ContextMenuSeparator />
-                  <ContextMenuItem onSelect={handleOpenProjectSettings}>
-                    Project settings
-                  </ContextMenuItem>
-                  {activeSearchableProject && activeSearchableProject.processCount > 0 && (
-                    <ContextMenuItem onSelect={() => handleStopProject(currentProject.id)}>
-                      <Square className="mr-2 h-3.5 w-3.5" />
-                      Stop all agents
-                    </ContextMenuItem>
-                  )}
-                  <ContextMenuItem
-                    onSelect={() => handleCloseProject(currentProject.id)}
-                    className="text-status-error focus:text-status-error"
-                  >
-                    <X className="mr-2 h-3.5 w-3.5" />
-                    Close project
-                  </ContextMenuItem>
-                </ContextMenuContent>
-              )}
-            </ContextMenu>
-            {currentProject && (
-              <TooltipContent side="bottom" className="max-w-[28rem]">
-                <div className="flex flex-col gap-0.5">
-                  <div className="text-xs font-medium">
-                    {currentProject.name}
-                    {branchName ? ` · ${branchName}` : ""}
-                  </div>
-                  <div className="text-text-muted font-mono text-[11px] truncate">
-                    {currentProject.path}
-                  </div>
-                </div>
-              </TooltipContent>
+            {!isMac() && (
+              <div className="app-no-drag">
+                <AppMenuButton />
+              </div>
             )}
-            {!currentProject && currentScratch && (
-              <TooltipContent side="bottom" className="max-w-[28rem]">
-                <div className="flex flex-col gap-0.5">
-                  <div className="text-xs font-medium">{currentScratch.name}</div>
-                  <div className="text-text-muted text-[11px]">Scratch workspace</div>
-                </div>
-              </TooltipContent>
-            )}
-          </Tooltip>
-        </div>
+            <div className="app-no-drag">{buttonRegistry["sidebar-toggle"]!.render()}</div>
 
-        {/* RIGHT GROUP */}
-        <div
-          role="group"
-          aria-label="Tools and settings"
-          className="flex items-center justify-end gap-1.5 z-20"
-        >
-          <div
-            ref={rightGroupRef}
-            className="flex flex-1 min-w-0 items-center gap-0.5 overflow-hidden justify-end"
-          >
-            {renderButtons(effectiveRightButtons, rightVisibleSet)}
-          </div>
-          <div className="app-no-drag">
-            {renderOverflowMenu(visibleRightOverflow, "right", rightOverflowSeverity)}
-          </div>
+            <div className={toolbarDividerClass} />
 
-          <div className={toolbarDividerClass} />
-
-          <div className="app-no-drag flex items-center gap-0.5">
-            {buttonRegistry["assistant-toggle"]!.render()}
-            {buttonRegistry["portal-toggle"]!.render()}
-          </div>
-
-          {isWindows() && (
             <div
-              aria-hidden="true"
-              data-fullscreen={isFullscreen ? "true" : undefined}
-              className={cn(
-                "shrink-0 transition-[width] duration-200 data-[fullscreen=true]:duration-120",
-                isFullscreen && "w-0"
+              ref={leftGroupRef}
+              className="flex flex-1 min-w-0 items-center gap-0.5 overflow-hidden"
+            >
+              {renderLeftButtons(effectiveLeftButtons, leftVisibleSet)}
+            </div>
+            <div className="app-no-drag">
+              {renderOverflowMenu(visibleLeftOverflow, "left", leftOverflowSeverity)}
+            </div>
+          </div>
+
+          {/* CENTER GROUP - Grid-centered, shrinks gracefully on narrow windows */}
+          <div
+            role="group"
+            aria-label="Project"
+            className="app-no-drag relative flex items-center justify-center min-w-0 max-w-full pointer-events-none justify-self-center"
+          >
+            {/* Sibling of the pill, not a child — see ProjectIdentityEditor. */}
+            {currentProject && <ProjectIdentityEditor project={currentProject} />}
+            <Tooltip
+              open={workspaceIdentity.kind !== "none" ? pillTooltipOpen : false}
+              onOpenChange={
+                workspaceIdentity.kind !== "none" ? handlePillTooltipOpenChange : undefined
+              }
+            >
+              <ContextMenu>
+                {shouldMountProjectSwitcherDropdown ? (
+                  <Suspense fallback={projectSwitcherTrigger}>
+                    <LazyProjectSwitcherPalette
+                      mode="dropdown"
+                      isOpen={isDropdownOpen}
+                      query={projectSwitcher.query}
+                      results={projectSwitcher.results}
+                      selectedIndex={projectSwitcher.selectedIndex}
+                      onQueryChange={projectSwitcher.setQuery}
+                      onSelectPrevious={projectSwitcher.selectPrevious}
+                      onSelectNext={projectSwitcher.selectNext}
+                      onSelect={projectSwitcher.selectRow}
+                      onHoverProject={projectSwitcher.onHoverProject}
+                      onHoverProjectEnd={projectSwitcher.onHoverProjectEnd}
+                      fleetLiveness={projectSwitcher.fleetLiveness}
+                      onClose={handlePillDropdownClose}
+                      onDropdownCloseAutoFocus={suppressPillTooltipForFocusRestore}
+                      onAddProject={projectSwitcher.addProject}
+                      onCloneRepo={projectSwitcher.cloneRepo}
+                      onStopProject={handleStopProject}
+                      onCloseProject={handleCloseProject}
+                      onSleepProject={handleSleepProject}
+                      onLocateProject={handleLocateProject}
+                      onMoveOrRenameProject={handleMoveOrRenameProject}
+                      onTogglePinProject={projectSwitcher.togglePinProject}
+                      onCopyPath={projectSwitcher.copyPath}
+                      onOpenProjectSettings={currentProject ? handleOpenProjectSettings : undefined}
+                      onSelectNewWindow={handleSelectNewWindow}
+                      dropdownAlign="center"
+                      removeConfirmProject={projectSwitcher.removeConfirmProject}
+                      onRemoveConfirmClose={handleRemoveConfirmClose}
+                      onConfirmRemove={projectSwitcher.confirmRemoveProject}
+                      isRemovingProject={projectSwitcher.isRemovingProject}
+                      sleepConfirmProject={projectSwitcher.sleepConfirmProject}
+                      onSleepConfirmClose={() => projectSwitcher.setSleepConfirmProject(null)}
+                      onConfirmSleep={projectSwitcher.confirmSleep}
+                      isSleepingProject={projectSwitcher.isSleepingProject}
+                      rankedSearch={projectSwitcher.isRankedSearch}
+                      scratchResults={projectSwitcher.scratchResults}
+                      onCreateScratch={(name) => void projectSwitcher.createScratch(name)}
+                      onSelectScratch={(scratch) => void projectSwitcher.selectScratch(scratch)}
+                      onRequestDeleteScratch={projectSwitcher.requestDeleteScratch}
+                      deleteScratchConfirm={projectSwitcher.deleteScratchConfirm}
+                      onDismissDeleteScratchConfirm={projectSwitcher.dismissDeleteScratchConfirm}
+                      onConfirmDeleteScratch={() => void projectSwitcher.confirmDeleteScratch()}
+                      isDeletingScratch={projectSwitcher.isDeletingScratch}
+                      onRequestDeleteAllScratches={projectSwitcher.requestDeleteAllScratches}
+                      deleteAllScratchesConfirm={projectSwitcher.deleteAllScratchesConfirm}
+                      onDismissDeleteAllScratchesConfirm={
+                        projectSwitcher.dismissDeleteAllScratchesConfirm
+                      }
+                      onConfirmDeleteAllScratches={() =>
+                        void projectSwitcher.confirmDeleteAllScratches()
+                      }
+                      isDeletingAllScratches={projectSwitcher.isDeletingAllScratches}
+                      onRenameScratch={(scratchId, name) =>
+                        void projectSwitcher.renameScratch(scratchId, name)
+                      }
+                      onSaveAsProject={(scratchId) => void projectSwitcher.saveAsProject(scratchId)}
+                      saveAsProjectConfirm={projectSwitcher.saveAsProjectConfirm}
+                      onDismissSaveAsProjectConfirm={projectSwitcher.dismissSaveAsProjectConfirm}
+                      onConfirmDeleteOriginalScratch={() =>
+                        void projectSwitcher.confirmDeleteOriginalScratch()
+                      }
+                      isDeletingOriginalScratch={projectSwitcher.isDeletingOriginalScratch}
+                    >
+                      {projectSwitcherTrigger}
+                    </LazyProjectSwitcherPalette>
+                  </Suspense>
+                ) : (
+                  projectSwitcherTrigger
+                )}
+                {currentProject && (
+                  <ContextMenuContent
+                    className="max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto"
+                    onCloseAutoFocus={(e) => {
+                      suppressPillTooltipForFocusRestore();
+                      e.preventDefault();
+                    }}
+                  >
+                    <ContextMenuItem onSelect={handlePillTogglePin}>
+                      {activeSearchableProject?.isPinned ? (
+                        <>
+                          <PinOff className="mr-2 h-3.5 w-3.5" />
+                          Unpin project
+                        </>
+                      ) : (
+                        <>
+                          <Pin className="mr-2 h-3.5 w-3.5" />
+                          Pin project
+                        </>
+                      )}
+                    </ContextMenuItem>
+                    <ContextMenuItem onSelect={handleCopyProjectPath}>
+                      <Clipboard className="mr-2 h-3.5 w-3.5" />
+                      Copy path
+                    </ContextMenuItem>
+                    <ContextMenuSeparator />
+                    <ContextMenuItem onSelect={handleOpenProjectSettings}>
+                      Project settings
+                    </ContextMenuItem>
+                    {activeSearchableProject && activeSearchableProject.processCount > 0 && (
+                      <ContextMenuItem onSelect={() => handleStopProject(currentProject.id)}>
+                        <Square className="mr-2 h-3.5 w-3.5" />
+                        Stop all agents
+                      </ContextMenuItem>
+                    )}
+                    <ContextMenuItem
+                      onSelect={() => handleCloseProject(currentProject.id)}
+                      className="text-status-error focus:text-status-error"
+                    >
+                      <X className="mr-2 h-3.5 w-3.5" />
+                      Close project
+                    </ContextMenuItem>
+                  </ContextMenuContent>
+                )}
+              </ContextMenu>
+              {currentProject && (
+                <TooltipContent side="bottom" className="max-w-[28rem]">
+                  <div className="flex flex-col gap-0.5">
+                    <div className="text-xs font-medium">
+                      {currentProject.name}
+                      {branchName ? ` · ${branchName}` : ""}
+                    </div>
+                    <div className="text-text-muted font-mono text-[11px] truncate">
+                      {currentProject.path}
+                    </div>
+                  </div>
+                </TooltipContent>
               )}
-              style={isFullscreen ? undefined : { width: `${WINDOWS_CAPTION_WIDTH_PX}px` }}
-            />
-          )}
+              {!currentProject && currentScratch && (
+                <TooltipContent side="bottom" className="max-w-[28rem]">
+                  <div className="flex flex-col gap-0.5">
+                    <div className="text-xs font-medium">{currentScratch.name}</div>
+                    <div className="text-text-muted text-[11px]">Scratch workspace</div>
+                  </div>
+                </TooltipContent>
+              )}
+            </Tooltip>
+          </div>
+
+          {/* RIGHT GROUP */}
+          <div
+            role="group"
+            aria-label="Tools and settings"
+            className="flex items-center justify-end gap-1.5 z-20"
+          >
+            <div
+              ref={rightGroupRef}
+              className="flex flex-1 min-w-0 items-center gap-0.5 overflow-hidden justify-end"
+            >
+              {renderButtons(effectiveRightButtons, rightVisibleSet)}
+            </div>
+            <div className="app-no-drag">
+              {renderOverflowMenu(visibleRightOverflow, "right", rightOverflowSeverity)}
+            </div>
+
+            <div className={toolbarDividerClass} />
+
+            <div className="app-no-drag flex items-center gap-0.5">
+              {buttonRegistry["assistant-toggle"]!.render()}
+              {buttonRegistry["portal-toggle"]!.render()}
+            </div>
+
+            {isWindows() && (
+              <div
+                aria-hidden="true"
+                data-fullscreen={isFullscreen ? "true" : undefined}
+                className={cn(
+                  "shrink-0 transition-[width] duration-200 data-[fullscreen=true]:duration-120",
+                  isFullscreen && "w-0"
+                )}
+                style={isFullscreen ? undefined : { width: `${WINDOWS_CAPTION_WIDTH_PX}px` }}
+              />
+            )}
+          </div>
         </div>
-      </div>
+      </BrandSurface>
     </header>
   );
 }

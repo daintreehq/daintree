@@ -3,6 +3,8 @@ import { cva, type VariantProps } from "class-variance-authority";
 import { X } from "lucide-react";
 
 import { cn } from "@/lib/utils";
+import { BrandSurface } from "@/components/icons";
+import type { BrandMarkSurface } from "@/lib/brandIcon";
 
 // Full literal strings per density rather than a shared base: the comfortable
 // output stays byte-identical to the markup the 35 AppDialog consumers render
@@ -23,14 +25,20 @@ const surfaceHeaderVariants = cva("", {
 export interface SurfaceHeaderProps
   extends React.HTMLAttributes<HTMLDivElement>, VariantProps<typeof surfaceHeaderVariants> {
   children: React.ReactNode;
+  /**
+   * The backdrop this header paints, for the brand marks inside it. Declared
+   * here rather than wrapped at the call site so a header can name its own
+   * surface without re-nesting its whole subtree — the provider renders no DOM.
+   */
+  brandSurface?: BrandMarkSurface;
 }
 
 // Composition stays open (children, not leading/trailing slots): consumers nest
 // search rows, badge clusters and multi-line title stacks inside the frame.
 const SurfaceHeader = React.forwardRef<HTMLDivElement, SurfaceHeaderProps>(
-  ({ density, className, children, ...props }, ref) => (
+  ({ density, className, children, brandSurface, ...props }, ref) => (
     <div ref={ref} className={cn(surfaceHeaderVariants({ density }), className)} {...props}>
-      {children}
+      {brandSurface ? <BrandSurface {...brandSurface}>{children}</BrandSurface> : children}
     </div>
   )
 );

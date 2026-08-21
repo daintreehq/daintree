@@ -2,6 +2,7 @@ import * as React from "react";
 import type * as PopoverPrimitiveType from "@radix-ui/react-popover";
 import { Slot } from "@radix-ui/react-slot";
 import { cn } from "@/lib/utils";
+import { BrandSurfaceReset } from "@/components/icons/BrandSurface";
 import { primeOnEvent, useRadixPrimitives } from "./radix-loader";
 
 let portalBoundary: HTMLDivElement | null = null;
@@ -225,21 +226,26 @@ const PopoverContent = React.forwardRef<
   const Content = radix.PopoverPrimitive.Content;
   return (
     <Portal>
-      <Content
-        ref={ref}
-        align={align}
-        sideOffset={sideOffset}
-        collisionBoundary={collisionBoundary ?? boundary ?? undefined}
-        style={{ transformOrigin: "var(--radix-popover-content-transform-origin)", ...style }}
-        className={cn(
-          "z-[var(--z-popover)] overflow-hidden rounded-[var(--radius-lg)] surface-overlay shadow-overlay text-daintree-text",
-          "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=open]:duration-200 data-[state=closed]:duration-120 data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-97 data-[state=open]:zoom-in-97 data-[side=bottom]:slide-in-from-top-1 data-[side=left]:slide-in-from-right-1 data-[side=right]:slide-in-from-left-1 data-[side=top]:slide-in-from-bottom-1",
-          className
-        )}
-        {...props}
-        // Internal reposition trigger must win over any caller-supplied value.
-        data-reposition-tick={repositionTick}
-      />
+      {/* Context reaches through a portal even though the DOM does not, so a
+          popover opened from the toolbar would otherwise measure its brand
+          marks against the toolbar's surface instead of this floating one. */}
+      <BrandSurfaceReset>
+        <Content
+          ref={ref}
+          align={align}
+          sideOffset={sideOffset}
+          collisionBoundary={collisionBoundary ?? boundary ?? undefined}
+          style={{ transformOrigin: "var(--radix-popover-content-transform-origin)", ...style }}
+          className={cn(
+            "z-[var(--z-popover)] overflow-hidden rounded-[var(--radius-lg)] surface-overlay shadow-overlay text-daintree-text",
+            "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=open]:duration-200 data-[state=closed]:duration-120 data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-97 data-[state=open]:zoom-in-97 data-[side=bottom]:slide-in-from-top-1 data-[side=left]:slide-in-from-right-1 data-[side=right]:slide-in-from-left-1 data-[side=top]:slide-in-from-bottom-1",
+            className
+          )}
+          {...props}
+          // Internal reposition trigger must win over any caller-supplied value.
+          data-reposition-tick={repositionTick}
+        />
+      </BrandSurfaceReset>
     </Portal>
   );
 });

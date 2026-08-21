@@ -2,6 +2,7 @@
 import { render } from "@testing-library/react";
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { BrandMark } from "../BrandMark";
+import { BrandSurface, BrandSurfaceReset } from "../BrandSurface";
 
 const resolveInkMock = vi.hoisted(() => vi.fn());
 vi.mock("@/lib/brandIcon", () => ({
@@ -15,7 +16,7 @@ function TestIcon({ className, style }: { className?: string; style?: React.CSSP
   return <svg data-testid="icon" className={className} style={style} />;
 }
 
-const INK = { rest: "#9a8b84", hover: "#cc785c" };
+const INK = { rest: "#9a8b84", active: "#cc785c" };
 
 beforeEach(() => {
   resolveInkMock.mockReset();
@@ -33,13 +34,13 @@ describe("BrandMark", () => {
 
     const icon = getByTestId("icon");
     expect(icon.style.getPropertyValue("--brand-mark-rest")).toBe(INK.rest);
-    expect(icon.style.getPropertyValue("--brand-mark-hover")).toBe(INK.hover);
+    expect(icon.style.getPropertyValue("--brand-mark-active")).toBe(INK.active);
     expect(icon.getAttribute("class")).toContain("brand-mark");
   });
 
-  it("never sets colour inline, so the hover rule can win", () => {
+  it("never sets colour inline, so the active rule can win", () => {
     // An inline `color` outranks `button:hover .brand-mark` and would strand the
-    // mark at its resting tint for the whole interaction.
+    // mark at its resting colour for the whole interaction.
     resolveInkMock.mockReturnValue(INK);
 
     const { getByTestId } = render(
@@ -52,6 +53,47 @@ describe("BrandMark", () => {
     expect(style.color).toBe("");
     expect(style.backgroundColor).toBe("");
     expect(style.filter).toBe("");
+  });
+
+  it("hands the resolver the whole surface descriptor, not part of it", () => {
+    // The bug this pins shipped once: the provider destructured `surface` and
+    // `lift` and quietly dropped `extension`, so the panel-header backgrounds
+    // several light themes paint never reached the resolver and every mark in a
+    // title bar was measured against a colour that was not on screen. Resolver
+    // tests could not see it — they pass the descriptor directly.
+    resolveInkMock.mockReturnValue(INK);
+
+    render(
+      <BrandSurface surface="surface-panel" extension="panel-header-focus-bg" lift="overlay-subtle">
+        <BrandMark brandColor="#cc785c">
+          <TestIcon />
+        </BrandMark>
+      </BrandSurface>
+    );
+
+    expect(resolveInkMock).toHaveBeenCalledWith("#cc785c", expect.anything(), {
+      surface: "surface-panel",
+      extension: "panel-header-focus-bg",
+      lift: "overlay-subtle",
+    });
+  });
+
+  it("withdraws the surface for floating material", () => {
+    // Context reaches through a portal even though the DOM does not, so a menu
+    // opened from the toolbar would measure against the toolbar without this.
+    resolveInkMock.mockReturnValue(INK);
+
+    render(
+      <BrandSurface surface="surface-toolbar">
+        <BrandSurfaceReset>
+          <BrandMark brandColor="#cc785c">
+            <TestIcon />
+          </BrandMark>
+        </BrandSurfaceReset>
+      </BrandSurface>
+    );
+
+    expect(resolveInkMock).toHaveBeenCalledWith("#cc785c", expect.anything(), null);
   });
 
   it("renders no wrapper element around the glyph", () => {
