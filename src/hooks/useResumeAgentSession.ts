@@ -1,4 +1,5 @@
 import { useCallback } from "react";
+import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useProjectStore } from "@/store/projectStore";
@@ -64,16 +65,27 @@ export function useResumeAgentSession() {
       // but this is the shared entry point, so guard here too.
       if (target.worktreeId && !worktrees.has(target.worktreeId)) return;
 
+      const revealTargetWorktree = () => {
+        const current = useWorktreeSelectionStore.getState();
+        if (target.worktreeId && target.worktreeId !== current.activeWorktreeId) {
+          current.selectWorktree(target.worktreeId, { source: "user" });
+        }
+      };
+
       try {
-        await resumeSessionIntoPanel(session, target, {
-          onBeforeSpawn: () => {
-            // Switch to the session's own worktree before spawning so the
-            // resumed grid panel isn't backgrounded.
-            if (target.worktreeId && target.worktreeId !== (activeWorktreeId ?? null)) {
-              selection.selectWorktree(target.worktreeId, { source: "user" });
-            }
-          },
+        // Switch BEFORE spawning so the resumed grid panel isn't backgrounded —
+        // `addPanel` backgrounds a panel whose worktree differs from the active
+        // one, and this callback only runs on the spawning path.
+        const resumed = await resumeSessionIntoPanel(session, target, {
+          onBeforeSpawn: revealTargetWorktree,
         });
+        // Run it again after the fact, because `onBeforeSpawn` is the STARTER's
+        // callback: a person clicking a session an agent is already resuming
+        // joins that in-flight resume and never reaches it, so without this
+        // their click would silently leave the pane in another worktree.
+        // Selecting the worktree we are already on is a no-op.
+        revealTargetWorktree();
+        usePanelStore.getState().activateTerminal(resumed.terminalId);
       } catch (error) {
         // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
         notify({

@@ -61,7 +61,21 @@ function useRecipeDialogState(): UseRecipeDialogStateReturn {
       if (!(event instanceof CustomEvent)) return;
       const detail = event.detail as unknown;
       if (!detail) return;
-      const d = detail as { worktreeId?: unknown; recipeId?: unknown; initialTerminals?: unknown };
+      const d = detail as {
+        worktreeId?: unknown;
+        recipeId?: unknown;
+        initialTerminals?: unknown;
+        acknowledge?: unknown;
+      };
+      // The dispatcher can pass a callback to learn that this listener actually
+      // took the request (#11908). Without it an action that only fires the
+      // event has no way to tell "the editor opened" from "nothing was
+      // listening", and the assistant-facing handoffs report the former either
+      // way. Called on each path that really opens the editor, never on the
+      // early returns below.
+      const acknowledge = () => {
+        if (typeof d.acknowledge === "function") (d.acknowledge as () => void)();
+      };
 
       if (typeof d.recipeId === "string") {
         const recipe = useRecipeStore.getState().getRecipeById(d.recipeId);
@@ -72,6 +86,7 @@ function useRecipeDialogState(): UseRecipeDialogStateReturn {
           setRecipeEditorInitialTerminals(undefined);
           setRecipeManagerEdit(recipe);
           setIsRecipeEditorOpen(true);
+          acknowledge();
           return;
         }
       }
@@ -82,6 +97,7 @@ function useRecipeDialogState(): UseRecipeDialogStateReturn {
         ? (d.initialTerminals as RecipeTerminal[])
         : undefined;
       handleOpenRecipeEditor(worktreeId, initialTerminals);
+      acknowledge();
     };
 
     const controller = new AbortController();

@@ -7,6 +7,7 @@ import { isPluginRecipe } from "@shared/types/project";
 import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
 import { useRecipeStore } from "@/store/recipeStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
+import { getWorktreePathIndex } from "@/store/storeAccessors";
 import { notifyRecipeSpawnFailures } from "@/utils/recipeNotify";
 import {
   TerminalSpawnSourceSchema,
@@ -15,16 +16,51 @@ import {
 } from "./schemas";
 
 /**
- * Deliberately just the two selectors.
+ * `initialTerminals` stays an opaque array rather than the full `RecipeTerminal`
+ * shape.
  *
- * The pre-#11908 schema also took `initialTerminals: z.any()`, which no caller
- * ever passed. Typing it properly for the tool surface meant advertising the
- * whole `RecipeTerminal` shape — 1.8 KB of nested schema on a tool whose job is
- * to open a window, well past the per-tool parameter budget. Prefilling a draft
- * from real panes is what `recipe.editor.openFromLayout` is for, and it reads
- * them from the live layout instead of asking a model to compose them, so the
- * argument bought nothing it does not already cover.
+ * It was `z.any()` before #11908, and no in-tree caller passes it — but a
+ * plugin can dispatch built-in actions, so dropping the key outright would
+ * silently strip an argument the manifest used to accept. Typing it properly
+ * instead meant advertising the whole nested `RecipeTerminal` shape: 1.8 KB of
+ * schema on a tool whose job is to open a window, past the per-tool parameter
+ * budget in `mcpWireBudget.test.ts`.
+ *
+ * So it keeps working exactly as it did and the description points a model at
+ * the from-layout capability instead, which reads real panes rather than asking
+ * the model to compose them. The editor validates the array itself
+ * (`Array.isArray`, then its own rendering), and nothing here is saved until a
+ * person reviews the draft.
  */
+/**
+ * Fire the editor-open event and report whether anything took it.
+ *
+ * These actions hand off through a DOM event, which tells the dispatcher
+ * nothing — `dispatchEvent` returns true whether one listener ran or none
+ * exist. Both actions promise their caller `opened: true`, so that promise has
+ * to be earned: the listener calls `acknowledge` on the paths that really open
+ * the editor, and an unacknowledged dispatch throws instead of reporting a
+ * handoff that never reached the screen.
+ */
+function dispatchRecipeEditorOpen(detail: Record<string, unknown>): void {
+  let acknowledged = false;
+  window.dispatchEvent(
+    new CustomEvent("daintree:open-recipe-editor", {
+      detail: {
+        ...detail,
+        acknowledge: () => {
+          acknowledged = true;
+        },
+      },
+    })
+  );
+  if (!acknowledged) {
+    throw new Error(
+      "The recipe editor didn't open — no editor surface is mounted to receive it right now."
+    );
+  }
+}
+
 const RecipeEditorOpenArgsSchema = z.object({
   worktreeId: z
     .string()
@@ -36,6 +72,12 @@ const RecipeEditorOpenArgsSchema = z.object({
     .min(1)
     .optional()
     .describe("Load an existing recipe. An unknown id opens a blank draft instead."),
+  initialTerminals: z
+    .array(z.unknown())
+    .optional()
+    .describe(
+      "Prefilled panes, for callers that already hold them. Capture a live layout instead."
+    ),
 });
 
 const RecipeEditorFromLayoutArgsSchema = z.object({
@@ -221,6 +263,15 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
       kind: "command",
       danger: "safe",
       scope: "renderer",
+      // An agent dispatch carrying a recipeId is elevated to "confirm" by
+      // `resolveEffectiveActionDanger`, which keys on the argument rather than
+      // on the action. Its generic rationale says the call spawns the recipe's
+      // terminals — true of the composites it was written for, false here, and a
+      // confirmation dialog that misstates what it is gating is worse than none.
+      // A definition's own rationale wins over the elevation's, so state what
+      // this call actually does.
+      dangerRationale:
+        "Opens the recipe editor on an existing recipe for the user to review. It starts no terminals and saves nothing on its own.",
       argsSchema: RecipeEditorOpenArgsSchema,
       resultSchema: RecipeEditorHandoffResultSchema,
       mcpOutputSchema: true,
@@ -231,7 +282,7 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
         },
       ],
       run: async (args, ctx: ActionContext) => {
-        const { worktreeId, recipeId } = args;
+        const { worktreeId, recipeId, initialTerminals } = args;
         // The editor's event listener hard-requires a string worktreeId and
         // silently returns without one (unless an existing recipe matched, which
         // carries its own). Resolving and checking here is what keeps the
@@ -239,22 +290,32 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
         // that never reached the screen.
         const resolvedWorktreeId = worktreeId ?? ctx.activeWorktreeId;
         const existing = recipeId ? useRecipeStore.getState().getRecipeById(recipeId) : undefined;
-        if (!existing && !resolvedWorktreeId) {
-          throw new Error(
-            "No worktree to scope the recipe draft to — name one, or open the editor from a worktree."
-          );
+        if (!existing) {
+          if (!resolvedWorktreeId) {
+            throw new Error(
+              "No worktree to scope the recipe draft to — name one, or open the editor from a worktree."
+            );
+          }
+          // A blank draft carries no scope of its own, so an unknown worktree id
+          // would open an editor pinned to a worktree that isn't there — and the
+          // person would only find out when they tried to save. An existing
+          // recipe is exempt: it brings its own stored worktree.
+          const index = getWorktreePathIndex();
+          if (index && !index.has(resolvedWorktreeId)) {
+            throw new Error("Unknown worktree — no worktree with that id is open in this project.");
+          }
         }
-        window.dispatchEvent(
-          new CustomEvent("daintree:open-recipe-editor", {
-            detail: { worktreeId: resolvedWorktreeId, recipeId },
-          })
-        );
+        dispatchRecipeEditorOpen({
+          worktreeId: resolvedWorktreeId,
+          recipeId,
+          initialTerminals,
+        });
         return {
           opened: true,
           mode: existing ? ("existingRecipe" as const) : ("blankDraft" as const),
           worktreeId: existing ? (existing.worktreeId ?? null) : (resolvedWorktreeId ?? null),
           recipeId: existing ? existing.id : null,
-          terminalCount: existing ? existing.terminals.length : 0,
+          terminalCount: existing ? existing.terminals.length : (initialTerminals?.length ?? 0),
         };
       },
     })
@@ -335,13 +396,9 @@ export function registerRecipeActions(actions: ActionRegistry, _callbacks: Actio
       run: async ({ worktreeId }) => {
         const terminals = useRecipeStore.getState().generateRecipeFromActiveTerminals(worktreeId);
         if (terminals.length === 0) {
-          throw new Error("No active terminals in this worktree to save");
+          throw new Error("No active terminals in this worktree to capture");
         }
-        window.dispatchEvent(
-          new CustomEvent("daintree:open-recipe-editor", {
-            detail: { worktreeId, initialTerminals: terminals },
-          })
-        );
+        dispatchRecipeEditorOpen({ worktreeId, initialTerminals: terminals });
         return {
           opened: true,
           mode: "fromLayout" as const,

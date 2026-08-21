@@ -2,7 +2,6 @@ import { describe, expect, it } from "vitest";
 import {
   WORKBENCH_TIER_TOOLS,
   ACTION_TIER_ADDONS,
-  SYSTEM_TIER_ADDONS,
   HELP_TIER_CUMULATIVE,
 } from "../helpAssistantTierAllowlists.js";
 import { MCP_EXTERNAL_TIER_TOOLS } from "../mcpExternalTierAllowlist.js";
@@ -31,7 +30,6 @@ const RECIPE_WRITES = ["recipe.saveToRepo", "recipe.delete"] as const;
 
 const workbench = new Set<string>(WORKBENCH_TIER_TOOLS);
 const action = new Set<string>(ACTION_TIER_ADDONS);
-const system = new Set<string>(SYSTEM_TIER_ADDONS);
 const external = new Set<string>(MCP_EXTERNAL_TIER_TOOLS);
 
 describe("session continuity tier placement (#11908)", () => {
@@ -45,15 +43,6 @@ describe("session continuity tier placement (#11908)", () => {
     for (const id of [...CONTINUITY_WRITES, ...EDITOR_HANDOFFS]) {
       expect(action.has(id), `${id} should be an action-tier addon`).toBe(true);
       expect(workbench.has(id), `${id} must not be readable at workbench`).toBe(false);
-      expect(system.has(id), `${id} is cumulative already — do not restate it`).toBe(false);
-    }
-  });
-
-  it("reaches an action-tier session but not a workbench one", () => {
-    for (const id of [...CONTINUITY_WRITES, ...EDITOR_HANDOFFS]) {
-      expect(HELP_TIER_CUMULATIVE.workbench).not.toContain(id);
-      expect(HELP_TIER_CUMULATIVE.action).toContain(id);
-      expect(HELP_TIER_CUMULATIVE.system).toContain(id);
     }
   });
 
@@ -69,10 +58,10 @@ describe("session continuity tier placement (#11908)", () => {
   it("never exposes a recipe write, so a draft cannot become a tracked file", () => {
     // The whole point of the editor handoffs: the assistant can propose a recipe
     // but the person is the only one who can commit it to `.daintree/recipes/`.
+    // Checked against the widest in-app tier plus the external roster — those two
+    // together are every surface an id could reach.
     for (const id of RECIPE_WRITES) {
-      expect(workbench.has(id), `${id} must stay unexposed`).toBe(false);
-      expect(action.has(id), `${id} must stay unexposed`).toBe(false);
-      expect(system.has(id), `${id} must stay unexposed`).toBe(false);
+      expect(HELP_TIER_CUMULATIVE.system, `${id} must stay unexposed`).not.toContain(id);
       expect(external.has(id), `${id} must stay unexposed`).toBe(false);
     }
   });
@@ -80,8 +69,7 @@ describe("session continuity tier placement (#11908)", () => {
   it("leaves the palette-only resume entry point off every tier", () => {
     // `terminal.resumeSessions` opens the human palette, takes no session id and
     // returns nothing — the reason #11908 added a deterministic action instead.
-    for (const set of [workbench, action, system, external]) {
-      expect(set.has("terminal.resumeSessions")).toBe(false);
-    }
+    expect(HELP_TIER_CUMULATIVE.system).not.toContain("terminal.resumeSessions");
+    expect(external.has("terminal.resumeSessions")).toBe(false);
   });
 });

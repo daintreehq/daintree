@@ -172,8 +172,14 @@ export function findLiveResumePanelId(
  * before `addPanel`. That ordering is load-bearing for the human surface, which
  * uses it to switch to the session's own worktree first — `addPanel` backgrounds
  * a grid panel whose worktree differs from the active one, so switching
- * afterwards would leave the pane off-screen. Agent callers deliberately pass
- * nothing, keeping an assistant-driven resume from yanking the user's view.
+ * afterwards would leave the pane off-screen. Agent and plugin callers
+ * deliberately pass nothing, keeping a headless resume from yanking the view.
+ *
+ * Only the caller that STARTS a resume gets its `onBeforeSpawn` run; one that
+ * joins an in-flight resume shares the result without re-running side effects.
+ * So a human clicking a session an agent is already resuming would get the
+ * agent's placement — which is why the human surface also reveals the pane
+ * after awaiting, rather than relying on this callback alone.
  *
  * @throws when the record has no buildable resume command
  *   ({@link RESUME_UNAVAILABLE_MESSAGE}), or when the panel is gone by the time
@@ -188,7 +194,16 @@ export async function resumeSessionIntoPanel(
 
   const existingId = findLiveResumePanelId(session.sessionId, worktreeId);
   if (existingId) {
-    usePanelStore.getState().activateTerminal(existingId);
+    const panelStore = usePanelStore.getState();
+    // A backgrounded pane is hidden, not closed. `activateTerminal` moves
+    // selection but never restores a panel's location, so activating one on its
+    // own reports `activatedExisting` while nothing appears — the pane stays
+    // out of the grid. Restore first, then activate, the same order the quick
+    // switcher uses for the identical case.
+    if (panelStore.panelsById[existingId]?.location === "background") {
+      panelStore.restoreBackgroundTerminal(existingId, worktreeId ?? undefined);
+    }
+    panelStore.activateTerminal(existingId);
     return { terminalId: existingId, outcome: "activatedExisting", worktreeId };
   }
 
@@ -196,7 +211,17 @@ export async function resumeSessionIntoPanel(
   const pending = inFlightResumes.get(inFlightKey);
   if (pending) return pending;
 
-  const run = (async (): Promise<ResumeSessionOutcome> => {
+  // Register BEFORE running any of the work. An async function body runs
+  // synchronously up to its first await, so building the promise first would
+  // leave `onBeforeSpawn` — which can call `selectWorktree` and drive store
+  // subscribers — executing while the map is still empty. A subscriber that
+  // re-entered here would find neither an in-flight entry nor a committed
+  // panel, and spawn a second agent on the same transcript.
+  let begin: () => void = () => {};
+  const gate = new Promise<void>((resolve) => {
+    begin = resolve;
+  });
+  const run = gate.then(async (): Promise<ResumeSessionOutcome> => {
     options.onBeforeSpawn?.();
     const panelOptions = buildResumePanelOptions(session, target);
     if (!panelOptions) throw new Error(RESUME_UNAVAILABLE_MESSAGE);
@@ -208,12 +233,15 @@ export async function resumeSessionIntoPanel(
       throw new Error("Resume started but its terminal was closed before it finished opening.");
     }
     return { terminalId, outcome: "created", worktreeId };
-  })();
+  });
 
   inFlightResumes.set(inFlightKey, run);
+  begin();
   try {
     return await run;
   } finally {
-    inFlightResumes.delete(inFlightKey);
+    // Only clear our own entry: a later resume for the same key may already have
+    // replaced it, and deleting that one would drop a live guard.
+    if (inFlightResumes.get(inFlightKey) === run) inFlightResumes.delete(inFlightKey);
   }
 }

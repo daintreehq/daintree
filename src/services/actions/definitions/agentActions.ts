@@ -7,6 +7,8 @@ import {
 } from "./locationArgs";
 import { resumeSessionIntoPanel } from "@/services/agentResume";
 import { resolveResumeLaunchTarget } from "@/utils/resumeLaunch";
+import { inferWorktreeIdFromCwd } from "@/utils/worktreePaths";
+import { isForegroundDispatch } from "./dispatchSource";
 import { getWorktreePathIndex } from "@/store/storeAccessors";
 import {
   AgentIdSchema,
@@ -960,13 +962,23 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       // Throws for a bare path that matches no open worktree, and for no
       // selector at all, rather than retargeting the resume at the active one.
       const requestedWorktreeId = requireWorktreeId(parsed, ctx);
-      const { worktreePath: requestedWorktreePath } = resolveWorktreeLocation(parsed, ctx);
+      // Fail closed rather than degrade: this action decides which DIRECTORY a
+      // process launches in, and without the index there is no way to prove the
+      // asserted worktree is open or where it lives. Other location-taking
+      // actions degrade to the context project on a null index; here that would
+      // mean launching somewhere unverified.
       const worktreeIndex = getWorktreePathIndex();
+      if (!worktreeIndex) {
+        throw new Error(
+          "No worktree index available — can't verify where this session would resume."
+        );
+      }
       // An explicit `worktreeId` is passed through unvalidated by the resolver
       // (only a path is matched against the index), so prove it is open here.
       // Before the lookup, so naming a worktree that isn't open reports exactly
       // that instead of the scope mismatch it would otherwise trip on.
-      if (worktreeIndex && !worktreeIndex.has(requestedWorktreeId)) {
+      const requestedWorktreePath = worktreeIndex.get(requestedWorktreeId);
+      if (!requestedWorktreePath) {
         throw new Error("Unknown worktree — no worktree with that id is open in this project.");
       }
 
@@ -993,19 +1005,26 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         );
       }
 
-      const worktreeList = worktreeIndex
-        ? [...worktreeIndex].map(([id, path]) => ({ id, path }))
-        : undefined;
+      const worktreeList = [...worktreeIndex].map(([id, path]) => ({ id, path }));
       // The record's OWN cwd/worktree wins: the CLI locates a conversation from
       // the launch directory (#4781), so relaunching anywhere else produces a
       // fresh session wearing a resumed session's id. The requested worktree is
       // only the fallback for pre-migration records that recorded neither.
+      // Containment, checked on the DIRECTORY rather than the worktree id.
+      // Checking the id alone is not enough: `resolveResumeLaunchTarget` falls
+      // back to the id we pass it when a record carries no resolvable worktree,
+      // so a record whose `cwd` points outside every open worktree would inherit
+      // the asserted id and pass an id-only check while launching somewhere the
+      // caller never named. The cwd is what the CLI actually resolves the
+      // conversation from (#4781), so it is what has to be inside the worktree.
+      if (record.cwd && inferWorktreeIdFromCwd(record.cwd, worktreeList) !== requestedWorktreeId) {
+        throw new Error(
+          "That session was recorded in a different directory. Resume it from the worktree it belongs to — relaunching it elsewhere would start a new conversation, not continue this one."
+        );
+      }
       const target = resolveResumeLaunchTarget(
         record,
-        {
-          defaultTerminalCwd: requestedWorktreePath ?? ctx.activeWorktreePath ?? "",
-          activeWorktreeId: requestedWorktreeId,
-        },
+        { defaultTerminalCwd: requestedWorktreePath, activeWorktreeId: requestedWorktreeId },
         worktreeList
       );
 
@@ -1017,26 +1036,24 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
           "That session was recorded in a different worktree. Resume it from the worktree it belongs to — it cannot be relaunched anywhere else."
         );
       }
-      if (!target.cwd) {
-        throw new Error("Couldn't resolve a launch directory for that session's worktree.");
-      }
 
-      // An agent dispatch passes NO `onBeforeSpawn`: an assistant-driven resume
-      // must not yank the user's worktree selection. The pane opens in its own
-      // worktree — backgrounded when that isn't the active one — and the caller
-      // addresses it by the id returned here. A foreground dispatch (keybinding,
-      // menu) does switch, matching every other human resume surface: the person
-      // asked for this pane and expects to see it.
+      // Only a FOREGROUND dispatch gets `onBeforeSpawn`. An assistant- or
+      // plugin-driven resume must not yank the user's worktree selection: the
+      // pane opens in its own worktree — backgrounded when that isn't the active
+      // one — and the caller addresses it by the id returned here. A keybinding
+      // or menu pick does switch, matching every other human resume surface: the
+      // person asked for this pane and expects to see it. `isForegroundDispatch`
+      // rather than `!== "agent"`, so `"plugin"` and a missing source fall on the
+      // don't-move-the-view side rather than the other way round.
       const resumed = await resumeSessionIntoPanel(record, target, {
-        onBeforeSpawn:
-          ctx.dispatchSource === "agent"
-            ? undefined
-            : () => {
-                const selection = useWorktreeSelectionStore.getState();
-                if (target.worktreeId && target.worktreeId !== selection.activeWorktreeId) {
-                  selection.selectWorktree(target.worktreeId, { source: "user" });
-                }
-              },
+        onBeforeSpawn: !isForegroundDispatch(ctx.dispatchSource)
+          ? undefined
+          : () => {
+              const selection = useWorktreeSelectionStore.getState();
+              if (target.worktreeId && target.worktreeId !== selection.activeWorktreeId) {
+                selection.selectWorktree(target.worktreeId, { source: "user" });
+              }
+            },
       });
 
       return {
@@ -1047,6 +1064,44 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       };
     },
   }));
+
+  /**
+   * Prove a session id belongs to the caller's project before mutating it.
+   *
+   * The bookmark mutations identify a session by `sessionId` alone, and main
+   * matches that id against the WHOLE journal — `promoteBookmark` and friends
+   * scan every record on disk, not just the current project's. That was
+   * tolerable while the only callers were this project's own bookmark UI. Once
+   * #11908 put these on the assistant's action tier it stopped being tolerable:
+   * an id from another project, guessed or carried over from an earlier turn,
+   * would promote, rename, or delete that project's bookmark and hand its
+   * metadata back in the result.
+   *
+   * Scope is taken from the dispatch context, never from an argument — an
+   * argument the caller supplies is not a boundary it can be held to. With no
+   * project in context an agent dispatch is refused outright, while a human
+   * surface keeps working as before: this guard tightens what a model can reach
+   * and must not break the UI it was already safe for (mirrors
+   * `requireExplicitWorktreeForAgentDispatch`).
+   */
+  async function requireSessionInCallerProject(sessionId: string, ctx: ActionContext) {
+    const projectScope = ctx.projectId ?? ctx.scratchId;
+    if (!projectScope) {
+      if (ctx.dispatchSource === "agent") {
+        throw new Error(
+          "No project in scope — this call can't be checked against a project, so it is refused."
+        );
+      }
+      return;
+    }
+    const records = await window.electron.agentSessionHistory.list(undefined, projectScope);
+    if (!records.some((record) => record.sessionId === sessionId)) {
+      // Deliberately the same wording whether the id is unknown or belongs to
+      // another project: distinguishing them would confirm that a guessed id
+      // exists somewhere, which is the probe this guard exists to stop.
+      throw new Error("No session with that id in this project.");
+    }
+  }
 
   actions.set("session.bookmarkAndClose", () => ({
     id: "session.bookmarkAndClose",
@@ -1060,9 +1115,14 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     dangerRationale:
       "Interrupts a running agent and removes its pane. The conversation is bookmarked and resumable, but the live process and terminal scrollback are discarded.",
     // danger:"confirm" gates agent/plugin dispatch through ActionService (the
-    // caller must attest confirmation via the dispatch option) — no confirm
-    // dialog exists in Phase 1; the Phase-2 pane dialog will supply it. Hidden
-    // from the palette so a source:"user" pick can't bypass the D1 guard.
+    // caller must attest confirmation via the dispatch option). Since #11908 put
+    // this on the assistant's action tier, that attestation comes from the
+    // renderer's own MCP confirm modal, which `useMcpBridge` raises for any
+    // dispatch whose effective danger is "confirm" — so an assistant call is
+    // gated by a real human dialog rather than dead-ending. The bound-session
+    // withholding rule that hides confirm-gated tools does not apply: it keys on
+    // the `external` tier, and the first-party assistant is never external.
+    // Hidden from the palette so a source:"user" pick can't bypass the D1 guard.
     palette: { mode: "hidden" },
     argsSchema: BookmarkAndCloseArgsSchema,
     run: async (args: unknown) => {
@@ -1110,8 +1170,9 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     danger: "safe",
     scope: "renderer",
     argsSchema: BookmarkMutateArgsSchema,
-    run: async (args: unknown) => {
+    run: async (args: unknown, ctx: ActionContext) => {
       const { sessionId, label } = BookmarkMutateArgsSchema.parse(args);
+      await requireSessionInCallerProject(sessionId, ctx);
       return window.electron.agentSessionHistory.promoteBookmark({ sessionId, label });
     },
   }));
@@ -1126,8 +1187,9 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     danger: "safe",
     scope: "renderer",
     argsSchema: BookmarkMutateArgsSchema,
-    run: async (args: unknown) => {
+    run: async (args: unknown, ctx: ActionContext) => {
       const { sessionId, label } = BookmarkMutateArgsSchema.parse(args);
+      await requireSessionInCallerProject(sessionId, ctx);
       return window.electron.agentSessionHistory.renameBookmark({ sessionId, label });
     },
   }));
@@ -1147,8 +1209,9 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     // ActionService; hidden from the palette so a user pick can't bypass it.
     palette: { mode: "hidden" },
     argsSchema: BookmarkDeleteArgsSchema,
-    run: async (args: unknown) => {
+    run: async (args: unknown, ctx: ActionContext) => {
       const { sessionId } = BookmarkDeleteArgsSchema.parse(args);
+      await requireSessionInCallerProject(sessionId, ctx);
       await window.electron.agentSessionHistory.deleteBookmark({ sessionId });
     },
   }));

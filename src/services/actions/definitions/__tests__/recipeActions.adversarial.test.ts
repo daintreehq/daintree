@@ -19,6 +19,7 @@ vi.mock("@/utils/recipeNotify", () => ({
 }));
 
 import { registerRecipeActions } from "../recipeActions";
+import { resolveEffectiveActionDanger } from "../../effectiveDanger";
 
 type Worktree = {
   path: string;
@@ -51,11 +52,23 @@ function definitionFor(id: string): AnyActionDefinition {
   return factory() as AnyActionDefinition;
 }
 
-const dispatchSpy = vi.fn<(event: Event) => boolean>(() => true);
+/**
+ * Stands in for a mounted editor surface: the real listener calls back through
+ * `detail.acknowledge` so the action can tell "the editor opened" from "nothing
+ * was listening" (#11908). A spy that only recorded the event would leave every
+ * editor-open test asserting against the unmounted path.
+ */
+const acknowledgeDispatchedEvent = (event: Event): boolean => {
+  const detail = (event as CustomEvent<{ acknowledge?: () => void }>).detail;
+  detail?.acknowledge?.();
+  return true;
+};
+
+const dispatchSpy = vi.fn<(event: Event) => boolean>(acknowledgeDispatchedEvent);
 
 beforeEach(() => {
   vi.clearAllMocks();
-  dispatchSpy.mockReset().mockReturnValue(true);
+  dispatchSpy.mockReset().mockImplementation(acknowledgeDispatchedEvent);
   Object.defineProperty(globalThis, "window", {
     value: { dispatchEvent: dispatchSpy },
     configurable: true,
@@ -402,10 +415,12 @@ describe("recipeActions adversarial", () => {
 
     const event = dispatchSpy.mock.calls[0]![0] as unknown as {
       type: string;
-      detail: { worktreeId: string; recipeId: string };
+      detail: { worktreeId: string; recipeId: string; acknowledge: () => void };
     };
     expect(event.type).toBe("daintree:open-recipe-editor");
-    expect(event.detail).toEqual({ worktreeId: "wt-a", recipeId: "r1" });
+    expect(event.detail.worktreeId).toBe("wt-a");
+    expect(event.detail.recipeId).toBe("r1");
+    expect(typeof event.detail.acknowledge).toBe("function");
   });
 
   // #11908 — these two are on the assistant's action tier, so their result is a
@@ -499,11 +514,11 @@ describe("recipeActions adversarial", () => {
       const blank = await run("recipe.editor.open", { worktreeId: "wt-a" });
       const layout = await run("recipe.editor.openFromLayout", { worktreeId: "wt-a" });
 
-      for (const result of [blank, layout]) {
-        expect(Object.keys(result as object)).not.toContain("saved");
-        expect(Object.keys(result as object)).not.toContain("recipeSaved");
-      }
-      // The write half stays off every tier, so there is no save to report.
+      // The exact-shape assertions above already fail on any extra key, so the
+      // load-bearing half here is that neither handoff touched a persistence
+      // collaborator — the write path has no MCP surface at all.
+      expect(blank).toBeTruthy();
+      expect(layout).toBeTruthy();
       expect(saveToRepo).not.toHaveBeenCalled();
       expect(deleteRecipe).not.toHaveBeenCalled();
     });
@@ -528,7 +543,62 @@ describe("recipeActions adversarial", () => {
           })
         : undefined;
 
-      expect(Object.keys(json?.properties ?? {}).sort()).toEqual(["recipeId", "worktreeId"]);
+      expect(Object.keys(json?.properties ?? {}).sort()).toEqual([
+        "initialTerminals",
+        "recipeId",
+        "worktreeId",
+      ]);
+    });
+
+    it("still elevates an agent dispatch carrying a recipe id to confirm", () => {
+      // `resolveEffectiveActionDanger` keys the elevation on the ARGUMENT, not
+      // an action allowlist (#11860). Tier-exposing this action makes that
+      // elevation reachable for the first time, so pin it: opening the editor on
+      // an existing recipe is a confirm-gated agent call, while a blank draft is
+      // not, and a human pick is never elevated.
+      const def = definitionFor("recipe.editor.open");
+
+      expect(resolveEffectiveActionDanger(def.danger, "agent", { recipeId: "r1" })).toBe("confirm");
+      expect(resolveEffectiveActionDanger(def.danger, "agent", { worktreeId: "wt-a" })).toBe(
+        "safe"
+      );
+      expect(resolveEffectiveActionDanger(def.danger, "user", { recipeId: "r1" })).toBe("safe");
+    });
+
+    it("refuses to claim an editor opened when nothing is listening", async () => {
+      // The handoff travels as a DOM event, which reports nothing back to its
+      // dispatcher — so without the acknowledgement the action would return
+      // `opened: true` into a void.
+      dispatchSpy.mockImplementation(() => true);
+      setRecipeState({});
+      const run = setupActions();
+
+      await expect(run("recipe.editor.open", { worktreeId: "wt-a" })).rejects.toThrow(
+        /didn't open/i
+      );
+      expect(dispatchSpy).toHaveBeenCalledTimes(1);
+    });
+
+    it("returns results the declared schema actually accepts", async () => {
+      // `dispatch` parses run()'s return through `resultSchema` and strips
+      // unknown keys (#11539), so a shape that drifts from the schema loses
+      // fields silently rather than failing loudly here.
+      setRecipeState({
+        recipes: [{ id: "r1", worktreeId: "wt-b", terminals: [{ type: "terminal" }] }],
+        generateRecipeFromActiveTerminals: vi.fn(() => [{ type: "terminal" }]),
+      });
+      const run = setupActions();
+
+      const results = [
+        await run("recipe.editor.open", { worktreeId: "wt-a" }),
+        await run("recipe.editor.open", { worktreeId: "wt-a", recipeId: "r1" }),
+        await run("recipe.editor.openFromLayout", { worktreeId: "wt-a" }),
+      ];
+      const schema = definitionFor("recipe.editor.open").resultSchema;
+
+      for (const result of results) {
+        expect(schema?.safeParse(result).success).toBe(true);
+      }
     });
 
     it("advertises a structured result over MCP for both handoffs", () => {

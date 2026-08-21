@@ -135,7 +135,7 @@ describe("agentSessionHistory.resume — scope isolation", () => {
 
   it("refuses a session recorded in a different worktree instead of re-homing it", async () => {
     await expect(run({ worktreeId: WT_B, sessionId: "sess-1" }, agentCtx)).rejects.toThrow(
-      /different worktree/i
+      /different directory/i
     );
     expect(resumeMock).not.toHaveBeenCalled();
   });
@@ -167,6 +167,42 @@ describe("agentSessionHistory.resume — scope isolation", () => {
   });
 });
 
+describe("agentSessionHistory.resume — launch directory containment", () => {
+  it("refuses a record whose recorded directory sits outside the asserted worktree", async () => {
+    // The id check alone cannot catch this: with no worktree recorded and a cwd
+    // matching nothing, the target inherits the asserted id and would launch in
+    // /tmp/elsewhere while reporting the caller's worktree.
+    listMock.mockResolvedValue([record({ worktreeId: null, cwd: "/tmp/elsewhere" })]);
+    await expect(run({ worktreeId: WT_A, sessionId: "sess-1" }, agentCtx)).rejects.toThrow(
+      /different directory/i
+    );
+    expect(resumeMock).not.toHaveBeenCalled();
+  });
+
+  it("refuses a record whose recorded directory belongs to another open worktree", async () => {
+    listMock.mockResolvedValue([record({ worktreeId: null, cwd: `${WT_B}/src` })]);
+    await expect(run({ worktreeId: WT_A, sessionId: "sess-1" }, agentCtx)).rejects.toThrow(
+      /different directory/i
+    );
+  });
+
+  it("launches a record with no recorded directory in the asserted worktree", async () => {
+    listMock.mockResolvedValue([record({ worktreeId: null, cwd: undefined })]);
+    await run({ worktreeId: WT_A, sessionId: "sess-1" }, agentCtx);
+    expect(resumeMock.mock.calls[0]?.[1]).toEqual({ cwd: WT_A, worktreeId: WT_A });
+  });
+
+  it("fails closed when the worktree index is unavailable", async () => {
+    // Degrading here would mean launching a process into a directory nothing
+    // verified is open.
+    worktreeIndexMock.getWorktreePathIndex.mockReturnValue(null);
+    await expect(run({ worktreeId: WT_A, sessionId: "sess-1" }, agentCtx)).rejects.toThrow(
+      /worktree index/i
+    );
+    expect(resumeMock).not.toHaveBeenCalled();
+  });
+});
+
 describe("agentSessionHistory.resume — launch target", () => {
   it("launches in the directory the record itself carries, not the caller's", async () => {
     listMock.mockResolvedValue([record({ cwd: `${WT_A}/nested` })]);
@@ -183,9 +219,24 @@ describe("agentSessionHistory.resume — launch target", () => {
     expect(resumeMock.mock.calls[0]?.[1]).toMatchObject({ worktreeId: WT_B, cwd: WT_B });
   });
 
+  it("keeps a nested recorded directory rather than flattening it to the worktree root", async () => {
+    // Resume is directory-coupled (#4781): the CLI looks for the conversation in
+    // the exact directory it started in.
+    listMock.mockResolvedValue([record({ cwd: `${WT_A}/packages/api` })]);
+    await run({ worktreeId: WT_A, sessionId: "sess-1" }, agentCtx);
+    expect(resumeMock.mock.calls[0]?.[1]?.cwd).toBe(`${WT_A}/packages/api`);
+  });
+
   it("does not move the user's view on an agent dispatch", async () => {
     await run({ worktreeId: WT_A, sessionId: "sess-1" }, agentCtx);
     // The spawn hook is what would switch worktrees; agents pass none.
+    expect(resumeMock.mock.calls[0]?.[2]?.onBeforeSpawn).toBeUndefined();
+  });
+
+  it("does not move the user's view on a plugin dispatch either", async () => {
+    // A plugin is not a person asking — `!== "agent"` would have let it yank the
+    // view, which is why this reads the shared foreground classifier instead.
+    await run({ worktreeId: WT_A, sessionId: "sess-1" }, { ...agentCtx, dispatchSource: "plugin" });
     expect(resumeMock.mock.calls[0]?.[2]?.onBeforeSpawn).toBeUndefined();
   });
 
