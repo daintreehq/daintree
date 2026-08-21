@@ -31,6 +31,18 @@ vi.mock("@/config/agents", () => ({
   AGENT_REGISTRY: { claude: { name: "Claude" } },
   getAgentDisplayTitle: vi.fn((id: string) => `Title:${id}`),
 }));
+// `agentActions` reaches the agent-settings store, which pulls in the CLI
+// availability store, which calls `getAgentIds()` at module eval — so the
+// partial `@/config/agents` mock above would have to carry that export for a
+// module nothing here exercises. Stubbing the two stores keeps the mock
+// describing what this suite actually uses (matching agentBookmarkActions and
+// agentActions.adversarial).
+vi.mock("@/store/agentSettingsStore", () => ({
+  useAgentSettingsStore: { getState: vi.fn(() => ({ settings: undefined })) },
+}));
+vi.mock("@/store/cliAvailabilityStore", () => ({
+  useCliAvailabilityStore: { getState: vi.fn(() => ({ availability: {} })) },
+}));
 vi.mock("@/clients/userAgentRegistryClient", () => ({
   userAgentRegistryClient: { get: vi.fn() },
 }));

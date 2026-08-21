@@ -35,6 +35,18 @@ vi.mock("@/store/panelStore", () => ({ usePanelStore: panelStoreMock }));
 vi.mock("@/store/createWorktreeStore", () => currentViewStoreMock);
 vi.mock("@/store/worktreeStore", () => worktreeSelectionMock);
 vi.mock("@/config/agents", () => agentRegistryMock);
+// `agentActions` reaches the agent-settings store, which pulls in the CLI
+// availability store, which calls `getAgentIds()` at module eval — so the
+// partial `@/config/agents` mock above would have to carry that export for a
+// module nothing here exercises. Stubbing the two stores keeps the mock
+// describing what this suite actually uses (matching agentBookmarkActions and
+// agentActions.adversarial).
+vi.mock("@/store/agentSettingsStore", () => ({
+  useAgentSettingsStore: { getState: vi.fn(() => ({ settings: undefined })) },
+}));
+vi.mock("@/store/cliAvailabilityStore", () => ({
+  useCliAvailabilityStore: { getState: vi.fn(() => ({ availability: {} })) },
+}));
 vi.mock("@/store/projectStore", () => ({ useProjectStore: projectStoreMock }));
 vi.mock("@/store/projectStatsStore", () => ({ useProjectStatsStore: projectStatsStoreMock }));
 
