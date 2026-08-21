@@ -971,7 +971,7 @@ function DockLaunchCaptureRow({ row, onDone }: { row: DockLaunchRow; onDone: () 
         <span className="inline-flex h-4 w-4 items-center justify-center shrink-0">
           {agent.icon ? (
             <BrandMark brandColor={agent.brandColor}>
-              <agent.icon />
+              <agent.icon brandColor={agent.brandColor} />
             </BrandMark>
           ) : (
             <SquareTerminal className="h-3.5 w-3.5" />
@@ -1304,8 +1304,8 @@ function DockLaunchOptionIcon({ row }: { row: DockLaunchRow }) {
   return (
     <span className="relative mr-2 inline-flex h-3.5 w-3.5 items-center justify-center shrink-0">
       {agent.icon ? (
-        <BrandMark brandColor={brandColor} className="h-3.5 w-3.5">
-          <agent.icon />
+        <BrandMark brandColor={brandColor} userChosen={row.kind === "preset" && !!row.preset.color}>
+          <agent.icon className="w-3.5 h-3.5" brandColor={brandColor} />
         </BrandMark>
       ) : (
         <SquareTerminal className="w-3.5 h-3.5 shrink-0" />

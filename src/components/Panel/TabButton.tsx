@@ -304,6 +304,7 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
               chrome={chrome}
               className="w-3.5 h-3.5"
               brandColor={presetColor ?? chrome.color}
+              userChosen={!!presetColor}
             />
           </span>
 

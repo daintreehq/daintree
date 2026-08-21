@@ -404,10 +404,11 @@ async function flushAsyncWork() {
 // hands back a fresh config object on every call, so the icon *component*
 // reference is what has to stay stable — minting one per lookup would remount
 // the glyph each render. `data-agent-icon` is a test-only handle rather than a
-// copy of any production name.
+// copy of any production name, and `data-brand-color` records whether the CTA
+// passed a brandColor (it must not: the glyph inherits the button foreground).
 function makeAgentIconStub(agentId: string) {
-  return function AgentIconStub() {
-    return <svg data-agent-icon={agentId} />;
+  return function AgentIconStub({ brandColor }: { brandColor?: string }) {
+    return <svg data-agent-icon={agentId} data-brand-color={brandColor ?? "inherit"} />;
   };
 }
 const CLAUDE_ICON_STUB = makeAgentIconStub("claude");
@@ -957,6 +958,11 @@ describe("HelpPanel — empty-state CTA wears the launching agent's mark (#11834
     const startButton = await findByTestId("help-start-assistant");
 
     expect(agentIconMarkerIn(startButton)).toBe("codex");
+    // No brandColor reaches the glyph, so it inherits the button's own
+    // foreground instead of painting itself the agent's brand hue.
+    expect(startButton.querySelector("[data-agent-icon]")?.getAttribute("data-brand-color")).toBe(
+      "inherit"
+    );
   });
 
   it("Resume assistant wears the captured agent's mark, not the launch preference's", async () => {

@@ -137,7 +137,7 @@ export interface AddPanelOptionsBase {
   detectedProcessId?: string;
   /** Preset ID selected at launch time for per-panel preset selection */
   agentPresetId?: string;
-  /** Preset brand color (hex) captured at launch time for the per-panel icon mark */
+  /** Preset brand color (hex) captured at launch time for per-panel icon tinting */
   agentPresetColor?: string;
   /** Original user-selected preset ID; immutable across fallback hops. */
   originalPresetId?: string;

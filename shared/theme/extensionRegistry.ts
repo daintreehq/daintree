@@ -300,6 +300,11 @@ export const EXTENSION_KEY_REGISTRY = {
   // tone (correct on dark); light themes lift the field to a raised plane.
   "review-commit-input-bg": OPTIONAL,
 
+  // Ambient brand-mark restraint. A bare saturation multiplier (0-1) applied by
+  // `.brand-mark` in src/index.css to third-party logos. Optional and inert at
+  // its CSS fallback of 1, so every theme that ignores it renders unchanged.
+  "brand-mark-saturation": OPTIONAL,
+
   // Welcome screen. welcome-field-wash is a full CSS `background` shorthand
   // layered behind the welcome layout (fallback `none` = today's chrome);
   // welcome-mark-color tints the brand mark (fallback: tint at 50%). The

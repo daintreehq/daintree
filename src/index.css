@@ -1928,6 +1928,40 @@ body,
   );
 }
 
+/* Third-party brand marks (agent and product logos). These carry vendor hexes
+   from `AgentConfig.color`, not theme tokens, so they sit outside the semantic
+   palette entirely and a themed contrast budget cannot reach them. The
+   `--brand-mark-saturation` extension lets a theme damp their chroma at rest;
+   the fallback of 1 is a no-op, so themes that do not set it are unaffected.
+   Full brand colour returns on hover of the containing control, which is where
+   identity actually matters. */
+.brand-mark {
+  filter: saturate(var(--brand-mark-saturation, 1));
+  transition: filter var(--duration-150) ease-out;
+}
+
+/* Restoring on hover alone stranded keyboard users at the damped saturation with
+   no way to reach full brand colour, which matters now that the default theme
+   sets the extension rather than only a contrast-budget one. `:focus-visible`
+   is the keyboard-equivalent of each hover selector above;
+   `:focus-visible > .brand-mark` covers a mark whose focusable ancestor is not
+   one of those roles, and the selected-option rule covers a listbox row the
+   keyboard has landed on without the row itself taking focus. */
+a:hover .brand-mark,
+button:hover .brand-mark,
+[role="option"]:hover .brand-mark,
+[role="menuitem"]:hover .brand-mark,
+[role="tab"]:hover .brand-mark,
+a:focus-visible .brand-mark,
+button:focus-visible .brand-mark,
+[role="option"]:focus-visible .brand-mark,
+[role="menuitem"]:focus-visible .brand-mark,
+[role="tab"]:focus-visible .brand-mark,
+[role="option"][aria-selected="true"] .brand-mark,
+:focus-visible > .brand-mark {
+  filter: none;
+}
+
 /* Panel Agent State Borders — grid panel container state-driven styling */
 .panel-state-waiting {
   border-color: color-mix(in oklab, var(--color-activity-waiting) 75%, transparent);

@@ -25,7 +25,7 @@ export function PortalIcon({ icon, size = "launchpad" }: PortalIconProps) {
       const pixelSize = size === "launchpad" ? 32 : 12;
       return (
         <BrandMark brandColor={config.color} size={pixelSize} className={iconClass}>
-          <Icon className={iconClass} />
+          <Icon className={iconClass} brandColor={config.color} />
         </BrandMark>
       );
     }

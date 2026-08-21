@@ -2,6 +2,8 @@ import type { ComponentType, ReactNode } from "react";
 import { cn } from "@/lib/utils";
 import { AGENT_DESCRIPTIONS, getAgentConfig, type AgentIconProps } from "@/config/agents";
 import { BrandMark } from "@/components/icons";
+import { resolveBrandChip } from "@/lib/brandIcon";
+import { useActiveAppScheme } from "@/hooks/useActiveAppScheme";
 import {
   isAgentInstalled,
   isAgentBlocked,
@@ -130,7 +132,7 @@ function ManagementCard({
       <div className="flex items-center justify-between pb-3 border-b border-daintree-border">
         <div className="flex items-center gap-3">
           <BrandMark brandColor={color} size={24}>
-            <Icon />
+            <Icon size={24} brandColor={color} />
           </BrandMark>
           <div>
             <h4 className="text-sm font-medium text-daintree-text">{name} settings</h4>
@@ -159,14 +161,20 @@ export function AgentIdentityBlock({
   description: string;
   compact?: boolean;
 }) {
+  const activeScheme = useActiveAppScheme();
+  const chip = resolveBrandChip(color, activeScheme);
+  const tileBackground = chip?.background ?? `${color}15`;
   return (
     <>
-      <BrandMark
-        brandColor={color}
-        className={cn("rounded-[var(--radius-sm)] shrink-0", compact ? "w-7 h-7" : "w-8 h-8")}
+      <div
+        className={cn(
+          "rounded-[var(--radius-sm)] flex items-center justify-center shrink-0",
+          compact ? "w-7 h-7" : "w-8 h-8"
+        )}
+        style={{ backgroundColor: tileBackground }}
       >
-        <Icon />
-      </BrandMark>
+        <Icon size={compact ? 16 : 18} brandColor={chip?.tint ?? color} />
+      </div>
       <div className="flex-1 min-w-0">
         <div className="text-sm font-medium text-daintree-text">{name}</div>
         {description && (

@@ -3,9 +3,10 @@ import { cn } from "@/lib/utils";
 
 type AiderIconProps = SVGProps<SVGSVGElement> & {
   size?: number;
+  brandColor?: string;
 };
 
-export function AiderIcon({ className, size = 16, ...props }: AiderIconProps) {
+export function AiderIcon({ className, size = 16, brandColor, ...props }: AiderIconProps) {
   // Lucide-style 24x24 outline of a lowercase "a" letterform — the official
   // aider.chat wordmark won't compose at icon size, so this distills it to
   // the dominant glyph in the brand mark.
@@ -15,7 +16,7 @@ export function AiderIcon({ className, size = 16, ...props }: AiderIconProps) {
       height={size}
       viewBox="0 0 24 24"
       fill="none"
-      stroke="currentColor"
+      stroke={brandColor || "currentColor"}
       strokeWidth={2}
       strokeLinecap="round"
       strokeLinejoin="round"

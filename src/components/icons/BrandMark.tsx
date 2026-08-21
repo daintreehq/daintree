@@ -1,40 +1,54 @@
-import { cloneElement, type CSSProperties, type ReactElement } from "react";
+import { cloneElement, type ReactElement } from "react";
 import { cn } from "@/lib/utils";
-import { resolveBrandBadge } from "@/lib/brandIcon";
+import { resolveBrandChip } from "@/lib/brandIcon";
+import { useActiveAppScheme } from "@/hooks/useActiveAppScheme";
 
 interface BrandMarkProps {
   brandColor?: string;
+  /** Marks `brandColor` as a deliberate user choice (e.g. a preset color),
+   * which bypasses the dark-theme white-tile fallback. */
+  userChosen?: boolean;
   size?: number;
   className?: string;
-  children: ReactElement<{ className?: string; style?: CSSProperties }>;
+  children: ReactElement<{ className?: string; brandColor?: string }>;
 }
 
 const SIZE_CLASS_REGEX = /\b(?:size-|w-|h-)/;
 
-/**
- * Renders an agent mark as a silhouette knocked out of a tile painted in the
- * brand color (#11895). The glyph inherits the tile's ink through
- * `currentColor`, so its contrast pair is the tile and never the surface the
- * mark lands on — the same mark reads on the grid, sidebar, toolbar, panel and
- * elevated planes without any of them being passed in.
- *
- * The color is painted exactly as given. There is no theme branch, no damping
- * and no user-choice exception: a preset color and a built-in color take the
- * same path, on both polarities.
- */
-export function BrandMark({ brandColor, size, className, children }: BrandMarkProps) {
-  const badge = resolveBrandBadge(brandColor);
+// Hook for the `--brand-mark-saturation` theme extension (src/index.css). Vendor
+// brand hexes come from `AgentConfig.color`, not the token system, so a theme
+// running a contrast budget has no other way to stop a row of logos out-shouting
+// its own signals. Inert unless a theme sets the extension.
+const BRAND_MARK_CLASS = "brand-mark";
 
-  if (!badge) {
-    // No usable color — the child keeps inheriting `currentColor`, which the
-    // text tokens already hold above the contrast floor on every surface.
-    if (!className) {
+// Resolves a brand mark that falls below WCAG 1.4.11 (3:1) against the active
+// theme's panel surface. Chromatic brands (Claude orange, Codex green, etc.)
+// that already clear the floor are returned untouched. On DARK themes, mono
+// brands like Goose and Open Interpreter render their official silhouette
+// against a near-white tile — preserving brand fidelity rather than
+// recoloring the mark. On LIGHT themes the mark itself is darkened to a
+// contrast-clearing tint of the same hue — a dark tile on pale chrome reads
+// as a black box, not a brand.
+export function BrandMark({ brandColor, userChosen, size, className, children }: BrandMarkProps) {
+  const scheme = useActiveAppScheme();
+  const chip = resolveBrandChip(brandColor, scheme, userChosen);
+  // Only themes that actually set the extension get the hook class, so every
+  // other theme renders byte-for-byte as before (no class, no filter, no
+  // compositing layer) rather than paying for an inert `saturate(1)`.
+  const dampClass = scheme.extensions?.["brand-mark-saturation"] ? BRAND_MARK_CLASS : undefined;
+
+  if (!chip || chip.tint) {
+    const tintProps = chip?.tint ? { brandColor: chip.tint } : null;
+    if (!className && !tintProps && !dampClass) {
       return children;
     }
     // `cn` collapses to "" when nothing is supplied; pass className only when it
     // has content so the no-op path leaves the child's props exactly as they were.
-    const merged = cn(children.props.className, className);
-    return cloneElement(children, merged ? { className: merged } : {});
+    const merged = cn(children.props.className, dampClass, className);
+    return cloneElement(children, {
+      ...(merged ? { className: merged } : null),
+      ...tintProps,
+    });
   }
 
   const inferSize = size === undefined && !(className && SIZE_CLASS_REGEX.test(className));
@@ -43,35 +57,13 @@ export function BrandMark({ brandColor, size, className, children }: BrandMarkPr
   return (
     <span
       aria-hidden="true"
-      className={cn("inline-flex shrink-0 items-center justify-center rounded-[3px]", className)}
+      className={cn("inline-flex items-center justify-center rounded-[3px]", dampClass, className)}
       style={{
         ...(fallbackSize !== undefined ? { width: fallbackSize, height: fallbackSize } : null),
-        backgroundColor: badge.tile,
-        color: badge.glyph,
-        // Achromatic tiles (goose, interpreter, grok) sit within ~1.1:1 of a
-        // same-polarity surface and would have no edge at all. The ring is the
-        // ink at low alpha, so it is always the tile's opposite polarity and
-        // needs no theme token to stay visible.
-        boxShadow: `inset 0 0 0 1px ${badge.ring}`,
+        backgroundColor: chip.background,
       }}
     >
-      {/* Inset the glyph by sizing it against the tile rather than padding the
-          tile: percentage padding resolves against the *containing block's*
-          width, so a 16px badge in a wide row would inset by a slice of the row.
-          A percentage on the child resolves against this span, which is the box
-          we actually mean. It also beats both ways a caller sizes its icon — a
-          `size` attribute or `w-*`/`h-*` classes — without being told which. */}
-      {cloneElement(children, {
-        style: {
-          ...children.props.style,
-          // Callers hand the same className to the wrapper and the glyph, and a
-          // `text-*` class on the glyph would outrank the inherited ink and undo
-          // the contrast the tile was chosen to guarantee.
-          color: "inherit",
-          width: "75%",
-          height: "75%",
-        },
-      })}
+      {children}
     </span>
   );
 }

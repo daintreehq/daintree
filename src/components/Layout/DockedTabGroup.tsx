@@ -642,6 +642,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                   kind={activePanel.kind}
                   chrome={activeChrome}
                   className="w-3.5 h-3.5"
+                  userChosen={!!panelPresetColors.get(activePanel.id)}
                 />
               </div>
               <span className="truncate min-w-[48px] max-w-[140px] font-sans font-medium">
@@ -901,6 +902,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                                   kind={panel.kind ?? "terminal"}
                                   chrome={tabChrome}
                                   className="w-3.5 h-3.5"
+                                  userChosen={!!panelPresetColors.get(panel.id)}
                                 />
                               </span>
                               <span className="truncate">{panel.title}</span>

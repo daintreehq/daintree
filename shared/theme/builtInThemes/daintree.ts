@@ -154,6 +154,13 @@ export const theme: BuiltInThemeSource = {
     "grain-opacity": "0.03",
   },
   extensions: {
+    // Vendor agent logos carry hexes from `AgentConfig.color`, so they are the
+    // one colour family the token system cannot reach — and at rest they are the
+    // loudest chromatic group in the toolbar. Damped to 65% at rest; `.brand-mark`
+    // restores full brand colour on hover OR keyboard focus of the containing
+    // control, and on a selected option row — which is where identity actually
+    // matters, and keeps the damping off the keyboard path.
+    "brand-mark-saturation": "0.65",
     "pulse-before-bg": "#181616",
     "pulse-card-bg": "#201f1f",
     "pulse-card-shadow": "0 1px 3px rgba(5,10,7,0.40)",

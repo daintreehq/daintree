@@ -48,11 +48,6 @@ function registryGlyph(id: PluginIconId): string {
   return render(<Icon />).container.querySelector("svg")!.innerHTML;
 }
 
-/** The tile `BrandMark` paints, as the rgb() string jsdom's CSSOM reports. */
-function badgeBackground(icon: Element | null): string | undefined {
-  return icon?.querySelector<HTMLElement>("span")?.style.backgroundColor;
-}
-
 describe("TerminalIcon", () => {
   it("marks the rendered icon identity for automated chrome assertions", () => {
     const { container, rerender } = render(
@@ -83,11 +78,7 @@ describe("TerminalIcon", () => {
 
     const icon = container.querySelector("[data-terminal-icon-id='claude']");
     expect(icon?.getAttribute("data-terminal-icon-color")).toBe("#3366ff");
-    // Since #11895 the color is painted as the badge tile and the glyph is
-    // knocked out of it, so the marker's color has to show up as the wrapper's
-    // background rather than as a fill on the path.
-    expect(badgeBackground(icon)).toBe("rgb(51, 102, 255)");
-    expect(icon?.querySelector("path")?.getAttribute("fill")).toBe("currentColor");
+    expect(icon?.querySelector("path")?.getAttribute("fill")).toBe("#3366ff");
   });
 
   it("lets an explicit brandColor override the chrome color marker", () => {
@@ -104,7 +95,7 @@ describe("TerminalIcon", () => {
 
     const icon = container.querySelector("[data-terminal-icon-id='claude']");
     expect(icon?.getAttribute("data-terminal-icon-color")).toBe("#ff6600");
-    expect(badgeBackground(icon)).toBe("rgb(255, 102, 0)");
+    expect(icon?.querySelector("path")?.getAttribute("fill")).toBe("#ff6600");
   });
 
   it("renders AI process icons for detected CLI processes in terminal panels", () => {

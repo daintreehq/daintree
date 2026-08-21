@@ -193,6 +193,7 @@ export function PilotParkEditor({
           chrome={target.row.chrome}
           className="h-4 w-4 shrink-0"
           brandColor={target.row.presetColor ?? target.row.chrome.color}
+          userChosen={target.row.presetColor !== undefined}
         />
         <span className="min-w-0 truncate text-sm text-daintree-text">{target.row.title}</span>
         <span className="shrink-0 text-xs text-daintree-text/40">{target.group.name}</span>
@@ -280,6 +281,7 @@ export function PilotParkEditor({
                       chrome={candidate.row.chrome}
                       className="h-4 w-4 shrink-0"
                       brandColor={candidate.row.presetColor ?? candidate.row.chrome.color}
+                      userChosen={candidate.row.presetColor !== undefined}
                     />
                     <span className="min-w-0 flex-1 truncate">{candidate.row.title}</span>
                     <span className="shrink-0 text-xs text-daintree-text/40">

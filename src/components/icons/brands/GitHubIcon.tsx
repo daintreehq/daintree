@@ -9,16 +9,17 @@ import { cn } from "@/lib/utils";
 
 type GitHubIconProps = SVGProps<SVGSVGElement> & {
   size?: number;
+  brandColor?: string;
 };
 
-export function GitHubIcon({ className, size = 16, ...props }: GitHubIconProps) {
+export function GitHubIcon({ className, size = 16, brandColor, ...props }: GitHubIconProps) {
   return (
     <svg
       width={size}
       height={size}
       viewBox="0 0 24 24"
       fill="none"
-      stroke="currentColor"
+      stroke={brandColor || "currentColor"}
       strokeWidth="2"
       strokeLinecap="round"
       strokeLinejoin="round"

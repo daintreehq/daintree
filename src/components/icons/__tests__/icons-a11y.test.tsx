@@ -143,13 +143,10 @@ describe("Brand icon a11y", () => {
     expect(svg?.getAttribute("aria-label")).toBe("Brand mark");
   });
 
-  it("ClaudeIcon paints from currentColor so the badge ink reaches it", () => {
-    // Brand marks stopped taking a fill in #11895: the glyph is knocked out of
-    // the badge tile, and inheriting is what lets `BrandMark` choose an ink that
-    // clears contrast without recolouring the identity.
-    const { container } = render(<ClaudeIcon />);
+  it("ClaudeIcon still honours brandColor after the type widening", () => {
+    const { container } = render(<ClaudeIcon brandColor="#FF0000" />);
     const path = container.querySelector("svg path");
-    expect(path?.getAttribute("fill")).toBe("currentColor");
+    expect(path?.getAttribute("fill")).toBe("#FF0000");
   });
 
   it("AiderIcon preserves fill='none' (stroke-only icon)", () => {

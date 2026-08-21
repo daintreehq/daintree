@@ -1,113 +1,61 @@
-import { isHexColor } from "@shared/theme";
+import { contrastRatio, isHexColor } from "@shared/theme";
+import type { AppColorScheme } from "@shared/theme";
 
-/** Painted behind an alpha brand color so the tile is always opaque. */
-const ALPHA_BACKPLATE = "#FFFFFF";
+const NON_TEXT_CONTRAST_THRESHOLD = 3;
+const CHIP_LIGHT = "#F5F5F5";
 
-/** Alpha of the hairline ring that delimits the tile, as a 0-1 fraction. */
-const RING_ALPHA = 0.15;
-
-/**
- * Luminance at which black and white ink contrast equally. Solving
- * `(1.05)/(L+0.05) = (L+0.05)/0.05` gives `sqrt(1.05 * 0.05) - 0.05`; the exact
- * expression rather than a rounded literal because a 4-decimal approximation
- * picks the weaker ink for the ~40 colors sitting on the crossover.
- */
-const INK_CROSSOVER = Math.sqrt(1.05 * 0.05) - 0.05;
-
-export interface BrandBadge {
-  /** The brand color as painted — never darkened, damped or re-hued. */
-  tile: string;
-  /** Black or white, whichever reads better on `tile`. Carries the silhouette. */
-  glyph: string;
-  /** `glyph` at low alpha, so an achromatic tile still has an edge. */
-  ring: string;
+export interface BrandChip {
+  /** Contrasting tile painted behind the untouched brand mark (dark themes). */
+  background?: string;
+  /** Replacement mark color — same hue, darkened to clear 3:1 (light themes). */
+  tint?: string;
 }
 
-function expand(hex: string): string {
-  const body = hex.slice(1);
-  return body.length === 3 || body.length === 4
-    ? body
-        .split("")
-        .map((c) => c + c)
-        .join("")
-    : body;
+function mixTowardBlack(hex: string, amount: number): string {
+  const channels = [hex.slice(1, 3), hex.slice(3, 5), hex.slice(5, 7)].map((c) =>
+    Math.round(parseInt(c, 16) * (1 - amount))
+  );
+  return `#${channels.map((c) => c.toString(16).padStart(2, "0")).join("")}`;
 }
 
-function channels(body: string): [number, number, number] {
-  return [
-    parseInt(body.slice(0, 2), 16),
-    parseInt(body.slice(2, 4), 16),
-    parseInt(body.slice(4, 6), 16),
-  ];
-}
-
-function round([r, g, b]: [number, number, number]): [number, number, number] {
-  return [Math.round(r), Math.round(g), Math.round(b)];
-}
-
-function toHex(rgb: [number, number, number]): string {
-  return `#${rgb.map((c) => c.toString(16).padStart(2, "0")).join("")}`;
-}
-
-/**
- * WCAG 2.x relative luminance. Duplicated from `@shared/theme` rather than
- * imported because this module already normalizes the hex to opaque channels;
- * the shared helper re-parses and reads an alpha hex as opaque.
- */
-function luminance([r, g, b]: [number, number, number]): number {
-  const linear = (c: number) => {
-    const s = c / 255;
-    return s <= 0.03928 ? s / 12.92 : Math.pow((s + 0.055) / 1.055, 2.4);
-  };
-  return 0.2126 * linear(r) + 0.7152 * linear(g) + 0.0722 * linear(b);
-}
-
-/**
- * Flattens `#RGBA`/`#RRGGBBAA` onto the backplate. A translucent tile would let
- * the caller's surface through, which is the surface dependence this whole
- * module exists to remove — so alpha is resolved here, once, against a fixed
- * plate rather than against whatever chrome the mark happens to land on.
- */
-function opaqueChannels(body: string): [number, number, number] {
-  const [r, g, b] = channels(body);
-  if (body.length !== 8) return [r, g, b];
-  const alpha = parseInt(body.slice(6, 8), 16) / 255;
-  const [pr, pg, pb] = channels(expand(ALPHA_BACKPLATE));
-  const over = (c: number, plate: number) => c * alpha + plate * (1 - alpha);
-  return [over(r, pr), over(g, pg), over(b, pb)];
-}
-
-/**
- * Splits the two jobs the brand color used to do at once (#11895). The glyph is
- * knocked out of a tile painted in the brand color, so its contrast pair is the
- * tile — a fixed, local pair that no theme surface participates in. Legibility
- * therefore holds on the grid, sidebar, toolbar, panel and elevated planes
- * alike, and the color itself is never modified to buy that legibility.
- *
- * Black-or-white ink guarantees at least ~4.58:1 for any opaque color; the
- * binding case across the shipped roster is copilot `#8957e5` at 4.61:1, which
- * `brandBadgeRegistry.test.ts` holds to the 4.5 floor.
- *
- * Returns null when there is no usable color, which leaves the caller rendering
- * a plain `currentColor` glyph — already contrast-safe by inheritance.
- */
-export function resolveBrandBadge(brandColor: string | undefined): BrandBadge | null {
+export function resolveBrandChip(
+  brandColor: string | undefined,
+  scheme: AppColorScheme,
+  userChosen?: boolean
+): BrandChip | null {
   if (!brandColor || !isHexColor(brandColor)) {
     return null;
   }
-  const body = expand(brandColor.trim());
-  if (body.length !== 6 && body.length !== 8) {
+  const surface = scheme.tokens["surface-panel"];
+  if (!isHexColor(surface)) {
     return null;
   }
-  // Round before choosing the ink, not after: flattening alpha lands on
-  // fractional channels, and picking against those can name the weaker ink for
-  // the color that actually gets painted.
-  const rgb = round(opaqueChannels(body));
-  const tile = body.length === 8 ? toHex(rgb) : brandColor;
-  const glyphIsWhite = luminance(rgb) <= INK_CROSSOVER;
-  return {
-    tile,
-    glyph: glyphIsWhite ? "#FFFFFF" : "#000000",
-    ring: glyphIsWhite ? `rgba(255, 255, 255, ${RING_ALPHA})` : `rgba(0, 0, 0, ${RING_ALPHA})`,
-  };
+  if (contrastRatio(brandColor, surface) >= NON_TEXT_CONTRAST_THRESHOLD) {
+    return null;
+  }
+  if (scheme.type === "dark") {
+    // Mono brands like Goose and Open Interpreter render their official
+    // silhouette against a near-white tile — preserving brand fidelity
+    // rather than recoloring the mark. A user-chosen preset color is a
+    // deliberate choice; render it as-is rather than stamping a white tile
+    // that overrides their intent.
+    if (userChosen) {
+      return null;
+    }
+    if (contrastRatio(brandColor, CHIP_LIGHT) < NON_TEXT_CONTRAST_THRESHOLD) {
+      return null;
+    }
+    return { background: CHIP_LIGHT };
+  }
+  // Light themes: a dark tile behind the mark reads as a black box stamped on
+  // the pale chrome (the old behavior). Darken the mark itself instead — the
+  // hue survives, no plate. Mixing toward black is monotonic against a
+  // near-white panel, so the loop always terminates.
+  for (let amount = 0.1; amount <= 0.9; amount += 0.1) {
+    const candidate = mixTowardBlack(brandColor, amount);
+    if (contrastRatio(candidate, surface) >= NON_TEXT_CONTRAST_THRESHOLD) {
+      return { tint: candidate };
+    }
+  }
+  return { tint: "#1F1F1F" };
 }

@@ -104,7 +104,7 @@ export function DockLaunchMenuItems({
       >
         {Icon ? (
           <BrandMark brandColor={agent.brandColor} className="w-3.5 h-3.5 mr-2">
-            <Icon className="w-3.5 h-3.5" />
+            <Icon className="w-3.5 h-3.5" brandColor={agent.brandColor} />
           </BrandMark>
         ) : (
           <SquareTerminal className="w-3.5 h-3.5 mr-2" />
