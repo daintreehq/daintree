@@ -56,30 +56,47 @@ interface Backdrop {
 }
 
 /**
- * Normalizes to a 6-digit hex, dropping alpha from the 4- and 8-digit forms.
+ * Normalizes an opaque 3- or 6-digit hex, rejecting everything else.
  *
- * Preset colours are user input and `sanitizePreset` deliberately accepts alpha
- * (`src/config/agents.ts`), so the resolver has to take those rather than hand
- * back null and leave the mark with no brand treatment at all. Alpha is dropped
- * rather than composited because a translucent mark has no single contrast
- * ratio — its effective colour depends on whatever it happens to be sitting on,
- * which is the one thing this resolver refuses to guess. `relativeLuminance`
- * already discards alpha the same way, so this keeps the two in step.
+ * Used for the theme's own tokens, where strictness is the point: a translucent
+ * surface composites over whatever sits behind it, so reading one as opaque
+ * would measure a pixel the screen never paints. Declining is the honest answer
+ * — the mark keeps its inherited colour rather than a mis-measured one.
  */
 function opaqueHex(value: string | undefined): string | null {
   if (!value) return null;
-  const match = /^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.exec(value.trim());
+  const match = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(value.trim());
   if (!match) return null;
   const body = match[1]!;
   const expanded =
-    body.length <= 4
+    body.length === 3
       ? body
-          .slice(0, 3)
           .split("")
           .map((char) => `${char}${char}`)
           .join("")
-      : body.slice(0, 6);
+      : body;
   return `#${expanded.toLowerCase()}`;
+}
+
+/**
+ * Normalizes the brand colour, additionally accepting the 4- and 8-digit forms
+ * by dropping their alpha.
+ *
+ * Deliberately laxer than `opaqueHex` because the two inputs fail differently.
+ * `sanitizePreset` (`src/config/agents.ts`) accepts alpha, so alpha brand hexes
+ * really do arrive here, and refusing them would leave a colour the user
+ * explicitly chose with no effect at all. A foreground also has somewhere to
+ * fall back to — its opaque RGB — whereas a translucent *backdrop* has no single
+ * value to measure against. So alpha is dropped on the way in and never on the
+ * surfaces, which is why this is not one shared helper.
+ */
+function brandHex(value: string | undefined): string | null {
+  if (!value) return null;
+  const trimmed = value.trim();
+  const match = /^#([0-9a-f]{4}|[0-9a-f]{8})$/i.exec(trimmed);
+  if (!match) return opaqueHex(trimmed);
+  const body = match[1]!;
+  return opaqueHex(body.length === 4 ? `#${body.slice(0, 3)}` : `#${body.slice(0, 6)}`);
 }
 
 /** Channel-wise sRGB interpolation — the space a `color` transition crossfades in. */
@@ -219,14 +236,14 @@ export function resolveBrandMarkInk(
   brandColor: string | undefined,
   scheme: AppColorScheme
 ): BrandMarkInk | null {
-  const brandHex = opaqueHex(brandColor);
+  const brand = brandHex(brandColor);
   const inkHex = opaqueHex(scheme.tokens["text-secondary"]);
-  if (!brandHex || !inkHex) return null;
+  if (!brand || !inkHex) return null;
 
   // Keyed on the token values themselves, not the scheme id: a custom theme can
   // be edited in place and keep its id, so an id-keyed entry would go stale.
   const key = [
-    brandHex,
+    brand,
     inkHex,
     scheme.tokens["overlay-elevated"] ?? "",
     ...DISPLAY_SURFACES.map((surface) => scheme.tokens[surface] ?? ""),
@@ -234,7 +251,7 @@ export function resolveBrandMarkInk(
   const cached = cache.get(key);
   if (cached !== undefined) return cached;
 
-  const resolved = computeInk(brandHex, inkHex, scheme);
+  const resolved = computeInk(brand, inkHex, scheme);
   if (cache.size >= CACHE_LIMIT) {
     // Oldest-first eviction. Preset colours are arbitrary hexes arriving at
     // runtime, so the key space is unbounded and the map needs a ceiling.

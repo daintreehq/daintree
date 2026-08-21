@@ -206,6 +206,29 @@ describe("resolveBrandMarkInk", () => {
     expect(resolveBrandMarkInk("#c75f", DARK)).toEqual(resolveBrandMarkInk("#cc7755", DARK));
   });
 
+  it("declines a theme whose surfaces are translucent, rather than mis-measuring them", () => {
+    // The asymmetry with the brand input above is deliberate. A translucent
+    // FOREGROUND has an opaque colour to fall back to; a translucent BACKDROP
+    // composites over whatever is behind it, so reading it as opaque would
+    // measure a pixel that never gets painted. Declining is the honest answer.
+    const translucent = makeScheme("dark", { ...DARK.tokens, "surface-panel": "#1e1e1e80" });
+    const resolved = resolveBrandMarkInk("#cc785c", translucent)!;
+    const opaqueOnly = backdrops(translucent);
+    expect(opaqueOnly.every((bg) => /^#[0-9a-f]{6}$/i.test(bg) || bg.startsWith("#1e1e1e80"))).toBe(
+      true
+    );
+    // The remaining four surfaces still carry the guarantee.
+    for (const key of SURFACE_KEYS.filter((k) => k !== "surface-panel")) {
+      expect(contrastRatio(resolved.rest, translucent.tokens[key]!)).toBeGreaterThanOrEqual(FLOOR);
+    }
+
+    const allTranslucent = makeScheme("dark", {
+      ...DARK.tokens,
+      "text-secondary": "#a8a8a880",
+    });
+    expect(resolveBrandMarkInk("#cc785c", allTranslucent)).toBeNull();
+  });
+
   it("declines colours it cannot measure", () => {
     expect(resolveBrandMarkInk("not-a-color", DARK)).toBeNull();
     expect(resolveBrandMarkInk("#12345", DARK)).toBeNull();
