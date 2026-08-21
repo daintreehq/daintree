@@ -906,23 +906,7 @@ describe("CopyTreeService against the installed CopyTree", () => {
       ]);
     });
 
-    // KNOWN UPSTREAM GAP, not a Daintree one: a curated glob cannot reach a
-    // dotfile. CopyTree 0.17 builds its include matcher as
-    // `micromatch.matcher(this.patterns)` (FileDiscoveryStage.js:485) with no
-    // `dot: true`, while the force-include matcher three lines up
-    // (FileDiscoveryStage.js:472) sets it — so `always` sees dotfiles and
-    // `filter`/`includePaths` do not. That costs a curated bundle things like
-    // `.github/workflows/**` or a dotfile config; ordinary sources and tests,
-    // which is what the feature is for, are unaffected.
-    //
-    // Pinned as current behavior rather than `it.fails`, which flips ANY
-    // failure to green — a broken fixture write or a renamed option would have
-    // "passed" it forever. The non-dot control is what makes this honest: it
-    // proves the glob and the traversal work, so the dotfile's absence is the
-    // upstream gap and not a typo. When a copytree release with `{ dot: true }`
-    // lands and this repo's dependency is raised to it, the second assertion
-    // starts failing — flip it to `toContain` and delete this comment.
-    it("does not reach a dotfile through a curated glob (upstream copytree gap)", async () => {
+    it("reaches a dotfile through a curated glob", async () => {
       await writeFixture("config/landscape/.defaults.json", '{"DOTFILE_SENTINEL":1}\n');
       await writeFixture("config/landscape/visible.json", '{"CONTROL_SENTINEL":1}\n');
 
@@ -933,7 +917,7 @@ describe("CopyTreeService against the installed CopyTree", () => {
       expect(result.error).toBeUndefined();
       const selected = (result.files ?? []).map((file) => file.path);
       expect(selected).toContain("config/landscape/visible.json");
-      expect(selected).not.toContain("config/landscape/.defaults.json");
+      expect(selected).toContain("config/landscape/.defaults.json");
     });
 
     it("still selects everything when neither field is given", async () => {

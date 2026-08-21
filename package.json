@@ -153,7 +153,7 @@
     "archiver": "^8.0.0",
     "avr-vad": "^1.0.10",
     "better-sqlite3": "^13.0.1",
-    "copytree": "^0.17.0",
+    "copytree": "1.0.0-rc.1",
     "httpxy": "^0.5.3",
     "ipaddr.js": "^2.4.0",
     "js-yaml": "^4.1.1",
