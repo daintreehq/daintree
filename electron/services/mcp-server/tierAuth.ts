@@ -261,8 +261,9 @@ export function readListPaging(args: unknown): { offset: number; limit: number }
 
 /**
  * Read a manifest entry's id from an untyped result payload. The introspection
- * result schemas declare their entries as `z.unknown()`, so main re-narrows
- * rather than trusting the renderer's shape.
+ * result schemas declare their entries permissively — `z.unknown()` for the
+ * list/search arrays, an open record for `getSchema` — so main re-narrows rather
+ * than trusting the renderer's shape.
  */
 function readEntryId(entry: unknown): string | null {
   if (!entry || typeof entry !== "object" || Array.isArray(entry)) return null;
@@ -430,7 +431,11 @@ export function buildTargetPolicy(
         : null;
   if (authorizedBy === null) return null;
 
-  const callable = record.enabled !== false;
+  // Strict rather than `!== false`: a malformed `enabled` (absent, or the
+  // string "false") would otherwise be reported as callable, which is the one
+  // direction this record must never guess in.
+  if (typeof record.enabled !== "boolean") return null;
+  const callable = record.enabled;
   const annotations = buildAnnotations(record as ActionManifestEntry);
   const confirmationMayEscalate = danger === "safe" && acceptsRecipeId(record.inputSchema);
 
@@ -445,29 +450,45 @@ export function buildTargetPolicy(
   // `buildSurfaceManifest`: they are model-facing prose that is reworded often,
   // and a compatibility check that cried drift on every wording edit is one
   // clients would learn to ignore.
-  const hash = createHash("sha256")
-    .update(
-      canonicalJson({
-        policyVersion: MCP_TARGET_POLICY_VERSION,
-        id,
-        kind,
-        minimumTier,
-        danger,
-        confirmationMayEscalate,
-        dynamicInvocation: "allowed",
-        preferredTool: null,
-        readOnlyHint: annotations.readOnlyHint ?? null,
-        idempotentHint: annotations.idempotentHint ?? null,
-        destructiveHint: annotations.destructiveHint ?? null,
-        openWorldHint: annotations.openWorldHint ?? null,
-        deprecated: record.deprecated ?? null,
-        inputSchema: toCompatibilityShape(record.inputSchema ?? null),
-        outputSchema: toCompatibilityShape(
-          buildToolOutputSchema(record as ActionManifestEntry) ?? null
-        ),
-      })
-    )
-    .digest("hex");
+  //
+  // Both schemas are hashed as the LOOKUP HANDS THEM OVER — `entry.inputSchema`
+  // and `entry.outputSchema`, unprojected. This diverges from
+  // `buildSurfaceManifest`, deliberately: that digest describes `tools/list`, so
+  // it hashes `buildToolOutputSchema`, the advertised view. This one accompanies
+  // the entry itself, and `buildToolOutputSchema` collapses every schema without
+  // a top-level `type: "object"` to nothing — so hashing that view would let a
+  // top-level union change its variants, in a field the caller can read right
+  // there in the payload, without moving the digest.
+  //
+  // JSON.stringify throws on a cycle or a BigInt, and a manifest entry is only
+  // as well-formed as whatever built it. Fail closed on that rather than letting
+  // it escape as a tool-call exception.
+  let hash: string;
+  try {
+    hash = createHash("sha256")
+      .update(
+        canonicalJson({
+          policyVersion: MCP_TARGET_POLICY_VERSION,
+          id,
+          kind,
+          minimumTier,
+          danger,
+          confirmationMayEscalate,
+          dynamicInvocation: "allowed",
+          preferredTool: null,
+          readOnlyHint: annotations.readOnlyHint ?? null,
+          idempotentHint: annotations.idempotentHint ?? null,
+          destructiveHint: annotations.destructiveHint ?? null,
+          openWorldHint: annotations.openWorldHint ?? null,
+          deprecated: record.deprecated ?? null,
+          inputSchema: toCompatibilityShape(record.inputSchema ?? null),
+          outputSchema: toCompatibilityShape(record.outputSchema ?? null),
+        })
+      )
+      .digest("hex");
+  } catch {
+    return null;
+  }
 
   return {
     version: MCP_TARGET_POLICY_VERSION,

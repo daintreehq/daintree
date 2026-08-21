@@ -114,9 +114,11 @@ const TIER_VALUES = ["workbench", "action", "system", "external"] as const;
 /**
  * The policy half of the `actions.getSchema` result.
  *
- * Enforced against `run()`'s return value, and exported as the shape a client
- * codes against — but not advertised as an MCP `outputSchema`; see the note on
- * the action's `resultSchema` for why the external wire budget rules that out.
+ * NOT reached by the renderer's own `resultSchema` validation: that runs in
+ * `ActionService.dispatch`, before main has substituted the real record, so what
+ * it validates is always the `null` placeholder. This schema's job is to be the
+ * shape a client — and `McpGetSchemaWireResultSchema` — checks the finished
+ * record against.
  */
 export const McpTargetPolicySchema = z.object({
   version: z.number().int().positive(),
@@ -162,3 +164,32 @@ export const McpGetSchemaResultSchema = z.object({
   policy: McpTargetPolicySchema.nullable(),
   error: z.object({ code: z.string(), message: z.string() }).nullable(),
 });
+
+/**
+ * What a CLIENT actually receives, after main has substituted the policy.
+ *
+ * Deliberately stricter than {@link McpGetSchemaResultSchema}, which has to stay
+ * loose enough to accept the renderer's half-built staging value (`policy:
+ * null` on a success). That looseness is a validation gap on the wire — it
+ * admits `{ ok: true, policy: null }` and `{ ok: false, entry: {...} }`, neither
+ * of which main can emit — so the finished shape gets its own schema rather than
+ * inheriting the staging one.
+ *
+ * Discriminated on a literal `ok`, so a consumer narrows on it and gets
+ * non-null `entry`/`policy` on the success arm without re-checking. This is the
+ * contract the companion CLI (daintreehq/assistant#368) codes against.
+ */
+export const McpGetSchemaWireResultSchema = z.discriminatedUnion("ok", [
+  z.object({
+    ok: z.literal(true),
+    entry: z.record(z.string(), z.unknown()),
+    policy: McpTargetPolicySchema,
+    error: z.null(),
+  }),
+  z.object({
+    ok: z.literal(false),
+    entry: z.null(),
+    policy: z.null(),
+    error: z.object({ code: z.literal("NOT_FOUND"), message: z.string() }),
+  }),
+]);

@@ -444,7 +444,8 @@ export function registerIntrospectionActions(
       // this payload in `filterIntrospectionResultForSession` and substitutes
       // the real record there, or denies the read if it cannot build one. The
       // null placeholder is what lets that field stay required-and-nullable in
-      // the advertised schema rather than optional.
+      // the declared schema rather than optional. `McpGetSchemaWireResultSchema`
+      // is the stricter shape a client sees once main has filled it in.
       return { ok: true, entry, policy: null, error: null };
     },
   }));
