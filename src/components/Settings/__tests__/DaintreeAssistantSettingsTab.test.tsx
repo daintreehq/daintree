@@ -456,9 +456,16 @@ describe("DaintreeAssistantSettingsTab", () => {
     );
     await waitForContent(container, "Auto-approve assistant actions");
 
-    fireEvent.click(
-      screen.getByLabelText("Auto-approve Daintree Assistant actions during help sessions")
+    // The switch stays disabled until the persisted settings resolve, and the
+    // heading above renders before that — clicking on the heading alone would
+    // drop the event and time out downstream.
+    const toggle = screen.getByLabelText(
+      "Auto-approve Daintree Assistant actions during help sessions"
     );
+    await waitFor(() => {
+      expect(toggle.hasAttribute("disabled")).toBe(false);
+    });
+    fireEvent.click(toggle);
 
     await waitForContent(
       container,
@@ -1455,6 +1462,31 @@ describe("SessionLiveStatusCard (live help session)", () => {
     await waitFor(() => expect(container.textContent).toContain("Live session"), { timeout: 5000 });
     expect(container.textContent).toContain("below the configured system default");
     expect(container.textContent).not.toContain("matches the configured default");
+  });
+
+  // The equality branch is the one a default assistant session lands on now
+  // that agent identity no longer forces `system` (#11907) — before the fix it
+  // was unreachable for the assistant, so only the drift copy was ever proven.
+  it("reports a live tier equal to the configured default as a match", async () => {
+    installApi(
+      {
+        getSettings: vi.fn().mockResolvedValue(settingsWithTier("action")),
+        getLiveSessionStatus: vi
+          .fn()
+          .mockResolvedValue({ connected: true, tier: "action", activeGrants: [] }),
+      },
+      {}
+    );
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+
+    await waitFor(() => expect(container.textContent).toContain("Live session"), { timeout: 5000 });
+    expect(container.textContent).toContain("matches the configured default");
+    expect(container.textContent).not.toContain("elevated above");
+    expect(container.textContent).not.toContain("below the configured");
   });
 
   it("passes the public help-session id to the live-status bridge call", async () => {
