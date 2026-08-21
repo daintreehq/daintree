@@ -46,6 +46,9 @@ export function checkBaselineFreshness(
  * would otherwise silently skip its regression gate. Returns those gaps so the
  * caller can fail the run before wasting measurement time.
  *
+ * Scenarios marked `calibrating` are excluded: they have deliberately not been
+ * baselined yet, so a missing entry is the expected state, not a gap.
+ *
  * Critical scenarios are excluded — `gate.ts` already fails closed for them.
  * A null baseline returns no gaps: that's the pre-existing "no file" path, not
  * the partial-coverage gap this check targets.
@@ -62,6 +65,7 @@ export function checkBaselineCoverage(
     if (budgetConfig.criticalScenarios.includes(scenario.id)) continue;
 
     const budget = getScenarioBudget(budgetConfig, scenario.id);
+    if (budget.calibrating) continue;
     if (budget.maxRegressionPct === undefined) continue;
 
     const baselineP95 = baseline.p95ByScenario?.[scenario.id];

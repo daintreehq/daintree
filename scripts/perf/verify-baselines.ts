@@ -1,6 +1,6 @@
 import path from "node:path";
 import { checkBaselineCoverage } from "./lib/baselineCoverage";
-import { loadBudgetConfig } from "./lib/budgets";
+import { getScenarioBudget, loadBudgetConfig } from "./lib/budgets";
 import { readJson } from "./lib/io";
 import { getScenariosForMode } from "./scenarios";
 import type { BaselineSummary, PerfMode } from "./types";
@@ -92,6 +92,19 @@ function verifyMode(
   const gaps = checkBaselineCoverage(baseline, budgetConfig, getScenariosForMode(mode));
   if (gaps.length > 0) {
     problems.push(`budgeted scenarios absent: ${gaps.map((gap) => gap.scenarioId).join(", ")}`);
+  }
+
+  // `calibrating` suppresses the regression gate until a runner-generated
+  // baseline exists. Once one does, the flag is doing nothing but hiding the
+  // gate, and nothing else would ever notice — this is the forcing function.
+  const staleCalibration = getScenariosForMode(mode)
+    .filter((scenario) => getScenarioBudget(budgetConfig, scenario.id).calibrating)
+    .map((scenario) => scenario.id)
+    .filter((id) => Number.isFinite(p95[id]));
+  if (staleCalibration.length > 0) {
+    problems.push(
+      `calibration complete but still flagged (remove \`calibrating\` from budgets.json to arm the regression gate): ${staleCalibration.join(", ")}`
+    );
   }
 
   return problems;
