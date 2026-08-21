@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { describe, expect, it } from "vitest";
-import { converter, modeOklch, modeRgb, useMode } from "culori/fn";
+import { converter, modeOklch, modeRgb, useMode as registerMode } from "culori/fn";
 import {
   BUILT_IN_APP_SCHEMES,
   DISPLAY_SURFACES,
@@ -13,8 +13,8 @@ import type { AppColorScheme } from "@shared/theme";
 import { AGENT_REGISTRY } from "@shared/config/agentRegistry";
 import { resolveBrandMarkInk } from "../brandIcon";
 
-useMode(modeRgb);
-useMode(modeOklch);
+registerMode(modeRgb);
+registerMode(modeOklch);
 const toOklch = converter("oklch");
 
 const FLOOR = 3;
@@ -57,6 +57,18 @@ function surfacePairs(scheme: AppColorScheme): Array<{ base: string; hovered: st
 }
 
 describe("brand marks across the whole registry", () => {
+  it("actually covers the whole roster, every theme and every surface", () => {
+    // Every loop below filters, and a filter that quietly empties turns the
+    // whole matrix into a no-op that still reports green. These are the
+    // preconditions that make the coverage claims mean something.
+    expect(AGENTS).toHaveLength(Object.keys(AGENT_REGISTRY).length);
+    expect(BUILT_IN_APP_SCHEMES.length).toBeGreaterThan(1);
+    for (const scheme of BUILT_IN_APP_SCHEMES) {
+      expect(surfacePairs(scheme)).toHaveLength(DISPLAY_SURFACES.length);
+      expect(toOklch(scheme.tokens["text-secondary"])?.l).toBeDefined();
+    }
+  });
+
   it("resolves an ink for every agent on every built-in theme", () => {
     const unresolved = AGENTS.flatMap(([id, color]) =>
       BUILT_IN_APP_SCHEMES.filter((scheme) => resolveBrandMarkInk(color, scheme) === null).map(
@@ -133,6 +145,7 @@ describe("brand marks across the whole registry", () => {
   });
 
   it("leaves a brand colour untouched wherever it is already legible", () => {
+    let exercised = 0;
     for (const [id, color] of AGENTS) {
       for (const scheme of BUILT_IN_APP_SCHEMES) {
         const ink = resolveBrandMarkInk(color, scheme);
@@ -146,12 +159,30 @@ describe("brand marks across the whole registry", () => {
             contrastRatio(mix(ink.rest, color, 0.5), mix(base, hovered, 0.5)) >= FLOOR
         );
         if (alreadySafe) {
+          exercised++;
           expect(`${id}/${scheme.id}:${ink.hover.toLowerCase()}`).toBe(
             `${id}/${scheme.id}:${color.toLowerCase()}`
           );
         }
       }
     }
+    // Correction is meant to be the exception, not the rule. If nothing reached
+    // the assertion the test proved nothing.
+    expect(exercised).toBeGreaterThan(0);
+  });
+
+  it("transitions colour alone, never a widened property list", () => {
+    // CLAUDE.md forbids widening to `transition`/`transition-all`; this reads the
+    // shipped rule rather than the constant, so retuning the duration token does
+    // not drag the test with it.
+    const css = readFileSync(fileURLToPath(new URL("../../index.css", import.meta.url)), "utf8");
+    const rule = /\.brand-mark\s*\{([^}]*)\}/.exec(css);
+    expect(rule).not.toBeNull();
+
+    const transition = /transition:\s*([^;]+);/.exec(rule![1]!);
+    expect(transition).not.toBeNull();
+    const properties = transition![1]!.split(",").map((part) => part.trim().split(/\s+/)[0]);
+    expect(properties).toEqual(["color"]);
   });
 
   it("derives everything from the brand hex and the theme, with no agent table", () => {

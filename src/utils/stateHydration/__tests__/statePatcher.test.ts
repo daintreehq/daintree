@@ -2893,7 +2893,7 @@ describe("adversarial: behavioral overrides flow through to generateAgentCommand
 // ── adversarial: agentPresetColor must be restored on respawn ─────────────────
 // Bug: buildArgsForRespawn looks up the preset (which has a color field) but
 // never writes agentPresetColor into the returned AddTerminalArgs object.
-// After an Electron reload, the dock icon loses its preset tint and falls back
+// After an Electron reload, the dock icon loses its preset-derived mark ink and falls back
 // to the default brand color instead of the preset color.
 
 describe("adversarial: agentPresetColor must be carried through buildArgsForRespawn", () => {

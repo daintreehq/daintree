@@ -1,4 +1,11 @@
-import { clampChroma, converter, formatHex, modeOklch, modeRgb, useMode } from "culori/fn";
+import {
+  clampChroma,
+  converter,
+  formatHex,
+  modeOklch,
+  modeRgb,
+  useMode as registerMode,
+} from "culori/fn";
 import { DISPLAY_SURFACES, blendOverBackground, contrastRatio, parseRgba } from "@shared/theme";
 import type { AppColorScheme } from "@shared/theme";
 
@@ -6,8 +13,10 @@ import type { AppColorScheme } from "@shared/theme";
 // makes it tree-shakable (the root `culori` entry calls `useMode` for ~30 spaces
 // at module scope and cannot be shaken). `modeRgb` is what parses a hex string
 // at all — without it `toOklch()` on a hex string returns undefined, not a color.
-useMode(modeRgb);
-useMode(modeOklch);
+// Aliased because culori's `useMode` is mode registration, not a React hook, and
+// `react-hooks/rules-of-hooks` matches it on the name alone.
+registerMode(modeRgb);
+registerMode(modeOklch);
 const toOklch = converter("oklch");
 
 /** WCAG 1.4.11 non-text contrast. A mark is a non-text UI component. */
@@ -47,22 +56,29 @@ interface Backdrop {
 }
 
 /**
- * Normalizes to an opaque 6-digit hex, rejecting the 4- and 8-digit forms.
- * `contrastRatio` drops alpha rather than compositing it, so an alpha colour
- * would be measured against a backdrop it does not actually paint.
+ * Normalizes to a 6-digit hex, dropping alpha from the 4- and 8-digit forms.
+ *
+ * Preset colours are user input and `sanitizePreset` deliberately accepts alpha
+ * (`src/config/agents.ts`), so the resolver has to take those rather than hand
+ * back null and leave the mark with no brand treatment at all. Alpha is dropped
+ * rather than composited because a translucent mark has no single contrast
+ * ratio — its effective colour depends on whatever it happens to be sitting on,
+ * which is the one thing this resolver refuses to guess. `relativeLuminance`
+ * already discards alpha the same way, so this keeps the two in step.
  */
 function opaqueHex(value: string | undefined): string | null {
   if (!value) return null;
-  const match = /^#([0-9a-f]{3}|[0-9a-f]{6})$/i.exec(value.trim());
+  const match = /^#([0-9a-f]{3,4}|[0-9a-f]{6}|[0-9a-f]{8})$/i.exec(value.trim());
   if (!match) return null;
   const body = match[1]!;
   const expanded =
-    body.length === 3
+    body.length <= 4
       ? body
+          .slice(0, 3)
           .split("")
           .map((char) => `${char}${char}`)
           .join("")
-      : body;
+      : body.slice(0, 6);
   return `#${expanded.toLowerCase()}`;
 }
 
@@ -145,6 +161,15 @@ function atLightness(hue: number | undefined, chroma: number, lightness: number)
  * closed form to solve, and a fixed step either lands visibly coarse or wastes
  * work. Every candidate is measured on the *formatted* hex for that reason —
  * the pre-clamp OKLCH value is not what the screen paints.
+ *
+ * Those same two steps also make the predicate very slightly non-monotonic in
+ * lightness: near a rounding boundary a candidate can clear the floor while one
+ * a fraction closer to the extreme misses it by a hundredth of a ratio point.
+ * That costs a hair of optimality, never the floor itself — `passing` only ever
+ * holds a lightness whose formatted hex was measured and passed (it starts at
+ * the verified extreme), and `atLightness` is deterministic, so the value
+ * returned below is that same verified hex. Keep that invariant if you touch
+ * this loop: the contrast guarantee rests on it, not on monotonicity.
  */
 function searchLightness(
   hue: number | undefined,

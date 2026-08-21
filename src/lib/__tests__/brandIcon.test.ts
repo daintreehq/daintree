@@ -1,11 +1,18 @@
 import { describe, expect, it } from "vitest";
-import { clampChroma, converter, formatHex, modeOklch, modeRgb, useMode } from "culori/fn";
+import {
+  clampChroma,
+  converter,
+  formatHex,
+  modeOklch,
+  modeRgb,
+  useMode as registerMode,
+} from "culori/fn";
 import { blendOverBackground, contrastRatio, parseRgba } from "@shared/theme";
 import type { AppColorScheme } from "@shared/theme";
 import { resolveBrandMarkInk } from "../brandIcon";
 
-useMode(modeRgb);
-useMode(modeOklch);
+registerMode(modeRgb);
+registerMode(modeOklch);
 const toOklch = converter("oklch");
 
 const FLOOR = 3;
@@ -190,11 +197,18 @@ describe("resolveBrandMarkInk", () => {
     expect(resolveBrandMarkInk("#c75", DARK)).toEqual(resolveBrandMarkInk("#cc7755", DARK));
   });
 
+  it("takes an alpha preset colour at full opacity rather than giving up on it", () => {
+    // `sanitizePreset` accepts 4- and 8-digit hex, so alpha colours really do
+    // reach here. A translucent mark has no single contrast ratio, so alpha is
+    // dropped rather than composited — but dropping the brand treatment
+    // entirely would leave the user's chosen colour with no effect at all.
+    expect(resolveBrandMarkInk("#cc785c80", DARK)).toEqual(resolveBrandMarkInk("#cc785c", DARK));
+    expect(resolveBrandMarkInk("#c75f", DARK)).toEqual(resolveBrandMarkInk("#cc7755", DARK));
+  });
+
   it("declines colours it cannot measure", () => {
-    // `contrastRatio` drops alpha rather than compositing it, so an alpha hex
-    // would be measured against a backdrop it does not actually paint.
-    expect(resolveBrandMarkInk("#cc785c80", DARK)).toBeNull();
     expect(resolveBrandMarkInk("not-a-color", DARK)).toBeNull();
+    expect(resolveBrandMarkInk("#12345", DARK)).toBeNull();
     expect(resolveBrandMarkInk(undefined, DARK)).toBeNull();
   });
 

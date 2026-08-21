@@ -58,9 +58,9 @@ export function buildMissingCliRelaunchOptions(panel: PtyPanelData): AddPanelOpt
     agentLaunchFlags: panel.agentLaunchFlags,
     agentModelId: panel.agentModelId,
     agentPresetId: panel.agentPresetId,
-    // The fallback tint when the preset is later deleted — dropping it changes
-    // the relaunched pane's chrome, so the continued launch would not be the
-    // launch that was originally asked for.
+    // The fallback brand colour when the preset is later deleted — dropping it
+    // changes the relaunched pane's chrome, so the continued launch would not be
+    // the launch that was originally asked for.
     agentPresetColor: panel.agentPresetColor,
     env: readPresetEnv(panel),
     // Since env is persisted onto the panel (#10922), dropping these would let
