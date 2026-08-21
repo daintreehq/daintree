@@ -118,6 +118,7 @@ Roughly in dependency order rather than by size — per-file line counts are del
 | `skills.ts` | Main-process short-circuit for `skills.search` / `skills.load` against the skill registry. |
 | `abusePolicy.ts` | Per-session sliding-window denial counter (401 + tier-mismatch). Trips → revoke session. |
 | `sessionDedup.ts` | Idempotency keys + canonical args hashing for the creation-tool dedup cache. |
+| `resourceOwnership.ts` | Which session created which terminal/worktree, written only from trusted post-dispatch results. Backs `terminal.closeOwned` / `worktree.deleteOwned`. See [Resource ownership](#resource-ownership-11909). |
 
 Tier tool lists live in `shared/config/helpAssistantTierAllowlists.ts` so the renderer's blast-radius preview can read them without an IPC round-trip.
 
@@ -274,6 +275,27 @@ Failures fail closed and never fall back to another window. `tools/list` surface
 **Confirm-gated tools are withheld from a bound session.** A `danger: "confirm"` dispatch is only ever approved in the target renderer's native dialog, which gives up at 28s — inside main's 30s dispatch timeout and the client's 60s request timeout. Nobody is watching a background-bound view, and no arrangement holds the call open long enough to find someone. So such tools are dropped from the session's effective surface across `tools/list`, the introspection tools and `mcp.surface`, and a direct call is refused **before dispatch** with `CONFIRMATION_REQUIRED` and `details.confirmationChannel: "workspace-bound"` (distinct from the `"unavailable"` a windowless host reports, which clears when a window opens). The exclusion is derived from the manifest's own `danger` rather than a curated id list, so a future confirm-gated addition to `MCP_EXTERNAL_TIER_TOOLS` is covered the day it lands. It is a hard ceiling: a live per-tool or native grant widens dispatch past the tier floor but not past this. The guard keys on external tier **and** bound, never on "has a renderer route" — the Daintree Assistant is pinned and carries confirm-gated tools in its own allowlist.
 
 Binding is opt-in. An unbound external session keeps the documented focus-following behaviour, `recipe.run` included.
+
+### Resource ownership (#11909)
+
+Routing identity says where a session's calls land. Ownership says which resources it may clean up, and the two stay separate concepts: a session bound to a workspace can reach every panel in it, and owns almost none of them.
+
+`SessionStore.resourceOwnership` (`resourceOwnership.ts`) records which terminals and worktrees each session created. Entries are written **only** from the dispatch envelope a completed action returned — never from `spawnedBy` (caller-supplied and purely descriptive), never from tool arguments, never from a later scan of `terminal.list`. The recording hook sits in `sessionServer`'s dispatch path immediately after the envelope resolves, and covers the four creation tools an external session can reach: `terminal.new`, `agent.launch`, `recipe.run` and `worktree.createWithRecipe`. The last two return `spawnedTerminalIds` precisely so composite child terminals are attributable — a count identifies nothing, and inferring ids from a later listing would attribute the user's panels too. A `worktree.createWithRecipe` that creates the worktree and then fails its recipe still attributes the worktree, read from the structured `PARTIAL_SUCCESS:` payload (`shared/utils/partialSuccess.ts`); the caller has to be able to clean up the mess its own call made.
+
+`agent.launch` returns a `worktreeId` and it is deliberately **not** recorded: that names the worktree the agent launched _into_, which the session did not create.
+
+Two tools consume the ledger, and neither is the general primitive:
+
+- **`terminal.closeOwned`** (`danger: "safe"`) — checks ownership, then dispatches the real `terminal.close`, so trash/recovery behaviour and the "reports the exact panel closed" contract are the shipped ones.
+- **`worktree.deleteOwned`** (`danger: "confirm"`) — checks ownership, then dispatches the real `worktree.delete`. Delegating under that literal id is what makes the D2 preview work: `resolveMcpConfirmPreviewTarget` in `useMcpBridge` matches on the action id to build the tracked/untracked file-count preview. Its `danger: "confirm"` also feeds `isWithheldFromBoundSession`, so a workspace-bound session — routed at a view nobody is watching — is refused it at discovery and at dispatch alike. `force`, `deleteBranch` and `closeTerminals` are absent from its schema and stripped from the delegated call: owning a worktree is not authority to destroy uncommitted work, delete a branch the session never created, or close every terminal in it (`closeTerminals` is a blunt boolean over all of them, so it cannot be narrowed to the owned ones).
+
+The generic `terminal.close` and `worktree.delete` stay off `MCP_EXTERNAL_TIER_TOOLS`. Both `*Owned` tools execute as main-process short-circuits because the ledger is keyed by MCP session id, which the renderer never sees.
+
+A refusal is `RESOURCE_NOT_OWNED`, and it is deliberately one code for three situations — the id never existed, it belongs to another session, or it belongs to the user, a plugin, or the in-app assistant. Distinguishing them would make the cleanup tools an enumeration oracle. The check runs before the delegated dispatch, so a refused call never reaches a renderer.
+
+**Ownership lasts exactly as long as the session, and disconnect does not clean anything up.** `clearSessionBinding` drops the ledger alongside route, context, origin and workspace, and `drain` clears it wholesale — that revokes _authority_, not the resources. Terminals and worktrees a disconnected client created stay exactly where they are: the session ending is not a decision to destroy work the user can still see, and a reconnecting client gets a new session id with an empty ledger. Cleaning up after a client that went away is the user's call, through the normal UI. Ownership is recorded for every tier rather than only `external`, because "this session created it" is a fact about the session rather than about its privileges.
+
+Re-recording an id that is already owned is ignored — first writer wins. `agent.launch` accepts a `requestedId` and `addPanel` honours it without a collision check, so without that rule a session could name another session's panel into its own ledger.
 
 ### Bearer register
 

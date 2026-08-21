@@ -392,6 +392,13 @@ export type ActionErrorCode =
   | "BINDING_STALE"
   | "PLUGIN_UNLOADED"
   | "TIER_NOT_PERMITTED"
+  /**
+   * An `*Owned` MCP cleanup tool was called with a resource the calling session
+   * did not create (#11909). Distinct from `NOT_FOUND`, which would answer a
+   * question the caller is not entitled to ask: whether the id exists at all.
+   * See `RESOURCE_NOT_OWNED_CODE` in the MCP server's `shared.ts`.
+   */
+  | "RESOURCE_NOT_OWNED"
   | "INVALID_URL";
 
 export interface ActionError {

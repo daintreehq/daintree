@@ -4,6 +4,7 @@ import type { McpTier, McpSseSession, McpHttpSession, McpSessionOrigin } from ".
 import { MCP_SSE_IDLE_TIMEOUT_MS, MCP_TIER_ELEVATION_TTL_MS } from "./shared.js";
 import type { DedupCacheEntry, DedupInFlightEntry } from "./sessionDedup.js";
 import { GrantCache, type GrantLifecycleEmitter } from "./grantCache.js";
+import { ResourceOwnershipLedger } from "./resourceOwnership.js";
 import { getSystemSleepService } from "../SystemSleepService.js";
 
 export interface SessionStoreOptions {
@@ -107,6 +108,15 @@ export class SessionStore {
    * idle-timer firing tears them down in lockstep.
    */
   readonly grantCache: GrantCache;
+  /**
+   * Which resources each session created, recorded from trusted post-dispatch
+   * results (#11909). The authority `terminal.closeOwned` and
+   * `worktree.deleteOwned` check before they delegate. Co-located with the
+   * other session-scoped state so one teardown tears it down too — see
+   * {@link clearSessionBinding}, which revokes the authority without touching
+   * the resources themselves.
+   */
+  readonly resourceOwnership = new ResourceOwnershipLedger();
 
   // Wall-clock timestamps recording when each session's idle timer was armed.
   // Used by recomputeIdleTimers() to calculate awake elapsed time across
@@ -227,11 +237,19 @@ export class SessionStore {
   /**
    * Drop every per-session routing/ownership record in one place.
    *
-   * The four maps must die together: a stale origin would let a recycled
-   * session id inherit another session's privileges, and a stale route would
-   * dispatch into a view the session no longer owns. Teardown is duplicated
-   * across ~9 call sites (four here, five inline in `httpLifecycle`), so the
-   * lockstep lives in one method rather than in nine copies that drift.
+   * The maps must die together: a stale origin would let a recycled
+   * session id inherit another session's privileges, a stale route would
+   * dispatch into a view the session no longer owns, and a stale ownership
+   * record would hand a recycled id authority over another session's
+   * terminals. Teardown is duplicated across ~9 call sites (four here, five
+   * inline in `httpLifecycle`), so the lockstep lives in one method rather
+   * than in nine copies that drift.
+   *
+   * Dropping the ownership records revokes *authority*, not the resources
+   * (#11909). A disconnected client's terminals and worktrees stay exactly
+   * where they are: the session ending is not a decision to destroy work the
+   * user can still see. `drain` clears the same ledger inline, alongside the
+   * maps it also clears without going through here.
    *
    * Callers must still revoke grants BEFORE calling this — the grant lifecycle
    * emitter resolves the pinned renderer to push `grant.revoked`, and that
@@ -242,6 +260,7 @@ export class SessionStore {
     this.sessionContextMap.delete(sessionId);
     this.sessionOriginMap.delete(sessionId);
     this.sessionWorkspaceMap.delete(sessionId);
+    this.resourceOwnership.clearSession(sessionId);
   }
 
   /**
@@ -825,6 +844,11 @@ export class SessionStore {
     this.sessionContextMap.clear();
     this.sessionOriginMap.clear();
     this.sessionWorkspaceMap.clear();
+    // Authority only — the terminals and worktrees these records named are
+    // deliberately left alone (#11909). See `clearSessionBinding`, which drops
+    // the same ledger per session; `drain` clears the session-scoped maps
+    // inline rather than routing through it, so this line is not redundant.
+    this.resourceOwnership.clear();
     this.sessionHelpIdMap.clear();
     this.figureCounters.clear();
     this.sessionConnectedAtMs.clear();

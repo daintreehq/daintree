@@ -5,6 +5,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { ActionManifestEntry, ActionId } from "../../../../shared/types/actions.js";
 import { BUILT_IN_ACTION_IDS } from "../../../../shared/config/actionIds.js";
+import { formatPartialSuccessMessage } from "../../../../shared/utils/partialSuccess.js";
 
 vi.mock("electron", () => ({
   app: {
@@ -17,6 +18,7 @@ import type { SessionServerDeps } from "../sessionServer.js";
 import type { SessionStore } from "../sessionStore.js";
 import { SessionStore as RealSessionStore } from "../sessionStore.js";
 import { GrantCache } from "../grantCache.js";
+import { ResourceOwnershipLedger } from "../resourceOwnership.js";
 import {
   buildToolError,
   buildMcpErrorPayload,
@@ -79,6 +81,10 @@ function fakeSessionStore(
     dedupInFlight: new Map(),
     dedupResultCache: new Map(),
     grantCache,
+    // A real ledger rather than a stub: it is plain in-memory Maps with no
+    // timers, and the recording hook runs on every dispatch, so a mock here
+    // would make the ownership assertions in this file vacuous (#11909).
+    resourceOwnership: new ResourceOwnershipLedger(),
     drain: vi.fn(),
     getTier: vi.fn(() => tier),
     createIdleTimer: vi.fn(() => setTimeout(() => {}, 1_000_000)),
@@ -5465,5 +5471,490 @@ describe("session-liveness gate (#11799)", () => {
     // ...but writes nothing back into the torn-down session.
     expect(store.dedupInFlight.size).toBe(0);
     expect(store.dedupResultCache.size).toBe(0);
+  });
+});
+
+// #11909 — the cleanup tools are an authorization boundary, so the cases below
+// are the boundary's edges rather than its happy path: another session's id, a
+// forged id, an id the user owns, a half-created composite, and a session whose
+// authority has been revoked.
+describe("session-scoped resource ownership (#11909)", () => {
+  const liveStores: RealSessionStore[] = [];
+
+  function makeStore(): RealSessionStore {
+    const store = new RealSessionStore(() => {});
+    liveStores.push(store);
+    return store;
+  }
+
+  afterEach(() => {
+    while (liveStores.length > 0) {
+      const store = liveStores.pop()!;
+      store.drain();
+      store.grantCache.dispose();
+    }
+    vi.restoreAllMocks();
+  });
+
+  function ownedManifest(): ActionManifestEntry[] {
+    return [
+      makeManifestEntry("terminal.new"),
+      { ...makeManifestEntry("terminal.closeOwned"), kind: "command", danger: "safe" as const },
+      {
+        ...makeManifestEntry("worktree.deleteOwned"),
+        kind: "command",
+        danger: "confirm" as const,
+      },
+      makeManifestEntry("worktree.createWithRecipe"),
+      makeManifestEntry("recipe.run"),
+      makeManifestEntry("agent.launch"),
+    ];
+  }
+
+  /** A store + deps pair whose dispatch returns whatever the test queues up. */
+  function harness(
+    sessionId: string,
+    envelopes: Record<string, unknown>,
+    overrides?: Partial<SessionServerDeps>
+  ) {
+    const store = makeStore();
+    seedLiveSession(store, sessionId, "external");
+    store.sessionOriginMap.set(sessionId, "external");
+    const dispatchAction = vi.fn().mockImplementation((actionId: string) => {
+      const envelope = envelopes[actionId];
+      if (envelope === undefined) return Promise.resolve({ result: { ok: true, result: null } });
+      return Promise.resolve(envelope);
+    });
+    const deps = fakeDeps({
+      sessionStore: store,
+      dispatchAction,
+      requestManifest: vi.fn().mockResolvedValue(ownedManifest()),
+      getCachedManifest: vi.fn(() => ownedManifest()),
+      ...overrides,
+    });
+    return { store, deps, dispatchAction, server: createSessionServer(sessionId, deps) };
+  }
+
+  function errorText(result: { content: unknown }): string {
+    return JSON.stringify(result.content);
+  }
+
+  describe("recording from trusted results", () => {
+    it("records the terminal a direct terminal.new created", async () => {
+      const { store, server } = harness("s-new", {
+        "terminal.new": {
+          result: { ok: true, result: { terminalId: "terminal-1" } },
+          dispatchedWorkspace: { kind: "project", workspaceId: "ws-a", workspacePath: "/tmp/a" },
+        },
+      });
+
+      await callTool(server, { name: "terminal.new", arguments: {} });
+
+      expect(store.resourceOwnership.owns("s-new", "terminal", "terminal-1")).toBe(true);
+      expect(store.resourceOwnership.get("s-new", "terminal", "terminal-1")?.workspaceId).toBe(
+        "ws-a"
+      );
+    });
+
+    it("records every composite child terminal and the worktree together", async () => {
+      const { store, server } = harness("s-composite", {
+        "worktree.createWithRecipe": {
+          result: {
+            ok: true,
+            result: {
+              worktreeId: "/tmp/wt",
+              worktreePath: "/tmp/wt",
+              branch: "feature/x",
+              recipeLaunched: true,
+              spawnedTerminalCount: 2,
+              spawnedTerminalIds: ["terminal-1", "terminal-2"],
+              failedTerminalCount: 0,
+            },
+          },
+        },
+      });
+
+      await callTool(server, {
+        name: "worktree.createWithRecipe",
+        arguments: { branchName: "x", recipeId: "r1" },
+      });
+
+      expect(store.resourceOwnership.owns("s-composite", "worktree", "/tmp/wt")).toBe(true);
+      expect(store.resourceOwnership.owns("s-composite", "terminal", "terminal-1")).toBe(true);
+      expect(store.resourceOwnership.owns("s-composite", "terminal", "terminal-2")).toBe(true);
+    });
+
+    it("records the worktree a partially-failed composite left behind", async () => {
+      // The caller has to be able to clean up the mess its own call made, and
+      // the failure arrives as `ok: false` because ActionService flattens the
+      // renderer throw — so the ledger reads the failure leg too.
+      const { store, server } = harness("s-partial", {
+        "worktree.createWithRecipe": {
+          result: {
+            ok: false,
+            error: {
+              code: "EXECUTION_ERROR",
+              message: formatPartialSuccessMessage("Recipe r1 failed to run: boom", {
+                worktreeId: "/tmp/wt-partial",
+                worktreePath: "/tmp/wt-partial",
+                branch: "feature/x",
+              }),
+            },
+          },
+        },
+      });
+
+      const result = await callTool(server, {
+        name: "worktree.createWithRecipe",
+        arguments: { branchName: "x", recipeId: "r1" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(store.resourceOwnership.owns("s-partial", "worktree", "/tmp/wt-partial")).toBe(true);
+    });
+
+    it("records nothing when a create fails outright", async () => {
+      const { store, server } = harness("s-failed", {
+        "terminal.new": {
+          result: { ok: false, error: { code: "EXECUTION_ERROR", message: "no worktree" } },
+        },
+      });
+
+      await callTool(server, { name: "terminal.new", arguments: {} });
+
+      expect(store.resourceOwnership.list("s-failed")).toEqual([]);
+    });
+
+    it("records nothing for a listing, so enumerated ids never become authority", async () => {
+      const { store, server } = harness("s-list", {
+        "terminal.list": {
+          result: { ok: true, result: { terminals: [{ id: "terminal-users-own" }] } },
+        },
+      });
+
+      await callTool(server, { name: "terminal.list", arguments: {} });
+
+      expect(store.resourceOwnership.owns("s-list", "terminal", "terminal-users-own")).toBe(false);
+    });
+  });
+
+  describe("terminal.closeOwned", () => {
+    it("closes a terminal the session created and delegates to the real terminal.close", async () => {
+      const { store, server, dispatchAction } = harness("s-close", {
+        "terminal.close": { result: { ok: true, result: { closedIds: ["terminal-1"] } } },
+      });
+      store.resourceOwnership.record("s-close", [{ kind: "terminal", id: "terminal-1" }]);
+
+      const result = await callTool(server, {
+        name: "terminal.closeOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      expect(result.isError).toBeUndefined();
+      // Delegation, not reimplementation: trash/recovery and the "reports the
+      // exact panel closed" contract come from the shipped action.
+      expect(dispatchAction).toHaveBeenCalledWith(
+        "terminal.close",
+        { terminalId: "terminal-1" },
+        expect.anything()
+      );
+      // Authority is released once the panel is genuinely gone.
+      expect(store.resourceOwnership.owns("s-close", "terminal", "terminal-1")).toBe(false);
+    });
+
+    it("keeps authority when the delegated close reports nothing closed", async () => {
+      const { store, server } = harness("s-noop", {
+        "terminal.close": { result: { ok: true, result: { closedIds: [] } } },
+      });
+      store.resourceOwnership.record("s-noop", [{ kind: "terminal", id: "terminal-1" }]);
+
+      await callTool(server, {
+        name: "terminal.closeOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      // A no-op close must not revoke the session's authority over a panel that
+      // is still running.
+      expect(store.resourceOwnership.owns("s-noop", "terminal", "terminal-1")).toBe(true);
+    });
+
+    it("refuses another session's terminal without dispatching", async () => {
+      const { store, server, dispatchAction } = harness("session-b", {});
+      store.resourceOwnership.record("session-a", [{ kind: "terminal", id: "terminal-a" }]);
+
+      const result = await callTool(server, {
+        name: "terminal.closeOwned",
+        arguments: { terminalId: "terminal-a" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toContain("RESOURCE_NOT_OWNED");
+      // The acceptance criterion: refused BEFORE renderer mutation.
+      expect(dispatchAction).not.toHaveBeenCalled();
+      expect(store.resourceOwnership.owns("session-a", "terminal", "terminal-a")).toBe(true);
+    });
+
+    it("refuses a forged id with the same error as an unowned one", async () => {
+      // One code, one message: distinguishing "no such panel" from "not yours"
+      // would let a caller enumerate the view it was never granted.
+      const { server, dispatchAction } = harness("s-forged", {});
+
+      const unknown = await callTool(server, {
+        name: "terminal.closeOwned",
+        arguments: { terminalId: "terminal-does-not-exist" },
+      });
+
+      expect(unknown.isError).toBe(true);
+      expect(errorText(unknown)).toContain("RESOURCE_NOT_OWNED");
+      expect(dispatchAction).not.toHaveBeenCalled();
+    });
+
+    it("refuses a worktree id passed as a terminal id", async () => {
+      // Kind is part of the key, so owning the worktree grants no authority
+      // over a panel that happens to share its id string.
+      const { store, server, dispatchAction } = harness("s-kind", {});
+      store.resourceOwnership.record("s-kind", [{ kind: "worktree", id: "/tmp/wt" }]);
+
+      const result = await callTool(server, {
+        name: "terminal.closeOwned",
+        arguments: { terminalId: "/tmp/wt" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toContain("RESOURCE_NOT_OWNED");
+      expect(dispatchAction).not.toHaveBeenCalled();
+    });
+
+    it("rejects a blank id as a validation error rather than an ownership one", async () => {
+      const { server, dispatchAction } = harness("s-blank", {});
+
+      const result = await callTool(server, {
+        name: "terminal.closeOwned",
+        arguments: { terminalId: "   " },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toContain("VALIDATION_ERROR");
+      expect(dispatchAction).not.toHaveBeenCalled();
+    });
+
+    it("loses authority when the session is revoked, without closing anything", async () => {
+      const { store, server, dispatchAction } = harness("s-revoked", {
+        "terminal.close": { result: { ok: true, result: { closedIds: ["terminal-1"] } } },
+      });
+      store.resourceOwnership.record("s-revoked", [{ kind: "terminal", id: "terminal-1" }]);
+
+      store.revokeSession("s-revoked");
+
+      // Revocation clears the authority record and dispatches nothing:
+      // disconnect is not a decision to destroy the user's terminals.
+      expect(store.resourceOwnership.list("s-revoked")).toEqual([]);
+      expect(dispatchAction).not.toHaveBeenCalled();
+
+      // And the terminal stays un-closable by the dead session — this call is
+      // refused by the liveness gate before ownership is even consulted.
+      const result = await callTool(server, {
+        name: "terminal.closeOwned",
+        arguments: { terminalId: "terminal-1" },
+      }).catch((err: unknown) => err);
+      expect(result).toBeDefined();
+      expect(dispatchAction).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("worktree.deleteOwned", () => {
+    it("delegates to worktree.delete so the real D2 preview and confirmation fire", async () => {
+      const { store, server, dispatchAction } = harness("s-del", {
+        "worktree.delete": { result: { ok: true, result: null } },
+      });
+      store.resourceOwnership.record("s-del", [{ kind: "worktree", id: "/tmp/wt" }]);
+
+      const result = await callTool(server, {
+        name: "worktree.deleteOwned",
+        arguments: { worktreeId: "/tmp/wt" },
+      });
+
+      expect(result.isError).toBeUndefined();
+      // The literal action id matters: `resolveMcpConfirmPreviewTarget` matches
+      // on "worktree.delete" to build the tracked/untracked file preview.
+      expect(dispatchAction).toHaveBeenCalledWith(
+        "worktree.delete",
+        { worktreeId: "/tmp/wt" },
+        expect.anything()
+      );
+      expect(store.resourceOwnership.owns("s-del", "worktree", "/tmp/wt")).toBe(false);
+    });
+
+    it("strips force, deleteBranch and closeTerminals from the delegated call", async () => {
+      // The narrow tool omits them from its schema, but the renderer validates
+      // against `worktree.delete`, which still accepts them — so rebuilding the
+      // args here is the actual enforcement.
+      const { store, server, dispatchAction } = harness("s-strip", {
+        "worktree.delete": { result: { ok: true, result: null } },
+      });
+      store.resourceOwnership.record("s-strip", [{ kind: "worktree", id: "/tmp/wt" }]);
+
+      await callTool(server, {
+        name: "worktree.deleteOwned",
+        arguments: {
+          worktreeId: "/tmp/wt",
+          force: true,
+          deleteBranch: true,
+          closeTerminals: true,
+        },
+      });
+
+      expect(dispatchAction).toHaveBeenCalledWith(
+        "worktree.delete",
+        { worktreeId: "/tmp/wt" },
+        expect.anything()
+      );
+    });
+
+    it("refuses a worktree the session did not create without dispatching", async () => {
+      const { server, dispatchAction } = harness("s-unowned-wt", {});
+
+      const result = await callTool(server, {
+        name: "worktree.deleteOwned",
+        arguments: { worktreeId: "/tmp/users-own-worktree" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toContain("RESOURCE_NOT_OWNED");
+      expect(dispatchAction).not.toHaveBeenCalled();
+    });
+
+    it("keeps authority when the delegated delete fails", async () => {
+      // A refused dirty-worktree delete must leave the caller able to retry
+      // after committing, rather than stranding the worktree unownable.
+      const { store, server } = harness("s-dirty", {
+        "worktree.delete": {
+          result: {
+            ok: false,
+            error: { code: "EXECUTION_ERROR", message: "worktree has uncommitted changes" },
+          },
+        },
+      });
+      store.resourceOwnership.record("s-dirty", [{ kind: "worktree", id: "/tmp/wt" }]);
+
+      const result = await callTool(server, {
+        name: "worktree.deleteOwned",
+        arguments: { worktreeId: "/tmp/wt" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(store.resourceOwnership.owns("s-dirty", "worktree", "/tmp/wt")).toBe(true);
+    });
+  });
+
+  describe("confirmation-unavailable / workspace-bound sessions", () => {
+    function boundHarness(sessionId: string) {
+      const store = makeStore();
+      seedLiveSession(store, sessionId, "external");
+      store.sessionOriginMap.set(sessionId, "external");
+      store.sessionWorkspaceMap.set(sessionId, "ws-a");
+      const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: null } });
+      const deps = fakeDeps({
+        sessionStore: store,
+        dispatchAction,
+        workspaceBinding: { kind: "project", workspaceId: "ws-a", workspacePath: "/tmp/a" },
+        requestManifest: vi.fn().mockResolvedValue(ownedManifest()),
+        getCachedManifest: vi.fn(() => ownedManifest()),
+      });
+      return { store, dispatchAction, server: createSessionServer(sessionId, deps) };
+    }
+
+    it("withholds worktree.deleteOwned from a bound session's tools/list but keeps closeOwned", async () => {
+      const { server } = boundHarness("s-bound-list");
+      await server.connect(makeMockTransport());
+
+      const names = (await listTools(server)).tools.map((t) => t.name);
+
+      // `danger: "confirm"` alone drives this — no hand-written id list.
+      expect(names).not.toContain("worktree.deleteOwned");
+      // The safe half stays reachable: it needs no dialog.
+      expect(names).toContain("terminal.closeOwned");
+    });
+
+    it("refuses a bound session's direct worktree.deleteOwned call even when it owns the worktree", async () => {
+      const { store, server, dispatchAction } = boundHarness("s-bound-call");
+      store.resourceOwnership.record("s-bound-call", [{ kind: "worktree", id: "/tmp/wt" }], "ws-a");
+
+      const result = await callTool(server, {
+        name: "worktree.deleteOwned",
+        arguments: { worktreeId: "/tmp/wt" },
+      });
+
+      // Discovery and direct-call authorization agree: owning the worktree is
+      // not enough when nobody can be shown the confirmation.
+      expect(result.isError).toBe(true);
+      expect(dispatchAction).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("workspace rebinding", () => {
+    it("refuses cleanup of a resource created in a different workspace", async () => {
+      const store = makeStore();
+      seedLiveSession(store, "s-rebound", "external");
+      store.sessionOriginMap.set("s-rebound", "external");
+      store.sessionWorkspaceMap.set("s-rebound", "ws-b");
+      // Recorded while the dispatch landed on ws-a.
+      store.resourceOwnership.record("s-rebound", [{ kind: "terminal", id: "terminal-1" }], "ws-a");
+      const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: null } });
+      const server = createSessionServer(
+        "s-rebound",
+        fakeDeps({
+          sessionStore: store,
+          dispatchAction,
+          workspaceBinding: { kind: "project", workspaceId: "ws-b", workspacePath: "/tmp/b" },
+          requestManifest: vi.fn().mockResolvedValue(ownedManifest()),
+          getCachedManifest: vi.fn(() => ownedManifest()),
+        })
+      );
+
+      const result = await callTool(server, {
+        name: "terminal.closeOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toContain("RESOURCE_NOT_OWNED");
+      expect(dispatchAction).not.toHaveBeenCalled();
+    });
+
+    it("allows cleanup when the creating dispatch could not resolve a workspace", async () => {
+      // The mismatch check is defence in depth over globally-unique ids, so it
+      // fails OPEN — an unresolved workspace must not strand the caller's own
+      // cleanup.
+      const store = makeStore();
+      seedLiveSession(store, "s-nows", "external");
+      store.sessionOriginMap.set("s-nows", "external");
+      store.sessionWorkspaceMap.set("s-nows", "ws-b");
+      store.resourceOwnership.record("s-nows", [{ kind: "terminal", id: "terminal-1" }]);
+      const dispatchAction = vi
+        .fn()
+        .mockResolvedValue({ result: { ok: true, result: { closedIds: ["terminal-1"] } } });
+      const server = createSessionServer(
+        "s-nows",
+        fakeDeps({
+          sessionStore: store,
+          dispatchAction,
+          requestManifest: vi.fn().mockResolvedValue(ownedManifest()),
+          getCachedManifest: vi.fn(() => ownedManifest()),
+        })
+      );
+
+      const result = await callTool(server, {
+        name: "terminal.closeOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(dispatchAction).toHaveBeenCalledWith(
+        "terminal.close",
+        { terminalId: "terminal-1" },
+        expect.anything()
+      );
+    });
   });
 });

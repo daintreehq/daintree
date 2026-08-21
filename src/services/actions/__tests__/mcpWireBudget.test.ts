@@ -289,7 +289,13 @@ describe("MCP wire budget — aggregate ratchets (§9)", () => {
   // annotations, `_meta.examples` and JSON framing, none of which this standard
   // governs. Reading them as the wire total would overstate what a rewrite here
   // can achieve.
-  const MAX_EXTERNAL_PAYLOAD_BYTES = 43_000;
+  // 43_000 → 45_500 for #11909, which spent bytes in two places: the two new
+  // `*Owned` cleanup tools, and a `spawnedTerminalIds` field added to
+  // `recipe.run` and `worktree.createWithRecipe`. The second is the one worth
+  // defending — those composites previously reported only a count, so the
+  // panels they created were unidentifiable, and no wording change buys that
+  // back.
+  const MAX_EXTERNAL_PAYLOAD_BYTES = 45_500;
   const MAX_COHORT_PAYLOAD_BYTES = 190_000;
 
   const wireBytes = (t: WireTool) => t.descriptionBytes + t.paramsBytes + t.outputBytes;

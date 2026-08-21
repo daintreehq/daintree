@@ -106,6 +106,15 @@ export function registerWorkflowCreationActions(
         branch: z.string(),
         recipeLaunched: z.boolean(),
         spawnedTerminalCount: z.number().int().nonnegative(),
+        // The composite's child panels, by id. Without these the terminals this
+        // call created are indistinguishable from every other panel in the
+        // view, so neither the caller nor the MCP ownership ledger can act on
+        // them (#11909).
+        spawnedTerminalIds: z
+          .array(z.string())
+          .describe(
+            "The recipe panels this call actually started, in spawn order. Use these ids to read output from or close the terminals it created."
+          ),
         failedTerminalCount: z.number().int().nonnegative(),
         assignedToSelf: z.boolean(),
         assignedUsername: z.string().nullable(),
@@ -226,6 +235,7 @@ export function registerWorkflowCreationActions(
 
         let recipeLaunched = false;
         let spawnedTerminalCount = 0;
+        let spawnedTerminalIds: string[] = [];
         let failedTerminalCount = 0;
         if (recipeId) {
           try {
@@ -250,6 +260,7 @@ export function registerWorkflowCreationActions(
             // report success to agent callers.
             recipeLaunched = results.spawned.length > 0;
             spawnedTerminalCount = results.spawned.length;
+            spawnedTerminalIds = results.spawned.map((s) => s.terminalId);
             failedTerminalCount = results.failed.length;
             notifyRecipeSpawnFailures(results, {
               recipeName: useRecipeStore.getState().getRecipeById(recipeId)?.name,
@@ -264,6 +275,7 @@ export function registerWorkflowCreationActions(
                 branch: effectiveBranch,
                 recipeLaunched: false,
                 spawnedTerminalCount: 0,
+                spawnedTerminalIds: [],
                 failedTerminalCount: 0,
                 assignedToSelf: false,
                 assignedUsername: null,
@@ -313,6 +325,7 @@ export function registerWorkflowCreationActions(
           branch: effectiveBranch,
           recipeLaunched,
           spawnedTerminalCount,
+          spawnedTerminalIds,
           failedTerminalCount,
           assignedToSelf,
           assignedUsername,

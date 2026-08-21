@@ -305,12 +305,18 @@ describe("LLM-facing tool descriptions (#11542)", () => {
   // reasoning as the external payload budget above, applied to the two
   // payloads that exist: what a third-party client is sent, and the largest
   // set the in-app assistant can be sent.
-  const MAX_EXTERNAL_TOTAL_BYTES = 9_600;
+  // 9_600 → 10_300 for #11909's `terminal.closeOwned` and
+  // `worktree.deleteOwned`. Both descriptions carry the same load: the tool
+  // acts only on resources this session created, and anything else is refused
+  // rather than quietly no-oped. That distinction is the whole reason the tools
+  // exist, and a caller that misses it will hand them ids from `terminal.list`
+  // and read the refusals as a bug.
+  const MAX_EXTERNAL_TOTAL_BYTES = 10_300;
   // Raised from 48_000 by #11908, which put seven tools on the in-app surface
   // (a deterministic session resume, the four bookmark mutations, and the two
   // recipe-editor handoffs). Each sits under the 400 B per-description ceiling
   // in `mcpWireBudget.test.ts`; the total simply reflects seven more of them.
-  // The external half is untouched — none of the seven is externally advertised.
+  // #11909's two owned-cleanup tools land in the same cohort on top of that.
   const MAX_COHORT_TOTAL_BYTES = 50_400;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;

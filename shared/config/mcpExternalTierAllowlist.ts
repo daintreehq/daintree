@@ -86,22 +86,42 @@ export const MCP_EXTERNAL_TIER_TOOLS = [
   "terminal.sendCommand",
   "terminal.inject",
   "terminal.new",
-  // `terminal.close` is deliberately NOT here, though #11540's draft core set
-  // included it. The argument for it was that closing is recoverable, so an
-  // orchestrator that opens terminals should be able to close them. That does
-  // not survive contact with this caller class: `terminal.list` enumerates every
-  // panel in the view — the user's own shells and other agents' terminals
-  // included — and nothing binds a panel to the session that created it, so
-  // "close the ones it opened" is not an invariant we actually have. Recovery is
-  // worse: trash is purged after TRASH_TTL_MS (20s), which kills the PTY, and no
-  // restore action is on this surface. Adding it back needs session-scoped panel
-  // ownership first, not just an id argument.
+  // The generic `terminal.close` is still deliberately NOT here, and the reason
+  // it was excluded is the reason this entry exists. #11540's draft core set
+  // included it on the argument that closing is recoverable, so an orchestrator
+  // that opens terminals should be able to close them. That did not survive
+  // contact with this caller class: `terminal.list` enumerates every panel in
+  // the view — the user's own shells and other agents' terminals included — and
+  // nothing bound a panel to the session that created it, so "close the ones it
+  // opened" was not an invariant we had. Recovery is worse: trash is purged
+  // after TRASH_TTL_MS (20s), which kills the PTY, and no restore action is on
+  // this surface.
+  //
+  // #11909 supplied the missing invariant rather than relaxing the objection.
+  // The MCP server now keeps a server-authoritative ledger of which session
+  // created which panel, written only from trusted post-dispatch results, and
+  // `terminal.closeOwned` acts on nothing else. The narrow tool is on the
+  // surface; the general primitive is not, which is the whole distinction —
+  // the same name at a wider tier would have given this caller a different
+  // contract behind an identical id.
+  "terminal.closeOwned",
   "terminal.waitUntilIdle",
   "terminal.waitUntilIdleBatch",
 
   "worktree.list",
   "worktree.getCurrent",
   "worktree.createWithRecipe",
+  // The counterpart to `worktree.createWithRecipe`, and only that: it deletes a
+  // worktree this session created and refuses everything else (#11909). The
+  // generic `worktree.delete` stays cut — #11585 removed it as "D2 destructive,
+  // and not needed to drive work forward", which is still true of an arbitrary
+  // worktree and was never true of the caller's own leftovers.
+  //
+  // It keeps `danger: "confirm"`, so a human still approves the delete against
+  // a real preview of the worktree's contents, and `isWithheldFromBoundSession`
+  // withholds it entirely from a workspace-bound session whose view nobody is
+  // watching — at discovery and at dispatch, from the manifest field alone.
+  "worktree.deleteOwned",
   "worktree.setActive",
 
   // A deliberate product exception rather than a clean pass of the rule above,

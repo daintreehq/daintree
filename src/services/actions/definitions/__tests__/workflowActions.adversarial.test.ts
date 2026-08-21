@@ -484,6 +484,9 @@ describe("worktree.createWithRecipe", () => {
     expect(result.recipeLaunched).toBe(true);
     expect(result.spawnedTerminalCount).toBe(1);
     expect(result.failedTerminalCount).toBe(1);
+    // Only the child that actually started is reported — a dropped terminal
+    // has no id, and the MCP ownership ledger must not attribute one (#11909).
+    expect(result.spawnedTerminalIds).toEqual(["t-0"]);
   });
 
   it("does not notify spawn failures when all recipe terminals spawn", async () => {
@@ -498,6 +501,9 @@ describe("worktree.createWithRecipe", () => {
     expect(result.recipeLaunched).toBe(true);
     expect(result.spawnedTerminalCount).toBe(1);
     expect(result.failedTerminalCount).toBe(0);
+    // The composite reports its child panels by id, so the caller (and the MCP
+    // ownership ledger) can act on the terminals it just created (#11909).
+    expect(result.spawnedTerminalIds).toEqual(["term-recipe"]);
     // The helper itself no-ops on zero failures; the action still routes
     // results through it so the gate lives in one place.
     expect(notifySpawnFailuresMock).toHaveBeenCalledWith(

@@ -888,6 +888,11 @@ describe("McpServerService", () => {
         description: "Permanently remove a worktree",
       }),
       createManifestEntry({
+        id: "worktree.deleteOwned" as ActionId,
+        title: "Delete Owned Worktree",
+        description: "Remove a worktree this MCP session created",
+      }),
+      createManifestEntry({
         id: "terminal.sendCommand" as ActionId,
         title: "Send Terminal Command",
         description: "Run an arbitrary command in a terminal",
@@ -896,6 +901,11 @@ describe("McpServerService", () => {
         id: "terminal.close" as ActionId,
         title: "Close Terminal",
         description: "Move a terminal to trash",
+      }),
+      createManifestEntry({
+        id: "terminal.closeOwned" as ActionId,
+        title: "Close Owned Terminal",
+        description: "Move a terminal this MCP session created to trash",
       }),
       createManifestEntry({
         id: "terminal.closeAll" as ActionId,

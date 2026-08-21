@@ -141,4 +141,58 @@ export function registerWorktreeCreateActions(
       },
     })
   );
+
+  // Manifest-only, executed in the MCP main process (see the note on
+  // `terminal.closeOwned`): the ownership ledger is keyed by MCP session id,
+  // which the renderer has no access to. Main verifies ownership, then
+  // dispatches `worktree.delete` itself — so the D2 confirmation the user sees
+  // is the real one, with the real file-count preview
+  // (`resolveMcpConfirmPreviewTarget` keys off that action id), rather than a
+  // second approval path a headless caller could talk its way through (#11909).
+  //
+  // `danger: "confirm"` is load-bearing beyond the dialog: `isWithheldFromBoundSession`
+  // derives its refusal from this field alone, so a workspace-bound external
+  // session — one routed at a background view where no human is watching for a
+  // dialog — is refused this tool at discovery AND at dispatch, with no
+  // hand-written id list to keep in sync (#11789).
+  //
+  // `force`, `deleteBranch` and `closeTerminals` are deliberately absent from
+  // the schema rather than defaulted. Owning the worktree is not authority to
+  // destroy uncommitted work, to delete a branch the session never created, or
+  // to close every terminal in the worktree — `closeTerminals` is a blunt
+  // boolean over all of them, so it cannot be narrowed to the owned ones. A
+  // caller cleaning up after itself closes its own panels through
+  // `terminal.closeOwned` first, then deletes a clean worktree.
+  actions.set("worktree.deleteOwned", () =>
+    defineAction({
+      id: "worktree.deleteOwned",
+      title: "Delete Owned Worktree",
+      description:
+        "Delete a worktree this session itself created, removing its directory from disk after the user confirms. Only worktrees created by this connection can be deleted; anything else is refused. It will not force past uncommitted or untracked changes, delete the branch, or close terminals it does not own — commit or close those first.",
+      category: "worktree",
+      kind: "command",
+      danger: "confirm",
+      scope: "renderer",
+      dangerRationale:
+        "Deletes the working tree from disk. Recovery requires re-creating the worktree, so the session's own ownership record is a precondition rather than the approval.",
+      // Hidden from the palette for the same reason as `terminal.closeOwned`:
+      // there is no ownership record for a user dispatch to check, so the only
+      // outcome here would be the `run()` throw. The palette's worktree delete
+      // is `worktree.delete`, via `WorktreeDeleteDialog`.
+      palette: { mode: "hidden" },
+      argsSchema: z.object({
+        worktreeId: z
+          .string()
+          .min(1)
+          .describe(
+            "The worktree to delete, as the `worktreeId` this session received when it created the worktree."
+          ),
+      }),
+      run: async () => {
+        throw new Error(
+          "worktree.deleteOwned must be invoked through the MCP main-process path, not renderer dispatch."
+        );
+      },
+    })
+  );
 }

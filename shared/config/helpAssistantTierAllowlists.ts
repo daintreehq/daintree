@@ -109,6 +109,13 @@ export const ACTION_TIER_ADDONS = [
   "terminal.new",
   "terminal.sendCommand",
   "terminal.close",
+  // The session-scoped form of the line above (#11909). Redundant for this
+  // caller — the assistant already holds the unrestricted `terminal.close` and
+  // has a human watching — but the external tier must stay a subset of what the
+  // assistant can reach, and that invariant is asserted rather than assumed
+  // (`tierAuth.test.ts`, "authorizes nothing the in-app assistant cannot
+  // already reach"). Listing it here keeps the direction of the cut honest.
+  "terminal.closeOwned",
   "terminal.closeAll",
   "terminal.kill",
   "terminal.killAll",
@@ -192,6 +199,10 @@ export const SYSTEM_TIER_ADDONS = [
   // `HelpSessionService`) and leaves overlays a scoped grant (#11880).
   "worktree.create",
   "worktree.delete",
+  // The session-scoped form of `worktree.delete` (#11909), carried here for the
+  // same subset invariant as `terminal.closeOwned`. It sits at system rather
+  // than action because the delete it delegates to does.
+  "worktree.deleteOwned",
   "worktree.resource.teardown",
 
   "terminal.arm",

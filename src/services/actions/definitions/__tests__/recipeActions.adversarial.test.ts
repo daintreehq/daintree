@@ -218,7 +218,7 @@ describe("recipeActions adversarial", () => {
     expect(runRecipeWithResults).not.toHaveBeenCalled();
   });
 
-  it("recipe.run returns structured spawn counts on full success", async () => {
+  it("recipe.run returns the ids of the terminals it spawned, not just a count", async () => {
     const runRecipeWithResults = vi.fn().mockResolvedValue({
       spawned: [
         { index: 0, terminalId: "t-0" },
@@ -232,7 +232,15 @@ describe("recipeActions adversarial", () => {
     const run = setupActions();
     const result = await run("recipe.run", { recipeId: "r1", worktreeId: "wt-1" }, {});
 
-    expect(result).toEqual({ spawnedCount: 2, failedCount: 0, failedTerminals: [] });
+    // The ids are what makes the spawned panels actionable — an automated
+    // caller polls them, and the MCP ownership ledger attributes them to the
+    // session that ran the recipe (#11909). In spawn order.
+    expect(result).toEqual({
+      spawnedCount: 2,
+      failedCount: 0,
+      spawnedTerminalIds: ["t-0", "t-1"],
+      failedTerminals: [],
+    });
   });
 
   it("recipe.run resolves with failure details on partial spawn and notifies", async () => {
@@ -257,6 +265,9 @@ describe("recipeActions adversarial", () => {
     expect(result).toEqual({
       spawnedCount: 1,
       failedCount: 1,
+      // Only what actually started: a dropped terminal has no id to report,
+      // and reporting one would attribute a panel that never existed.
+      spawnedTerminalIds: ["t-0"],
       failedTerminals: [{ index: 1, reason: "Panel limit reached" }],
     });
     expect(notifySpawnFailuresMock).toHaveBeenCalledWith(results, {

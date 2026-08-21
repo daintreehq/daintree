@@ -1392,6 +1392,120 @@ describe("SessionStore session origin and workspace binding (#11789)", () => {
   });
 });
 
+// #11909 — the ownership ledger is per-session authority, so it must die on
+// every path that ends a session. Each teardown route gets its own case because
+// the four are separate code paths (two inline in `sessionStore`, one explicit
+// revoke, one wholesale drain that clears the session maps without routing
+// through `clearSessionBinding`), and a route that forgot the ledger would
+// leave a recycled session id holding authority over another client's panels.
+describe("SessionStore resource-ownership teardown (#11909)", () => {
+  let store: SessionStore;
+
+  beforeEach(() => {
+    setAwakeTime(0);
+    store = new SessionStore(() => {});
+  });
+
+  afterEach(() => {
+    store.grantCache.dispose();
+    vi.useRealTimers();
+  });
+
+  function ownTerminal(sessionId: string, terminalId: string): void {
+    store.resourceOwnership.record(sessionId, [{ kind: "terminal", id: terminalId }]);
+  }
+
+  it("clearSessionBinding drops the ledger alongside route, context, origin and workspace", () => {
+    store.sessionWebContentsMap.set("s", 42);
+    store.sessionOriginMap.set("s", "external");
+    ownTerminal("s", "terminal-1");
+
+    store.clearSessionBinding("s");
+
+    expect(store.resourceOwnership.list("s")).toEqual([]);
+    expect(store.resourceOwnership.owns("s", "terminal", "terminal-1")).toBe(false);
+  });
+
+  it("revokeSession drops the revoked session's ledger and leaves other sessions intact", () => {
+    store.httpSessions.set("revoked", fakeHttpSession());
+    store.sessionTierMap.set("revoked", "external");
+    ownTerminal("revoked", "terminal-revoked");
+    ownTerminal("survivor", "terminal-survivor");
+
+    expect(store.revokeSession("revoked")).toBe(true);
+
+    expect(store.resourceOwnership.list("revoked")).toEqual([]);
+    expect(store.resourceOwnership.owns("survivor", "terminal", "terminal-survivor")).toBe(true);
+  });
+
+  it("drain drops every session's ledger", () => {
+    store.httpSessions.set("a", fakeHttpSession());
+    store.sessions.set("b", fakeSseSession());
+    ownTerminal("a", "terminal-a");
+    store.resourceOwnership.record("b", [{ kind: "worktree", id: "/tmp/wt-b" }]);
+
+    store.drain();
+
+    expect(store.resourceOwnership.list("a")).toEqual([]);
+    expect(store.resourceOwnership.list("b")).toEqual([]);
+  });
+
+  it("SSE idle expiry drops the ledger", () => {
+    vi.useFakeTimers();
+    try {
+      setAwakeTime(MCP_SSE_IDLE_TIMEOUT_MS + 1);
+      const session = fakeSseSession();
+      store.sessions.set("idle", session);
+      ownTerminal("idle", "terminal-idle");
+      session.idleTimer = store.createIdleTimer("idle");
+
+      vi.advanceTimersByTime(MCP_SSE_IDLE_TIMEOUT_MS + 10);
+
+      expect(store.sessions.has("idle")).toBe(false);
+      expect(store.resourceOwnership.list("idle")).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("HTTP idle expiry drops the ledger", () => {
+    vi.useFakeTimers();
+    try {
+      setAwakeTime(MCP_SSE_IDLE_TIMEOUT_MS + 1);
+      const session = fakeHttpSession();
+      store.httpSessions.set("idle", session);
+      ownTerminal("idle", "terminal-idle");
+      session.idleTimer = store.createHttpIdleTimer("idle");
+
+      vi.advanceTimersByTime(MCP_SSE_IDLE_TIMEOUT_MS + 10);
+
+      expect(store.httpSessions.has("idle")).toBe(false);
+      expect(store.resourceOwnership.list("idle")).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("teardown revokes authority without touching the resources themselves", () => {
+    // The whole safety argument: a disconnect is not a decision to destroy the
+    // user's terminals. `SessionStore` owns no close/kill path, so the proof is
+    // that the ledger is the ONLY thing teardown reaches — the session's
+    // resources are never enumerated for disposal.
+    const cleanups: string[] = [];
+    const observed = new SessionStore((sessionId) => cleanups.push(sessionId));
+    observed.httpSessions.set("s", fakeHttpSession());
+    observed.resourceOwnership.record("s", [{ kind: "terminal", id: "terminal-1" }]);
+
+    observed.revokeSession("s");
+
+    // Only the resource-SUBSCRIPTION cleanup fires; nothing consults the
+    // ownership ledger for things to close.
+    expect(cleanups).toEqual(["s"]);
+    expect(observed.resourceOwnership.list("s")).toEqual([]);
+    observed.grantCache.dispose();
+  });
+});
+
 describe("SessionStore.hasLiveWorkspaceBinding (#11790)", () => {
   let store: SessionStore;
 
