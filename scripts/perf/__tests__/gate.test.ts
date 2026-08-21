@@ -89,7 +89,11 @@ describe("evaluateScenarioBudget — metric ceilings", () => {
     expect(pass.failedBudget).toBe(false);
   });
 
-  it("ignores metrics that have no recorded average", () => {
+  it("fails closed when a configured metric has no recorded average", () => {
+    // Reversed from the original ignore-and-pass behaviour. `averageMetrics`
+    // includes any metric reported by at least ONE sample, so an absent entry
+    // means no sample emitted it at all — a renamed or dropped metric whose
+    // ceiling has silently stopped gating, not a sparse measurement.
     const result = evaluateScenarioBudget(
       makeParams({
         budget: { p95Ms: 1000, maxMetricValues: { eventLoopLagMs: 1 } },
@@ -97,7 +101,7 @@ describe("evaluateScenarioBudget — metric ceilings", () => {
         metricAverages: {},
       })
     );
-    expect(result.failedBudget).toBe(false);
+    expect(result.failedBudget).toBe(true);
   });
 });
 
@@ -245,5 +249,105 @@ describe("evaluateScenarioBudget — thresholds are exported, not magic numbers"
     );
     expect(justOver.failedBudget).toBe(true);
     expect(exactly.failedBudget).toBe(false);
+  });
+});
+
+describe("evaluateScenarioBudget — calibrating scenarios", () => {
+  it("skips the regression gate without a baseline and says why", () => {
+    const result = evaluateScenarioBudget(
+      makeParams({
+        budget: { p95Ms: 1000, maxRegressionPct: 15, calibrating: true },
+        baselineP95: undefined,
+      })
+    );
+    expect(result.failedBudget).toBe(false);
+    expect(result.reasons).toContain("calibrating - regression gate not yet enabled");
+    // The misleading missing-baseline reason must not also be reported.
+    expect(result.reasons).not.toContain("baseline missing - regression gate skipped");
+  });
+
+  it("rejects the contradictory critical + calibrating combination", () => {
+    const result = evaluateScenarioBudget(
+      makeParams({
+        budget: { p95Ms: 1000, maxRegressionPct: 15, calibrating: true },
+        baselineP95: undefined,
+        isCritical: true,
+      })
+    );
+    expect(result.failedBudget).toBe(true);
+    expect(result.reasons.join(" ")).toContain("contradictory");
+  });
+
+  it("reports that calibration is complete once a baseline exists", () => {
+    const result = evaluateScenarioBudget(
+      makeParams({
+        budget: { p95Ms: 1000, maxRegressionPct: 15, calibrating: true },
+        baselineP95: 40,
+      })
+    );
+    expect(result.failedBudget).toBe(false);
+    expect(result.reasons.join(" ")).toContain("remove `calibrating`");
+  });
+
+  it("still enforces the absolute p95 budget and metric ceilings", () => {
+    const result = evaluateScenarioBudget(
+      makeParams({
+        budget: { p95Ms: 100, maxMetricValues: { p99KeystrokeMs: 4 }, calibrating: true },
+        p95Ms: 250,
+        metricAverages: { p99KeystrokeMs: 9 },
+      })
+    );
+    expect(result.failedBudget).toBe(true);
+    expect(result.reasons).toEqual(
+      expect.arrayContaining([
+        expect.stringContaining("p95"),
+        expect.stringContaining("p99Keystroke"),
+      ])
+    );
+  });
+
+  it("suppresses a real regression that would otherwise fail", () => {
+    const budget = { p95Ms: 1000, maxRegressionPct: 15 };
+    const regressed = makeParams({ budget, p95Ms: 100, baselineP95: 50 });
+    expect(evaluateScenarioBudget(regressed).failedBudget).toBe(true);
+    expect(
+      evaluateScenarioBudget({ ...regressed, budget: { ...budget, calibrating: true } })
+        .failedBudget
+    ).toBe(false);
+  });
+});
+
+describe("evaluateScenarioBudget — metric ceilings", () => {
+  it("fails closed when a configured metric is not emitted", () => {
+    // A renamed or dropped metric silently removes its gate otherwise, which is
+    // the same silent-rot class as a missing baseline.
+    const result = evaluateScenarioBudget(
+      makeParams({
+        budget: { maxMetricValues: { p99KeystrokeMs: 4 } },
+        metricAverages: {},
+      })
+    );
+    expect(result.failedBudget).toBe(true);
+    expect(result.reasons.join(" ")).toContain("not emitted");
+  });
+
+  it("passes when every configured metric is emitted and under its ceiling", () => {
+    const result = evaluateScenarioBudget(
+      makeParams({
+        budget: { maxMetricValues: { a: 10, b: 20 } },
+        metricAverages: { a: 9, b: 19 },
+      })
+    );
+    expect(result.failedBudget).toBe(false);
+  });
+
+  it("still fails closed for a missing metric while calibrating", () => {
+    const result = evaluateScenarioBudget(
+      makeParams({
+        budget: { maxMetricValues: { onlyMetric: 1 }, calibrating: true },
+        metricAverages: {},
+      })
+    );
+    expect(result.failedBudget).toBe(true);
   });
 });

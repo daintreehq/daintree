@@ -94,6 +94,19 @@ describe("checkBaselineCoverage", () => {
     expect(gaps).toEqual([{ scenarioId: "PERF-070" }]);
   });
 
+  it("does not flag a calibrating scenario absent from the baseline", () => {
+    // A calibrating scenario inherits maxRegressionPct from defaultBudget but
+    // has deliberately not been baselined yet, so its absence is expected.
+    const calibratingConfig: PerfBudgetConfig = {
+      ...budgetConfig,
+      scenarios: { ...budgetConfig.scenarios, "PERF-070": { calibrating: true } },
+    };
+    const gaps = checkBaselineCoverage(baseline({ "PERF-001": 1 }), calibratingConfig, [
+      scenario("PERF-070"),
+    ]);
+    expect(gaps).toEqual([]);
+  });
+
   it("does not flag a scenario present in the baseline", () => {
     const gaps = checkBaselineCoverage(baseline({ "PERF-070": 900 }), budgetConfig, [
       scenario("PERF-070"),

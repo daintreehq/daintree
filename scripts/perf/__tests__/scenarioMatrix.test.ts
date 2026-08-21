@@ -1,11 +1,27 @@
 import { describe, expect, it } from "vitest";
-import { allScenarios, assertMatrixCoverage, getScenariosForMode } from "../scenarios";
+import {
+  allScenarios,
+  assertMatrixCoverage,
+  EXPECTED_SCENARIO_IDS,
+  getScenariosForMode,
+} from "../scenarios";
 import { getConstructedReflowTerminalCount } from "../lib/reflowFixture";
 
 describe("perf scenario matrix", () => {
-  it("covers full PERF matrix", () => {
+  it("covers full PERF matrix in both directions", () => {
     expect(() => assertMatrixCoverage()).not.toThrow();
-    expect(allScenarios).toHaveLength(63);
+    // Set equality against the one declaration, rather than a copied count.
+    expect(new Set(allScenarios.map((scenario) => scenario.id))).toEqual(EXPECTED_SCENARIO_IDS);
+  });
+
+  it("assertMatrixCoverage rejects an undeclared scenario", () => {
+    const undeclared = { ...allScenarios[0]!, id: "PERF-999" };
+    allScenarios.push(undeclared);
+    try {
+      expect(() => assertMatrixCoverage()).toThrow(/PERF-999/);
+    } finally {
+      allScenarios.pop();
+    }
   });
 
   it("importing the resize/reflow scenario module constructs no terminals", () => {

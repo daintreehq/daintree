@@ -55,6 +55,18 @@ export interface PerfRunSummary {
 export interface ScenarioBudget {
   p95Ms?: number;
   maxRegressionPct?: number;
+  /**
+   * Opt this scenario out of the baseline regression gate until a baseline
+   * generated on the CI runner exists for it.
+   *
+   * `defaultBudget` supplies `maxRegressionPct`, so a new scenario inherits a
+   * regression gate it has no baseline for — which fails the whole run in
+   * `checkBaselineCoverage`. Committing a locally-generated baseline is not the
+   * fix: baselines are runner-specific. Set this instead, then remove it once
+   * `perf-update-baselines` has published a baseline containing the scenario.
+   * Absolute `p95Ms` and `maxMetricValues` budgets still apply.
+   */
+  calibrating?: boolean;
   maxMetricValues?: Record<string, number>;
   comparison?: {
     maxPValue: number;

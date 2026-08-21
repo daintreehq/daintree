@@ -37,6 +37,16 @@ Artifacts are written to `.tmp/perf-results/`:
 
 The cold recipe fanout benchmark writes its versioned, atomically updated result to `.tmp/perf-results/recipe-fanout.json` by default.
 
+## Everyday-interaction scenarios (PERF-190..196)
+
+Three families in the in-process matrix measure interactions a user hits many times a day, driving real production code rather than a simulation. Read each scenario's scope limits below before trusting a delta — PERF-196 in particular measures a parser floor, not wall-clock restore.
+
+- **File picker (PERF-190/191/192)** — the `@`-mention completion and file palette, driven through the real `FileSearchService` against synthetic git repos (~3,200 and ~12,000 files). PERF-192 is the one to watch: it drops the cached path list and times `git ls-files` plus the directory-set build — the wait between pressing `@` and the picker showing anything. That list is rebuilt whenever its 10s TTL lapses and dropped outright when a worktree is created or deleted, so a session pays this repeatedly. Because `FileSearchService` silently falls back to a filesystem walk when git fails, PERF-192 asserts a git subprocess spawned and that the results contain a file only `git ls-files` can return. PERF-190/191 measure the warm per-keystroke re-scan.
+- **Terminal search (PERF-193/194)** — find-in-scrollback via the real `@xterm/addon-search` and the app's own `buildSearchOptions`. The search bar debounces at 150ms, so the gated number is a single post-debounce search over a full scrollback, not a per-keystroke cost. The addon memoizes its buffer-to-string translation for 15s and drops it on any line feed, so a terminal still streaming output re-translates on every search where a quiet one does not — worth ~1.3x across the mixed-term sweep, reported per run as `coldToWarmRatio`. PERF-193 gates that cold path, because it is what a live agent terminal actually pays, and reports the warm one alongside. Sizes come from `shared/config/scrollback.ts`, so the benchmark tracks the real configurable range. Fidelity gap (documented in `lib/terminalSearchFixture.ts`): headless has no render service, so decorations are shimmed — the buffer walk, the capped match collection and marker lifecycle are real, the highlight painting is not.
+- **Session snapshot/reparse (PERF-195/196)** — `SerializeAddon.serialize()` across a 12-terminal fleet at maximum scrollback (the real teardown cost on every quit), and feeding those payloads back through the xterm parser. PERF-196 is a PARSER FLOOR, not wall-clock restore: production sends payloads this size (~600 KiB) through `TerminalRestoreController`, which chunks at 32 KiB with UI yields and schedules fleet restores independently, and that controller cannot run in-process. A regression in chunking, yielding or scheduling is invisible to PERF-196 and needs a Playwright benchmark. The corpus is SGR-dense because real agent output is, and colour dominates payload size.
+
+These seven budgets carry `calibrating: true`. Every scenario inherits `maxRegressionPct` from `defaultBudget`, and `checkBaselineCoverage` fails a run when a scenario has a regression gate but no baseline entry — while baselines must be generated on the CI runner and never committed from a local machine. `calibrating` suppresses only the regression gate; the absolute `p95Ms` ceiling and every `maxMetricValues` entry still apply. Once `perf-update-baselines` publishes Linux baselines containing these scenarios, **remove the `calibrating` flag** to arm the inherited regression gate — do not add a new one. `npm run perf verify-baselines` fails on any scenario still flagged after its baseline lands, so the flag cannot rot unnoticed.
+
 ## Baselines
 
 Baselines are read from `scripts/perf/config/baseline.<mode>.json`.
@@ -76,6 +86,19 @@ npm run perf launch-ab -- --warm --json ...               # steady-state, machin
 ```
 
 Prefer this over `perf cold-start` for before/after comparisons across branches: build each branch with `npm run package:local`, move each `release/mac-<arch>` bundle aside, and point `--a`/`--b` at the two executables. (`electron-builder` wipes `release/` on every package run — never leave the only copy of a comparison build there.)
+
+## Keystroke-to-paint and TUI scroll (`perf interactivity`, `perf scroll`)
+
+Two opt-in Playwright benchmarks for the interactions that historically regressed silently — a focused terminal going dead under fleet load, and full-screen TUI scrolling stalling.
+
+`npm run perf interactivity` measures keydown → paint (PERF-120/121/122) across a `cat` floor, a hermetic composer-sim, and the sim under 12 background terminals plus a saturation tier. `npm run perf scroll` measures wheel-notch → paint for mouse-reporting TUIs (PERF-125/126/127), ending in the concurrent cell where six TUIs scroll at once with a bystander keystroke-echo probe.
+
+Both rebuild the e2e bundle, run multi-minute, and gate nothing in CI — they report invariants and ratios, with absolute budgets left until a calibration soak has run. They are opt-in commands, not part of any matrix mode.
+
+```bash
+npm run perf interactivity
+npm run perf scroll
+```
 
 ## Cold recipe fanout (`perf recipe-fanout`)
 
