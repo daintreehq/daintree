@@ -85,7 +85,7 @@ describe("FileSearchService", () => {
     const result = await service.search({ cwd: dir, query: "app", limit: 10 });
 
     expect(result).toContain("src/app.ts");
-    expect(gitClientMock.revparse).toHaveBeenCalledTimes(1);
+    expect(gitClientMock.raw).toHaveBeenCalledTimes(1);
   });
 
   it("uses git file listing when repository is available", async () => {
@@ -128,7 +128,6 @@ describe("FileSearchService", () => {
 
     expect(first).toContain("src/main.ts");
     expect(second).toContain("README.md");
-    expect(gitClientMock.revparse).toHaveBeenCalledTimes(1);
     expect(gitClientMock.raw).toHaveBeenCalledTimes(1);
   });
 
