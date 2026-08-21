@@ -164,9 +164,18 @@ export async function measureWireSurface(): Promise<WireTool[]> {
     // bytes `tools/list` really carries and quietly flatter every budget below.
     let outputSchema: unknown;
     if (def.mcpOutputSchema) {
-      outputSchema = def.resultSchema
-        ? emitSchema(def.resultSchema, "output")
-        : def.rawOutputSchema;
+      const raw = def.resultSchema ? emitSchema(def.resultSchema, "output") : def.rawOutputSchema;
+      // `buildToolOutputSchema` advertises an output schema only when it is a
+      // top-level object, so anything else costs zero wire bytes. Mirrored here
+      // for the same reason the projection is: a harness that counts bytes
+      // production never sends is measuring a surface nobody receives.
+      outputSchema =
+        raw !== null &&
+        typeof raw === "object" &&
+        !Array.isArray(raw) &&
+        (raw as Record<string, unknown>)["type"] === "object"
+          ? raw
+          : undefined;
     }
 
     const propertyDescriptions: WirePropertyDescription[] = [];

@@ -734,7 +734,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.listIssues",
       title: "List Issues",
       description:
-        "List repository issues from the active forge provider, a page at a time. Use this to discover or filter issues; use the pull-request listing for PRs, and the single-issue lookup for a known number. Summary results keep responses small by dropping bodies and raw provider payloads; ask for full results only when the body is needed. Bypassing the cache spends a live round trip.",
+        "List repository issues from the active forge provider, a page at a time. Use this to discover or filter issues; use the pull-request listing for PRs, and the single-issue lookup for a known number. Search takes a provider-native query fragment, not plain text, and routes through the provider's search API rather than the list cache pagination uses. Bypassing the cache spends a live round trip.",
       category: "forge",
       kind: "query",
       danger: "safe",

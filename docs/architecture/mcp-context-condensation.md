@@ -104,6 +104,18 @@ The field-description target is a **count ratchet** (paired with a total-excess 
 
 Two allowlists carry a written reason per entry — oversized `parameters`, keyed by tool, and oversized field descriptions, keyed by `toolId :: schema path`. The second is path-scoped on purpose: exempting a whole tool would silently extend the exemption to every field added to it later. Both are checked for staleness against the ceiling they exempt, because an entry that no longer needs its exemption would otherwise go on covering the next regression.
 
+### Raising a ratchet
+
+Every budget above may fall freely. Raising one is a deliberate act, and the reason has to be one of these — anything else means the budget is doing its job and the change is what should give way:
+
+1. **The surface genuinely grew.** A new tool was added on purpose, or an existing one gained an argument it needs. The ratchet moves by roughly what that addition costs, in the same commit that adds it.
+2. **Protected content was restored.** A clause came back because it was cut in error — see [What must not be cut](#what-must-not-be-cut). Name the clause.
+3. **The measurement changed, not the surface.** The harness started counting something it should always have counted. Say what, and expect the number to jump once and then hold.
+
+What is **not** a reason: a tool that came in over budget and would fit if some unrelated prose were trimmed. That trade is the failure mode this whole standard exists to prevent — it pays for a new tool with the disambiguation clause on an old one, and the bill arrives as a routing regression nobody traces back. If a new tool does not fit, the options are to shrink _that tool_, to drop something from the tier, or to raise the ceiling on the record. Not to go hunting elsewhere.
+
+Headroom is deliberately thin — the external aggregate sits within a couple of percent of its ceiling — so this decision will come up on roughly the next tool added. It is written down here so it gets made on the merits rather than under deadline.
+
 ## Application order
 
 Fixed, so that two conforming passes cannot disagree about which rule fired first.
