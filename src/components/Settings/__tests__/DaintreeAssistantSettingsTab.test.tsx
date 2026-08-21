@@ -456,9 +456,9 @@ describe("DaintreeAssistantSettingsTab", () => {
     );
     await waitForContent(container, "Auto-approve assistant actions");
 
-    // The switch stays disabled until the persisted settings resolve, and the
-    // heading above renders before that — clicking on the heading alone would
-    // drop the event and time out downstream.
+    // The switch stays disabled until the initial settings and MCP-status loads
+    // both settle, and the heading above renders before that — clicking while
+    // it's still disabled would drop the event and time out downstream.
     const toggle = screen.getByLabelText(
       "Auto-approve Daintree Assistant actions during help sessions"
     );
@@ -1464,9 +1464,9 @@ describe("SessionLiveStatusCard (live help session)", () => {
     expect(container.textContent).not.toContain("matches the configured default");
   });
 
-  // The equality branch is the one a default assistant session lands on now
-  // that agent identity no longer forces `system` (#11907) — before the fix it
-  // was unreachable for the assistant, so only the drift copy was ever proven.
+  // The equality branch is the one a default (action-tier) assistant session
+  // lands on now that agent identity no longer forces `system` (#11907). The
+  // copy was previously unasserted — only the two drift directions were.
   it("reports a live tier equal to the configured default as a match", async () => {
     installApi(
       {
