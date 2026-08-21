@@ -165,8 +165,12 @@ function readOwnedResourceId(args: unknown, key: string): string | undefined {
   if (typeof args !== "object" || args === null || Array.isArray(args)) return undefined;
   const value = (args as Record<string, unknown>)[key];
   if (typeof value !== "string") return undefined;
-  const trimmed = value.trim();
-  return trimmed.length === 0 ? undefined : trimmed;
+  // Blankness is judged on the trimmed form, but the ORIGINAL is returned: the
+  // ledger stores ids exactly as the creating action reported them, and
+  // `agent.launch`'s `requestedId` lets a caller create one with surrounding
+  // whitespace. Handing the trimmed form to the lookup would make that
+  // resource permanently uncleanable.
+  return value.trim().length === 0 ? undefined : value;
 }
 
 /**
@@ -729,6 +733,14 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
       }
       const drafts = extractOwnedResourcesFromDispatch(actionId, envelope.result);
       if (drafts.length === 0) return;
+      // Liveness guard, mirroring the dedup completion hook below: a creation
+      // admitted before the session was revoked can land after
+      // `clearSessionBinding` already dropped the ledger. Writing then would
+      // resurrect a dead session's authority — and, worse, claim the id away
+      // from whoever legitimately records it next.
+      if (!sessionStore.sessions.has(sessionId) && !sessionStore.httpSessions.has(sessionId)) {
+        return;
+      }
       sessionStore.resourceOwnership.record(
         sessionId,
         drafts,

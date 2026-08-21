@@ -630,13 +630,14 @@ const MCP_DEDUP_ALLOWLIST_ENTRIES = [
   "workflow.startWorkOnIssue",
   "worktree.resource.provision",
   "worktree.delete",
-  // Same justification as `worktree.delete` above, and a stronger one: a
-  // successful `worktree.deleteOwned` releases the session's ownership record,
-  // so the redundant redispatch a reconnect replays would come back
-  // `RESOURCE_NOT_OWNED` — an authorization refusal for work that actually
-  // succeeded, which is exactly the error a caller would misread as a bug
-  // rather than as "already done" (#11909).
-  "worktree.deleteOwned",
+  // `worktree.deleteOwned` is deliberately NOT here, though the "replay the
+  // original success" argument for `worktree.delete` above reads like it should
+  // be. Worktree ids are paths, and create → delete → recreate with the same
+  // path is a supported workflow — the very reason `worktree.create` is absent
+  // from this list. Caching a delete would then suppress a genuine second
+  // deletion of a genuinely different worktree and report success for it. The
+  // replay it would have absorbed is only a confusing `RESOURCE_NOT_OWNED` on a
+  // redundant call, which is a worse error message but an honest one (#11909).
 
   // Forge writes worth absorbing a replay for. `createIssue`,
   // `addIssueComment`, `commentOnPR`, `approvePR` and `requestChanges` each

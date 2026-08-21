@@ -399,6 +399,18 @@ export type ActionErrorCode =
    * See `RESOURCE_NOT_OWNED_CODE` in the MCP server's `shared.ts`.
    */
   | "RESOURCE_NOT_OWNED"
+  /**
+   * `run()` threw a `PartialSuccessError`: a composite created something real
+   * — a worktree — and then failed on a later step, so the failure carries what
+   * already exists in its `PARTIAL_SUCCESS:` payload.
+   *
+   * Distinct from `EXECUTION_ERROR` because it is a provenance claim, not just
+   * a classification: only in-repo code can construct that error class, so this
+   * code is what lets the MCP ownership ledger trust the payload. An upstream
+   * forge or git failure that merely *looks* like one arrives as
+   * `EXECUTION_ERROR` and is refused (#11909).
+   */
+  | "PARTIAL_SUCCESS"
   | "INVALID_URL";
 
 export interface ActionError {

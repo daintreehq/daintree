@@ -27,6 +27,7 @@ import {
   EXECUTION_ERROR_CODE,
   SESSION_BINDING_GONE,
   SESSION_GONE,
+  CONFIRMATION_REQUIRED_CODE,
   CONFIRMATION_TIMEOUT_CODE,
   USER_REJECTED_CODE,
   MCP_DEDUP_KEY_COLLISION_CODE,
@@ -5539,6 +5540,10 @@ describe("session-scoped resource ownership (#11909)", () => {
     return JSON.stringify(result.content);
   }
 
+  function payloadOf<T>(res: { content: unknown }): T {
+    return JSON.parse((res.content as Array<{ text: string }>)[0]!.text) as T;
+  }
+
   describe("recording from trusted results", () => {
     it("records the terminal a direct terminal.new created", async () => {
       const { store, server } = harness("s-new", {
@@ -5593,7 +5598,7 @@ describe("session-scoped resource ownership (#11909)", () => {
           result: {
             ok: false,
             error: {
-              code: "EXECUTION_ERROR",
+              code: "PARTIAL_SUCCESS",
               message: formatPartialSuccessMessage("Recipe r1 failed to run: boom", {
                 worktreeId: "/tmp/wt-partial",
                 worktreePath: "/tmp/wt-partial",
@@ -5623,6 +5628,82 @@ describe("session-scoped resource ownership (#11909)", () => {
       await callTool(server, { name: "terminal.new", arguments: {} });
 
       expect(store.resourceOwnership.list("s-failed")).toEqual([]);
+    });
+
+    it("records the terminal a launched agent reports, but not its worktree", async () => {
+      const { store, server } = harness("s-agent", {
+        "agent.launch": {
+          result: {
+            ok: true,
+            result: {
+              launched: true,
+              terminalId: "terminal-agent",
+              worktreeId: "/tmp/pre-existing",
+              worktreePath: "/tmp/pre-existing",
+            },
+          },
+        },
+      });
+
+      await callTool(server, { name: "agent.launch", arguments: { agentId: "claude" } });
+
+      expect(store.resourceOwnership.owns("s-agent", "terminal", "terminal-agent")).toBe(true);
+      // The agent launched INTO that worktree; the session did not create it,
+      // so recording it would grant delete authority over someone else's tree.
+      expect(store.resourceOwnership.owns("s-agent", "worktree", "/tmp/pre-existing")).toBe(false);
+    });
+
+    it("records every terminal a recipe run started", async () => {
+      const { store, server } = harness("s-recipe", {
+        "recipe.run": {
+          result: {
+            ok: true,
+            result: {
+              spawnedCount: 2,
+              failedCount: 1,
+              spawnedTerminalIds: ["terminal-1", "terminal-2"],
+              failedTerminals: [{ index: 2, reason: "panel limit" }],
+            },
+          },
+        },
+      });
+
+      await callTool(server, { name: "recipe.run", arguments: { recipeId: "r1" } });
+
+      expect(store.resourceOwnership.owns("s-recipe", "terminal", "terminal-1")).toBe(true);
+      expect(store.resourceOwnership.owns("s-recipe", "terminal", "terminal-2")).toBe(true);
+      // The dropped terminal has no id, so nothing is attributed for it.
+      expect(store.resourceOwnership.list("s-recipe")).toHaveLength(2);
+    });
+
+    it("refuses a partial payload that did not come from a PartialSuccessError", async () => {
+      // The composite calls forge providers and git BEFORE the worktree exists,
+      // and those failures rethrow the provider's message unchanged. A provider
+      // returning a string shaped like a partial result must not mint an
+      // ownership record for a worktree nothing created — provenance is the
+      // error CODE, which only an in-repo `PartialSuccessError` earns.
+      const { store, server } = harness("s-forged-partial", {
+        "worktree.createWithRecipe": {
+          result: {
+            ok: false,
+            error: {
+              code: "EXECUTION_ERROR",
+              message: formatPartialSuccessMessage("upstream said so", {
+                worktreeId: "/tmp/victim",
+              }),
+            },
+          },
+        },
+      });
+
+      await callTool(server, {
+        name: "worktree.createWithRecipe",
+        arguments: { branchName: "x", pullRequestNumber: 1 },
+      });
+
+      expect(store.resourceOwnership.owns("s-forged-partial", "worktree", "/tmp/victim")).toBe(
+        false
+      );
     });
 
     it("records nothing for a listing, so enumerated ids never become authority", async () => {
@@ -5751,13 +5832,14 @@ describe("session-scoped resource ownership (#11909)", () => {
       expect(store.resourceOwnership.list("s-revoked")).toEqual([]);
       expect(dispatchAction).not.toHaveBeenCalled();
 
-      // And the terminal stays un-closable by the dead session — this call is
-      // refused by the liveness gate before ownership is even consulted.
-      const result = await callTool(server, {
+      // And the terminal stays un-closable by the dead session — the liveness
+      // gate refuses the call before ownership is even consulted.
+      const refused = await callTool(server, {
         name: "terminal.closeOwned",
         arguments: { terminalId: "terminal-1" },
-      }).catch((err: unknown) => err);
-      expect(result).toBeDefined();
+      });
+      expect(refused.isError).toBe(true);
+      expect(errorText(refused)).toContain(SESSION_GONE);
       expect(dispatchAction).not.toHaveBeenCalled();
     });
   });
@@ -5777,10 +5859,15 @@ describe("session-scoped resource ownership (#11909)", () => {
       expect(result.isError).toBeUndefined();
       // The literal action id matters: `resolveMcpConfirmPreviewTarget` matches
       // on "worktree.delete" to build the tracked/untracked file preview.
+      //
+      // The third argument is asserted as `false`, not `expect.anything()`:
+      // that flag is what tells the renderer the dispatch is already approved,
+      // so a lenient matcher here would pass just as happily if authorizing
+      // ownership had silently pre-confirmed the delete and skipped the dialog.
       expect(dispatchAction).toHaveBeenCalledWith(
         "worktree.delete",
         { worktreeId: "/tmp/wt" },
-        expect.anything()
+        false
       );
       expect(store.resourceOwnership.owns("s-del", "worktree", "/tmp/wt")).toBe(false);
     });
@@ -5807,8 +5894,35 @@ describe("session-scoped resource ownership (#11909)", () => {
       expect(dispatchAction).toHaveBeenCalledWith(
         "worktree.delete",
         { worktreeId: "/tmp/wt" },
-        expect.anything()
+        false
       );
+    });
+
+    it("reports CONFIRMATION_REQUIRED when no window can show the dialog", async () => {
+      // Owning the worktree is not approval. With no renderer to raise the
+      // native dialog the delegated dispatch throws, and the caller must get
+      // the machine-readable "needs a human I can't reach" answer rather than a
+      // generic execution error — and must keep its ownership for the retry.
+      const { store } = harness("s-nowindow", {});
+      store.resourceOwnership.record("s-nowindow", [{ kind: "worktree", id: "/tmp/wt" }]);
+      const deps = fakeDeps({
+        sessionStore: store,
+        dispatchAction: vi.fn().mockRejectedValue(new RendererBridgeUnavailableError()),
+        requestManifest: vi.fn().mockResolvedValue(ownedManifest()),
+        getCachedManifest: vi.fn(() => ownedManifest()),
+      });
+      const windowless = createSessionServer("s-nowindow", deps);
+
+      const result = await callTool(windowless, {
+        name: "worktree.deleteOwned",
+        arguments: { worktreeId: "/tmp/wt" },
+      });
+
+      expect(result.isError).toBe(true);
+      const text = errorText(result);
+      expect(text).toContain(CONFIRMATION_REQUIRED_CODE);
+      expect(text).toContain("unavailable");
+      expect(store.resourceOwnership.owns("s-nowindow", "worktree", "/tmp/wt")).toBe(true);
     });
 
     it("refuses a worktree the session did not create without dispatching", async () => {
@@ -5889,6 +6003,131 @@ describe("session-scoped resource ownership (#11909)", () => {
       // not enough when nobody can be shown the confirmation.
       expect(result.isError).toBe(true);
       expect(dispatchAction).not.toHaveBeenCalled();
+    });
+  });
+
+  // Acceptance criterion: `tools/list`, `actions.search`, `actions.getSchema`,
+  // `mcp.surface` and the direct `tools/call` gate must expose the SAME
+  // effective cleanup surface. They are five separate code paths, so a
+  // regression can hide in any one of them — #11582 is the precedent for a
+  // tool that was listed by one and refused by another.
+  describe("effective cleanup surface agreement", () => {
+    function surfaceDeps(sessionId: string) {
+      const store = makeStore();
+      seedLiveSession(store, sessionId, "external");
+      store.sessionOriginMap.set(sessionId, "external");
+      store.sessionWorkspaceMap.set(sessionId, "ws-a");
+      const manifest = [
+        ...ownedManifest(),
+        makeManifestEntry("mcp.surface"),
+        makeManifestEntry("actions.search"),
+        makeManifestEntry("actions.getSchema"),
+        makeManifestEntry("terminal.list"),
+      ];
+      return {
+        store,
+        deps: fakeDeps({
+          sessionStore: store,
+          workspaceBinding: { kind: "project", workspaceId: "ws-a", workspacePath: "/tmp/a" },
+          requestManifest: vi.fn().mockResolvedValue(manifest),
+          getCachedManifest: vi.fn(() => manifest),
+          dispatchAction: vi.fn((actionId: string) => {
+            // The renderer answers with the UNFILTERED registry; narrowing to
+            // the session's effective surface is main's job, and that narrowing
+            // is exactly what this suite is checking.
+            if (actionId === "actions.search") {
+              return Promise.resolve({
+                result: {
+                  ok: true as const,
+                  result: {
+                    totalMatches: manifest.length,
+                    results: manifest,
+                  },
+                },
+              });
+            }
+            if (actionId === "actions.getSchema") {
+              return Promise.resolve({
+                result: {
+                  ok: true as const,
+                  result: { ok: true, entry: makeManifestEntry("worktree.deleteOwned") },
+                },
+              });
+            }
+            return Promise.resolve({ result: { ok: true as const, result: null } });
+          }),
+        }),
+      };
+    }
+
+    it("agrees across all five surfaces for a workspace-bound external session", async () => {
+      // `terminal.closeOwned` is `danger: "safe"` and stays; `worktree.deleteOwned`
+      // is confirm-gated and no human is watching the bound view, so every
+      // surface must withhold or refuse it.
+      const { deps } = surfaceDeps("s-surface");
+      const server = createSessionServer("s-surface", deps);
+      await server.connect(makeMockTransport());
+
+      const listed = (await listTools(server)).tools.map((t) => t.name);
+      expect(listed).toContain("terminal.closeOwned");
+      expect(listed).not.toContain("worktree.deleteOwned");
+
+      const searched = payloadOf<{ results: Array<{ id: string }> }>(
+        await callTool(server, { name: "actions.search", arguments: { query: "owned" } })
+      ).results.map((r) => r.id);
+      expect(searched).toContain("terminal.closeOwned");
+      expect(searched).not.toContain("worktree.deleteOwned");
+
+      const surfaced = (
+        (await callTool(server, { name: "mcp.surface" })) as {
+          structuredContent: { tools: Array<{ id: string }> };
+        }
+      ).structuredContent.tools.map((t) => t.id);
+      expect(surfaced).toContain("terminal.closeOwned");
+      expect(surfaced).not.toContain("worktree.deleteOwned");
+
+      // `actions.getSchema` deliberately collapses a withheld id onto the same
+      // "no action found" shape an unknown id gets, rather than a distinct
+      // error that would confirm the id exists while offering no way to reach
+      // it. Agreement here means "does not hand back the schema", not "raises
+      // a different error from the other four surfaces".
+      const schema = payloadOf<{ ok: boolean; error?: { code: string }; entry?: unknown }>(
+        await callTool(server, {
+          name: "actions.getSchema",
+          arguments: { actionId: "worktree.deleteOwned" },
+        })
+      );
+      expect(schema.ok).toBe(false);
+      expect(schema.error?.code).toBe("NOT_FOUND");
+      expect(schema.entry).toBeUndefined();
+
+      const called = await callTool(server, {
+        name: "worktree.deleteOwned",
+        arguments: { worktreeId: "/tmp/wt" },
+      });
+      expect(called.isError).toBe(true);
+    });
+
+    it("keeps both tools on every surface for an unbound external session", async () => {
+      // The counterpart assertion, so the test above cannot pass by the tools
+      // being missing from the manifest entirely.
+      const store = makeStore();
+      seedLiveSession(store, "s-unbound-surface", "external");
+      store.sessionOriginMap.set("s-unbound-surface", "external");
+      const manifest = [...ownedManifest(), makeManifestEntry("mcp.surface")];
+      const server = createSessionServer(
+        "s-unbound-surface",
+        fakeDeps({
+          sessionStore: store,
+          requestManifest: vi.fn().mockResolvedValue(manifest),
+          getCachedManifest: vi.fn(() => manifest),
+        })
+      );
+      await server.connect(makeMockTransport());
+
+      const listed = (await listTools(server)).tools.map((t) => t.name);
+      expect(listed).toContain("terminal.closeOwned");
+      expect(listed).toContain("worktree.deleteOwned");
     });
   });
 

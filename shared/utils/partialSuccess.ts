@@ -4,16 +4,21 @@
  * `worktree.createWithRecipe` and `workflow.startWorkOnIssue` can create a
  * worktree and then fail on the recipe or agent launch that follows. The
  * worktree is real by then, so the failure has to carry what already exists
- * rather than reporting a clean rejection. It rides in the thrown `Error`'s
- * message because `ActionService.dispatch` flattens every renderer throw to
- * `{ ok: false, error: { code, message } }` — the message is the only field
- * that survives the trip to the MCP main process (#11909).
+ * rather than reporting a clean rejection.
  *
  * Lives in `shared/` rather than beside the action definitions because both
  * ends need it: the renderer formats it, and the MCP server's ownership ledger
- * parses it to attribute a half-created worktree to the session that asked for
- * it. A second copy of the prefix in main would be exactly the drift this
- * module exists to prevent.
+ * reads it to attribute a half-created worktree to the session that asked for
+ * it (#11909).
+ *
+ * **The marker in the message is a human-readable label, never the proof.**
+ * Provenance rides on {@link PartialSuccessError} and the
+ * `PARTIAL_SUCCESS` error code `ActionService` stamps when it recognizes that
+ * class. Anything that authorizes a mutation must key on the code: a composite
+ * calls out to forge providers and git before the worktree exists, and those
+ * failures rethrow the provider's raw message unchanged — so a provider that
+ * returned a string merely *shaped* like this payload could otherwise mint an
+ * ownership record for a worktree nothing created.
  */
 export const PARTIAL_SUCCESS_PREFIX = "PARTIAL_SUCCESS:";
 
@@ -30,14 +35,31 @@ export function formatPartialSuccessMessage(
 }
 
 /**
+ * Thrown by a composite that created something real before failing.
+ *
+ * The class is the authentication: only code in this repo can construct it,
+ * and `ActionService.dispatch` maps it to the `PARTIAL_SUCCESS` error code that
+ * downstream consumers gate on. The message keeps the legacy prefixed format so
+ * existing readers and tests are unaffected.
+ */
+export class PartialSuccessError extends Error {
+  readonly partialResult: Record<string, unknown>;
+
+  constructor(message: string, partial: Record<string, unknown>) {
+    super(formatPartialSuccessMessage(message, partial));
+    this.name = "PartialSuccessError";
+    this.partialResult = partial;
+  }
+}
+
+/**
  * Recover the structured payload from a formatted message, or `null` when the
  * message is not one of ours.
  *
- * Deliberately strict: the prefix must start the string, the remainder must
- * parse as JSON, and `partialResult` must be a plain object. A caller-supplied
- * error message that merely *contains* the prefix must not be mistaken for a
- * trusted creation record — this parser feeds an authorization ledger, so
- * anything short of the exact shape returns `null` rather than a best guess.
+ * Deliberately strict — the prefix must start the string, the remainder must
+ * parse as JSON, and `partialResult` must be a plain object — but strictness is
+ * not provenance. Callers that authorize on the result must first establish
+ * that the failure really came from a {@link PartialSuccessError}.
  */
 export function parsePartialSuccessMessage(message: unknown): PartialSuccessPayload | null {
   if (typeof message !== "string") return null;

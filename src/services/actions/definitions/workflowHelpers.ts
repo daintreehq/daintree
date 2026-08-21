@@ -1,7 +1,7 @@
-import { formatPartialSuccessMessage } from "@shared/utils/partialSuccess";
+import { PartialSuccessError } from "@shared/utils/partialSuccess";
 
 export function partialSuccessError(message: string, partial: Record<string, unknown>): Error {
-  return new Error(formatPartialSuccessMessage(message, partial));
+  return new PartialSuccessError(message, partial);
 }
 
 export function slugifyForBranch(title: string): string {

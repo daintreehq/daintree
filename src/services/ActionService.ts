@@ -16,6 +16,7 @@ import { keybindingService } from "./KeybindingService";
 import { shortcutHintStore } from "../store/shortcutHintStore";
 import { useUIStore } from "@/store/uiStore";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { PartialSuccessError } from "@shared/utils/partialSuccess";
 import {
   WORKBENCH_TIER_TOOLS,
   ACTION_TIER_ADDONS,
@@ -644,7 +645,14 @@ export class ActionService {
       return { ok: true, result: (validatedResult ? validatedResult.data : result) as Result };
     } catch (err) {
       const error: ActionError = {
-        code: "EXECUTION_ERROR",
+        // `PartialSuccessError` is the one throw that carries a provenance
+        // claim: a composite created a real worktree before failing, and the
+        // MCP ownership ledger attributes it on the strength of this code
+        // rather than the message shape (#11909). An `instanceof` check is
+        // sound here because the throw and this catch are the same realm; an
+        // upstream forge/git rejection reaching this line is an ordinary
+        // `EXECUTION_ERROR` however its message happens to read.
+        code: err instanceof PartialSuccessError ? "PARTIAL_SUCCESS" : "EXECUTION_ERROR",
         message: formatErrorMessage(err, `Action "${actionId}" failed`),
         details: err,
       };

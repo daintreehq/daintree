@@ -34,25 +34,42 @@ describe("ResourceOwnershipLedger", () => {
     expect(ledger.list("never-handshook")).toEqual([]);
   });
 
-  it("refuses to transfer ownership when a second session claims the same id", () => {
+  it("moves the record to the newest creator when an id is reused", () => {
     const ledger = new ResourceOwnershipLedger();
     ledger.record("session-a", [{ kind: "terminal", id: "terminal-1" }]);
 
-    // `agent.launch` takes a `requestedId` and `addPanel` honours it without a
-    // collision check, so this is a reachable claim — not a hypothetical.
-    const added = ledger.record("session-b", [{ kind: "terminal", id: "terminal-1" }]);
+    // Ids are reusable — `agent.launch` takes a `requestedId` that `addPanel`
+    // honours without a collision check, and a reused id names a REPLACEMENT
+    // panel. Keeping A's record would let A close B's live panel; moving it
+    // keeps authority pointing at what actually exists.
+    ledger.record("session-b", [{ kind: "terminal", id: "terminal-1" }]);
 
-    expect(added).toEqual([]);
-    expect(ledger.owns("session-b", "terminal", "terminal-1")).toBe(false);
-    expect(ledger.owns("session-a", "terminal", "terminal-1")).toBe(true);
+    expect(ledger.owns("session-b", "terminal", "terminal-1")).toBe(true);
+    expect(ledger.owns("session-a", "terminal", "terminal-1")).toBe(false);
+    // The displaced session is not left holding an empty husk of a record.
+    expect(ledger.list("session-a")).toEqual([]);
   });
 
-  it("keeps the original workspace stamp when the same session re-records an id", () => {
+  it("leaves a displaced session's other resources alone", () => {
+    const ledger = new ResourceOwnershipLedger();
+    ledger.record("session-a", [
+      { kind: "terminal", id: "terminal-1" },
+      { kind: "terminal", id: "terminal-keep" },
+    ]);
+
+    ledger.record("session-b", [{ kind: "terminal", id: "terminal-1" }]);
+
+    expect(ledger.owns("session-a", "terminal", "terminal-keep")).toBe(true);
+    expect(ledger.list("session-a")).toHaveLength(1);
+  });
+
+  it("re-stamps the workspace when the same session re-records an id", () => {
     const ledger = new ResourceOwnershipLedger();
     ledger.record("s", [{ kind: "terminal", id: "terminal-1" }], "ws-a");
     ledger.record("s", [{ kind: "terminal", id: "terminal-1" }], "ws-b");
 
-    expect(ledger.get("s", "terminal", "terminal-1")?.workspaceId).toBe("ws-a");
+    // The later creation is the live one, so its workspace is the true one.
+    expect(ledger.get("s", "terminal", "terminal-1")?.workspaceId).toBe("ws-b");
   });
 
   it("stamps the dispatched workspace when one was resolved and omits it otherwise", () => {
@@ -204,51 +221,78 @@ describe("extractOwnedResources", () => {
 });
 
 describe("extractOwnedResourcesFromFailure", () => {
-  const partialMessage = formatPartialSuccessMessage("Recipe r1 failed to run: boom", {
-    worktreeId: "/tmp/wt",
-    worktreePath: "/tmp/wt",
-    branch: "feature/x",
-    recipeLaunched: false,
-    spawnedTerminalCount: 0,
-    spawnedTerminalIds: [],
-    failedTerminalCount: 0,
-  });
+  const partialError = {
+    // The code is the provenance claim `ActionService` stamps for a thrown
+    // `PartialSuccessError`; the message is only the human-readable half.
+    code: "PARTIAL_SUCCESS",
+    message: formatPartialSuccessMessage("Recipe r1 failed to run: boom", {
+      worktreeId: "/tmp/wt",
+      worktreePath: "/tmp/wt",
+      branch: "feature/x",
+      recipeLaunched: false,
+      spawnedTerminalCount: 0,
+      spawnedTerminalIds: [],
+      failedTerminalCount: 0,
+    }),
+  };
 
   it("attributes the worktree a half-failed composite already created", () => {
-    expect(extractOwnedResourcesFromFailure("worktree.createWithRecipe", partialMessage)).toEqual([
+    expect(extractOwnedResourcesFromFailure("worktree.createWithRecipe", partialError)).toEqual([
       { kind: "worktree", id: "/tmp/wt" },
     ]);
   });
 
   it("attributes nothing when the composite failed before creating anything", () => {
     expect(
-      extractOwnedResourcesFromFailure(
-        "worktree.createWithRecipe",
-        "Failed to create worktree: no worktreeId returned from backend"
-      )
+      extractOwnedResourcesFromFailure("worktree.createWithRecipe", {
+        code: "EXECUTION_ERROR",
+        message: "Failed to create worktree: no worktreeId returned from backend",
+      })
+    ).toEqual([]);
+  });
+
+  it("refuses a correctly-shaped payload that lacks the provenance code", () => {
+    // The composite calls forge providers and git BEFORE the worktree exists,
+    // and `forgeAuditService` rethrows a provider's error unchanged. A provider
+    // returning this exact string must not mint an ownership record, so the
+    // message shape alone is never enough.
+    expect(
+      extractOwnedResourcesFromFailure("worktree.createWithRecipe", {
+        code: "EXECUTION_ERROR",
+        message: partialError.message,
+      })
+    ).toEqual([]);
+    expect(
+      extractOwnedResourcesFromFailure("worktree.createWithRecipe", {
+        message: partialError.message,
+      })
     ).toEqual([]);
   });
 
   it("refuses a partial payload smuggled through another action's error message", () => {
     // The prefix is only trusted on the composites that actually emit it, so a
     // failure message a caller can influence elsewhere cannot mint ownership.
-    expect(extractOwnedResourcesFromFailure("terminal.new", partialMessage)).toEqual([]);
-    expect(extractOwnedResourcesFromFailure("recipe.run", partialMessage)).toEqual([]);
+    expect(extractOwnedResourcesFromFailure("terminal.new", partialError)).toEqual([]);
+    expect(extractOwnedResourcesFromFailure("recipe.run", partialError)).toEqual([]);
   });
 
-  it("refuses malformed or embedded partial payloads", () => {
+  it("refuses malformed or embedded partial payloads even with the right code", () => {
+    const withCode = (message: string) => ({ code: "PARTIAL_SUCCESS", message });
     expect(
-      extractOwnedResourcesFromFailure("worktree.createWithRecipe", "PARTIAL_SUCCESS: {not json")
+      extractOwnedResourcesFromFailure(
+        "worktree.createWithRecipe",
+        withCode("PARTIAL_SUCCESS: {not json")
+      )
     ).toEqual([]);
     expect(
-      extractOwnedResourcesFromFailure("worktree.createWithRecipe", "PARTIAL_SUCCESS: []")
+      extractOwnedResourcesFromFailure("worktree.createWithRecipe", withCode("PARTIAL_SUCCESS: []"))
     ).toEqual([]);
     // Must START with the prefix: a message that merely quotes it is a report
     // about a partial success, not one.
     expect(
       extractOwnedResourcesFromFailure(
         "worktree.createWithRecipe",
-        `the run said PARTIAL_SUCCESS: {"partialResult":{"worktreeId":"/tmp/forged"}}`
+        withCode(`the run said PARTIAL_SUCCESS: {"partialResult":{"worktreeId":"/tmp/forged"}}`)
       )
     ).toEqual([]);
   });
@@ -272,7 +316,7 @@ describe("extractOwnedResourcesFromDispatch", () => {
       extractOwnedResourcesFromDispatch("worktree.createWithRecipe", {
         ok: false,
         error: {
-          code: "EXECUTION_ERROR",
+          code: "PARTIAL_SUCCESS",
           message: formatPartialSuccessMessage("recipe blew up", { worktreeId: "/tmp/wt" }),
         },
       })
@@ -290,19 +334,27 @@ describe("extractOwnedResourcesFromDispatch", () => {
 });
 
 describe("ownership recording coverage", () => {
-  it("covers every creation tool an external session can reach", () => {
-    // The gap this issue closes is a caller that can create but not clean up.
-    // Any future creation tool added to the external surface without an
-    // extractor reopens it silently, so the set is pinned here.
-    const externalCreationTools = [
-      "terminal.new",
-      "agent.launch",
-      "recipe.run",
-      "worktree.createWithRecipe",
-    ];
-    for (const id of externalCreationTools) {
+  // A manually maintained contract, not a derived one: nothing in the registry
+  // marks an action as "creates a resource", so this list is the record of that
+  // judgement. Exact set equality rather than a subset check, so REMOVING an
+  // extractor fails here too — and so the failure message names the tool.
+  const EXPECTED_RECORDING_TOOLS = [
+    "terminal.new",
+    "agent.launch",
+    "recipe.run",
+    "worktree.createWithRecipe",
+  ];
+
+  it("has an extractor for exactly the creation tools we decided to attribute", () => {
+    expect([...OWNERSHIP_RECORDING_TOOLS].sort()).toEqual([...EXPECTED_RECORDING_TOOLS].sort());
+  });
+
+  it("keeps every attributed tool reachable by an external session", () => {
+    // The gap this closes is a caller that can create but not clean up, so an
+    // attributed tool that left the external surface would mean the ledger is
+    // recording for a caller class that can no longer use it.
+    for (const id of EXPECTED_RECORDING_TOOLS) {
       expect(MCP_EXTERNAL_TIER_TOOLS as readonly string[]).toContain(id);
-      expect(OWNERSHIP_RECORDING_TOOLS).toContain(id);
     }
   });
 });
