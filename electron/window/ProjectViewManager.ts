@@ -1040,6 +1040,13 @@ export class ProjectViewManager {
   // derives terminal sizes from these bounds instead of from layout.
   private notifyBackgroundResize(): void {
     if (this.disposed || this.win.isDestroyed()) return;
+    // A minimized window's content bounds are platform-dependent and not a
+    // layout the renderer can scale against. Forwarding them shrinks every
+    // cached pane's geometry proportionally, and a pane that lands on the column
+    // floor re-wraps committed scrollback into a strip no later reflow undoes
+    // (#11900). Skipping costs nothing: restoring fires `resize` again, and a
+    // switch back to the view resets the scaling basis from live layout anyway.
+    if (this.win.isMinimized()) return;
     const { width, height } = this.win.getContentBounds();
     for (const [projectId, entry] of this.views) {
       if (projectId === this.activeProjectId) continue;

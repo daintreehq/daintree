@@ -23,14 +23,22 @@ const SETTLED_RESIZE_DELAY_MS = 500;
  * committed scrollback to two columns on the way; reflow cannot undo it when
  * real layout returns, so the history stays a vertical strip until it scrolls
  * away (#11900). `applyBackgroundWindowResize` produces exactly such a box by
- * scaling every pane's origin against a transient near-zero content bound
- * during a minimize or a view detach.
+ * scaling every pane's origin against the window content bounds Main forwards
+ * on a resize, maximize or full-screen transition — one implausible bound
+ * shrinks every cached pane at once.
  *
  * The value is the floor `fit`/`reconcileGeometryFresh` already applied to
  * measured rects — this makes the pixel entry points agree rather than
- * introducing a second policy.
+ * introducing a second policy. It bounds the box, not the grid the box becomes;
+ * the column floor in `resizeGridFromCachedCellMetrics` covers that.
  */
-const MIN_VIABLE_RESIZE_PX = 50;
+export const MIN_VIABLE_RESIZE_PX = 50;
+
+/**
+ * FitAddon's own column floor, which `colsForWidth` reproduces. A width that
+ * divides to exactly this produced no measurement — the floor absorbed it.
+ */
+const FIT_MIN_COLS = 2;
 
 /**
  * Whether a pixel box is worth deriving a grid from. Finiteness is checked
@@ -238,7 +246,7 @@ function toFitPx(px: number): number {
  */
 function colsForWidth(terminal: Terminal, widthPx: number, cellWidth: number): number {
   const availableWidth = toFitPx(widthPx) - getEffectiveScrollbarWidth(terminal.options);
-  return Math.max(2, normalizeTerminalGridDimension(availableWidth / cellWidth));
+  return Math.max(FIT_MIN_COLS, normalizeTerminalGridDimension(availableWidth / cellWidth));
 }
 
 /**
@@ -730,6 +738,22 @@ export class TerminalResizeController {
     }
     const cols = colsForWidth(managed.terminal, width, cellDims.width);
     const rows = rowsForHeight(height, cellDims.height);
+    // The pixel floor is necessary but not sufficient. It is a fixed count of
+    // pixels, while the grid those pixels become also depends on the gutter and
+    // the cell: at the largest supported font a box sitting exactly on that
+    // floor still divides to FIT_MIN_COLS. Landing on the column floor means the
+    // arithmetic bottomed out rather than measured a pane, and re-wrapping
+    // committed scrollback that narrow is the damage #11900 is about — columns
+    // are what reflow rewraps, so this is checked on cols alone.
+    //
+    // Only these cached-metric paths take it. They have no live layout to sanity
+    // check against, and nothing is lost by declining: both grids stay where
+    // they are, and the reveal-time `reconcileGeometryFresh` sizes the pane from
+    // real bounds. A visible pane keeps its floor grid, which is the honest
+    // answer when the container really is that narrow.
+    if (cols <= FIT_MIN_COLS) {
+      return null;
+    }
     // Convergence is a claim about the grid xterm actually holds, never about
     // the target cache. `latestCols`/`latestRows` are written AHEAD of the
     // commit — by `applyResize`'s settled branch, by `sendPtyResize`, and by the

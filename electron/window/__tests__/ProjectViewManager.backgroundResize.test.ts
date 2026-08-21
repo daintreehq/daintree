@@ -135,6 +135,7 @@ import { CHANNELS } from "../../ipc/channels.js";
 function createMockWindow() {
   return {
     isDestroyed: vi.fn(() => false),
+    isMinimized: vi.fn(() => false),
     on: vi.fn(),
     removeListener: vi.fn(),
     getContentBounds: vi.fn(() => ({ x: 0, y: 0, width: 800, height: 600 })),
@@ -192,6 +193,30 @@ describe("ProjectViewManager — background resize forwarding", () => {
     expect(backgroundResizeSends(initialWc)).toHaveLength(0);
 
     vi.advanceTimersByTime(300);
+    const sends = backgroundResizeSends(initialWc);
+    expect(sends).toHaveLength(1);
+    expect(sends[0][1]).toEqual({ width: 1440, height: 900 });
+  });
+
+  it("forwards nothing while the window is minimized", async () => {
+    // A minimized window's content bounds are not a layout to scale against.
+    // Forwarding them shrinks every cached pane proportionally, and a pane that
+    // bottoms out on the column floor re-wraps its committed scrollback into a
+    // strip no later reflow undoes (#11900).
+    await manager.switchTo("proj-b", "/path/b");
+    win.isMinimized.mockReturnValue(true);
+    win.getContentBounds.mockReturnValue({ x: 0, y: 0, width: 63, height: 59 });
+
+    fireResize();
+    vi.advanceTimersByTime(300);
+    expect(backgroundResizeSends(initialWc)).toHaveLength(0);
+
+    // Restoring re-arms the ordinary path, so nothing is permanently lost.
+    win.isMinimized.mockReturnValue(false);
+    win.getContentBounds.mockReturnValue({ x: 0, y: 0, width: 1440, height: 900 });
+    fireResize();
+    vi.advanceTimersByTime(300);
+
     const sends = backgroundResizeSends(initialWc);
     expect(sends).toHaveLength(1);
     expect(sends[0][1]).toEqual({ width: 1440, height: 900 });

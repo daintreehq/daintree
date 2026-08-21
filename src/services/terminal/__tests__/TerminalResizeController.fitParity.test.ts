@@ -28,7 +28,7 @@ import {
   __resetSidebarLayoutTransitionLockForTests,
   unlockSidebarHydration,
 } from "@/lib/layoutTransitionLock";
-import { getXtermOptions } from "@/config/xtermConfig";
+import { getEffectiveScrollbarWidth, getXtermOptions } from "@/config/xtermConfig";
 import type { ManagedTerminal } from "../types";
 
 /**
@@ -474,36 +474,34 @@ describe("TerminalResizeController ↔ FitAddon column parity (#11095)", () => {
     const { managed, fitAddon } = buildPane(narrow, { scrollbar: { width: 60 } });
     const controller = makeController(managed);
 
+    // Witness that the fixture is genuinely in the flooring regime: the gutter
+    // alone exceeds the container, so available width is negative and only the
+    // floor can produce a column count. Without this the equality below would
+    // still hold on a fixture that quietly stopped reaching the floor.
+    expect(getEffectiveScrollbarWidth(managed.terminal.options)).toBeGreaterThan(narrow.width);
+
     const proposal = fitAddon.proposeDimensions();
     const applied = controller.resize("t1", narrow.width, narrow.height);
 
     // Negative available width must not produce a negative or zero column count
-    // on either side — both floor at 2.
+    // on either side.
     expect(applied).toEqual({ cols: proposal!.cols, rows: proposal!.rows });
-    expect(applied!.cols).toBeGreaterThanOrEqual(2);
   });
 
   it("clamps to FitAddon's floor when the container is shorter than one cell", () => {
     const short = { width: 665, height: 50 };
-    const { managed, fitAddon } = buildPane(short, {}, { width: 9, height: 60 });
+    const cell = { width: 9, height: 60 };
+    const { managed, fitAddon } = buildPane(short, {}, cell);
     const controller = makeController(managed);
+
+    // Same witness on the row axis: one cell is taller than the whole container,
+    // so the unclamped quotient is below one and the floor is what answers.
+    expect(cell.height).toBeGreaterThan(short.height);
 
     const proposal = fitAddon.proposeDimensions();
     const applied = controller.resize("t1", short.width, short.height);
 
     expect(applied).toEqual({ cols: proposal!.cols, rows: proposal!.rows });
-    expect(applied!.rows).toBeGreaterThanOrEqual(1);
-  });
-
-  it("refuses a box too small to be layout instead of flooring it to a strip", () => {
-    // The #11900 ingress: a transient near-zero content bound scaled down every
-    // cached pane's origin, and 2x1 is a grid the controller used to accept.
-    const { managed } = buildPane();
-    const controller = makeController(managed);
-
-    expect(controller.resize("t1", 5, 5)).toBeNull();
-    expect(managed.latestCols).toBe(80); // untouched seed value
-    expect(resizeMock).not.toHaveBeenCalled();
   });
 
   it("rejects a non-finite box instead of caching a garbage grid", () => {
