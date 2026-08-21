@@ -574,7 +574,7 @@ export function registerFleetActions(actions: ActionRegistry): void {
     palette: { mode: "hidden" },
     title: "Fleet: Get run status",
     description:
-      "Read a snapshot of the in-app fleet broadcast the user is currently running, including per-terminal delivery and liveness. This only observes — it dispatches nothing, so driving a fan-out means sending to each terminal yourself and watching them with a status snapshot or batched wait. Agent state here is a passive heuristic and any parsed check result is not a process exit code, so confirm both before acting on them.",
+      "Read a snapshot of the in-app fleet broadcast the user is currently running, including per-terminal delivery and liveness. This only observes and dispatches nothing, so drive a fan-out by sending to each terminal yourself and watching with a status snapshot or batched wait. Agent state here is a passive heuristic and a parsed check result is not an exit code; confirm both before acting.",
     category: "terminal",
     kind: "query",
     danger: "safe",

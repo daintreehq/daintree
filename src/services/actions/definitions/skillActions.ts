@@ -17,7 +17,7 @@ export function registerSkillActions(actions: ActionRegistry, _callbacks: Action
       id: "skills.search",
       title: "Search skills",
       description:
-        "Find plugin-contributed skills: reusable written instructions and workflows, such as a review rubric or a test-driven-development procedure, that plugins ship for an agent to follow. This returns names and summaries only; load a skill by id to read its actual instructions. Omitting a query lists available skills, but only up to the capped result limit, and the result never says whether more were left out.",
+        "Find plugin-contributed skills: reusable written instructions and workflows, such as a review rubric or a test-driven-development procedure, that plugins ship for an agent to follow. This returns names and summaries only, so load a skill by id to read its instructions. Omitting a query lists available skills, but only to the capped limit, and the result never says whether more were left out.",
       category: "agent",
       kind: "query",
       danger: "safe",

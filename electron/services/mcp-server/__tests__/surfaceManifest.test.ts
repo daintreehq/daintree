@@ -398,12 +398,34 @@ describe("hash", () => {
     expect(hashOf(withEnum(["a", "b"]))).not.toBe(hashOf(withEnum(["b", "a"])));
   });
 
+  it("moves when a value bound is tightened", () => {
+    // The case the frozen fixture below cannot see, because it carries no bound
+    // at all. `maximum: 100` -> `maximum: 50` starts rejecting calls that used
+    // to succeed, so it is exactly the incompatibility this digest promises to
+    // report — and it is invisible in the ADVERTISED schema, which projects the
+    // value-range keywords away for the model. This is what pins the preimage to
+    // `entry.inputSchema` rather than to `buildToolInputSchema(entry)`.
+    const withMax = (maximum: number): ActionManifestEntry[] => [
+      entry({
+        id: "actions.list",
+        inputSchema: { type: "object", properties: { limit: { type: "number", maximum } } },
+      }),
+    ];
+
+    expect(hashOf(withMax(100))).not.toBe(hashOf(withMax(50)));
+  });
+
   it("pins the published digest for a frozen surface", () => {
     // The hash is a client-facing contract: a refactor that changed every
     // digest would keep every relative assertion above green while silently
     // breaking every client that stored one. This fixture is deliberately
     // hand-frozen — update it only alongside a MCP_SURFACE_MANIFEST_VERSION
     // bump and a note in the PR, never to make a failing run pass.
+    //
+    // Last moved for v2, which re-pointed the preimage at the unprojected
+    // `entry.inputSchema` (see MCP_SURFACE_MANIFEST_VERSION). That dropped the
+    // `additionalProperties: false` the advertised view injects, so every v1
+    // digest is stale by construction.
     const frozen: ActionManifestEntry[] = [
       entry({
         id: "actions.list",
@@ -419,7 +441,7 @@ describe("hash", () => {
     ];
 
     expect(buildSurfaceManifest(frozen, "action", APP_VERSION).hash).toBe(
-      "00c81d0089fa582bd988cf8fa8280cd703b69b523846f190b5fce5cf2340055b"
+      "e19447a203b1badebb082cd110c51768030ab6f4057afc804b9ba746a679efe4"
     );
   });
 

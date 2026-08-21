@@ -48,7 +48,7 @@ export function registerWorktreeCreateActions(
       id: "worktree.create",
       title: "Create Worktree",
       description:
-        "Create a git worktree with its branch, without launching terminals. Prefer the recipe-backed creation path when the worktree should also track a pull request or start a recipe's terminals. It writes to disk, may branch from a remote base or reuse an existing branch, and can provision a configured resource. Creation anchors on the repository root, not the active worktree, which is usually a linked one; setup can still fail after the worktree exists.",
+        "Create a git worktree with its branch, without launching terminals. Prefer the recipe-backed path when it should also track a pull request or start a recipe's terminals. It writes to disk, may branch from a remote base or reuse a branch, and can provision a configured resource. Creation anchors on the repository root, not the active worktree; setup can still fail after the worktree exists.",
       category: "worktree",
       kind: "command",
       danger: "safe",

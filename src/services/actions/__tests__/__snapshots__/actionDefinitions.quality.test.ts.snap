@@ -61,7 +61,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "introspection",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Enumerate the available actions as lightweight entries, filtered by domain or substring and returned a page at a time. Use ranked search instead when looking for a capability by intent; use this when the goal is to walk a domain systematically. Entries omit argument and result schemas to stay small — fetch one action's schema before dispatching it. Ordering is stable, so paging cannot skip or repeat entries.",
+    "description": "Enumerate the available actions as lightweight entries, filtered by domain or substring and returned a page at a time. Use ranked search instead when looking for a capability by intent; use this when walking a domain systematically. Entries omit argument and result schemas to stay small, so fetch one action's schema before dispatching. Ordering is stable, so paging cannot skip or repeat entries.",
     "examples": undefined,
     "id": "actions.list",
     "keywords": undefined,
@@ -85,7 +85,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "introspection",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Find actions by describing what you want to do, ranked by how well each matches. This is the discovery path: start here, then fetch the chosen action's schema before dispatching it. Use the plain listing instead when walking a domain systematically rather than searching by intent. Results omit argument and result schemas to stay small, and matching nothing returns an empty list rather than failing.",
+    "description": "Find actions by describing what you want to do, ranked by how well each matches. This is the discovery path: start here, then fetch the chosen action's schema before dispatching it. Use the plain listing when walking a domain systematically rather than searching by intent. Results omit argument and result schemas to stay small, and matching nothing returns an empty list rather than failing.",
     "examples": [
       {
         "args": {
@@ -370,7 +370,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "agent",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Start an AI agent in a new terminal and report where it landed, so parallel launches can be told apart without re-resolving the target. Success means the panel was created and its process is starting, not that the agent is ready — poll its state or a terminal status snapshot for that. A failure to launch may mean the agent's CLI is missing, in which case a setup diagnostic panel is opened instead. Launching consumes real resources, so keep concurrent launches modest.",
+    "description": "Start an AI agent in a new terminal and report where it landed, so parallel launches can be told apart without re-resolving the target. Success means the panel was created and its process is starting, not that the agent is ready; poll its state or a terminal status snapshot for that. A missing CLI opens a setup diagnostic panel instead. Keep concurrent launches modest.",
     "examples": undefined,
     "id": "agent.launch",
     "keywords": undefined,
@@ -382,7 +382,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "agent",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "List every registered agent — built-in, user-defined and plugin-contributed — from the authoritative registry, including ones that are not currently launchable. Use this before launching so an id is known to exist, and read each entry's launchability rather than assuming membership implies it. Those fields appear only once a live probe of each CLI finishes, and the result says so while that is incomplete.",
+    "description": "List every registered agent, built-in, user-defined and plugin-contributed, from the authoritative registry, including ones not currently launchable. Use this before launching so an id is known to exist, and read each entry's launchability rather than assuming membership implies it. Those fields appear only once a live probe of each CLI finishes, and the result says so while that is incomplete.",
     "examples": undefined,
     "id": "agent.listAvailable",
     "keywords": undefined,
@@ -485,7 +485,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "agent",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "List closed agent sessions that can be relaunched, read from the on-disk journal. This is a faithful record of which sessions exist, not a summary of what happened in them — it carries no transcript text. It must be scoped to a worktree or project and fails rather than listing every project when no scope can be resolved. Old sessions are pruned by the journal's retention policy, so absence does not mean a session never existed.",
+    "description": "List closed agent sessions that can be relaunched, read from the on-disk journal. This is a faithful record of which sessions exist, not a summary of what happened in them: it carries no transcript text. It must be scoped to a worktree or project and fails rather than listing every project when no scope resolves. Old sessions are pruned by retention, so absence does not prove one never existed.",
     "examples": [
       {
         "args": {
@@ -992,7 +992,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "copyTree",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Bundle a worktree's file tree and selected file contents into a context dump written to a temporary file, and return its path. Use this to hand a large codebase context to something that can read a file; inject directly into a terminal instead when the target is an agent. The bundle routinely runs to tens of megabytes and is never returned inline. Check the budget flags before trusting it as complete, and read the file promptly — it is pruned by age.",
+    "description": "Bundle a worktree's file tree and selected file contents into a context dump on disk, and return its path. Use it to hand a large codebase context to something that can read a file; inject into a terminal when the target is an agent. The bundle routinely runs to tens of megabytes and is never returned inline. Check the budget flags before trusting it, and read it promptly: it is pruned by age.",
     "examples": undefined,
     "id": "copyTree.generate",
     "keywords": [
@@ -1009,7 +1009,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "copyTree",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Bundle a worktree's context to a file and put it on the system clipboard, replacing what the user had copied. Selection can mix exact files with globs, so this assembles a curated bundle of scattered related files, their supporting code and tests, rather than the whole worktree. Agent and MCP callers must name the worktree instead of relying on whichever is active. macOS and Linux copy the file, Windows its path. Never returned inline; check the budget flags for completeness.",
+    "description": "Bundle a worktree's context to a file and onto the system clipboard, replacing what the user had copied. Selection mixes exact files with globs, so this assembles a curated bundle rather than the whole worktree. Agent and MCP callers must name the worktree, not rely on the active one. macOS and Linux copy the file, Windows its path. Never returned inline; check the budget flags for completeness.",
     "examples": undefined,
     "id": "copyTree.generateAndCopyFile",
     "keywords": undefined,
@@ -1584,7 +1584,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "terminal",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Read a snapshot of the in-app fleet broadcast the user is currently running, including per-terminal delivery and liveness. This only observes — it dispatches nothing, so driving a fan-out means sending to each terminal yourself and watching them with a status snapshot or batched wait. Agent state here is a passive heuristic and any parsed check result is not a process exit code, so confirm both before acting on them.",
+    "description": "Read a snapshot of the in-app fleet broadcast the user is currently running, including per-terminal delivery and liveness. This only observes and dispatches nothing, so drive a fan-out by sending to each terminal yourself and watching with a status snapshot or batched wait. Agent state here is a passive heuristic and a parsed check result is not an exit code; confirm both before acting.",
     "examples": undefined,
     "id": "fleet.getRunStatus",
     "keywords": undefined,
@@ -1880,7 +1880,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "forge",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "List every CI check on one pull request — each check's name, whether it is still running, how it finished, and a link to its log where the forge reports one. Reach for it once the roll-up shows trouble and the question becomes which check broke and where to read its output. A check with no conclusion reported has not passed; the roll-up stays the authority on whether a PR is green. An empty list means no checks, a null one no such PR, and a provider that cannot read checks fails instead.",
+    "description": "List every CI check on one pull request: name, run state, conclusion, and a log link where the forge reports one. Reach for it once the roll-up shows trouble. A check with no conclusion has not passed; the roll-up stays the authority on whether a PR is green. An empty list means no checks, a null one no such PR, and a provider that cannot read checks fails instead.",
     "examples": [
       {
         "args": {
@@ -1899,7 +1899,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "forge",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Fetch the roll-up CI verdict for one pull request from the active forge provider. Read the overall state for the answer: the accompanying counts cover required checks only, and a zero total also appears when the required-check list could not be read in full, so it is never evidence that nothing gates the merge. Values are provider-cached and can lag by around a minute, so poll for a settled verdict rather than treating a single success as final.",
+    "description": "Fetch the roll-up CI verdict for one pull request from the active forge provider. Read the overall state for the answer: the accompanying counts cover required checks only, and a zero total also appears when the required-check list could not be read in full, so it is never evidence that nothing gates the merge. Values are provider-cached and can lag by a minute, so poll for a settled verdict.",
     "examples": [
       {
         "args": {
@@ -1918,7 +1918,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "forge",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Fetch one issue by number from the active forge provider, including its body. This is the direct lookup — reach for it instead of paging the issue listing to find a number you already have. An issue that does not exist comes back empty rather than failing, so treat an empty result as absence rather than an error. It reports how many comments exist but not their text; read the comment thread for that.",
+    "description": "Fetch one issue by number from the active forge provider, including its body. This is the direct lookup: reach for it instead of paging the issue listing to find a number you already have. An issue that does not exist comes back empty rather than failing, so treat empty as absence, not an error. It reports how many comments exist but not their text; read the comment thread for that.",
     "examples": [
       {
         "args": {
@@ -1944,7 +1944,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "forge",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Fetch one pull request by number from the active forge provider, including its body, draft state and branches. This is the direct lookup — reach for it instead of paging the PR listing for a number you already have, and read it before editing or merging so the current state is known. A pull request that does not exist comes back empty rather than failing, so treat an empty result as absence rather than an error.",
+    "description": "Fetch one pull request by number from the active forge provider, including its body, draft state and branches. This is the direct lookup: reach for it instead of paging the PR listing for a number you already have, and read it before editing or merging so the current state is known. A pull request that does not exist comes back empty rather than failing, so treat empty as absence, not an error.",
     "examples": undefined,
     "id": "forge.getPR",
     "keywords": undefined,
@@ -1956,7 +1956,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "forge",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Get headline repository counts — commits, issues and pull requests — from the active forge provider. Use this for a cheap overview rather than paging a list to count it. Results are cached and may be stale; bypassing the cache costs a live provider round trip against your rate limit. A provider failure comes back as an error field on an otherwise valid result rather than failing the call, so check it before trusting the counts.",
+    "description": "Get headline repository counts, commits, issues and pull requests, from the active forge provider. Use this for a cheap overview rather than paging a list to count it. Results are cached and may be stale; bypassing the cache costs a live round trip against your rate limit. A provider failure comes back as an error field on an otherwise valid result, so check it before trusting the counts.",
     "examples": undefined,
     "id": "forge.getRepoStats",
     "keywords": undefined,
@@ -1968,7 +1968,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "forge",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Read one page of an issue's comment thread from the active forge provider. Use this when comment text matters — the single-issue lookup reports only how many comments exist. Comments arrive oldest first, so reaching the newest reply means paging to the end rather than reading the first page. An empty page genuinely means nobody has commented: a missing issue or a provider that cannot read threads fails instead, so silence is never ambiguous.",
+    "description": "Read one page of an issue's comment thread from the active forge provider. Use it when comment text matters: the single-issue lookup reports only how many exist. Comments arrive oldest first, so reaching the newest reply means paging to the end. An empty page genuinely means nobody has commented; a missing issue or a provider that cannot read threads fails instead, so silence is never ambiguous.",
     "examples": [
       {
         "args": {
@@ -1995,7 +1995,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "forge",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "List repository issues from the active forge provider, one page at a time. Use this to discover or filter issues; use the pull-request listing for PRs, and the single-issue lookup when the number is already known. Summary results keep responses small by dropping bodies and raw provider payloads — ask for full results only when the body is needed. Results are cached, and bypassing the cache spends a live provider round trip against your rate limit.",
+    "description": "List repository issues from the active forge provider, a page at a time. Use this to discover or filter issues; use the pull-request listing for PRs, and the single-issue lookup for a known number. Search takes a provider-native query fragment, not plain text, and routes through the provider's search API rather than the list cache pagination uses. Bypassing the cache spends a live round trip.",
     "examples": undefined,
     "id": "forge.listIssues",
     "keywords": undefined,
@@ -2007,7 +2007,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "forge",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "List repository pull requests from the active forge provider, one page at a time. Use this to discover or filter PRs; use the issue listing for issues, and the single-PR lookup when the number is already known. Search takes a provider-native query fragment rather than plain text and routes through the provider's search API, which isn't served from the list cache that pagination uses. Summary results keep responses small, and bypassing the cache spends a live provider round trip.",
+    "description": "List repository pull requests from the active forge provider, a page at a time. Use this to discover or filter PRs; use the issue listing for issues, and the single-PR lookup for a known number. Search takes a provider-native query fragment, not plain text, and routes through the provider's search API rather than the list cache pagination uses. Bypassing the cache spends a live round trip.",
     "examples": undefined,
     "id": "forge.listPRs",
     "keywords": undefined,
@@ -2204,7 +2204,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "git",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Read one file's git diff as a byte-bounded window, so a large diff cannot flood the response. When the result is flagged truncated, call again from the offset it hands back to continue — a single call is not guaranteed to be the whole diff. Some files have no diff text at all: binary files, unchanged files and oversized files come back as a marker instead, which is a valid result rather than a failure.",
+    "description": "Read one file's git diff as a byte-bounded window, so a large diff cannot flood the response. When the result is flagged truncated, call again from the offset it hands back to continue: a single call is not guaranteed to be the whole diff. Some files have no diff text at all, and binary, unchanged and oversized files come back as a marker instead, which is a valid result rather than a failure.",
     "examples": [
       {
         "args": {
@@ -2352,7 +2352,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "help",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Show a documentation image inline in the assistant panel so an answer can point at it. Use this only when an image genuinely illustrates the answer, not for decorative ones. Reference the returned figure label as plain text at the insertion point rather than as markdown image syntax, which command-line renderers strip. Figure numbers are assigned by the app in sequence and must never be chosen yourself.",
+    "description": "Show a documentation image inline in the assistant panel so an answer can point at it. Use this only when an image genuinely illustrates the answer, not for decorative ones. Reference the returned figure label as plain text at the insertion point rather than as markdown image syntax, which command-line renderers strip. Figure numbers are assigned in sequence and must never be chosen yourself.",
     "examples": [
       {
         "args": {
@@ -3749,7 +3749,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "project",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Run one of a project's detected commands as a child process and report its exit code and output. A command that fails is reported as a failed check rather than as an error, so read the result rather than relying on the call succeeding. Detection finds every runnable script, not just checks — verify what a command actually is before running an unfamiliar one. Never use this for long-lived servers: they block until the timeout expires.",
+    "description": "Run one of a project's detected commands and report its exit code and output. A command that fails is reported as a failed check rather than an error, so read the result rather than relying on the call succeeding. Detection finds every runnable script, not just checks, so verify an unfamiliar command before running it. Never use this for long-lived servers: they block until the timeout expires.",
     "examples": undefined,
     "id": "project.runCheck",
     "keywords": undefined,
@@ -3989,7 +3989,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "agent",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Find plugin-contributed skills: reusable written instructions and workflows, such as a review rubric or a test-driven-development procedure, that plugins ship for an agent to follow. This returns names and summaries only; load a skill by id to read its actual instructions. Omitting a query lists available skills, but only up to the capped result limit, and the result never says whether more were left out.",
+    "description": "Find plugin-contributed skills: reusable written instructions and workflows, such as a review rubric or a test-driven-development procedure, that plugins ship for an agent to follow. This returns names and summaries only, so load a skill by id to read its instructions. Omitting a query lists available skills, but only to the capped limit, and the result never says whether more were left out.",
     "examples": undefined,
     "id": "skills.search",
     "keywords": undefined,
@@ -4069,7 +4069,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "system",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Read how much pressure the host machine is under and which adaptive performance mode is in effect. Use this to judge whether there is headroom before launching more agents or heavy work. Some readings are platform-specific and report as unknown elsewhere. It never fails — while the service is still starting it returns a neutral baseline, so treat an unremarkable reading early in a session with some caution.",
+    "description": "Read how much pressure the host machine is under and which adaptive performance mode is in effect. Use this to judge whether there is headroom before launching more agents or heavy work. Some readings are platform-specific and report as unknown elsewhere. It never fails: while the service is starting it returns a neutral baseline, so treat an unremarkable early reading with caution.",
     "examples": undefined,
     "id": "system.getResourceProfileSnapshot",
     "keywords": undefined,
@@ -4234,7 +4234,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "terminal",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Close a panel, usually moving it to the trash where it stays briefly recoverable before its process is killed. Recovery is not universal — panels set to remove on exit, and dialog panels, are discarded outright. This is not limited to terminals. Name the panel you mean; closing the wrong one discards someone's work. An untracked panel is rejected rather than reported closed, and the result names what actually closed — already gone from the listing when an automated caller sees it.",
+    "description": "Close a panel, usually to the trash, where it is briefly recoverable before its process is killed. Recovery is not universal: remove-on-exit and dialog panels are discarded outright. Not limited to terminals. Name the panel you mean; the wrong one discards someone's work. An untracked panel is rejected, not reported closed; the result names what closed, already gone from the listing by then.",
     "examples": undefined,
     "id": "terminal.close",
     "keywords": [
@@ -4568,7 +4568,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "terminal",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Read the trailing scrollback of one terminal, for inspecting what an agent or command actually printed. Use the terminal status snapshot instead when watching several terminals — it fetches output tails for a whole fleet in one call, and reading them one at a time is the common mistake here. Output has ANSI codes stripped by default and may be truncated to the requested tail; a terminal that no longer exists comes back as an error field in the result rather than failing the call.",
+    "description": "Read the trailing scrollback of one terminal, to inspect what an agent or command printed. Use the status snapshot when watching several terminals: it fetches tails for a whole fleet in one call, and reading one at a time is the common mistake. ANSI codes are stripped by default; output may be truncated to the requested tail, and a missing terminal returns an error field, not a failed call.",
     "examples": [
       {
         "args": {
@@ -4595,7 +4595,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "terminal",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Take a point-in-time snapshot of agent and process state across many terminals at once, optionally with recent output tails. This is the batched polling path: prefer it over listing terminals for agent state or reading each terminal's output in turn. It never blocks and never fails as a whole — an entry's own error can mean that terminal was missing or that the shared output fetch failed — so use the blocking wait instead when the goal is to proceed the moment an agent finishes.",
+    "description": "Snapshot agent and process state across many terminals, with optional output tails. This is the batched polling path: prefer it over listing terminals for agent state, or reading each terminal's output in turn. It never blocks or fails as a whole; an entry's error can mean that terminal was missing or the shared fetch failed. Use the blocking wait to proceed the moment an agent finishes.",
     "examples": undefined,
     "id": "terminal.getStatus",
     "keywords": undefined,
@@ -4672,7 +4672,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "terminal",
     "danger": "confirm",
     "dangerRationale": "Permanently kills the PTY process. Scrollback and session state are lost.",
-    "description": "Permanently destroy a panel and any process behind it, with no trash step and no recovery. This is not limited to terminals — whatever panel the id names is removed. A panel running an agent session is left untouched unless the call itself is marked confirmed, so read back its state rather than assuming it went. Identify it explicitly: an automated caller cannot see what the user has focused. Close it instead when recoverability matters.",
+    "description": "Permanently destroy a panel and its process, with no trash step and no recovery. Not limited to terminals: whatever the id names is removed. A panel running an agent session is untouched unless the call is marked confirmed, so read back its state rather than assume it went. Identify it explicitly: an automated caller cannot see what the user focused. Close it instead when recovery matters.",
     "examples": undefined,
     "id": "terminal.kill",
     "keywords": [
@@ -4689,7 +4689,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "terminal",
     "danger": "confirm",
     "dangerRationale": "Permanently kills every user-facing terminal. All scrollback and session state are lost.",
-    "description": "Permanently destroy every panel in the project at once — across all worktrees, of every kind, including trashed and backgrounded ones — with no trash step and no recovery. This takes the user's own shells and other agents' running work with it; only tooling-internal and dialog-hosted panels are spared. While any agent session is running it destroys nothing unless the call itself is marked confirmed. There is essentially never a reason for an automated caller to use this.",
+    "description": "Permanently destroy every panel in the project, across all worktrees and kinds, including trashed and backgrounded, with no trash step and no recovery. It takes the user's own shells and other agents' work with it; only tooling-internal and dialog-hosted panels are spared. While an agent session runs it destroys nothing unless the call is marked confirmed. Automated callers should never need this.",
     "examples": undefined,
     "id": "terminal.killAll",
     "keywords": [
@@ -4706,7 +4706,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "terminal",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Enumerate the open terminals and panels, with just enough metadata to pick one to act on. Start here to discover terminal ids, then read status or output for the ones that matter — this is a cheap inventory, not a polling path, and the status snapshot carries richer agent state for a whole fleet in one call. Ephemeral and internal panels are left out, and an empty result means no terminals are open rather than a failure.",
+    "description": "Enumerate the open terminals and panels, with just enough metadata to pick one. Start here to discover terminal ids, then read status or output for the ones that matter: this is a cheap inventory, not a polling path; the status snapshot carries richer agent state for a fleet in one call. Ephemeral and internal panels are left out; an empty result means none are open, not a failure.",
     "examples": undefined,
     "id": "terminal.list",
     "keywords": undefined,
@@ -4802,7 +4802,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "terminal",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Move a terminal panel to a different worktree. The process is never restarted: a live agent keeps running in the directory it launched from, and its pane offers to tell it to continue in the destination. A panel that shares a tab group travels with the rest of that group, so this can relocate more than the one panel named. The move is reversible. Name the target explicitly — an automated caller cannot see what the user has focused.",
+    "description": "Move a terminal panel to a different worktree. The process is never restarted: a live agent keeps running in the directory it launched from, and its pane offers to tell it to continue there. A panel sharing a tab group travels with the rest of that group, so this can relocate more than the panel named. The move is reversible. Name the target: an automated caller cannot see what the user focused.",
     "examples": undefined,
     "id": "terminal.moveToWorktree",
     "keywords": undefined,
@@ -4948,7 +4948,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "terminal",
     "danger": "confirm",
     "dangerRationale": "Restarts the terminal process. Scrollback is lost and the process is re-spawned.",
-    "description": "Begin restarting a terminal's process in place, keeping the pane. This returns before the restart has finished, so the terminal is not ready yet when it does — watch its status before sending anything. A terminal running an agent session is left untouched unless the call itself is marked confirmed; otherwise whatever was running is terminated and unsaved in-process state is lost. A panel with no process is ignored rather than reported as an error.",
+    "description": "Restart a terminal's process in place, keeping the pane. This returns before the restart finishes, so it is not ready when it does; watch its status before sending anything. A terminal running an agent session is left untouched unless the call is marked confirmed; otherwise whatever was running is terminated and unsaved state is lost. A panel with no process is ignored, not an error.",
     "examples": undefined,
     "id": "terminal.restart",
     "keywords": [
@@ -5153,7 +5153,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "terminal",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Block until the agent in one terminal stops working, so the next step runs against finished output. Use the batched wait for several terminals, or a status snapshot to poll without blocking. This can hold the call open for a minute in an interactive session and far longer in a headless one. Timing out is a normal result meaning still working, and an exit code appears only once the process has ended — confirm success there before acting irreversibly.",
+    "description": "Block until the agent in one terminal stops working, so the next step sees finished output. Use the batched wait for several terminals, or a status snapshot to poll without blocking. It can hold open for a minute interactively, far longer headless. Timing out is normal and means still working; an exit code appears only once the process ends, so confirm success there before acting irreversibly.",
     "examples": undefined,
     "id": "terminal.waitUntilIdle",
     "keywords": undefined,
@@ -5165,7 +5165,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "terminal",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Block until the first of several agents stops working, or until all of them do — the fan-out primitive for agents that finish at different speeds. Use this rather than waiting on each terminal in turn, or a status snapshot to poll without blocking. This can hold the call open for a minute in an interactive session and far longer in a headless one. Timing out means the condition is not met yet, and terminals no longer tracked count as already finished.",
+    "description": "Block until the first of several agents stops working, or until all of them do; the fan-out primitive when agents finish at different speeds. Use this rather than waiting on each terminal in turn, or a status snapshot to poll without blocking. It can hold the call open for a minute interactively, far longer headless. Timing out means not met yet; untracked terminals count as finished.",
     "examples": undefined,
     "id": "terminal.waitUntilIdleBatch",
     "keywords": undefined,
@@ -5679,7 +5679,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "worktree",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Create a git worktree with its branch, without launching terminals. Prefer the recipe-backed creation path when the worktree should also track a pull request or start a recipe's terminals. It writes to disk, may branch from a remote base or reuse an existing branch, and can provision a configured resource. Creation anchors on the repository root, not the active worktree, which is usually a linked one; setup can still fail after the worktree exists.",
+    "description": "Create a git worktree with its branch, without launching terminals. Prefer the recipe-backed path when it should also track a pull request or start a recipe's terminals. It writes to disk, may branch from a remote base or reuse a branch, and can provision a configured resource. Creation anchors on the repository root, not the active worktree; setup can still fail after the worktree exists.",
     "examples": undefined,
     "id": "worktree.create",
     "keywords": undefined,
@@ -5708,7 +5708,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "worktree",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Create a git worktree with its branch, optionally tracking a pull request, and optionally launch a recipe's terminals in it. This is the heavy composite path: it writes to disk, may check out a remote branch, and may start several processes. Create the worktree alone when no pull request or terminals are wanted. Partial failure is possible — the worktree can exist while its recipe did not fully start.",
+    "description": "Create a git worktree with its branch, optionally tracking a pull request, and optionally launch a recipe's terminals in it. This is the heavy composite path: it writes to disk, may check out a remote branch, and may start several processes. Create the worktree alone when neither is wanted. Partial failure is possible: the worktree can exist while its recipe did not fully start.",
     "examples": undefined,
     "id": "worktree.createWithRecipe",
     "keywords": undefined,
@@ -6253,7 +6253,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "worktree",
     "danger": "confirm",
     "dangerRationale": "Runs the project's configured teardown commands for this worktree's cloud resource. What they destroy, and whether it can be recovered, is defined by the project rather than by Daintree.",
-    "description": "Run the project's configured teardown commands for a worktree's remote resource, typically to destroy a cloud devbox. These are arbitrary commands the project defines, so what they destroy — and whether anything can be recovered — depends entirely on that configuration; read it before running this. The project's pause commands are the intended lighter-weight path when the resource is still needed.",
+    "description": "Run the project's configured teardown commands for a worktree's remote resource, typically to destroy a cloud devbox. These are arbitrary commands the project defines, so what they destroy, and whether anything can be recovered, depends entirely on that configuration; read it before running this. The project's pause commands are the lighter path when the resource is still needed.",
     "examples": undefined,
     "id": "worktree.resource.teardown",
     "keywords": undefined,

@@ -1,6 +1,7 @@
 import { createHash, timingSafeEqual } from "node:crypto";
 import type { ActionDispatchResult, ActionManifestEntry } from "../../../shared/types/actions.js";
 import { deriveBand, BAND_OVERRIDES } from "../../../shared/utils/actionRiskBand.js";
+import { toWireSchema } from "../../../shared/utils/mcpWireSchema.js";
 import type { ToolAnnotations } from "@modelcontextprotocol/sdk/types.js";
 import { mcpPaneConfigService } from "../McpPaneConfigService.js";
 import type { HelpTokenValidator } from "./shared.js";
@@ -414,6 +415,16 @@ export function readRequestedActionId(args: unknown): string | undefined {
   return typeof actionId === "string" && actionId.length > 0 ? actionId : undefined;
 }
 
+/**
+ * The advertised half of a tool's schema — the wire view.
+ *
+ * `toWireSchema` drops the value-range keywords, which a constrained-decoding
+ * backend never enforces and which therefore reach the model as prompt text
+ * billed on every turn. Nothing is weakened by their absence: `argsSchema` is
+ * what actually validates a dispatch, and it is untouched by this projection.
+ * See `shared/utils/mcpWireSchema.ts` for the full reasoning and for why
+ * `additionalProperties: false` is deliberately not in the stripped set.
+ */
 export function buildToolInputSchema(entry: ActionManifestEntry): Record<string, unknown> {
   if (
     entry.inputSchema &&
@@ -421,7 +432,10 @@ export function buildToolInputSchema(entry: ActionManifestEntry): Record<string,
     !Array.isArray(entry.inputSchema) &&
     entry.inputSchema["type"] === "object"
   ) {
-    return { ...entry.inputSchema, additionalProperties: false } as Record<string, unknown>;
+    return {
+      ...(toWireSchema(entry.inputSchema) as Record<string, unknown>),
+      additionalProperties: false,
+    };
   }
   return {
     type: "object",
@@ -442,6 +456,26 @@ export function buildAnnotations(entry: ActionManifestEntry): ToolAnnotations {
   };
 }
 
+/**
+ * The advertised return shape, emitted verbatim.
+ *
+ * Deliberately NOT projected through {@link toWireSchema}, even though it rides
+ * `tools/list` and costs bytes on every turn like the input half. An output
+ * schema is not advertisement — it is an enforced contract. The MCP SDK compiles
+ * every advertised `outputSchema` and validates `structuredContent` against it
+ * with AJV on the client side, and AJV genuinely enforces the value-range family
+ * that constrained decoding ignores.
+ *
+ * Stripping them would therefore delete real validation rather than dead prompt
+ * text, and it would bite hardest where there is no second line of defence: a
+ * main-process tool returns its result without going through `ActionService`, so
+ * it never gets the `resultSchema` check that covers renderer-dispatched
+ * actions, and the client's AJV pass is the only validation there is. That gap
+ * is latent rather than live today — the main-process tools do not currently opt
+ * into `mcpOutputSchema`, so no output schema is advertised for them at all —
+ * but the moment one does, this projection would be the thing that silently
+ * disarmed it.
+ */
 export function buildToolOutputSchema(
   entry: ActionManifestEntry
 ): Record<string, unknown> | undefined {

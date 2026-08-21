@@ -25,7 +25,7 @@ export function registerProjectCheckActions(
       id: "project.runCheck",
       title: "Run Project Check",
       description:
-        "Run one of a project's detected commands as a child process and report its exit code and output. A command that fails is reported as a failed check rather than as an error, so read the result rather than relying on the call succeeding. Detection finds every runnable script, not just checks — verify what a command actually is before running an unfamiliar one. Never use this for long-lived servers: they block until the timeout expires.",
+        "Run one of a project's detected commands and report its exit code and output. A command that fails is reported as a failed check rather than an error, so read the result rather than relying on the call succeeding. Detection finds every runnable script, not just checks, so verify an unfamiliar command before running it. Never use this for long-lived servers: they block until the timeout expires.",
       category: "project",
       kind: "command",
       danger: "safe",
@@ -62,7 +62,7 @@ export function registerProjectCheckActions(
           .max(PROJECT_CHECK_MAX_TIMEOUT_MS)
           .optional()
           .describe(
-            `Wall-clock ceiling in milliseconds (default ${PROJECT_CHECK_DEFAULT_TIMEOUT_MS}, max ${PROJECT_CHECK_MAX_TIMEOUT_MS}). The process tree is killed when it elapses.`
+            `Wall-clock ceiling in milliseconds (default ${PROJECT_CHECK_DEFAULT_TIMEOUT_MS}, min ${PROJECT_CHECK_MIN_TIMEOUT_MS}, max ${PROJECT_CHECK_MAX_TIMEOUT_MS}). The process tree is killed when it elapses.`
           ),
       }),
       resultSchema: z.object({

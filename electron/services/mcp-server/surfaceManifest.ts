@@ -4,7 +4,6 @@ import type { McpSurfaceManifest, McpSurfaceTool } from "../../../shared/types/m
 import { type McpTier, minimumPermittingTier } from "./shared.js";
 import {
   buildAnnotations,
-  buildToolInputSchema,
   buildToolOutputSchema,
   shouldExposeTool,
   UNBOUND_SESSION_SURFACE,
@@ -18,12 +17,21 @@ export const MCP_SURFACE_TOOL_ID = "mcp.surface";
  * removed, or given new meaning — never for a change in which tools the surface
  * contains, which is what `hash` is for.
  *
+ * v2: `hash` was given new meaning. Its preimage used to be the ADVERTISED input
+ * schema (`buildToolInputSchema`), which now projects away the value-range
+ * keywords for the model's benefit. Hashing that projection would have made a
+ * genuine incompatibility invisible — tightening a `maximum` from 100 to 50
+ * starts rejecting calls that used to succeed while the digest sat still — so
+ * the preimage moved to the unprojected `entry.inputSchema`. Every stored digest
+ * from v1 is therefore stale by construction, which is precisely what a version
+ * bump is for.
+ *
  * Lives here rather than beside the payload types in `shared/` on purpose: main
  * is the only process that stamps it, and keeping it out of the shared module
  * lets that module stay a type-only import from here, so its `zod` value import
  * never becomes an eager edge on the main-process boot path.
  */
-export const MCP_SURFACE_MANIFEST_VERSION = 1;
+export const MCP_SURFACE_MANIFEST_VERSION = 2;
 
 /** JSON Schema keywords whose value is itself a schema. */
 const SCHEMA_VALUED_KEYS = new Set([
@@ -220,6 +228,15 @@ export function buildSurfaceManifest(
     // `toCompatibilityShape`). They are model-facing prose that is reworded
     // often, and a compatibility check that cried drift on every wording edit
     // is one clients would learn to ignore.
+    //
+    // The INPUT schema is hashed unprojected — `entry.inputSchema`, not
+    // `buildToolInputSchema(entry)`. Those differ: the wire view drops the
+    // value-range keywords (`shared/utils/mcpWireSchema.ts`) because a model
+    // cannot act on them, but a *client* very much can. Tightening a `maximum`
+    // from 100 to 50 starts rejecting calls that used to succeed, which is
+    // exactly the incompatibility this digest promises to report, so hashing the
+    // projected view would let it pass silently. Compatibility is a property of
+    // what the server accepts, not of what the model is shown.
     hashRows.push([
       tool.id,
       tool.tier,
@@ -230,7 +247,7 @@ export function buildSurfaceManifest(
       entry.danger,
       annotations.destructiveHint ?? null,
       annotations.openWorldHint ?? null,
-      toCompatibilityShape(buildToolInputSchema(entry)),
+      toCompatibilityShape(entry.inputSchema ?? null),
       toCompatibilityShape(buildToolOutputSchema(entry) ?? null),
     ]);
   }

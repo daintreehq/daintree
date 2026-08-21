@@ -124,7 +124,7 @@ const ForgeListOptionsSchema = ForgeListPagingSchema.extend({
     .string()
     .optional()
     .describe(
-      "Provider-native query fragment — NOT a plain-text filter. The dialect is the active provider's own issue search, which typically supports negation: 'no:assignee -label:human-review'. It is trimmed and appended after the generated repo/type/state/sort qualifiers, and truncated to the provider's query-length cap. Routes via the provider's search API, which caps result depth."
+      "Provider-native query fragment, NOT plain text. The dialect is the provider's own issue search, typically supporting negation. Trimmed, appended after the generated repo/type/state/sort qualifiers, and truncated to the provider's length cap. Routes via the search API, which caps result depth."
     ),
 }).strict();
 
@@ -144,7 +144,7 @@ const ForgePRListOptionsSchema = ForgeListPagingSchema.extend({
     .string()
     .optional()
     .describe(
-      "Provider-native query fragment — NOT a plain-text filter. The dialect is the active provider's own pull-request search, which typically supports negation and PR-specific qualifiers: 'is:draft -label:wip'. It is trimmed and appended after the generated repo/type/state/sort qualifiers, and truncated to the provider's query-length cap. Routes via the provider's search API, which caps result depth."
+      "Provider-native query fragment, NOT plain text. The dialect is the provider's own PR search, typically supporting negation and PR qualifiers. Trimmed, appended after the generated repo/type/state/sort qualifiers, and truncated to the provider's length cap. Routes via the search API, which caps result depth."
     ),
 }).strict();
 
@@ -702,7 +702,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.getRepoStats",
       title: "Get Repo Stats",
       description:
-        "Get headline repository counts — commits, issues and pull requests — from the active forge provider. Use this for a cheap overview rather than paging a list to count it. Results are cached and may be stale; bypassing the cache costs a live provider round trip against your rate limit. A provider failure comes back as an error field on an otherwise valid result rather than failing the call, so check it before trusting the counts.",
+        "Get headline repository counts, commits, issues and pull requests, from the active forge provider. Use this for a cheap overview rather than paging a list to count it. Results are cached and may be stale; bypassing the cache costs a live round trip against your rate limit. A provider failure comes back as an error field on an otherwise valid result, so check it before trusting the counts.",
       category: "forge",
       kind: "query",
       danger: "safe",
@@ -734,7 +734,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.listIssues",
       title: "List Issues",
       description:
-        "List repository issues from the active forge provider, one page at a time. Use this to discover or filter issues; use the pull-request listing for PRs, and the single-issue lookup when the number is already known. Summary results keep responses small by dropping bodies and raw provider payloads — ask for full results only when the body is needed. Results are cached, and bypassing the cache spends a live provider round trip against your rate limit.",
+        "List repository issues from the active forge provider, a page at a time. Use this to discover or filter issues; use the pull-request listing for PRs, and the single-issue lookup for a known number. Search takes a provider-native query fragment, not plain text, and routes through the provider's search API rather than the list cache pagination uses. Bypassing the cache spends a live round trip.",
       category: "forge",
       kind: "query",
       danger: "safe",
@@ -767,7 +767,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.listPRs",
       title: "List Pull Requests",
       description:
-        "List repository pull requests from the active forge provider, one page at a time. Use this to discover or filter PRs; use the issue listing for issues, and the single-PR lookup when the number is already known. Search takes a provider-native query fragment rather than plain text and routes through the provider's search API, which isn't served from the list cache that pagination uses. Summary results keep responses small, and bypassing the cache spends a live provider round trip.",
+        "List repository pull requests from the active forge provider, a page at a time. Use this to discover or filter PRs; use the issue listing for issues, and the single-PR lookup for a known number. Search takes a provider-native query fragment, not plain text, and routes through the provider's search API rather than the list cache pagination uses. Bypassing the cache spends a live round trip.",
       category: "forge",
       kind: "query",
       danger: "safe",
@@ -798,7 +798,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.getIssue",
       title: "Get Issue",
       description:
-        "Fetch one issue by number from the active forge provider, including its body. This is the direct lookup — reach for it instead of paging the issue listing to find a number you already have. An issue that does not exist comes back empty rather than failing, so treat an empty result as absence rather than an error. It reports how many comments exist but not their text; read the comment thread for that.",
+        "Fetch one issue by number from the active forge provider, including its body. This is the direct lookup: reach for it instead of paging the issue listing to find a number you already have. An issue that does not exist comes back empty rather than failing, so treat empty as absence, not an error. It reports how many comments exist but not their text; read the comment thread for that.",
       category: "forge",
       kind: "query",
       danger: "safe",
@@ -832,7 +832,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.listIssueComments",
       title: "List Issue Comments",
       description:
-        "Read one page of an issue's comment thread from the active forge provider. Use this when comment text matters — the single-issue lookup reports only how many comments exist. Comments arrive oldest first, so reaching the newest reply means paging to the end rather than reading the first page. An empty page genuinely means nobody has commented: a missing issue or a provider that cannot read threads fails instead, so silence is never ambiguous.",
+        "Read one page of an issue's comment thread from the active forge provider. Use it when comment text matters: the single-issue lookup reports only how many exist. Comments arrive oldest first, so reaching the newest reply means paging to the end. An empty page genuinely means nobody has commented; a missing issue or a provider that cannot read threads fails instead, so silence is never ambiguous.",
       category: "forge",
       kind: "query",
       danger: "safe",
@@ -877,7 +877,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.getPR",
       title: "Get Pull Request",
       description:
-        "Fetch one pull request by number from the active forge provider, including its body, draft state and branches. This is the direct lookup — reach for it instead of paging the PR listing for a number you already have, and read it before editing or merging so the current state is known. A pull request that does not exist comes back empty rather than failing, so treat an empty result as absence rather than an error.",
+        "Fetch one pull request by number from the active forge provider, including its body, draft state and branches. This is the direct lookup: reach for it instead of paging the PR listing for a number you already have, and read it before editing or merging so the current state is known. A pull request that does not exist comes back empty rather than failing, so treat empty as absence, not an error.",
       category: "forge",
       kind: "query",
       danger: "safe",
@@ -899,7 +899,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.getCIStatus",
       title: "Get CI Status",
       description:
-        "Fetch the roll-up CI verdict for one pull request from the active forge provider. Read the overall state for the answer: the accompanying counts cover required checks only, and a zero total also appears when the required-check list could not be read in full, so it is never evidence that nothing gates the merge. Values are provider-cached and can lag by around a minute, so poll for a settled verdict rather than treating a single success as final.",
+        "Fetch the roll-up CI verdict for one pull request from the active forge provider. Read the overall state for the answer: the accompanying counts cover required checks only, and a zero total also appears when the required-check list could not be read in full, so it is never evidence that nothing gates the merge. Values are provider-cached and can lag by a minute, so poll for a settled verdict.",
       category: "forge",
       kind: "query",
       danger: "safe",
@@ -932,7 +932,7 @@ export function registerForgeActions(actions: ActionRegistry, _callbacks: Action
       id: "forge.getChecks",
       title: "Get CI Checks",
       description:
-        "List every CI check on one pull request — each check's name, whether it is still running, how it finished, and a link to its log where the forge reports one. Reach for it once the roll-up shows trouble and the question becomes which check broke and where to read its output. A check with no conclusion reported has not passed; the roll-up stays the authority on whether a PR is green. An empty list means no checks, a null one no such PR, and a provider that cannot read checks fails instead.",
+        "List every CI check on one pull request: name, run state, conclusion, and a log link where the forge reports one. Reach for it once the roll-up shows trouble. A check with no conclusion has not passed; the roll-up stays the authority on whether a PR is green. An empty list means no checks, a null one no such PR, and a provider that cannot read checks fails instead.",
       category: "forge",
       kind: "query",
       danger: "safe",

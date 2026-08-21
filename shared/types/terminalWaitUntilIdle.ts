@@ -104,7 +104,7 @@ export const WAIT_UNTIL_IDLE_OUTPUT_SCHEMA: Record<string, unknown> = {
 };
 
 export const WAIT_UNTIL_IDLE_DESCRIPTION =
-  "Block until the agent in one terminal stops working, so the next step runs against finished output. Use the batched wait for several terminals, or a status snapshot to poll without blocking. This can hold the call open for a minute in an interactive session and far longer in a headless one. Timing out is a normal result meaning still working, and an exit code appears only once the process has ended — confirm success there before acting irreversibly.";
+  "Block until the agent in one terminal stops working, so the next step sees finished output. Use the batched wait for several terminals, or a status snapshot to poll without blocking. It can hold open for a minute interactively, far longer headless. Timing out is normal and means still working; an exit code appears only once the process ends, so confirm success there before acting irreversibly.";
 
 // === Batched wait (fan-out orchestration) ===
 
@@ -177,4 +177,4 @@ export const WAIT_UNTIL_IDLE_BATCH_OUTPUT_SCHEMA: Record<string, unknown> = {
 };
 
 export const WAIT_UNTIL_IDLE_BATCH_DESCRIPTION =
-  "Block until the first of several agents stops working, or until all of them do — the fan-out primitive for agents that finish at different speeds. Use this rather than waiting on each terminal in turn, or a status snapshot to poll without blocking. This can hold the call open for a minute in an interactive session and far longer in a headless one. Timing out means the condition is not met yet, and terminals no longer tracked count as already finished.";
+  "Block until the first of several agents stops working, or until all of them do; the fan-out primitive when agents finish at different speeds. Use this rather than waiting on each terminal in turn, or a status snapshot to poll without blocking. It can hold the call open for a minute interactively, far longer headless. Timing out means not met yet; untracked terminals count as finished.";
