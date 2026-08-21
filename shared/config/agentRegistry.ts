@@ -492,8 +492,10 @@ export interface AssistantSupports {
   settingsOverlay: boolean;
   /**
    * Whether this agent exposes a `--dangerously-skip-*` CLI flag that the
-   * system tier appends to the spawn command. Corresponds to entries in
-   * `DEFAULT_DANGEROUS_ARGS`.
+   * help-session launch path appends when the user turns on bypass
+   * permissions. Keyed off the `bypassPermissions` snapshot, not the MCP
+   * capability tier — the two controls are orthogonal. Corresponds to entries
+   * in `DEFAULT_DANGEROUS_ARGS`.
    */
   permissionBypass: boolean;
   /**

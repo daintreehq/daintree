@@ -195,8 +195,9 @@ export const SYSTEM_TIER_ADDONS = [
   // confined to the current project because it derives its own root. This one
   // takes an explicit root that is not validated against the session's
   // project, so an action-tier overlay could create a tree in another repo.
-  // System keeps that with the first-party assistant (forced to this tier in
-  // `HelpSessionService`) and leaves overlays a scoped grant (#11880).
+  // System keeps it there, so every help agent — the Daintree Assistant
+  // included — reaches it only at an explicitly selected `system` tier or
+  // through a scoped grant (#11880, #11907).
   "worktree.create",
   "worktree.delete",
   // The session-scoped form of `worktree.delete` (#11909), carried here for the

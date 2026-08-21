@@ -441,6 +441,46 @@ describe("DaintreeAssistantSettingsTab", () => {
     });
   });
 
+  // #11907: with the confirmation sheet off, the tier is the entire remaining
+  // boundary, so the warning has to name it — and keep naming the right one
+  // when the selector moves (a missing memo dependency would freeze the old
+  // tier in the copy while the selector reads the new one).
+  it("names the configured tier in the auto-approve warning and follows the selector", async () => {
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex", "daintree-assistant"]);
+    helpPanelState.preferredAgentId = "daintree-assistant";
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Auto-approve assistant actions");
+
+    // The switch stays disabled until the initial settings and MCP-status loads
+    // both settle, and the heading above renders before that — clicking while
+    // it's still disabled would drop the event and time out downstream.
+    const toggle = screen.getByLabelText(
+      "Auto-approve Daintree Assistant actions during help sessions"
+    );
+    await waitFor(() => {
+      expect(toggle.hasAttribute("disabled")).toBe(false);
+    });
+    fireEvent.click(toggle);
+
+    await waitForContent(
+      container,
+      "New sessions run at the Action capability tier, which is the only remaining safeguard"
+    );
+
+    fireEvent.change(screen.getByLabelText("Capability tier"), { target: { value: "system" } });
+
+    await waitForContent(
+      container,
+      "New sessions run at the System capability tier, which is the only remaining safeguard"
+    );
+    expect(container.textContent).not.toContain("the Action capability tier");
+  });
+
   // The gate is what keeps a switch off agents where flipping it does nothing.
   it("hides the bypass toggle for an agent with no bypass mechanism", async () => {
     mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "byoa"]);
@@ -1422,6 +1462,31 @@ describe("SessionLiveStatusCard (live help session)", () => {
     await waitFor(() => expect(container.textContent).toContain("Live session"), { timeout: 5000 });
     expect(container.textContent).toContain("below the configured system default");
     expect(container.textContent).not.toContain("matches the configured default");
+  });
+
+  // The equality branch is the one a default (action-tier) assistant session
+  // lands on now that agent identity no longer forces `system` (#11907). The
+  // copy was previously unasserted — only the two drift directions were.
+  it("reports a live tier equal to the configured default as a match", async () => {
+    installApi(
+      {
+        getSettings: vi.fn().mockResolvedValue(settingsWithTier("action")),
+        getLiveSessionStatus: vi
+          .fn()
+          .mockResolvedValue({ connected: true, tier: "action", activeGrants: [] }),
+      },
+      {}
+    );
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+
+    await waitFor(() => expect(container.textContent).toContain("Live session"), { timeout: 5000 });
+    expect(container.textContent).toContain("matches the configured default");
+    expect(container.textContent).not.toContain("elevated above");
+    expect(container.textContent).not.toContain("below the configured");
   });
 
   it("passes the public help-session id to the live-status bridge call", async () => {

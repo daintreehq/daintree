@@ -162,8 +162,13 @@ interface BypassCopy {
   warning: string;
 }
 
-const TIER_IS_LAST_SAFEGUARD =
-  "The capability tier above is the only remaining safeguard for Daintree actions.";
+// Names the tier rather than pointing at "the selector above" (#11907): with
+// the gate off, the tier is the entire remaining boundary, so the warning has
+// to say which one. Scoped to new sessions because both the tier and the
+// bypass preference are provision-time snapshots — a session already running
+// keeps the tier it was minted with, which the live-status card reports.
+const tierIsLastSafeguard = (tier: HelpAssistantTier): string =>
+  `New sessions run at the ${TIER_SHORT_LABEL[tier]} capability tier, which is the only remaining safeguard for Daintree actions.`;
 
 /**
  * Per-agent wording for the one stored `bypassPermissions` preference. The
@@ -172,18 +177,22 @@ const TIER_IS_LAST_SAFEGUARD =
  * sandbox alongside its approvals — and understating the blast radius is the
  * same failure as labelling every agent with Claude's flag.
  */
+// `warning` carries the agent-specific half only; `getBypassCopy` appends the
+// tier-naming safeguard sentence so every branch names the same effective tier.
 const BYPASS_COPY: Record<string, Omit<BypassCopy, "subtitle"> & { effect: string }> = {
   claude: {
     title: "Bypass Claude permission prompts",
     effect: "Skip Claude's per-tool confirmation gate",
     ariaLabel: "Bypass Claude permission prompts during help sessions",
-    warning: `With this on, Claude's permission gate is bypassed for all tools — built-in (Bash, Write) and MCP. ${TIER_IS_LAST_SAFEGUARD}`,
+    warning:
+      "With this on, Claude's permission gate is bypassed for all tools — built-in (Bash, Write) and MCP.",
   },
   codex: {
     title: "Bypass Codex approvals and sandbox",
     effect: "Skip Codex's approval prompts and run tools unsandboxed",
     ariaLabel: "Bypass Codex approvals and sandbox during help sessions",
-    warning: `With this on, Codex runs every tool without approval and outside its sandbox, so it reaches anywhere the process can. ${TIER_IS_LAST_SAFEGUARD}`,
+    warning:
+      "With this on, Codex runs every tool without approval and outside its sandbox, so it reaches anywhere the process can.",
   },
 };
 
@@ -195,8 +204,10 @@ const BYPASS_COPY: Record<string, Omit<BypassCopy, "subtitle"> & { effect: strin
  * path appends from (`electron/ipc/handlers/terminal/lifecycle.ts`) — so the
  * subtitle can't drift from what actually reaches the command line.
  */
-function getBypassCopy(agentId: string | null): BypassCopy | null {
+function getBypassCopy(agentId: string | null, tier: HelpAssistantTier): BypassCopy | null {
   if (!agentId) return null;
+
+  const safeguard = tierIsLastSafeguard(tier);
 
   // The assistant has no CLI flag: bypass skips its own confirm sheet via
   // DAINTREE_ASSISTANT_AUTO_APPROVE, which is why it carries no
@@ -206,7 +217,7 @@ function getBypassCopy(agentId: string | null): BypassCopy | null {
       title: "Auto-approve assistant actions",
       subtitle: "Skip the assistant's own per-action confirmation sheet",
       ariaLabel: "Auto-approve Daintree Assistant actions during help sessions",
-      warning: `With this on, the assistant acts without asking — no confirmation sheet for anything it does. ${TIER_IS_LAST_SAFEGUARD}`,
+      warning: `With this on, the assistant acts without asking — no confirmation sheet for anything it does. ${safeguard}`,
     };
   }
 
@@ -219,14 +230,14 @@ function getBypassCopy(agentId: string | null): BypassCopy | null {
   const agentName = config?.name ?? agentId;
   const known = BYPASS_COPY[agentId];
   if (known) {
-    const { effect, ...rest } = known;
-    return { ...rest, subtitle: `${effect} (passes ${flag})` };
+    const { effect, warning, ...rest } = known;
+    return { ...rest, subtitle: `${effect} (passes ${flag})`, warning: `${warning} ${safeguard}` };
   }
   return {
     title: `Bypass ${agentName} permission prompts`,
     subtitle: `Skip ${agentName}'s confirmation gate (passes ${flag})`,
     ariaLabel: `Bypass ${agentName} permission prompts during help sessions`,
-    warning: `With this on, ${agentName} runs every tool without asking. ${TIER_IS_LAST_SAFEGUARD}`,
+    warning: `With this on, ${agentName} runs every tool without asking. ${safeguard}`,
   };
 }
 
@@ -307,7 +318,10 @@ export function DaintreeAssistantSettingsTab() {
   // panel still in its empty state. The placeholder makes "no selection" explicit.
   const agentSelectValue = preferredAgentId ?? "";
 
-  const bypassCopy = useMemo(() => getBypassCopy(preferredAgentId), [preferredAgentId]);
+  const bypassCopy = useMemo(
+    () => getBypassCopy(preferredAgentId, settings.tier),
+    [preferredAgentId, settings.tier]
+  );
 
   // Resolved model catalog for the currently-preferred agent. `null` means "not
   // loaded / unavailable" (we render nothing); an empty array means "agent has
