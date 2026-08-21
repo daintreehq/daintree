@@ -22,7 +22,6 @@ import { getPanelSuspectLedger } from "../services/PanelSuspectLedgerService.js"
 import { getDatabaseMaintenanceService } from "../services/DatabaseMaintenanceService.js";
 import { getPeriodicCleanupService } from "../services/PeriodicCleanupService.js";
 import { getHibernationService } from "../services/HibernationService.js";
-import { getIdleBackgroundAutoCloseService } from "../services/IdleBackgroundAutoCloseService.js";
 import { getIdleTerminalNotificationService } from "../services/IdleTerminalNotificationService.js";
 import { getSystemSleepService } from "../services/SystemSleepService.js";
 import { getOsDndService } from "../services/OsDndService.js";
@@ -472,6 +471,13 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
         import("../services/PluginCliServer.js")
           .then(({ stopPluginCliServer }) => stopPluginCliServer())
           .catch(() => {}),
+        import("../services/IdleBackgroundAutoCloseService.js")
+          .then(({ getIdleBackgroundAutoCloseService }) =>
+            getIdleBackgroundAutoCloseService().stop()
+          )
+          .catch((err) => {
+            console.warn("[MAIN] IdleBackgroundAutoCloseService.stop failed:", err);
+          }),
         new Promise<void>((resolve) => {
           // Global singletons that previously tore down on last-window-close
           // (electron/window/windowServices.ts) live here now so they cover
@@ -498,11 +504,6 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
             getIdleTerminalNotificationService().stop();
           } catch (err) {
             console.warn("[MAIN] IdleTerminalNotificationService.stop failed:", err);
-          }
-          try {
-            getIdleBackgroundAutoCloseService().stop();
-          } catch (err) {
-            console.warn("[MAIN] IdleBackgroundAutoCloseService.stop failed:", err);
           }
           try {
             getSystemSleepService().dispose();

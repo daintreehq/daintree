@@ -2,7 +2,7 @@ import { Terminal, IDisposable, IMarker, ILink } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SerializeAddon } from "@xterm/addon-serialize";
 import type { ImageAddon } from "@xterm/addon-image";
-import { SearchAddon } from "@xterm/addon-search";
+import type { SearchAddon } from "@xterm/addon-search";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 
 import { TerminalRefreshTier, PanelKind, AgentState } from "@/types";
@@ -75,7 +75,8 @@ export interface ManagedTerminal {
   fitAddon: FitAddon;
   serializeAddon: SerializeAddon;
   imageAddon: ImageAddon | null;
-  searchAddon: SearchAddon;
+  searchAddon: SearchAddon | null;
+  searchAddonPromise?: Promise<SearchAddon | null>;
   fileLinksDisposable: IDisposable | null;
   imageLinksDisposable: IDisposable | null;
   webLinksAddon: WebLinksAddon | null;

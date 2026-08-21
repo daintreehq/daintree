@@ -8,11 +8,9 @@ const LazyDiagnosticsDock = lazy(() =>
   import("../Diagnostics").then((m) => ({ default: m.DiagnosticsDock }))
 );
 import { ErrorBoundary } from "../ErrorBoundary";
-import { PortalDock, PortalVisibilityController } from "../Portal";
-import { ThemeBrowser } from "../ThemeBrowser";
+import { PortalCloseConfirmDialog, PortalVisibilityController } from "../Portal";
 import { FleetArmingRibbon } from "@/components/Fleet";
 import { TerminalDestructiveActionConfirmDialog } from "@/components/Terminal/TerminalDestructiveActionConfirmDialog";
-import { PortalCloseConfirmDialog } from "@/components/Portal/PortalCloseConfirmDialog";
 import { MoveOrRenameProjectDialog } from "@/components/Project/MoveOrRenameProjectDialog";
 import { ImportConfigDialog } from "@/components/Config/ImportConfigDialog";
 import { ChordIndicator } from "./ChordIndicator";
@@ -95,6 +93,12 @@ const LazyDemoCursor = lazy(() =>
 );
 const LazyDemoCaptureBridge = lazy(() =>
   import("../Demo/DemoCaptureBridge").then((m) => ({ default: m.DemoCaptureBridge }))
+);
+const LazyThemeBrowser = lazy(() =>
+  import("../ThemeBrowser/ThemeBrowser").then((m) => ({ default: m.ThemeBrowser }))
+);
+const LazyPortalDock = lazy(() =>
+  import("../Portal/PortalDock").then((m) => ({ default: m.PortalDock }))
 );
 // Preload only in demo mode so the chunks resolve before first mount (no
 // Suspense flash). In production the gate is false, so this block never runs and
@@ -1065,7 +1069,9 @@ export function AppLayout({
                   right: "var(--right-obstruction-offset, 0px)",
                 }}
               >
-                <ThemeBrowser />
+                <Suspense fallback={null}>
+                  <LazyThemeBrowser />
+                </Suspense>
               </div>
             </ErrorBoundary>
           </>,
@@ -1083,7 +1089,9 @@ export function AppLayout({
               className="fixed right-0 bottom-0 z-50 shadow-2xl border-l border-daintree-border"
               style={{ top: OVERLAY_TOP_OFFSET }}
             >
-              <PortalDock />
+              <Suspense fallback={null}>
+                <LazyPortalDock />
+              </Suspense>
             </div>
           </ErrorBoundary>,
           document.body

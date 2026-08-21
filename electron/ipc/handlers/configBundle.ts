@@ -6,7 +6,6 @@ import { CHANNELS } from "../channels.js";
 import { CONFIG_BUNDLE_METHOD_CHANNELS } from "./configBundle.preload.js";
 import type { HandlerDependencies } from "../types.js";
 import { broadcastToRenderer } from "../utils.js";
-import { ConfigBundleService } from "../../services/ConfigBundleService.js";
 import { buildConfigBundle, parseConfigBundle } from "../../utils/configBundleIO.js";
 import {
   CONFIG_BUNDLE_MAX_BYTES,
@@ -71,7 +70,12 @@ export function registerConfigBundleHandlers(deps: HandlerDependencies): () => v
     refreshTitleBarOverlayTheme();
   };
 
-  const service = new ConfigBundleService({ rebuildMenu, refreshTitleBar });
+  const loadService = async () => {
+    const { ConfigBundleService } = await import("../../services/ConfigBundleService.js");
+    return new ConfigBundleService({ rebuildMenu, refreshTitleBar });
+  };
+  let servicePromise: ReturnType<typeof loadService> | undefined;
+  const getService = () => (servicePromise ??= loadService());
 
   const namespace = defineIpcNamespace({
     name: "configBundle",
@@ -98,6 +102,7 @@ export function registerConfigBundleHandlers(deps: HandlerDependencies): () => v
           // configuration as of the moment it was written rather than the moment
           // the dialog opened — another window may have changed a setting while
           // the picker sat open.
+          const service = await getService();
           const sections = await service.collect();
           const {
             json,
@@ -164,6 +169,7 @@ export function registerConfigBundleHandlers(deps: HandlerDependencies): () => v
             };
           }
 
+          const service = await getService();
           return {
             outcome: "ready",
             fileName,
@@ -200,6 +206,7 @@ export function registerConfigBundleHandlers(deps: HandlerDependencies): () => v
           // Serialized across every window: two imports interleaving their
           // section writes could roll one back over the other's changes, since
           // each holds its own pre-import snapshot.
+          const service = await getService();
           const run = applyChain.then(
             () => service.apply(parsed.sections),
             () => service.apply(parsed.sections)

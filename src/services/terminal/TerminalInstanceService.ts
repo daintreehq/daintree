@@ -16,6 +16,7 @@ import { tallyScrollbackRestoreStates } from "./scrollbackRestoreAggregate";
 import {
   setupTerminalAddons,
   createImageAddon,
+  createSearchAddon,
   createFileLinksAddon,
   createImageLinksAddon,
   createWebLinksAddon,
@@ -1162,6 +1163,29 @@ class TerminalInstanceService {
 
   get(id: string): ManagedTerminal | null {
     return this.instances.get(id) ?? null;
+  }
+
+  async ensureSearchAddon(id: string): Promise<ManagedTerminal["searchAddon"]> {
+    const managed = this.instances.get(id);
+    if (!managed) return null;
+    if (managed.searchAddon) return managed.searchAddon;
+    if (managed.searchAddonPromise) return managed.searchAddonPromise;
+
+    const promise = createSearchAddon(managed.terminal).then((addon) => {
+      const current = this.instances.get(id);
+      if (current !== managed) {
+        addon.dispose();
+        return null;
+      }
+      managed.searchAddon = addon;
+      return addon;
+    });
+    managed.searchAddonPromise = promise;
+    try {
+      return await promise;
+    } finally {
+      if (managed.searchAddonPromise === promise) delete managed.searchAddonPromise;
+    }
   }
 
   /**

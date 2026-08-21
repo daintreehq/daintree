@@ -2,17 +2,16 @@ import { Terminal, IDisposable } from "@xterm/xterm";
 import { FitAddon } from "@xterm/addon-fit";
 import { SerializeAddon } from "@xterm/addon-serialize";
 import type { ImageAddon } from "@xterm/addon-image";
-import { SearchAddon } from "@xterm/addon-search";
+import type { SearchAddon } from "@xterm/addon-search";
 import { WebLinksAddon } from "@xterm/addon-web-links";
 import { FileLinksAddon, HoverCallback } from "./FileLinksAddon";
 import { ImageLinksAddon, OnActivateFigure } from "./ImageLinksAddon";
 
 const IMAGE_ADDON_OPTIONS = { pixelLimit: 2_000_000, storageLimit: 8 };
 
-// @xterm/addon-image (~79KB) and @xterm/addon-unicode11 (~14KB) load via dynamic
-// import so their module code stays out of the renderer's eager critical path —
-// they are parsed/compiled only when a terminal actually needs them, not on every
-// project-view load (#10840). This mirrors the lazy WebGL loader in
+// Image, search, and Unicode11 addons load via dynamic import so their module
+// code stays out of the renderer's eager critical path — they are parsed and
+// compiled only when a terminal actually needs them. This mirrors the lazy WebGL loader in
 // TerminalWebGLManager.ts: a module-level class cache plus a single in-flight
 // promise guard so concurrent callers share one import, and the promise is nulled
 // on failure so a later call can retry.
@@ -20,6 +19,7 @@ const IMAGE_ADDON_OPTIONS = { pixelLimit: 2_000_000, storageLimit: 8 };
 // is a type-only construct — erased at compile time, no eager runtime import), so
 // the resolved class assigns to the cache without a type assertion.
 type ImageAddonConstructor = (typeof import("@xterm/addon-image"))["ImageAddon"];
+type SearchAddonConstructor = (typeof import("@xterm/addon-search"))["SearchAddon"];
 type Unicode11AddonConstructor = (typeof import("@xterm/addon-unicode11"))["Unicode11Addon"];
 
 let ImageAddonClass: ImageAddonConstructor | null = null;
@@ -39,6 +39,25 @@ function loadImageAddon(): Promise<ImageAddonConstructor> {
     }
   );
   return imageAddonLoadPromise;
+}
+
+let SearchAddonClass: SearchAddonConstructor | null = null;
+let searchAddonLoadPromise: Promise<SearchAddonConstructor> | null = null;
+
+function loadSearchAddon(): Promise<SearchAddonConstructor> {
+  if (SearchAddonClass) return Promise.resolve(SearchAddonClass);
+  if (searchAddonLoadPromise) return searchAddonLoadPromise;
+  searchAddonLoadPromise = import("@xterm/addon-search").then(
+    (mod) => {
+      SearchAddonClass = mod.SearchAddon;
+      return SearchAddonClass;
+    },
+    (err) => {
+      searchAddonLoadPromise = null;
+      throw err;
+    }
+  );
+  return searchAddonLoadPromise;
 }
 
 let Unicode11AddonClass: Unicode11AddonConstructor | null = null;
@@ -66,7 +85,7 @@ export interface TerminalAddons {
   fitAddon: FitAddon;
   serializeAddon: SerializeAddon;
   imageAddon: ImageAddon | null;
-  searchAddon: SearchAddon;
+  searchAddon: SearchAddon | null;
   fileLinksDisposable: IDisposable | null;
   imageLinksDisposable: IDisposable | null;
   webLinksAddon: WebLinksAddon | null;
@@ -112,21 +131,22 @@ export async function setupTerminalAddons(terminal: Terminal): Promise<TerminalA
     );
   }
 
-  // SearchAddon registers no parser hooks and does nothing until a search is
-  // invoked, so it stays in the eager set — keeping it non-null avoids a
-  // nullable-search blast radius across TerminalSearchBar and the wake path.
-  const searchAddon = new SearchAddon({ highlightLimit: SEARCH_HIGHLIGHT_LIMIT });
-  terminal.loadAddon(searchAddon);
-
   return {
     fitAddon,
     serializeAddon,
     imageAddon: null,
-    searchAddon,
+    searchAddon: null,
     fileLinksDisposable: null,
     imageLinksDisposable: null,
     webLinksAddon: null,
   };
+}
+
+export async function createSearchAddon(terminal: Terminal): Promise<SearchAddon> {
+  const SearchAddonCtor = await loadSearchAddon();
+  const addon = new SearchAddonCtor({ highlightLimit: SEARCH_HIGHLIGHT_LIMIT });
+  terminal.loadAddon(addon);
+  return addon;
 }
 
 export async function createImageAddon(terminal: Terminal): Promise<ImageAddon> {
@@ -184,6 +204,8 @@ export const __testing = {
   resetLoaderState(): void {
     ImageAddonClass = null;
     imageAddonLoadPromise = null;
+    SearchAddonClass = null;
+    searchAddonLoadPromise = null;
     Unicode11AddonClass = null;
     unicode11AddonLoadPromise = null;
   },

@@ -64,20 +64,17 @@ describe("FileSearchService adversarial", () => {
     const dir = fs.mkdtempSync(path.join(os.tmpdir(), "file-search-adv-"));
     tempDirs.push(dir);
     const gitClient = createGitClient();
-    const checkDeferred = createDeferred<boolean>();
-    gitClient.checkIsRepo.mockReturnValue(checkDeferred.promise);
-    gitClient.revparse.mockResolvedValue(`${dir}\n`);
-    gitClient.raw.mockResolvedValue("README.md\0src/main.ts\0");
+    const listDeferred = createDeferred<string>();
+    gitClient.raw.mockReturnValue(listDeferred.promise);
     createHardenedGitMock.mockReturnValue(gitClient);
 
     const service = await createService();
     const first = service.search({ cwd: dir, query: "read", limit: 5 });
     const second = service.search({ cwd: dir, query: "main", limit: 5 });
 
-    checkDeferred.resolve(true);
+    listDeferred.resolve("README.md\0src/main.ts\0");
 
     await expect(Promise.all([first, second])).resolves.toEqual([["README.md"], ["src/main.ts"]]);
-    expect(gitClient.checkIsRepo).toHaveBeenCalledTimes(1);
     expect(gitClient.raw).toHaveBeenCalledTimes(1);
   });
 
@@ -136,37 +133,30 @@ describe("FileSearchService adversarial", () => {
     expect(result).not.toContain("secret/hidden.txt");
   });
 
-  it("keeps git pathspecs rooted to the cwd inside a larger repository", async () => {
+  it("lists from the cwd itself inside a larger repository", async () => {
     const repoRoot = fs.mkdtempSync(path.join(os.tmpdir(), "file-search-adv-"));
     tempDirs.push(repoRoot);
     const cwd = path.join(repoRoot, "packages", "app");
     fs.mkdirSync(cwd, { recursive: true });
 
-    const repoClient = createGitClient();
-    repoClient.raw.mockResolvedValue("packages/app/src/main.ts\0packages/app/src/utils.ts\0");
     const cwdClient = createGitClient();
-    cwdClient.checkIsRepo.mockResolvedValue(true);
-    cwdClient.revparse.mockResolvedValue(`${repoRoot}\n`);
+    cwdClient.raw.mockResolvedValue("src/main.ts\0src/utils.ts\0");
 
     createHardenedGitMock.mockImplementation((baseDir) => {
-      if (baseDir === repoRoot) {
-        return repoClient;
-      }
-      return cwdClient;
+      if (baseDir === cwd) return cwdClient;
+      throw new Error(`unexpected git client for ${baseDir}`);
     });
 
     const service = await createService();
     const result = await service.search({ cwd, query: "./src////main.ts", limit: 10 });
 
     expect(result).toEqual(["src/main.ts"]);
-    expect(repoClient.raw).toHaveBeenCalledWith([
+    expect(cwdClient.raw).toHaveBeenCalledWith([
       "ls-files",
       "-z",
       "--cached",
       "--others",
       "--exclude-standard",
-      "--",
-      "packages/app",
     ]);
   });
 

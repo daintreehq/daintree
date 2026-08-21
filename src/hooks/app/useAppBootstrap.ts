@@ -21,23 +21,14 @@ import { useNotificationSettingsStore, usePluginManagerStore } from "@/store";
 import { preloadNewWorktreeDialog } from "@/components/Sidebar";
 import { primeRadix } from "@/components/ui/radix-loader";
 import {
-  preloadSettingsDialog,
   preloadActionPalette,
   preloadQuickSwitcher,
   preloadProjectSwitcherPalette,
   preloadWorktreePalette,
   preloadNewTerminalPalette,
   preloadPanelPalette,
-  preloadThemePalette,
   preloadSendToAgentPalette,
   preloadQuickCreatePalette,
-  preloadLogLevelPalette,
-  preloadPluginManagerView,
-  preloadWorktreeOverviewModal,
-  preloadShortcutReferenceDialog,
-  preloadCrossWorktreeDiff,
-  loadJetbrainsMono500,
-  loadJetbrainsMono600,
 } from "@/lazyPanels";
 
 /**
@@ -152,7 +143,6 @@ export function useAppBootstrap() {
     const execute = () => {
       if (controller.signal.aborted) return;
       setIdleHousekeepingReady(true);
-      void preloadSettingsDialog();
       void preloadNewWorktreeDialog();
       void preloadActionPalette();
       void preloadQuickSwitcher();
@@ -160,16 +150,8 @@ export function useAppBootstrap() {
       void preloadWorktreePalette();
       void preloadNewTerminalPalette();
       void preloadPanelPalette();
-      void preloadThemePalette();
       void preloadSendToAgentPalette();
       void preloadQuickCreatePalette();
-      void preloadLogLevelPalette();
-      void preloadPluginManagerView();
-      void preloadWorktreeOverviewModal();
-      void preloadShortcutReferenceDialog();
-      void preloadCrossWorktreeDiff();
-      loadJetbrainsMono500().catch(() => {});
-      loadJetbrainsMono600().catch(() => {});
       // Warm the shared Radix overlay primitives chunk (`radix-deferred`) so the
       // ProjectSwitcherPalette popover and context menus are ready on first
       // interaction in a freshly loaded project view. Otherwise this chunk is

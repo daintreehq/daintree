@@ -7,7 +7,11 @@ import type { Dirent } from "fs";
 
 interface FileListCacheEntry {
   files: string[];
-  sortedFiles: string[];
+  normalizedFiles: string[];
+  basenameStarts: Int32Array;
+  sortedFiles?: string[];
+  lastSearchQuery?: string;
+  lastSearchCandidates?: number[];
 }
 
 const FILE_LIST_CACHE = new Cache<string, FileListCacheEntry>({
@@ -57,6 +61,12 @@ const FALLBACK_SKIP_NAMES = new Set<string>([
 // repo logs once at startup, not once per file-watcher invalidation.
 const FALLBACK_CAP_WARNED = new Set<string>();
 
+let pathCollator: Intl.Collator | null = null;
+function getPathCollator(): Intl.Collator {
+  pathCollator ??= new Intl.Collator();
+  return pathCollator;
+}
+
 function toPosixPath(p: string): string {
   return p.split(path.sep).join("/");
 }
@@ -74,24 +84,57 @@ function normalizeQuery(rawQuery: string): string {
   return normalized.replace(/\/+/g, "/");
 }
 
-function scorePath(normalizedQuery: string, file: string): number | null {
+function scorePath(
+  normalizedQuery: string,
+  normalizedFile: string,
+  basenameStart: number
+): number | null {
   if (normalizedQuery.length === 0) return 0;
 
-  const fileLower = file.toLowerCase();
-  const normalizedFile = fileLower.endsWith("/") ? fileLower.slice(0, -1) : fileLower;
-  const basename = normalizedFile.slice(normalizedFile.lastIndexOf("/") + 1);
-
-  if (basename === normalizedQuery) return 0;
-  if (normalizedFile === normalizedQuery) return 1;
-
-  const basenameIdx = basename.indexOf(normalizedQuery);
   const fileIdx = normalizedFile.indexOf(normalizedQuery);
+  if (fileIdx === -1) return null;
+
+  let basenameIdx: number;
+  if (fileIdx >= basenameStart) {
+    basenameIdx = fileIdx - basenameStart;
+  } else {
+    const inBasename = normalizedFile.indexOf(normalizedQuery, basenameStart);
+    basenameIdx = inBasename === -1 ? -1 : inBasename - basenameStart;
+  }
+
+  const queryLength = normalizedQuery.length;
+  if (basenameIdx === 0 && basenameStart + queryLength === normalizedFile.length) return 0;
+  if (fileIdx === 0 && queryLength === normalizedFile.length) return 1;
 
   if (basenameIdx === 0) return 10;
   if (fileIdx === 0) return 20;
   if (basenameIdx > 0) return 30 + basenameIdx;
-  if (fileIdx > 0) return 50 + fileIdx;
-  return null;
+  return 50 + fileIdx;
+}
+
+function buildScoringInputs(files: string[]): {
+  normalizedFiles: string[];
+  basenameStarts: Int32Array;
+} {
+  const normalizedFiles = new Array<string>(files.length);
+  const basenameStarts = new Int32Array(files.length);
+  for (let i = 0; i < files.length; i++) {
+    const lower = files[i].toLowerCase();
+    const normalized = lower.endsWith("/") ? lower.slice(0, -1) : lower;
+    normalizedFiles[i] = normalized;
+    basenameStarts[i] = normalized.lastIndexOf("/") + 1;
+  }
+  return { normalizedFiles, basenameStarts };
+}
+
+function sortedFilesFor(entry: FileListCacheEntry): string[] {
+  if (!entry.sortedFiles) {
+    const collator = getPathCollator();
+    entry.sortedFiles = [...entry.files].sort(
+      (a, b) => a.length - b.length || collator.compare(a, b)
+    );
+  }
+  return entry.sortedFiles;
 }
 
 function pickTopMatches(entry: FileListCacheEntry, query: string, limit: number): string[] {
@@ -100,16 +143,31 @@ function pickTopMatches(entry: FileListCacheEntry, query: string, limit: number)
   const effectiveLimit = clampInt(limit, 1, 100, MAX_RESULTS_DEFAULT);
 
   if (normalizedQuery.length === 0) {
-    return entry.sortedFiles.slice(0, effectiveLimit);
+    return sortedFilesFor(entry).slice(0, effectiveLimit);
   }
 
   const best: Array<{ file: string; score: number }> = [];
+  const matchingCandidates: number[] = [];
+  const previousCandidates = entry.lastSearchCandidates;
+  const canNarrowPrevious =
+    previousCandidates !== undefined &&
+    entry.lastSearchQuery !== undefined &&
+    normalizedQuery.startsWith(entry.lastSearchQuery);
+  const candidates = canNarrowPrevious ? previousCandidates : undefined;
   let worstIdx = -1;
   let worstScore = -Infinity;
 
-  for (const file of entry.files) {
-    const score = scorePath(normalizedQuery, file);
+  const candidateCount = candidates?.length ?? entry.files.length;
+  for (let candidateIdx = 0; candidateIdx < candidateCount; candidateIdx++) {
+    const fileIdx = candidates?.[candidateIdx] ?? candidateIdx;
+    const file = entry.files[fileIdx];
+    const score = scorePath(
+      normalizedQuery,
+      entry.normalizedFiles[fileIdx],
+      entry.basenameStarts[fileIdx]
+    );
     if (score === null) continue;
+    matchingCandidates.push(fileIdx);
 
     if (best.length < effectiveLimit) {
       best.push({ file, score });
@@ -133,7 +191,10 @@ function pickTopMatches(entry: FileListCacheEntry, query: string, limit: number)
     }
   }
 
-  best.sort((a, b) => a.score - b.score || a.file.localeCompare(b.file));
+  entry.lastSearchQuery = normalizedQuery;
+  entry.lastSearchCandidates = matchingCandidates;
+  const collator = getPathCollator();
+  best.sort((a, b) => a.score - b.score || collator.compare(a.file, b.file));
   return best.map((m) => m.file);
 }
 
@@ -181,43 +242,34 @@ async function loadFilesFromDisk(cwd: string): Promise<string[]> {
     });
   }
 
-  return results.sort((a, b) => a.localeCompare(b));
+  const collator = getPathCollator();
+  return results.sort((a, b) => collator.compare(a, b));
 }
 
 async function loadGitFiles(cwd: string): Promise<string[]> {
   const git = await createHardenedGit(cwd);
-  const isRepo = await git.checkIsRepo();
-  if (!isRepo) {
-    return [];
-  }
-
-  const gitRootRaw = (await git.revparse(["--show-toplevel"])).trim();
-  const gitRoot = path.resolve(gitRootRaw);
-  const relativeToRoot = toPosixPath(path.relative(gitRoot, cwd));
-  const pathspec = relativeToRoot && relativeToRoot !== "." ? relativeToRoot : null;
 
   // -z: NUL-delimited output. Required to round-trip filenames containing tabs,
   // newlines, or backslashes; core.quotepath=false alone only suppresses high-bit
   // quoting.
   // No --recurse-submodules: submodules surface as a single gitlink and recursing
   // would require a separate ls-files invocation per submodule and break the
-  // root-relative path mapping below.
+  // cwd-relative path mapping below.
   // No -t / skip-worktree filtering: skip-worktree entries appear as phantoms in
   // the index but are intentionally surfaced so users can still search files they
   // chose not to check out.
-  const args = ["ls-files", "-z", "--cached", "--others", "--exclude-standard"] as string[];
-  if (pathspec) {
-    args.push("--", pathspec);
+  // Running from cwd scopes ls-files to that subtree and emits cwd-relative
+  // paths. A non-repository cwd exits non-zero and falls back to the walker.
+  const output = await git.raw(["ls-files", "-z", "--cached", "--others", "--exclude-standard"]);
+
+  const files: string[] = [];
+  let start = 0;
+  while (start < output.length) {
+    let end = output.indexOf("\0", start);
+    if (end === -1) end = output.length;
+    if (end > start) files.push(output.slice(start, end));
+    start = end + 1;
   }
-
-  const output = await (await createHardenedGit(gitRoot)).raw(args);
-  const prefix = pathspec ? `${pathspec.replace(/\/$/, "")}/` : "";
-
-  const files = output
-    .split("\0")
-    .filter((p) => p.length > 0)
-    .map((p) => (prefix && p.startsWith(prefix) ? p.slice(prefix.length) : p))
-    .filter((p) => p.length > 0);
 
   const dirs = new Set<string>();
   for (const file of files) {
@@ -231,8 +283,8 @@ async function loadGitFiles(cwd: string): Promise<string[]> {
     }
   }
 
-  const dirPaths = Array.from(dirs).map((d) => `${d}/`);
-  return [...files, ...dirPaths];
+  for (const dir of dirs) files.push(`${dir}/`);
+  return files;
 }
 
 const NL_STOP_WORDS = new Set([
@@ -386,8 +438,12 @@ export class FileSearchService {
     const epoch = FILE_LIST_EPOCHS.get(resolvedCwd) ?? 0;
     const loadPromise: Promise<FileListCacheEntry> = this.loadFileList(resolvedCwd)
       .then((loaded) => {
-        const sortedFiles = [...loaded].sort((a, b) => a.length - b.length || a.localeCompare(b));
-        const entry: FileListCacheEntry = { files: loaded, sortedFiles };
+        const { normalizedFiles, basenameStarts } = buildScoringInputs(loaded);
+        const entry: FileListCacheEntry = {
+          files: loaded,
+          normalizedFiles,
+          basenameStarts,
+        };
         if ((FILE_LIST_EPOCHS.get(resolvedCwd) ?? 0) === epoch) {
           FILE_LIST_CACHE.set(resolvedCwd, entry);
         }
