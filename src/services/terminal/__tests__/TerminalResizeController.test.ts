@@ -2171,6 +2171,156 @@ describe("TerminalResizeController", () => {
     });
   });
 
+  /**
+   * A pixel box small enough to be a transient rather than layout used to
+   * succeed rather than fail: the column and row math floors at FitAddon's own
+   * 2x1, so a few-pixel box produced a valid-looking grid and both halves
+   * adopted it. A cached pane parses every byte through that, and xterm re-wraps
+   * committed scrollback to two columns on the way — damage no later reflow
+   * undoes, leaving the history a vertical strip until it scrolls away (#11900).
+   *
+   * `applyBackgroundWindowResize` generates exactly that box: it scales every
+   * pane's origin by the ratio of Main's forwarded content bounds, so one
+   * transient near-zero bound during a minimize or view detach shrinks every
+   * backgrounded terminal at once.
+   *
+   * The guards sit at the entry points rather than at the shared cached-metrics
+   * helper alone, which is what the last two cases here pin down: by the time
+   * that helper runs, `applyBackgroundResize` has already cancelled queued work,
+   * and `resize`'s measured branch never reaches it at all.
+   */
+  describe("minimum viable resize box (#11900)", () => {
+    function mockDataBuffer(): ResizeControllerDeps["dataBuffer"] {
+      return {
+        flushForTerminal: vi.fn(),
+        resetForTerminal: vi.fn(),
+        getQueuedBytes: vi.fn(() => 0),
+        resumeFlush: vi.fn(),
+      } as unknown as ResizeControllerDeps["dataBuffer"];
+    }
+
+    function attachCellDims(managed: ReturnType<typeof createManagedTerminal>) {
+      Object.assign(managed.terminal, {
+        _core: { _renderService: { dimensions: { css: { cell: CELL } } } },
+      });
+    }
+
+    function makeController(managed: ReturnType<typeof createManagedTerminal>) {
+      return new TerminalResizeController({
+        getInstance: vi.fn(() => managed),
+        dataBuffer: mockDataBuffer(),
+      });
+    }
+
+    /**
+     * The four fields a rejected box must leave alone. Captured from the fixture
+     * and compared to itself rather than asserted against literals, so the seed
+     * values stay the fixture's business.
+     */
+    const geometryOf = (managed: ReturnType<typeof createManagedTerminal>) => ({
+      lastWidth: managed.lastWidth,
+      lastHeight: managed.lastHeight,
+      latestCols: managed.latestCols,
+      latestRows: managed.latestRows,
+    });
+
+    it("refuses a sub-viable box on the cached-metrics branch without moving either grid", () => {
+      const managed = createManagedTerminal();
+      managed.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
+      managed.isFocused = false;
+      managed.isVisible = false;
+      attachCellDims(managed);
+      const controller = makeController(managed);
+      const before = geometryOf(managed);
+
+      expect(controller.resize("term-1", 5, 5)).toBeNull();
+      // Either axis alone is enough to disqualify the box.
+      expect(controller.resize("term-1", 1600, 5)).toBeNull();
+      expect(controller.resize("term-1", 5, 800)).toBeNull();
+
+      expect(managed.terminal.resize).not.toHaveBeenCalled();
+      expect(resizeMock).not.toHaveBeenCalled();
+      expect(geometryOf(managed)).toEqual(before);
+    });
+
+    it("refuses a sub-viable box on the measured branch a cached view's stale isVisible routes it down", () => {
+      // A backgrounded project view leaves `isVisible` true from before the
+      // detach, so the tier is BACKGROUND but the branch taken is the measured
+      // one — which never touches the cached-metrics helper. Reverting only
+      // `resize`'s own guard fails this test while the helper backstop remains.
+      const managed = createManagedTerminal();
+      managed.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
+      managed.isFocused = false;
+      managed.isVisible = true;
+      attachCellDims(managed);
+      const controller = makeController(managed);
+      const before = geometryOf(managed);
+
+      expect(controller.resize("term-1", 5, 5)).toBeNull();
+
+      expect(managed.terminal.resize).not.toHaveBeenCalled();
+      expect(managed.fitAddon.proposeDimensions).not.toHaveBeenCalled();
+      expect(resizeMock).not.toHaveBeenCalled();
+      expect(geometryOf(managed)).toEqual(before);
+    });
+
+    it("applies the next viable box after refusing a sub-viable one", () => {
+      // Refusal must not stamp the box into the pixel cache: the dedup gate
+      // compares against it, so a poisoned cache would swallow the recovery
+      // measurement that arrives when real layout returns.
+      const managed = createManagedTerminal();
+      attachCellDims(managed);
+      const controller = makeController(managed);
+
+      expect(controller.resize("term-1", 5, 5)).toBeNull();
+      expect(controller.resize("term-1", 1200, 700)).toEqual({ cols: colsFor(1200), rows: 35 });
+
+      expect(managed.terminal.resize).toHaveBeenCalledTimes(1);
+      expect(managed.terminal.resize).toHaveBeenCalledWith(colsFor(1200), 35);
+      expect(resizeMock).toHaveBeenCalledTimes(1);
+      expect(resizeMock).toHaveBeenCalledWith("term-1", colsFor(1200), 35);
+    });
+
+    it("refuses a sub-viable background box without cancelling queued foreground work", () => {
+      // `applyBackgroundResize` cancels pending work before it derives a grid,
+      // so a guard placed in the shared helper instead of at the top would drop
+      // this debounced resize on the way to rejecting the box.
+      const managed = createManagedTerminal();
+      managed.isFocused = false;
+      managed.terminal.buffer.active.length = 300;
+      attachCellDims(managed);
+      const controller = makeController(managed);
+
+      controller.resize("term-1", 1200, 800);
+      expect(controller.applyBackgroundResize("term-1", 5, 5)).toBeNull();
+      vi.advanceTimersByTime(100);
+
+      expect(managed.terminal.resize).toHaveBeenCalledWith(colsFor(1200), 40);
+      expect(resizeMock).toHaveBeenCalledWith("term-1", colsFor(1200), 40);
+    });
+
+    it("refuses a sub-viable background box without overwriting a stashed viable one", () => {
+      // Same ordering requirement one branch over: the lock stash is written
+      // before the grid is derived, so a late guard would replace real geometry
+      // with the transient and replay it on unlock.
+      const managed = createManagedTerminal();
+      managed.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
+      managed.isFocused = false;
+      managed.isVisible = false;
+      attachCellDims(managed);
+      const controller = makeController(managed);
+
+      controller.lockResize("term-1", true);
+      controller.applyBackgroundResize("term-1", 1600, 800);
+      expect(controller.applyBackgroundResize("term-1", 5, 5)).toBeNull();
+      expect(managed.pendingBackgroundResize).toEqual({ width: 1600, height: 800 });
+
+      controller.lockResize("term-1", false);
+
+      expect(resizeMock).toHaveBeenCalledWith("term-1", colsFor(1600), 40);
+    });
+  });
+
   describe("applyBackgroundResize", () => {
     function makeController(managed: ReturnType<typeof createManagedTerminal> | undefined) {
       return new TerminalResizeController({
@@ -2400,6 +2550,10 @@ describe("TerminalResizeController", () => {
       expect(controller.applyBackgroundResize("term-1", 1600, Number.POSITIVE_INFINITY)).toBeNull();
       expect(controller.applyBackgroundResize("term-1", 0, 800)).toBeNull();
       expect(controller.applyBackgroundResize("term-1", -100, 800)).toBeNull();
+      // Positive but far too small to be layout: the column math floors at 2, so
+      // this used to resize both grids to a 2-column strip rather than fail
+      // (#11900).
+      expect(controller.applyBackgroundResize("term-1", 5, 5)).toBeNull();
       expect(resizeMock).not.toHaveBeenCalled();
       expect(managed.lastWidth).toBe(800);
       expect(managed.latestCols).toBe(80);

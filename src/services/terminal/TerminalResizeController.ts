@@ -13,6 +13,38 @@ const RESIZE_DEBOUNCE_MS = 100;
 const RESIZE_LOCK_TTL_MS = 5000;
 const SETTLED_RESIZE_DELAY_MS = 500;
 
+/**
+ * Smallest a container may report on either axis before its pixel box stops
+ * counting as layout at all.
+ *
+ * A box of a few pixels does not fail loudly — `colsForWidth` floors at 2 and
+ * `rowsForHeight` at 1, matching FitAddon, so it succeeds at 2x1 and both grids
+ * adopt it. A cached pane keeps parsing bytes through that, and xterm re-wraps
+ * committed scrollback to two columns on the way; reflow cannot undo it when
+ * real layout returns, so the history stays a vertical strip until it scrolls
+ * away (#11900). `applyBackgroundWindowResize` produces exactly such a box by
+ * scaling every pane's origin against a transient near-zero content bound
+ * during a minimize or a view detach.
+ *
+ * The value is the floor `fit`/`reconcileGeometryFresh` already applied to
+ * measured rects — this makes the pixel entry points agree rather than
+ * introducing a second policy.
+ */
+const MIN_VIABLE_RESIZE_PX = 50;
+
+/**
+ * Whether a pixel box is worth deriving a grid from. Finiteness is checked
+ * explicitly because `Infinity >= MIN_VIABLE_RESIZE_PX` is true.
+ */
+function isViableResizeBox(width: number, height: number): boolean {
+  return (
+    Number.isFinite(width) &&
+    Number.isFinite(height) &&
+    width >= MIN_VIABLE_RESIZE_PX &&
+    height >= MIN_VIABLE_RESIZE_PX
+  );
+}
+
 import { exceedsResizeFlushSyncBudget, RESIZE_FLUSH_SYNC_BUDGET_BYTES } from "./resizeFlushBudget";
 
 export { RESIZE_FLUSH_SYNC_BUDGET_BYTES };
@@ -351,7 +383,7 @@ export class TerminalResizeController {
     }
 
     const rect = managed.hostElement.getBoundingClientRect();
-    if (rect.width < 50 || rect.height < 50) {
+    if (!isViableResizeBox(rect.width, rect.height)) {
       return null;
     }
 
@@ -414,9 +446,12 @@ export class TerminalResizeController {
       return null;
     }
 
-    // Mirrors applyBackgroundResize's guard: a non-finite box would otherwise poison the
-    // pixel cache and deliver a garbage grid to the PTY.
-    if (!Number.isFinite(width) || !Number.isFinite(height)) {
+    // Mirrors applyBackgroundResize's guard, ahead of tier routing, the dedup
+    // check and every cache write so both branches below inherit it: a box that
+    // is non-finite — or too small to be layout rather than a transient — would
+    // otherwise poison the pixel cache and deliver a garbage grid to the PTY
+    // (#11900).
+    if (!isViableResizeBox(width, height)) {
       return null;
     }
 
@@ -592,7 +627,12 @@ export class TerminalResizeController {
     width: number,
     height: number
   ): { cols: number; rows: number } | null {
-    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    // Above the instance lookup, the alt-buffer exclusion and the resize lock on
+    // purpose. Rejecting further down would cancel queued foreground work and
+    // overwrite a stashed viable box on the way to dropping this one, so a
+    // transient near-zero bound would cost geometry even once it stopped
+    // corrupting it (#11900).
+    if (!isViableResizeBox(width, height)) {
       return null;
     }
     const managed = this.deps.getInstance(id);
@@ -677,6 +717,13 @@ export class TerminalResizeController {
     height: number,
     wasAtBottom: boolean
   ): CachedMetricGrid | null {
+    // Both callers reject a sub-viable box earlier, where rejecting costs
+    // nothing. Repeated here because this is where a box becomes a grid and
+    // reaches the caches — the invariant belongs with the mutation, so a future
+    // caller inherits it instead of re-deriving it (#11900).
+    if (!isViableResizeBox(width, height)) {
+      return null;
+    }
     const cellDims = getXtermCellDimensions(managed.terminal);
     if (!cellDims) {
       return null;
@@ -862,7 +909,7 @@ export class TerminalResizeController {
     if (!managed.hostElement.checkVisibility()) return false;
 
     const rect = managed.hostElement.getBoundingClientRect();
-    if (rect.width < 50 || rect.height < 50) return false;
+    if (!isViableResizeBox(rect.width, rect.height)) return false;
 
     // Never reflow a live alt-screen TUI here. A full-screen app (OpenCode, and
     // any agent with blockAltScreen disabled) paints an absolutely-positioned

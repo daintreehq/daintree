@@ -464,9 +464,14 @@ describe("TerminalResizeController ↔ FitAddon column parity (#11095)", () => {
     }
   });
 
-  it("clamps to FitAddon's floor when the container is thinner than the gutter", () => {
-    const narrow = { width: 10, height: 360 };
-    const { managed, fitAddon } = buildPane(narrow);
+  // Both floors are reached with a container the resize entry points still
+  // accept as layout — a box below that floor is now refused outright rather
+  // than flooring to 2x1 and re-wrapping a cached pane's scrollback (#11900),
+  // so the degenerate geometry has to come from the gutter and the cell size
+  // instead of from the box.
+  it("clamps to FitAddon's floor when the gutter is wider than the container", () => {
+    const narrow = { width: 50, height: 360 };
+    const { managed, fitAddon } = buildPane(narrow, { scrollbar: { width: 60 } });
     const controller = makeController(managed);
 
     const proposal = fitAddon.proposeDimensions();
@@ -479,8 +484,8 @@ describe("TerminalResizeController ↔ FitAddon column parity (#11095)", () => {
   });
 
   it("clamps to FitAddon's floor when the container is shorter than one cell", () => {
-    const short = { width: 665, height: 9 };
-    const { managed, fitAddon } = buildPane(short);
+    const short = { width: 665, height: 50 };
+    const { managed, fitAddon } = buildPane(short, {}, { width: 9, height: 60 });
     const controller = makeController(managed);
 
     const proposal = fitAddon.proposeDimensions();
@@ -488,6 +493,17 @@ describe("TerminalResizeController ↔ FitAddon column parity (#11095)", () => {
 
     expect(applied).toEqual({ cols: proposal!.cols, rows: proposal!.rows });
     expect(applied!.rows).toBeGreaterThanOrEqual(1);
+  });
+
+  it("refuses a box too small to be layout instead of flooring it to a strip", () => {
+    // The #11900 ingress: a transient near-zero content bound scaled down every
+    // cached pane's origin, and 2x1 is a grid the controller used to accept.
+    const { managed } = buildPane();
+    const controller = makeController(managed);
+
+    expect(controller.resize("t1", 5, 5)).toBeNull();
+    expect(managed.latestCols).toBe(80); // untouched seed value
+    expect(resizeMock).not.toHaveBeenCalled();
   });
 
   it("rejects a non-finite box instead of caching a garbage grid", () => {
