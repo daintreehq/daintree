@@ -441,6 +441,39 @@ describe("DaintreeAssistantSettingsTab", () => {
     });
   });
 
+  // #11907: with the confirmation sheet off, the tier is the entire remaining
+  // boundary, so the warning has to name it — and keep naming the right one
+  // when the selector moves (a missing memo dependency would freeze the old
+  // tier in the copy while the selector reads the new one).
+  it("names the configured tier in the auto-approve warning and follows the selector", async () => {
+    mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex", "daintree-assistant"]);
+    helpPanelState.preferredAgentId = "daintree-assistant";
+
+    const { container } = render(
+      <SettingsValidationProvider>
+        <DaintreeAssistantSettingsTab />
+      </SettingsValidationProvider>
+    );
+    await waitForContent(container, "Auto-approve assistant actions");
+
+    fireEvent.click(
+      screen.getByLabelText("Auto-approve Daintree Assistant actions during help sessions")
+    );
+
+    await waitForContent(
+      container,
+      "New sessions run at the Action capability tier, which is the only remaining safeguard"
+    );
+
+    fireEvent.change(screen.getByLabelText("Capability tier"), { target: { value: "system" } });
+
+    await waitForContent(
+      container,
+      "New sessions run at the System capability tier, which is the only remaining safeguard"
+    );
+    expect(container.textContent).not.toContain("the Action capability tier");
+  });
+
   // The gate is what keeps a switch off agents where flipping it does nothing.
   it("hides the bypass toggle for an agent with no bypass mechanism", async () => {
     mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "byoa"]);

@@ -190,7 +190,7 @@ const {
   mockSetAssistantPaneActionContextResolver,
   mockEnsureReady,
 } = vi.hoisted(() => ({
-  mockValidateToken: vi.fn<(token: string) => "action" | "system" | false>(),
+  mockValidateToken: vi.fn<(token: string) => "workbench" | "action" | "system" | false>(),
   mockIsRunning: vi.fn<() => boolean>(),
   mockCurrentPort: vi.fn<() => number | null>(),
   mockPreparePaneConfig: vi.fn(),
@@ -1248,9 +1248,12 @@ describe("terminal spawn handler - help session detection (#6524)", () => {
     expect(mockPreparePaneConfig).not.toHaveBeenCalled();
   });
 
-  it("injects DAINTREE_ASSISTANT_AUTO_APPROVE=1 when the Daintree Assistant launches with bypassPermissions on", async () => {
+  // Workbench on purpose (#11907): auto-approve rides the bypassPermissions
+  // snapshot, never the MCP capability tier. The assistant is no longer pinned
+  // to `system`, so a low-tier session must still inject the env var.
+  it("injects DAINTREE_ASSISTANT_AUTO_APPROVE=1 when the Daintree Assistant launches with bypassPermissions on, regardless of tier", async () => {
     mockValidateToken.mockImplementation((token) =>
-      token === "assistant-bypass" ? "system" : false
+      token === "assistant-bypass" ? "workbench" : false
     );
     mockGetBypassPermissions.mockImplementation((token) => token === "assistant-bypass");
 

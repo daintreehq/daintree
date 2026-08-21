@@ -764,15 +764,17 @@ describe("buildAnnotations", () => {
   });
 });
 
-// Policy guard for the help-session MCP tiers (#10640). NOTE: the Daintree
-// Assistant itself is now provisioned at the `system` tier (see
-// HelpSessionService.doProvision — selecting it grants full capability), so the
-// assertions below lock the `action` tier that still governs the Claude/Codex
-// help OVERLAYS, plus the system/external boundaries the assistant relies on.
+// Policy guard for the help-session MCP tiers (#10640). Every help agent —
+// the Daintree Assistant and the Claude/Codex overlays alike — provisions at
+// the tier the user configured, with `action` as the default floor (#11907
+// removed the identity override that used to pin the assistant to `system`).
+// So the assertions below lock the `action` tier that governs a default
+// session, plus the system/external boundaries above it.
 // The distinction is load-bearing: `action` leaves irreversible mutations
-// (git.push, worktree.delete) TIER_NOT_PERMITTED so the overlays need a
-// human-approved scoped grant, while `system` (the assistant) permits them
-// subject only to the confirm gate. `external` used to permit them too — #11585
+// (git.push, worktree.delete) TIER_NOT_PERMITTED so a default session needs a
+// human-approved scoped grant, while `system` — the tier a user has to select
+// deliberately — permits them subject only to the confirm gate. `external` used
+// to permit them too — #11585
 // removed them from that surface entirely, so `system` is now the only tier that
 // reaches them. These assertions lock those invariants against allowlist drift
 // (e.g. someone promoting git.push into the action tier). They test the runtime
