@@ -25,6 +25,7 @@ import {
   getXtermCellDimensions,
   REVEAL_REWRAP_QUIESCENT_MS,
   RESIZE_FLUSH_SYNC_BUDGET_BYTES,
+  MIN_VIABLE_RESIZE_PX,
   type ResizeControllerDeps,
 } from "../TerminalResizeController";
 import { TERMINAL_SCROLLBAR_WIDTH } from "@/config/xtermConfig";
@@ -2171,6 +2172,328 @@ describe("TerminalResizeController", () => {
     });
   });
 
+  /**
+   * A pixel box small enough to be a transient rather than layout used to
+   * succeed rather than fail: the column and row math floors at FitAddon's own
+   * 2x1, so a few-pixel box produced a valid-looking grid and both halves
+   * adopted it. A cached pane parses every byte through that, and xterm re-wraps
+   * committed scrollback to two columns on the way — multiplying the line count
+   * until the scrollback cap evicts the top of the history for good (#11900).
+   *
+   * `applyBackgroundWindowResize` generates that box: it scales every pane's
+   * origin by the ratio of the content bounds Main forwards on a window resize,
+   * maximize or full-screen transition, so one implausible bound shrinks every
+   * backgrounded terminal at once.
+   *
+   * Two questions, asked separately. Is the BOX layout at all, and does the GRID
+   * it derives describe a pane — the second because the pixel floor is a fixed
+   * count of pixels while the grid also depends on the gutter and the cell.
+   * Both are asked at the entry points rather than at the shared cached-metrics
+   * helper alone, which is what the placement cases here pin down: by the time
+   * that helper runs, `applyBackgroundResize` has already discarded stashes and
+   * cancelled queued work, and `resize`'s measured branch never reaches it.
+   */
+  describe("minimum viable resize box (#11900)", () => {
+    function mockDataBuffer(): ResizeControllerDeps["dataBuffer"] {
+      return {
+        flushForTerminal: vi.fn(),
+        resetForTerminal: vi.fn(),
+        getQueuedBytes: vi.fn(() => 0),
+        resumeFlush: vi.fn(),
+      } as unknown as ResizeControllerDeps["dataBuffer"];
+    }
+
+    function attachCellDims(
+      managed: ReturnType<typeof createManagedTerminal>,
+      cell: { width: number; height: number } = CELL
+    ) {
+      Object.assign(managed.terminal, {
+        _core: { _renderService: { dimensions: { css: { cell } } } },
+      });
+    }
+
+    function makeController(managed: ReturnType<typeof createManagedTerminal>) {
+      return new TerminalResizeController({
+        getInstance: vi.fn(() => managed),
+        dataBuffer: mockDataBuffer(),
+      });
+    }
+
+    /**
+     * Every field a rejected box must leave alone. Captured from the fixture and
+     * compared to itself rather than asserted against literals, so the seed
+     * values stay the fixture's business.
+     *
+     * `latestWasAtBottom` has to be seeded against the grain to be worth
+     * snapshotting: the fixture's buffer computes as at-bottom, so a seed of
+     * `true` would survive an unwanted write unchanged. `seedDetectable` flips
+     * it, making any write visible.
+     */
+    const geometryOf = (managed: ReturnType<typeof createManagedTerminal>) => ({
+      lastWidth: managed.lastWidth,
+      lastHeight: managed.lastHeight,
+      latestCols: managed.latestCols,
+      latestRows: managed.latestRows,
+      latestWasAtBottom: managed.latestWasAtBottom,
+    });
+
+    function seedDetectable(managed: ReturnType<typeof createManagedTerminal>) {
+      managed.latestWasAtBottom = false;
+    }
+
+    it("refuses a sub-viable box on the cached-metrics branch without moving either grid", () => {
+      const managed = createManagedTerminal();
+      managed.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
+      managed.isFocused = false;
+      managed.isVisible = false;
+      attachCellDims(managed);
+      seedDetectable(managed);
+      const controller = makeController(managed);
+      const before = geometryOf(managed);
+
+      expect(controller.resize("term-1", 5, 5)).toBeNull();
+      // Either axis alone is enough to disqualify the box.
+      expect(controller.resize("term-1", 1600, 5)).toBeNull();
+      expect(controller.resize("term-1", 5, 800)).toBeNull();
+
+      expect(managed.terminal.resize).not.toHaveBeenCalled();
+      expect(resizeMock).not.toHaveBeenCalled();
+      expect(geometryOf(managed)).toEqual(before);
+    });
+
+    it("accepts the smallest viable box and refuses the pixel just below it", () => {
+      // Pins which side of the comparison the threshold itself falls on —
+      // rejected one pixel below, accepted exactly at it — so tightening the
+      // check to `>` fails here. Being relative to the constant, this cannot
+      // detect a change to its VALUE, and after the column floor below it no
+      // longer needs to: the pixel bound decides whether a box is worth
+      // measuring, while the grid it produces is what has to be safe.
+      const belowFloor = MIN_VIABLE_RESIZE_PX - 1;
+
+      for (const box of [
+        { width: belowFloor, height: MIN_VIABLE_RESIZE_PX },
+        { width: MIN_VIABLE_RESIZE_PX, height: belowFloor },
+      ]) {
+        const managed = createManagedTerminal();
+        attachCellDims(managed);
+        seedDetectable(managed);
+        const controller = makeController(managed);
+        const before = geometryOf(managed);
+
+        expect(controller.resize("term-1", box.width, box.height)).toBeNull();
+        expect(geometryOf(managed)).toEqual(before);
+      }
+
+      const managed = createManagedTerminal();
+      // A cell small enough that the smallest viable box still clears the column
+      // floor — the box is what is under test here, not the grid it becomes.
+      attachCellDims(managed, { width: 1, height: 1 });
+      const controller = makeController(managed);
+
+      expect(
+        controller.resize("term-1", MIN_VIABLE_RESIZE_PX, MIN_VIABLE_RESIZE_PX)
+      ).not.toBeNull();
+    });
+
+    it("treats a non-finite host rect as unmeasurable in fit and the fresh reconcile", () => {
+      // A comparison against the floor is false for NaN, so both methods used to
+      // fall past their size check on an unmeasurable rect and take a proposal
+      // from FitAddon's own DOM read instead — a different measurement channel,
+      // trusted for a box the first one could not measure. Sharing one predicate
+      // makes finiteness part of the question.
+      for (const rect of [
+        { left: 0, width: Number.NaN, height: 700 },
+        { left: 0, width: 1000, height: Number.POSITIVE_INFINITY },
+      ]) {
+        const managed = createManagedTerminal();
+        attachCellDims(managed);
+        seedDetectable(managed);
+        managed.hostElement.getBoundingClientRect.mockReturnValue(rect);
+        const controller = makeController(managed);
+        const before = geometryOf(managed);
+
+        expect(controller.fit("term-1")).toBeNull();
+        // Reported as "not measurable yet" so the reveal sweep retries rather
+        // than treating the pane as reconciled.
+        expect(controller.reconcileGeometryFresh("term-1")).toBe(false);
+
+        expect(managed.fitAddon.proposeDimensions).not.toHaveBeenCalled();
+        expect(managed.terminal.resize).not.toHaveBeenCalled();
+        expect(resizeMock).not.toHaveBeenCalled();
+        expect(geometryOf(managed)).toEqual(before);
+      }
+    });
+
+    it("refuses a background grid that bottomed out on the column floor", () => {
+      // The pixel floor bounds the box, not the grid: a box on that floor still
+      // divides to the column floor once the gutter and a large cell are
+      // applied. Re-wrapping committed scrollback that narrow is the damage, so
+      // the cached-metrics paths check the derived grid too.
+      const managed = createManagedTerminal();
+      managed.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
+      managed.isFocused = false;
+      managed.isVisible = false;
+      attachCellDims(managed, { width: 30, height: 60 });
+      seedDetectable(managed);
+      const controller = makeController(managed);
+      const before = geometryOf(managed);
+
+      // Comfortably above the pixel floor, yet only the floor's worth of columns
+      // survives the gutter and the cell — the witness that this box is rejected
+      // for its grid and not for its size.
+      const box = MIN_VIABLE_RESIZE_PX * 2;
+      expect(Math.floor((box - SCROLLBAR_PX) / 30)).toBeLessThanOrEqual(2);
+
+      expect(controller.resize("term-1", box, box)).toBeNull();
+      expect(controller.applyBackgroundResize("term-1", box, box)).toBeNull();
+
+      expect(managed.terminal.resize).not.toHaveBeenCalled();
+      expect(resizeMock).not.toHaveBeenCalled();
+      expect(geometryOf(managed)).toEqual(before);
+    });
+
+    it("refuses a sub-viable box on the measured branch a cached view's stale isVisible routes it down", () => {
+      // A backgrounded project view leaves `isVisible` true from before the
+      // detach, so the tier is BACKGROUND but the branch taken is the measured
+      // one — which never touches the cached-metrics helper. Reverting only
+      // `resize`'s own guard fails this test while the helper backstop remains.
+      const managed = createManagedTerminal();
+      managed.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
+      managed.isFocused = false;
+      managed.isVisible = true;
+      attachCellDims(managed);
+      const controller = makeController(managed);
+      const before = geometryOf(managed);
+
+      expect(controller.resize("term-1", 5, 5)).toBeNull();
+
+      expect(managed.terminal.resize).not.toHaveBeenCalled();
+      expect(managed.fitAddon.proposeDimensions).not.toHaveBeenCalled();
+      expect(resizeMock).not.toHaveBeenCalled();
+      expect(geometryOf(managed)).toEqual(before);
+    });
+
+    it("lets a transient pass through without costing the resize that follows it", () => {
+      // The refusal must be inert, not merely safe: it commits nothing of its
+      // own, and the next real measurement still lands. (The caches it must
+      // leave alone are covered by the snapshots above; a 5px box and a 1200px
+      // box differ too plainly for the pixel dedup to be the thing under test.)
+      const managed = createManagedTerminal();
+      attachCellDims(managed);
+      const controller = makeController(managed);
+
+      expect(controller.resize("term-1", 5, 5)).toBeNull();
+      expect(controller.resize("term-1", 1200, 700)).toEqual({ cols: colsFor(1200), rows: 35 });
+
+      expect(managed.terminal.resize).toHaveBeenCalledTimes(1);
+      expect(managed.terminal.resize).toHaveBeenCalledWith(colsFor(1200), 35);
+      expect(resizeMock).toHaveBeenCalledTimes(1);
+      expect(resizeMock).toHaveBeenCalledWith("term-1", colsFor(1200), 35);
+    });
+
+    /**
+     * Both rejection kinds, run through every placement case below. They are
+     * refused for different reasons at different checks, and each has to be
+     * refused before `applyBackgroundResize` starts discarding geometry — so
+     * neither can stand in for the other.
+     *
+     * The floor-grid box clears the pixel bound with room to spare; what
+     * disqualifies it is the wide cell, which leaves only the floor's worth of
+     * columns once the gutter is reserved.
+     */
+    const FLOOR_GRID_CELL = { width: 30, height: 60 };
+    const rejected = [
+      { kind: "a sub-viable box", box: { width: 5, height: 5 }, cell: CELL },
+      { kind: "a floor-grid box", box: { width: 100, height: 100 }, cell: FLOOR_GRID_CELL },
+    ];
+
+    for (const { kind, box, cell } of rejected) {
+      it(`refuses ${kind} without cancelling queued foreground work`, () => {
+        // `applyBackgroundResize` cancels pending work before it derives a grid,
+        // so a guard placed in the shared helper instead of at the top would
+        // drop this debounced resize on the way to rejecting the box.
+        const managed = createManagedTerminal();
+        managed.isFocused = false;
+        managed.terminal.buffer.active.length = 300;
+        attachCellDims(managed, cell);
+        const controller = makeController(managed);
+
+        controller.resize("term-1", 1200, 800);
+        expect(controller.hasPendingResize("term-1")).toBe(true);
+
+        expect(controller.applyBackgroundResize("term-1", box.width, box.height)).toBeNull();
+        expect(controller.hasPendingResize("term-1")).toBe(true);
+
+        // Drain without naming the debounce interval — the survival of the job
+        // is the contract, its duration is not.
+        controller.flushResize("term-1");
+
+        const cols = Math.max(2, Math.floor((1200 - SCROLLBAR_PX) / cell.width));
+        const rows = Math.max(1, Math.floor(800 / cell.height));
+        expect(managed.terminal.resize).toHaveBeenCalledTimes(1);
+        expect(managed.terminal.resize).toHaveBeenCalledWith(cols, rows);
+        expect(resizeMock).toHaveBeenCalledTimes(1);
+        expect(resizeMock).toHaveBeenCalledWith("term-1", cols, rows);
+      });
+
+      it(`refuses ${kind} without overwriting a stashed viable one`, () => {
+        // Same ordering requirement one branch over: the lock stash is written
+        // before the grid is derived, so a late guard would replace real
+        // geometry with the transient and replay it on unlock.
+        const managed = createManagedTerminal();
+        managed.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
+        managed.isFocused = false;
+        managed.isVisible = false;
+        attachCellDims(managed, cell);
+        const controller = makeController(managed);
+
+        controller.lockResize("term-1", true);
+        controller.applyBackgroundResize("term-1", 1600, 800);
+        expect(controller.applyBackgroundResize("term-1", box.width, box.height)).toBeNull();
+        expect(managed.pendingBackgroundResize).toEqual({ width: 1600, height: 800 });
+
+        controller.lockResize("term-1", false);
+
+        const cols = Math.max(2, Math.floor((1600 - SCROLLBAR_PX) / cell.width));
+        expect(resizeMock).toHaveBeenCalledWith(
+          "term-1",
+          cols,
+          Math.max(1, Math.floor(800 / cell.height))
+        );
+      });
+
+      it(`refuses ${kind} without clearing a stash through the alt-buffer branch`, () => {
+        // The alt-buffer exclusion discards the stash on its way out, so a guard
+        // sitting below it would let a transient delivered while a TUI is up
+        // throw away geometry captured before the TUI started. Pins the guard
+        // above that branch, which the lock-stash case alone does not.
+        const managed = createManagedTerminal();
+        managed.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
+        managed.isFocused = false;
+        managed.isVisible = false;
+        attachCellDims(managed, cell);
+        const controller = makeController(managed);
+
+        controller.lockResize("term-1", true);
+        controller.applyBackgroundResize("term-1", 1600, 800);
+
+        managed.isAltBuffer = true;
+        expect(controller.applyBackgroundResize("term-1", box.width, box.height)).toBeNull();
+        expect(managed.pendingBackgroundResize).toEqual({ width: 1600, height: 800 });
+
+        managed.isAltBuffer = false;
+        controller.lockResize("term-1", false);
+
+        const cols = Math.max(2, Math.floor((1600 - SCROLLBAR_PX) / cell.width));
+        expect(resizeMock).toHaveBeenCalledWith(
+          "term-1",
+          cols,
+          Math.max(1, Math.floor(800 / cell.height))
+        );
+      });
+    }
+  });
+
   describe("applyBackgroundResize", () => {
     function makeController(managed: ReturnType<typeof createManagedTerminal> | undefined) {
       return new TerminalResizeController({
@@ -2400,6 +2723,10 @@ describe("TerminalResizeController", () => {
       expect(controller.applyBackgroundResize("term-1", 1600, Number.POSITIVE_INFINITY)).toBeNull();
       expect(controller.applyBackgroundResize("term-1", 0, 800)).toBeNull();
       expect(controller.applyBackgroundResize("term-1", -100, 800)).toBeNull();
+      // Positive but far too small to be layout: the column math floors at 2, so
+      // this used to resize both grids to a 2-column strip rather than fail
+      // (#11900).
+      expect(controller.applyBackgroundResize("term-1", 5, 5)).toBeNull();
       expect(resizeMock).not.toHaveBeenCalled();
       expect(managed.lastWidth).toBe(800);
       expect(managed.latestCols).toBe(80);

@@ -13,6 +13,48 @@ const RESIZE_DEBOUNCE_MS = 100;
 const RESIZE_LOCK_TTL_MS = 5000;
 const SETTLED_RESIZE_DELAY_MS = 500;
 
+/**
+ * Smallest a container may report on either axis before its pixel box stops
+ * counting as layout at all.
+ *
+ * A box of a few pixels does not fail loudly — `colsForWidth` floors at 2 and
+ * `rowsForHeight` at 1, matching FitAddon, so it succeeds at 2x1 and both grids
+ * adopt it. A cached pane keeps parsing bytes through that, and xterm re-wraps
+ * committed scrollback to two columns on the way. Widening does unwrap ordinary
+ * soft-wrapped lines, so the strip is not always permanent — but a rewrap that
+ * narrow multiplies the line count, and whatever overflows the scrollback cap is
+ * evicted and gone, as is anything the app hard-wrapped at two columns while the
+ * PTY was that size (#11900). `applyBackgroundWindowResize` produces such a box by
+ * scaling every pane's origin against the window content bounds Main forwards
+ * on a resize, maximize or full-screen transition — one implausible bound
+ * shrinks every cached pane at once.
+ *
+ * The value is the floor `fit`/`reconcileGeometryFresh` already applied to
+ * measured rects — this makes the pixel entry points agree rather than
+ * introducing a second policy. It bounds the box, not the grid the box becomes;
+ * the column floor in `resizeGridFromCachedCellMetrics` covers that.
+ */
+export const MIN_VIABLE_RESIZE_PX = 50;
+
+/**
+ * FitAddon's own column floor, which `colsForWidth` reproduces. A width that
+ * divides to exactly this produced no measurement — the floor absorbed it.
+ */
+const FIT_MIN_COLS = 2;
+
+/**
+ * Whether a pixel box is worth deriving a grid from. Finiteness is checked
+ * explicitly because `Infinity >= MIN_VIABLE_RESIZE_PX` is true.
+ */
+function isViableResizeBox(width: number, height: number): boolean {
+  return (
+    Number.isFinite(width) &&
+    Number.isFinite(height) &&
+    width >= MIN_VIABLE_RESIZE_PX &&
+    height >= MIN_VIABLE_RESIZE_PX
+  );
+}
+
 import { exceedsResizeFlushSyncBudget, RESIZE_FLUSH_SYNC_BUDGET_BYTES } from "./resizeFlushBudget";
 
 export { RESIZE_FLUSH_SYNC_BUDGET_BYTES };
@@ -206,7 +248,7 @@ function toFitPx(px: number): number {
  */
 function colsForWidth(terminal: Terminal, widthPx: number, cellWidth: number): number {
   const availableWidth = toFitPx(widthPx) - getEffectiveScrollbarWidth(terminal.options);
-  return Math.max(2, normalizeTerminalGridDimension(availableWidth / cellWidth));
+  return Math.max(FIT_MIN_COLS, normalizeTerminalGridDimension(availableWidth / cellWidth));
 }
 
 /**
@@ -351,7 +393,7 @@ export class TerminalResizeController {
     }
 
     const rect = managed.hostElement.getBoundingClientRect();
-    if (rect.width < 50 || rect.height < 50) {
+    if (!isViableResizeBox(rect.width, rect.height)) {
       return null;
     }
 
@@ -414,9 +456,12 @@ export class TerminalResizeController {
       return null;
     }
 
-    // Mirrors applyBackgroundResize's guard: a non-finite box would otherwise poison the
-    // pixel cache and deliver a garbage grid to the PTY.
-    if (!Number.isFinite(width) || !Number.isFinite(height)) {
+    // Mirrors applyBackgroundResize's guard, ahead of tier routing, the dedup
+    // check and every cache write so both branches below inherit it: a box that
+    // is non-finite — or too small to be layout rather than a transient — would
+    // otherwise poison the pixel cache and deliver a garbage grid to the PTY
+    // (#11900).
+    if (!isViableResizeBox(width, height)) {
       return null;
     }
 
@@ -592,11 +637,24 @@ export class TerminalResizeController {
     width: number,
     height: number
   ): { cols: number; rows: number } | null {
-    if (!Number.isFinite(width) || !Number.isFinite(height) || width <= 0 || height <= 0) {
+    // Above the instance lookup, the alt-buffer exclusion and the resize lock on
+    // purpose. Rejecting further down would cancel queued foreground work and
+    // overwrite a stashed viable box on the way to dropping this one, so a
+    // transient near-zero bound would cost geometry even once it stopped
+    // corrupting it (#11900).
+    if (!isViableResizeBox(width, height)) {
       return null;
     }
     const managed = this.deps.getInstance(id);
     if (!managed) return null;
+    // The box cleared the pixel floor, but the grid it derives is what actually
+    // reflows, and that also depends on the gutter and the cell. Ask before
+    // touching anything: the checks below discard the alt-buffer stash, replace
+    // the lock stash and cancel queued work, so learning at the helper that this
+    // box was never usable would cost real geometry to reject an unusable one.
+    if (this.derivesFloorGrid(managed, width)) {
+      return null;
+    }
     // Choke point for the alt-screen exclusion: a live full-screen TUI paints an
     // absolutely-positioned frame that xterm never reflows, and racing its own
     // SIGWINCH redraw is the #10805/#10632 corruption. Leaving BOTH grids at the
@@ -662,6 +720,21 @@ export class TerminalResizeController {
     return { cols: grid.cols, rows: grid.rows };
   }
 
+  /**
+   * Whether `width` divides down to the column floor for this pane's cached
+   * cell — the signal that a box passed the pixel floor and still describes no
+   * usable pane (#11900).
+   *
+   * Answers `false` when cell metrics are missing: that is a separate condition
+   * with its own handling further in, and reporting it as a floor grid here
+   * would reroute it.
+   */
+  private derivesFloorGrid(managed: ManagedTerminal, width: number): boolean {
+    const cellDims = getXtermCellDimensions(managed.terminal);
+    if (!cellDims) return false;
+    return colsForWidth(managed.terminal, width, cellDims.width) <= FIT_MIN_COLS;
+  }
+
   // Computes cols/rows from cached cell metrics with no DOM reads — a hidden or
   // detached view has no live layout to measure. Pure computation + state
   // update; the caller owns the commit policy, and the two callers differ in
@@ -677,12 +750,37 @@ export class TerminalResizeController {
     height: number,
     wasAtBottom: boolean
   ): CachedMetricGrid | null {
+    // Both callers reject a sub-viable box earlier, where rejecting costs
+    // nothing. Repeated here because this is where a box becomes a grid and
+    // reaches the caches — the invariant belongs with the mutation, so a future
+    // caller inherits it instead of re-deriving it (#11900).
+    if (!isViableResizeBox(width, height)) {
+      return null;
+    }
     const cellDims = getXtermCellDimensions(managed.terminal);
     if (!cellDims) {
       return null;
     }
     const cols = colsForWidth(managed.terminal, width, cellDims.width);
     const rows = rowsForHeight(height, cellDims.height);
+    // The pixel floor is necessary but not sufficient. It is a fixed count of
+    // pixels, while the grid those pixels become also depends on the gutter and
+    // the cell: at the largest supported font a box sitting exactly on that
+    // floor still divides to FIT_MIN_COLS. Checked on columns alone because
+    // columns are what reflow rewraps.
+    //
+    // A conservative classification, not a proof — a genuine many-way split at
+    // maximum font size can measure this narrow. These paths are where that
+    // trade is worth taking: they extrapolate from a cached cell with no live
+    // layout to check against, and declining costs only staleness, since both
+    // grids stay put and the reveal-time `reconcileGeometryFresh` measures the
+    // pane for real. `applyBackgroundResize` asks the same question up front, so
+    // by here this is the backstop for anything that reaches the conversion
+    // another way; a visible pane keeps its floor grid, the honest answer when
+    // the container really is that narrow (#11900).
+    if (cols <= FIT_MIN_COLS) {
+      return null;
+    }
     // Convergence is a claim about the grid xterm actually holds, never about
     // the target cache. `latestCols`/`latestRows` are written AHEAD of the
     // commit — by `applyResize`'s settled branch, by `sendPtyResize`, and by the
@@ -862,7 +960,7 @@ export class TerminalResizeController {
     if (!managed.hostElement.checkVisibility()) return false;
 
     const rect = managed.hostElement.getBoundingClientRect();
-    if (rect.width < 50 || rect.height < 50) return false;
+    if (!isViableResizeBox(rect.width, rect.height)) return false;
 
     // Never reflow a live alt-screen TUI here. A full-screen app (OpenCode, and
     // any agent with blockAltScreen disabled) paints an absolutely-positioned
