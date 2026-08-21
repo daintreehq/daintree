@@ -175,12 +175,18 @@ test.describe.serial("Core: Panel Drag & Drop", () => {
       await expect.poll(() => getDockChipIds(window), { timeout: T_MEDIUM }).toEqual(dockIdsBefore);
 
       await pointerReorderDockChip(window, chips.first(), chips.nth(1));
-      const dockIdsAfter = await getDockChipIds(window);
 
+      // Poll for the moved chip rather than reading once: the helper's fixed
+      // settle can land mid-flight, and a single read of a rail still animating
+      // is the flake this test was rewritten to remove.
+      await expect
+        .poll(() => getDockChipIds(window).then((ids) => ids[0]), { timeout: T_MEDIUM })
+        .not.toBe(dockIdsBefore[0]);
+
+      const dockIdsAfter = await getDockChipIds(window);
       expect(dockIdsAfter).toHaveLength(2);
       // Same panels, different order — the chip moved past its neighbour.
       expect([...dockIdsAfter].sort()).toEqual([...dockIdsBefore].sort());
-      expect(dockIdsAfter[0]).not.toBe(dockIdsBefore[0]);
 
       // The rail must repaint, not just the store. Reordering writes only
       // `panelIds`, which the offscreen containers above mirror directly — they

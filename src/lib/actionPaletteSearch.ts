@@ -343,8 +343,7 @@ export type ActionRanker<T extends SearchableAction> = (
 export function createActionRanker<T extends SearchableAction>(
   items: readonly T[]
 ): ActionRanker<T> {
-  let titleRanks: number[] | undefined;
-  let charMasks: Int32Array | undefined;
+  let rankCache: TitleRankCacheEntry | undefined;
   let cachedMruList: readonly ActionFrecencyEntry[] | undefined;
   let cachedMruMap: ReadonlyMap<string, ActionFrecencyEntry> | undefined;
   let cachedTerminalKind: string | undefined;
@@ -355,8 +354,7 @@ export function createActionRanker<T extends SearchableAction>(
   return (query, mruList, context) => {
     const lowerQuery = normalizeRankQuery(query);
     if (lowerQuery === undefined) return [];
-    titleRanks ??= computeTitleRanks(items).ranks;
-    charMasks ??= computeCharMasks(items);
+    rankCache ??= computeTitleRanks(items);
     if (cachedMruList !== mruList) {
       cachedMruList = mruList;
       cachedMruMap = buildMruMap(mruList);
@@ -375,8 +373,8 @@ export function createActionRanker<T extends SearchableAction>(
     return rankActionMatchesWithTitleRanks(
       lowerQuery,
       items,
-      titleRanks,
-      charMasks,
+      rankCache.ranks,
+      rankCache.charMasks,
       cachedMruMap!,
       cachedBoostedCategories
     );

@@ -474,10 +474,24 @@ describe("CopyTreeService", () => {
       // silently resurrecting files the caller (or the project's settings)
       // explicitly excluded. The selection has to stay in `filter` alone.
       expect(options.always).toBeUndefined();
-      expect(options.filter).toEqual(
-        expect.arrayContaining(["docs/**", "docs/**/.*", "docs/**/.*/**"])
-      );
+      expect(options.filter).toEqual(["docs/**", "docs/**/.*", "docs/**/.*/**"]);
       expect(options.exclude).toEqual(["**/*.secret"]);
+    });
+
+    it("lets a selection reach the dotfiles its own globs name", async () => {
+      await copyTreeService.generate(tempDir, { includePaths: ["docs/**"] });
+
+      const options = sdkOptions();
+      expect(options.includeHidden).toBe(true);
+      // Widening what the walk sees must not loosen the ignore stack with it —
+      // a gitignored `.env` stays out either way.
+      expect(options.respectGitignore).toBe(true);
+    });
+
+    it("keeps the SDK's hidden-file default for an unfiltered whole-project copy", async () => {
+      await copyTreeService.generate(tempDir);
+
+      expect(sdkOptions().includeHidden).toBeFalsy();
     });
 
     it.each([

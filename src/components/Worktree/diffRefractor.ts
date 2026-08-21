@@ -49,6 +49,12 @@ const FAST_STRINGIFY_MARKER = Symbol.for("daintree.refractor.fast-token-stringif
  * This builds that node directly and only falls back to refractor's path when a
  * `wrap` hook actually contributed attributes (Prism's markup grammar sets a
  * `title` on entity tokens), so the emitted tree stays byte-for-byte identical.
+ *
+ * Note the blast radius: `refractor.Token` IS `Prism.Token` (refractor's core
+ * does `Refractor.prototype = Prism`), so importing this module re-points token
+ * stringification for every refractor consumer in the renderer — MarkdownDocument
+ * included — which is why the equivalence has to hold for all languages, not
+ * just the diff viewer's.
  */
 /**
  * Mirrors hastscript's `addChild`: flattens nested arrays, unwraps `root`
@@ -88,7 +94,7 @@ function isEmptyRecord(record: Record<string, string>): boolean {
 }
 
 function installFastTokenStringify(): void {
-  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- reaching into refractor's Prism internals, mirrored by the equivalence checks in diffRefractor tests
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- reaching into refractor's Prism internals, pinned by the patched-vs-original differential in diffRefractorStringify.test.ts
   const internals = refractor as unknown as RefractorInternals;
   const tokenApi = internals.Token as RefractorInternals["Token"] & Record<symbol, unknown>;
   if (tokenApi[FAST_STRINGIFY_MARKER] === true) return;
