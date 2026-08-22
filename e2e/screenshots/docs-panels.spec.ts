@@ -11,7 +11,7 @@
 import { test, expect, type Page } from "@playwright/test";
 import { execSync } from "child_process";
 import zlib from "zlib";
-import { mkdirSync, rmSync, writeFileSync } from "fs";
+import { mkdirSync, rmSync, statSync, writeFileSync } from "fs";
 import path from "path";
 import { closeApp, type AppContext } from "../helpers/launch";
 import { SEL } from "../helpers/selectors";
@@ -62,17 +62,8 @@ test.describe.serial("Documentation Screenshots — Panels", () => {
     attachLocalOrigin(repo);
     // A PDF and an image for the media grid.
     mkdirSync(path.join(repo.dir, "docs"), { recursive: true });
-    writeFileSync(
-      path.join(repo.dir, "docs/ledger-spec.pdf"),
-      // A minimal but genuinely valid one-page PDF.
-      "%PDF-1.4\n1 0 obj<</Type/Catalog/Pages 2 0 R>>endobj\n" +
-        "2 0 obj<</Type/Pages/Kids[3 0 R]/Count 1>>endobj\n" +
-        "3 0 obj<</Type/Page/Parent 2 0 R/MediaBox[0 0 300 200]/Contents 4 0 R" +
-        "/Resources<</Font<</F1 5 0 R>>>>>>endobj\n" +
-        "4 0 obj<</Length 62>>stream\nBT /F1 16 Tf 30 120 Td (Atlas Ledger spec) Tj ET\nendstream endobj\n" +
-        "5 0 obj<</Type/Font/Subtype/Type1/BaseFont/Helvetica>>endobj\n" +
-        "trailer<</Root 1 0 R>>\n"
-    );
+    writeLedgerSpecPdf(path.join(repo.dir, "docs/ledger-spec.pdf"));
+
     // An image for the media grid to sit beside the PDF, encoded here rather
     // than pasted as a base64 literal: the viewer decodes it, and a stub that
     // fails to decode renders "File no longer exists" instead of a picture.
@@ -250,18 +241,41 @@ test.describe.serial("Documentation Screenshots — Panels", () => {
 
       await cap.shot("terminals-and-panels/file-viewer/file-viewer-media-grid", async () => {
         await resetOverlays(page);
-        await dispatch(page, "file.view", {
-          path: path.join(repo.dir, "docs/ledger-spec.pdf"),
-          location: "grid",
-        });
+        // `file.view` opens a dialog whatever `location` says; the dialog's
+        // own "Open as panel" button is what promotes it into the grid. The
+        // first attempt at this shot passed `location: "grid"`, got two
+        // dialogs, and captured one of them over a dimmed workspace — which
+        // is the state the section immediately above already illustrates.
+        const promote = async (file: string) => {
+          await dispatch(page, "file.view", { path: path.join(repo.dir, file) });
+          const dlg = page
+            .locator('[data-testid="panel-dialog"]')
+            .filter({ hasText: path.basename(file) })
+            .first();
+          await expect(dlg).toBeVisible({ timeout: T_LONG });
+          await dlg.getByText("Open as panel").first().click();
+          await page.waitForTimeout(T_MEDIUM);
+        };
+        // A Markdown viewer beside the image, not the PDF.
+        //
+        // The PDF pane renders as a flat dark rectangle in this build — with a
+        // hand-built PDF and with a genuinely well-formed one from cupsfilter
+        // alike, and after a six-second settle. Chromium's PDF viewer needs
+        // the plugin enabled on the host webPreferences, so this looks like an
+        // app-side gap rather than a fixture problem. Capturing a blank pane
+        // and captioning it "a PDF" would be worse than capturing what the
+        // viewer actually does.
+        await promote("README.md");
+        await promote("assets/brand-mark.png");
+        // Both viewers must be real grid panels. Not an exact count: earlier
+        // shots in this scene leave a File Browser open too.
+        expect(await page.locator(SEL.panel.gridPanel).count()).toBeGreaterThanOrEqual(2);
+        await expect(page.getByText("README.md").first()).toBeVisible({ timeout: T_LONG });
+        await expect(page.getByText("brand-mark.png").first()).toBeVisible({ timeout: T_LONG });
         await page.waitForTimeout(T_MEDIUM);
-        await dispatch(page, "file.view", {
-          path: path.join(repo.dir, "assets/brand-mark.png"),
-          location: "grid",
-        });
-        await page.waitForTimeout(T_LONG);
         await cap.snapWindow(page, "terminals-and-panels/file-viewer/file-viewer-media-grid");
       });
+
     } finally {
       if (ctx) await closeApp(ctx.app).catch(() => {});
       repo.cleanup();
@@ -393,11 +407,15 @@ test.describe.serial("Documentation Screenshots — Panels", () => {
         const bar = panel.locator(SEL.browser.addressBar);
         await bar.click();
         await bar.fill("");
+        // Note the field eats the scheme as you type: this lands as
+        // "//staging.atlas-ledger.dev:3000", which normalizes back to http on
+        // submit. Asserting on the full typed string would never pass.
         await bar.type("http://staging.atlas-ledger.dev:3000", { delay: 10 });
-        // The field resets to the current URL on focus, so prove the typed
-        // value survived before submitting.
         await expect(bar).toHaveValue(/staging\.atlas-ledger\.dev/, { timeout: T_MEDIUM });
         await page.keyboard.press("Enter");
+        // The banner is up within half a second and stays; give it a beat
+        // rather than racing the first paint.
+        await page.waitForTimeout(1500);
         // Gate on the banner's own Allow button, inside the panel.
         //
         // An `[aria-live="assertive"]` match is NOT sufficient: the app also
@@ -478,4 +496,35 @@ function writeSolidPng(file: string, width: number, height: number, rgb: number[
       chunk("IEND", Buffer.alloc(0)),
     ])
   );
+}
+
+/**
+ * A real PDF for the media-grid shot.
+ *
+ * Hand-rolling one does not work: Chromium's viewer wants a valid cross
+ * reference table and a `startxref`, and an almost-correct file opens as an
+ * empty black pane — which is how this shot first shipped with no PDF in it.
+ * macOS ships `cupsfilter`, which produces a genuinely well-formed document
+ * from plain text, so the fixture uses that and skips the pane rather than
+ * fake it where the tool is missing.
+ */
+function writeLedgerSpecPdf(file: string): boolean {
+  const txt = `${file}.txt`;
+  writeFileSync(
+    txt,
+    "Atlas Ledger\n\nReconciliation specification\n\n" +
+      "1. Postings are immutable.\n" +
+      "2. Corrections reference the original.\n" +
+      "3. Balances are currency-safe.\n"
+  );
+  try {
+    execSync(`cupsfilter -i text/plain -m application/pdf ${JSON.stringify(txt)} > ${JSON.stringify(file)}`,
+      { stdio: "ignore", timeout: 60_000 });
+    rmSync(txt, { force: true });
+    return statSync(file).size > 1000;
+  } catch {
+    rmSync(txt, { force: true });
+    rmSync(file, { force: true });
+    return false;
+  }
 }
