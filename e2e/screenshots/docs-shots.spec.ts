@@ -31,6 +31,7 @@ import { dismissBlockingPalette } from "../helpers/overlays";
 import { SEL } from "../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../helpers/timeouts";
 import { createAtlasLedgerRepo, attachLocalOrigin, DOCS_DEMO_ROOT } from "../helpers/docsFixtures";
+import { SAMPLE_PLUGINS_DIR, openPluginManager } from "../helpers/plugins";
 import type { DemoRepo } from "../helpers/screenshotFixtures";
 
 const SCALE = process.env.DAINTREE_SCREENSHOT_SCALE ?? "2";
@@ -170,10 +171,16 @@ interface Booted {
   page: Page;
 }
 
-async function boot(repo: DemoRepo, displayName: string, emoji: string): Promise<Booted> {
+async function boot(
+  repo: DemoRepo,
+  displayName: string,
+  emoji: string,
+  env?: Record<string, string>
+): Promise<Booted> {
   const ctx = await launchApp({
     screenshotScale: SCALE,
     windowSize: { width: WINDOW_WIDTH, height: WINDOW_HEIGHT },
+    ...(env ? { env } : {}),
   });
 
   await mockOpenDialog(ctx.app, repo.dir);
@@ -733,7 +740,13 @@ test.describe.serial("Documentation Screenshots", () => {
     attachLocalOrigin(repo);
     let booted: Booted | undefined;
     try {
-      booted = await boot(repo, "Atlas Ledger", "📒");
+      // Sideload the sample plugins. A fresh e2e profile has none installed, so
+      // the Plugin Manager's "Installed plugins" listbox renders empty and the
+      // detail-pane shot has nothing to click — which is exactly how v3 missed
+      // it. Two plugins also give the list something to *be* a list of.
+      booted = await boot(repo, "Atlas Ledger", "📒", {
+        DAINTREE_E2E_SIDELOAD_PLUGIN_DIR: SAMPLE_PLUGINS_DIR,
+      });
       const { page } = booted;
 
       const runPaletteAction = async (query: string, optionText: RegExp) => {
@@ -781,9 +794,11 @@ test.describe.serial("Documentation Screenshots", () => {
       });
 
       await shot("plugins/plugins-manager-view", async () => {
-        await runPaletteAction("plugin", /plugin/i);
-        const manager = page.locator(SEL.plugin.manager);
-        await expect(manager).toBeVisible({ timeout: T_LONG });
+        // The action dispatches a `daintree:open-plugin-manager` CustomEvent;
+        // firing it directly is the same code path without the palette's
+        // ranking as a dependency.
+        await resetOverlays(page);
+        await openPluginManager(page);
         await page.waitForTimeout(T_MEDIUM);
         await snapWindow(page, "plugins/plugins-manager-view");
       });
@@ -803,7 +818,13 @@ test.describe.serial("Documentation Screenshots", () => {
       });
 
       await shot("troubleshooting/diagnostics/diagnostics-dock-tabs", async () => {
-        await runPaletteAction("diagnostic", /diagnostic/i);
+        // Not the action palette: searching "diagnostic" ranks "Send
+        // diagnostics" (which opens the review dialog) above the dock toggle,
+        // so v3 clicked the wrong action and timed out waiting for a dock that
+        // was never opened. `panel.toggleDiagnostics` is bound to Ctrl+Shift+J
+        // on every platform — see shared/config/defaultKeybindings.ts.
+        await resetOverlays(page);
+        await page.keyboard.press("Control+Shift+KeyJ");
         const dock = page.locator(SEL.diagnostics.dock);
         await expect(dock).toBeVisible({ timeout: T_LONG });
         await page.waitForTimeout(T_MEDIUM);
