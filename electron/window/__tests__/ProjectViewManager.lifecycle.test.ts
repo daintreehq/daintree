@@ -174,7 +174,6 @@ vi.mock("../../setup/protocols.js", () => ({
 }));
 
 vi.mock("../../setup/environment.js", () => ({
-  isDemoMode: false,
   isSmokeTest: false,
 }));
 

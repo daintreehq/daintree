@@ -75,28 +75,6 @@ const DEAD_CHANNEL_ALLOWLIST = new Set<string>([
   // `plugin:ui-prompt-request` event declared in IpcEventMap.
   "plugin:ui-prompt-response",
 
-  // fire-and-forget — main→renderer broadcast for in-app demo command
-  // forwarding (`sendCommandAndAwait` in handlers/demo.ts). The renderer
-  // subscribes through `demo.onExecCommand(channelName, handler)` — a generic
-  // bridge wrapper whose channel argument is dynamic, so the preload-on check
-  // can't see them. Migration: type each via IpcEventMap once the dynamic
-  // dispatch is replaced.
-  "demo:capture-chunk",
-  "demo:capture-stop",
-  "demo:command-done",
-  "demo:exec-annotate",
-  "demo:exec-dismiss-annotation",
-  "demo:exec-dismiss-spotlight",
-  "demo:exec-drag",
-  "demo:exec-press-key",
-  "demo:exec-scroll",
-  "demo:exec-spotlight",
-  "demo:exec-start-capture",
-  "demo:exec-stop-capture",
-  "demo:exec-wait-for-idle",
-  "demo:exec-send-key-to-terminal",
-  "demo:exec-type-in-terminal",
-
   // fire-and-forget — renderer→main `ipcRenderer.send` handled by
   // `ipcMain.on(CHANNELS.ERROR_RETRY_CANCEL)` in errorHandlers.ts.
   "error:retry-cancel",

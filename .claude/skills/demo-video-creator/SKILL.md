@@ -7,7 +7,7 @@ description: Stage Daintree for a screencast — build a throwaway demo project 
 
 This skill stages Daintree for recording. It does **not** record anything and does not animate a cursor — the person recording drives the mouse themselves and captures with their own tool (Screen Studio, QuickTime, OBS). The harness exists so they never have to build a demo project, wire a remote, dirty a worktree, or click through onboarding before every take.
 
-The in-app demo engine (`window.electron.demo`, animated cursor, MediaRecorder capture) is being retired in favour of this. It shipped inside the renderer behind a flag to do a job that turned out to be a filesystem problem. Ignore it — do not drive `window.electron.demo` for new work.
+The in-app demo engine (`window.electron.demo`, animated cursor, MediaRecorder capture) is gone. It shipped inside the renderer behind a flag to do a job that turned out to be a filesystem problem, and nothing replaced it inside the app — capture now happens entirely outside it.
 
 ## The shape of a demo
 

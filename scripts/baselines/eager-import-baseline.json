@@ -8,7 +8,6 @@
     "electron/ipc/handlers/ai.ts",
     "electron/ipc/handlers/app/state.ts",
     "electron/ipc/handlers/appTheme.ts",
-    "electron/ipc/handlers/demo.ts",
     "electron/ipc/handlers/diagnostics.ts",
     "electron/ipc/handlers/forgeResolution.ts",
     "electron/ipc/handlers/forgeSettings.ts",
@@ -165,11 +164,6 @@
       "file": "electron/ipc/handlers/appTheme.ts",
       "line": 24,
       "pattern": "sync-store-get"
-    },
-    {
-      "file": "electron/ipc/handlers/demo.ts",
-      "line": 309,
-      "pattern": "sync-fs"
     },
     {
       "file": "electron/ipc/handlers/diagnostics.ts",

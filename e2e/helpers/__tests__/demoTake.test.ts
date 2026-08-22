@@ -70,7 +70,6 @@ describe("buildTakeArgs", () => {
   it("carries no e2e flags, so a take behaves like a shipped build", () => {
     const args = buildTakeArgs({ appRoot: "/app", workDir: "/tmp/take" });
     expect(args.filter((arg) => arg.includes("daintree-e2e"))).toEqual([]);
-    expect(args).not.toContain("--demo-mode");
   });
 
   it("keeps caller-supplied switches ahead of the app root", () => {

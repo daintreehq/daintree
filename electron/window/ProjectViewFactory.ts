@@ -23,7 +23,6 @@ import {
   INITIAL_PROJECT_ID_ARG,
   INSTANCE_ROLE_ARG,
 } from "./skeletonCss.js";
-import { isDemoMode } from "../setup/runtimeFlags.js";
 import { projectStore } from "../services/ProjectStore.js";
 import type { ProjectViewManager } from "./ProjectViewManager.js";
 
@@ -75,12 +74,6 @@ export function createView(host: ProjectViewManager, projectId: string): WebCont
         `${INITIAL_PROJECT_ID_ARG}=${projectId}`,
         `${INSTANCE_ROLE_ARG}=${resolveInstanceRole()}`,
         ...resolveE2EPreloadArgs(),
-        // Demo mode is gated in the renderer on process.argv. Electron does
-        // not forward main-process CLI switches to renderer argv, so the
-        // `--demo-mode` flag must be threaded explicitly for the DemoCursor /
-        // DemoOverlay / DemoCaptureBridge components to mount and the
-        // window.electron.demo bridge to be exposed.
-        ...(isDemoMode ? ["--demo-mode"] : []),
       ],
     },
   });

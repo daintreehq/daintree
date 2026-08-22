@@ -239,36 +239,6 @@
     "skipReasons": [],
     "pipelineErrors": []
   },
-  "src/components/Demo/DemoCaptureBridge.tsx": {
-    "success": 0,
-    "skip": 0,
-    "error": 1,
-    "pipeline": 0,
-    "hintCount": 1,
-    "errorBailouts": [],
-    "skipReasons": [],
-    "pipelineErrors": []
-  },
-  "src/components/Demo/DemoCursor.tsx": {
-    "success": 0,
-    "skip": 0,
-    "error": 1,
-    "pipeline": 0,
-    "hintCount": 1,
-    "errorBailouts": [],
-    "skipReasons": [],
-    "pipelineErrors": []
-  },
-  "src/components/Demo/DemoOverlay.tsx": {
-    "success": 0,
-    "skip": 0,
-    "error": 1,
-    "pipeline": 0,
-    "hintCount": 1,
-    "errorBailouts": [],
-    "skipReasons": [],
-    "pipelineErrors": []
-  },
   "src/components/DevPreview/BlockedNavBanner.tsx": {
     "success": 0,
     "skip": 0,

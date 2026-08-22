@@ -2,17 +2,11 @@ import path from "node:path";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { DAINTREE_APP_PERMISSIONS_POLICY } from "../../shared/config/permissionsPolicy.js";
 
-// Process-wide Permissions-Policy served on app:// responses. Defaults to the
-// deny-by-default posture; demo mode swaps in a variant that allows
-// `display-capture=(self)` via setAppPermissionsPolicy() at protocol setup so
-// the screencast recorder's getDisplayMedia() call isn't blocked by policy.
-// Kept as module state (not an import of electron `isDemoMode`) so this pure
-// util stays decoupled from the heavyweight environment module and its tests.
-let appPermissionsPolicy = DAINTREE_APP_PERMISSIONS_POLICY;
-
-export function setAppPermissionsPolicy(policy: string): void {
-  appPermissionsPolicy = policy;
-}
+// Permissions-Policy served on app:// responses. Deny-by-default with no
+// runtime relaxation: the only caller that ever swapped this at runtime was
+// demo mode, relaxing display-capture for the in-app recorder that no longer
+// exists.
+const appPermissionsPolicy = DAINTREE_APP_PERMISSIONS_POLICY;
 
 export interface AppProtocolHeaders extends Record<string, string> {
   "Content-Type": string;

@@ -95,7 +95,6 @@ vi.mock("../../setup/protocols.js", () => ({
 }));
 
 vi.mock("../../setup/environment.js", () => ({
-  isDemoMode: false,
   isSmokeTest: false,
 }));
 
@@ -136,11 +135,9 @@ vi.mock("../skeletonCss.js", () => ({
   resolveInitialCanvasBackgroundColor: vi.fn(() => "#1f1b16"),
 }));
 
-// ProjectViewManager imports isDemoMode from setup/environment.js, whose
 // module-level side effects (deepLinkUrlQueue app.on, userData setPath) need
 // the real electron app API the partial mock above does not provide.
 vi.mock("../../setup/environment.js", () => ({
-  isDemoMode: false,
   isSmokeTest: false,
 }));
 

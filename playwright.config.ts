@@ -159,19 +159,20 @@ export default defineConfig({
       retries: 0,
     },
     {
-      // Demo-engine pipeline — exercises the in-app demo automation API
-      // (window.electron.demo) to record screencasts and drive scripted
-      // terminal input. Runs on demand via the `demo` suite in
-      // .github/workflows/e2e.yml; not a release gate.
+      // Demo staging harness — proves the golden-profile round trip that
+      // `npm run demo` depends on: build a scene, bake a profile, restore it
+      // into a fresh directory, and relaunch straight back into the project.
+      // Runs on demand via the `demo` suite in .github/workflows/e2e.yml; not
+      // a release gate.
       //
       // workers:1 is mandatory and baked into the project (not a CLI flag):
-      // these specs cold-launch Electron and record at 4K, so parallel
-      // workers contend on the crashpad Mach port and the shared demo repo
-      // fixtures. Keeping it here guarantees serialization even for a bare
-      // local `npx playwright test --project=demo`.
+      // these specs cold-launch Electron more than once and share one demo
+      // repo root, so parallel workers contend on the crashpad Mach port and
+      // on the same fixture paths. Keeping it here guarantees serialization
+      // even for a bare local `npx playwright test --project=demo`.
       //
-      // 1800s (30 min) — demo recording choreography plus Electron cold
-      // launch on Windows justifies the same budget as `screenshots`.
+      // 1800s (30 min) — several cold Electron launches per spec, plus a
+      // Windows cold start, justifies the same budget as `screenshots`.
       name: "demo",
       testDir: "./e2e/demo",
       timeout: 1_800_000,

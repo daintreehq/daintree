@@ -168,9 +168,6 @@
     "win-job-object": "file:electron/native/win-job-object",
     "yauzl": "^3.4.0"
   },
-  "optionalDependencies": {
-    "ffmpeg-static": "^5.2.0"
-  },
   "overrides": {
     "@tailwindcss/vite": {
       "vite": "^8.0.0"

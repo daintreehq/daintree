@@ -113,7 +113,6 @@ vi.mock("../skeletonCss.js", () => ({
 }));
 
 vi.mock("../../setup/environment.js", () => ({
-  isDemoMode: false,
   isSmokeTest: false,
 }));
 

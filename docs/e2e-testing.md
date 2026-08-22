@@ -18,7 +18,7 @@ npm run test:e2e:full-terminal     # Run a single bucket — substitute any of:
                                    #   full-plugins
 npm run test:e2e:online            # Claude/OpenCode-dependent online tests
 npm run test:e2e:nightly           # Memory-leak / soak suite (serialized, workers=1)
-npm run test:e2e:demo              # Demo-engine specs (workers=1, screencast capture)
+npm run test:e2e:demo              # Staging-harness specs (workers=1)
 npx playwright test e2e/full/terminal/core-terminal-search.spec.ts  # Single file
 PWDEBUG=1 npx playwright test --project=core                         # Debug mode
 ```
@@ -38,7 +38,7 @@ Tests are split into twelve Playwright projects:
 - **online** — Tests that interact with real agent CLIs (requires `ANTHROPIC_API_KEY`).
 - **nightly** — Long-running memory-leak detection (workers=1, no retries). The project name predates the scheduled nightly; it now runs as part of the `stabilize` sweep and on demand, not on a cron.
 - **screenshots** — Marketing screenshot pipeline. Run on demand via `screenshots.yml`, not part of the PR/release gates.
-- **demo** — Demo-engine specs that exercise the in-app demo automation API (`window.electron.demo`) — screencast recording and scripted terminal input (workers=1, no retries). Runs on demand via the `demo` suite in `e2e.yml`; not a release gate. The 4K dimension assertion in `demo-reel` is skipped on hosted CI (where the virtual display can't reach 4K) unless `DAINTREE_DEMO_STRICT_DIMS=1` is set.
+- **demo** — Staging-harness specs (workers=1, no retries). They prove the round trip behind `npm run demo`: build a throwaway scene, bake an app profile, restore it into a fresh directory, and relaunch into the same project with its staged panels. Runs on demand via the `demo` suite in `e2e.yml`; not a release gate. Recording itself is not automated — a human drives the app and captures with their own screen recorder, so nothing here asserts frame dimensions.
 
 ## Configuration
 
@@ -89,9 +89,8 @@ e2e/
 ├── screenshots/         # marketing screenshot pipeline (on demand)
 │   ├── store-reel.spec.ts
 │   └── theme-review.spec.ts
-└── demo/                # demo-engine specs (on demand)
-    ├── demo-reel.spec.ts
-    └── demo-terminal-input.spec.ts
+└── demo/                # staging-harness specs (on demand)
+    └── staging-smoke.spec.ts
 ```
 
 ## Shared Helpers

@@ -40,13 +40,7 @@ import {
   shouldRetryGpuAfterUpdate,
 } from "../services/gpuDisabledFlag.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
-import {
-  e2eCrashDumpsDir,
-  isDemoMode,
-  isE2EMode,
-  isSmokeTest,
-  smokeTestStart,
-} from "./runtimeFlags.js";
+import { e2eCrashDumpsDir, isE2EMode, isSmokeTest, smokeTestStart } from "./runtimeFlags.js";
 // Side-effect import: registers the macOS `daintree://` `open-url` listener on
 // the early-load path (#9559). environment.ts is imported first in main.ts, so
 // the listener is live before `app.whenReady()` resolves — see deepLinkUrlQueue.
@@ -574,7 +568,7 @@ export function getEarlyPathRefreshPromise(): Promise<void> | null {
 // ProjectViewManager) should import from ./runtimeFlags.js directly. Imported
 // as local bindings (not a bare `export ... from`) because environment.ts uses
 // isSmokeTest internally below.
-export { isDemoMode, isSmokeTest, smokeTestStart };
+export { isSmokeTest, smokeTestStart };
 
 // Same deal for the Windows PATH helpers, which moved to ./windowsPath.js so
 // the terminal spawn path can reach them without this module's `app.*` and

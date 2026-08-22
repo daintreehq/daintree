@@ -32,7 +32,6 @@ import {
   SCRATCH_METHOD_CHANNELS,
   buildScratchPreloadBindings,
 } from "../handlers/scratch/preload.js";
-import { DEMO_METHOD_CHANNELS, buildDemoPreloadBindings } from "../handlers/demo.preload.js";
 import { SENTRY_METHOD_CHANNELS, buildSentryPreloadBindings } from "../handlers/sentry.preload.js";
 import {
   MILESTONES_METHOD_CHANNELS,
@@ -280,29 +279,6 @@ describe("leaf preload namespace bindings", () => {
         CHANNELS.ONBOARDING_CHECKLIST_MARK_CELEBRATION_SHOWN
       );
     });
-
-    it("demo matches", () => {
-      expect(DEMO_METHOD_CHANNELS.moveTo).toBe(CHANNELS.DEMO_MOVE_TO);
-      expect(DEMO_METHOD_CHANNELS.moveToSelector).toBe(CHANNELS.DEMO_MOVE_TO_SELECTOR);
-      expect(DEMO_METHOD_CHANNELS.click).toBe(CHANNELS.DEMO_CLICK);
-      expect(DEMO_METHOD_CHANNELS.type).toBe(CHANNELS.DEMO_TYPE);
-      expect(DEMO_METHOD_CHANNELS.screenshot).toBe(CHANNELS.DEMO_SCREENSHOT);
-      expect(DEMO_METHOD_CHANNELS.waitForSelector).toBe(CHANNELS.DEMO_WAIT_FOR_SELECTOR);
-      expect(DEMO_METHOD_CHANNELS.pause).toBe(CHANNELS.DEMO_PAUSE);
-      expect(DEMO_METHOD_CHANNELS.resume).toBe(CHANNELS.DEMO_RESUME);
-      expect(DEMO_METHOD_CHANNELS.sleep).toBe(CHANNELS.DEMO_SLEEP);
-      expect(DEMO_METHOD_CHANNELS.scroll).toBe(CHANNELS.DEMO_SCROLL);
-      expect(DEMO_METHOD_CHANNELS.drag).toBe(CHANNELS.DEMO_DRAG);
-      expect(DEMO_METHOD_CHANNELS.pressKey).toBe(CHANNELS.DEMO_PRESS_KEY);
-      expect(DEMO_METHOD_CHANNELS.spotlight).toBe(CHANNELS.DEMO_SPOTLIGHT);
-      expect(DEMO_METHOD_CHANNELS.dismissSpotlight).toBe(CHANNELS.DEMO_DISMISS_SPOTLIGHT);
-      expect(DEMO_METHOD_CHANNELS.annotate).toBe(CHANNELS.DEMO_ANNOTATE);
-      expect(DEMO_METHOD_CHANNELS.dismissAnnotation).toBe(CHANNELS.DEMO_DISMISS_ANNOTATION);
-      expect(DEMO_METHOD_CHANNELS.waitForIdle).toBe(CHANNELS.DEMO_WAIT_FOR_IDLE);
-      expect(DEMO_METHOD_CHANNELS.startCapture).toBe(CHANNELS.DEMO_START_CAPTURE);
-      expect(DEMO_METHOD_CHANNELS.stopCapture).toBe(CHANNELS.DEMO_STOP_CAPTURE);
-      expect(DEMO_METHOD_CHANNELS.getCaptureStatus).toBe(CHANNELS.DEMO_GET_CAPTURE_STATUS);
-    });
   });
 
   describe("slashCommands", () => {
@@ -544,29 +520,6 @@ describe("leaf preload namespace bindings", () => {
 
       expect(invoke).toHaveBeenCalledTimes(1);
       expect(invoke).toHaveBeenCalledWith("scratch:update", "s1", updates);
-    });
-  });
-
-  describe("demo", () => {
-    it("routes click() to demo:click with no args", async () => {
-      const invoke = vi.fn().mockResolvedValue(undefined);
-      const bindings = buildDemoPreloadBindings(invoke);
-
-      await bindings.click();
-
-      expect(invoke).toHaveBeenCalledTimes(1);
-      expect(invoke).toHaveBeenCalledWith("demo:click");
-    });
-
-    it("routes moveTo(payload) to demo:move-to with the payload forwarded", async () => {
-      const invoke = vi.fn().mockResolvedValue(undefined);
-      const bindings = buildDemoPreloadBindings(invoke);
-
-      const payload = { x: 10, y: 20, durationMs: 100 };
-      await bindings.moveTo(payload);
-
-      expect(invoke).toHaveBeenCalledTimes(1);
-      expect(invoke).toHaveBeenCalledWith("demo:move-to", payload);
     });
   });
 

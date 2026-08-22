@@ -65,9 +65,6 @@ keys/
 # Performance capture output
 perf-metrics.ndjson
 
-# Demo recording output
-demo-output/
-
 # Demo scene files — throwaway JSON per video, never committed.
 .demo/
 

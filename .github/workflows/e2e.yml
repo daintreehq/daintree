@@ -297,8 +297,9 @@ jobs:
     # nightly is unsharded and its serialized leak suite legitimately runs
     # long, so it keeps the generous ceiling; `full` (meta — all seven buckets on
     # one runner) gets a wider window than a single full-* shard.
-    # demo is unsharded, workers=1, and each spec records a 4K screencast with a
-    # 30min per-test ceiling, so it gets a wide window like nightly/full.
+    # demo is unsharded and workers=1: its staging-harness spec cold-launches
+    # Electron several times against one shared demo root, and carries a 30min
+    # per-test ceiling, so it keeps a wide window like nightly/full.
     timeout-minutes: ${{ matrix.timeoutMinutes }}
 
     steps:
@@ -726,7 +727,6 @@ jobs:
             test-results/
             playwright-report/
             daintree-e2e-artifacts/
-            artifacts/demo/
           retention-days: 7
           if-no-files-found: ignore
 

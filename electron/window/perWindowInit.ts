@@ -20,7 +20,6 @@ import { notificationService } from "../services/NotificationService.js";
 import { projectStore } from "../services/ProjectStore.js";
 import { logInfo } from "../utils/logger.js";
 import { SCROLLBACK_BACKGROUND } from "../../shared/config/scrollback.js";
-import { isDemoMode } from "../setup/environment.js";
 import type { WindowContext, WindowRegistry } from "./WindowRegistry.js";
 import { registerDeferredTask, finalizeDeferredRegistration } from "./deferredInitQueue.js";
 import { toDisposable } from "../utils/lifecycle.js";
@@ -369,7 +368,6 @@ export async function initPerWindowServices(
     cliAvailabilityService,
     agentVersionService: getAgentVersionService() ?? undefined,
     agentUpdateHandler: getAgentUpdateHandler() ?? undefined,
-    isDemoMode,
     windowRegistry,
   } as HandlerDependencies);
 
@@ -439,7 +437,6 @@ export async function initPerWindowServices(
     cliAvailabilityService,
     agentVersionService: getAgentVersionService() ?? undefined,
     agentUpdateHandler: getAgentUpdateHandler() ?? undefined,
-    isDemoMode,
     windowRegistry,
   };
 

@@ -9,20 +9,13 @@
  * protocol handler (electron/utils/appProtocol.ts). There is no <meta>
  * equivalent for Permissions-Policy in Chromium 146.
  */
-export interface AppPermissionsPolicyOptions {
-  /**
-   * Allow `display-capture=(self)` so the renderer can call
-   * `navigator.mediaDevices.getDisplayMedia()`. Off by default; enabled only
-   * for the demo-mode screencast recorder (DemoCaptureBridge), which is gated
-   * on `!app.isPackaged && --demo-mode` and therefore never reaches production.
-   */
-  allowDisplayCapture?: boolean;
-}
-
-export function buildAppPermissionsPolicy(options: AppPermissionsPolicyOptions = {}): string {
+export function buildAppPermissionsPolicy(): string {
   return [
     "camera=()",
-    options.allowDisplayCapture ? "display-capture=(self)" : "display-capture=()",
+    // Unconditional. The one caller that ever relaxed this to `(self)` was the
+    // demo-mode screencast recorder, which no longer exists — recordings are
+    // captured by the user's own screen recorder, outside the app entirely.
+    "display-capture=()",
     "geolocation=()",
     "microphone=(self)",
     "midi=()",

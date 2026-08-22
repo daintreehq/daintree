@@ -81,18 +81,6 @@
       "raw": 36928,
       "gzip": 11045
     },
-    "DemoCaptureBridge": {
-      "raw": 3605,
-      "gzip": 1449
-    },
-    "DemoCursor": {
-      "raw": 15457,
-      "gzip": 5328
-    },
-    "DemoOverlay": {
-      "raw": 7072,
-      "gzip": 3026
-    },
     "DevPreviewPane": {
       "raw": 100294,
       "gzip": 30274
@@ -556,10 +544,6 @@
     "d": {
       "raw": 3755,
       "gzip": 1715
-    },
-    "demoSpring": {
-      "raw": 869,
-      "gzip": 501
     },
     "deriveEffectiveTier": {
       "raw": 341,

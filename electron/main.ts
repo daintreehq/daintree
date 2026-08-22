@@ -93,7 +93,6 @@ import { getIdleTerminalNotificationService } from "./services/IdleTerminalNotif
 import {
   getPendingOpenDirPaths,
   getPendingOpenFilePaths,
-  isDemoMode,
   isSmokeTest,
   kickOffEarlyPathRefresh,
 } from "./setup/environment.js";
@@ -685,7 +684,7 @@ if (!gotTheLock) {
       });
       setupPermissionLockdown();
       registerDeepLinkProtocolClient();
-      registerAppProtocol(distPath, { allowDisplayCapture: isDemoMode });
+      registerAppProtocol(distPath);
       registerDaintreeFileProtocol();
       registerDaintreeHtmlProtocol();
       registerDaintreePdfProtocol();

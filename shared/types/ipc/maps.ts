@@ -112,13 +112,6 @@ import type { HibernationProjectHibernatedPayload } from "./hibernation.js";
 import type { IdleTerminalNotifyPayload } from "./idleTerminals.js";
 import type { IdleBackgroundClosedPayload } from "./idleBackgroundAutoClose.js";
 import type { AppThemeConfig } from "../appTheme.js";
-import type {
-  DemoMoveToPayload,
-  DemoMoveToSelectorPayload,
-  DemoTypePayload,
-  DemoWaitForSelectorPayload,
-  DemoSleepPayload,
-} from "./demo.js";
 import type { BulkProjectStats } from "./project.js";
 import type { Scratch } from "../scratch.js";
 import type { ScratchSwitchPayload } from "./scratch.js";
@@ -1213,7 +1206,6 @@ export interface IpcInvokeMap extends GeneratedIpcInvokeMap {
     result: number;
   };
 
-  // Demo mode channels (dev-only, gated by --demo-mode flag)
   // App Agent channels
   "app-agent:get-config": {
     args: [];
@@ -1818,16 +1810,6 @@ export interface IpcEventMap {
   };
   "voice-input:error": VoiceInputError;
   "voice-input:status": VoiceInputStatus;
-
-  // Demo mode events (main → renderer command forwarding)
-  "demo:exec-move-to": DemoMoveToPayload;
-  "demo:exec-move-to-selector": DemoMoveToSelectorPayload;
-  "demo:exec-click": void;
-  "demo:exec-type": DemoTypePayload;
-  "demo:exec-pause": void;
-  "demo:exec-resume": void;
-  "demo:exec-wait-for-selector": DemoWaitForSelectorPayload;
-  "demo:exec-sleep": DemoSleepPayload;
 
   // Accessibility events
   "accessibility:support-changed": { enabled: boolean };

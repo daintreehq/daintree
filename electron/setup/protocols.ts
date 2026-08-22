@@ -11,13 +11,9 @@ import {
   buildHeaders,
   isImmutableAppAsset,
   isNotModified,
-  setAppPermissionsPolicy,
   toHttpDate,
 } from "../utils/appProtocol.js";
-import {
-  DAINTREE_APP_PERMISSIONS_POLICY,
-  buildAppPermissionsPolicy,
-} from "../../shared/config/permissionsPolicy.js";
+import { DAINTREE_APP_PERMISSIONS_POLICY } from "../../shared/config/permissionsPolicy.js";
 import { getDevServerOrigins } from "../../shared/config/devServer.js";
 import {
   classifyPartition,
@@ -1271,20 +1267,8 @@ export function registerProtocolsForSession(ses: Electron.Session, distPath: str
   }
 }
 
-export function registerAppProtocol(
-  distPath: string,
-  options: { allowDisplayCapture?: boolean } = {}
-): void {
+export function registerAppProtocol(distPath: string): void {
   cachedDistPath = distPath;
-  // Demo mode records the renderer via getDisplayMedia(), which the default
-  // `display-capture=()` Permissions-Policy blocks. Relax it to `(self)` only
-  // when the caller opts in (demo mode, itself gated on `!app.isPackaged`), so
-  // production keeps the deny-by-default posture. The flag is threaded from
-  // main.ts rather than imported here to keep this module decoupled from the
-  // heavyweight environment module (and its eager app.getPath side effects).
-  if (options.allowDisplayCapture) {
-    setAppPermissionsPolicy(buildAppPermissionsPolicy({ allowDisplayCapture: true }));
-  }
   protocol.handle("app", createAppProtocolHandler(distPath));
 }
 

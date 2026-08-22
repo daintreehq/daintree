@@ -2,13 +2,12 @@
 // `process.argv`.
 // Kept separate from the heavy `environment.ts` (which runs `app.getPath`/
 // `setPath`, fs, and SQLite work at module load) so importers that only need a
-// flag — e.g. `ProjectViewManager` reading `isDemoMode` — don't pull that
+// flag don't pull that
 // startup machinery into their graph. Same rationale as `deepLinkUrlQueue.ts`.
 
 const isElectronProcess = process.versions.electron !== undefined;
 const isPackaged = isElectronProcess && process.defaultApp !== true;
 
-export const isDemoMode = !isPackaged && process.argv.includes("--demo-mode");
 export const isSmokeTest = process.argv.includes("--smoke-test");
 export const E2E_MODE_ARG = "--daintree-e2e-mode";
 export const E2E_SKIP_FIRST_RUN_DIALOGS_ARG = "--daintree-e2e-skip-first-run-dialogs";

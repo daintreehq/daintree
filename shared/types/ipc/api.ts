@@ -85,17 +85,6 @@ import type {
   AgentSessionRetentionDays,
 } from "./agentSessionHistory.js";
 import type {
-  DemoScreenshotResult,
-  DemoStartCapturePayload,
-  DemoStartCaptureResult,
-  DemoStopCaptureResult,
-  DemoCaptureStatus,
-  DemoAnnotateResult,
-  DemoAnnotationPlacement,
-  DemoAnnotationSize,
-  DemoTerminalKey,
-} from "./demo.js";
-import type {
   CopyTreeResult,
   CopyTreeOptions,
   CopyTreeTestConfigOptions,
@@ -212,8 +201,7 @@ export interface NotificationSettings {
  * Hand-maintained entries below either layer event listeners and other non-
  * invoke methods on top of a generated namespace (intersected with
  * `GeneratedElectronAPI[<ns>]`) or cover namespaces that are not generated
- * (legacy `ipcMain.handle` registrations, variadic plugin invocations, the
- * positional-arg `demo` namespace, etc.).
+ * (legacy `ipcMain.handle` registrations, variadic plugin invocations, etc.).
  */
 export interface ElectronAPI extends GeneratedElectronAPI {
   // Invoke methods are generated; onWebglThresholds is the hand-wired push
@@ -2167,53 +2155,6 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   // help is generated — see GeneratedElectronAPI.
   perf: {
     flushMarks(payload: import("../../perf/marks.js").RendererPerfFlushPayload): void;
-  };
-  demo?: {
-    moveTo(x: number, y: number, durationMs?: number): Promise<void>;
-    moveToSelector(
-      selector: string,
-      durationMs?: number,
-      offsetX?: number,
-      offsetY?: number
-    ): Promise<void>;
-    click(): Promise<void>;
-    type(selector: string, text: string, cps?: number): Promise<void>;
-    screenshot(): Promise<DemoScreenshotResult>;
-    waitForSelector(selector: string, timeoutMs?: number): Promise<void>;
-    pause(): Promise<void>;
-    resume(): Promise<void>;
-    sleep(durationMs: number): Promise<void>;
-    scroll(selector: string): Promise<void>;
-    drag(fromSelector: string, toSelector: string, durationMs?: number): Promise<void>;
-    pressKey(
-      key: string,
-      code?: string,
-      modifiers?: Array<"mod" | "ctrl" | "shift" | "alt" | "meta">,
-      selector?: string
-    ): Promise<void>;
-    typeInTerminal(selector: string, text: string, cps?: number): Promise<void>;
-    sendKeyToTerminal(selector: string, key: DemoTerminalKey): Promise<void>;
-    spotlight(selector: string, padding?: number): Promise<void>;
-    dismissSpotlight(): Promise<void>;
-    annotate(
-      selector: string,
-      text: string,
-      position?: DemoAnnotationPlacement,
-      size?: DemoAnnotationSize,
-      id?: string
-    ): Promise<DemoAnnotateResult>;
-    dismissAnnotation(id?: string): Promise<void>;
-    waitForIdle(settleMs?: number, timeoutMs?: number): Promise<void>;
-    startCapture(payload: DemoStartCapturePayload): Promise<DemoStartCaptureResult>;
-    sendCaptureChunk(captureId: string, data: Uint8Array): void;
-    sendCaptureStop(captureId: string, chunkCount: number, error?: string): void;
-    stopCapture(): Promise<DemoStopCaptureResult>;
-    getCaptureStatus(): Promise<DemoCaptureStatus>;
-    onExecCommand(
-      channel: string,
-      callback: (payload: Record<string, unknown>) => void
-    ): () => void;
-    sendCommandDone(requestId: string, error?: string): void;
   };
 }
 

@@ -42,13 +42,16 @@ npm run rebuild    # rebuild native modules against Electron
 
 ## Demo development
 
-Demo authoring — the Stage DSL, scene runner, and recording pipeline — lives in a separate repo: [`daintreehq/demo-studio`](https://github.com/daintreehq/demo-studio). Clone it into the `demo/` directory at the root of this repo:
+Demo videos are staged by the harness in this repo and recorded by a person, not by the app. Build the e2e bundle, then drive it with the `demo` dispatcher:
 
 ```bash
-git clone https://github.com/daintreehq/demo-studio.git demo
+npm run build:e2e
+npm run demo list
 ```
 
-`demo/` is gitignored here and excluded from packaged builds, so the clone won't pollute `git status` or ship in releases. The app-side surface demo-studio drives (the `--demo-mode` flag, IPC handlers, and `DemoCursor`/`DemoOverlay` components) lives in this repo and is maintained here. See the demo-studio README for authoring workflow.
+A scene is throwaway JSON describing a demo project — worktrees, a local bare remote, dirty files — plus the beats a shot card is rendered from. `npm run demo stage <scene.json>` builds it and bakes an app profile; `take` resets and launches the app so you can record with your own screen recorder; `clean` deletes everything. Keep scene files in `.demo/` (gitignored) and delete them afterwards. The `demo-video-creator` skill has the full workflow.
+
+The app no longer carries any recording machinery. The `--demo-mode` flag, the `window.electron.demo` IPC namespace, and the `DemoCursor`/`DemoOverlay`/`DemoCaptureBridge` components were removed once capture moved out of the product — so the driver in [`daintreehq/demo-studio`](https://github.com/daintreehq/demo-studio) has nothing left to drive and is superseded by `npm run demo`.
 
 ## Branching model
 

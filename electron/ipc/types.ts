@@ -30,7 +30,6 @@ export interface HandlerDependencies {
   agentVersionService?: AgentVersionService;
   agentUpdateHandler?: AgentUpdateHandler;
   projectSwitchService?: ProjectSwitchService;
-  isDemoMode?: boolean;
   windowRegistry?: WindowRegistry;
   projectViewManager?: ProjectViewManager;
   worktreePortBroker?: WorktreePortBroker;

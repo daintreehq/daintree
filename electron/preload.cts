@@ -208,8 +208,6 @@ const perfNowMs = (): number =>
 // primary strip happens at build time via esbuild defines in build-main.mjs.
 const isPackagedBuild = process.argv.some((a) => a.includes("app.asar"));
 
-const isDemoMode = !isPackagedBuild && process.argv.includes("--demo-mode");
-
 // Persisted color scheme id passed from the main process via
 // webPreferences.additionalArguments. Read synchronously here (process.argv is
 // available even under sandbox: true) so the renderer can apply the saved theme
@@ -3208,119 +3206,6 @@ function buildElectronApi(): ElectronAPI {
         rendererT0: number;
       }) => ipcRenderer.send(CHANNELS.PERF_FLUSH_RENDERER_MARKS, payload),
     },
-
-    // Demo API — channel constants live in `./ipc/handlers/demo.preload.ts` and
-    // back the main-side `defineIpcNamespace`, but the renderer-facing shape
-    // takes positional args (moveTo(x, y, durationMs)) while channels carry a
-    // single payload object. The translation stays inline so window.electron.demo
-    // matches its declared `ElectronAPI.demo` signature.
-    ...(isDemoMode
-      ? {
-          demo: {
-            moveTo: (x: number, y: number, durationMs?: number) =>
-              _unwrappingInvoke(CHANNELS.DEMO_MOVE_TO, { x, y, durationMs }),
-            moveToSelector: (
-              selector: string,
-              durationMs?: number,
-              offsetX?: number,
-              offsetY?: number
-            ) =>
-              _unwrappingInvoke(CHANNELS.DEMO_MOVE_TO_SELECTOR, {
-                selector,
-                durationMs,
-                offsetX,
-                offsetY,
-              }),
-            click: () => _unwrappingInvoke(CHANNELS.DEMO_CLICK),
-            type: (selector: string, text: string, cps?: number) =>
-              _unwrappingInvoke(CHANNELS.DEMO_TYPE, { selector, text, cps }),
-            screenshot: () => _unwrappingInvoke(CHANNELS.DEMO_SCREENSHOT),
-            waitForSelector: (selector: string, timeoutMs?: number) =>
-              _unwrappingInvoke(CHANNELS.DEMO_WAIT_FOR_SELECTOR, { selector, timeoutMs }),
-            pause: () => _unwrappingInvoke(CHANNELS.DEMO_PAUSE),
-            resume: () => _unwrappingInvoke(CHANNELS.DEMO_RESUME),
-            sleep: (durationMs: number) => _unwrappingInvoke(CHANNELS.DEMO_SLEEP, { durationMs }),
-            startCapture: (payload: {
-              fps?: number;
-              outputPath: string;
-              videoBitsPerSecond?: number;
-              width?: number;
-              height?: number;
-            }) => _unwrappingInvoke(CHANNELS.DEMO_START_CAPTURE, payload),
-            sendCaptureChunk: (captureId: string, data: Uint8Array) => {
-              ipcRenderer.send(CHANNELS.DEMO_CAPTURE_CHUNK, { captureId, data });
-            },
-            sendCaptureStop: (captureId: string, chunkCount: number, error?: string) => {
-              ipcRenderer.send(CHANNELS.DEMO_CAPTURE_STOP, { captureId, chunkCount, error });
-            },
-            stopCapture: () => _unwrappingInvoke(CHANNELS.DEMO_STOP_CAPTURE),
-            getCaptureStatus: () => _unwrappingInvoke(CHANNELS.DEMO_GET_CAPTURE_STATUS),
-            scroll: (selector: string) => _unwrappingInvoke(CHANNELS.DEMO_SCROLL, { selector }),
-            drag: (fromSelector: string, toSelector: string, durationMs?: number) =>
-              _unwrappingInvoke(CHANNELS.DEMO_DRAG, { fromSelector, toSelector, durationMs }),
-            pressKey: (
-              key: string,
-              code?: string,
-              modifiers?: Array<"mod" | "ctrl" | "shift" | "alt" | "meta">,
-              selector?: string
-            ) => _unwrappingInvoke(CHANNELS.DEMO_PRESS_KEY, { key, code, modifiers, selector }),
-            typeInTerminal: (selector: string, text: string, cps?: number) =>
-              _unwrappingInvoke(CHANNELS.DEMO_TYPE_IN_TERMINAL, { selector, text, cps }),
-            sendKeyToTerminal: (selector: string, key: string) =>
-              _unwrappingInvoke(CHANNELS.DEMO_SEND_KEY_TO_TERMINAL, { selector, key }),
-            spotlight: (selector: string, padding?: number) =>
-              _unwrappingInvoke(CHANNELS.DEMO_SPOTLIGHT, { selector, padding }),
-            dismissSpotlight: () => _unwrappingInvoke(CHANNELS.DEMO_DISMISS_SPOTLIGHT),
-            annotate: (
-              selector: string,
-              text: string,
-              position?:
-                | "top"
-                | "bottom"
-                | "left"
-                | "right"
-                | "screen-top"
-                | "screen-bottom"
-                | "screen-center"
-                | "lower-third-left"
-                | "lower-third-right"
-                | "top-left"
-                | "top-right"
-                | "bottom-left"
-                | "bottom-right"
-                | "above-cursor"
-                | "below-cursor",
-              size?: "sm" | "md" | "lg" | "xl",
-              id?: string
-            ) =>
-              _unwrappingInvoke(CHANNELS.DEMO_ANNOTATE, {
-                selector,
-                text,
-                position,
-                size,
-                id,
-              }),
-            dismissAnnotation: (id?: string) =>
-              _unwrappingInvoke(CHANNELS.DEMO_DISMISS_ANNOTATION, { id }),
-            waitForIdle: (settleMs?: number, timeoutMs?: number) =>
-              _unwrappingInvoke(CHANNELS.DEMO_WAIT_FOR_IDLE, { settleMs, timeoutMs }),
-            onExecCommand: (
-              channel: string,
-              callback: (payload: Record<string, unknown>) => void
-            ): (() => void) => {
-              const handler = (
-                _event: Electron.IpcRendererEvent,
-                payload: Record<string, unknown>
-              ) => callback(payload);
-              ipcRenderer.on(channel, handler);
-              return () => ipcRenderer.removeListener(channel, handler);
-            },
-            sendCommandDone: (requestId: string, error?: string) => {
-              ipcRenderer.send(CHANNELS.DEMO_COMMAND_DONE, { requestId, error });
-            },
-          },
-        }
-      : {}),
   };
 }
 
