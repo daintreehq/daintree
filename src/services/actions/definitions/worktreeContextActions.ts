@@ -22,6 +22,7 @@ import { useCopyTreeRunStore } from "@/store/copyTreeRunStore";
 import { deriveCommitMessageSeed } from "@/lib/worktreeAiNote";
 import { buildWorkingTreeDiffModel } from "@/lib/workingTreeDiff";
 import { basename } from "@shared/utils/path";
+import { composeFileBrowserTitle } from "@/panels/file-browser/title";
 // Static, unlike the stores below: this module carries the panel types plus a
 // handful of pure predicates over them, so it drags in no client or store graph.
 import {
@@ -167,30 +168,47 @@ function toReadinessResultItem(
  * become the thing that picks a surface, since revealing the root passes no
  * path while still carrying a `revealKind` (#11666).
  */
-const fileBrowserArgsSchema = z
-  .object({
-    // `.min(1)`, unlike the siblings above: an empty string here is not a
-    // harmless falsy worktree — it would slip past the unknown-worktree
-    // guard and open the workspace root instead of failing.
-    worktreeId: z.string().min(1).optional(),
-    /**
-     * Path to select and scroll into view on open, relative to the worktree or
-     * workspace root — the same base `browserSelectedPath` is stored against,
-     * not the tree's current scoped root. Every caller computes it that way,
-     * and a path relative to a scope the caller cannot see would be
-     * unresolvable from outside the panel.
-     */
-    revealPath: z.string().optional(),
-    /**
-     * What `revealPath` points at. A directory is also expanded so its
-     * children are visible; the caller knows (it validated the path),
-     * and re-statting here would be a second round-trip for one bit.
-     */
-    revealKind: z.enum(["file", "directory"]).optional(),
+const fileBrowserArgsObject = z.object({
+  // `.min(1)`, unlike the siblings above: an empty string here is not a
+  // harmless falsy worktree — it would slip past the unknown-worktree
+  // guard and open the workspace root instead of failing.
+  worktreeId: z.string().min(1).optional(),
+  /**
+   * Path to select and scroll into view on open, relative to the worktree or
+   * workspace root — the same base `browserSelectedPath` is stored against,
+   * not the tree's current scoped root. Every caller computes it that way,
+   * and a path relative to a scope the caller cannot see would be
+   * unresolvable from outside the panel.
+   */
+  revealPath: z.string().optional(),
+  /**
+   * What `revealPath` points at. A directory is also expanded so its
+   * children are visible; the caller knows (it validated the path),
+   * and re-statting here would be a second round-trip for one bit.
+   */
+  revealKind: z.enum(["file", "directory"]).optional(),
+});
+
+const fileBrowserArgsSchema = fileBrowserArgsObject.optional();
+
+/**
+ * The persistent opener also answers to the dock launcher, which forwards the
+ * placement it advertised in its heading (`launchPanelKind`). Declared only
+ * here: the dialog opener has no placement to take, and `ActionService` drops
+ * undeclared fields, so a shared schema would silently strand a dock request in
+ * the grid — the heading promising one surface and the panel landing on the
+ * other (#11917).
+ */
+const fileBrowserPanelArgsSchema = fileBrowserArgsObject
+  .extend({
+    location: z.enum(["grid", "dock"]).optional(),
+    /** Open the dock popover on create. Ignored unless `location` is "dock". */
+    activateDockOnCreate: z.boolean().optional(),
   })
   .optional();
 
 type FileBrowserArgs = z.infer<typeof fileBrowserArgsSchema>;
+type FileBrowserPanelArgs = z.infer<typeof fileBrowserPanelArgsSchema>;
 
 /**
  * A palette gate rather than `isEnabled`, for the same reason
@@ -260,11 +278,16 @@ function resolveFileBrowserTarget(
   }
 
   if (worktree) {
-    return { worktreeId: targetWorktreeId, title: `Files — ${worktree.branch ?? worktree.name}` };
+    return {
+      worktreeId: targetWorktreeId,
+      title: composeFileBrowserTitle(worktree.branch ?? worktree.name),
+    };
   }
   return {
     worktreeId: undefined,
-    title: `Files — ${ctx.projectName ?? ctx.scratchName ?? (workspacePath ? basename(workspacePath) : "workspace")}`,
+    title: composeFileBrowserTitle(
+      ctx.projectName ?? ctx.scratchName ?? (workspacePath ? basename(workspacePath) : "workspace")
+    ),
   };
 }
 
@@ -675,7 +698,7 @@ export function registerWorktreeContextActions(
       id: "worktree.openFileBrowserPanel",
       title: "Browse files",
       description:
-        "Show a folder in a persistent read-only file browser panel in the grid, for a worktree or for the current project or scratch folder when no worktree is selected. It focuses the existing grid browser for the same folder rather than opening a second one, and applies an optional reveal path to it.",
+        'Show a folder in a persistent read-only file browser panel, for a worktree or for the current project or scratch folder when no worktree is selected. It opens in the grid unless location is "dock". It focuses the existing browser for the same folder on the same surface rather than opening a second one, and applies an optional reveal path to it.',
       category: "worktree",
       kind: "command",
       danger: "safe",
@@ -686,11 +709,14 @@ export function registerWorktreeContextActions(
         isReady: fileBrowserIsReady,
         reason: "No folder to browse",
       },
-      argsSchema: fileBrowserArgsSchema,
-      run: async (args, ctx: ActionContext) => {
+      argsSchema: fileBrowserPanelArgsSchema,
+      run: async (args: FileBrowserPanelArgs, ctx: ActionContext) => {
         const { worktreeId, title } = resolveFileBrowserTarget(args, ctx);
         const reveal = await resolveFileBrowserReveal(args);
         const foreground = isForegroundDispatch(ctx.dispatchSource);
+        // Grid stays the default, so every caller that predates the dock
+        // launcher keeps landing exactly where it did.
+        const location = args?.location === "dock" ? "dock" : "grid";
 
         // The grid renders only the active worktree's bucket, so a panel opened
         // for any other worktree is created `background` and never appears —
@@ -724,12 +750,21 @@ export function registerWorktreeContextActions(
           .map((id) => store.panelsById[id])
           .find((panel): panel is FileBrowserPanelData => {
             if (panel === undefined || !isFileBrowserPanel(panel)) return false;
-            // Grid members only. A dialog browser is ephemeral modal content
-            // and reusing one would hand the grid an uncounted, unpersisted
-            // record; trashed and backgrounded panels surface nothing when
-            // activated. `isGridPanelLocation` is the one place that answer
-            // lives, so dock and overlay come along for free.
-            if (!isGridPanelLocation(panel.location)) return false;
+            // Matched against the surface that was ASKED for, not "anywhere":
+            // reusing the grid browser for a dock request would leave the dock
+            // empty after a gesture that named it, and moving the panel across
+            // instead would drag its whole tab group along. One browser per
+            // folder per surface is the smallest honest extension of the old
+            // grid-only rule (#11917).
+            //
+            // Either way a dialog browser is ephemeral modal content and
+            // reusing one would hand the grid an uncounted, unpersisted record;
+            // trashed and backgrounded panels surface nothing when activated.
+            // `isGridPanelLocation` is the one place that answer lives, so
+            // overlay comes along for free.
+            const onRequestedSurface =
+              location === "dock" ? panel.location === "dock" : isGridPanelLocation(panel.location);
+            if (!onRequestedSurface) return false;
             // Identity is the folder the tree is rooted at, not the placement
             // worktree: a workspace-rooted panel carries a worktreeId purely so
             // it lands in a rendered index bucket (#11489), and matching on
@@ -799,7 +834,12 @@ export function registerWorktreeContextActions(
           title,
           ...(worktreeId !== undefined && { worktreeId }),
           ...reveal,
-          location: "grid",
+          location,
+          // Folded into the same set() that commits the panel, so the offscreen
+          // container's watchdog can't close the popover in the render gap
+          // (#6590) — the reason `launchPanelKind` passes this rather than
+          // opening the chip afterwards.
+          ...(location === "dock" && { activateDockOnCreate: args?.activateDockOnCreate === true }),
           ...(foreground && { focusPolicy: "take" as const }),
         });
         if (!panelId) {

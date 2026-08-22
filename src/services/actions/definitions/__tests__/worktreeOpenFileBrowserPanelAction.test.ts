@@ -116,7 +116,7 @@ beforeEach(() => {
 });
 
 afterEach(() => {
-  // A suite-wide invariant rather than one test: this action opens a grid
+  // A suite-wide invariant rather than one test: this action opens a persistent
   // panel, and the whole point of the split is that it never presents the
   // ephemeral dialog its sibling owns — on any path, including the failures.
   expect(openPanelDialogMock).not.toHaveBeenCalled();
@@ -397,6 +397,114 @@ describe("worktree.openFileBrowserPanel", () => {
       await getAction().run({ worktreeId: "wt-1" }, {} as ActionContext);
 
       expect(addPanelMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  describe("placement (#11917)", () => {
+    it("declares the placement fields the dock launcher forwards", () => {
+      // `getAction().run()` below is called directly, so it never sees
+      // `ActionService`'s parse. This is the half that would break silently:
+      // an undeclared field is DROPPED, not rejected, so the launcher's "Open
+      // in dock" heading would keep promising a surface the panel never
+      // reaches.
+      const parsed = getAction().argsSchema?.parse({
+        worktreeId: "wt-1",
+        location: "dock",
+        activateDockOnCreate: true,
+      });
+      expect(parsed).toMatchObject({ location: "dock", activateDockOnCreate: true });
+    });
+
+    it("rejects a placement that is neither surface", () => {
+      expect(() => getAction().argsSchema?.parse({ location: "dialog" })).toThrow();
+    });
+
+    it("defaults to the grid, so every caller predating the dock keeps its surface", async () => {
+      seedWorktree("wt-1", { branch: "feature/x" });
+      await getAction().run({ worktreeId: "wt-1" }, {} as ActionContext);
+
+      const options = addPanelOptions();
+      expect(options).toMatchObject({ location: "grid" });
+      // Not merely absent-and-falsy: `addPanel` reads the flag independently of
+      // the location, so a grid open must not carry dock activation at all.
+      expect(options).not.toHaveProperty("activateDockOnCreate");
+    });
+
+    it("commits to the dock and opens the chip when the launcher asks for both", async () => {
+      seedWorktree("wt-1", { branch: "feature/x" });
+      await getAction().run(
+        { worktreeId: "wt-1", location: "dock", activateDockOnCreate: true },
+        {} as ActionContext
+      );
+
+      expect(addPanelOptions()).toMatchObject({
+        kind: "file-browser",
+        location: "dock",
+        activateDockOnCreate: true,
+      });
+    });
+
+    it("parks a dock panel without opening the chip when activation was not asked for", async () => {
+      seedWorktree("wt-1");
+      await getAction().run({ worktreeId: "wt-1", location: "dock" }, {} as ActionContext);
+
+      expect(addPanelOptions()).toMatchObject({ location: "dock", activateDockOnCreate: false });
+    });
+
+    it("reuses the docked browser for a dock request rather than opening a second", async () => {
+      seedWorktree("wt-1");
+      panelsMock.byId = [browserPanel("fb-docked", { worktreeId: "wt-1", location: "dock" })];
+
+      const result = await getAction().run(
+        { worktreeId: "wt-1", location: "dock" },
+        {} as ActionContext
+      );
+
+      expect(addPanelMock).not.toHaveBeenCalled();
+      expect(activateTerminalMock).toHaveBeenCalledWith("fb-docked");
+      expect(result).toEqual({ panelId: "fb-docked" });
+    });
+
+    it("does not answer a dock request with the grid browser for the same folder", async () => {
+      // Reusing across surfaces would leave the dock empty after a gesture that
+      // named it — and moving the panel over instead would drag its whole tab
+      // group along.
+      seedWorktree("wt-1");
+      panelsMock.byId = [browserPanel("fb-grid", { worktreeId: "wt-1", location: "grid" })];
+
+      const result = await getAction().run(
+        { worktreeId: "wt-1", location: "dock" },
+        {} as ActionContext
+      );
+
+      expect(activateTerminalMock).not.toHaveBeenCalled();
+      expect(addPanelOptions()).toMatchObject({ location: "dock" });
+      expect(result).toEqual({ panelId: "fb-panel-1" });
+    });
+
+    it("does not answer a grid request with the docked browser for the same folder", async () => {
+      seedWorktree("wt-1");
+      panelsMock.byId = [browserPanel("fb-docked", { worktreeId: "wt-1", location: "dock" })];
+
+      await getAction().run({ worktreeId: "wt-1" }, {} as ActionContext);
+
+      expect(activateTerminalMock).not.toHaveBeenCalled();
+      expect(addPanelOptions()).toMatchObject({ location: "grid" });
+    });
+
+    it("applies a reveal to the docked browser it reuses", async () => {
+      seedWorktree("wt-1");
+      panelsMock.byId = [browserPanel("fb-docked", { worktreeId: "wt-1", location: "dock" })];
+
+      await getAction().run(
+        { worktreeId: "wt-1", location: "dock", revealPath: "src/app.ts" },
+        {} as ActionContext
+      );
+
+      expect(setFileBrowserViewMock).toHaveBeenCalledWith(
+        "fb-docked",
+        expect.objectContaining({ browserSelectedPath: "src/app.ts" })
+      );
     });
   });
 

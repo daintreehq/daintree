@@ -1762,6 +1762,34 @@ describe("buildArgsForNonPtyRecreation", () => {
     expect(result.browserSidebarWidth).toBe(360);
   });
 
+  it("restores a persisted file-browser to the dock it was left in (#11917)", () => {
+    // A combination that could not exist before the kind became dockable, and
+    // the rescue below is keyed on `panelKindIsDockable` — so a regression on
+    // the registry flag resurfaces here as a panel silently reappearing in the
+    // grid, with the layout state intact and the placement wrong.
+    const result = buildArgsForNonPtyRecreation(
+      {
+        id: "fb-dock",
+        kind: "file-browser",
+        title: "Files — develop",
+        location: "dock",
+        worktreeId: "wt-1",
+        browserRootPath: "src",
+        browserExpandedPaths: ["src", "src/components"],
+      },
+      "file-browser",
+      "/project",
+      "wt-active"
+    );
+
+    expect(result.location).toBe("dock");
+    // The rescue's worktree adoption is for panels it pulls back to the grid;
+    // a kept dock placement must not have its attribution rewritten.
+    expect(result.worktreeId).toBe("wt-1");
+    expect(result.browserRootPath).toBe("src");
+    expect(result.browserExpandedPaths).toEqual(["src", "src/components"]);
+  });
+
   it("falls back to projectRoot when a non-PTY saved cwd is relative", () => {
     const result = buildArgsForNonPtyRecreation(
       {

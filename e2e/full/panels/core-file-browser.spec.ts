@@ -325,4 +325,49 @@ test.describe.serial("Core: File browser preview", () => {
     await panel.locator(SEL.panel.close).first().click();
     await expect(panel).toHaveCount(0, { timeout: T_SHORT });
   });
+
+  // #11917 — the browser used to opt out of the dock entirely, so its header
+  // offered only maximize and close.
+  test("the grid browser moves to the dock, previews from the chip, and restores", async () => {
+    const worktreeId = await mainWorktreeId(ctx.window);
+
+    const opened = await dispatchAction(ctx.window, "worktree.openFileBrowserPanel", {
+      worktreeId,
+    });
+    expect(opened.ok, opened.error?.message).toBe(true);
+    const panelId = opened.result?.panelId;
+    const panel = ctx.window.locator(`[data-panel-id="${panelId}"]${SEL.panel.gridPanel}`);
+    await expect(panel).toBeVisible({ timeout: T_MEDIUM });
+
+    // The docked panel stays mounted in the offscreen parking container, so
+    // count GRID membership rather than total pane instances.
+    const gridBrowsers = ctx.window.locator(
+      `${SEL.panel.gridPanel}:has([data-testid="file-browser-sidebar-toggle"])`
+    );
+    await expect(gridBrowsers).toHaveCount(1, { timeout: T_MEDIUM });
+
+    await panel.locator('[data-testid="panel-move-to-dock"]').click();
+    await expect(gridBrowsers).toHaveCount(0, { timeout: T_MEDIUM });
+
+    // The chip drops the composed title's "Files — " prefix, so what is left is
+    // the branch that distinguishes this browser from another worktree's.
+    const chip = ctx.window.locator("[data-dock-item]", { hasText: "main" });
+    await expect(chip).toBeVisible({ timeout: T_MEDIUM });
+    // Exact rather than a substring: "Files — main" would satisfy `hasText`,
+    // and it is precisely the composed grid title this derivation trims.
+    await expect(chip).toHaveText("main", { timeout: T_SHORT });
+    await chip.click();
+    await expect(
+      ctx.window.locator('[data-dock-portal-target] [data-testid="file-browser-sidebar-toggle"]')
+    ).toBeVisible({ timeout: T_LONG });
+
+    // Double-click restores it to the grid, the same gesture docked file
+    // panels answer to.
+    await chip.dblclick();
+    await expect(gridBrowsers).toHaveCount(1, { timeout: T_MEDIUM });
+    await expect(chip).not.toBeVisible({ timeout: T_MEDIUM });
+
+    await panel.locator(SEL.panel.close).first().click();
+    await expect(panel).toHaveCount(0, { timeout: T_SHORT });
+  });
 });
