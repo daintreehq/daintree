@@ -1,9 +1,7 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
 import type { WorktreeSnapshot, WorktreeEventVersion, AttachIssuePayload } from "@shared/types";
 import { usePanelStore } from "./panelStore";
-// Safe despite the store cycle: `worktreeStore` never imports this module, and
-// the read below happens inside a function, never at module evaluation.
-import { useWorktreeSelectionStore } from "./worktreeStore";
+import { getWorktreeSelectionSnapshot } from "./storeAccessors";
 import { worktreeClient } from "@/clients";
 import {
   captureWorktreeTerminalSnapshot,
@@ -1653,7 +1651,12 @@ export function cleanupOrphanedTerminals(): void {
   // empty the row and destroy the survivors #11232 exists to keep (#11911).
   // Read live rather than passed in: this runs after hydration has rebuilt the
   // rows, and the live path can be holding rows at any time.
-  const ghostedWorktreeIds = useWorktreeSelectionStore.getState().deletedWorktrees;
+  //
+  // Through the accessor rather than importing the selection store directly:
+  // that store pulls in TerminalInstanceService, and esbuild links every static
+  // import whether or not it is reachable, so a direct import drags the whole
+  // terminal subgraph into the perf bundle that exists to isolate this store.
+  const ghostedWorktreeIds = getWorktreeSelectionSnapshot()?.deletedWorktreeIds;
 
   const terminalStore = usePanelStore.getState();
   const orphanedTerminals = terminalStore.panelIds
@@ -1662,7 +1665,7 @@ export function cleanupOrphanedTerminals(): void {
       if (!t) return false;
       const worktreeId = typeof t.worktreeId === "string" ? t.worktreeId.trim() : "";
       if (!worktreeId || worktreeIds.has(worktreeId)) return false;
-      return !ghostedWorktreeIds.has(worktreeId);
+      return ghostedWorktreeIds?.has(worktreeId) !== true;
     });
 
   if (orphanedTerminals.length > 0) {

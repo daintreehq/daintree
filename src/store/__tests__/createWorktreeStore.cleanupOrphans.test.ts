@@ -8,6 +8,10 @@ import {
 } from "@/store/createWorktreeStore";
 import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeSelectionStore, createDeletedWorktreeRecord } from "@/store/worktreeStore";
+import {
+  setWorktreeSelectionAccessor,
+  resetStoreAccessorsForTesting,
+} from "@/store/storeAccessors";
 
 // `cleanupOrphanedTerminals` is destructive — `removePanel` kills the PTY — so
 // what it declines to touch is as load-bearing as what it removes. These pin
@@ -73,6 +77,14 @@ beforeEach(() => {
   _seq = 0;
   useWorktreeSelectionStore.getState().reset();
   setPanels([]);
+  // Cleanup reads the rows through the accessor, exactly as the renderer wires
+  // it — a direct store import would drag the terminal subgraph into the perf
+  // bundle that isolates this store.
+  setWorktreeSelectionAccessor(() => ({
+    activeWorktreeId: null,
+    restoreWorktreeId: null,
+    deletedWorktreeIds: new Set(useWorktreeSelectionStore.getState().deletedWorktrees.keys()),
+  }));
   // `removePanel` reaches into terminal teardown the real store owns; the
   // question here is only which ids cleanup selects, so the removal itself is
   // reduced to dropping the id.
@@ -87,6 +99,7 @@ beforeEach(() => {
 
 afterEach(() => {
   useWorktreeSelectionStore.getState().reset();
+  resetStoreAccessorsForTesting();
   vi.restoreAllMocks();
 });
 
@@ -137,5 +150,20 @@ describe("cleanupOrphanedTerminals — deleted-worktree exemption (#11911)", () 
     cleanupOrphanedTerminals();
 
     expect(livePanelIds().sort()).toEqual(["normal", "survivor"]);
+  });
+});
+
+describe("cleanupOrphanedTerminals — without the selection accessor wired", () => {
+  it("still removes genuinely stale panels", () => {
+    // No accessor means no known rows, which is the pre-#11911 reading: every
+    // panel on a dead worktree is orphaned. The destructive path must keep
+    // working rather than silently switching itself off.
+    resetStoreAccessorsForTesting();
+    seedStore(["wt-live"]);
+    setPanels([{ id: "stale", worktreeId: "wt-gone" }]);
+
+    cleanupOrphanedTerminals();
+
+    expect(livePanelIds()).toEqual([]);
   });
 });
