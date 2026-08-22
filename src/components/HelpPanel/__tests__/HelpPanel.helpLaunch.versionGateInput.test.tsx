@@ -81,7 +81,11 @@ const {
     width: 380,
     terminalId: null as string | null,
     agentId: null as string | null,
-    preferredAgentId: null as string | null,
+    // "claude" rather than null: these suites exercise the PTY LAUNCH path, and the
+    // Daintree Assistant is now the default surface when no agent is chosen — a null
+    // preference renders the native panel and never launches a terminal at all. Naming
+    // a terminal-backed agent keeps each test about the thing it is testing.
+    preferredAgentId: "claude" as string | null,
     // Consent granted by default (#10699) so the existing auto-launch coverage
     // exercises the downstream launch wiring; the consent gate itself is
     // unit-tested in HelpSessionController.test.ts.
@@ -438,7 +442,9 @@ function resetState() {
   helpPanelState.width = 380;
   helpPanelState.terminalId = null;
   helpPanelState.agentId = null;
-  helpPanelState.preferredAgentId = null;
+  // See the note on the initial state: null now means the NATIVE panel, so the
+  // PTY-launch suites reset to a terminal-backed agent.
+  helpPanelState.preferredAgentId = "claude";
   helpPanelState.autoLaunchEnabled = true;
   helpPanelState.sessionId = null;
   helpPanelState.introDismissed = true;
@@ -563,6 +569,18 @@ beforeEach(() => {
   Object.defineProperty(globalThis, "window", {
     value: {
       electron: {
+        // The native assistant panel mounts whenever no terminal-backed agent is
+        // chosen, so the HelpPanel harness has to model its IPC namespace. Without
+        // it the panel throws on subscribe and every test in the file fails for a
+        // reason that has nothing to do with what it asserts.
+        assistantHost: {
+          start: vi.fn().mockResolvedValue({ sessionId: "assistant-test-session" }),
+          send: vi.fn().mockResolvedValue({ delivered: true }),
+          stop: vi.fn().mockResolvedValue({ stopped: true }),
+          onEvent: vi.fn(() => () => {}),
+          onSequenceGap: vi.fn(() => () => {}),
+          onExit: vi.fn(() => () => {}),
+        },
         help: {
           getFolderPath: mockGetFolderPath,
           markTerminal: mockMarkTerminal,
@@ -624,8 +642,10 @@ beforeEach(() => {
 });
 
 describe("HelpPanel — assistantMinVersion gate (issue #7539)", () => {
-  it("blocks the single-supported-agent launch when installed version is below assistantMinVersion", async () => {
-    helpPanelState.preferredAgentId = null;
+  it("blocks the launch when the installed version is below assistantMinVersion", async () => {
+    // Chosen explicitly: the version gate is the subject, and a null preference now
+    // renders the native panel, which has no CLI to gate.
+    helpPanelState.preferredAgentId = "claude";
     cliAvailabilityState.availability = { claude: "ready" };
     mockGetAssistantSupportedAgentIds.mockReturnValue(["claude"]);
     mockGetFolderPath.mockResolvedValue("/help");
@@ -866,7 +886,7 @@ describe("HelpPanel — assistantMinVersion gate (issue #7539)", () => {
     );
   });
 
-  it("clears the version-too-old block when preferredAgentId changes", async () => {
+  it("clears the version-too-old block when preferredAgentId changes to another agent", async () => {
     helpPanelState.preferredAgentId = "claude";
     mockGetFolderPath.mockResolvedValue("/help");
     mockGetAgentVersion.mockResolvedValue({
@@ -880,9 +900,12 @@ describe("HelpPanel — assistantMinVersion gate (issue #7539)", () => {
     const { findByTestId, queryByTestId, rerender } = render(<HelpPanel width={380} />);
     await findByTestId("help-version-too-old");
 
-    // User clears their preferred agent — the stale block should disappear so
-    // the no-preference empty state can render correctly.
-    helpPanelState.preferredAgentId = null;
+    // User switches to a DIFFERENT terminal-backed agent — the stale block should
+    // disappear so the new agent's own state can render. Deliberately not null:
+    // clearing the preference switches the panel to the native assistant, which hides
+    // the version gate outright, so the test would pass without the block ever being
+    // cleared.
+    helpPanelState.preferredAgentId = "codex";
     cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
     mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
 
@@ -1196,8 +1219,11 @@ describe("HelpPanel — launch loading state (issue #8771)", () => {
     }
   });
 
-  it("does not render the launch skeleton on the idle multi-agent empty state", () => {
-    helpPanelState.preferredAgentId = null;
+  it("does not render the launch skeleton on the idle empty state", () => {
+    // Consent off with an explicit preference is what reaches the idle empty state
+    // now; a null preference renders the native panel instead.
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.preferredAgentId = "claude";
     cliAvailabilityState.availability = { claude: "ready", codex: "ready" };
     mockGetAssistantSupportedAgentIds.mockReturnValue(["claude", "codex"]);
 

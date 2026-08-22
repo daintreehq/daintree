@@ -181,6 +181,23 @@ export function registerHelpActions(actions: ActionRegistry, callbacks: ActionCa
         agentId = resolved ?? "claude";
       }
 
+      // The native Daintree Assistant has no PTY form. Reaching the launch path below
+      // with it would provision a session, spawn its CLI into a terminal, and bind that
+      // terminal to the panel — at which point HelpPanel ALSO renders the native branch,
+      // and two engines race for the same project lease. This action is on a shipped
+      // keyboard shortcut and in the Help menu, so it is a route a user takes by
+      // accident, not a theoretical one. Opening the panel is the whole job here: the
+      // panel decides its own surface, and for this agent that surface is native.
+      if (isAssistantOnlyAgentId(agentId)) {
+        useHelpPanelStore.getState().setPreferredAgent(agentId);
+        useFocusStore.getState().clearAssistantGesture();
+        if (!useHelpPanelStore.getState().isOpen) {
+          suppressSidebarResizes();
+          useHelpPanelStore.getState().setOpen(true);
+        }
+        return;
+      }
+
       const helpPrompt =
         "I need help with Daintree, an Electron-based IDE for orchestrating AI coding agents. Please briefly tell me how you can help.";
 

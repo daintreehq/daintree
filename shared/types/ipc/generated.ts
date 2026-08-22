@@ -114,6 +114,18 @@ export interface GeneratedIpcInvokeMap {
     args: [options: import("./agent.js").SaveArtifactOptions];
     result: import("./agent.js").SaveArtifactResult | null;
   };
+  "assistant-host:send": {
+    args: [raw: unknown];
+    result: { delivered: boolean };
+  };
+  "assistant-host:start": {
+    args: [payload: import("./assistantHostIpc.js").AssistantHostStartPayload];
+    result: import("./assistantHostIpc.js").AssistantHostStartResult;
+  };
+  "assistant-host:stop": {
+    args: [sessionId: string];
+    result: { stopped: boolean };
+  };
   "claude:list-subagents": {
     args: [__0: { terminalId: string }];
     result: import("./agentSubagents.js").AgentSubagentsResult;

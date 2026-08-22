@@ -1,0 +1,4 @@
+[submodule "vendor/daintree-assistant"]
+	path = vendor/daintree-assistant
+	url = https://github.com/daintreehq/assistant.git
+	branch = feature/native-host-protocol-v3

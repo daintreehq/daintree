@@ -52,6 +52,11 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
+        with:
+          # The assistant engine is a Go submodule. Without it the engine-conformance
+          # test SKIPS, which is how a packaging blocker reached a release branch
+          # under a green CI.
+          submodules: recursive
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -87,6 +92,11 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
+        with:
+          # The assistant engine is a Go submodule. Without it the engine-conformance
+          # test SKIPS, which is how a packaging blocker reached a release branch
+          # under a green CI.
+          submodules: recursive
 
       - name: Set up Node.js
         uses: actions/setup-node@v6
@@ -116,6 +126,17 @@ jobs:
           restore-keys: |
             ${{ runner.os }}-vite-
 
+      # Build the engine so the cross-repo conformance test has a real binary to
+      # drive. It is CGO-free, so this costs seconds and needs no extra toolchain.
+      - name: Set up Go (assistant engine)
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: vendor/daintree-assistant/go.mod
+          cache-dependency-path: vendor/daintree-assistant/go.sum
+
+      - name: Build assistant engine
+        run: npm run build:assistant
+
       - name: Test (vitest unit, shard ${{ matrix.shard }}/4)
         run: npx vitest run --shard=${{ matrix.shard }}/4
 
@@ -126,6 +147,11 @@ jobs:
     steps:
       - name: Check out repository
         uses: actions/checkout@v6
+        with:
+          # The assistant engine is a Go submodule. Without it the engine-conformance
+          # test SKIPS, which is how a packaging blocker reached a release branch
+          # under a green CI.
+          submodules: recursive
 
       - name: Set up Node.js
         uses: actions/setup-node@v6

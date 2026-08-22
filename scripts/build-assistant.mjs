@@ -1,0 +1,185 @@
+#!/usr/bin/env node
+/**
+ * Builds the vendored Daintree Assistant engine (`vendor/daintree-assistant`, a Go
+ * submodule) into `resources/assistant/`, from where electron-builder ships it as an
+ * extraResource and `resolveAssistantBinary` finds it at runtime.
+ *
+ * Why a bundled binary rather than a PATH lookup: the assistant IS the product's
+ * engine, and its wire protocol moves in lockstep with Daintree's host code. A
+ * separately-installed copy on PATH is free to be any version, which is exactly how
+ * the v1/v2 protocol skew happened. The submodule SHA pins them together.
+ *
+ * Why Go is cheap to bundle: the engine is CGO-free (pure-Go SQLite, no cgo deps), so
+ * every target cross-compiles from one machine in seconds with no toolchain beyond Go
+ * itself. `-ldflags "-s -w"` strips ~38% off the result.
+ *
+ * Usage:
+ *   node scripts/build-assistant.mjs                # host platform
+ *   node scripts/build-assistant.mjs --all          # every shipped target
+ *   node scripts/build-assistant.mjs --platform darwin --arch arm64
+ *   node scripts/build-assistant.mjs --check        # report only, build nothing
+ */
+
+import { execFileSync, spawnSync } from "node:child_process";
+import { existsSync, mkdirSync, rmSync, statSync } from "node:fs";
+import path from "node:path";
+import { fileURLToPath } from "node:url";
+
+const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
+const SUBMODULE = path.join(ROOT, "vendor", "daintree-assistant");
+const OUT_DIR = path.join(ROOT, "resources", "assistant");
+const CMD_PKG = "./cmd/daintree-assistant";
+
+/** Every target Daintree ships. All are CGO-free, so one runner produces the lot. */
+const TARGETS = [
+  { platform: "darwin", arch: "arm64", goos: "darwin", goarch: "arm64" },
+  { platform: "darwin", arch: "x64", goos: "darwin", goarch: "amd64" },
+  { platform: "linux", arch: "x64", goos: "linux", goarch: "amd64" },
+  { platform: "linux", arch: "arm64", goos: "linux", goarch: "arm64" },
+  { platform: "win32", arch: "x64", goos: "windows", goarch: "amd64" },
+  { platform: "win32", arch: "arm64", goos: "windows", goarch: "arm64" },
+];
+
+/**
+ * The on-disk name for a target's binary. Kept in ONE place because
+ * `resolveAssistantBinary` in the main process derives the same name from
+ * `process.platform`/`process.arch` — a mismatch is a runtime "binary missing" that
+ * only shows up in a packaged build.
+ */
+export function assistantBinaryName(platform, arch) {
+  const ext = platform === "win32" ? ".exe" : "";
+  return `daintree-assistant-${platform}-${arch}${ext}`;
+}
+
+function log(msg) {
+  process.stdout.write(`[assistant] ${msg}\n`);
+}
+
+function fail(msg) {
+  process.stderr.write(`[assistant] ERROR: ${msg}\n`);
+  process.exit(1);
+}
+
+/** The submodule is empty until `git submodule update --init`. Say so plainly. */
+function assertSubmodule() {
+  if (!existsSync(path.join(SUBMODULE, "go.mod"))) {
+    fail(
+      `vendor/daintree-assistant is not checked out.\n` +
+        `  Run: git submodule update --init --recursive`
+    );
+  }
+}
+
+function goVersion() {
+  const res = spawnSync("go", ["version"], { encoding: "utf8" });
+  if (res.error || res.status !== 0) return null;
+  return res.stdout.trim();
+}
+
+function buildTarget({ platform, arch, goos, goarch }, { version }) {
+  const outName = assistantBinaryName(platform, arch);
+  const outPath = path.join(OUT_DIR, outName);
+  const started = Date.now();
+
+  execFileSync(
+    "go",
+    [
+      "build",
+      // Strip the symbol table and DWARF. The engine is shipped, not debugged in
+      // place — a crash is diagnosed from its own structured debug log, not a
+      // backtrace against the packaged binary.
+      "-ldflags",
+      `-s -w -X main.version=${version}`,
+      "-o",
+      outPath,
+      CMD_PKG,
+    ],
+    {
+      cwd: SUBMODULE,
+      stdio: ["ignore", "inherit", "inherit"],
+      env: {
+        ...process.env,
+        // CGO off is load-bearing, not an optimization: it is what makes every
+        // target buildable from one machine. Turning it on silently reintroduces a
+        // per-platform toolchain requirement.
+        CGO_ENABLED: "0",
+        GOOS: goos,
+        GOARCH: goarch,
+      },
+    }
+  );
+
+  const mb = (statSync(outPath).size / 1048576).toFixed(1);
+  log(`${outName.padEnd(42)} ${mb} MB  (${Date.now() - started}ms)`);
+  return outPath;
+}
+
+/** Reads the pinned submodule version so the binary reports something meaningful. */
+function resolveVersion() {
+  try {
+    const sha = execFileSync("git", ["rev-parse", "--short", "HEAD"], {
+      cwd: SUBMODULE,
+      encoding: "utf8",
+    }).trim();
+    return `daintree-${sha}`;
+  } catch {
+    return "daintree-dev";
+  }
+}
+
+function main() {
+  const argv = process.argv.slice(2);
+  const checkOnly = argv.includes("--check");
+  const all = argv.includes("--all");
+  const platformArg = argv[argv.indexOf("--platform") + 1];
+  const archArg = argv[argv.indexOf("--arch") + 1];
+
+  assertSubmodule();
+
+  const go = goVersion();
+  if (!go) {
+    fail(
+      "Go is not on PATH. The assistant engine is a Go binary vendored as a submodule.\n" +
+        "  macOS: brew install go   |   Linux: https://go.dev/dl/"
+    );
+  }
+  log(go);
+
+  let targets;
+  if (all) {
+    targets = TARGETS;
+  } else {
+    const platform = argv.includes("--platform") ? platformArg : process.platform;
+    const arch = argv.includes("--arch") ? archArg : process.arch;
+    targets = TARGETS.filter((t) => t.platform === platform && t.arch === arch);
+    if (targets.length === 0) {
+      fail(
+        `no assistant target for ${platform}/${arch}. Supported: ` +
+          TARGETS.map((t) => `${t.platform}/${t.arch}`).join(", ")
+      );
+    }
+  }
+
+  if (checkOnly) {
+    for (const t of targets) {
+      const p = path.join(OUT_DIR, assistantBinaryName(t.platform, t.arch));
+      log(`${existsSync(p) ? "present" : "MISSING"}  ${p}`);
+    }
+    return;
+  }
+
+  mkdirSync(OUT_DIR, { recursive: true });
+  const version = resolveVersion();
+  for (const t of targets) {
+    buildTarget(t, { version });
+  }
+  log(`done → ${path.relative(ROOT, OUT_DIR)}`);
+}
+
+/** `--clean` removes previously built binaries (used by `npm run clean`). */
+if (process.argv.includes("--clean")) {
+  rmSync(OUT_DIR, { recursive: true, force: true });
+  log("cleaned");
+} else {
+  main();
+}

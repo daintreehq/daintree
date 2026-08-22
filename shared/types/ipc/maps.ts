@@ -1625,6 +1625,16 @@ export interface IpcEventMap {
    * Targeted push: an MCP tool dispatch entered the call path for the pinned
    * help-session. Drives the Assistant panel's live activity strip (#9759).
    */
+  /**
+   * Native assistant engine push channels (protocol v3). Each is a TARGETED send to
+   * the view that started the session — never a broadcast, because Daintree is
+   * multi-window and each project has its own renderer.
+   */
+  "assistant-host:event": import("./assistantHost.js").AssistantHostEvent;
+  /** Frames were lost in transit; the transcript is incomplete from this point. */
+  "assistant-host:gap": import("./assistantHostIpc.js").AssistantHostGapPayload;
+  "assistant-host:exit": import("./assistantHostIpc.js").AssistantHostExitPayload;
+
   "mcp-server:tool-call-started": import("./mcpServer.js").McpToolCallStartedPayload;
   /**
    * Targeted push: an MCP tool dispatch announced via `tool-call-started`

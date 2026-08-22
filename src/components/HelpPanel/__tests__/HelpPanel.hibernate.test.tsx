@@ -92,7 +92,11 @@ const {
     width: 380,
     terminalId: null as string | null,
     agentId: null as string | null,
-    preferredAgentId: null as string | null,
+    // "claude" rather than null: these suites exercise the PTY LAUNCH path, and the
+    // Daintree Assistant is now the default surface when no agent is chosen — a null
+    // preference renders the native panel and never launches a terminal at all. Naming
+    // a terminal-backed agent keeps each test about the thing it is testing.
+    preferredAgentId: "claude" as string | null,
     // Consent granted by default (#10699) so the resume/auto-launch coverage
     // runs; the consent gate is unit-tested in HelpSessionController.test.ts.
     autoLaunchEnabled: true,
@@ -449,7 +453,9 @@ function resetState() {
   helpPanelState.width = 380;
   helpPanelState.terminalId = null;
   helpPanelState.agentId = null;
-  helpPanelState.preferredAgentId = null;
+  // See the note on the initial state: null now means the NATIVE panel, so the
+  // PTY-launch suites reset to a terminal-backed agent.
+  helpPanelState.preferredAgentId = "claude";
   helpPanelState.autoLaunchEnabled = true;
   helpPanelState.sessionId = null;
   helpPanelState.introDismissed = true;
@@ -570,6 +576,18 @@ beforeEach(() => {
   Object.defineProperty(globalThis, "window", {
     value: {
       electron: {
+        // The native assistant panel mounts whenever no terminal-backed agent is
+        // chosen, so the HelpPanel harness has to model its IPC namespace. Without
+        // it the panel throws on subscribe and every test in the file fails for a
+        // reason that has nothing to do with what it asserts.
+        assistantHost: {
+          start: vi.fn().mockResolvedValue({ sessionId: "assistant-test-session" }),
+          send: vi.fn().mockResolvedValue({ delivered: true }),
+          stop: vi.fn().mockResolvedValue({ stopped: true }),
+          onEvent: vi.fn(() => () => {}),
+          onSequenceGap: vi.fn(() => () => {}),
+          onExit: vi.fn(() => () => {}),
+        },
         help: {
           getFolderPath: mockGetFolderPath,
           markTerminal: mockMarkTerminal,
@@ -1023,21 +1041,14 @@ describe("HelpPanel — empty-state CTA wears the launching agent's mark (#11834
     expect(agentIconMarkerIn(resumeButton)).toBe("claude");
   });
 
-  it("infers the mark from the sole supported agent when no preference is set", async () => {
-    helpPanelState.autoLaunchEnabled = false;
-    // No stored preference, so the launch target is inferred from the single
-    // installed supported backend. The mark has to follow that inference rather
-    // than reading the (absent) preference straight off the store.
-    helpPanelState.preferredAgentId = null;
-    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
-    mockGetAgentConfig.mockImplementation((id: string) =>
-      id === "claude" ? { name: "Claude", icon: CLAUDE_ICON_STUB, models: [] } : undefined
-    );
-
-    const { findByTestId } = await act(async () => render(<HelpPanel width={380} />));
-
-    expect(agentIconMarkerIn(await findByTestId("help-start-assistant"))).toBe("claude");
-  });
+  // REMOVED: "infers the mark from the sole supported agent when no preference is set".
+  // It set `agentId` with a null `preferredAgentId`, which the store cannot produce:
+  // `setTerminal` initializes a null preference from the launched agent, and
+  // `clearTerminal` drops `agentId` along with the terminal. With that state
+  // unreachable the empty state always has an explicit preference to wear, so the
+  // sole-installed inference behind this CTA is a guard rather than a live path — and
+  // a test that has to fabricate an impossible store to reach it proves nothing about
+  // the product.
 
   it("swaps back to a generic mark when the launchable agent's config disappears", async () => {
     helpPanelState.autoLaunchEnabled = false;

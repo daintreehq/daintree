@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useRef } from "react";
 import { usePanelStore, type AddPanelOptions } from "@/store/panelStore";
 import type { PtyPanelData } from "@shared/types/panel";
+import { isAssistantOnlyAgentId } from "@shared/config/agentIds";
 import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
@@ -354,6 +355,19 @@ export function useAgentLauncher(): UseAgentLauncherReturn {
     ): Promise<LaunchAgentResult | null> => {
       if (!isElectronAvailable()) {
         console.warn("Electron API not available");
+        return null;
+      }
+
+      // The assistant-only agents have no terminal form at all — the Daintree
+      // Assistant is a headless engine behind a React panel, not a CLI a user drives in
+      // an xterm. `agentIds.ts` already states they must never be offered as a
+      // standalone launchable agent, but stating it in the pickers only protects the
+      // pickers: the `agent.launch` action accepts every built-in id, so an action
+      // dispatch, an MCP tool call, or a keybinding reaches this function directly.
+      // Refusing HERE is what makes the invariant true, because this is the one place
+      // every launch path converges before a PTY exists.
+      if (isAssistantOnlyAgentId(agentId)) {
+        console.warn(`Refusing to launch ${agentId} as a terminal agent — it has no PTY form`);
         return null;
       }
 

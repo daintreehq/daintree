@@ -12,6 +12,7 @@ import {
   type AssistantHostEvent,
   type AssistantHostCommand,
   type AssistantHostSessionDescriptor,
+  type AssistantToolState,
 } from "../../shared/types/ipc/assistantHost.js";
 import type {
   McpAuditResult,
@@ -1037,10 +1038,14 @@ const TurnOutcomeClassSchema = z.enum([
   "tool-error",
   "reasoning-loop",
   "hibernate-resume-stale",
+  "cancelled",
   "unknown",
 ]);
 
 const AssistantTurnRoleSchema = z.enum(["user", "assistant"]);
+
+/** Lifecycle of one announced tool call. "waiting" means blocked on the USER. */
+const AssistantToolStateSchema = z.enum(["queued", "active", "waiting", "done", "failed"]);
 
 const AssistantHostShutdownReasonSchema = z.enum(["hibernate", "revoke", "error", "exit"]);
 
@@ -1062,6 +1067,7 @@ export type AssistantHostVocabularyParity = [
   AssertTrue<ExactlyEqual<z.infer<typeof McpAuditSeveritySchema>, McpAuditSeverity>>,
   AssertTrue<ExactlyEqual<z.infer<typeof McpConfirmationDecisionSchema>, McpConfirmationDecision>>,
   AssertTrue<ExactlyEqual<z.infer<typeof TurnOutcomeClassSchema>, TurnOutcomeClass>>,
+  AssertTrue<ExactlyEqual<z.infer<typeof AssistantToolStateSchema>, AssistantToolState>>,
 ];
 
 /**
@@ -1096,36 +1102,106 @@ export const AssistantHostSessionDescriptorSchema = z
   })
   .strict();
 
+/**
+ * Every v3 event carries a monotonic `seq`. It is validated as a positive integer
+ * because the engine counts from 1, which lets a consumer treat 0 as "nothing seen
+ * yet" without ambiguity. Tracking it is how Daintree detects a lost frame: v2 shed
+ * frames silently under backpressure with no way to notice, which is unusable once
+ * the transcript is the product.
+ */
+const Seq = z.number().int().positive();
+
+/** Fields shared by every engine event. */
+const hostEventBase = { sessionId: IdString, seq: Seq };
+
 export const AssistantHostEventSchema = z.discriminatedUnion("type", [
   z.object({
+    ...hostEventBase,
     type: z.literal("host:ready"),
-    sessionId: IdString,
     protocolVersion: z.number().int().positive(),
     resumedSessionId: IdString.optional(),
+    version: z.string().optional(),
+    autoApprove: z.boolean(),
+    // Engine-resolved masthead facts. Bounded rather than bare `z.string()`: they are
+    // rendered into the panel chrome, and a pathological value should be refused at
+    // the boundary instead of laid out.
+    tier: z.string().max(64).optional(),
+    tierGloss: z.string().max(200).optional(),
+    backend: z.string().max(2048).optional(),
+    routing: z.string().max(500).optional(),
+    logFile: z.string().max(4096).optional(),
   }),
   z.object({
+    ...hostEventBase,
     type: z.literal("turn:start"),
-    sessionId: IdString,
     turnId: IdString,
     role: AssistantTurnRoleSchema,
     startedAt: Timestamp,
   }),
   z.object({
+    ...hostEventBase,
     type: z.literal("turn:token"),
-    sessionId: IdString,
     turnId: IdString,
     chunk: z.string(),
   }),
   z.object({
+    ...hostEventBase,
     type: z.literal("turn:end"),
-    sessionId: IdString,
     turnId: IdString,
     endedAt: Timestamp,
     outcome: TurnOutcomeClassSchema.optional(),
+    // Authoritative final text. Absent (not "") when the turn produced none, so a
+    // tool-only round stays distinguishable from an empty answer.
+    content: z.string().optional(),
   }),
   z.object({
+    ...hostEventBase,
+    type: z.literal("turn:phase"),
+    turnId: IdString.optional(),
+    phase: z.string(),
+  }),
+  z.object({
+    ...hostEventBase,
+    type: z.literal("turn:reasoning"),
+    turnId: IdString,
+    text: z.string(),
+  }),
+  z.object({
+    ...hostEventBase,
+    type: z.literal("turn:interjection"),
+    turnId: IdString.optional(),
+    text: z.string(),
+  }),
+  z.object({
+    ...hostEventBase,
+    type: z.literal("tool:batch"),
+    turnId: IdString.optional(),
+    calls: z.array(
+      z.object({
+        toolCallId: IdString,
+        toolId: IdString,
+        argsSummary: z.string(),
+        danger: z.boolean(),
+      })
+    ),
+  }),
+  z.object({
+    ...hostEventBase,
+    type: z.literal("tool:state"),
+    toolCallId: IdString,
+    state: AssistantToolStateSchema,
+    turnId: IdString.optional(),
+  }),
+  z.object({
+    ...hostEventBase,
+    type: z.literal("tool:progress"),
+    toolCallId: IdString,
+    message: z.string(),
+    turnId: IdString.optional(),
+  }),
+  z.object({
+    ...hostEventBase,
     type: z.literal("tool:started"),
-    sessionId: IdString,
     toolCallId: IdString,
     toolId: IdString,
     argsSummary: z.string(),
@@ -1134,8 +1210,8 @@ export const AssistantHostEventSchema = z.discriminatedUnion("type", [
     danger: z.boolean(),
   }),
   z.object({
+    ...hostEventBase,
     type: z.literal("tool:settled"),
-    sessionId: IdString,
     toolCallId: IdString,
     toolId: IdString,
     durationMs: Timestamp,
@@ -1143,32 +1219,75 @@ export const AssistantHostEventSchema = z.discriminatedUnion("type", [
     severity: McpAuditSeveritySchema,
     errorCode: z.string().optional(),
     turnId: IdString.optional(),
+    asyncId: IdString.optional(),
   }),
   z.object({
+    ...hostEventBase,
+    type: z.literal("usage"),
+    turnId: IdString.optional(),
+    promptTokens: z.number().int().nonnegative(),
+    completionTokens: z.number().int().nonnegative(),
+    totalTokens: z.number().int().nonnegative(),
+    // Optional, never zero-filled: absent means the provider reported nothing, and a
+    // meter that shows 0% cache-hit is a claim rather than a gap.
+    cachedTokens: z.number().int().nonnegative().optional(),
+    cacheHitRatio: z.number().finite().optional(),
+    contextTokens: z.number().int().nonnegative(),
+    contextThreshold: z.number().int().nonnegative(),
+    contextWindow: z.number().int().nonnegative(),
+  }),
+  z.object({
+    ...hostEventBase,
+    type: z.literal("cost"),
+    turnId: IdString.optional(),
+    total: z.number().finite().nonnegative(),
+    // `false` means `total` is a FLOOR. Render "≥ $x"; never present it as a receipt.
+    complete: z.boolean(),
+  }),
+  z.object({
+    ...hostEventBase,
+    type: z.literal("notice"),
+    level: z.enum(["info", "warning"]),
+    message: z.string(),
+    turnId: IdString.optional(),
+  }),
+  z.object({
+    ...hostEventBase,
+    type: z.literal("model:rate-limited"),
+    turnId: IdString.optional(),
+  }),
+  z.object({
+    ...hostEventBase,
     type: z.literal("approval:requested"),
-    sessionId: IdString,
     approvalId: IdString,
     toolId: IdString,
     summary: z.string(),
     requestedAt: Timestamp,
     turnId: IdString.optional(),
+    riskClass: z.string().optional(),
+    consequence: z.string().optional(),
+    argsSummary: z.string().optional(),
+    // REQUIRED, never defaulted. The safety layer's own verdict that this action is
+    // irreversible; a missing field would silently become "false" and let a click
+    // approve a git/system operation that must be typed.
+    needsTypedConfirm: z.boolean(),
   }),
   z.object({
+    ...hostEventBase,
     type: z.literal("approval:decided"),
-    sessionId: IdString,
     approvalId: IdString,
     decision: McpConfirmationDecisionSchema,
     decidedAt: Timestamp,
   }),
   z.object({
+    ...hostEventBase,
     type: z.literal("host:error"),
-    sessionId: IdString,
     code: IdString,
     message: z.string(),
   }),
   z.object({
+    ...hostEventBase,
     type: z.literal("host:shutdown"),
-    sessionId: IdString,
     reason: AssistantHostShutdownReasonSchema,
     resumeSessionId: IdString.optional(),
   }),
@@ -1199,6 +1318,23 @@ export const AssistantHostCommandSchema = z.discriminatedUnion("type", [
     sessionId: IdString,
   }),
 ]);
+
+/**
+ * WHOLE-UNION parity: the Zod validator and the declared TypeScript union must agree,
+ * member for member and field for field.
+ *
+ * This is the guard for the failure that actually happened. Daintree's half of this
+ * protocol sat at v1 while the engine moved to v2 and then v3, and nothing caught it
+ * because the two descriptions lived in different files with no assertion between
+ * them. A hand-maintained schema beside a hand-maintained type is not one contract,
+ * it is two — and they only look identical until someone edits one of them.
+ *
+ * If this line fails to compile, do not cast around it: one of the two is wrong, and
+ * the engine's `internal/host/events.go` decides which.
+ */
+export type AssistantHostEventSchemaParity = AssertTrue<
+  ExactlyEqual<z.infer<typeof AssistantHostEventSchema>, AssistantHostEvent>
+>;
 
 /** Parse an inbound host event, returning `null` for any invalid message. */
 export function parseAssistantHostEvent(value: unknown): AssistantHostEvent | null {

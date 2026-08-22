@@ -1927,6 +1927,33 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       callback: (payload: { description: string; replacement: string; resolved: boolean }) => void
     ): () => void;
   };
+  /**
+   * The native assistant engine (protocol v3). Invoke methods start/stop a session
+   * and send commands; the event stream arrives on the subscriptions below, each a
+   * targeted push to this view.
+   */
+  assistantHost: {
+    start(
+      payload: import("./assistantHostIpc.js").AssistantHostStartPayload
+    ): Promise<import("./assistantHostIpc.js").AssistantHostStartResult>;
+    send(
+      command: import("./assistantHost.js").AssistantHostCommand
+    ): Promise<{ delivered: boolean }>;
+    stop(sessionId: string): Promise<{ stopped: boolean }>;
+    /** One validated protocol event from the engine. */
+    onEvent(callback: (event: import("./assistantHost.js").AssistantHostEvent) => void): () => void;
+    /**
+     * A gap in the engine's monotonic sequence: frames were lost, so the transcript is
+     * incomplete from here. Surfaced rather than absorbed.
+     */
+    onSequenceGap(
+      callback: (payload: import("./assistantHostIpc.js").AssistantHostGapPayload) => void
+    ): () => void;
+    onExit(
+      callback: (payload: import("./assistantHostIpc.js").AssistantHostExitPayload) => void
+    ): () => void;
+  };
+
   // Invoke methods come from GeneratedElectronAPI; the rest are
   // renderer-only event subscriptions.
   mcpServer: GeneratedElectronAPI["mcpServer"] & {

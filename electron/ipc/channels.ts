@@ -769,6 +769,29 @@ export const CHANNELS = {
    * figure inline. Targeted at the pinned WebContents — never broadcast.
    */
   MCP_HELP_DISPLAY_IMAGE: "mcp-server:help-display-image",
+
+  /**
+   * Native assistant engine (protocol v3). Commands go renderer → main; the event
+   * stream comes back on the push channels below.
+   *
+   * Every push here is a TARGETED send to the WebContents that started the session,
+   * never a broadcast: Daintree is multi-window and each project has its own
+   * renderer, so a broadcast would put one project's conversation — and its approval
+   * prompts — on another project's screen (#7003).
+   */
+  ASSISTANT_HOST_START: "assistant-host:start",
+  ASSISTANT_HOST_SEND: "assistant-host:send",
+  ASSISTANT_HOST_STOP: "assistant-host:stop",
+  /** One validated protocol event from the engine. */
+  ASSISTANT_HOST_EVENT: "assistant-host:event",
+  /**
+   * A gap in the engine's monotonic sequence: frames were lost in transit, so the
+   * transcript from this point is incomplete. Surfaced rather than absorbed —
+   * rendering a partial answer as though it were whole is the worse failure.
+   */
+  ASSISTANT_HOST_GAP: "assistant-host:gap",
+  /** The engine process exited, cooperatively or otherwise. */
+  ASSISTANT_HOST_EXIT: "assistant-host:exit",
   /**
    * Push channel: a turn for the help-session pinned to this renderer
    * classified as `agent-stuck` or `reasoning-loop` (#10018). Drives the

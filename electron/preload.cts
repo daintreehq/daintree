@@ -25,6 +25,11 @@ import type {
   McpHelpDisplayImagePayload,
   McpTurnOutcomeAlertPayload,
 } from "../shared/types/ipc/mcpServer.js";
+import type { AssistantHostEvent } from "../shared/types/ipc/assistantHost.js";
+import type {
+  AssistantHostGapPayload,
+  AssistantHostExitPayload,
+} from "../shared/types/ipc/assistantHostIpc.js";
 import type { ActionContext, ActionDispatchResult } from "../shared/types/actions.js";
 import type { PushProgressEvent } from "../shared/types/ipc/gitPush.js";
 import { CHANNELS } from "./ipc/channels.js";
@@ -51,6 +56,7 @@ import { buildPluginCapabilityPreloadBindings } from "./ipc/handlers/pluginCapab
 import { buildPluginProcessPreloadBindings } from "./ipc/handlers/pluginProcess.preload.js";
 import { buildScratchPreloadBindings } from "./ipc/handlers/scratch/preload.js";
 import { buildMcpServerPreloadBindings } from "./ipc/handlers/mcpServer.preload.js";
+import { buildAssistantHostPreloadBindings } from "./ipc/handlers/assistantHost.preload.js";
 import { buildForgeAuditPreloadBindings } from "./ipc/handlers/forgeAudit.preload.js";
 import { buildRunHistoryPreloadBindings } from "./ipc/handlers/runHistory.preload.js";
 import { buildCopyTreeHistoryPreloadBindings } from "./ipc/handlers/copyTreeHistory.preload.js";
@@ -3084,6 +3090,22 @@ function buildElectronApi(): ElectronAPI {
     },
 
     helpAssistant: buildHelpAssistantPreloadBindings(_unwrappingInvoke),
+
+    /**
+     * The native assistant engine (protocol v3). Commands are invokes; the event
+     * stream arrives on push channels, each a TARGETED send to this view.
+     */
+    assistantHost: {
+      ...buildAssistantHostPreloadBindings(_unwrappingInvoke),
+
+      onEvent: (callback: (event: AssistantHostEvent) => void) =>
+        _typedOn(CHANNELS.ASSISTANT_HOST_EVENT, callback),
+      /** Frames were lost in transit — the transcript is incomplete from here. */
+      onSequenceGap: (callback: (payload: AssistantHostGapPayload) => void) =>
+        _typedOn(CHANNELS.ASSISTANT_HOST_GAP, callback),
+      onExit: (callback: (payload: AssistantHostExitPayload) => void) =>
+        _typedOn(CHANNELS.ASSISTANT_HOST_EXIT, callback),
+    },
 
     mcpBridge: {
       onGetManifestRequest: (callback: (requestId: string) => void) =>

@@ -25,6 +25,8 @@ const {
   mockRemovePanel: vi.fn(),
 }));
 
+import { useHelpPanelStore } from "@/store/helpPanelStore";
+
 vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: mockDispatch, getContext: mockGetContext },
 }));
@@ -160,21 +162,28 @@ describe("help.launchAgent", () => {
     expect(mockNotify).not.toHaveBeenCalled();
   });
 
-  it("runs the Daintree Assistant in the project root, not the provisioned session dir", async () => {
-    // The assistant is env-only and ships its own skills, so it reads nothing
-    // from cwd — it should operate on the actual project files. Same mock setup
-    // as the non-assistant case below; only the cwd differs.
+  // Replaces "runs the Daintree Assistant in the project root, not the provisioned
+  // session dir". That test described the assistant when it WAS a CLI in a terminal.
+  // It is now a headless engine behind a React panel with no PTY form at all, so the
+  // question is no longer where its terminal runs but that it never gets one: this
+  // action sits on a shipped keyboard shortcut and in the Help menu, and a terminal
+  // spawned from here would race the panel's own engine for the project lease.
+  it("opens the panel and launches NO terminal for the native assistant", async () => {
     (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
       "/mock/help"
     );
+    useHelpPanelStore.getState().setOpen(false);
 
     await action.run({ agentId: "daintree-assistant" }, stubCtx);
 
-    expect(mockDispatch).toHaveBeenCalledWith(
+    expect(mockDispatch).not.toHaveBeenCalledWith(
       "agent.launch",
-      expect.objectContaining({ agentId: "daintree-assistant", cwd: "/repo" }),
-      { source: "user" }
+      expect.anything(),
+      expect.anything()
     );
+    expect(window.electron.help.provisionSession).not.toHaveBeenCalled();
+    expect(useHelpPanelStore.getState().isOpen).toBe(true);
+    expect(useHelpPanelStore.getState().preferredAgentId).toBe("daintree-assistant");
   });
 
   it("keeps a non-assistant help agent in the provisioned session dir", async () => {
@@ -471,7 +480,10 @@ describe("help.launchAgent", () => {
     expect(mockNotify).not.toHaveBeenCalled();
   });
 
-  it("runs the assistant in the scratch root when a scratch is the active workspace", async () => {
+  it("runs a terminal help agent in the scratch root when a scratch is the active workspace", async () => {
+    // Was asserted with the Daintree Assistant, which no longer takes a terminal at
+    // all. The scratch-root rule it was really testing belongs to the PTY help agents,
+    // so it is asserted with one.
     (window.electron.help.getFolderPath as ReturnType<typeof vi.fn>).mockResolvedValue(
       "/mock/help"
     );
@@ -480,14 +492,11 @@ describe("help.launchAgent", () => {
       currentScratch: { id: "scratch-1", path: "/scratches/scratch-1" },
     });
 
-    await action.run({ agentId: "daintree-assistant" }, stubCtx);
+    await action.run({ agentId: "codex" }, stubCtx);
 
     expect(mockDispatch).toHaveBeenCalledWith(
       "agent.launch",
-      expect.objectContaining({
-        agentId: "daintree-assistant",
-        cwd: "/scratches/scratch-1",
-      }),
+      expect.objectContaining({ agentId: "codex" }),
       { source: "user" }
     );
   });

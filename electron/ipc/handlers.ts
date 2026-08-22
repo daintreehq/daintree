@@ -5,6 +5,7 @@ import { registerCopyTreeHandlers } from "./handlers/copyTree.js";
 import { registerAiHandlers } from "./handlers/ai.js";
 import { registerSystemShellHandlers } from "./handlers/systemShell.js";
 import { registerEditorConfigHandlers } from "./handlers/editorConfig.js";
+import { registerAssistantHostHandlers } from "./handlers/assistantHost.js";
 import { registerWindowChromeHandlers } from "./handlers/windowChrome.js";
 import { registerPaintFabricSurfaceHandlers } from "./handlers/paintFabricSurface.js";
 import { registerAgentCliHandlers } from "./handlers/agentCli.js";
@@ -143,6 +144,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerSlashCommandHandlers());
     register(() => registerSystemShellHandlers(deps));
     register(() => registerEditorConfigHandlers(deps));
+    register(() => registerAssistantHostHandlers());
     register(() => registerWindowChromeHandlers(deps));
     register(() => registerPaintFabricSurfaceHandlers(deps));
     register(() => registerAgentCliHandlers(deps));

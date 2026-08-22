@@ -14,6 +14,7 @@ import { ExternalLink, MessageCircle, Settings2, ShieldAlert, Sparkles, X } from
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { XtermAdapter } from "@/components/Terminal/XtermAdapter";
+import { AssistantPanel } from "@/components/AssistantPanel";
 import { MissingCliGate } from "@/components/Terminal/MissingCliGate";
 import {
   getTerminalFocusTarget,
@@ -24,6 +25,7 @@ import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { terminalClient } from "@/clients";
 import { logWarn } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
+import { DAINTREE_ASSISTANT_AGENT_ID } from "@shared/config/agentRegistry";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
 import { HelpIntroBanner } from "./HelpIntroBanner";
 import { HelpPanelHeader } from "./HelpPanelHeader";
@@ -250,6 +252,27 @@ export function HelpPanel({
     }))
   );
 
+  /**
+   * The Daintree Assistant renders NATIVELY; every other help agent keeps the xterm pane.
+   *
+   * There is deliberately no toggle. This is not a preference between two working
+   * surfaces — the engine no longer HAS a terminal UI. Its cockpit was removed when
+   * Daintree took over rendering, so pointing the PTY path at a current engine would
+   * show the bare line REPL that exists for SSH sessions. Claude, Codex and the rest
+   * are real terminal programs and stay on xterm.
+   *
+   * It is also the DEFAULT. The Daintree Assistant is the assistant — the picker,
+   * the availability probe and the "Start assistant" consent CTA all exist because
+   * this panel could host Claude or Codex instead, and none of that should stand
+   * between someone opening the panel and seeing their own assistant. Another agent
+   * takes the panel only when it has been chosen explicitly.
+   *
+   * Keyed off the preferred agent as well as the launched one: in native mode no
+   * terminal is ever launched, so `agentId` stays null.
+   */
+  const useNativeAssistant =
+    (agentId ?? preferredAgentId ?? DAINTREE_ASSISTANT_AGENT_ID) === DAINTREE_ASSISTANT_AGENT_ID;
+
   const terminal = usePanelStore((s) => (terminalId ? s.panelsById[terminalId] : undefined));
   const terminalPty = terminal && isPtyPanel(terminal) ? terminal : undefined;
   // Narrow structural triggers for the reveal-focus effect below. A live
@@ -291,6 +314,31 @@ export function HelpPanel({
   // across renders — `syncInputs` below patches controller state, which can
   // re-render this component, and an inline object would churn the effect.
   const activeWorkspaceId = currentProject?.id ?? currentScratch?.id ?? null;
+
+  // Arms once the native panel has actually been opened, and stays armed across
+  // close/reopen so dismissing the sidebar does not end the conversation.
+  //
+  // The arm names the workspace it belongs to, and is compared DURING RENDER rather
+  // than cleared by an effect. A boolean cleared in an effect is a frame too late: on
+  // an A→B switch, B's first render still sees A's `true`, starts B's engine, and the
+  // clear then stops it — leaving a visible panel with no session and no way back,
+  // because an effect keyed only on `isOpen`/`useNativeAssistant` never re-runs when
+  // neither changed. Deriving it makes a new workspace unarmed before any effect runs.
+  const [armedWorkspaceId, setArmedWorkspaceId] = useState<string | null>(null);
+  // Bumped by "+ New session" in native mode. It is a dependency of the engine's start
+  // effect, so a bump is what tears the old session down and starts a fresh one —
+  // the native equivalent of respawning the PTY, expressed through the same lifecycle
+  // rather than a second teardown path that could drift from it.
+  const [nativeSessionNonce, setNativeSessionNonce] = useState(0);
+  const nativeSessionArmed = armedWorkspaceId !== null && armedWorkspaceId === activeWorkspaceId;
+  useEffect(() => {
+    // Depends on the workspace too, so a switch re-arms immediately when the panel is
+    // already open, and waits for a first open when it is not.
+    if (isOpen && useNativeAssistant && armedWorkspaceId !== activeWorkspaceId) {
+      setArmedWorkspaceId(activeWorkspaceId);
+    }
+  }, [isOpen, useNativeAssistant, activeWorkspaceId, armedWorkspaceId]);
+
   const activeWorkspacePath = currentProject?.path ?? currentScratch?.path ?? null;
   const activeWorkspace = useMemo(
     () =>
@@ -626,6 +674,34 @@ export function HelpPanel({
     return () => clearTimeout(timer);
   }, [controller, terminalId, terminalPty?.agentState]);
 
+  /**
+   * Moves the panel to `targetAgentId`, from whatever surface it is on now.
+   *
+   * The native assistant is NOT a `selectAgent` target. `selectAgent` is the legacy
+   * PTY path: it unbinds the current terminal and launches a new one for the chosen
+   * agent. Pointed at "daintree-assistant" it would spawn the engine's CLI into an
+   * xterm — the very cockpit this panel replaced — while unbinding the terminal also
+   * mounts the native branch, leaving two assistants racing for the same project
+   * lease. Switching TO native is therefore a teardown, not a launch: end the bound
+   * session and the native branch takes the panel on the next render.
+   */
+  const switchToAgent = useCallback(
+    (targetAgentId: string) => {
+      if (targetAgentId === DAINTREE_ASSISTANT_AGENT_ID) {
+        // `endSession` is the user-facing STOP: it tears the PTY down and closes the
+        // sidebar. Closing is right when someone stops their assistant and wrong when
+        // they are switching to another one — the panel they are switching INTO would
+        // never appear, and the native engine would either not start (unarmed) or start
+        // behind a closed panel. Re-open in the same tick so the surface swaps in place.
+        controller.endSession();
+        setOpen(true);
+        return;
+      }
+      controller.selectAgent(targetAgentId);
+    },
+    [controller, setOpen]
+  );
+
   // React to a Settings agent change while a session is already bound.
   // `setTerminal` no longer overwrites `preferredAgentId`, so a user choice
   // made in the Daintree Assistant settings tab reaches here as a genuine
@@ -662,9 +738,9 @@ export function HelpPanel({
       setShowAgentSwitchConfirm(true);
       return;
     }
-    controller.selectAgent(preferredAgentId);
+    switchToAgent(preferredAgentId);
   }, [
-    controller,
+    switchToAgent,
     preferredAgentId,
     terminalId,
     agentId,
@@ -1170,13 +1246,19 @@ export function HelpPanel({
       : (sessionTabs.find((tab) => tab.slot === pendingCloseSlot)?.label ?? "this session");
 
   const handleNewSession = useCallback(() => {
+    if (useNativeAssistant) {
+      // The native transcript lives only in the store, so "something to lose" is
+      // whether anything has been said at all.
+      setNativeSessionNonce((n) => n + 1);
+      return;
+    }
     if (!terminalId || !agentId) return;
     if (shouldConfirmNewSession) {
       setShowNewSessionConfirm(true);
       return;
     }
     controller.newSession();
-  }, [controller, terminalId, agentId, shouldConfirmNewSession]);
+  }, [controller, terminalId, agentId, shouldConfirmNewSession, useNativeAssistant]);
 
   const handleConfirmNewSession = useCallback(() => {
     setShowNewSessionConfirm(false);
@@ -1190,13 +1272,19 @@ export function HelpPanel({
   // Stop reuses the same "something to lose" gate as +New session — confirm
   // only when a working agent or an engaged conversation would be discarded.
   const handleEndSession = useCallback(() => {
+    if (useNativeAssistant) {
+      // Disarming stops the engine through the same effect cleanup that a project
+      // change uses; re-opening the panel arms it again.
+      setArmedWorkspaceId(null);
+      return;
+    }
     if (!terminalId || !agentId) return;
     if (shouldConfirmNewSession) {
       setShowEndSessionConfirm(true);
       return;
     }
     controller.endSession();
-  }, [controller, terminalId, agentId, shouldConfirmNewSession]);
+  }, [controller, terminalId, agentId, shouldConfirmNewSession, useNativeAssistant]);
 
   const handleConfirmEndSession = useCallback(() => {
     setShowEndSessionConfirm(false);
@@ -1212,9 +1300,9 @@ export function HelpPanel({
     // Guard against the preference having moved back to the running agent (or
     // cleared) between opening the dialog and confirming.
     if (preferredAgentId && preferredAgentId !== agentId) {
-      controller.selectAgent(preferredAgentId);
+      switchToAgent(preferredAgentId);
     }
-  }, [controller, preferredAgentId, agentId]);
+  }, [switchToAgent, preferredAgentId, agentId]);
 
   // Leave preferredAgentId as the user set it — reverting it on cancel would
   // be a silent fallback the dropdown wouldn't reflect. The session simply
@@ -1271,6 +1359,15 @@ export function HelpPanel({
   // user's preference, or the sole installed assistant backend. Mirrors the
   // controller's own auto-launch eligibility so the CTA is shown only when a
   // single unambiguous target exists; otherwise the user is sent to settings.
+  //
+  // The sole-installed half is now a GUARD rather than a live path. This empty state
+  // only renders when the panel is not on the native surface, which means
+  // `agentId ?? preferredAgentId` is some other agent — and `setTerminal` initializes
+  // a null preference from the agent it launches while `clearTerminal` drops `agentId`
+  // with the terminal, so a set `agentId` always implies a set preference. The
+  // preference therefore always wins here. Kept because it degrades gracefully if that
+  // store invariant ever slips, and because #6612's reasoning still holds for whoever
+  // reaches it; not kept because anything is expected to.
   const launchableAgentId =
     preferredAgentId ??
     (supportedInstalledAgentIds.length === 1 ? (supportedInstalledAgentIds[0] ?? null) : null);
@@ -1431,8 +1528,8 @@ export function HelpPanel({
 
       <HelpPanelHeader
         agentState={terminalPty?.agentState}
-        canRestartConversation={Boolean(terminalId && agentId)}
-        canEndSession={Boolean(terminalId && agentId)}
+        canRestartConversation={Boolean((terminalId && agentId) || nativeSessionArmed)}
+        canEndSession={Boolean((terminalId && agentId) || nativeSessionArmed)}
         onRestartConversation={handleNewSession}
         onEndSession={handleEndSession}
         onOpenDocs={handleOpenAssistantDocs}
@@ -1464,7 +1561,12 @@ export function HelpPanel({
           slot={slot}
           isActive={slot === activeSlot}
           isOpen={isOpen}
-          isReadyToLaunch={isReadyToLaunch}
+          // Withheld for the native assistant: the launch controller exists to spawn a
+          // PTY, and in native mode there is no terminal to spawn. Letting it run would
+          // start a SECOND engine alongside the one the panel owns, and both would reach
+          // for the same per-project state lease. Applied per lane, since #12108 moved
+          // the `syncInputs` this used to gate into `HelpSessionLaneRuntime`.
+          isReadyToLaunch={isReadyToLaunch && !useNativeAssistant}
           currentProject={activeWorkspace}
           preferredAgentId={preferredAgentId}
           supportedInstalledAgentIds={supportedInstalledAgentIds}
@@ -1515,7 +1617,25 @@ export function HelpPanel({
           onStartNewSession={handleNewSession}
           onDismissSessionRevoked={dismissSessionRevoked}
         />
-        {showTerminal ? (
+        {useNativeAssistant ? (
+          <div className="flex-1 relative min-h-0">
+            <AssistantPanel
+              projectId={activeWorkspaceId}
+              projectPath={activeWorkspacePath}
+              projectName={currentProject?.name ?? currentScratch?.name ?? null}
+              // Latched, not `isOpen`. The engine must not start for a panel the user
+              // never opened — hiding slides it off-canvas rather than unmounting, so
+              // every project view would otherwise spin one up unprompted. But it must
+              // not STOP on close either: closing the sidebar is not ending a
+              // conversation, and tying the engine to `isOpen` silently discarded the
+              // transcript every time the panel was dismissed. Start on first open,
+              // then live until the project changes or the view goes away.
+              active={nativeSessionArmed}
+              restartNonce={nativeSessionNonce}
+              className="h-full"
+            />
+          </div>
+        ) : showTerminal ? (
           isMissingCli && agentId ? (
             <MissingCliGate
               agentId={agentId}
@@ -1771,7 +1891,7 @@ export function HelpPanel({
                   </span>
                 </span>
               ))}
-            {agentId === "daintree-assistant" ? (
+            {agentId === DAINTREE_ASSISTANT_AGENT_ID ? (
               // The Daintree Assistant is the workspace's own conductor, so the
               // brand mark already says "Daintree" — pairing it with just
               // "assistant" keeps this status row from repeating the word twice
