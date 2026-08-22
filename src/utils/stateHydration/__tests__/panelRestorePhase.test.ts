@@ -538,16 +538,21 @@ describe("restorePanelsPhase — worktree re-home validation (#11387)", () => {
   // re-homed.
   const resolvedWorktreeId = (tasks: { worktreeId?: string }[]) => tasks[0]?.worktreeId;
 
-  it("re-homes a stranded panel onto the active worktree when the active worktree is live", async () => {
+  it("ghosts a surviving PTY's dead worktree instead of re-homing it (#11911)", async () => {
     const ctx = makeContext({
       activeWorktreeId: "wMain",
       worktreesPromise: Promise.resolve(wtList("wMain")),
     });
     ctx.backendTerminalMap.set("t1", backend("t1"));
-    const { restoreTasks } = await restorePanelsPhase([panel("t1", { worktreeId: "wGone" })], ctx);
-    // wGone is absent from the complete list; wMain (the active worktree) is
-    // live, so the panel re-homes onto it — the existing #11234 behavior.
-    expect(resolvedWorktreeId(restoreTasks)).toBe("wMain");
+    const { restoreTasks, ghostedWorktreeIds } = await restorePanelsPhase(
+      [panel("t1", { worktreeId: "wGone" })],
+      ctx
+    );
+    // wGone is absent from the complete list, but this PTY is still running in
+    // it. Re-homing onto wMain would hide that and erase the row the cleanup
+    // sweep needs to ever retire the run, so the dead id is kept and reported.
+    expect(resolvedWorktreeId(restoreTasks)).toBe("wGone");
+    expect([...ghostedWorktreeIds]).toEqual(["wGone"]);
   });
 
   it("keeps the saved worktreeId rather than re-homing onto a dead active worktree", async () => {
@@ -1205,21 +1210,154 @@ describe("restorePanelsPhase — panels outliving their worktree (issue #11232)"
     // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
     Promise.resolve(ids.map((id) => ({ id, path: `/repo/${id}` })) as never);
 
-  it("re-homes a saved panel whose worktree no longer exists", async () => {
-    // Deleting a worktree now leaves its terminals running, and the sidebar row
+  it("keeps a saved panel on its deleted worktree and reports it for a row (#11911)", async () => {
+    // Deleting a worktree leaves its terminals running, and the sidebar row
     // holding them is in-memory only — so a saved panel can name a worktree
-    // that is gone. Restoring it as-is would strand a live PTY off-screen,
-    // since the grid and dock both filter by the active worktree.
+    // that is gone. Re-homing it onto the active worktree used to be the
+    // answer, but that laundered a run from a deleted worktree into a live
+    // one's identity and left nothing for the cleanup sweep to retire. The
+    // panel keeps the dead id; hydration rebuilds the row that holds it.
     const ctx = makeContext({
       activeWorktreeId: "wA",
       worktreesPromise: worktreeList("wA"),
     });
     ctx.backendTerminalMap.set("t1", backend("t1"));
 
-    await restorePanelsPhase([panel("t1", { worktreeId: "deleted-wt" })], ctx);
+    const { ghostedWorktreeIds } = await restorePanelsPhase(
+      [panel("t1", { worktreeId: "deleted-wt" })],
+      ctx
+    );
 
     expect(ctx.addPanel).toHaveBeenCalledTimes(1);
+    expect(ctx.addPanel.mock.calls[0]![0]).toMatchObject({ worktreeId: "deleted-wt" });
+    expect([...ghostedWorktreeIds]).toEqual(["deleted-wt"]);
+  });
+
+  it("reports one ghost id for several panels sharing a deleted worktree", async () => {
+    const ctx = makeContext({
+      activeWorktreeId: "wA",
+      worktreesPromise: worktreeList("wA"),
+    });
+    ctx.backendTerminalMap.set("t1", backend("t1"));
+    ctx.backendTerminalMap.set("t2", backend("t2"));
+
+    const { ghostedWorktreeIds } = await restorePanelsPhase(
+      [panel("t1", { worktreeId: "deleted-wt" }), panel("t2", { worktreeId: "deleted-wt" })],
+      ctx
+    );
+
+    // Assert BOTH landed on the dead id: one silently re-homed while the other
+    // kept it would still produce a single ghost id and pass a weaker check.
+    expect(ctx.addPanel).toHaveBeenCalledTimes(2);
+    for (const call of ctx.addPanel.mock.calls) {
+      expect(call[0]).toMatchObject({ worktreeId: "deleted-wt" });
+    }
+    expect([...ghostedWorktreeIds]).toEqual(["deleted-wt"]);
+  });
+
+  it("ghosts nothing when the worktree list is unknown", async () => {
+    // `null` is "not ready", never proof of absence (#11235) — ghosting off it
+    // would bury every live worktree in the project behind a deleted row.
+    const ctx = makeContext({
+      activeWorktreeId: "wA",
+      worktreesPromise: Promise.resolve(null),
+    });
+    ctx.backendTerminalMap.set("t1", backend("t1"));
+
+    const { ghostedWorktreeIds } = await restorePanelsPhase(
+      [panel("t1", { worktreeId: "deleted-wt" })],
+      ctx
+    );
+
+    expect(ghostedWorktreeIds.size).toBe(0);
+  });
+
+  it("ghosts nothing when the worktree list is empty", async () => {
+    const ctx = makeContext({
+      activeWorktreeId: "wA",
+      worktreesPromise: Promise.resolve([]),
+    });
+    ctx.backendTerminalMap.set("t1", backend("t1"));
+
+    const { ghostedWorktreeIds } = await restorePanelsPhase(
+      [panel("t1", { worktreeId: "deleted-wt" })],
+      ctx
+    );
+
+    expect(ghostedWorktreeIds.size).toBe(0);
+  });
+
+  it("ghosts nothing for a live worktree", async () => {
+    const ctx = makeContext({
+      activeWorktreeId: "wA",
+      worktreesPromise: worktreeList("wA", "wB"),
+    });
+    ctx.backendTerminalMap.set("t1", backend("t1"));
+
+    const { ghostedWorktreeIds } = await restorePanelsPhase(
+      [panel("t1", { worktreeId: "wB" })],
+      ctx
+    );
+
+    expect(ghostedWorktreeIds.size).toBe(0);
+  });
+
+  it("re-homes a cold respawn onto the active worktree and ghosts nothing", async () => {
+    // not_found means the PTY died on quit, so the respawn boots a NEW process
+    // that can pick any live worktree — and its cwd has to point somewhere that
+    // still exists. Recording a row for it would resurrect a dead worktree in
+    // the sidebar for a session that never ran there.
+    reconnectWithTimeoutMock.mockResolvedValue({ status: "not_found" });
+    const ctx = makeContext({
+      activeWorktreeId: "wA",
+      worktreesPromise: worktreeList("wA"),
+    });
+
+    const { ghostedWorktreeIds } = await restorePanelsPhase(
+      [panel("t1", { worktreeId: "deleted-wt" })],
+      ctx
+    );
+
     expect(ctx.addPanel.mock.calls[0]![0]).toMatchObject({ worktreeId: "wA" });
+    expect(ghostedWorktreeIds.size).toBe(0);
+  });
+
+  it("ghosts a reconnect-fallback survivor whose worktree is gone", async () => {
+    // No entry in backendTerminalMap, but the reconnect probe finds the PTY
+    // alive — same fact as the matched-backend path, so the same answer.
+    reconnectWithTimeoutMock.mockResolvedValue({
+      status: "found",
+      terminal: backend("t1"),
+    });
+    const ctx = makeContext({
+      activeWorktreeId: "wA",
+      worktreesPromise: worktreeList("wA"),
+    });
+
+    const { ghostedWorktreeIds } = await restorePanelsPhase(
+      [panel("t1", { worktreeId: "deleted-wt" })],
+      ctx
+    );
+
+    expect(ctx.addPanel.mock.calls[0]![0]).toMatchObject({ worktreeId: "deleted-wt" });
+    expect([...ghostedWorktreeIds]).toEqual(["deleted-wt"]);
+  });
+
+  it("ghosts nothing for a panel that never named a worktree", async () => {
+    const ctx = makeContext({
+      activeWorktreeId: "wA",
+      worktreesPromise: worktreeList("wA"),
+    });
+    ctx.backendTerminalMap.set("t1", backend("t1"));
+
+    const { ghostedWorktreeIds } = await restorePanelsPhase(
+      [panel("t1", { worktreeId: undefined })],
+      ctx
+    );
+
+    // Still homes onto the live active worktree, as before.
+    expect(ctx.addPanel.mock.calls[0]![0]).toMatchObject({ worktreeId: "wA" });
+    expect(ghostedWorktreeIds.size).toBe(0);
   });
 
   it("leaves a saved panel alone when its worktree still exists", async () => {
@@ -1404,33 +1542,59 @@ describe("restorePanelsPhase — panels surviving a worktree move (issue #11388)
     expect(ctx.addPanel.mock.calls[1]![0]).toMatchObject({ worktreeId: "/new/feature" });
   });
 
-  it("still re-homes a genuinely-deleted worktree (no gitDir match)", async () => {
+  it("ghosts a genuinely-deleted worktree rather than remapping it (no gitDir match)", async () => {
     const ctx = makeContext({
       activeWorktreeId: "wA",
       worktreesPromise: worktreeList({ id: "wA", gitDir: "/repo/.git" }),
     });
     ctx.backendTerminalMap.set("t1", backend("t1"));
 
-    await restorePanelsPhase(
+    const { ghostedWorktreeIds } = await restorePanelsPhase(
       [panel("t1", { worktreeId: "/old/feature", worktreeGitDir: GITDIR })],
       ctx
     );
 
-    expect(ctx.addPanel.mock.calls[0]![0]).toMatchObject({ worktreeId: "wA" });
+    // No live worktree claims this gitDir, so the worktree really is gone —
+    // the panel keeps its id and earns a deleted-worktree row (#11911).
+    expect(ctx.addPanel.mock.calls[0]![0]).toMatchObject({ worktreeId: "/old/feature" });
+    expect([...ghostedWorktreeIds]).toEqual(["/old/feature"]);
   });
 
-  it("re-homes a legacy snapshot with no stored gitDir handle", async () => {
-    // Pre-#11388 snapshots carry no gitDir, so a move can't be correlated — the
-    // panel falls through to the existing re-home behavior.
+  it("ghosts a legacy snapshot with no stored gitDir handle", async () => {
+    // Pre-#11388 snapshots carry no gitDir, so a move can't be correlated. The
+    // invariant under test is that the panel is NOT adopted by the moved
+    // worktree on a guess — it falls through to the deleted-worktree path.
     const ctx = makeContext({
       activeWorktreeId: "wA",
       worktreesPromise: worktreeList({ id: "wA" }, { id: "/new/feature", gitDir: GITDIR }),
     });
     ctx.backendTerminalMap.set("t1", backend("t1"));
 
-    await restorePanelsPhase([panel("t1", { worktreeId: "/old/feature" })], ctx);
+    const { ghostedWorktreeIds } = await restorePanelsPhase(
+      [panel("t1", { worktreeId: "/old/feature" })],
+      ctx
+    );
 
-    expect(ctx.addPanel.mock.calls[0]![0]).toMatchObject({ worktreeId: "wA" });
+    expect(ctx.addPanel.mock.calls[0]![0]).toMatchObject({ worktreeId: "/old/feature" });
+    expect([...ghostedWorktreeIds]).toEqual(["/old/feature"]);
+  });
+
+  it("ghosts nothing when the worktree merely moved", async () => {
+    // The remap runs before the missing-id check, so a moved worktree is
+    // followed to its new id — never mistaken for a deleted one.
+    const ctx = makeContext({
+      activeWorktreeId: "wA",
+      worktreesPromise: worktreeList({ id: "wA" }, { id: "/new/feature", gitDir: GITDIR }),
+    });
+    ctx.backendTerminalMap.set("t1", backend("t1"));
+
+    const { ghostedWorktreeIds } = await restorePanelsPhase(
+      [panel("t1", { worktreeId: "/old/feature", worktreeGitDir: GITDIR })],
+      ctx
+    );
+
+    expect(ctx.addPanel.mock.calls[0]![0]).toMatchObject({ worktreeId: "/new/feature" });
+    expect(ghostedWorktreeIds.size).toBe(0);
   });
 });
 

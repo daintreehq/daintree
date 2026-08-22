@@ -692,18 +692,53 @@ export const createTabGroupActions = (
       });
 
       const uniquePanelIds = Array.from(new Set(validPanelIds));
-      const finalPanelIds = uniquePanelIds.filter((id) => !panelsAlreadyInGroups.has(id));
+      let finalPanelIds = uniquePanelIds.filter((id) => !panelsAlreadyInGroups.has(id));
 
       if (finalPanelIds.length <= 1) continue;
 
-      const panelWorktrees = new Map<string | undefined, number>();
-      for (const panelId of finalPanelIds) {
-        const terminal = state.panelsById[panelId];
-        if (terminal) {
-          const count = panelWorktrees.get(terminal.worktreeId) || 0;
-          panelWorktrees.set(terminal.worktreeId, count + 1);
+      const countWorktrees = (ids: readonly string[]) => {
+        const counts = new Map<string | undefined, number>();
+        for (const panelId of ids) {
+          const terminal = state.panelsById[panelId];
+          if (terminal) {
+            counts.set(terminal.worktreeId, (counts.get(terminal.worktreeId) || 0) + 1);
+          }
+        }
+        return counts;
+      };
+
+      // A group whose worktree was deleted can restore split: PTYs that
+      // survived keep the deleted worktree, while any whose process died
+      // cold-respawn onto a live one. Repair rewrites EVERY member to a single
+      // worktree, and both answers are wrong for a split like that — electing
+      // the deleted worktree drags a freshly spawned agent onto a row the
+      // cleanup sweep trashes, and electing the live one relabels genuine
+      // survivors as belonging to a worktree they never ran in, which empties
+      // their row and exempts them from the cleanup that should retire them.
+      //
+      // So don't repair across that line at all: drop the survivors out of the
+      // group and leave them on their row. Ungrouped is a real state, and each
+      // panel keeps the worktree it actually restored onto (#11911).
+      const ghosted = getWorktreeSelectionSnapshot()?.deletedWorktreeIds ?? new Set<string>();
+      if (ghosted.size > 0) {
+        const isGhosted = (id: string) => {
+          const wid = state.panelsById[id]?.worktreeId;
+          return wid !== undefined && ghosted.has(wid);
+        };
+        const ghostMembers = finalPanelIds.filter(isGhosted);
+        // Only a MIXED group needs splitting — one whose members all sit on the
+        // same deleted worktree is already coherent, and its row is where they
+        // belong until it is swept.
+        if (ghostMembers.length > 0 && ghostMembers.length < finalPanelIds.length) {
+          finalPanelIds = finalPanelIds.filter((id) => !isGhosted(id));
+          console.warn(
+            `[TabGroup] Hydration: Splitting ${ghostMembers.length} deleted-worktree survivor(s) out of group ${group.id}`
+          );
+          if (finalPanelIds.length <= 1) continue;
         }
       }
+
+      const panelWorktrees = countWorktrees(finalPanelIds);
 
       let repairedWorktreeId = group.worktreeId;
       if (panelWorktrees.size > 1 || !panelWorktrees.has(group.worktreeId)) {

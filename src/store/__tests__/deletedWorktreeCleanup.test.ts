@@ -146,6 +146,43 @@ describe("sweepDeletedWorktreeCleanup", () => {
     expect(bulkTrashByWorktree).toHaveBeenCalledWith("wt-1");
   });
 
+  it("retries on the next sweep when the trash dispatch throws", () => {
+    // `firedIds` is set before the dispatch, so a throw used to retire the row
+    // permanently — leaving its terminals on a row nothing would ever clear,
+    // which is the state this whole feature exists to end.
+    addRow({ expiresAt: NOW - 1 });
+    bulkTrashByWorktree.mockImplementationOnce(() => {
+      throw new Error("panel store busy");
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    sweepDeletedWorktreeCleanup(makeDeps());
+    expect(bulkTrashByWorktree).toHaveBeenCalledTimes(1);
+
+    sweepDeletedWorktreeCleanup(makeDeps());
+    expect(bulkTrashByWorktree).toHaveBeenCalledTimes(2);
+
+    // And the retry still settles: a third sweep must not re-fire the row.
+    sweepDeletedWorktreeCleanup(makeDeps());
+    expect(bulkTrashByWorktree).toHaveBeenCalledTimes(2);
+
+    warn.mockRestore();
+  });
+
+  it("reports nothing to the inbox for a sweep whose dispatch threw", () => {
+    addRow({ expiresAt: NOW - 1 });
+    bulkTrashByWorktree.mockImplementationOnce(() => {
+      throw new Error("panel store busy");
+    });
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    sweepDeletedWorktreeCleanup(makeDeps());
+
+    // Nothing was trashed, so announcing a cleanup would be a lie.
+    expect(notify).not.toHaveBeenCalled();
+    warn.mockRestore();
+  });
+
   it("fires only once even if the row lingers across further sweeps", () => {
     addRow({ expiresAt: NOW - 1 });
     sweepDeletedWorktreeCleanup(makeDeps());

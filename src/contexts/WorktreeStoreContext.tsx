@@ -11,7 +11,7 @@ import type { PluginWorktreeLinked } from "@shared/types/plugin";
 import {
   useWorktreeSelectionStore,
   getDeletedWorktreeTerminalIds,
-  getPinnedDeletedWorktreeAnchorId,
+  createDeletedWorktreeRecord,
 } from "@/store/worktreeStore";
 import { usePanelStore } from "@/store/panelStore";
 import { startDeletedWorktreeCleanup } from "@/store/deletedWorktreeCleanup";
@@ -452,24 +452,24 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
         // `applyRemove` dropped it from the live map. Both delete entry points
         // (the delete dialog and the `worktree.delete` action) funnel through
         // this event, so they get identical behaviour from this one change.
+        // Ordinarily a no-op by the time it runs: `applyRemove` above fires the
+        // map-diff subscription synchronously, and that backstop has already
+        // recorded this row from the outgoing snapshot. It still matters for
+        // the removals the backstop cannot see — an id already absent from the
+        // map, which is how an externally-removed worktree usually arrives —
+        // and `createDeletedWorktreeRecord` keeps the two records identical, so
+        // `addDeletedWorktree`'s first-write-wins never loses a field (#11911).
         if (willBecomeGhost) {
-          selectionStore.addDeletedWorktree({
-            id: event.worktreeId,
-            // Detached-HEAD worktrees have no branch; fall back to the folder
-            // name so the row always carries a recognisable last-known title.
-            title:
-              worktree.branch ?? worktree.path.split(/[/\\]/).filter(Boolean).pop() ?? "Unknown",
-            path: worktree.path,
-            deletedAt: Date.now(),
-            // Recorded UNARMED on purpose: the sweep arms it on its first tick
-            // with this view awake, and only ever advances it across awake
-            // seconds. Stamping a wall-clock deadline here instead meant a
-            // project cached at deletion time came back with the countdown
-            // already spent and no window to rescue anything (#11259).
-            expiresAt: null,
-            holdReason: null,
-            pinnedBeforeWorktreeId: getPinnedDeletedWorktreeAnchorId(event.worktreeId),
-          });
+          selectionStore.addDeletedWorktree(
+            createDeletedWorktreeRecord(event.worktreeId, {
+              // Detached-HEAD worktrees have no branch; the helper falls back
+              // to the folder name so the row always carries a recognisable
+              // last-known title.
+              title: worktree.branch,
+              path: worktree.path,
+              gitDir: worktree.gitDir,
+            })
+          );
         }
       })
     );
@@ -512,13 +512,86 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
     // already-clean key — so on a normal single removal the `worktree-removed`
     // event path and this subscription each fire it once for the same id
     // (the second call re-publishes correct state, nothing more) (#9536).
+    //
+    // The last topology the host actually reported, held so a not-ready `[]`
+    // can't erase the baseline the removal diff below depends on. Scoped to
+    // this effect, so a remount starts from the store's own state again.
+    let lastReadyWorktrees: ReadonlyMap<string, WorktreeSnapshot> | null = null;
     cleanups.push(
       store.subscribe((state, prevState) => {
         if (state.worktrees === prevState.worktrees) return;
+        // An empty incoming map is never a removal: a successful `git worktree
+        // list` always reports at least the main worktree, so [] only ever
+        // means the host isn't ready (#11235). Pulse invalidation is harmless
+        // either way, but adopting off a not-ready read would ghost every live
+        // worktree in the project at once.
+        const removalsAreAuthoritative = state.worktrees.size > 0;
         for (const id of prevState.worktrees.keys()) {
-          if (!state.worktrees.has(id)) {
-            usePulseStore.getState().invalidate(id);
-          }
+          if (!state.worktrees.has(id)) usePulseStore.getState().invalidate(id);
+        }
+        if (!removalsAreAuthoritative) return;
+
+        // Diff against the last READY topology, not simply the previous state.
+        // A not-ready `[]` still replaces the live map, so comparing with
+        // `prevState` would let a `[a, b] → [] → [a]` sequence lose `b`
+        // entirely: the first step declines to adopt (correctly) and the second
+        // compares against nothing. The removal would then never be observed
+        // again, which is the bug this backstop exists to close.
+        const baseline = lastReadyWorktrees ?? prevState.worktrees;
+        lastReadyWorktrees = state.worktrees;
+
+        // A worktree that merely moved reappears under a new path-derived id
+        // while keeping its `.git/worktrees/<name>` handle (#11388) — and ids
+        // can differ by spelling alone, since creation resolves symlinks and
+        // enumeration does not. Ghosting one of those would hand a LIVE
+        // worktree's agents to the cleanup sweep, which trashes them and lets
+        // the trash TTL kill the PTYs. Absence of an id is not proof of
+        // removal; a handle nothing claims is.
+        const incomingGitDirs = new Set<string>();
+        for (const worktree of state.worktrees.values()) {
+          if (worktree.gitDir) incomingGitDirs.add(worktree.gitDir);
+        }
+
+        for (const id of baseline.keys()) {
+          if (state.worktrees.has(id)) continue;
+
+          // Same backstop, second symptom (#11911). A worktree that leaves the
+          // map without a `worktree-removed` event strands every panel still
+          // pointing at it: the sidebar groups by live worktree, so those
+          // panels render nowhere, while their PTYs stay alive and keep
+          // counting toward the project's attention tally. Adopting them onto
+          // a deleted-worktree row is what gives them a home again — and what
+          // lets `deletedWorktreeCleanup` eventually retire them, which it
+          // could never do for a row that was never recorded.
+          //
+          // Also covers the event path's own blind spot: its ghost branch is
+          // gated on the worktree still being in the live map, so an external
+          // removal that reconciles the map first (topology watcher →
+          // `applySnapshot`) reaches the handler with nothing left to read.
+          //
+          // The main worktree is exempt for the same reason the event handler
+          // blocks it: it cannot legitimately be deleted, so its absence here
+          // is a host restart mid-hydration, not a removal.
+          const removed = baseline.get(id);
+          if (removed?.isMainWorktree) continue;
+          if (removed?.gitDir && incomingGitDirs.has(removed.gitDir)) continue;
+          const selectionStore = useWorktreeSelectionStore.getState();
+          if (selectionStore.deletedWorktrees.has(id)) continue;
+          if (getDeletedWorktreeTerminalIds(id).length === 0) continue;
+          // A deleted id must never survive as the durable restore target —
+          // `deletedWorktrees` is in-memory, so it would resolve to nothing
+          // after a restart. No-ops unless the id IS the target.
+          selectionStore.clearRestoreTarget(id);
+          // Branch and path come off the outgoing snapshot, which still holds
+          // them here — so this record is identical to the one the event
+          // handler would build, and first-write-wins costs nothing.
+          selectionStore.addDeletedWorktree(
+            createDeletedWorktreeRecord(id, {
+              title: removed?.branch,
+              path: removed?.path,
+              gitDir: removed?.gitDir,
+            })
+          );
         }
         // A host restart can re-hydrate a worktree we had already deleted
         // (#11232). The real row wins — its terminals were never detached, so
@@ -526,7 +599,7 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
         if (useWorktreeSelectionStore.getState().deletedWorktrees.size > 0) {
           useWorktreeSelectionStore
             .getState()
-            .pruneDeletedWorktrees(new Set(state.worktrees.keys()));
+            .pruneDeletedWorktrees(new Set(state.worktrees.keys()), incomingGitDirs);
         }
       })
     );
