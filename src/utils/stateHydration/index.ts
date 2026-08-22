@@ -5,6 +5,7 @@ import { useScratchStore } from "@/store/scratchStore";
 import {
   suppressMruRecording,
   createDeletedWorktreeRecord,
+  getDeletedWorktreeTerminalIds,
   useWorktreeSelectionStore,
 } from "@/store/worktreeStore";
 import { useLayoutConfigStore } from "@/store";
@@ -571,6 +572,12 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
         // membership lookup finds them; a row with nothing in it is pruned on
         // the sweep's next tick.
         for (const ghostedId of restoreResult.ghostedWorktreeIds) {
+          // The phase reports an id as soon as it resolves a panel onto it,
+          // before the `addPanel` that places it can reject. A row with nothing
+          // in it is not self-correcting — the sweep arms it, dispatches an
+          // empty trash and marks it fired — so confirm the membership that
+          // justifies the row actually exists before recording one.
+          if (getDeletedWorktreeTerminalIds(ghostedId).length === 0) continue;
           const selectionStore = useWorktreeSelectionStore.getState();
           // A deleted id can never be restored after a restart, so it must not
           // survive as the durable restore target — no-ops unless it is one.

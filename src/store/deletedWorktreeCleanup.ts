@@ -407,7 +407,19 @@ export function sweepDeletedWorktreeCleanup(deps: SweepDeps = DEFAULT_DEPS): voi
     // Count first — the executor mirrors this exact filter, and once it runs
     // the panels have already left the row.
     const trashedCount = getDeletedWorktreeTerminalIds(entry.id).length;
-    usePanelStore.getState().bulkTrashByWorktree(entry.id);
+    try {
+      usePanelStore.getState().bulkTrashByWorktree(entry.id);
+    } catch (error) {
+      // `firedIds` is what stops a dispatched row re-firing every tick, so a
+      // throw after it was set would retire the row permanently while its
+      // terminals are still on it — the row would sit there forever and the
+      // PTYs would never be reclaimed. Retry is safe because the executor
+      // skips panels already in trash, so a partial batch resumes rather than
+      // re-trashing. Warned, not notified: the next tick is one second away.
+      firedIds.delete(entry.id);
+      console.warn("[DeletedWorktreeCleanup] Trash dispatch failed; retrying next tick", error);
+      continue;
+    }
     if (trashedCount > 0) {
       swept.push({ worktreeId: entry.id, title: entry.title, count: trashedCount });
     }

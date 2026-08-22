@@ -72,6 +72,7 @@ export function initStoreOrchestrator(): () => void {
   setWorktreeSelectionAccessor(() => ({
     activeWorktreeId: useWorktreeSelectionStore.getState().activeWorktreeId,
     restoreWorktreeId: useWorktreeSelectionStore.getState().restoreWorktreeId,
+    deletedWorktreeIds: new Set(useWorktreeSelectionStore.getState().deletedWorktrees.keys()),
   }));
   setWorktreeIdSetAccessor(() => {
     const viewStore = getCurrentViewStoreOrNull();

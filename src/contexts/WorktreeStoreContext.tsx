@@ -511,6 +511,11 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
     // already-clean key — so on a normal single removal the `worktree-removed`
     // event path and this subscription each fire it once for the same id
     // (the second call re-publishes correct state, nothing more) (#9536).
+    //
+    // The last topology the host actually reported, held so a not-ready `[]`
+    // can't erase the baseline the removal diff below depends on. Scoped to
+    // this effect, so a remount starts from the store's own state again.
+    let lastReadyWorktrees: ReadonlyMap<string, WorktreeSnapshot> | null = null;
     cleanups.push(
       store.subscribe((state, prevState) => {
         if (state.worktrees === prevState.worktrees) return;
@@ -521,9 +526,33 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
         // worktree in the project at once.
         const removalsAreAuthoritative = state.worktrees.size > 0;
         for (const id of prevState.worktrees.keys()) {
+          if (!state.worktrees.has(id)) usePulseStore.getState().invalidate(id);
+        }
+        if (!removalsAreAuthoritative) return;
+
+        // Diff against the last READY topology, not simply the previous state.
+        // A not-ready `[]` still replaces the live map, so comparing with
+        // `prevState` would let a `[a, b] → [] → [a]` sequence lose `b`
+        // entirely: the first step declines to adopt (correctly) and the second
+        // compares against nothing. The removal would then never be observed
+        // again, which is the bug this backstop exists to close.
+        const baseline = lastReadyWorktrees ?? prevState.worktrees;
+        lastReadyWorktrees = state.worktrees;
+
+        // A worktree that merely moved reappears under a new path-derived id
+        // while keeping its `.git/worktrees/<name>` handle (#11388) — and ids
+        // can differ by spelling alone, since creation resolves symlinks and
+        // enumeration does not. Ghosting one of those would hand a LIVE
+        // worktree's agents to the cleanup sweep, which trashes them and lets
+        // the trash TTL kill the PTYs. Absence of an id is not proof of
+        // removal; a handle nothing claims is.
+        const incomingGitDirs = new Set<string>();
+        for (const worktree of state.worktrees.values()) {
+          if (worktree.gitDir) incomingGitDirs.add(worktree.gitDir);
+        }
+
+        for (const id of baseline.keys()) {
           if (state.worktrees.has(id)) continue;
-          usePulseStore.getState().invalidate(id);
-          if (!removalsAreAuthoritative) continue;
 
           // Same backstop, second symptom (#11911). A worktree that leaves the
           // map without a `worktree-removed` event strands every panel still
@@ -542,8 +571,9 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
           // The main worktree is exempt for the same reason the event handler
           // blocks it: it cannot legitimately be deleted, so its absence here
           // is a host restart mid-hydration, not a removal.
-          const removed = prevState.worktrees.get(id);
+          const removed = baseline.get(id);
           if (removed?.isMainWorktree) continue;
+          if (removed?.gitDir && incomingGitDirs.has(removed.gitDir)) continue;
           const selectionStore = useWorktreeSelectionStore.getState();
           if (selectionStore.deletedWorktrees.has(id)) continue;
           if (getDeletedWorktreeTerminalIds(id).length === 0) continue;

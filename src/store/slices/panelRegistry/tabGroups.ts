@@ -707,8 +707,20 @@ export const createTabGroupActions = (
 
       let repairedWorktreeId = group.worktreeId;
       if (panelWorktrees.size > 1 || !panelWorktrees.has(group.worktreeId)) {
+        // A repair rewrites every member's worktreeId, so the winner decides
+        // where the whole group lives. A deleted worktree's row is on its way
+        // to the trash (deletedWorktreeCleanup), so electing one would drag
+        // panels that restored onto a LIVE worktree into a sweep that kills
+        // them. Mixed groups only became reachable once survivors started
+        // keeping their deleted worktree instead of re-homing (#11911).
+        const ghosted = getWorktreeSelectionSnapshot()?.deletedWorktreeIds ?? new Set<string>();
+        const survivesRepair = (wid: string | undefined) => wid === undefined || !ghosted.has(wid);
+        const preferred = [...panelWorktrees.entries()].filter(([wid]) => survivesRepair(wid));
+        // Every candidate ghosted means nothing restored onto a live worktree,
+        // so there is no safe destination to prefer — leave the old ranking.
+        const candidates = preferred.length > 0 ? preferred : [...panelWorktrees.entries()];
         let maxCount = 0;
-        for (const [wid, count] of panelWorktrees.entries()) {
+        for (const [wid, count] of candidates) {
           if (count > maxCount) {
             maxCount = count;
             repairedWorktreeId = wid;

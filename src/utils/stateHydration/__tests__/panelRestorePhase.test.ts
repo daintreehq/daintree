@@ -1246,7 +1246,12 @@ describe("restorePanelsPhase — panels outliving their worktree (issue #11232)"
       ctx
     );
 
+    // Assert BOTH landed on the dead id: one silently re-homed while the other
+    // kept it would still produce a single ghost id and pass a weaker check.
     expect(ctx.addPanel).toHaveBeenCalledTimes(2);
+    for (const call of ctx.addPanel.mock.calls) {
+      expect(call[0]).toMatchObject({ worktreeId: "deleted-wt" });
+    }
     expect([...ghostedWorktreeIds]).toEqual(["deleted-wt"]);
   });
 

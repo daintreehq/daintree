@@ -580,25 +580,111 @@ describe("WorktreeStoreProvider — worktrees dropped without a removal event (#
     expect(useWorktreeSelectionStore.getState().deletedWorktrees.has("wt-main")).toBe(false);
   });
 
-  it("keeps the event handler's row identical to the backstop's", async () => {
+  it("records every field the event handler owns without the event firing", async () => {
     const { store } = await renderProvider();
     act(() => {
-      store.getState().applySnapshot([makeWorktree("wt-1")], nextV());
+      store.getState().applySnapshot([makeWorktree("wt-1"), makeWorktree("wt-2")], nextV());
     });
     setPanels([{ id: "agent-a", worktreeId: "wt-1" }]);
-    recordSidebarWorktreeOrder(["wt-1"]);
+    recordSidebarWorktreeOrder(["wt-1", "wt-2"]);
 
-    // The backstop fires synchronously inside `applyRemove`, so it — not the
-    // handler below it — is what actually records the row. Every field the
-    // handler used to own has to survive that reordering.
+    // `applyRemove` WITHOUT emitting the event: the backstop is then the only
+    // author, which is also what happens for real — it runs synchronously
+    // inside `applyRemove`, before the handler's own first-write-wins call.
+    // Anything the backstop can't reconstruct is lost for good, so assert the
+    // full record here rather than through the handler that used to own it.
     act(() => {
-      emit("worktree-removed", removeEvent("wt-1"));
+      store.getState().applyRemove("wt-1", nextV());
     });
 
     const row = useWorktreeSelectionStore.getState().deletedWorktrees.get("wt-1");
     expect(row?.title).toBe("branch-wt-1");
     expect(row?.path).toBe("/repo/wt-1");
+    expect(row?.pinnedBeforeWorktreeId).toBe("wt-2");
     expect(row?.expiresAt).toBeNull();
+  });
+
+  it("adopts each dropped worktree independently, skipping trash-only ones", async () => {
+    const { store } = await renderProvider();
+    act(() => {
+      store
+        .getState()
+        .applySnapshot(
+          [
+            makeWorktree("wt-live"),
+            makeWorktree("wt-a"),
+            makeWorktree("wt-b"),
+            makeWorktree("wt-trashed"),
+          ],
+          nextV()
+        );
+    });
+    setPanels([
+      { id: "agent-a", worktreeId: "wt-a" },
+      { id: "agent-b", worktreeId: "wt-b" },
+      { id: "gone", worktreeId: "wt-trashed", location: "trash" },
+      { id: "live", worktreeId: "wt-live" },
+    ]);
+
+    act(() => {
+      store.getState().applySnapshot([makeWorktree("wt-live")], nextV());
+    });
+
+    // Compared as a set: one id failing to adopt must not be masked by another
+    // succeeding, and insertion order is not part of the contract.
+    expect([...useWorktreeSelectionStore.getState().deletedWorktrees.keys()].sort()).toEqual([
+      "wt-a",
+      "wt-b",
+    ]);
+  });
+
+  it("still sees a removal that a not-ready snapshot straddled", async () => {
+    const { store } = await renderProvider();
+    act(() => {
+      store.getState().applySnapshot([makeWorktree("wt-main"), makeWorktree("wt-2")], nextV());
+    });
+    setPanels([{ id: "agent-a", worktreeId: "wt-2" }]);
+
+    // `[main, wt-2] → [] → [main]`. The empty read is the host not being ready,
+    // and it replaces the live map — so a diff against the previous state alone
+    // would never observe that wt-2 left, and its panels would stay stranded.
+    act(() => {
+      store.getState().applySnapshot([], nextV());
+    });
+    expect(useWorktreeSelectionStore.getState().deletedWorktrees.size).toBe(0);
+
+    act(() => {
+      store.getState().applySnapshot([makeWorktree("wt-main")], nextV());
+    });
+
+    expect(useWorktreeSelectionStore.getState().deletedWorktrees.has("wt-2")).toBe(true);
+  });
+
+  it("does not ghost a worktree that only moved", async () => {
+    const { store } = await renderProvider();
+    act(() => {
+      store
+        .getState()
+        .applySnapshot(
+          [makeWorktree("wt-main"), makeWorktree("/old/feature", { gitDir: "/repo/.git/wt/f" })],
+          nextV()
+        );
+    });
+    setPanels([{ id: "agent-a", worktreeId: "/old/feature" }]);
+
+    // A `git worktree move` re-mints the path-derived id while keeping the
+    // stable admin-dir handle. Ghosting the old id would hand a LIVE
+    // worktree's agents to the cleanup sweep, which trashes and kills them.
+    act(() => {
+      store
+        .getState()
+        .applySnapshot(
+          [makeWorktree("wt-main"), makeWorktree("/new/feature", { gitDir: "/repo/.git/wt/f" })],
+          nextV()
+        );
+    });
+
+    expect(useWorktreeSelectionStore.getState().deletedWorktrees.has("/old/feature")).toBe(false);
   });
 
   it("demotes an adopted worktree from the durable restore target", async () => {

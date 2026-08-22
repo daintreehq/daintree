@@ -1,7 +1,8 @@
-import { beforeEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { TerminalRefreshTier } from "@/types";
 import type { PtyPanelData, TabGroup } from "@shared/types/panel";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
+import { setWorktreeSelectionAccessor } from "@/store/storeAccessors";
 import { NO_WORKTREE } from "../worktreeIndex";
 
 vi.mock("@/clients", () => ({
@@ -724,5 +725,68 @@ describe("Tab Group Worktree Invariant", () => {
       const allIds = groups.flatMap((g) => g.panelIds);
       expect(allIds).toEqual(["recipe-1"]);
     });
+  });
+});
+
+describe("hydrateTabGroups — repair never elects a deleted worktree (#11911)", () => {
+  // Restoring a group whose worktree was deleted can now split: PTYs that
+  // survived keep the deleted id, while any whose process died cold-respawn
+  // onto a live worktree. The repair rewrites EVERY member to one worktree, so
+  // electing the deleted one would move a freshly spawned agent onto a row the
+  // cleanup sweep trashes.
+  beforeEach(() => {
+    usePanelStore.getState().reset();
+    usePanelStore.setState({
+      panelsById: {},
+      panelIds: [],
+      tabGroups: new Map(),
+      focusedId: null,
+      maximizedId: null,
+      commandQueue: [],
+    });
+    setWorktreeSelectionAccessor(() => ({
+      activeWorktreeId: "wt-live",
+      restoreWorktreeId: null,
+      deletedWorktreeIds: new Set(["wt-dead"]),
+    }));
+  });
+
+  afterEach(() => {
+    setWorktreeSelectionAccessor(() => ({
+      activeWorktreeId: null,
+      restoreWorktreeId: null,
+    }));
+  });
+
+  it("prefers a live worktree even when the deleted one holds the majority", () => {
+    const survivorA = createMockTerminal("t1", "wt-dead", "grid");
+    const survivorB = createMockTerminal("t2", "wt-dead", "grid");
+    const respawned = createMockTerminal("t3", "wt-live", "grid");
+    setTerminals([survivorA, survivorB, respawned]);
+
+    usePanelStore
+      .getState()
+      .hydrateTabGroups([createMockTabGroup("g1", "wt-dead", ["t1", "t2", "t3"])]);
+
+    const state = usePanelStore.getState();
+    // 2-vs-1 in favour of the deleted worktree, and it still loses: the sweep
+    // would otherwise take t3 with it.
+    expect(state.tabGroups.get("g1")?.worktreeId).toBe("wt-live");
+    expect(state.panelsById["t3"]?.worktreeId).toBe("wt-live");
+  });
+
+  it("leaves an all-survivor group on its deleted worktree", () => {
+    const survivorA = createMockTerminal("t1", "wt-dead", "grid");
+    const survivorB = createMockTerminal("t2", "wt-dead", "grid");
+    setTerminals([survivorA, survivorB]);
+
+    usePanelStore.getState().hydrateTabGroups([createMockTabGroup("g1", "wt-dead", ["t1", "t2"])]);
+
+    const state = usePanelStore.getState();
+    // Nothing restored onto a live worktree, so there is no safer destination —
+    // and the row is exactly where these panels belong until it is swept.
+    expect(state.tabGroups.get("g1")?.worktreeId).toBe("wt-dead");
+    expect(state.panelsById["t1"]?.worktreeId).toBe("wt-dead");
+    expect(state.panelsById["t2"]?.worktreeId).toBe("wt-dead");
   });
 });
