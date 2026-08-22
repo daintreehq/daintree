@@ -551,6 +551,15 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
   // wrapper's ring is the only focus indication. The scanner can't see the
   // sibling JSX parent, so these get per-occurrence allowlists.
   {
+    file: "src/components/AssistantPanel/AssistantPanelView.tsx",
+    fragment: '"outline-hidden"',
+    reason:
+      "Assistant composer textarea — the wrapper owns focus chrome " +
+      "(`focus-within:border-border-interactive`). Deliberately NOT an accent ring: the " +
+      "accent already belongs to the send button, and two accent signals in one focus " +
+      "region is what the accent-restraint rule forbids.",
+  },
+  {
     file: "src/components/Settings/KeyboardShortcutsTab.tsx",
     fragment:
       "flex-1 min-w-0 text-xs bg-transparent text-text-primary placeholder:text-text-placeholder focus:outline-hidden",

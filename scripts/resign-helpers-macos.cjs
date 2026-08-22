@@ -14,6 +14,13 @@ const LOG = "[resign-helpers-macos]";
 const HELPER_RELATIVE_PATHS = [
   "Contents/Resources/app.asar.unpacked/node_modules/node-pty/build/Release/spawn-helper",
   "Contents/Resources/app.asar.unpacked/node_modules/posix-pty-reaper/build/Release/daintree_pty_supervisor",
+  // The Daintree Assistant engine. It is spawned like any other helper, so it hits
+  // exactly the same Tahoe rule: signed through mac.binaries[] it inherits the app
+  // plist, including the restricted audio-input entitlement it has no use for, and
+  // amfid kills it at spawn. The app would sign and notarize cleanly and the
+  // assistant would simply never start — the worst shape of failure, because every
+  // gate reports success.
+  "Contents/Resources/assistant/daintree-assistant",
 ];
 
 // Parse the signing identity from the already-signed .app. `codesign -dvv`

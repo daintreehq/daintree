@@ -132,3 +132,11 @@ planning/
 # Perf results history: ~5k lines rewritten per canonical run, and the filename
 # carries a machine label. Local to whoever ran it.
 scripts/perf/history/*.json
+
+# Built Daintree Assistant engine binaries (scripts/build-assistant.mjs).
+# Compiled from the vendor/daintree-assistant submodule at build time; never committed.
+resources/assistant/
+
+# Declaration source maps are always tsc emit, never hand-written — a stray `tsc -b`
+# drops them (and their .d.ts) beside the source it compiled.
+*.d.ts.map
