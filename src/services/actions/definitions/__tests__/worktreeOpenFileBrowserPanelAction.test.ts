@@ -425,12 +425,10 @@ describe("worktree.openFileBrowserPanel", () => {
 
       const options = addPanelOptions();
       expect(options).toMatchObject({ location: "grid" });
-      // Not merely absent-and-falsy: `addPanel` reads the flag independently of
-      // the location, so a grid open must not carry dock activation at all.
-      expect(options).not.toHaveProperty("activateDockOnCreate");
+      expect(options.activateDockOnCreate).not.toBe(true);
     });
 
-    it("commits to the dock and opens the chip when the launcher asks for both", async () => {
+    it("forwards the dock placement and the activation the launcher asked for", async () => {
       seedWorktree("wt-1", { branch: "feature/x" });
       await getAction().run(
         { worktreeId: "wt-1", location: "dock", activateDockOnCreate: true },
@@ -444,11 +442,15 @@ describe("worktree.openFileBrowserPanel", () => {
       });
     });
 
-    it("parks a dock panel without opening the chip when activation was not asked for", async () => {
+    it("parks a dock panel without asking for the chip when activation was not requested", async () => {
       seedWorktree("wt-1");
       await getAction().run({ worktreeId: "wt-1", location: "dock" }, {} as ActionContext);
 
-      expect(addPanelOptions()).toMatchObject({ location: "dock", activateDockOnCreate: false });
+      const options = addPanelOptions();
+      expect(options).toMatchObject({ location: "dock" });
+      // Truthiness is what `addPanel` reads, so this is the whole contract —
+      // absent and explicitly false are the same request.
+      expect(options.activateDockOnCreate).not.toBe(true);
     });
 
     it("reuses the docked browser for a dock request rather than opening a second", async () => {

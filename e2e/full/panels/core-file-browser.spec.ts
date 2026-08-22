@@ -349,12 +349,14 @@ test.describe.serial("Core: File browser preview", () => {
     await panel.locator('[data-testid="panel-move-to-dock"]').click();
     await expect(gridBrowsers).toHaveCount(0, { timeout: T_MEDIUM });
 
+    // Anchored on this panel's own sortable wrapper rather than on the label:
+    // dock titles are not unique, so a same-named terminal chip would otherwise
+    // turn this into a strict-mode ambiguity instead of an assertion.
+    const chip = ctx.window.locator(`[data-dock-item-id="${panelId}"] [data-dock-item]`);
+    await expect(chip).toBeVisible({ timeout: T_MEDIUM });
     // The chip drops the composed title's "Files — " prefix, so what is left is
     // the branch that distinguishes this browser from another worktree's.
-    const chip = ctx.window.locator("[data-dock-item]", { hasText: "main" });
-    await expect(chip).toBeVisible({ timeout: T_MEDIUM });
-    // Exact rather than a substring: "Files — main" would satisfy `hasText`,
-    // and it is precisely the composed grid title this derivation trims.
+    // Exact, not a substring: "Files — main" is precisely what this trims.
     await expect(chip).toHaveText("main", { timeout: T_SHORT });
     await chip.click();
     await expect(

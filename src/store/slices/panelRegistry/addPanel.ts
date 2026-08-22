@@ -250,6 +250,12 @@ export const createAddPanelActions = (
         id,
         kind: requestedKind,
         title,
+        // Carried like the PTY branch does below. Hydration forwards the saved
+        // mode (`buildArgsForNonPtyRecreation`) and persistence writes it, so
+        // dropping it here silently demoted every restored non-PTY rename back
+        // to `"default"` — the panel kept the name but lost the ownership that
+        // stops a derived surface (the dock chip) from overriding it.
+        ...(options.titleMode && { titleMode: options.titleMode }),
         worktreeId: effectiveWorktreeId,
         location,
         isVisible: location === "grid",

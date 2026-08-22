@@ -48,8 +48,16 @@ export function browserChipTitle(panel: BrowserPanelData): string {
  * project, which is the only thing distinguishing one root browser from another.
  */
 export function fileBrowserChipTitle(panel: FileBrowserPanelData): string {
-  if (panel.titleMode === "user") return panel.title;
-  const scopedRoot = basename(panel.browserRootPath);
+  // Both explicit rungs of the title-ownership ladder, not just `"user"`:
+  // `"custom"` is a name automation asked for (an MCP `terminal.rename`), and
+  // the ladder freezes it against derived rewrites — which is exactly what
+  // trimming it here would be. Only a `"default"` title is this module's to
+  // take apart.
+  if (panel.titleMode === "user" || panel.titleMode === "custom") return panel.title;
+  // Trimmed before the truthiness test: a directory named entirely of spaces is
+  // a legal path segment `canonicalizeRootPath` keeps, and it would otherwise
+  // pass as a label and render the chip blank.
+  const scopedRoot = basename(panel.browserRootPath)?.trim();
   if (scopedRoot) return scopedRoot;
   // Both fallbacks are load-bearing: a title that carried no prefix comes back
   // unchanged, and an empty one still owes the chip a label.

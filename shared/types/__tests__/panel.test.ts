@@ -118,8 +118,6 @@ describe("panel variant guards", () => {
     expect(isDockPanel(ptyPanel)).toBe(true);
     expect(isDockPanel(browserPanel)).toBe(true);
     expect(isDockPanel(filePanel)).toBe(true);
-    // #11917 — the two-pane browser is moved, not remounted, into the dock
-    // popover, so it has the same room there as the file viewer.
     expect(isDockPanel(fileBrowserPanel)).toBe(true);
     for (const kind of ["dev-preview", "review", "diff"]) {
       const panel = { id: `opt-${kind}`, kind, title: "t", location: "grid" } as PanelInstance;

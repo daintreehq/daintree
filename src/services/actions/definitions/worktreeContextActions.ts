@@ -201,9 +201,14 @@ const fileBrowserArgsSchema = fileBrowserArgsObject.optional();
  */
 const fileBrowserPanelArgsSchema = fileBrowserArgsObject
   .extend({
-    location: z.enum(["grid", "dock"]).optional(),
-    /** Open the dock popover on create. Ignored unless `location` is "dock". */
-    activateDockOnCreate: z.boolean().optional(),
+    location: z
+      .enum(["grid", "dock"])
+      .optional()
+      .describe("Surface to open on (default: grid). `dock` parks it as a chip in the sidebar."),
+    activateDockOnCreate: z
+      .boolean()
+      .optional()
+      .describe("Open the dock popover immediately (default: false). Ignored unless docking."),
   })
   .optional();
 
@@ -698,7 +703,7 @@ export function registerWorktreeContextActions(
       id: "worktree.openFileBrowserPanel",
       title: "Browse files",
       description:
-        'Show a folder in a persistent read-only file browser panel, for a worktree or for the current project or scratch folder when no worktree is selected. It opens in the grid unless location is "dock". It focuses the existing browser for the same folder on the same surface rather than opening a second one, and applies an optional reveal path to it.',
+        "Show a folder in a persistent read-only file browser panel, for a worktree or for the current project or scratch folder when no worktree is selected. It focuses the existing browser for the same folder on the same surface rather than opening a second one, and applies an optional reveal path to it.",
       category: "worktree",
       kind: "command",
       danger: "safe",
@@ -759,9 +764,10 @@ export function registerWorktreeContextActions(
             //
             // Either way a dialog browser is ephemeral modal content and
             // reusing one would hand the grid an uncounted, unpersisted record;
-            // trashed and backgrounded panels surface nothing when activated.
-            // `isGridPanelLocation` is the one place that answer lives, so
-            // overlay comes along for free.
+            // trashed, backgrounded and overlay panels surface nothing when
+            // activated. `isGridPanelLocation` is the one place that answer
+            // lives, so every one of those exclusions — and the legacy
+            // `undefined` location that still counts as grid — comes for free.
             const onRequestedSurface =
               location === "dock" ? panel.location === "dock" : isGridPanelLocation(panel.location);
             if (!onRequestedSurface) return false;

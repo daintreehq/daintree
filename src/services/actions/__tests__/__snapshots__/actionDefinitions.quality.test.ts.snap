@@ -6003,7 +6003,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "worktree",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Show a folder in a persistent read-only file browser panel, for a worktree or for the current project or scratch folder when no worktree is selected. It opens in the grid unless location is "dock". It focuses the existing browser for the same folder on the same surface rather than opening a second one, and applies an optional reveal path to it.",
+    "description": "Show a folder in a persistent read-only file browser panel, for a worktree or for the current project or scratch folder when no worktree is selected. It focuses the existing browser for the same folder on the same surface rather than opening a second one, and applies an optional reveal path to it.",
     "examples": undefined,
     "id": "worktree.openFileBrowserPanel",
     "keywords": [

@@ -549,8 +549,6 @@ describe("panelKindIsDockable", () => {
     expect(panelKindIsDockable("terminal")).toBe(true);
     expect(panelKindIsDockable("file")).toBe(true);
     expect(panelKindIsDockable("browser")).toBe(true);
-    // #11917 — the file browser dropped its opt-out; the dock popover hosts its
-    // two-pane layout the same way it hosts the file viewer.
     expect(panelKindIsDockable("file-browser")).toBe(true);
   });
 
