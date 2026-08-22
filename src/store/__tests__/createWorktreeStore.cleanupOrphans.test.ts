@@ -81,7 +81,6 @@ beforeEach(() => {
       usePanelStore.setState((prev) => ({
         panelIds: prev.panelIds.filter((panelId) => panelId !== id),
       }));
-      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion
     }) as never,
   });
 });
