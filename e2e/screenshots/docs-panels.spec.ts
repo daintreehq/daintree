@@ -470,14 +470,27 @@ test.describe.serial("Documentation Screenshots — Panels", () => {
         await expect(panel.locator('[aria-label="Dismiss host approval"]')).toBeVisible({
           timeout: T_MEDIUM,
         });
+        // NOT CAPTURABLE, and the reason is worth writing down.
+        //
+        // The banner is genuinely raised — an `innerText` dump of the panel at
+        // this point reads "Allow browser panel to load staging.atlas-ledger.dev?
+        // | Allow | ×", and the dismiss control reports a real layout box inside
+        // the panel. But it never paints into a renderer screenshot: the browser
+        // panel's body is composited as a separate native view, so the whole
+        // region comes back black however correct the DOM is. Every assertion
+        // below passes and the PNG is still a panel with no banner in it, which
+        // is worse than no PNG at all.
+        //
+        // Anyone retrying this needs a window-level grab (native screencapture
+        // of the Electron window) rather than Playwright's renderer screenshot.
+        const dismiss = panel.locator('[aria-label="Dismiss host approval"]');
+        await expect(dismiss).toBeVisible({ timeout: T_MEDIUM });
         const box = await panel.boundingBox();
         if (!box) throw new Error("browser panel has no layout");
-        await cap.snapBand(page, "portal-browser/browser-panels/browser-panels-host-approval", {
-          x: box.x,
-          y: box.y,
-          width: box.width,
-          height: 190,
-        });
+        throw new Error(
+          "host-approval banner does not paint into a renderer screenshot — " +
+            "needs a native window capture; see the comment above"
+        );
       });
     } finally {
       if (ctx) await closeApp(ctx.app).catch(() => {});
