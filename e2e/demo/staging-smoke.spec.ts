@@ -81,7 +81,15 @@ test("a baked profile restores into a fresh directory and reopens the project", 
 
     // The payoff: a cold launch against the restored profile lands on the
     // project with no dialogs, no folder picker, and no onboarding.
-    const context = await launchApp({ userDataDir: takeDir });
+    // Deliberately WITHOUT the skip-first-run flag. launchApp passes it by
+    // default, and it makes the onboarding handler *report* a completed state
+    // without persisting one — so a smoke that kept it would prove nothing
+    // about whether the profile itself suppresses first-run UI. A real take
+    // runs with no flags at all, and this is the closest the harness can get.
+    const context = await launchApp({
+      userDataDir: takeDir,
+      env: { DAINTREE_E2E_SKIP_FIRST_RUN_DIALOGS: "0" },
+    });
     try {
       const page = await waitForActiveProject(
         context.app,
@@ -96,6 +104,12 @@ test("a baked profile restores into a fresh directory and reopens the project", 
       // The panel staged during the bake has to come back, or a take would open
       // on an empty grid and every shot card would be wrong from frame one.
       await expect(page.locator(SEL.panel.anyPanel)).toHaveCount(1);
+
+      // Nothing first-run may be on screen. The bake persists onboarding for
+      // real precisely so a flag-free take opens on the product, not on a
+      // welcome card or a getting-started checklist.
+      await expect(page.getByRole("dialog")).toHaveCount(0);
+      await expect(page.getByText("Getting started")).toHaveCount(0);
     } finally {
       await closeApp(context.app);
     }

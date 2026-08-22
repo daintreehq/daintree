@@ -436,6 +436,29 @@ export function restoreProfile(snapshotDir: string, workDir: string): void {
   );
 }
 
+/**
+ * Write a finished-onboarding state the take can actually inherit.
+ *
+ * `openAndOnboardProject` only dismisses what is on screen; nothing in it
+ * persists onboarding. These are the same IPC calls the app makes when a user
+ * finishes for real, so the snapshot carries genuine state rather than a
+ * flag-induced illusion — which is what keeps welcome cards, the getting-started
+ * checklist and first-run toasts out of a recording.
+ */
+async function persistOnboardingComplete(page: Page): Promise<void> {
+  await page.evaluate(async () => {
+    const onboarding = window.electron?.onboarding;
+    if (!onboarding) return;
+    await onboarding.complete();
+    await onboarding.markToastSeen();
+    await onboarding.markNewsletterSeen();
+    await onboarding.markWaitingNudgeSeen();
+    await onboarding.dismissWelcomeCard();
+    await onboarding.dismissSetupBanner();
+    await onboarding.dismissChecklist();
+  });
+}
+
 export interface BakeContext {
   app: ElectronApplication;
   /** The project view's page, already opened and onboarded. */
@@ -488,6 +511,10 @@ export async function bakeProfile(options: BakeProfileOptions): Promise<BakedPro
     // dir, so it gets the same refuse-what-we-do-not-own treatment.
     if (!usingTempWorkDir) claimDirectory(workDir, built.slug, "work");
 
+    // Baking keeps launchApp's skip-first-run flag so the wizard cannot block
+    // the project from opening. The flag only makes onboarding *report* itself
+    // complete, never persist it, so `persistOnboardingComplete` below writes
+    // the real state the take inherits.
     const context = await launchApp({ userDataDir: workDir });
     app = context.app;
 
@@ -503,6 +530,7 @@ export async function bakeProfile(options: BakeProfileOptions): Promise<BakedPro
     }
 
     const page = await openAndOnboardProject(context.app, context.window, built.dir);
+    await persistOnboardingComplete(page);
     await options.setup?.({ app: context.app, page, scene: built });
 
     // Let every writer finish before the process goes away.
