@@ -31,7 +31,7 @@ import { dismissBlockingPalette } from "../helpers/overlays";
 import { SEL } from "../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../helpers/timeouts";
 import { createAtlasLedgerRepo, attachLocalOrigin, DOCS_DEMO_ROOT } from "../helpers/docsFixtures";
-import { SAMPLE_PLUGINS_DIR, openPluginManager } from "../helpers/plugins";
+import { SAMPLE_PLUGINS_DIR, openPluginManager, activateE2EPlugin } from "../helpers/plugins";
 import type { DemoRepo } from "../helpers/screenshotFixtures";
 
 const SCALE = process.env.DAINTREE_SCREENSHOT_SCALE ?? "2";
@@ -748,6 +748,13 @@ test.describe.serial("Documentation Screenshots", () => {
         DAINTREE_E2E_SIDELOAD_PLUGIN_DIR: SAMPLE_PLUGINS_DIR,
       });
       const { page } = booted;
+      // Sideloading puts the plugins on disk; activation is what makes them
+      // appear in the manager's "Installed plugins" listbox. Without it the
+      // list renders empty and the detail-pane shot has nothing to click.
+      for (const id of ["daintree.hello", "daintree.rich"]) {
+        await activateE2EPlugin(booted.ctx.app, id).catch(() => {});
+      }
+      await page.waitForTimeout(T_MEDIUM);
 
       const runPaletteAction = async (query: string, optionText: RegExp) => {
         await resetOverlays(page);
@@ -804,9 +811,16 @@ test.describe.serial("Documentation Screenshots", () => {
       });
 
       await shot("plugins/plugins-detail-pane", async () => {
-        const first = page.locator(SEL.plugin.option).first();
-        await expect(first).toBeVisible({ timeout: T_MEDIUM });
-        await first.click();
+        // Not SEL.plugin.option: that expects a listbox/option structure the
+        // manager no longer uses — the installed list is plain rows with
+        // toggles, so the old selector matched nothing while four plugins sat
+        // on screen. Rich Daintree is the sample with the most detail tabs.
+        const row = page
+          .locator(SEL.plugin.manager)
+          .getByText("Rich Daintree", { exact: false })
+          .first();
+        await expect(row).toBeVisible({ timeout: T_LONG });
+        await row.click();
         await page.waitForTimeout(T_MEDIUM);
         const perms = page.locator(SEL.plugin.tabPermissions);
         if (await perms.isVisible({ timeout: T_SHORT }).catch(() => false)) {
@@ -815,20 +829,6 @@ test.describe.serial("Documentation Screenshots", () => {
         }
         await snapWindow(page, "plugins/plugins-detail-pane");
         await resetOverlays(page);
-      });
-
-      await shot("troubleshooting/diagnostics/diagnostics-dock-tabs", async () => {
-        // Not the action palette: searching "diagnostic" ranks "Send
-        // diagnostics" (which opens the review dialog) above the dock toggle,
-        // so v3 clicked the wrong action and timed out waiting for a dock that
-        // was never opened. `panel.toggleDiagnostics` is bound to Ctrl+Shift+J
-        // on every platform — see shared/config/defaultKeybindings.ts.
-        await resetOverlays(page);
-        await page.keyboard.press("Control+Shift+KeyJ");
-        const dock = page.locator(SEL.diagnostics.dock);
-        await expect(dock).toBeVisible({ timeout: T_LONG });
-        await page.waitForTimeout(T_MEDIUM);
-        await snapElement(page, dock, "troubleshooting/diagnostics/diagnostics-dock-tabs", 8);
       });
 
       await resetOverlays(page);

@@ -1,6 +1,6 @@
 import { execSync } from "child_process";
 import path from "path";
-import { mkdirSync, rmSync, existsSync } from "fs";
+import { mkdirSync, readFileSync, rmSync, existsSync, writeFileSync } from "fs";
 import { createDemoRepo, type DemoRepo } from "./screenshotFixtures";
 
 /**
@@ -321,5 +321,141 @@ export function balanceOf(postings: Posting[]): Money {
         },
       },
     ],
+  });
+}
+
+/**
+ * Push commits to the demo repo's bare origin from a throwaway clone, so the
+ * remote is ahead of the working copy.
+ *
+ * `createDivergedRemoteFixture` in `fixtures.ts` does the same job, but it
+ * builds its repo under `mkdtemp`, and the resulting
+ * `/private/var/folders/.../daintree-e2e-…` path is visible in the project
+ * header and the Review Hub's own chrome. The documentation set keeps every
+ * path under the demo root, so divergence is layered onto the shared fixture
+ * instead of being a separate repo with a different name.
+ *
+ * Requires `attachLocalOrigin(repo)` to have run first.
+ */
+export function advanceRemote(
+  repo: DemoRepo,
+  commits: Array<{ file: string; content: string; message: string }>
+): void {
+  const bare = path.join(path.dirname(repo.dir), `${repo.slug}.git`);
+  const scratch = path.join(path.dirname(repo.dir), `${repo.slug}-remote-scratch`);
+  const run = (cmd: string, cwd: string) => execSync(cmd, { cwd, stdio: "ignore" });
+
+  rmSync(scratch, { recursive: true, force: true });
+  run(`git clone ${JSON.stringify(bare)} ${JSON.stringify(scratch)}`, path.dirname(repo.dir));
+  run('git config user.email "avery@atlas-ledger.dev"', scratch);
+  run('git config user.name "Avery Coelho"', scratch);
+  for (const commit of commits) {
+    const target = path.join(scratch, commit.file);
+    mkdirSync(path.dirname(target), { recursive: true });
+    writeFileSync(target, commit.content);
+    run("git add -A", scratch);
+    run(`git commit -m ${JSON.stringify(commit.message)}`, scratch);
+  }
+  run("git push origin main", scratch);
+  rmSync(scratch, { recursive: true, force: true });
+}
+
+/**
+ * Leave the repo stopped in the middle of a rebase with a real conflict.
+ *
+ * Three commits on the topic branch rather than one, so the Review Hub's
+ * rebase sequence rail reads as a sequence — a 1-of-1 rail photographs as a
+ * progress bar with nothing to progress through.
+ *
+ * Only ONE file conflicts. The Review Hub stages everything unstaged when it
+ * opens (`autoStageOnOpen`), and a second dirty file would be swept into the
+ * index alongside the conflict and change what the panel shows.
+ */
+export function startConflictedRebase(repo: DemoRepo, branch: string): void {
+  const run = (cmd: string, cwd: string) => execSync(cmd, { cwd, stdio: "ignore" });
+  const ledger = path.join(repo.dir, "src/journal/posting.ts");
+  const base = readFileSync(ledger, "utf8");
+
+  run(`git checkout -b ${branch}`, repo.dir);
+  const edits = [
+    ["reconcile against the statement, not the balance", "fix: reconcile against the statement"],
+    ["carry the currency through the posting pair", "fix: carry currency through the pair"],
+    ["round once, at the boundary", "fix: round once, at the boundary"],
+  ];
+  edits.forEach(([line, message], i) => {
+    writeFileSync(ledger, `// ${line}\n${base}`);
+    writeFileSync(path.join(repo.dir, `src/journal/note-${i}.md`), `${message}\n`);
+    run("git add -A", repo.dir);
+    run(`git commit -m ${JSON.stringify(message)}`, repo.dir);
+  });
+
+  run("git checkout main", repo.dir);
+  writeFileSync(ledger, `// settle in the ledger currency before rounding\n${base}`);
+  run("git add -A", repo.dir);
+  run('git commit -m "fix: settle before rounding"', repo.dir);
+
+  run(`git checkout ${branch}`, repo.dir);
+  try {
+    // Expected to stop on the first conflicting commit.
+    run("git rebase main", repo.dir);
+  } catch {
+    // The stop is the point.
+  }
+}
+
+/**
+ * Backdated commit history, for the Project Pulse shots.
+ *
+ * Pulse is not a stored record — it is recomputed from `git log` on every
+ * fetch, bucketed by *local* calendar day. So the only way to stage it is to
+ * write commits with the dates you want.
+ *
+ * Two details do the work. Days 0-3 are contiguous, which is what produces a
+ * streak: the service walks back from today's local midnight and stops at the
+ * first gap, and the flame only renders above one day. And the per-day counts
+ * vary, because the heat scale is a p90 over the range — a history of exactly
+ * one commit a day paints every cell at level 1 and the heatmap has no heat.
+ *
+ * `withSpreadCommits` in the shared fixtures cannot be used here: it writes
+ * three commits at 50/30/10 days, which leaves the streak at zero and the
+ * strip's 18-cell ribbon empty.
+ */
+export function seedPulseHistory(dir: string): void {
+  const days = [45, 44, 38, 31, 30, 29, 22, 17, 16, 15, 9, 8, 7, 3, 2, 1, 0];
+  mkdirSync(path.join(dir, "history"), { recursive: true });
+  for (const d of days) {
+    const perDay = d % 7 === 0 ? 4 : d % 3 === 0 ? 3 : d % 2 === 0 ? 2 : 1;
+    for (let i = 0; i < perDay; i++) {
+      const when = new Date(Date.now() - d * 86_400_000);
+      // Local time, not UTC. Both the heatmap and the streak bucket by local
+      // calendar day, so a UTC-noon stamp lands on the wrong day for a capture
+      // machine far enough east or west.
+      when.setHours(11, 10 * i, 0, 0);
+      const stamp = when.toISOString();
+      writeFileSync(path.join(dir, "history", `day-${d}-${i}.md`), `# ledger note ${d}.${i}\n`);
+      execSync("git add -A", { cwd: dir, stdio: "ignore" });
+      execSync(`git commit -m ${JSON.stringify(`chore: ledger notes (day -${d}, ${i})`)}`, {
+        cwd: dir,
+        stdio: "ignore",
+        env: { ...process.env, GIT_AUTHOR_DATE: stamp, GIT_COMMITTER_DATE: stamp },
+      });
+    }
+  }
+}
+
+/**
+ * Backdate a repo's root commit.
+ *
+ * Pulse marks every cell older than the first commit as "before the project"
+ * and the strip drops those cells entirely — so a fixture whose root commit is
+ * dated now renders an empty ribbon however much history sits on top of it.
+ * Amend before any worktree branches off, or they are orphaned.
+ */
+export function backdateRootCommit(dir: string, daysAgo: number): void {
+  const stamp = new Date(Date.now() - daysAgo * 86_400_000).toISOString();
+  execSync("git commit --amend --no-edit", {
+    cwd: dir,
+    stdio: "ignore",
+    env: { ...process.env, GIT_AUTHOR_DATE: stamp, GIT_COMMITTER_DATE: stamp },
   });
 }

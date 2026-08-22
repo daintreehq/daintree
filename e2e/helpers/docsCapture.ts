@@ -108,11 +108,19 @@ export interface Capture {
   readonly missed: CaptureMiss[];
 }
 
+/**
+ * Comma-separated slug substrings. When set, every other shot is skipped —
+ * a scene is one long serial sequence, so re-running the whole thing to
+ * retry the twelfth state costs minutes per attempt.
+ */
+const ONLY = (process.env.DAINTREE_DOCS_ONLY ?? "").split(",").filter(Boolean);
+
 export function createCapture(domain: string): Capture {
   const captured: string[] = [];
   const missed: CaptureMiss[] = [];
 
   async function shot(slug: string, fn: () => Promise<void>): Promise<boolean> {
+    if (ONLY.length > 0 && !ONLY.some((frag) => slug.includes(frag))) return false;
     try {
       await fn();
       captured.push(slug);
@@ -120,7 +128,22 @@ export function createCapture(domain: string): Capture {
       console.log(`[docs:${domain}] captured ${slug}`);
       return true;
     } catch (error) {
-      const reason = error instanceof Error ? error.message.split("\n")[0] : String(error);
+      // Keep the "waiting for <selector>" line as well as the headline. On its
+      // own, "locator.click: Timeout 30000ms exceeded" names neither the
+      // selector nor the surface, which makes a missed shot un-triageable
+      // from the report alone.
+      const reason =
+        error instanceof Error
+          ? [
+              error.message.split("\n")[0],
+              error.message
+                .split("\n")
+                .map((l) => l.trim())
+                .find((l) => l.startsWith("waiting for") || l.startsWith("- waiting for")),
+            ]
+              .filter(Boolean)
+              .join(" — ")
+          : String(error);
       missed.push({ slug, reason });
       // eslint-disable-next-line no-console
       console.log(`[docs:${domain}] MISSED  ${slug} — ${reason}`);

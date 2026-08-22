@@ -26,7 +26,7 @@ import { SEL } from "../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG } from "../helpers/timeouts";
 import { createAtlasLedgerRepo, attachLocalOrigin, DOCS_DEMO_ROOT } from "../helpers/docsFixtures";
 import { createCapture, resetOverlays } from "../helpers/docsCapture";
-import { bootDocsApp, DOCS_WINDOW } from "../helpers/docsBoot";
+import { bootDocsApp, DOCS_WINDOW, DOCS_WINDOW_TALL, DIALOG_PAD } from "../helpers/docsBoot";
 import type { DemoRepo } from "../helpers/screenshotFixtures";
 
 process.env.DAINTREE_DEMO_ROOT = DOCS_DEMO_ROOT;
@@ -166,7 +166,12 @@ test.describe.serial("Documentation Screenshots — Troubleshooting", () => {
 
         await expect(dialog.getByRole("button", { name: "Save Bundle" })).toBeVisible();
         await page.waitForTimeout(T_MEDIUM);
-        await cap.snapWindow(page, "troubleshooting/diagnostics/diagnostics-review-dialog");
+        await cap.snapElement(
+          page,
+          dialog.locator("> div").first(),
+          "troubleshooting/diagnostics/diagnostics-review-dialog",
+          DIALOG_PAD
+        );
         await resetOverlays(page);
       });
 
@@ -277,6 +282,7 @@ test.describe.serial("Documentation Screenshots — Troubleshooting", () => {
         displayName: "Atlas Ledger",
         emoji: "📒",
         userDataDir,
+        keepGlobalBanner: true,
       });
       ctx = booted.ctx;
       const { page } = booted;
@@ -399,7 +405,7 @@ test.describe.serial("Documentation Screenshots — Troubleshooting", () => {
         // internally — which clipped the suspect row, the one row the shot
         // exists to show. The dialog is captured as an element, so the extra
         // height costs nothing in the final image.
-        windowSize: { width: DOCS_WINDOW.width, height: 1100 },
+        windowSize: DOCS_WINDOW_TALL,
       });
       ctx = booted.ctx;
       const { page } = booted;
@@ -434,7 +440,7 @@ test.describe.serial("Documentation Screenshots — Troubleshooting", () => {
             page,
             dialog.locator("> div").first(),
             "troubleshooting/crash-recovery/troubleshooting-crash-recovery-dialog",
-            40
+            DIALOG_PAD
           );
         }
       );
