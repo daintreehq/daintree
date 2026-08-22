@@ -33,9 +33,8 @@ function harness(options?: Parameters<typeof createHoverSettle>[1]) {
   return { controller, settled };
 }
 
-/** Arms `inside` and gets a suppressed pointer episode running. */
+/** Gets a suppressed pointer episode running; returns the last sample's time. */
 function engagePointer(controller: HoverSettleController): number {
-  controller.pointerEnter({ ...MOUSE, clientX: 0, clientY: 0, timeStamp: 0 });
   return sweep(controller, { from: 0, stepPx: 8, stepMs: 8, count: 4 });
 }
 
@@ -49,6 +48,20 @@ describe("createSampler", () => {
     sampler.push(0, 0, 0);
     expect(sampler.speed()).toBeNull();
     expect(sampler.recentSpeed()).toBeNull();
+  });
+
+  it("keeps exactly the trailing pair once everything else has aged out", () => {
+    const stale = createSampler(50);
+    stale.push(0, 0, 0);
+    stale.push(200, 0, 5);
+    stale.push(10, 0, 100);
+    stale.push(20, 0, 110);
+    // Same trailing pair, no history at all: the windowed reading has to agree,
+    // which it cannot if any of the earlier samples survived the cutoff.
+    const fresh = createSampler(50);
+    fresh.push(10, 0, 100);
+    fresh.push(20, 0, 110);
+    expect(stale.speed()).toBe(fresh.speed());
   });
 
   it("reads tremor around a point as still, while a flick still registers instantly", () => {
@@ -98,7 +111,6 @@ describe("createSampler", () => {
 describe("createHoverSettle — pointer authority", () => {
   it("treats an isolated move as intent rather than transit", () => {
     const { controller } = harness();
-    controller.pointerEnter({ ...MOUSE, clientX: 0, clientY: 0, timeStamp: 0 });
     move(controller, 0, 0, 0);
     expect(controller.suppressionSource()).toBeNull();
   });
@@ -111,7 +123,6 @@ describe("createHoverSettle — pointer authority", () => {
 
   it("engages on a flick the windowed reading alone would have missed", () => {
     const { controller } = harness();
-    controller.pointerEnter({ ...MOUSE, clientX: 0, clientY: 0, timeStamp: 0 });
     move(controller, 0, 0, 0);
     move(controller, 0, -4, 10);
     expect(controller.suppressionSource()).toBeNull();
@@ -123,8 +134,9 @@ describe("createHoverSettle — pointer authority", () => {
   });
 
   it("holds a flick through its cold window, then settles once the floor elapses", () => {
-    const { controller, settled } = harness();
-    controller.pointerEnter({ ...MOUSE, clientX: 0, clientY: 0, timeStamp: 0 });
+    // An explicit floor rather than the shipped one, so tuning the default does
+    // not force this arithmetic to be rewritten.
+    const { controller, settled } = harness({ minSuppressMs: 30 });
     move(controller, 0, 0, 0);
     move(controller, 0, -4, 10);
     move(controller, 0, 2.5, 14);
@@ -133,11 +145,11 @@ describe("createHoverSettle — pointer authority", () => {
     // is exactly the cold-window problem the floor exists for — so without it
     // the very next sample would release the flick it just engaged.
     move(controller, 0, 2.5, 24);
-    move(controller, 0, 2.5, 54);
+    move(controller, 0, 2.5, 34);
     expect(controller.suppressionSource()).toBe("pointer");
     expect(settled).toEqual([]);
 
-    move(controller, 0, 2.5, 64);
+    move(controller, 0, 2.5, 44);
     expect(settled).toEqual(["pointer"]);
   });
 
@@ -153,7 +165,6 @@ describe("createHoverSettle — pointer authority", () => {
 
   it("settles on braking, before the pointer has stopped", () => {
     const { controller, settled } = harness();
-    controller.pointerEnter({ ...MOUSE, clientX: 0, clientY: 0, timeStamp: 0 });
     // A ballistic peak of 3px/ms, then a decelerating tail.
     move(controller, 0, 0, 0);
     move(controller, 0, 30, 10);
@@ -170,7 +181,6 @@ describe("createHoverSettle — pointer authority", () => {
     // A slow-but-sweeping gesture halving its speed is the adaptive band
     // wobbling, not a decision — releasing here flashes rows mid-sweep.
     const { controller, settled } = harness();
-    controller.pointerEnter({ ...MOUSE, clientX: 0, clientY: 0, timeStamp: 0 });
     move(controller, 0, 0, 0);
     move(controller, 0, 8, 10);
     expect(controller.suppressionSource()).toBe("pointer");
@@ -196,6 +206,7 @@ describe("createHoverSettle — pointer authority", () => {
     vi.useFakeTimers();
     const { controller, settled } = harness();
     engagePointer(controller);
+    expect(controller.suppressionSource()).toBe("pointer");
     controller.pointerLeave({ ...MOUSE, clientX: 0, clientY: 0, timeStamp: 0 });
     expect(controller.suppressionSource()).toBeNull();
     await vi.advanceTimersByTimeAsync(1000);
@@ -206,51 +217,33 @@ describe("createHoverSettle — pointer authority", () => {
     vi.useFakeTimers();
     const { controller, settled } = harness();
     engagePointer(controller);
+    expect(controller.suppressionSource()).toBe("pointer");
     controller.destroy();
     await vi.advanceTimersByTimeAsync(1000);
     expect(settled).toEqual([]);
   });
 
-  it("ignores touch and pen entirely", () => {
+  it.each(["touch", "pen"])("ignores %s entirely", (pointerType) => {
     const { controller } = harness();
-    controller.pointerEnter({ pointerType: "touch", clientX: 0, clientY: 0, timeStamp: 0 });
     for (let i = 0; i < 5; i += 1) {
-      controller.pointerMove({
-        pointerType: "touch",
-        clientX: 0,
-        clientY: i * 20,
-        timeStamp: i * 8,
-      });
+      controller.pointerMove({ pointerType, clientX: 0, clientY: i * 20, timeStamp: i * 8 });
     }
     expect(controller.suppressionSource()).toBeNull();
   });
 });
 
-describe("createHoverSettle — scroll authority", () => {
-  it("ignores a scroll while the pointer is elsewhere", () => {
+describe("createHoverSettle — list movement authority", () => {
+  it("engages on movement alone, with no pointer event to read", () => {
+    // The keyboard case: the cursor is resting and the rows come to it, so
+    // there is no velocity anywhere to derive intent from.
     const { controller } = harness();
-    controller.scroll();
-    expect(controller.suppressionSource()).toBeNull();
-  });
-
-  it("engages on a scroll under a cursor that never moved", () => {
-    const { controller } = harness();
-    controller.pointerEnter({ ...MOUSE, clientX: 0, clientY: 0, timeStamp: 0 });
-    controller.scroll();
-    expect(controller.suppressionSource()).toBe("scroll");
-  });
-
-  it("arms itself from a move alone, for a list that mounts under a resting cursor", () => {
-    const { controller } = harness();
-    move(controller, 0, 0, 0);
-    controller.scroll();
+    controller.listMoved();
     expect(controller.suppressionSource()).toBe("scroll");
   });
 
   it("cannot be released by pointer samples", () => {
     const { controller, settled } = harness();
-    controller.pointerEnter({ ...MOUSE, clientX: 0, clientY: 0, timeStamp: 0 });
-    controller.scroll();
+    controller.listMoved();
     // Stray near-stationary samples: under pointer authority these would home
     // in and release, which mid-scroll would strobe the list.
     move(controller, 0, 0, 100);
@@ -260,12 +253,12 @@ describe("createHoverSettle — scroll authority", () => {
     expect(settled).toEqual([]);
   });
 
-  it("takes over a pointer episode and settles as a scroll", async () => {
+  it("takes over a pointer episode and settles as movement, never as a pointer", async () => {
     vi.useFakeTimers();
     const { controller, settled } = harness();
     engagePointer(controller);
     expect(controller.suppressionSource()).toBe("pointer");
-    controller.scroll();
+    controller.listMoved();
     await vi.advanceTimersByTimeAsync(1000);
     expect(settled).toEqual(["scroll"]);
   });
@@ -273,9 +266,8 @@ describe("createHoverSettle — scroll authority", () => {
   it("keeps re-arming its backstop for as long as the list is moving", async () => {
     vi.useFakeTimers();
     const { controller, settled } = harness();
-    controller.pointerEnter({ ...MOUSE, clientX: 0, clientY: 0, timeStamp: 0 });
     for (let i = 0; i < 6; i += 1) {
-      controller.scroll();
+      controller.listMoved();
       await vi.advanceTimersByTimeAsync(20);
       expect(settled).toEqual([]);
     }

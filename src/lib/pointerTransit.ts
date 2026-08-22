@@ -111,10 +111,10 @@ const DEFAULTS = {
 } as const;
 
 export interface HoverSettleController {
-  pointerEnter(event: PointerTransitEvent): void;
   pointerMove(event: PointerTransitEvent): void;
   pointerLeave(event: PointerTransitEvent): void;
-  scroll(): void;
+  /** The rows moved under the pointer, by any means. */
+  listMoved(): void;
   /** Null while the pointer's position is a statement of intent. */
   suppressionSource(): HoverSuppressionSource | null;
   destroy(): void;
@@ -139,7 +139,6 @@ export function createHoverSettle(
   let source: HoverSuppressionSource | null = null;
   let peakSpeed = 0;
   let releasableAt = 0;
-  let inside = false;
   let backstopTimer: ReturnType<typeof setTimeout> | undefined;
 
   function armBackstop(): void {
@@ -175,17 +174,8 @@ export function createHoverSettle(
   }
 
   return {
-    pointerEnter(event) {
-      if (event.pointerType !== "mouse") return;
-      inside = true;
-    },
-
     pointerMove(event) {
       if (event.pointerType !== "mouse") return;
-      // Also set here, not only on enter: a list that mounts under a resting
-      // cursor never fires an enter, and without this the scroll path below
-      // would sit disarmed for the whole gesture.
-      inside = true;
 
       const now = event.timeStamp;
       sampler.push(event.clientX, event.clientY, now);
@@ -247,13 +237,17 @@ export function createHoverSettle(
 
     pointerLeave(event) {
       if (event.pointerType !== "mouse") return;
-      inside = false;
       sampler.clear();
       cancel();
     },
 
-    scroll() {
-      if (!inside) return;
+    listMoved() {
+      // No "is the pointer inside" precondition, unlike the source: that watches
+      // every scroll on the page and needs one to tell its own list's movement
+      // from the rest. The caller here only reports movement of the list itself,
+      // which is the question `inside` was approximating — and suppressing while
+      // the pointer is elsewhere costs one timer and gates nothing.
+      //
       // Whatever the pointer was doing before the list moved is no longer a
       // reading of where it is relative to the rows.
       sampler.clear();
@@ -268,7 +262,6 @@ export function createHoverSettle(
     },
 
     destroy() {
-      inside = false;
       sampler.clear();
       cancel();
     },

@@ -411,7 +411,6 @@ function listbox(container: HTMLElement): HTMLElement {
 }
 
 const POINTER_FACTORIES = {
-  pointerenter: createEvent.pointerEnter,
   pointermove: createEvent.pointerMove,
   pointerleave: createEvent.pointerLeave,
   pointerover: createEvent.pointerOver,
@@ -449,7 +448,6 @@ function fireRowEnter(row: Element, sample: { x: number; y: number; t: number })
 /** Two samples 30px apart in 10ms — well past the sweep threshold. */
 function startSweep(container: HTMLElement): void {
   const list = listbox(container);
-  firePointer(list, "pointerenter", { x: 0, y: 0, t: 0 });
   firePointer(list, "pointermove", { x: 0, y: 0, t: 0 });
   firePointer(list, "pointermove", { x: 0, y: 30, t: 10 });
 }
@@ -1231,6 +1229,18 @@ describe("DockLaunchButton", () => {
         });
       });
 
+      it("selects immediately on an ordinary mouse hover", () => {
+        // The two bare-pointerEnter tests above carry no pointerType, so they
+        // only prove the non-mouse bypass. This is the path a real mouse takes.
+        const { container } = renderButton();
+        openLauncher();
+        const rows = options(container);
+        const target = rows[1]!;
+
+        fireRowEnter(target, { x: 0, y: 32, t: 0 });
+        expect(selectedOption(container)).toBe(target);
+      });
+
       it("settles onto the row the sweep stopped on", () => {
         const { container } = renderButton();
         openLauncher();
@@ -1244,7 +1254,7 @@ describe("DockLaunchButton", () => {
 
         // The pointer comes to rest: same position, far enough past the
         // minimum-suppression floor for the gesture to read as finished.
-        firePointer(listbox(container), "pointermove", { x: 0, y: 30, t: 70 });
+        firePointer(listbox(container), "pointermove", { x: 0, y: 30, t: 200 });
         expect(selectedOption(container)).toBe(target);
       });
 
@@ -1253,8 +1263,6 @@ describe("DockLaunchButton", () => {
         openLauncher();
         const input = searchInput(container);
         const list = listbox(container);
-        // The cursor is parked in the list and never moves again.
-        firePointer(list, "pointerenter", { x: 0, y: 0, t: 0 });
 
         fireEvent.keyDown(input, { key: "ArrowDown" });
         fireEvent.keyDown(input, { key: "ArrowDown" });
@@ -1286,6 +1294,8 @@ describe("DockLaunchButton", () => {
 
         startSweep(container);
         fireRowEnter(rows[2]!, { x: 0, y: 30, t: 12 });
+        // Without this the test passes whether or not hover is gated at all.
+        expect(selectedOption(container)).not.toBe(rows[2]!);
 
         fireEvent.change(searchInput(container), { target: { value: "claude" } });
         const filtered = options(container);
@@ -1293,7 +1303,7 @@ describe("DockLaunchButton", () => {
         expect(filtered.map((row) => row.textContent)).not.toContain(trackedLabel);
         const before = selectedOption(container);
 
-        firePointer(listbox(container), "pointermove", { x: 0, y: 30, t: 70 });
+        firePointer(listbox(container), "pointermove", { x: 0, y: 30, t: 200 });
         expect(selectedOption(container)).toBe(before);
       });
 
@@ -1309,6 +1319,29 @@ describe("DockLaunchButton", () => {
         startSweep(container);
         fireRowEnter(target, { x: 0, y: 30, t: 12 });
         firePointer(listbox(container), "pointerleave", { x: 0, y: 400, t: 20 });
+
+        act(() => {
+          vi.advanceTimersByTime(500);
+        });
+        expect(selectedOption(container)).toBe(chosen);
+      });
+
+      it("lets a keystroke override a sweep that has not settled yet", () => {
+        const { container } = renderButton();
+        openLauncher();
+        const input = searchInput(container);
+        const rows = options(container);
+        const swept = rows[2]!;
+
+        vi.useFakeTimers();
+        startSweep(container);
+        fireRowEnter(swept, { x: 0, y: 30, t: 12 });
+
+        // The keyboard makes a choice mid-gesture. The sweep's row is now an
+        // older opinion and must not come back when the gesture settles.
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+        const chosen = selectedOption(container);
+        expect(chosen).not.toBe(swept);
 
         act(() => {
           vi.advanceTimersByTime(500);

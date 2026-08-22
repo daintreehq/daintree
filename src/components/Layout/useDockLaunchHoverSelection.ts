@@ -15,6 +15,8 @@ interface UseDockLaunchHoverSelection {
   /** Goes on the listbox host element. Not on a row — see `onHover`. */
   listboxRef: (node: HTMLDivElement | null) => void;
   onHover: (index: number, rowKey: string, pointerType: string) => void;
+  /** Call before any keystroke that moves the selection. */
+  notifyKeyboardSelection: () => void;
 }
 
 /**
@@ -78,7 +80,6 @@ export function useDockLaunchHoverSelection<Row extends HoverSelectionRow>({
     });
     controllerRef.current = controller;
 
-    const handleEnter = (event: PointerEvent) => controller.pointerEnter(event);
     const handleMove = (event: PointerEvent) => controller.pointerMove(event);
     // Both of these clear the pending row for any pointer type: once the
     // pointer is off the list, or a scroll has taken authority, the row it was
@@ -87,12 +88,16 @@ export function useDockLaunchHoverSelection<Row extends HoverSelectionRow>({
       pendingRowKeyRef.current = null;
       controller.pointerLeave(event);
     };
-    const handleScroll = () => {
+    const handleScroll = (event: Event) => {
+      // Only a scroller the list actually sits inside can move rows under the
+      // cursor. This app is full of independent scrollers, and a terminal
+      // streaming output must not stand the launcher's hover down.
+      const target = event.target;
+      if (!(target instanceof Node) || !target.contains(listboxNode)) return;
       pendingRowKeyRef.current = null;
-      controller.scroll();
+      controller.listMoved();
     };
 
-    listboxNode.addEventListener("pointerenter", handleEnter);
     listboxNode.addEventListener("pointermove", handleMove, { passive: true });
     listboxNode.addEventListener("pointerleave", handleLeave);
     // Scroll does not bubble and the scroller is the palette body wrapping this
@@ -101,7 +106,6 @@ export function useDockLaunchHoverSelection<Row extends HoverSelectionRow>({
     document.addEventListener("scroll", handleScroll, { passive: true, capture: true });
 
     return () => {
-      listboxNode.removeEventListener("pointerenter", handleEnter);
       listboxNode.removeEventListener("pointermove", handleMove);
       listboxNode.removeEventListener("pointerleave", handleLeave);
       document.removeEventListener("scroll", handleScroll, { capture: true });
@@ -135,5 +139,15 @@ export function useDockLaunchHoverSelection<Row extends HoverSelectionRow>({
     pendingRowKeyRef.current = source === "pointer" ? rowKey : null;
   }, []);
 
-  return { listboxRef, onHover };
+  // A keystroke that moves the selection makes the pointer's last opinion
+  // stale, and the row that lands under a resting cursor when the new selection
+  // scrolls into view is not a choice either. Standing hover down here rather
+  // than waiting for the scroll event keeps this off the boundary event the
+  // scroll fires, whichever order the browser emits the two in.
+  const notifyKeyboardSelection = useCallback(() => {
+    pendingRowKeyRef.current = null;
+    controllerRef.current?.listMoved();
+  }, []);
+
+  return { listboxRef, onHover, notifyKeyboardSelection };
 }

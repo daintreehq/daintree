@@ -71,6 +71,9 @@ const DOCK_LAUNCH_FUSE_OPTIONS: IFuseOptions<DockLaunchItem> = {
 };
 
 /** Ranked results are capped; the browse list always renders in full. */
+/** Keys that move the selection, so the list may scroll under the pointer. */
+const SELECTION_KEYS = new Set(["ArrowDown", "ArrowUp", "Home", "End"]);
+
 const SEARCH_RESULT_CAP = 30;
 
 /**
@@ -421,7 +424,11 @@ export function DockLaunchButton({
   // Pointer transit must not be read as a choice of row: sweeping past rows to
   // reach a lower one, and the scrollIntoView below sliding a row under a
   // resting cursor, are both movement rather than intent (#11919).
-  const { listboxRef, onHover: handleRowHover } = useDockLaunchHoverSelection({
+  const {
+    listboxRef,
+    onHover: handleRowHover,
+    notifyKeyboardSelection,
+  } = useDockLaunchHoverSelection({
     open,
     results,
     setSelectedIndex,
@@ -628,6 +635,11 @@ export function DockLaunchButton({
       // itself, so this only covers keys arriving from the input.
       if (capturingRowKey !== null) return;
 
+      // Before the selection moves, not after: the scroll that follows it slides
+      // a row under a resting cursor, and that row's pointerenter must not be
+      // read as a choice (#11919).
+      if (SELECTION_KEYS.has(event.key)) notifyKeyboardSelection();
+
       if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         event.preventDefault();
         event.stopPropagation();
@@ -729,6 +741,7 @@ export function DockLaunchButton({
       results.length,
       selectedPinTarget,
       selectedRow,
+      notifyKeyboardSelection,
       selectNext,
       selectPrevious,
       setSelectedIndex,
