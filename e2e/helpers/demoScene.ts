@@ -38,6 +38,32 @@ export interface DemoScene {
   /** Written to `.daintree/recipes/` before the initial commit. */
   recipes?: Array<{ filename: string; content: object }>;
   worktrees?: DemoSceneWorktree[];
+  /**
+   * The shot list. Beats do not affect what gets built — they are what the
+   * shot card is rendered from.
+   *
+   * They live in the same file as the state on purpose. A card kept separately
+   * drifts from what the app actually boots into, and a shot card that
+   * disagrees with the screen is worse than no shot card at all.
+   */
+  beats?: DemoSceneBeat[];
+}
+
+export interface DemoSceneBeat {
+  /** Short label for the beat, used as its heading. */
+  name: string;
+  /** What is already true on screen when this beat starts. */
+  given?: string;
+  /** What the person recording does. */
+  action: string;
+  /** What to wait for before moving on — the cue, not a stopwatch. */
+  waitFor?: string;
+  /** How to tell it worked, so a bad take is caught in the room. */
+  expect?: string;
+  /** On-screen text for the edit, if this beat carries one. */
+  super?: string;
+  /** Target duration in seconds. */
+  seconds?: number;
 }
 
 export interface DemoSceneWorktree {
@@ -245,8 +271,18 @@ function rejectUnknownKeys(
   }
 }
 
-const SCENE_KEYS = ["slug", "files", "defaultBranch", "remote", "recipes", "worktrees"] as const;
+const SCENE_KEYS = [
+  "slug",
+  "files",
+  "defaultBranch",
+  "remote",
+  "recipes",
+  "worktrees",
+  "beats",
+] as const;
 const WORKTREE_KEYS = ["branch", "files", "aheadCommits", "uncommittedFiles", "push"] as const;
+const BEAT_KEYS = ["name", "given", "action", "waitFor", "expect", "super", "seconds"] as const;
+const BEAT_TEXT_FIELDS = ["name", "given", "action", "waitFor", "expect", "super"] as const;
 
 /**
  * Validate a scene and throw once with every problem found.
@@ -309,6 +345,57 @@ export function validateScene(scene: unknown): asserts scene is DemoScene {
         if (!isRecord(recipe.content)) {
           errors.push(`${label}.content: expected an object`);
         }
+      }
+    }
+  }
+
+  if (scene.beats !== undefined) {
+    if (!Array.isArray(scene.beats)) {
+      errors.push("beats: expected an array");
+    } else {
+      for (const [index, beat] of scene.beats.entries()) {
+        const label = `beats[${index}]`;
+        if (!isRecord(beat)) {
+          errors.push(`${label}: expected an object`);
+          continue;
+        }
+        rejectUnknownKeys(beat, BEAT_KEYS, label, errors);
+        for (const field of ["name", "action"] as const) {
+          if (typeof beat[field] !== "string" || (beat[field] as string).trim().length === 0) {
+            errors.push(`${label}.${field} is required`);
+          }
+        }
+        for (const field of ["given", "waitFor", "expect", "super"] as const) {
+          if (beat[field] !== undefined && typeof beat[field] !== "string") {
+            errors.push(`${label}.${field}: expected a string`);
+          }
+        }
+        // Beat text becomes one Markdown line each. A newline would break the
+        // project's one-physical-line rule and, worse, let a beat inject its own
+        // headings or fences into the shot card.
+        for (const field of BEAT_TEXT_FIELDS) {
+          const value = beat[field];
+          if (typeof value === "string" && /[\r\n]/.test(value)) {
+            errors.push(`${label}.${field}: must be a single line`);
+          }
+        }
+        if (
+          beat.seconds !== undefined &&
+          (typeof beat.seconds !== "number" || !Number.isFinite(beat.seconds) || beat.seconds <= 0)
+        ) {
+          errors.push(`${label}.seconds: expected a positive number`);
+        }
+      }
+
+      // All-or-nothing, because the shot card lays beats out on a running
+      // timeline. One untimed beat in the middle contributes zero, so every
+      // beat after it claims a start time earlier than it will really happen —
+      // a card that is wrong in a way nobody notices until the edit.
+      const timed = scene.beats.filter((beat) => isRecord(beat) && beat.seconds !== undefined);
+      if (timed.length > 0 && timed.length !== scene.beats.length) {
+        errors.push(
+          `beats: ${timed.length} of ${scene.beats.length} beats declare seconds — time all of them or none, or the timeline misreports every beat after the first untimed one`
+        );
       }
     }
   }
