@@ -9,7 +9,7 @@ import { removePathSync } from "./fixtures";
  * paths in marketing screenshots. Windows: C:\Projects\<slug>. POSIX:
  * /tmp/daintree-demos/<slug>. Override with DAINTREE_DEMO_ROOT.
  */
-function getDemoRoot(): string {
+export function getDemoRoot(): string {
   if (process.env.DAINTREE_DEMO_ROOT) return process.env.DAINTREE_DEMO_ROOT;
   if (process.platform === "win32") return "C:\\Projects";
   return "/tmp/daintree-demos";
@@ -47,7 +47,7 @@ function git(cmd: string, cwd: string) {
   execSync(`git ${cmd}`, { cwd, stdio: "ignore" });
 }
 
-function writeFiles(root: string, files: Record<string, string>) {
+export function writeFiles(root: string, files: Record<string, string>) {
   for (const [relPath, content] of Object.entries(files)) {
     const target = path.join(root, relPath);
     mkdirSync(path.dirname(target), { recursive: true });
