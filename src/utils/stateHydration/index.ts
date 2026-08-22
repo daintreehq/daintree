@@ -2,7 +2,11 @@ import { appClient, terminalClient, worktreeClient, projectClient, systemClient 
 import { useTerminalInputStore } from "@/store/terminalInputStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
-import { suppressMruRecording } from "@/store/worktreeStore";
+import {
+  suppressMruRecording,
+  createDeletedWorktreeRecord,
+  useWorktreeSelectionStore,
+} from "@/store/worktreeStore";
 import { useLayoutConfigStore } from "@/store";
 import type {
   AgentState,
@@ -554,6 +558,26 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
         // panel respawned with a fresh id (#10440).
         savedIdToRestoredId = restoreResult.savedIdToRestoredId;
 
+        // Rebuild the deleted-worktree rows for panels whose PTY outlived its
+        // worktree (#11911). The rows are in-memory and die with the project
+        // view, so every path that rebuilds a view — cold start, reload, LRU
+        // recreation, or first open of a project whose worktrees were removed
+        // while it was closed — arrives with the survivors homeless. Without a
+        // row they render nowhere, `cleanupOrphanedTerminals` below deletes
+        // them, and the cleanup sweep that is supposed to retire them never
+        // sees them at all.
+        //
+        // Recorded AFTER the panels are restored so `addDeletedWorktree`'s
+        // membership lookup finds them; a row with nothing in it is pruned on
+        // the sweep's next tick.
+        for (const ghostedId of restoreResult.ghostedWorktreeIds) {
+          const selectionStore = useWorktreeSelectionStore.getState();
+          // A deleted id can never be restored after a restart, so it must not
+          // survive as the durable restore target — no-ops unless it is one.
+          selectionStore.clearRestoreTarget(ghostedId);
+          selectionStore.addDeletedWorktree(createDeletedWorktreeRecord(ghostedId));
+        }
+
         // Schedule scrollback restores at background priority — no blocking IPC
         // fetch on the critical path. The overlay can dismiss immediately and
         // scrollback fills in asynchronously.
@@ -670,7 +694,9 @@ export async function hydrateAppState(options: HydrationOptions): Promise<void> 
     // removePanel kills the PTY — so it only runs on a coherent worktree
     // picture: restore keeps a saved worktreeId when the list is unknown
     // (#11234), and cleanup would read that survivor as a deleted worktree and
-    // kill a live agent terminal, the exact outcome #11232 ruled out.
+    // kill a live agent terminal, the exact outcome #11232 ruled out. Panels on
+    // a CONFIRMED-deleted worktree now keep their id too, and are exempted by
+    // the deleted-worktree row recorded for them above (#11911).
     if (worktreesAreKnown && activeWorktreeIsLive) {
       try {
         const { cleanupOrphanedTerminals } = await import("@/store/createWorktreeStore");

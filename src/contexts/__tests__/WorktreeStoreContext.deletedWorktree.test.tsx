@@ -465,3 +465,159 @@ describe("WorktreeStoreProvider — surviving terminals on worktree removal", ()
     expect(useWorktreeSelectionStore.getState().deletedWorktrees.has("wt-1")).toBe(false);
   });
 });
+
+describe("WorktreeStoreProvider — worktrees dropped without a removal event (#11911)", () => {
+  it("adopts stranded panels onto a row when applySnapshot drops the worktree", async () => {
+    const { store } = await renderProvider();
+    act(() => {
+      store.getState().applySnapshot([makeWorktree("wt-1"), makeWorktree("wt-2")], nextV());
+    });
+    setPanels([
+      { id: "agent-a", worktreeId: "wt-2" },
+      { id: "agent-b", worktreeId: "wt-2" },
+      { id: "live", worktreeId: "wt-1" },
+    ]);
+
+    // An external `git worktree remove` reconciles the list before any per-id
+    // event arrives, so the survivors would otherwise render nowhere while
+    // their PTYs stayed alive and kept counting as needing input.
+    act(() => {
+      store.getState().applySnapshot([makeWorktree("wt-1")], nextV());
+    });
+
+    const row = useWorktreeSelectionStore.getState().deletedWorktrees.get("wt-2");
+    expect(row).toBeDefined();
+    expect(row?.path).toBe("/repo/wt-2");
+    expect(row?.title).toBe("branch-wt-2");
+    // Panels survive: "worktree gone" and "PTY dead" stay independent (#11232).
+    expect(usePanelStore.getState().panelsById["agent-a"]).toBeDefined();
+    expect(usePanelStore.getState().panelsById["agent-b"]).toBeDefined();
+  });
+
+  it("records the adopted row unarmed so the sweep owns the countdown", async () => {
+    const { store } = await renderProvider();
+    act(() => {
+      store.getState().applySnapshot([makeWorktree("wt-1"), makeWorktree("wt-2")], nextV());
+    });
+    setPanels([{ id: "agent-a", worktreeId: "wt-2" }]);
+
+    act(() => {
+      store.getState().applySnapshot([makeWorktree("wt-1")], nextV());
+    });
+
+    const row = useWorktreeSelectionStore.getState().deletedWorktrees.get("wt-2");
+    expect(row?.expiresAt).toBeNull();
+    expect(row?.holdReason).toBeNull();
+  });
+
+  it("anchors the adopted row to the neighbour it sat above", async () => {
+    const { store } = await renderProvider();
+    act(() => {
+      store.getState().applySnapshot([makeWorktree("wt-1"), makeWorktree("wt-2")], nextV());
+    });
+    setPanels([{ id: "agent-a", worktreeId: "wt-1" }]);
+    recordSidebarWorktreeOrder(["wt-1", "wt-2"]);
+
+    act(() => {
+      store.getState().applySnapshot([makeWorktree("wt-2")], nextV());
+    });
+
+    expect(
+      useWorktreeSelectionStore.getState().deletedWorktrees.get("wt-1")?.pinnedBeforeWorktreeId
+    ).toBe("wt-2");
+  });
+
+  it("adopts nothing when the incoming snapshot is empty", async () => {
+    const { store } = await renderProvider();
+    act(() => {
+      store.getState().applySnapshot([makeWorktree("wt-1"), makeWorktree("wt-2")], nextV());
+    });
+    setPanels([
+      { id: "agent-a", worktreeId: "wt-1" },
+      { id: "agent-b", worktreeId: "wt-2" },
+    ]);
+
+    // A successful enumeration always reports the main worktree, so [] means
+    // the host isn't ready — never that every worktree was deleted (#11235).
+    act(() => {
+      store.getState().applySnapshot([], nextV());
+    });
+
+    expect(useWorktreeSelectionStore.getState().deletedWorktrees.size).toBe(0);
+  });
+
+  it("adopts nothing for a dropped worktree that held no terminals", async () => {
+    const { store } = await renderProvider();
+    act(() => {
+      store.getState().applySnapshot([makeWorktree("wt-1"), makeWorktree("wt-2")], nextV());
+    });
+    setPanels([{ id: "agent-a", worktreeId: "wt-1" }]);
+
+    act(() => {
+      store.getState().applySnapshot([makeWorktree("wt-1")], nextV());
+    });
+
+    expect(useWorktreeSelectionStore.getState().deletedWorktrees.has("wt-2")).toBe(false);
+  });
+
+  it("adopts nothing when the dropped worktree is the main one", async () => {
+    const { store } = await renderProvider();
+    act(() => {
+      store
+        .getState()
+        .applySnapshot(
+          [makeWorktree("wt-main", { isMainWorktree: true }), makeWorktree("wt-2")],
+          nextV()
+        );
+    });
+    setPanels([{ id: "agent-a", worktreeId: "wt-main" }]);
+
+    // Main can't be deleted, so its absence is a host rebuild mid-hydration.
+    act(() => {
+      store.getState().applySnapshot([makeWorktree("wt-2")], nextV());
+    });
+
+    expect(useWorktreeSelectionStore.getState().deletedWorktrees.has("wt-main")).toBe(false);
+  });
+
+  it("keeps the event handler's row identical to the backstop's", async () => {
+    const { store } = await renderProvider();
+    act(() => {
+      store.getState().applySnapshot([makeWorktree("wt-1")], nextV());
+    });
+    setPanels([{ id: "agent-a", worktreeId: "wt-1" }]);
+    recordSidebarWorktreeOrder(["wt-1"]);
+
+    // The backstop fires synchronously inside `applyRemove`, so it — not the
+    // handler below it — is what actually records the row. Every field the
+    // handler used to own has to survive that reordering.
+    act(() => {
+      emit("worktree-removed", removeEvent("wt-1"));
+    });
+
+    const row = useWorktreeSelectionStore.getState().deletedWorktrees.get("wt-1");
+    expect(row?.title).toBe("branch-wt-1");
+    expect(row?.path).toBe("/repo/wt-1");
+    expect(row?.expiresAt).toBeNull();
+  });
+
+  it("demotes an adopted worktree from the durable restore target", async () => {
+    const { store } = await renderProvider();
+    act(() => {
+      store.getState().applySnapshot([makeWorktree("wt-1"), makeWorktree("wt-2")], nextV());
+    });
+    setPanels([{ id: "agent-a", worktreeId: "wt-2" }]);
+    act(() => {
+      useWorktreeSelectionStore.getState().selectWorktree("wt-2");
+    });
+    expect(useWorktreeSelectionStore.getState().restoreWorktreeId).toBe("wt-2");
+
+    act(() => {
+      store.getState().applySnapshot([makeWorktree("wt-1")], nextV());
+    });
+
+    // A deleted id resolves to nothing after a restart, so it must not persist
+    // as the restore point even while its ghost row is still on screen.
+    expect(useWorktreeSelectionStore.getState().restoreWorktreeId).toBeNull();
+  });
+});

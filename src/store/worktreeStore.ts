@@ -126,6 +126,47 @@ export function getPinnedDeletedWorktreeAnchorId(worktreeId: string): string | n
 }
 
 /**
+ * Build the row a deleted worktree's surviving terminals live on.
+ *
+ * Shared because three paths reach this state and must produce byte-identical
+ * records: the `worktree-removed` event, the map-diff backstop that catches
+ * removals which never fired one, and hydration rebuilding a row whose store
+ * died with the project view. `addDeletedWorktree` is first-write-wins, so
+ * whichever path arrives first decides the row — and on a normal removal the
+ * backstop fires FIRST, synchronously inside `applyRemove`'s `set()`, before
+ * the event handler that used to be the only author. Anything the backstop
+ * couldn't reconstruct would therefore be silently lost, not merely deferred.
+ *
+ * `title` and `path` fall back to the id because a worktree id IS its path:
+ * git has forgotten the worktree, so the id is the only surviving description
+ * of it, and the basename is the closest thing to the branch name that's left.
+ */
+export function createDeletedWorktreeRecord(
+  worktreeId: string,
+  metadata?: { title?: string | null; path?: string | null }
+): DeletedWorktree {
+  const path = metadata?.path ?? worktreeId;
+  return {
+    id: worktreeId,
+    title: metadata?.title ?? basenameOf(path) ?? "Unknown",
+    path,
+    deletedAt: Date.now(),
+    // Recorded UNARMED: the sweep arms it on its first tick with the view
+    // awake, and only ever advances across awake seconds. A wall-clock
+    // deadline stamped here would come back already spent for a project that
+    // was cached at deletion time, with no window to rescue anything (#11259).
+    expiresAt: null,
+    holdReason: null,
+    pinnedBeforeWorktreeId: getPinnedDeletedWorktreeAnchorId(worktreeId),
+  };
+}
+
+/** Last path segment, or null when the path is empty or all separators. */
+function basenameOf(path: string): string | null {
+  return path.split(/[/\\]/).filter(Boolean).pop() ?? null;
+}
+
+/**
  * Terminals still held by a deleted worktree's row.
  *
  * Mirrors `bulkTrashByWorktree`'s filter exactly (trash + overlay + dialog

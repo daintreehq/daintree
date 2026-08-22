@@ -1,6 +1,9 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
 import type { WorktreeSnapshot, WorktreeEventVersion, AttachIssuePayload } from "@shared/types";
 import { usePanelStore } from "./panelStore";
+// Safe despite the store cycle: `worktreeStore` never imports this module, and
+// the read below happens inside a function, never at module evaluation.
+import { useWorktreeSelectionStore } from "./worktreeStore";
 import { worktreeClient } from "@/clients";
 import {
   captureWorktreeTerminalSnapshot,
@@ -1645,13 +1648,21 @@ export function cleanupOrphanedTerminals(): void {
     }
   }
 
+  // A deleted worktree whose terminals outlived it is not orphaned — it has a
+  // sidebar row holding exactly these panels, and removing them here would
+  // empty the row and destroy the survivors #11232 exists to keep (#11911).
+  // Read live rather than passed in: this runs after hydration has rebuilt the
+  // rows, and the live path can be holding rows at any time.
+  const ghostedWorktreeIds = useWorktreeSelectionStore.getState().deletedWorktrees;
+
   const terminalStore = usePanelStore.getState();
   const orphanedTerminals = terminalStore.panelIds
     .map((id) => terminalStore.panelsById[id])
     .filter((t): t is NonNullable<typeof t> => {
       if (!t) return false;
       const worktreeId = typeof t.worktreeId === "string" ? t.worktreeId.trim() : "";
-      return Boolean(worktreeId && !worktreeIds.has(worktreeId));
+      if (!worktreeId || worktreeIds.has(worktreeId)) return false;
+      return !ghostedWorktreeIds.has(worktreeId);
     });
 
   if (orphanedTerminals.length > 0) {
