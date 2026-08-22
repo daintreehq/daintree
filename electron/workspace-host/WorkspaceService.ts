@@ -2455,9 +2455,10 @@ export class WorkspaceService {
    * `monitors` map is empty (`WorkspaceHostPool.loadProject`).
    *
    * `gitBacked` is deliberately left untouched on the throw path: its `null`
-   * default already means "not classified" to every consumer (#11650), and the
-   * `syncMonitors` self-deletion guard keys on `=== false`, so an unknown
-   * verdict can never arm the hazard #11405 closed.
+   * default already means "not classified" to every consumer (#11650). The
+   * monitor-minting guards were tightened to `!== true` to match, so an unknown
+   * verdict withholds exactly like a proven non-repository and can never arm
+   * the hazard #11405 closed.
    */
   private async isGitRepository(): Promise<boolean> {
     if (!this.git) {
@@ -3720,6 +3721,11 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     // `forgeProbeCwd` falls back to the project root — so without this the
     // matcher relay would spawn `git remote -v` there and, on its bounded
     // re-arm, up to three more times per registry change (#11405 × #11408).
+    // Left at `=== false` where the monitor-minting guards moved to `!== true`:
+    // a matcher push reaching a host whose probe failed can still spawn one
+    // bounded, read-only `git remote -v` against that path. It fails fast and
+    // harmlessly, and tightening it here would block the legitimate cold-start
+    // reselect that lands before a load completes.
     if (this.gitBacked === false) return;
     if (this._shutdownController.signal.aborted) return;
     if (this.forgeReselectTimer) return;

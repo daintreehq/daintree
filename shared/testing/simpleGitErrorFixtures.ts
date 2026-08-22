@@ -7,6 +7,14 @@
  * `"Error: spawn git ENOENT"` and a synthetic errno-bearing cause chain — that
  * satisfied detection which could never fire against the real thing. A fixture
  * that is easier to match than production input tests nothing.
+ *
+ * The fidelity boundary is the classifier's input surface: message text and the
+ * own properties it reads (`message`, `code`, `syscall`, `cause`), captured from
+ * the installed simple-git. These build plain `Error`s rather than simple-git's
+ * `GitError`/`GitPluginError` subclasses, and their `task` carries only
+ * `commands` where a real task also owns `format`, `onError` and `parser` —
+ * none of which any classifier consults. Anything that starts branching on the
+ * prototype or the task shape needs richer fixtures than these.
  */
 
 /**
