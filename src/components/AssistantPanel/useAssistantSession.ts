@@ -39,6 +39,8 @@ export interface AssistantSessionActions {
   submit: (text: string) => boolean;
   interrupt: () => void;
   decideApproval: (approvalId: string, decision: "approved" | "rejected") => void;
+  /** Answer an outstanding question; `index` of -1 dismisses. */
+  answerQuestion: (questionId: string, index: number) => void;
 }
 
 export function useAssistantSession(opts: AssistantSessionOptions): AssistantSessionActions {
@@ -206,35 +208,54 @@ export function useAssistantSession(opts: AssistantSessionOptions): AssistantSes
     safeFireAndForget(window.electron.assistantHost.send(command));
   }, []);
 
-  const submit = useCallback((text: string): boolean => {
-    const sessionId = sessionIdRef.current;
-    // No session yet (still starting) or it has stopped. Report the refusal so the
-    // composer keeps the draft instead of eating it. `connection` is checked as well
-    // as the id because Enter bypasses the disabled Send button, and the window
-    // between "engine exited" and the store settling is exactly when someone who
-    // just typed hits it.
-    if (!sessionId) return false;
-    if (useAssistantStore.getState().connection !== "ready") return false;
-    // Appended locally because the engine does not echo the prompt back — and a
-    // prompt sent mid-turn is folded into the RUNNING turn as an interjection, so
-    // the store's own turn list is the only place a user turn exists.
-    const localTurnId = useAssistantStore.getState().appendUserTurn(text);
-    // The local checks above can only see what the renderer knows. The engine can
-    // exit between them and main receiving this command, in which case main answers
-    // `delivered: false` — and taking that as success leaves a user turn in the
-    // transcript that nothing will ever answer. Take it back out and say so.
-    safeFireAndForget(
-      window.electron.assistantHost
-        .send({ type: "prompt", sessionId, text })
-        .then(({ delivered }) => {
-          if (delivered) return;
-          const store = useAssistantStore.getState();
-          store.dropLocalTurn(localTurnId);
-          store.pushNotice("error", "That message didn't reach the assistant — it has stopped.");
-        })
-    );
-    return true;
-  }, []);
+  const submit = useCallback(
+    (text: string): boolean => {
+      const sessionId = sessionIdRef.current;
+      // No session yet (still starting) or it has stopped. Report the refusal so the
+      // composer keeps the draft instead of eating it. `connection` is checked as well
+      // as the id because Enter bypasses the disabled Send button, and the window
+      // between "engine exited" and the store settling is exactly when someone who
+      // just typed hits it.
+      if (!sessionId) return false;
+      if (useAssistantStore.getState().connection !== "ready") return false;
+      // A slash line is a COMMAND, not conversation. Sending it as a prompt makes the
+      // model answer a question about the word — "/clear" produces prose about clearing
+      // while the conversation stays exactly as it was — and spends a turn doing it. The
+      // engine routes it through the same handler the CLI's REPL uses, so an embedded
+      // session cannot support a different command set from the one the CLI documents.
+      //
+      // The slash must be followed by a letter: "/" alone, or "/tmp/foo" pasted as a
+      // path, is ordinary text someone is typing at the assistant.
+      if (/^\/[a-zA-Z]/.test(text)) {
+        useAssistantStore.getState().appendUserTurn(text);
+        send({ type: "command", sessionId, line: text });
+        return true;
+      }
+
+      // Appended locally because the engine does not echo the prompt back — and a
+      // prompt sent mid-turn is folded into the RUNNING turn as an interjection, so
+      // the store's own turn list is the only place a user turn exists.
+      const localTurnId = useAssistantStore.getState().appendUserTurn(text);
+      // The local checks above can only see what the renderer knows. The engine can
+      // exit between them and main receiving this command, in which case main answers
+      // `delivered: false` — and taking that as success leaves a user turn in the
+      // transcript that nothing will ever answer. Take it back out and say so.
+      safeFireAndForget(
+        window.electron.assistantHost
+          .send({ type: "prompt", sessionId, text })
+          .then(({ delivered }) => {
+            if (delivered) return;
+            const store = useAssistantStore.getState();
+            // Null when the text was QUEUED as an interjection rather than appended as
+            // a turn of its own — there is nothing to take back in that case.
+            if (localTurnId) store.dropLocalTurn(localTurnId);
+            store.pushNotice("error", "That message didn't reach the assistant — it has stopped.");
+          })
+      );
+      return true;
+    },
+    [send]
+  );
 
   const interrupt = useCallback(() => {
     const sessionId = sessionIdRef.current;
@@ -249,5 +270,13 @@ export function useAssistantSession(opts: AssistantSessionOptions): AssistantSes
     [send]
   );
 
-  return { submit, interrupt, decideApproval };
+  const answerQuestion = useCallback(
+    (questionId: string, index: number) => {
+      const sessionId = sessionIdRef.current;
+      if (sessionId) send({ type: "question:answer", sessionId, questionId, index });
+    },
+    [send]
+  );
+
+  return { submit, interrupt, decideApproval, answerQuestion };
 }

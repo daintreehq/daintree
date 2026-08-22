@@ -34,7 +34,7 @@ export function AssistantPanel({
   restartNonce = 0,
   className,
 }: AssistantPanelProps) {
-  const { submit, interrupt, decideApproval } = useAssistantSession({
+  const { submit, interrupt, decideApproval, answerQuestion } = useAssistantSession({
     projectId,
     cwd: projectPath,
     enabled: active,
@@ -54,6 +54,13 @@ export function AssistantPanel({
       routing: s.routing,
       logFile: s.logFile,
       mcpUnavailable: s.mcpUnavailable,
+      mcpToolCount: s.mcpToolCount,
+      commands: s.commands,
+      queuedInterjection: s.queuedInterjection,
+      lastActivityAt: s.lastActivityAt,
+      turnStartedAt: s.turnStartedAt,
+      pendingQuestion: s.pendingQuestion,
+      answeredQuestions: s.answeredQuestions,
       autoApprove: s.autoApprove,
       stoppedReason: s.stoppedReason,
       error: s.error,
@@ -78,6 +85,7 @@ export function AssistantPanel({
       onSubmit={submit}
       onInterrupt={interrupt}
       onDecideApproval={decideApproval}
+      onAnswerQuestion={answerQuestion}
       className={className}
     />
   );
