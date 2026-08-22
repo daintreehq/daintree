@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
-import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, fireEvent, waitFor, act } from "@testing-library/react";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { render, fireEvent, createEvent, waitFor, act } from "@testing-library/react";
 import type { ReactNode } from "react";
 import {
   getPanelKindIds,
@@ -402,6 +402,56 @@ function searchInput(container: HTMLElement): HTMLInputElement {
   const input = container.querySelector("input");
   if (!input) throw new Error("search input not found");
   return input;
+}
+
+function listbox(container: HTMLElement): HTMLElement {
+  const node = container.querySelector<HTMLElement>('[role="listbox"]');
+  if (!node) throw new Error("listbox not found");
+  return node;
+}
+
+const POINTER_FACTORIES = {
+  pointerenter: createEvent.pointerEnter,
+  pointermove: createEvent.pointerMove,
+  pointerleave: createEvent.pointerLeave,
+  pointerover: createEvent.pointerOver,
+} as const;
+
+/**
+ * jsdom defaults `pointerType` to "" and offers no way to set `timeStamp`
+ * through the init dict, so a plain `fireEvent.pointerMove` exercises neither
+ * the mouse-only guard nor the velocity sampler — it just passes through.
+ */
+function firePointer(
+  target: Element,
+  type: keyof typeof POINTER_FACTORIES,
+  sample: { x: number; y: number; t: number }
+): void {
+  const event = POINTER_FACTORIES[type](target, {
+    pointerType: "mouse",
+    clientX: sample.x,
+    clientY: sample.y,
+  });
+  Object.defineProperty(event, "timeStamp", { value: sample.t, configurable: true });
+  fireEvent(target, event);
+}
+
+/**
+ * A row's `onPointerEnter` is synthesised by React from `pointerover`, so a
+ * real `pointerenter` never reaches it — which is why react-testing-library
+ * aliases `fireEvent.pointerEnter` to `pointerOver`. The gate's own listeners
+ * are native and take the real thing.
+ */
+function fireRowEnter(row: Element, sample: { x: number; y: number; t: number }): void {
+  firePointer(row, "pointerover", sample);
+}
+
+/** Two samples 30px apart in 10ms — well past the sweep threshold. */
+function startSweep(container: HTMLElement): void {
+  const list = listbox(container);
+  firePointer(list, "pointerenter", { x: 0, y: 0, t: 0 });
+  firePointer(list, "pointermove", { x: 0, y: 0, t: 0 });
+  firePointer(list, "pointermove", { x: 0, y: 30, t: 10 });
 }
 
 // jsdom implements no layout, so it ships no scrollIntoView at all. The
@@ -1150,6 +1200,141 @@ describe("DockLaunchButton", () => {
       fireEvent.pointerEnter(rows[1]!);
       expect(selectedOption(container)).toBe(rows[1]);
       expect(fireEvent.pointerDown(rows[1]!)).toBe(false);
+    });
+
+    describe("pointer transit is not a choice of row (#11919)", () => {
+      afterEach(() => {
+        vi.useRealTimers();
+      });
+
+      /** The gate only watches an open launcher, and this mock renders rows regardless. */
+      function openLauncher(): void {
+        act(() => popoverOpenChangeSpy!(true));
+      }
+
+      it("leaves the selection alone while a sweep crosses rows to reach a lower one", () => {
+        const { container } = renderButton();
+        openLauncher();
+        const input = searchInput(container);
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+        const chosen = selectedOption(container);
+        expect(chosen).not.toBeNull();
+
+        startSweep(container);
+
+        // Every row the sweep passes announces itself; none of them was picked.
+        const rows = options(container);
+        expect(rows.length).toBeGreaterThan(2);
+        rows.slice(1).forEach((row, offset) => {
+          fireRowEnter(row, { x: 0, y: 32 + offset * 32, t: 12 + offset });
+          expect(selectedOption(container)).toBe(chosen);
+        });
+      });
+
+      it("settles onto the row the sweep stopped on", () => {
+        const { container } = renderButton();
+        openLauncher();
+        const rows = options(container);
+        expect(rows.length).toBeGreaterThan(2);
+        const target = rows[2]!;
+
+        startSweep(container);
+        fireRowEnter(target, { x: 0, y: 30, t: 12 });
+        expect(selectedOption(container)).not.toBe(target);
+
+        // The pointer comes to rest: same position, far enough past the
+        // minimum-suppression floor for the gesture to read as finished.
+        firePointer(listbox(container), "pointermove", { x: 0, y: 30, t: 70 });
+        expect(selectedOption(container)).toBe(target);
+      });
+
+      it("keeps the keyboard's row when the list scrolls under a resting cursor", () => {
+        const { container } = renderButton();
+        openLauncher();
+        const input = searchInput(container);
+        const list = listbox(container);
+        // The cursor is parked in the list and never moves again.
+        firePointer(list, "pointerenter", { x: 0, y: 0, t: 0 });
+
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+        const chosen = selectedOption(container);
+        expect(chosen).not.toBeNull();
+
+        vi.useFakeTimers();
+        // What scrollIntoView does to a stationary pointer: the list moves, and
+        // a row it never chose slides underneath.
+        fireEvent.scroll(list);
+        const slidUnder = options(container).find((row) => row !== chosen)!;
+        fireRowEnter(slidUnder, { x: 0, y: 0, t: 200 });
+        expect(selectedOption(container)).toBe(chosen);
+
+        // And it must still be the keyboard's row once the list stops moving —
+        // a scroll settling says nothing about where the user is pointing.
+        act(() => {
+          vi.advanceTimersByTime(500);
+        });
+        expect(selectedOption(container)).toBe(chosen);
+      });
+
+      it("drops the row it was tracking rather than settling on whatever replaced it", () => {
+        const { container } = renderButton();
+        openLauncher();
+        const rows = options(container);
+        expect(rows.length).toBeGreaterThan(2);
+        const trackedLabel = rows[2]!.textContent;
+
+        startSweep(container);
+        fireRowEnter(rows[2]!, { x: 0, y: 30, t: 12 });
+
+        fireEvent.change(searchInput(container), { target: { value: "claude" } });
+        const filtered = options(container);
+        expect(filtered.length).toBeGreaterThan(0);
+        expect(filtered.map((row) => row.textContent)).not.toContain(trackedLabel);
+        const before = selectedOption(container);
+
+        firePointer(listbox(container), "pointermove", { x: 0, y: 30, t: 70 });
+        expect(selectedOption(container)).toBe(before);
+      });
+
+      it("does not settle a sweep that left the list", () => {
+        const { container } = renderButton();
+        openLauncher();
+        const input = searchInput(container);
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+        const chosen = selectedOption(container);
+        const target = options(container).find((row) => row !== chosen)!;
+
+        vi.useFakeTimers();
+        startSweep(container);
+        fireRowEnter(target, { x: 0, y: 30, t: 12 });
+        firePointer(listbox(container), "pointerleave", { x: 0, y: 400, t: 20 });
+
+        act(() => {
+          vi.advanceTimersByTime(500);
+        });
+        expect(selectedOption(container)).toBe(chosen);
+      });
+
+      it("re-arms after the list empties and comes back", () => {
+        const { container } = renderButton();
+        openLauncher();
+        const input = searchInput(container);
+
+        // Zero results tears the listbox out entirely, taking the gate with it.
+        fireEvent.change(input, { target: { value: "zzzznotarealrow" } });
+        expect(container.querySelector('[role="listbox"]')).toBeNull();
+        fireEvent.change(input, { target: { value: "" } });
+
+        fireEvent.keyDown(input, { key: "ArrowDown" });
+        const chosen = selectedOption(container);
+        expect(chosen).not.toBeNull();
+
+        startSweep(container);
+        const target = options(container).find((row) => row !== chosen)!;
+        fireRowEnter(target, { x: 0, y: 32, t: 12 });
+        expect(selectedOption(container)).toBe(chosen);
+      });
     });
   });
 
