@@ -59,6 +59,9 @@ const SUPERVISOR = join(
   "daintree_pty_supervisor"
 );
 
+/** The vendored Go assistant engine — spawned like any other helper. */
+const ASSISTANT_ENGINE = join(APP_PATH, "Contents", "Resources", "assistant", "daintree-assistant");
+
 const IDENTITY = "Developer ID Application: Greg Priday (ABCDE12345)";
 
 function mockIdentity(value = IDENTITY) {
@@ -153,13 +156,17 @@ describe("resign-helpers-macos", () => {
     expect(mockExecFileSync).toHaveBeenCalledTimes(1);
   });
 
-  it("re-signs both helpers then repairs the bundle seal, in order", async () => {
+  it("re-signs every helper then repairs the bundle seal, in order", async () => {
     mockIdentity();
     await resignHelpers(createContext());
 
-    expect(mockExecFileSync).toHaveBeenCalledTimes(3);
+    // The assistant engine is a spawned helper like the other two: signed through
+    // mac.binaries it inherits the app's restricted audio-input entitlement, and
+    // Tahoe's amfid kills a spawned executable claiming one. Missing it would ship an
+    // app that signs, notarizes and launches — with an assistant that never starts.
+    expect(mockExecFileSync).toHaveBeenCalledTimes(4);
     const targets = mockExecFileSync.mock.calls.map((c: any[]) => c[1][c[1].length - 1]);
-    expect(targets).toEqual([SPAWN_HELPER, SUPERVISOR, APP_PATH]);
+    expect(targets).toEqual([SPAWN_HELPER, SUPERVISOR, ASSISTANT_ENGINE, APP_PATH]);
     // Every codesign invocation is the codesign binary.
     for (const call of mockExecFileSync.mock.calls) {
       expect(call[0]).toBe("codesign");
@@ -170,7 +177,7 @@ describe("resign-helpers-macos", () => {
     mockIdentity();
     await resignHelpers(createContext());
 
-    for (const helper of [SPAWN_HELPER, SUPERVISOR]) {
+    for (const helper of [SPAWN_HELPER, SUPERVISOR, ASSISTANT_ENGINE]) {
       const call = mockExecFileSync.mock.calls.find((c: any[]) => c[1][c[1].length - 1] === helper);
       expect(call).toBeDefined();
       const args: string[] = call![1];
