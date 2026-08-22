@@ -8,6 +8,8 @@ interface HoverSelectionRow {
 interface UseDockLaunchHoverSelectionArgs<Row extends HoverSelectionRow> {
   open: boolean;
   results: readonly Row[];
+  /** The index actually rendered as selected, whoever last moved it. */
+  selectedIndex: number;
   setSelectedIndex: (index: number) => void;
 }
 
@@ -15,8 +17,6 @@ interface UseDockLaunchHoverSelection {
   /** Goes on the listbox host element. Not on a row — see `onHover`. */
   listboxRef: (node: HTMLDivElement | null) => void;
   onHover: (index: number, rowKey: string, pointerType: string) => void;
-  /** Call before any keystroke that moves the selection. */
-  notifyKeyboardSelection: () => void;
 }
 
 /**
@@ -36,6 +36,7 @@ interface UseDockLaunchHoverSelection {
 export function useDockLaunchHoverSelection<Row extends HoverSelectionRow>({
   open,
   results,
+  selectedIndex,
   setSelectedIndex,
 }: UseDockLaunchHoverSelectionArgs<Row>): UseDockLaunchHoverSelection {
   // Paired in one object so a deferred flush can never combine one render's
@@ -51,6 +52,31 @@ export function useDockLaunchHoverSelection<Row extends HoverSelectionRow>({
   // captured then points at a different row by the time it is spent.
   const pendingRowKeyRef = useRef<string | null>(null);
   const controllerRef = useRef<HoverSettleController | null>(null);
+
+  // What this gate last asked for, so the effect below can tell its own writes
+  // apart from everybody else's.
+  const selfSetIndexRef = useRef<number | null>(null);
+  const applySelection = useCallback((index: number) => {
+    selfSetIndexRef.current = index;
+    latestRef.current.setSelectedIndex(index);
+  }, []);
+
+  useLayoutEffect(() => {
+    if (selectedIndex === selfSetIndexRef.current) return;
+    selfSetIndexRef.current = null;
+    // Something other than this gate moved the selection: a keystroke, a query
+    // narrowing the list, a preset expansion splicing rows in. Keying off the
+    // selection rather than off a list of key names is the point — every one of
+    // those routes ends here, and a new one cannot forget to.
+    //
+    // The pointer's last opinion is stale now, and the row that lands under a
+    // resting cursor when the new selection scrolls into view is not a choice
+    // either. Standing hover down here rather than waiting for the scroll event
+    // keeps this ahead of the boundary event that scroll fires, whichever order
+    // the browser emits the two in.
+    pendingRowKeyRef.current = null;
+    controllerRef.current?.listMoved();
+  }, [selectedIndex]);
 
   // State rather than a ref, because the attach effect has to re-run when the
   // node arrives. Radix loads the popover's content lazily, so the listbox can
@@ -71,11 +97,11 @@ export function useDockLaunchHoverSelection<Row extends HoverSelectionRow>({
         // A scroll settling says only that the list stopped moving. Where the
         // cursor happens to have landed is the bug, not the answer.
         if (source !== "pointer" || rowKey === null) return;
-        const { results: liveResults, setSelectedIndex: select } = latestRef.current;
+        const { results: liveResults } = latestRef.current;
         const index = liveResults.findIndex((row) => row.rowKey === rowKey);
         // Filtered away mid-sweep: no fallback. Selecting whatever now sits at
         // that index would be the same guess this whole gate exists to refuse.
-        if (index >= 0) select(index);
+        if (index >= 0) applySelection(index);
       },
     });
     controllerRef.current = controller;
@@ -115,39 +141,33 @@ export function useDockLaunchHoverSelection<Row extends HoverSelectionRow>({
       // intent left to spend.
       controller.destroy();
     };
-  }, [open, listboxNode]);
+  }, [open, listboxNode, applySelection]);
 
   // Stable for the lifetime of the component: every per-render value it needs
   // is read through a ref, so the rows never re-render for this prop and an
   // in-flight suppression is never reset by a keystroke.
-  const onHover = useCallback((index: number, rowKey: string, pointerType: string) => {
-    // Touch and pen have no hover state to protect.
-    if (pointerType !== "mouse") {
-      latestRef.current.setSelectedIndex(index);
-      return;
-    }
+  const onHover = useCallback(
+    (index: number, rowKey: string, pointerType: string) => {
+      // Touch and pen have no hover state to protect (the issue is explicit that
+      // neither gets suppression logic).
+      if (pointerType !== "mouse") {
+        applySelection(index);
+        return;
+      }
 
-    const source = controllerRef.current?.suppressionSource() ?? null;
-    if (source === null) {
-      latestRef.current.setSelectedIndex(index);
-      return;
-    }
+      const source = controllerRef.current?.suppressionSource() ?? null;
+      if (source === null) {
+        applySelection(index);
+        return;
+      }
 
-    // Only a pointer gesture earns a flush when it settles. Nothing needs
-    // clearing when a new episode starts: settle, leave, scroll takeover and
-    // teardown all clear this, so it is already null by then.
-    pendingRowKeyRef.current = source === "pointer" ? rowKey : null;
-  }, []);
+      // Only a pointer gesture earns a flush when it settles. Nothing needs
+      // clearing when a new episode starts: settle, leave, scroll takeover and
+      // teardown all clear this, so it is already null by then.
+      pendingRowKeyRef.current = source === "pointer" ? rowKey : null;
+    },
+    [applySelection]
+  );
 
-  // A keystroke that moves the selection makes the pointer's last opinion
-  // stale, and the row that lands under a resting cursor when the new selection
-  // scrolls into view is not a choice either. Standing hover down here rather
-  // than waiting for the scroll event keeps this off the boundary event the
-  // scroll fires, whichever order the browser emits the two in.
-  const notifyKeyboardSelection = useCallback(() => {
-    pendingRowKeyRef.current = null;
-    controllerRef.current?.listMoved();
-  }, []);
-
-  return { listboxRef, onHover, notifyKeyboardSelection };
+  return { listboxRef, onHover };
 }

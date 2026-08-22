@@ -12,15 +12,18 @@ const ROWS: Row[] = [{ rowKey: "a" }, { rowKey: "b" }, { rowKey: "c" }];
 function Harness({
   results,
   setSelectedIndex,
+  selectedIndex = 0,
   open = true,
 }: {
   results: readonly Row[];
   setSelectedIndex: (index: number) => void;
+  selectedIndex?: number;
   open?: boolean;
 }) {
-  const { listboxRef, onHover, notifyKeyboardSelection } = useDockLaunchHoverSelection({
+  const { listboxRef, onHover } = useDockLaunchHoverSelection({
     open,
     results,
+    selectedIndex,
     setSelectedIndex,
   });
   return (
@@ -36,9 +39,7 @@ function Harness({
           </button>
         ))}
       </div>
-      <button data-testid="navigate" onClick={notifyKeyboardSelection}>
-        navigate
-      </button>
+      <div data-testid="sibling-scroller" />
     </div>
   );
 }
@@ -91,7 +92,9 @@ describe("useDockLaunchHoverSelection", () => {
     expect(setSelectedIndex).toHaveBeenCalledWith(1);
   });
 
-  it.each(["touch", "pen"])("never gates %s, which has no hover to protect", (pointerType) => {
+  // Mouse-only by design: #11919 states plainly that touch and pen get no
+  // suppression logic at all.
+  it.each(["touch", "pen"])("never gates %s", (pointerType) => {
     const { getByTestId, setSelectedIndex } = setup();
     const listbox = getByTestId("listbox");
     startSweep(listbox);
@@ -165,24 +168,41 @@ describe("useDockLaunchHoverSelection", () => {
     const { getByTestId, setSelectedIndex } = setup();
     // A sibling scroller — a terminal streaming output — must not stand the
     // launcher's hover down.
-    fireEvent.scroll(getByTestId("navigate"));
+    fireEvent.scroll(getByTestId("sibling-scroller"));
     enterRow(getByTestId("row-b"), { x: 0, y: 32, t: 0 });
     expect(setSelectedIndex).toHaveBeenCalledWith(1);
   });
 
-  it("drops a sweep's pending row when the keyboard makes a choice first", () => {
+  it("drops a sweep's pending row when something else moves the selection first", () => {
     vi.useFakeTimers();
-    const { getByTestId, setSelectedIndex } = setup();
+    const { getByTestId, rerender, setSelectedIndex } = setup();
     const listbox = getByTestId("listbox");
     startSweep(listbox);
     enterRow(getByTestId("row-c"), { x: 0, y: 64, t: 12 });
 
-    fireEvent.click(getByTestId("navigate"));
+    // A keystroke, a query narrowing the list, a preset expanding — the gate
+    // does not care which. The selection moved and the sweep did not move it.
+    rerender(<Harness results={ROWS} selectedIndex={1} setSelectedIndex={setSelectedIndex} />);
 
     act(() => {
       vi.advanceTimersByTime(500);
     });
     expect(setSelectedIndex).not.toHaveBeenCalled();
+  });
+
+  it("does not stand itself down when the flush is what moved the selection", () => {
+    const { getByTestId, rerender, setSelectedIndex } = setup();
+    const listbox = getByTestId("listbox");
+    startSweep(listbox);
+    enterRow(getByTestId("row-c"), { x: 0, y: 64, t: 12 });
+    settlePointer(listbox);
+    expect(setSelectedIndex).toHaveBeenCalledWith(2);
+
+    // The selection this gate just asked for comes back as a prop. Reading that
+    // as somebody else's move would suppress hover after every hover.
+    rerender(<Harness results={ROWS} selectedIndex={2} setSelectedIndex={setSelectedIndex} />);
+    enterRow(getByTestId("row-b"), { x: 0, y: 32, t: 500 });
+    expect(setSelectedIndex).toHaveBeenLastCalledWith(1);
   });
 
   it("drops a sweep's pending row when the pointer leaves the list", () => {

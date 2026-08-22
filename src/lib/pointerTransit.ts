@@ -245,8 +245,10 @@ export function createHoverSettle(
       // No "is the pointer inside" precondition, unlike the source: that watches
       // every scroll on the page and needs one to tell its own list's movement
       // from the rest. The caller here only reports movement of the list itself,
-      // which is the question `inside` was approximating — and suppressing while
-      // the pointer is elsewhere costs one timer and gates nothing.
+      // which is the question `inside` was approximating. Suppressing while the
+      // pointer is elsewhere costs one timer and, at worst, drops a row entered
+      // inside the settle window — cheap next to reading the list's own movement
+      // as a choice.
       //
       // Whatever the pointer was doing before the list moved is no longer a
       // reading of where it is relative to the rows.
