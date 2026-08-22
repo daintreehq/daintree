@@ -163,9 +163,17 @@ describe("buildDockLaunchModel — panel offering", () => {
     const offered = [...model.dockPanels, ...model.gridPanels].map((p) => p.kindId);
     // Non-dockable kinds are present — previously they were dropped entirely.
     expect(offered).toEqual(expect.arrayContaining(["review", "file-browser", "dev-preview"]));
-    // ...and each landed in the grid group, not the dock group.
+    // ...and each non-dockable one landed in the grid group, not the dock group.
     const dockIds = model.dockPanels.map((p) => p.kindId);
-    expect(dockIds).not.toEqual(expect.arrayContaining(["review", "file-browser", "dev-preview"]));
+    expect(dockIds).not.toEqual(expect.arrayContaining(["review", "dev-preview"]));
+  });
+
+  it("includes File Browser in the dock group now that it is dockable (#11917)", () => {
+    // The heading is a promise about placement, so the kind that just gained
+    // `dockable` has to move sections with it.
+    const model = build();
+    expect(model.dockPanels.map((p) => p.kindId)).toContain("file-browser");
+    expect(model.gridPanels.map((p) => p.kindId)).not.toContain("file-browser");
   });
 
   it("includes File Viewer in the dock group (dockable but previously unlisted)", () => {

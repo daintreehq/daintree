@@ -8,16 +8,12 @@ import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { usePanelStore, useWorktreeSelectionStore } from "@/store";
 import {
-  isBrowserPanel,
   isDockPanel,
-  isFilePanel,
   isPtyPanel,
-  type BrowserPanelData,
   type DockPanelData,
-  type FilePanelData,
   type PanelInstance,
 } from "@shared/types/panel";
-import { extractHostPort } from "@/components/Browser/browserUtils";
+import { dockChipTitle } from "./dockChipTitle";
 import { getRenderablePanel } from "@/store/slices/panelRegistry/selectors";
 import {
   collectUngroupedCandidateIds,
@@ -86,35 +82,6 @@ const EMPTY_DOCK_TERMINALS: readonly DockPanelData[] = [];
 
 interface ContentDockProps {
   density?: DockDensity;
-}
-
-// File name beats the generic kind title in the chip, mirroring FilePane's own
-// title layering (a user-locked rename still wins).
-function fileChipTitle(panel: FilePanelData): string {
-  const fileName = panel.filePath?.split(/[/\\]/).filter(Boolean).pop();
-  return panel.titleMode === "user" ? panel.title : (fileName ?? panel.title);
-}
-
-// Host beats the generic "Browser" title in the chip, mirroring BrowserPane's
-// displayTitle (a page-supplied title still wins; a user-locked rename always
-// wins). Falls back to the kind title when there's no host to show (e.g.
-// about:blank, whose URL.host is empty) so the chip is never blank.
-function browserChipTitle(panel: BrowserPanelData): string {
-  if (panel.titleMode === "user") return panel.title;
-  if (panel.title && panel.title !== "Browser") return panel.title;
-  const currentUrl = panel.browserHistory?.present || panel.browserUrl || "";
-  const host = currentUrl ? extractHostPort(currentUrl) : "";
-  // Ultimate fallback so the chip is never blank (e.g. empty title + no URL).
-  return host || panel.title || "Browser";
-}
-
-// Chip label for a non-PTY dock panel. File and browser get their kind-specific
-// derivations; every other dockable kind (dev-preview if opted in, plugin view
-// panels — #11332) falls back to the panel title so the chip is never blank.
-function dockChipTitle(panel: PanelInstance): string {
-  if (isFilePanel(panel)) return fileChipTitle(panel);
-  if (isBrowserPanel(panel)) return browserChipTitle(panel);
-  return panel.title;
 }
 
 export function ContentDock({ density = "normal" }: ContentDockProps) {

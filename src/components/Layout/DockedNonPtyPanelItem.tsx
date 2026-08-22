@@ -22,16 +22,17 @@ import { DockPopoverChildProvider } from "@/components/ui/DockPopoverChildContex
 interface DockedNonPtyPanelItemProps {
   /**
    * Any non-PTY dock panel. The chip only reads `id`/`kind`/`title`, so it
-   * hosts file, browser, and plugin view kinds alike (#11332); the caller
-   * derives the label per kind via `dockChipTitle`.
+   * hosts file, browser, file-browser, and plugin view kinds alike (#11332,
+   * #11917); the caller derives the label per kind via `dockChipTitle`.
    */
   panel: PanelInstance;
-  /** Chip label, derived per-kind by the caller (file name, browser host, …). */
+  /** Chip label, derived per-kind by the caller (file name, host, folder, …). */
   displayTitle: string;
 }
 
 /**
- * Dock chip for a non-PTY content panel (file viewer, browser, plugin view).
+ * Dock chip for a non-PTY content panel (file viewer, browser, file browser,
+ * plugin view).
  * Mirrors DockedTerminalItem's popover + stable-wrapper relocation flow, minus
  * everything PTY: no renderer policies, no xterm fit, no agent state. The
  * panel's React subtree lives in DockPanelOffscreenContainer and is moved (not

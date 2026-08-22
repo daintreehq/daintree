@@ -5,6 +5,11 @@
  * `titleMode: "custom"` is how an assistant-named agent launch pins its title so
  * the identity reducer's agent-detected/exited rewrites skip it. The field was
  * previously dropped on the floor between AddPanelOptions and the panel object.
+ *
+ * The non-PTY half (#11917) kept dropping it long after the PTY half was fixed:
+ * persistence writes the mode and hydration forwards it, so a restored file
+ * viewer or file browser kept the name a rename gave it while losing the
+ * ownership that stops a derived surface — the dock chip — from overriding it.
  */
 
 import { describe, it, expect, beforeEach, vi } from "vitest";
@@ -129,6 +134,37 @@ describe("addPanel titleMode propagation (#10439)", () => {
     expect(id).toBe("default-1");
     const panel = getPtyPanel("default-1");
     expect(panel?.titleMode).toBeUndefined();
+  });
+
+  it("stamps titleMode onto a non-PTY panel too, the way hydration replays it", async () => {
+    const { addPanel } = usePanelStore.getState();
+    const id = await addPanel({
+      kind: "file-browser",
+      title: "My notes",
+      titleMode: "user",
+      requestedId: "fb-named",
+      cwd: "/",
+      bypassLimits: true,
+    });
+
+    expect(id).toBe("fb-named");
+    const panel = usePanelStore.getState().panelsById["fb-named"];
+    expect(panel?.title).toBe("My notes");
+    expect(panel?.titleMode).toBe("user");
+  });
+
+  it("leaves a non-PTY panel's titleMode unset when the caller supplies none", async () => {
+    const { addPanel } = usePanelStore.getState();
+    const id = await addPanel({
+      kind: "file-browser",
+      title: "Files — develop",
+      requestedId: "fb-default",
+      cwd: "/",
+      bypassLimits: true,
+    });
+
+    expect(id).toBe("fb-default");
+    expect(usePanelStore.getState().panelsById["fb-default"]?.titleMode).toBeUndefined();
   });
 });
 

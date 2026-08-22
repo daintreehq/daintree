@@ -313,9 +313,9 @@ function PanelHeaderComponent({
   const isHibernated = useIsHibernated(id);
 
   // Whether the overflow "..." menu has any items to show.
-  // Dock membership is capability-gated: PTY kinds plus non-PTY kinds that
-  // opt in via the registry's `dockable` flag (file panels — #10985).
-  // Offering the affordance for any other kind would silently strand it.
+  // Dock membership is capability-gated by the registry: kinds are dockable by
+  // default and a handful opt out with `dockable: false` (#10985, #11917).
+  // Offering the affordance for an opted-out kind would silently strand it.
   const showMoveToDock =
     !!onMinimize && !isMaximized && location !== "dock" && panelKindIsDockable(kind);
   const hasOverflowItems = true;
