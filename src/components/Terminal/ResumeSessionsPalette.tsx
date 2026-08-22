@@ -231,7 +231,10 @@ export function ResumeSessionsPalette() {
         <PaletteFooterHints
           primaryHint={{
             keys: ["↵"],
-            label: selected ? `to resume ${selected.name.toLowerCase()}` : "to resume",
+            // `name` is already "Resume: <title>" (see resumeSessionItems.ts),
+            // so prefixing "resume" again read as "to resume resume: fix
+            // same-day statement ordering".
+            label: selected ? `to ${selected.name.toLowerCase()}` : "to resume",
           }}
         />
       </AppPaletteDialog.Footer>

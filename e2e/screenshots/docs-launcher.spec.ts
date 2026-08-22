@@ -17,7 +17,7 @@ import { createAtlasLedgerRepo, attachLocalOrigin, DOCS_DEMO_ROOT } from "../hel
 import { createCapture, resetOverlays, POLISH_CSS } from "../helpers/docsCapture";
 import { bootDocsApp, DIALOG_PAD } from "../helpers/docsBoot";
 import { installFakeAgent, fakeAgentEnv } from "../helpers/fakeAgent";
-import { launchDocsAgent } from "../helpers/docsAgents";
+import { launchDocsAgent, worktreeIdFor } from "../helpers/docsAgents";
 import { writeResourceConfig, createWorktree } from "../helpers/resource-lifecycle";
 import type { DemoRepo } from "../helpers/screenshotFixtures";
 
@@ -207,32 +207,39 @@ test.describe.serial("Documentation Screenshots — Launcher", () => {
         await resetOverlays(page);
         await createWorktree(page, "feature/sandbox-check");
         await page.waitForTimeout(T_LONG);
+
+        // The trigger does not exist until the resource has reported a status
+        // at least once. A fresh worktree has never been checked, which is why
+        // the earlier version of this scene clicked a control that was really
+        // the inert fallback icon — same corner of the card, no popover behind
+        // it. Prime the state the fake lifecycle script reads, then ask for a
+        // status explicitly rather than waiting out the 30s poll.
+        writeFileSync(
+          path.join(repo.dir, ".daintree", "resource-state.json"),
+          JSON.stringify({ status: "running", endpoint: "https://sandbox-7f2a.fly.dev" })
+        );
+        const worktreeId = await worktreeIdFor(page, "feature/sandbox-check");
+        await page.evaluate(
+          (id) =>
+            window.__daintreeDispatchAction?.(
+              "worktree.resource.status",
+              { worktreeId: id },
+              { source: "user" }
+            ),
+          worktreeId
+        );
+
         const card = page.locator(SEL.worktree.card("feature/sandbox-check")).first();
-        await expect(card).toBeVisible({ timeout: T_LONG });
+        // `data-resource-status` is the deterministic gate: the trigger cannot
+        // be in the DOM before it flips.
+        await expect
+          .poll(() => card.getAttribute("data-resource-status"), { timeout: T_LONG * 3 })
+          .toBe("running");
         await card.hover();
-        // The control is labelled by the mode the resource is in, and a fresh
-        // worktree's resource starts stopped — so it reads "Resume Resource"
-        // until it has been provisioned. Provision first, then the status
-        // popover has something to report.
-        const resume = card.locator('[aria-label="Resume Resource"]').first();
-        if (await resume.isVisible({ timeout: T_MEDIUM }).catch(() => false)) {
-          await resume.click();
-          await page.waitForTimeout(T_LONG);
-        }
-        await card.hover();
-        // Candidates in order: the explicit status label if the build has
-        // one, the resource control the card actually exposes, then the
-        // card's own "Show details" disclosure.
-        const trigger = card
-          .locator(
-            '[aria-label$="environment status"], [aria-label*="Resource"], [aria-label="Show details"]'
-          )
-          .first();
-        await expect(trigger).toBeVisible({ timeout: T_LONG });
-        await trigger.click();
+        await card.locator('[aria-label$="environment status"]').first().click();
         const popover = page
-          .locator('[role="dialog"], [data-radix-popper-content-wrapper]')
-          .filter({ hasText: /status|endpoint|checked/i })
+          .locator("[data-radix-popper-content-wrapper]")
+          .filter({ hasText: "Check Status" })
           .last();
         await expect(popover).toBeVisible({ timeout: T_LONG });
         await page.waitForTimeout(T_SHORT);
@@ -240,7 +247,7 @@ test.describe.serial("Documentation Screenshots — Launcher", () => {
           page,
           popover,
           "worktrees/remote-compute/worktrees-environment-popover",
-          16
+          12
         );
       });
     } finally {

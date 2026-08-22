@@ -783,6 +783,14 @@ test.describe.serial("Documentation Screenshots", () => {
           await page.mouse.wheel(0, 420);
         }
         await page.waitForTimeout(T_MEDIUM);
+        // The scroll left the Project Recipes row half out of the dialog, so
+        // "Never used" was clipped mid-line. Land on the last row instead of
+        // on the section heading above it.
+        const lastRow = page.locator('text=/Never used|Last used/').last();
+        if (await lastRow.isVisible({ timeout: T_SHORT }).catch(() => false)) {
+          await lastRow.scrollIntoViewIfNeeded();
+          await page.waitForTimeout(T_MEDIUM);
+        }
         await snapWindow(page, "recipes/recipes-recipe-manager");
       });
 
@@ -795,6 +803,17 @@ test.describe.serial("Documentation Screenshots", () => {
         await newRecipe.click();
         await expect(page.locator(SEL.recipeEditor.nameInput)).toBeVisible({ timeout: T_MEDIUM });
         await page.locator(SEL.recipeEditor.nameInput).fill("Full Stack Dev");
+        // The editor's sticky footer sat over the After Exit control, hiding
+        // the selector the surrounding prose is about. Scroll the panel card
+        // clear of it before the shutter.
+        const afterExit = page.locator('text=/After Exit/i').first();
+        if (await afterExit.isVisible({ timeout: T_SHORT }).catch(() => false)) {
+          await afterExit.evaluate((el) => {
+            (el as HTMLElement).style.scrollMarginBottom = "120px";
+            el.scrollIntoView({ block: "end", behavior: "auto" });
+          });
+          await page.waitForTimeout(T_MEDIUM);
+        }
         await page.waitForTimeout(T_SHORT);
         await snapWindow(page, "recipes/recipes-recipe-editor");
         await resetOverlays(page);

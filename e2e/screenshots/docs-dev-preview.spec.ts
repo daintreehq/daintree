@@ -129,7 +129,26 @@ test.describe.serial("Documentation Screenshots — Dev Preview", () => {
         // site header painted and a fragment of the hero spilling outside it.
         // Wait for the reload to settle the same way the first shot does.
         await waitForGuest(page);
-        await page.waitForTimeout(6_000);
+        // `waitForGuest` returns on the guest existing, not on it having
+        // painted its body — the previous attempt still caught a bare header
+        // with a clipped fragment of the hero. Poll the guest itself for real
+        // laid-out content before the shutter.
+        await expect
+          .poll(
+            async () =>
+              page
+                .locator("webview")
+                .first()
+                .evaluate(
+                  (el) =>
+                    (el as unknown as { executeJavaScript(s: string): Promise<number> })
+                      .executeJavaScript("document.body ? document.body.scrollHeight : 0")
+                )
+                .catch(() => 0),
+            { timeout: 45_000, intervals: [1_000] }
+          )
+          .toBeGreaterThan(1_200);
+        await page.waitForTimeout(4_000);
         await cap.snapWindow(page, "dev-preview/tools/dev-preview-device-emulation");
       });
 
@@ -147,7 +166,16 @@ test.describe.serial("Documentation Screenshots — Dev Preview", () => {
         if (!box) throw new Error("dev preview panel has no layout");
         // Band the bottom of the panel: the drawer is the subject, and the
         // page above it is the same pixels as the previous shot.
-        const height = Math.min(360, box.height);
+        // 360 sliced through the last diagnostics row. Take the drawer from
+        // its own top edge instead of guessing a height.
+        const drawer = await page
+          .locator('[role="tab"]')
+          .filter({ hasText: /Diagnostics/i })
+          .first()
+          .boundingBox();
+        const height = drawer
+          ? Math.min(box.y + box.height - (drawer.y - 12), box.height)
+          : Math.min(360, box.height);
         await cap.snapBand(page, "dev-preview/tools/dev-preview-diagnostics-tab", {
           x: box.x,
           y: box.y + box.height - height,

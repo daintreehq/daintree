@@ -25,7 +25,7 @@ import { closeApp, type AppContext } from "../helpers/launch";
 import { SEL } from "../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG } from "../helpers/timeouts";
 import { createAtlasLedgerRepo, attachLocalOrigin, DOCS_DEMO_ROOT } from "../helpers/docsFixtures";
-import { createCapture, resetOverlays } from "../helpers/docsCapture";
+import { createCapture, resetOverlays, settleFrame } from "../helpers/docsCapture";
 import { bootDocsApp, DOCS_WINDOW, DOCS_WINDOW_TALL, DIALOG_PAD } from "../helpers/docsBoot";
 import type { DemoRepo } from "../helpers/screenshotFixtures";
 
@@ -140,6 +140,17 @@ test.describe.serial("Documentation Screenshots — Troubleshooting", () => {
       // its own caption.
       await cap.shot("troubleshooting/diagnostics/diagnostics-dock-tabs", async () => {
         await cap.requireSurface(page, SEL.diagnostics.tabList, "diagnostics tab strip");
+        // The v4 attempt shipped a crop of the right region with nothing in
+        // it: the dock's own `bg/95 backdrop-blur-sm` over an unpainted body,
+        // so the shot was the blurred workspace showing through. A visible tab
+        // strip was not enough of a gate — assert a row of the table the shot
+        // is actually of, and let it settle.
+        await expect(dock.getByText("Terminal 'dev server' exited with code 1")).toBeVisible({
+          timeout: T_LONG,
+        });
+        await expect(dock.getByText("Problems")).toBeVisible({ timeout: T_MEDIUM });
+        await settleFrame(page);
+        await page.waitForTimeout(T_MEDIUM);
         await cap.snapElement(page, dock, "troubleshooting/diagnostics/diagnostics-dock-tabs", 8);
       });
 

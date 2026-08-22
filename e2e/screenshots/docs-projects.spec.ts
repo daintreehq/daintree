@@ -319,10 +319,15 @@ test.describe.serial("Documentation Screenshots — Projects", () => {
         // expands it, and without this the shot silently re-captured the
         // collapsed one-line strip.
         await expect(page.locator(SEL.pulse.heatmap)).toBeVisible({ timeout: T_LONG });
+        // `.last()` on a legend-containing div lands on an inner wrapper, which
+        // is why this used to crop through the header and lose the card's
+        // title and its range controls. Anchor on the heading instead and take
+        // the outermost div that holds both it and the legend.
         const card = page
           .locator("div")
+          .filter({ has: page.getByText(/Project Pulse$/) })
           .filter({ has: page.locator(SEL.pulse.legend) })
-          .last();
+          .first();
         await expect(card).toBeVisible({ timeout: T_LONG });
         // Force a health re-fetch so the stub is what the chips render from.
         await page.locator('[aria-label="Refresh"]').first().click().catch(() => {});
@@ -482,9 +487,21 @@ test.describe.serial("Documentation Screenshots — Projects", () => {
                                latestUnacknowledgedCompletionAt: Date.now() - 12 * 60_000 },
         });
         await page.waitForTimeout(T_MEDIUM);
-        const section = palette.getByText("Scratch", { exact: false }).first();
-        await section.scrollIntoViewIfNeeded().catch(() => {});
+        // Scroll to the *end* of the section, not its heading: "Delete all
+        // scratch workspaces" sits below the create button and was falling
+        // outside the frame, so the shot showed a section that looked like it
+        // had no bulk action.
+        await palette
+          .getByText("Delete all scratch workspaces")
+          .first()
+          .scrollIntoViewIfNeeded()
+          .catch(async () => {
+            await palette.getByText("Scratch", { exact: false }).first().scrollIntoViewIfNeeded();
+          });
         await expect(palette.getByText("New scratch workspace")).toBeVisible({ timeout: T_LONG });
+        await expect(palette.getByText("Delete all scratch workspaces")).toBeVisible({
+          timeout: T_LONG,
+        });
         await page.waitForTimeout(T_SHORT);
         await cap.snapElement(
           page,

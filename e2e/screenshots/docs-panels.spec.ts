@@ -308,7 +308,24 @@ test.describe.serial("Documentation Screenshots — Panels", () => {
         const portal = page.locator('aside[aria-label="Portal"]');
         await expect(portal).toBeVisible({ timeout: T_LONG });
         await page.waitForTimeout(T_MEDIUM);
-        await cap.snapElement(page, portal, "portal-browser/portal-launchpad", 0);
+        // The rail runs the full height of the window and its list is short,
+        // so an element capture is more than half empty. End the band just
+        // below the last row.
+        const railBox = await portal.boundingBox();
+        const rows = await portal.locator("button, a").all();
+        let lastBottom = 0;
+        for (const row of rows) {
+          const b = await row.boundingBox();
+          if (b) lastBottom = Math.max(lastBottom, b.y + b.height);
+        }
+        if (!railBox) throw new Error("portal rail has no layout");
+        const railHeight = lastBottom > railBox.y ? lastBottom - railBox.y + 16 : railBox.height;
+        await cap.snapBand(page, "portal-browser/portal-launchpad", {
+          x: railBox.x,
+          y: railBox.y,
+          width: railBox.width,
+          height: Math.min(railHeight, railBox.height),
+        });
         await dispatch(page, "portal.toggle");
       });
 
@@ -398,6 +415,15 @@ test.describe.serial("Documentation Screenshots — Panels", () => {
 
       await cap.shot("portal-browser/browser-panels/browser-panels-host-approval", async () => {
         await resetOverlays(page);
+        // A host approved by an earlier scene in this profile would suppress
+        // the prompt outright, and the failure would look like a timing bug.
+        await page.evaluate(() => {
+          window.__daintreeDispatchAction?.(
+            "project.saveSettings",
+            { browserAllowedHosts: [] },
+            { source: "user" }
+          );
+        });
         await openBrowser(page);
         const panel = page
           .locator(SEL.panel.gridPanel)
@@ -410,9 +436,12 @@ test.describe.serial("Documentation Screenshots — Panels", () => {
         // Note the field eats the scheme as you type: this lands as
         // "//staging.atlas-ledger.dev:3000", which normalizes back to http on
         // submit. Asserting on the full typed string would never pass.
-        await bar.type("http://staging.atlas-ledger.dev:3000", { delay: 10 });
+        await bar.fill("http://staging.atlas-ledger.dev:3000");
         await expect(bar).toHaveValue(/staging\.atlas-ledger\.dev/, { timeout: T_MEDIUM });
-        await page.keyboard.press("Enter");
+        // Press on the input, not on the page. A page-level Enter was landing
+        // somewhere else entirely — the panel stayed on its default
+        // localhost:3000 and no prompt was ever raised.
+        await bar.press("Enter");
         // The banner is up within half a second and stays; give it a beat
         // rather than racing the first paint.
         await page.waitForTimeout(1500);
@@ -437,6 +466,10 @@ test.describe.serial("Documentation Screenshots — Panels", () => {
           timeout: T_LONG * 2,
         });
         await expect(panel).toContainText("staging.atlas-ledger.dev", { timeout: T_MEDIUM });
+        // Single-node handle, immune to the text being split across spans.
+        await expect(panel.locator('[aria-label="Dismiss host approval"]')).toBeVisible({
+          timeout: T_MEDIUM,
+        });
         const box = await panel.boundingBox();
         if (!box) throw new Error("browser panel has no layout");
         await cap.snapBand(page, "portal-browser/browser-panels/browser-panels-host-approval", {

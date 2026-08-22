@@ -140,7 +140,7 @@ test.describe.serial("Documentation Screenshots — Tools", () => {
         // tooltip renders straight over the dropdown.
         await page.mouse.move(20, 400);
         await page.waitForTimeout(T_SHORT);
-        await cap.snapElement(page, panel, "copytree/copytree-recents-dropdown", 40);
+        await cap.snapElement(page, panel, "copytree/copytree-recents-dropdown", 8);
         await resetOverlays(page);
       });
 
@@ -163,7 +163,7 @@ test.describe.serial("Documentation Screenshots — Tools", () => {
         await expect(result).toBeVisible({ timeout: T_LONG });
         await result.scrollIntoViewIfNeeded();
         await page.waitForTimeout(T_SHORT);
-        await cap.snapElement(page, result, "copytree/copytree-test-config-result", 24);
+        await cap.snapElement(page, result, "copytree/copytree-test-config-result", 8);
         await resetOverlays(page);
       });
 
@@ -191,12 +191,21 @@ test.describe.serial("Documentation Screenshots — Tools", () => {
         });
         await page.waitForTimeout(T_SHORT);
         const card = row.locator("xpath=..");
-        await cap.snapElement(
-          page,
-          card,
-          "daintree-assistant/daintree-assistant-blast-radius",
-          20
-        );
+        // The card is taller than the settings scrollport. An element capture
+        // clips to the element box, which runs past what was ever painted and
+        // fills the tail of the shot with black — so clamp the band to the
+        // panel's own bottom edge instead.
+        const cardBox = await card.boundingBox();
+        const shell = await page.locator("div.settings-shell").first().boundingBox();
+        if (!cardBox || !shell) throw new Error("blast radius card has no layout");
+        const top = Math.max(cardBox.y - 12, shell.y + 4);
+        const bottom = Math.min(cardBox.y + cardBox.height + 12, shell.y + shell.height - 8);
+        await cap.snapBand(page, "daintree-assistant/daintree-assistant-blast-radius", {
+          x: cardBox.x - 12,
+          y: top,
+          width: cardBox.width + 24,
+          height: bottom - top,
+        });
         await resetOverlays(page);
       });
 
@@ -320,7 +329,8 @@ test.describe.serial("Documentation Screenshots — Tools", () => {
               x,
               y: Math.max(0, bell.y - 10),
               width: Math.min(size.w - x, 540),
-              height: Math.min(size.h - bell.y, 440),
+              // 440 ran through the middle of the row after "Agent finished".
+              height: Math.min(size.h - bell.y, 386),
             }
           );
           await resetOverlays(page);
