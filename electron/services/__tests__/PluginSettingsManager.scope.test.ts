@@ -33,6 +33,7 @@ function manifestWith(settings: SettingDefinition[]): PluginManifest {
       fileDecorationProviders: [],
       agents: [],
       processTools: [],
+      recipes: [],
       settings,
     },
   };

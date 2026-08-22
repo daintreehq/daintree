@@ -68,8 +68,12 @@ vi.mock("../../../../shared/config/agentRegistry.js", () => ({
   isRegisteredAgent: vi.fn(() => false),
   getAssistantWiredAgentIds: vi.fn(() => ["claude"]),
   getEffectiveAgentConfig: vi.fn((id: string) => {
-    if (id === "claude") return { resume: { kind: "session-id" } };
+    // The pattern is load-bearing: bookmarking gates on the id being
+    // OBSERVABLE, not merely on the resume kind (#11851).
+    if (id === "claude")
+      return { resume: { kind: "session-id", sessionIdPattern: "claude --resume ([\\w-]+)" } };
     if (id === "rolling") return { resume: { kind: "rolling-history" } };
+    if (id === "uncapturable") return { resume: { kind: "session-id" } };
     return undefined;
   }),
 }));
@@ -194,6 +198,18 @@ describe("prepareBookmark handler", () => {
 
   it("rejects NOT_BOOKMARKABLE for an agent without exact-session resume", async () => {
     ptyClient.getTerminalAsync.mockResolvedValue({ ...agentInfo, launchAgentId: "rolling" });
+    register();
+    await expect(
+      handlerFor(CHANNELS.AGENT_SESSION_PREPARE_BOOKMARK)({}, { terminalId: "term-1", label: "L" })
+    ).rejects.toMatchObject({ code: "NOT_BOOKMARKABLE" });
+    expect(ptyClient.gracefulKill).not.toHaveBeenCalled();
+  });
+
+  it("rejects NOT_BOOKMARKABLE before killing a pane whose id is unobservable", async () => {
+    // An agent can resume by exact id yet have no way to LEARN one (#11851 —
+    // Antigravity, 0 captures in 6). Gating on the resume kind alone would tear
+    // down the user's live agent and only then report that nothing was saved.
+    ptyClient.getTerminalAsync.mockResolvedValue({ ...agentInfo, launchAgentId: "uncapturable" });
     register();
     await expect(
       handlerFor(CHANNELS.AGENT_SESSION_PREPARE_BOOKMARK)({}, { terminalId: "term-1", label: "L" })

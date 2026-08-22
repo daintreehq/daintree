@@ -146,7 +146,7 @@ const copyTreeRunNameField = z
   .string()
   .optional()
   .describe(
-    "Short human-readable label for this copy tree, shown in the user's copy-tree history and in the completion notification. Use 2 to 4 words describing what the context is for, for example 'auth flow context'. Omit it and the notification stays unlabelled, while the history entry keeps the label it already has or, if this selection is new, one derived from it."
+    "Short human-readable label for this copy tree, shown in the user's copy-tree history and in the completion notification. Use 2 to 4 words, for example 'auth flow context'. Omitted, the notification is unlabelled and the history entry keeps or derives its own label."
   );
 
 /**
@@ -285,7 +285,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       id: "system.getResourceProfileSnapshot",
       title: "Get Resource Profile Snapshot",
       description:
-        "Read how much pressure the host machine is under and which adaptive performance mode is in effect. Use this to judge whether there is headroom before launching more agents or heavy work. Some readings are platform-specific and report as unknown elsewhere. It never fails — while the service is still starting it returns a neutral baseline, so treat an unremarkable reading early in a session with some caution.",
+        "Read how much pressure the host machine is under and which adaptive performance mode is in effect. Use this to judge whether there is headroom before launching more agents or heavy work. Some readings are platform-specific and report as unknown elsewhere. It never fails: while the service is starting it returns a neutral baseline, so treat an unremarkable early reading with caution.",
       category: "system",
       kind: "query",
       danger: "safe",
@@ -466,7 +466,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       id: "copyTree.generate",
       title: "Generate CopyTree Context",
       description:
-        "Bundle a worktree's file tree and selected file contents into a context dump written to a temporary file, and return its path. Use this to hand a large codebase context to something that can read a file; inject directly into a terminal instead when the target is an agent. The bundle routinely runs to tens of megabytes and is never returned inline. Check the budget flags before trusting it as complete, and read the file promptly — it is pruned by age.",
+        "Bundle a worktree's file tree and selected file contents into a context dump on disk, and return its path. Use it to hand a large codebase context to something that can read a file; inject into a terminal when the target is an agent. The bundle routinely runs to tens of megabytes and is never returned inline. Check the budget flags before trusting it, and read it promptly: it is pruned by age.",
       category: "copyTree",
       kind: "query",
       danger: "safe",
@@ -492,6 +492,15 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       // an MCP outputSchema when this flag is set too.
       mcpOutputSchema: true,
       run: async (args, ctx: ActionContext) => {
+        // Deliberately NOT bracketed into the shared run store, unlike the two
+        // clipboard siblings. That store drives the toolbar button's spinner,
+        // and the button also goes aria-disabled while it spins — so bracketing
+        // an assistant's background bundle would take the user's own control
+        // away for the seconds the agent is working, which is the "hostage UI"
+        // anti-pattern (NN/g "user control and freedom"). This endpoint has no
+        // human route at all, so the in-flight signal belongs where the work is
+        // visible — the assistant panel that started it — and only the
+        // COMPLETION comes back to the button below.
         const result = await copyTreeClient.generate(
           requireWorktreeId(args, ctx),
           args?.options,
@@ -504,41 +513,60 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
         // "generated"/"bundled", never "copied": this writes a temp file and
         // never touches the clipboard, so the clipboard wording would be false.
         // Ordered after both failure checks so a bundle that never landed can't
-        // announce success. No `context.worktreeId` — see the note on
-        // generateAndCopyFile below (#11735).
+        // announce success.
         //
-        // `priority: "low"` — inbox only, no toast, unlike the other two
-        // copy-tree completions. This action is `kind: "query"`, so
-        // `useActionPalette` (which drops everything but `kind: "command"`)
-        // never surfaces it: there is no human route at all, only MCP and the
-        // in-app assistant, and it sits in WORKBENCH_TIER_TOOLS beside pure
-        // reads like `file.read` and `worktree.list`. It writes a temp file and
-        // hands the path back to the calling agent — nothing the user owns
-        // changes, which is exactly what justifies the toast on
-        // generateAndCopyFile, whose whole point is that it silently replaces
-        // the clipboard. A toast is the most-restricted surface, and for a
-        // routine agent read it fails the notify() gate on "helpful next
-        // step?": the user never sees the temp path and can do nothing with it.
-        // Low keeps the durable "an agent bundled the codebase" inbox row
-        // without interrupting. It is also why this call carries no
-        // `notify-no-action` opt-out where its two siblings below do:
-        // `priority: "low"` is itself one of the sanctioned exits from the
-        // unprotected-success-toast rule, so a disable here would be dead.
-        notify({
-          type: "success",
-          title: copyTreeRunTitle("Context generated", args?.name),
-          message: formatCopyResultMessage(
-            {
-              fileCount: result.fileCount,
-              stats: result.stats,
-              format: args?.options?.format,
-            },
-            "temporary-file"
-          ),
-          priority: "low",
-          rateLimitKey: "copyTree.generate",
-          context: { eventKind: "agent" },
-        });
+        // Announced through the same button-anchored presenter as the two
+        // clipboard siblings rather than the inbox-only notify it used to
+        // raise. The old gate reasoned from "nothing the user owns changes",
+        // which is true of the temp file but wrong about the event: this is the
+        // endpoint the in-app assistant lands on by default, so inbox-only made
+        // its most common context action one the user had to go looking for.
+        // The inbox row does survive a restart (notificationHistorySlice
+        // persists `entries`), so what was missing was never durability — it
+        // was any surface at the moment it happened.
+        //
+        // Degrades the way its siblings do: the presenter takes it when the
+        // button can carry it, otherwise `announceCopyTreeCopy` re-routes to
+        // notify(). Note that is a toast only while the window is FOCUSED —
+        // notify() sends a blurred high-priority event to the inbox instead
+        // (`shouldToast` in lib/notify.ts) — which is the same condition the
+        // presenter declines on, so a completion that lands on a blurred
+        // window is inbox-only by design at both layers.
+        announceCopyTreeCopy(
+          {
+            // Names the actor rather than reporting the change passively: an
+            // unattributed autonomous state change is a transparency failure
+            // under every current human-AI guideline (MS HAX G1/G11, Google
+            // PAIR "mental models", IBM Carbon's AI labelling), and passive
+            // "Context generated" reads as the user's own earlier click
+            // landing late.
+            //
+            // "Agent", not "Assistant", and deliberately so. `dispatchSource`
+            // cannot identify WHICH agent: useMcpBridge dispatches every MCP
+            // origin as "agent", and this action sits in WORKBENCH_TIER_TOOLS,
+            // which a normal Claude pane reaches through its own per-pane
+            // bearer token (terminal/lifecycle.ts mints one for every Claude
+            // launch when the project's MCP tier is on). Naming the in-app
+            // assistant here would misattribute any grid agent's bundle to it —
+            // the exact failure the attribution exists to prevent. The trusted
+            // signal is `McpSessionOrigin`, which main already computes but
+            // does not thread into ActionContext; until it does, "Agent" is the
+            // most specific thing that is true.
+            title: copyTreeRunTitle(
+              ctx.dispatchSource === "agent" ? "Agent generated context" : "Context generated",
+              args?.name
+            ),
+            message: formatCopyResultMessage(
+              {
+                fileCount: result.fileCount,
+                stats: result.stats,
+                format: args?.options?.format,
+              },
+              "temporary-file"
+            ),
+          },
+          "copyTree.generate"
+        );
         // Projected explicitly rather than passed through. Dispatch does parse
         // results against `resultSchema` now (#11539), but building the result
         // here is still what keeps the bundle off the wire: a parse would reject
@@ -567,7 +595,7 @@ export function registerSystemActions(actions: ActionRegistry, _callbacks: Actio
       id: "copyTree.generateAndCopyFile",
       title: "Generate And Copy Context",
       description:
-        "Bundle a worktree's context to a file and put it on the system clipboard, replacing what the user had copied. Selection can mix exact files with globs, so this assembles a curated bundle of scattered related files, their supporting code and tests, rather than the whole worktree. Agent and MCP callers must name the worktree instead of relying on whichever is active. macOS and Linux copy the file, Windows its path. Never returned inline; check the budget flags for completeness.",
+        "Bundle a worktree's context to a file and onto the system clipboard, replacing what the user had copied. Selection mixes exact files with globs, so this assembles a curated bundle rather than the whole worktree. Agent and MCP callers must name the worktree, not rely on the active one. macOS and Linux copy the file, Windows its path. Never returned inline; check the budget flags for completeness.",
       category: "copyTree",
       kind: "command",
       danger: "safe",

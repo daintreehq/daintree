@@ -11,7 +11,6 @@ import { isAssistantOnlyAgentId } from "../shared/config/agentIds.js";
 import type { CliAvailabilityService } from "./services/CliAvailabilityService.js";
 import { isAgentInstalled } from "../shared/utils/agentAvailability.js";
 import * as CliInstallService from "./services/CliInstallService.js";
-import * as FinderQuickActionService from "./services/FinderQuickActionService.js";
 import { getWindowRegistry } from "./window/windowRef.js";
 import { toggleWindowFullscreen } from "./window/fullscreen.js";
 import {
@@ -549,6 +548,8 @@ export function createApplicationMenu(
           click: async (_item, browserWindow) => {
             const targetWin = getTargetBrowserWindow(browserWindow);
             try {
+              const FinderQuickActionService =
+                await import("./services/FinderQuickActionService.js");
               const installPath = await FinderQuickActionService.install();
               if (targetWin && !targetWin.isDestroyed()) {
                 const wc = getAppWebContents(targetWin);
@@ -583,6 +584,8 @@ export function createApplicationMenu(
           click: async (_item, browserWindow) => {
             const targetWin = getTargetBrowserWindow(browserWindow);
             try {
+              const FinderQuickActionService =
+                await import("./services/FinderQuickActionService.js");
               const { removed, path: quickActionPath } = await FinderQuickActionService.remove();
               if (targetWin && !targetWin.isDestroyed()) {
                 const wc = getAppWebContents(targetWin);
@@ -649,6 +652,16 @@ export function createApplicationMenu(
           label: "Reload Configuration",
           click: (_item, browserWindow) =>
             sendAction("app.reloadConfig", getTargetBrowserWindow(browserWindow)),
+        },
+        {
+          label: "Export Configuration…",
+          click: (_item, browserWindow) =>
+            sendAction("app.exportConfig", getTargetBrowserWindow(browserWindow)),
+        },
+        {
+          label: "Import Configuration…",
+          click: (_item, browserWindow) =>
+            sendAction("app.importConfig", getTargetBrowserWindow(browserWindow)),
         },
         { type: "separator" },
         {

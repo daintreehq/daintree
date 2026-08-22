@@ -241,6 +241,44 @@
       "p95Ms": 55,
       "maxRegressionPct": 75,
       "maxMetricValues": { "msPerKAction": 6 }
+    },
+
+    "PERF-190": {
+      "calibrating": true,
+      "p95Ms": 60,
+      "maxMetricValues": { "p99KeystrokeMs": 4 }
+    },
+    "PERF-191": {
+      "calibrating": true,
+      "p95Ms": 220,
+      "maxMetricValues": { "msPerKFile": 0.5, "largeP99KeystrokeMs": 8 }
+    },
+    "PERF-192": {
+      "calibrating": true,
+      "p95Ms": 450,
+      "maxMetricValues": { "coldMsPerKFile": 22, "largeColdMs": 260 }
+    },
+
+    "PERF-193": {
+      "calibrating": true,
+      "p95Ms": 150,
+      "maxMetricValues": { "p99SearchMs": 22 }
+    },
+    "PERF-194": {
+      "calibrating": true,
+      "p95Ms": 220,
+      "maxMetricValues": { "msPerKLine": 2.5, "stepForwardMs": 2, "stepBackwardMs": 2 }
+    },
+
+    "PERF-195": {
+      "calibrating": true,
+      "p95Ms": 1600,
+      "maxMetricValues": { "p95TerminalMs": 160, "snapshotKB": 800 }
+    },
+    "PERF-196": {
+      "calibrating": true,
+      "p95Ms": 800,
+      "maxMetricValues": { "msPerKLine": 6 }
     }
   }
 }

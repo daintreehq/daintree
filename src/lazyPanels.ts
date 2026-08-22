@@ -6,8 +6,6 @@
 import { lazy } from "react";
 
 export const loadE2ENotificationBackdoor = () => import("./lib/e2eNotificationBackdoor");
-export const loadJetbrainsMono500 = () => import("@fontsource/jetbrains-mono/latin-500.css");
-export const loadJetbrainsMono600 = () => import("@fontsource/jetbrains-mono/latin-600.css");
 
 export function preloadModalHostLayer() {
   return import("./ModalHostLayer");

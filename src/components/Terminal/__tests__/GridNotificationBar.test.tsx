@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, act, within } from "@testing-library/react";
+import { render, act, fireEvent, within } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import { GRID_BAR_DWELL_FLOOR_MS, useNotificationStore } from "@/store/notificationStore";
 import {
@@ -243,13 +243,17 @@ describe("GridNotificationBar animation", () => {
     expect(live?.textContent).toContain("Announce me");
   });
 
-  it("renders action buttons as siblings of the live region, not inside it", () => {
-    const onClick = vi.fn();
+  it("renders action and dismiss controls as siblings of the live region, not inside it", () => {
+    // Two actions, matching the shape real producers use, so the ordering
+    // assertion would catch dismiss being inserted between them.
     addGridBar({
       message: "Pick one",
-      action: { label: "Confirm", onClick },
+      actions: [
+        { label: "Confirm", onClick: vi.fn() },
+        { label: "Not now", onClick: vi.fn(), variant: "secondary" },
+      ],
     });
-    const { container } = render(<GridNotificationBar />);
+    const { container, getByRole } = render(<GridNotificationBar />);
     act(() => {
       vi.advanceTimersByTime(16);
     });
@@ -258,28 +262,102 @@ describe("GridNotificationBar animation", () => {
     expect(live).not.toBeNull();
     // The live region announces flat text; buttons must not be its descendants.
     expect(within(live!).queryAllByRole("button")).toHaveLength(0);
-    // But the button still exists in the bar as a sibling.
-    const allButtons = container.querySelectorAll("button");
-    expect(allButtons).toHaveLength(1);
-    expect(allButtons[0]?.textContent).toBe("Confirm");
-    expect(live!.contains(allButtons[0]!)).toBe(false);
+
+    // A notification carrying actions still gets a dismiss control alongside
+    // them, so the bar is clearable without committing to an action.
+    const confirmBtn = getByRole("button", { name: "Confirm" });
+    const notNowBtn = getByRole("button", { name: "Not now" });
+    const dismissBtn = getByRole("button", { name: "Dismiss" });
+    for (const btn of [confirmBtn, notNowBtn, dismissBtn]) {
+      expect(live!.contains(btn)).toBe(false);
+      // Still inside the bar row that owns the live region.
+      expect(live!.parentElement?.contains(btn)).toBe(true);
+    }
+
+    // Every action leads, dismiss trails: the escape control is last in tab
+    // order. Identity per index, since toEqual on DOM nodes compares structure.
+    const buttons = Array.from(container.querySelectorAll("button"));
+    expect(buttons).toHaveLength(3);
+    expect(buttons[0]).toBe(confirmBtn);
+    expect(buttons[1]).toBe(notNowBtn);
+    expect(buttons[2]).toBe(dismissBtn);
   });
 
-  it("renders the dismiss button as a sibling of the live region", () => {
+  it("renders the dismiss control as the only button when the notification has no actions", () => {
     addGridBar({ message: "Dismiss me" });
-    const { container } = render(<GridNotificationBar />);
+    const { container, getByRole } = render(<GridNotificationBar />);
     act(() => {
       vi.advanceTimersByTime(16);
     });
 
     const live = getLiveRegion(container);
     expect(live).not.toBeNull();
-    const dismissBtn = container.querySelector("button");
-    expect(dismissBtn?.textContent).toBe("Dismiss");
-    expect(live!.contains(dismissBtn!)).toBe(false);
+    const dismissBtn = getByRole("button", { name: "Dismiss" });
+    expect(container.querySelectorAll("button")).toHaveLength(1);
+    expect(live!.contains(dismissBtn)).toBe(false);
   });
 
-  it("blocks focus and screen readers on action buttons while collapsed", () => {
+  it("removes the notification from the store and empties the bar when dismiss is clicked", () => {
+    const id = addGridBar({
+      message: "Already handled",
+      action: { label: "Confirm", onClick: vi.fn() },
+    });
+    const { container, getByRole, queryByRole } = render(<GridNotificationBar />);
+    act(() => {
+      vi.advanceTimersByTime(16);
+    });
+
+    act(() => {
+      fireEvent.click(getByRole("button", { name: "Dismiss" }));
+    });
+
+    // Hard removal: no soft `dismissed: true` row is left behind to accumulate,
+    // since nothing downstream ever reads a dismissed grid-bar entry.
+    expect(useNotificationStore.getState().notifications.some((n) => n.id === id)).toBe(false);
+
+    // Exit begins immediately rather than waiting on a duration: the controls
+    // stay mounted for the collapse but are already out of the a11y tree.
+    expect(container.querySelectorAll("button")).toHaveLength(2);
+    expect(queryByRole("button", { name: "Dismiss" })).toBeNull();
+
+    act(() => {
+      vi.advanceTimersByTime(BANNER_EXIT_DURATION);
+    });
+
+    // The live region stays mounted for AT registration, but is emptied and
+    // every control is gone.
+    expect(getLiveRegion(container)?.textContent).toBe("");
+    expect(container.querySelectorAll("button")).toHaveLength(0);
+  });
+
+  it("keeps the action and dismiss handlers separate", () => {
+    const onClick = vi.fn();
+    const id = addGridBar({
+      message: "Pick one",
+      action: { label: "Confirm", onClick },
+    });
+    const { getByRole } = render(<GridNotificationBar />);
+    act(() => {
+      vi.advanceTimersByTime(16);
+    });
+
+    // The action fires its own callback and leaves the row in place for the
+    // producer to clear; the bar never auto-dismisses on an action click.
+    act(() => {
+      fireEvent.click(getByRole("button", { name: "Confirm" }));
+    });
+    expect(onClick).toHaveBeenCalledTimes(1);
+    expect(useNotificationStore.getState().notifications.some((n) => n.id === id)).toBe(true);
+
+    // Dismiss clears the row without invoking the action.
+    act(() => {
+      fireEvent.click(getByRole("button", { name: "Dismiss" }));
+    });
+    expect(onClick).toHaveBeenCalledTimes(1);
+    expect(useNotificationStore.getState().notifications.some((n) => n.id === id)).toBe(false);
+  });
+
+  it("blocks focus and screen readers on action and dismiss controls while collapsed", () => {
     const onClick = vi.fn();
     addGridBar({
       message: "Pick one",
@@ -287,20 +365,25 @@ describe("GridNotificationBar animation", () => {
     });
     const { container } = render(<GridNotificationBar />);
 
-    // Pre-rAF (collapsed): button is non-tabbable and aria-hidden.
-    const earlyBtn = container.querySelector("button");
-    expect(earlyBtn).not.toBeNull();
-    expect(earlyBtn?.getAttribute("tabindex")).toBe("-1");
-    expect(earlyBtn?.getAttribute("aria-hidden")).toBe("true");
+    // Pre-rAF (collapsed): every control is non-tabbable and aria-hidden.
+    const earlyButtons = Array.from(container.querySelectorAll("button"));
+    expect(earlyButtons).toHaveLength(2);
+    for (const btn of earlyButtons) {
+      expect(btn.getAttribute("tabindex")).toBe("-1");
+      expect(btn.getAttribute("aria-hidden")).toBe("true");
+    }
 
     act(() => {
       vi.advanceTimersByTime(16);
     });
 
     // Visible: focusable and exposed to AT.
-    const liveBtn = container.querySelector("button");
-    expect(liveBtn?.hasAttribute("tabindex")).toBe(false);
-    expect(liveBtn?.hasAttribute("aria-hidden")).toBe(false);
+    const liveButtons = Array.from(container.querySelectorAll("button"));
+    expect(liveButtons).toHaveLength(2);
+    for (const btn of liveButtons) {
+      expect(btn.hasAttribute("tabindex")).toBe(false);
+      expect(btn.hasAttribute("aria-hidden")).toBe(false);
+    }
   });
 
   it("animates in when a notification is added after mount", () => {
@@ -666,8 +749,8 @@ describe("GridNotificationBar selection contract", () => {
   });
 
   it("releases promptly when the locked notification is dismissed mid-dwell", () => {
-    const lowId = addGridBar({ message: "Low priority", priority: "low" });
-    const { getByText, queryByText } = render(<GridNotificationBar />);
+    addGridBar({ message: "Low priority", priority: "low" });
+    const { getByRole, getByText, queryByText } = render(<GridNotificationBar />);
     act(() => {
       vi.advanceTimersByTime(16);
     });
@@ -682,9 +765,11 @@ describe("GridNotificationBar selection contract", () => {
     });
     expect(queryByText("High priority")).toBeNull();
 
-    // User dismisses the locked low one before its dwell expires.
+    // User dismisses the locked low one through the rendered control, ~1s into
+    // a 5s floor. Removing it drops it from the candidate set, so the lock
+    // releases without waiting out GRID_BAR_DWELL_FLOOR_MS.
     act(() => {
-      useNotificationStore.getState().removeNotification(lowId);
+      fireEvent.click(getByRole("button", { name: "Dismiss" }));
     });
     act(() => {
       vi.advanceTimersByTime(LIVE_REGION_SWAP_DELAY + 16);

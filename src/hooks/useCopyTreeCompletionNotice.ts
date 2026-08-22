@@ -7,11 +7,19 @@ import {
 
 /**
  * How long a copy-tree completion notice stays pinned to the Copy context
- * button. A display window, not a motion tier: long enough to read "Context
- * copied" plus its one-line summary, short enough that the tooltip never
- * outstays a signal about work that took a second or two.
+ * button. A display window, not a motion tier.
+ *
+ * 5s, not the 2s this shipped with. Two lines of copy ("Context copied" plus a
+ * count-and-size summary) is ~9 words: at 200-250wpm, plus the ~1s it takes to
+ * notice the notice at all, reading it costs 3.5-4.5s — so 2s was under the
+ * floor for its own content. 5s is the auto-dismiss floor the accessible design
+ * systems converge on (GDS, USWDS, Carbon), and sits inside Material 3's
+ * 4-10s band for a message carrying no action. Still bounded rather than
+ * sticky: the run stays readable in the recents dropdown on this same button,
+ * which is the alternative-access route that keeps an auto-dismissing status
+ * message clear of WCAG 2.2.1.
  */
-export const COPY_TREE_NOTICE_DURATION_MS = 2000;
+export const COPY_TREE_NOTICE_DURATION_MS = 5000;
 
 export interface CopyTreeNoticeState {
   /** The completion currently pinned to the anchor, shown as a tooltip. */
@@ -38,8 +46,9 @@ export interface CopyTreeNoticeState {
  *   absolute` under an aria-hidden wrapper, so offsetParent is null);
  * - nobody is looking — the view is background-hidden (MCP dispatches run in
  *   their project's renderer even when another project is on screen) or the
- *   window is blurred. A two-second tooltip in an unwatched window evaporates,
- *   where the fallback toast also leaves a durable inbox row;
+ *   window is blurred. A pinned tooltip in an unwatched window evaporates,
+ *   where the fallback leaves a durable inbox row (and a toast too, if the
+ *   window is focused — notify() routes a blurred one straight to the inbox);
  * - the caller suppressed it — e.g. while the recents dropdown is open on the
  *   same anchor, where the two portaled surfaces would stack.
  */

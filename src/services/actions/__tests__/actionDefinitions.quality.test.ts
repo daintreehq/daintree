@@ -203,26 +203,20 @@ function inputPropertyNames(argsSchema: z.ZodType | undefined): string[] | null 
 // is derived from the real allowlist rather than restated here, so this cannot
 // drift from the gate it is budgeting.
 describe("external MCP tool surface budget (#11585)", () => {
-  // Descriptions are the bulk of the text an MCP client re-reads every model
-  // turn. This ceiling sits a little above the current total rather than at an
-  // arbitrary round number, so a description that doubles trips it while
-  // ordinary wording edits do not. The tool COUNT is budgeted in
-  // tierAuth.test.ts, against the allowlist that is the actual gate — it is not
-  // duplicated here.
-  const MAX_DESCRIPTION_BYTES = 16_000;
+  // The summed external description budget that used to live here is gone: it
+  // capped the same bytes as MAX_EXTERNAL_TOTAL_BYTES below at a looser number,
+  // so it could never fail first and only offered a second place for the real
+  // figure to drift out of step. The tool COUNT is budgeted in tierAuth.test.ts
+  // against the allowlist that is the actual gate.
 
-  it("keeps the advertised description payload small", async () => {
+  it("every allowlisted external tool exists in the registry", async () => {
+    // Kept from the deleted budget: it was the half that caught an allowlist
+    // naming an id the registry no longer has, which the byte sum only noticed
+    // as a suspiciously small total.
     const { registry } = await createRegistryWithAudit();
 
-    const totalBytes = MCP_EXTERNAL_TIER_TOOLS.reduce((sum, id) => {
-      const def = registry.get(id as ActionId)?.();
-      // A missing definition means the allowlist names an id the registry no
-      // longer has — surface that as a failure rather than a zero-byte entry.
-      expect(def, `${id} is allowlisted but absent from the action registry`).toBeDefined();
-      return sum + Buffer.byteLength(def!.description ?? "", "utf8");
-    }, 0);
-
-    expect(totalBytes).toBeLessThanOrEqual(MAX_DESCRIPTION_BYTES);
+    const absent = MCP_EXTERNAL_TIER_TOOLS.filter((id) => !registry.get(id as ActionId)?.());
+    expect(absent).toEqual([]);
   });
 
   it("names only real actions that can actually be advertised and dispatched", async () => {
@@ -300,19 +294,30 @@ describe("LLM-facing tool descriptions (#11542)", () => {
     ...SYSTEM_TIER_ADDONS,
   ]);
 
-  // Below the floor a description says nothing a caller can act on; above the
-  // ceiling it is almost always restating the schema. Both are per-description,
-  // so neither can be averaged away by the aggregate budgets.
+  // Below the floor a description says nothing a caller can act on. The matching
+  // per-description CEILING lives in `mcpWireBudget.test.ts` alongside the rest
+  // of the context-condensation budgets — stating it in two files would let the
+  // two numbers drift and leave neither authoritative.
   const MIN_DESCRIPTION_BYTES = 120;
-  const MAX_SINGLE_DESCRIPTION_BYTES = 500;
 
   // Aggregate ceilings, set a little above the real totals so a description
   // that balloons trips them while ordinary wording edits do not. Same
   // reasoning as the external payload budget above, applied to the two
   // payloads that exist: what a third-party client is sent, and the largest
   // set the in-app assistant can be sent.
-  const MAX_EXTERNAL_TOTAL_BYTES = 10_000;
-  const MAX_COHORT_TOTAL_BYTES = 53_000;
+  // 9_600 → 10_300 for #11909's `terminal.closeOwned` and
+  // `worktree.deleteOwned`. Both descriptions carry the same load: the tool
+  // acts only on resources this session created, and anything else is refused
+  // rather than quietly no-oped. That distinction is the whole reason the tools
+  // exist, and a caller that misses it will hand them ids from `terminal.list`
+  // and read the refusals as a bug.
+  const MAX_EXTERNAL_TOTAL_BYTES = 10_300;
+  // Raised from 48_000 by #11908, which put seven tools on the in-app surface
+  // (a deterministic session resume, the four bookmark mutations, and the two
+  // recipe-editor handoffs). Each sits under the 400 B per-description ceiling
+  // in `mcpWireBudget.test.ts`; the total simply reflects seven more of them.
+  // #11909's two owned-cleanup tools land in the same cohort on top of that.
+  const MAX_COHORT_TOTAL_BYTES = 50_400;
 
   const ARG_SECTION = /\b(?:args?|arguments?|parameters?)\s*(?:\([^)]*\))?\s*:|\btakes no args\b/i;
 
@@ -333,12 +338,12 @@ describe("LLM-facing tool descriptions (#11542)", () => {
     expect(rows.length).toBe(LLM_EXPOSED_TOOL_IDS.size);
   });
 
-  it("keeps every description within the readable range", async () => {
+  it("keeps every description above the readable floor", async () => {
     const rows = await cohortDefinitions();
 
     const violations = rows
       .map(({ id, def }) => ({ id, bytes: Buffer.byteLength(def.description ?? "", "utf8") }))
-      .filter((r) => r.bytes < MIN_DESCRIPTION_BYTES || r.bytes > MAX_SINGLE_DESCRIPTION_BYTES)
+      .filter((r) => r.bytes < MIN_DESCRIPTION_BYTES)
       .map((r) => `${r.id} (${r.bytes} bytes)`);
 
     expect(violations).toEqual([]);
@@ -679,6 +684,7 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
   "devPreview.reinstallAndRestart",
   "artifact.applyPatch",
   "agentSettings.reset",
+  "app.importConfig",
   "forge.createPR",
   "forge.closePR",
   "forge.reopenPR",
@@ -706,6 +712,7 @@ const EXPECTED_CONFIRM_DANGER: ReadonlyArray<ActionId> = [
  * in source — runs via `npm run check:confirm-wiring`.
  */
 const CONFIRMED_WIRED: ReadonlyArray<ActionId> = [
+  "app.importConfig",
   "terminal.kill",
   "terminal.killAll",
   "terminal.restart",

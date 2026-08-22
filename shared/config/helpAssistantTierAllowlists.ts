@@ -52,9 +52,11 @@ export const WORKBENCH_TIER_TOOLS = [
   "agent.getState",
   "agent.listToolbar",
   "agent.listAvailable",
+  "agent.listPresets",
   "agentSessionHistory.list",
   // Read-only bookmark metadata (#11288) — same workbench tier as the history
-  // listing. Bookmark mutation actions are intentionally NOT tier-exposed.
+  // listing. The mutations sit at action tier (#11908); listing stays here so a
+  // read-only session can still see what has been kept.
   "session.bookmarks.list",
 
   "agentSettings.get",
@@ -107,12 +109,20 @@ export const ACTION_TIER_ADDONS = [
   "terminal.new",
   "terminal.sendCommand",
   "terminal.close",
+  // The session-scoped form of the line above (#11909). Redundant for this
+  // caller — the assistant already holds the unrestricted `terminal.close` and
+  // has a human watching — but the external tier must stay a subset of what the
+  // assistant can reach, and that invariant is asserted rather than assumed
+  // (`tierAuth.test.ts`, "authorizes nothing the in-app assistant cannot
+  // already reach"). Listing it here keeps the direction of the cut honest.
+  "terminal.closeOwned",
   "terminal.closeAll",
   "terminal.kill",
   "terminal.killAll",
   "terminal.restart",
   "terminal.moveToDock",
   "terminal.moveToGrid",
+  "terminal.moveToWorktree",
   "terminal.toggleDock",
   "terminal.rename",
   TERMINAL_WAIT_UNTIL_IDLE_TOOL,
@@ -120,6 +130,12 @@ export const ACTION_TIER_ADDONS = [
 
   "recipe.list",
   "recipe.run",
+  // Editor handoffs (#11908). Safe because they only put a draft on screen for
+  // the user to review — the write half (`recipe.saveToRepo`, `recipe.delete`)
+  // is deliberately absent from every tier, so the assistant can propose a
+  // recipe but never commit one to `.daintree/recipes/` on its own.
+  "recipe.editor.open",
+  "recipe.editor.openFromLayout",
 
   "copyTree.injectToTerminal",
 
@@ -131,6 +147,18 @@ export const ACTION_TIER_ADDONS = [
   "agent.focusNextWorking",
   "agent.focusNextAgent",
   "agent.focusPreviousAgent",
+
+  // Session continuity (#11908). Resume spawns a pane, so it belongs beside the
+  // other spawn tools rather than with the workbench-tier listings it reads
+  // from. The bookmark mutations are reversible and project-scoped; the two
+  // that remove something a person can see — a live pane, a durable bookmark —
+  // keep `danger: "confirm"` and are gated by the renderer's own dialog, which
+  // the first-party assistant is pinned to a window for.
+  "agentSessionHistory.resume",
+  "session.bookmarkAndClose",
+  "session.bookmark.promote",
+  "session.bookmark.rename",
+  "session.bookmark.delete",
 
   "panel.focus",
 
@@ -163,7 +191,19 @@ export const ACTION_TIER_ADDONS = [
 ] as const satisfies readonly BuiltInActionId[];
 
 export const SYSTEM_TIER_ADDONS = [
+  // Deliberately above `worktree.createWithRecipe`, which is heavier but
+  // confined to the current project because it derives its own root. This one
+  // takes an explicit root that is not validated against the session's
+  // project, so an action-tier overlay could create a tree in another repo.
+  // System keeps it there, so every help agent — the Daintree Assistant
+  // included — reaches it only at an explicitly selected `system` tier or
+  // through a scoped grant (#11880, #11907).
+  "worktree.create",
   "worktree.delete",
+  // The session-scoped form of `worktree.delete` (#11909), carried here for the
+  // same subset invariant as `terminal.closeOwned`. It sits at system rather
+  // than action because the delete it delegates to does.
+  "worktree.deleteOwned",
   "worktree.resource.teardown",
 
   "terminal.arm",

@@ -1006,8 +1006,8 @@ describe("HelpPanel — Stop assistant (end session, #10989)", () => {
       expect.anything()
     );
     expect(helpPanelState.setTerminal).not.toHaveBeenCalled();
-    // Stop ends the session but keeps the panel open (it is not "hide").
-    expect(helpPanelState.setOpen).not.toHaveBeenCalledWith(false);
+    // …and the panel slides out rather than lingering on the empty state (#11833).
+    expect(helpPanelState.setOpen).toHaveBeenCalledWith(false);
   });
 
   it("shows the Stop assistant confirm when the agent is working (no teardown yet)", () => {
@@ -1064,8 +1064,8 @@ describe("HelpPanel — Stop assistant (end session, #10989)", () => {
       expect.anything(),
       expect.anything()
     );
-    // Confirmed stop keeps the panel open — restart is one click away.
-    expect(helpPanelState.setOpen).not.toHaveBeenCalledWith(false);
+    // The same confirmation gates both the teardown and the slide-out (#11833).
+    expect(helpPanelState.setOpen).toHaveBeenCalledWith(false);
   });
 
   it("aborts a relaunch in flight so a late-settling dispatch never binds a fresh session", async () => {

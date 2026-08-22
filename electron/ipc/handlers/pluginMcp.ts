@@ -10,11 +10,6 @@ import { PLUGIN_MCP_METHOD_CHANNELS } from "./pluginMcp.preload.js";
 import type * as PluginMcpSupervisorModule from "../../services/PluginMcpSupervisor.js";
 import type * as PluginServiceModule from "../../services/PluginService.js";
 import { store } from "../../store.js";
-import {
-  getPluginMcpAuditService,
-  getPluginMcpConsentService,
-  getPluginMcpRateLimiter,
-} from "../../services/plugin-mcp/instances.js";
 import { deriveDangerTier } from "../../services/plugin-mcp/PluginMcpTierAuth.js";
 import type {
   PluginMcpAuthorizeInput,
@@ -46,6 +41,7 @@ import {
 
 type PluginMcpSupervisor = ReturnType<typeof PluginMcpSupervisorModule.getPluginMcpSupervisor>;
 type PluginServiceSingleton = typeof PluginServiceModule.pluginService;
+type PluginMcpInstancesModule = typeof import("../../services/plugin-mcp/instances.js");
 
 // Lazy accessors (mirrors helpAssistant.ts): static imports here would pull
 // PluginMcpSupervisor and — transitively — the ~3,200-line PluginService onto
@@ -65,6 +61,11 @@ async function getPluginService(): Promise<PluginServiceSingleton> {
     cachedPluginService = mod.pluginService;
   }
   return cachedPluginService;
+}
+
+let cachedPluginMcpInstances: PluginMcpInstancesModule | null = null;
+async function getPluginMcpInstances(): Promise<PluginMcpInstancesModule> {
+  return (cachedPluginMcpInstances ??= await import("../../services/plugin-mcp/instances.js"));
 }
 
 async function handleList(): Promise<PluginMcpServerInfo[]> {
@@ -148,7 +149,7 @@ async function handleRestart(key: PluginMcpServerKey): Promise<void> {
   });
   // A respawned server is a clean slate — clear any accumulated throttle debt so
   // the first call after a manual restart isn't rejected by a stale empty bucket.
-  getPluginMcpRateLimiter().dropServer(key.pluginId, key.serverId);
+  (await getPluginMcpInstances()).getPluginMcpRateLimiter().dropServer(key.pluginId, key.serverId);
 }
 
 /**
@@ -267,16 +268,21 @@ const consentBridge: PluginMcpConsentBridge = (request) => {
 };
 
 /** Install the consent bridge once, lazily — keeps an unused boot path bridge-free. */
-function ensureConsentBridge(): void {
+function ensureConsentBridge(
+  service: ReturnType<PluginMcpInstancesModule["getPluginMcpConsentService"]>
+): void {
   if (consentBridgeInstalled) return;
   consentBridgeInstalled = true;
-  getPluginMcpConsentService().setConsentBridge(consentBridge);
+  service.setConsentBridge(consentBridge);
 }
 
 /** Test-only: drop installed-bridge state and reject any pending prompts. */
 export function _resetConsentBridgeForTest(): void {
   for (const requestId of [...pendingConsents.keys()]) {
     settleConsent(requestId, "rejected");
+  }
+  if (consentBridgeInstalled) {
+    cachedPluginMcpInstances?.getPluginMcpConsentService().setConsentBridge(null);
   }
   consentBridgeInstalled = false;
 }
@@ -352,7 +358,8 @@ export async function handleCallTool(
     };
   }
 
-  const audit = getPluginMcpAuditService();
+  const instances = await getPluginMcpInstances();
+  const audit = instances.getPluginMcpAuditService();
   const baseAudit = {
     pluginId: input.pluginId,
     serverId: input.serverId,
@@ -363,7 +370,7 @@ export async function handleCallTool(
   };
 
   // Rate limit BEFORE consent — a throttled call must not spend a user prompt.
-  const limit = getPluginMcpRateLimiter().check(input.pluginId, input.serverId);
+  const limit = instances.getPluginMcpRateLimiter().check(input.pluginId, input.serverId);
   if (!limit.allowed) {
     audit.append({
       ...baseAudit,
@@ -379,7 +386,8 @@ export async function handleCallTool(
     };
   }
 
-  ensureConsentBridge();
+  const consentService = instances.getPluginMcpConsentService();
+  ensureConsentBridge(consentService);
   const authorizeInput: PluginMcpAuthorizeInput = {
     identity: { pluginId: input.pluginId, serverId: input.serverId, toolName: input.toolName },
     pluginDisplayName,
@@ -390,7 +398,7 @@ export async function handleCallTool(
     rawArgs: input.args,
   };
   const outcome = await consentTargetStore.run(ctx.webContentsId, () =>
-    getPluginMcpConsentService().authorizeToolCall(authorizeInput)
+    consentService.authorizeToolCall(authorizeInput)
   );
 
   if (outcome.kind === "denied") {
@@ -496,7 +504,7 @@ export function registerPluginMcpHandlers(): () => void {
     // no stale prompt resolves against a torn-down renderer. Pending prompts are
     // rejected (fail closed) rather than left dangling.
     if (consentBridgeInstalled) {
-      getPluginMcpConsentService().setConsentBridge(null);
+      cachedPluginMcpInstances?.getPluginMcpConsentService().setConsentBridge(null);
       consentBridgeInstalled = false;
     }
     for (const requestId of [...pendingConsents.keys()]) {

@@ -22,7 +22,6 @@ import { getPanelSuspectLedger } from "../services/PanelSuspectLedgerService.js"
 import { getDatabaseMaintenanceService } from "../services/DatabaseMaintenanceService.js";
 import { getPeriodicCleanupService } from "../services/PeriodicCleanupService.js";
 import { getHibernationService } from "../services/HibernationService.js";
-import { getIdleBackgroundAutoCloseService } from "../services/IdleBackgroundAutoCloseService.js";
 import { getIdleTerminalNotificationService } from "../services/IdleTerminalNotificationService.js";
 import { getSystemSleepService } from "../services/SystemSleepService.js";
 import { getOsDndService } from "../services/OsDndService.js";
@@ -258,7 +257,13 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
         projectIds.map((pid) => {
           let timer: ReturnType<typeof setTimeout> | undefined;
           return Promise.race([
-            ptyClient.gracefulKillByProject(pid),
+            // preserveSession: a terminal with no shutdown config (every plain
+            // shell) falls through `gracefulKill` to `PtyManager.kill`, which
+            // skips the final session persist and deletes the session file
+            // unless this is set. Without it a quit discarded plain-shell
+            // scrollback that a background "sleep" of the same project kept —
+            // and the next launch is supposed to restore the project as it was.
+            ptyClient.gracefulKillByProject(pid, { preserveSession: true }),
             new Promise<Array<{ id: string; agentSessionId: string | null }>>((resolve) => {
               timer = setTimeout(() => resolve([]), 4000);
             }),
@@ -466,6 +471,13 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
         import("../services/PluginCliServer.js")
           .then(({ stopPluginCliServer }) => stopPluginCliServer())
           .catch(() => {}),
+        import("../services/IdleBackgroundAutoCloseService.js")
+          .then(({ getIdleBackgroundAutoCloseService }) =>
+            getIdleBackgroundAutoCloseService().stop()
+          )
+          .catch((err) => {
+            console.warn("[MAIN] IdleBackgroundAutoCloseService.stop failed:", err);
+          }),
         new Promise<void>((resolve) => {
           // Global singletons that previously tore down on last-window-close
           // (electron/window/windowServices.ts) live here now so they cover
@@ -492,11 +504,6 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
             getIdleTerminalNotificationService().stop();
           } catch (err) {
             console.warn("[MAIN] IdleTerminalNotificationService.stop failed:", err);
-          }
-          try {
-            getIdleBackgroundAutoCloseService().stop();
-          } catch (err) {
-            console.warn("[MAIN] IdleBackgroundAutoCloseService.stop failed:", err);
           }
           try {
             getSystemSleepService().dispose();

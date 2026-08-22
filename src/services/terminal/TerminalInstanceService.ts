@@ -16,6 +16,7 @@ import { tallyScrollbackRestoreStates } from "./scrollbackRestoreAggregate";
 import {
   setupTerminalAddons,
   createImageAddon,
+  createSearchAddon,
   createFileLinksAddon,
   createImageLinksAddon,
   createWebLinksAddon,
@@ -32,7 +33,13 @@ import { TerminalWebGLPolicy } from "./TerminalWebGLPolicy";
 import { TerminalRevealController } from "./TerminalRevealController";
 import { TerminalAgentStateController } from "./TerminalAgentStateController";
 import { TerminalRestoreController } from "./TerminalRestoreController";
-import { TerminalReflowController, forceXtermReflow } from "./TerminalReflowController";
+import {
+  TerminalReflowController,
+  attemptRendererUnpause,
+  forceXtermReflow,
+  forceXtermRendererUnpause,
+  resetRendererUnpauseBreaker,
+} from "./TerminalReflowController";
 import { TerminalReconciliationWatchdog } from "./TerminalReconciliationWatchdog";
 import { TerminalWriteController } from "./TerminalWriteController";
 import { TerminalSettleWaiterRegistry } from "./TerminalSettleWaiterRegistry";
@@ -98,6 +105,13 @@ function canAutoInitializeTerminalIngest(): boolean {
 
 class TerminalInstanceService {
   private instances = new Map<string, ManagedTerminal>();
+
+  /**
+   * Consumers holding work against any live instance, notified on teardown.
+   * Not per-id: these outlive individual instances by design. See
+   * `addInstanceDestroyedListener`.
+   */
+  private instanceDestroyedSubscribers = new Set<(id: string) => void>();
   // In-flight creations keyed by id: concurrent getOrCreate(id) share ONE build
   // so a single id can never wire two terminalClient.onData subscriptions (see
   // getOrCreate).
@@ -332,7 +346,6 @@ class TerminalInstanceService {
       isWebGLActive: (id) => this.webGLManager.isActive(id),
       shouldHaveWebGL: (managed) => this.webGLPolicy.shouldHaveActiveWebGL(managed),
       ensureWebGL: (id, managed) => this.webGLManager.ensureContext(id, managed),
-      forceReflow: (element) => forceXtermReflow(element),
       reconcileRevealGeometry: (id) => this.reconcileRevealGeometry(id),
       isStoreBackgrounded: (id) => usePanelStore.getState().backgroundedTerminals.has(id),
       isStoreHidden: (id) => usePanelStore.getState().panelsById[id]?.isVisible === false,
@@ -1152,6 +1165,29 @@ class TerminalInstanceService {
     return this.instances.get(id) ?? null;
   }
 
+  async ensureSearchAddon(id: string): Promise<ManagedTerminal["searchAddon"]> {
+    const managed = this.instances.get(id);
+    if (!managed) return null;
+    if (managed.searchAddon) return managed.searchAddon;
+    if (managed.searchAddonPromise) return managed.searchAddonPromise;
+
+    const promise = createSearchAddon(managed.terminal).then((addon) => {
+      const current = this.instances.get(id);
+      if (current !== managed) {
+        addon.dispose();
+        return null;
+      }
+      managed.searchAddon = addon;
+      return addon;
+    });
+    managed.searchAddonPromise = promise;
+    try {
+      return await promise;
+    } finally {
+      if (managed.searchAddonPromise === promise) delete managed.searchAddonPromise;
+    }
+  }
+
   /**
    * Coalesce a "why am I slow?" diagnostics push (#10910). Terminal create,
    * destroy, and tier changes each nudge this; the actual report is deferred to a
@@ -1809,6 +1845,12 @@ class TerminalInstanceService {
       }
       Object.assign(managed, addons);
       managed.terminal = terminal;
+      // A replacement Terminal brings a brand-new RenderService with its own
+      // pause state. attachGeneration doesn't move here, so without this the
+      // fresh renderer inherits the old one's give-up latch and — since it
+      // starts paused and only an observed unpause re-arms — would be denied
+      // its first repair forever (#11800).
+      resetRendererUnpauseBreaker(managed);
     } catch (error) {
       logError("[TIS] Failed to construct replacement terminal", error, { id });
       // The old instance is already disposed and `managed.terminal` may still
@@ -2981,17 +3023,32 @@ class TerminalInstanceService {
       logError(`resetRenderer failed for ${id}`, error);
     }
 
-    // Force IO re-evaluation so a DOM-renderer terminal that got stuck
-    // with _isPaused=true actually resumes drawing. Runs independently of
-    // the refresh/fit block so the user-invokable escape hatch works even
-    // when fit() throws. Clear the throttle so any follow-up automatic
-    // reflow (onWriteParsed, heartbeat, focus) fires immediately.
+    // Resume a renderer stuck at _isPaused=true so the pane actually redraws.
+    // Runs independently of the refresh/fit block so the user-invokable escape
+    // hatch works even when fit() throws. Clear the throttle so any follow-up
+    // automatic repair (onWriteParsed, heartbeat, focus) fires immediately.
     const termEl = managed.terminal.element;
     if (termEl) {
       try {
+        // The layout flush the reveal/wake sequences rely on. It cannot unpause
+        // anything on its own (#11800) — the real repair is below.
         forceXtermReflow(termEl);
       } catch (error) {
         logWarn(`forceXtermReflow failed for ${id}`, { error });
+      }
+      if (options.force) {
+        // A PERSON asked for this — the same foreground gate #11638 uses below.
+        // Their explicit "this pane is broken" signal re-arms the breaker, so a
+        // latch accrued by autonomous sweeps can't make the manual escape hatch
+        // a no-op. One user-initiated attempt can't become a retry loop.
+        resetRendererUnpauseBreaker(managed);
+        forceXtermRendererUnpause(managed.terminal);
+      } else {
+        // Automatic callers — backend recovery, the project-switch reveal, and
+        // the post-drag repair — stay inside the shared cap. Re-arming for them
+        // would clear the latch on a timer and hand the periodic sweeps a fresh
+        // budget forever, which is the loop this whole change removes.
+        attemptRendererUnpause(managed);
       }
       managed.lastReflowAt = 0;
     }
@@ -3191,6 +3248,23 @@ class TerminalInstanceService {
     }
   }
 
+  /**
+   * Observe renderer-instance teardown for any panel.
+   *
+   * Distinct from `addExitListener`, and deliberately so: `destroy` *clears*
+   * the exit subscribers rather than firing them, so a consumer holding work
+   * against a live instance gets no signal from the exit path when the panel is
+   * restarted, closed, or reset. This is the one funnel all seven destruction
+   * call sites reach, which is why the notification belongs here rather than
+   * hand-wired at each of them.
+   *
+   * Registered by id-agnostic consumers, so the callback receives the id.
+   */
+  addInstanceDestroyedListener(cb: (id: string) => void): () => void {
+    this.instanceDestroyedSubscribers.add(cb);
+    return () => this.instanceDestroyedSubscribers.delete(cb);
+  }
+
   addExitListener(id: string, cb: (exitCode: number) => void): () => void {
     const managed = this.instances.get(id);
     if (!managed) return () => {};
@@ -3220,6 +3294,16 @@ class TerminalInstanceService {
     // aborts. Marked regardless of the `instances` presence check below.
     if (this.creating.has(id)) {
       this.cancelledCreations.add(id);
+    }
+
+    // Before the `!managed` bail: an id whose creation was cancelled above still
+    // has consumers holding work against it, and they need releasing too.
+    for (const cb of [...this.instanceDestroyedSubscribers]) {
+      try {
+        cb(id);
+      } catch (error) {
+        logError("Instance-destroyed listener error", error);
+      }
     }
 
     const managed = this.instances.get(id);
@@ -3472,6 +3556,17 @@ if (typeof window !== "undefined" && window.__DAINTREE_E2E_MODE__ === true) {
     managed.terminal.selectAll();
     return true;
   };
+
+  // What xterm believes is selected right now. The theme tour's selection scene
+  // needs a postcondition: a completed mouse drag proves the mouse moved, not
+  // that a selection exists, and under the WebGL renderer the fill is painted
+  // into the canvas so there is no DOM node to look for. Attached via
+  // Object.assign (not a window cast) so it doesn't add to the
+  // no-unsafe-type-assertion lint ratchet.
+  Object.assign(window, {
+    __daintreeGetTerminalSelection: (panelId: string): string =>
+      terminalInstanceService.getInstanceForE2E(panelId)?.terminal.getSelection() ?? "",
+  });
 
   (window as unknown as Record<string, unknown>).__daintreeGetTerminalBufferLength = (
     panelId: string

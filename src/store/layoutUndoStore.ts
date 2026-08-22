@@ -10,6 +10,7 @@ import {
 import { getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { buildWorktreeIndex } from "@/store/slices/panelRegistry/worktreeIndex";
+import { reconcileMovedPanel } from "@/services/terminal/crossWorktreeMove";
 
 type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];
 
@@ -186,6 +187,9 @@ function applySnapshot(snapshot: LayoutSnapshot): boolean {
     activeDockPanel.location === "dock" &&
     panelKindIsDockable(activeDockPanel.kind ?? "terminal");
 
+  const worktreeBefore = new Map<string, string | undefined>();
+  for (const id of newTerminalIds) worktreeBefore.set(id, panelsById[id]?.worktreeId);
+
   usePanelStore.setState({
     panelsById: newTerminalsById,
     panelIds: newTerminalIds,
@@ -198,6 +202,17 @@ function applySnapshot(snapshot: LayoutSnapshot): boolean {
     maximizedId: snapshot.maximizedId,
     activeDockTerminalId: activeDockStillValid ? restoredActiveDock : null,
   });
+
+  // A bulk restore rewrites `worktreeId` with a raw `setState`, so it bypasses
+  // the move choke point entirely. Without this pass an undone cross-worktree
+  // move would leave the pane filed back where it started while still carrying
+  // the banner — and its queued instruction — for the destination it just left,
+  // so "Tell the agent" would send it somewhere the user has undone (#11853).
+  for (const [id, before] of worktreeBefore) {
+    const after = newTerminalsById[id]?.worktreeId;
+    if (before === after || after === undefined) continue;
+    reconcileMovedPanel(id, after);
+  }
 
   return true;
 }

@@ -1,8 +1,9 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
+import type { ActionSource } from "@shared/types/actions";
 import { z } from "zod";
 import { terminalClient } from "@/clients";
 import { terminalInstanceService } from "@/services/terminal/TerminalInstanceService";
-import { requestPanelClose } from "@/services/terminal/optimisticPanelClose";
+import { flushOptimisticCloses, requestPanelClose } from "@/services/terminal/optimisticPanelClose";
 import { fireWatchNotification } from "@/lib/watchNotification";
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel } from "@shared/types/panel";
@@ -29,6 +30,50 @@ function clearPendingIf(kind: TerminalPendingDestructiveActionKind): void {
     useTerminalPendingDestructiveActionStore.getState().clear();
   }
 }
+
+const PanelCloseResultSchema = z.object({
+  closedIds: z
+    .array(z.string())
+    .describe(
+      "The panels this call closed. Empty means nothing closed: there was no panel to act on, the one named was already in the trash, or its teardown did not complete. Treat an empty array as a failed close rather than a quiet success."
+    ),
+});
+
+/**
+ * Which of `ids` have actually left the open roster, read after the canonical
+ * teardown ran. `trashPanel` keeps the record and moves it to `location:
+ * "trash"`, but remove-on-exit and dialog panels bypass trash entirely and are
+ * removed outright, so a missing record counts as closed too.
+ */
+function closedPanelIds(ids: readonly string[]): string[] {
+  const { panelsById } = usePanelStore.getState();
+  return ids.filter((id) => {
+    if (!Object.hasOwn(panelsById, id)) return true;
+    return panelsById[id]?.location === "trash";
+  });
+}
+
+/**
+ * Resolve a close before returning when nobody is watching the screen.
+ *
+ * The optimistic coordinator defers the canonical teardown past paint, which is
+ * right for a click and wrong for an automated caller: it has no frame to
+ * protect and it reads the roster straight after the ack, so a deferred commit
+ * hands back the panel it just closed (#11805). Flushing drains *every* queued
+ * close rather than just this one — the same trade `terminal.reopenLast`
+ * already makes, and the reason a duplicate close still resolves truthfully:
+ * `requestPanelClose` drops it as already-closing, but the flush commits the
+ * earlier request that owns it.
+ */
+function settleCloseForDispatch(ids: readonly string[], ctx: { dispatchSource?: ActionSource }) {
+  if (isForegroundDispatch(ctx?.dispatchSource)) {
+    // The commit is still queued, so this names what was accepted for close.
+    // A person watching the grid is the real feedback channel here.
+    return { closedIds: [...ids] };
+  }
+  flushOptimisticCloses();
+  return { closedIds: closedPanelIds(ids) };
+}
 export function registerTerminalLifecycleActions(
   actions: ActionRegistry,
   callbacks: ActionCallbacks
@@ -37,13 +82,24 @@ export function registerTerminalLifecycleActions(
     id: "terminal.close",
     title: "Close Terminal",
     description:
-      "Close a panel, usually moving it to the trash where it stays briefly recoverable before its process is killed. Recovery is not universal — panels set to remove on exit, and dialog panels, are discarded outright. This is not limited to terminals. Identify the panel explicitly: an automated caller cannot see what the user has focused, and closing the wrong one discards their work.",
+      "Close a panel, usually to the trash, where it is briefly recoverable before its process is killed. Recovery is not universal: remove-on-exit and dialog panels are discarded outright. Not limited to terminals. Name the panel you mean; the wrong one discards someone's work. An untracked panel is rejected, not reported closed; the result names what closed, already gone from the listing by then.",
     category: "terminal",
     kind: "command",
     danger: "safe",
     scope: "renderer",
     keywords: ["trash", "hide", "dismiss", "remove"],
-    argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
+    argsSchema: z
+      .object({
+        terminalId: z
+          .string()
+          .optional()
+          .describe(
+            "The panel to close, as an `id` from the terminal listing. An automated caller must pass this; omitted, the close falls back to whatever the user has focused."
+          ),
+      })
+      .optional(),
+    resultSchema: PanelCloseResultSchema,
+    mcpOutputSchema: true,
     run: async (args: unknown, ctx) => {
       const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
       // Guard before the store read: this chain falls past focus all the way to
@@ -51,6 +107,17 @@ export function registerTerminalLifecycleActions(
       // essentially at random.
       requireExplicitTerminalIdForAgentDispatch("terminal.close", terminalId, ctx);
       const state = usePanelStore.getState();
+      // A named panel that isn't tracked is a caller mistake, not a no-op:
+      // `trashPanel` ignores an unknown id silently, so without this the call
+      // reports success for a typo (#11805). `Object.hasOwn` rather than a
+      // truthiness check: `panelsById` is a plain object, so an id like
+      // "constructor" would otherwise resolve off the prototype and get trashed
+      // as if it were a real panel.
+      if (terminalId !== undefined && !Object.hasOwn(state.panelsById, terminalId)) {
+        throw new Error(
+          `terminal.close: no panel with id "${terminalId}" — pass an \`id\` from the terminal listing.`
+        );
+      }
       const targetId =
         terminalId ??
         state.focusedId ??
@@ -59,7 +126,14 @@ export function registerTerminalLifecycleActions(
             state.panelsById[id]?.location !== "trash" &&
             state.panelsById[id]?.location !== "background"
         );
-      if (!targetId) return;
+      if (!targetId) return { closedIds: [] };
+      const target = Object.hasOwn(state.panelsById, targetId)
+        ? state.panelsById[targetId]
+        : undefined;
+      // A stale `focusedId`, or a panel already trashed. Re-trashing resets the
+      // recovery TTL and rewrites the recorded restore location, so leave it be
+      // and report that nothing closed.
+      if (!target || target.location === "trash") return { closedIds: [] };
       // Optimistic close: hide the panel now, trash it after the removal has
       // painted. The coordinator advances focus synchronously so a rapid Cmd+W
       // stream keeps closing fresh panels instead of re-targeting this one.
@@ -67,6 +141,48 @@ export function registerTerminalLifecycleActions(
         hideIds: [targetId],
         commit: () => usePanelStore.getState().trashPanel(targetId),
       });
+      return settleCloseForDispatch([targetId], ctx);
+    },
+  }));
+
+  // Registered here purely for manifest metadata — schema, description, tier
+  // and audit registration. Execution lives in the MCP CallTool handler
+  // (electron/services/mcp-server/sessionServer.ts) because the authorization
+  // it needs is session state: the ownership ledger is keyed by MCP session id,
+  // which the renderer cannot see and must never be told. Main checks ownership
+  // first, then delegates to `terminal.close` for the actual close, so trash
+  // recovery and the "reports the exact panel closed" contract are the ones
+  // already shipped rather than a second implementation (#11909). `run()`
+  // throws if the renderer ever invokes it directly.
+  actions.set("terminal.closeOwned", () => ({
+    id: "terminal.closeOwned",
+    title: "Close Owned Terminal",
+    description:
+      "Close a panel this session itself created, usually to the trash, where it is briefly recoverable before its process is killed. Only panels created by this connection can be closed: a panel opened by the user, another client, or a plugin is refused outright, as is an id that never existed. The result names what closed, already gone from the listing by then.",
+    category: "terminal",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    keywords: ["trash", "dismiss", "cleanup", "owned"],
+    // Hidden from the palette: it is dispatchable only through the MCP
+    // main-process path, so a user picking it here would get the `run()` throw
+    // below rather than a closed panel. `terminal.close` is the palette's
+    // version of this.
+    palette: { mode: "hidden" },
+    argsSchema: z.object({
+      terminalId: z
+        .string()
+        .min(1)
+        .describe(
+          "The panel to close, as an `id` this session received when it created the panel. Required — there is no focused-panel fallback, because the focused panel is rarely one this session owns."
+        ),
+    }),
+    resultSchema: PanelCloseResultSchema,
+    mcpOutputSchema: true,
+    run: async () => {
+      throw new Error(
+        "terminal.closeOwned must be invoked through the MCP main-process path, not renderer dispatch."
+      );
     },
   }));
 
@@ -128,7 +244,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.kill",
     title: "Kill Terminal",
     description:
-      "Permanently destroy a panel and any process behind it, with no trash step and no recovery. This is not limited to terminals — whatever panel the id names is removed. A panel running an agent session is left untouched unless the call itself is marked confirmed, so read back its state rather than assuming it went. Identify it explicitly: an automated caller cannot see what the user has focused. Close it instead when recoverability matters.",
+      "Permanently destroy a panel and its process, with no trash step and no recovery. Not limited to terminals: whatever the id names is removed. A panel running an agent session is untouched unless the call is marked confirmed, so read back its state rather than assume it went. Identify it explicitly: an automated caller cannot see what the user focused. Close it instead when recovery matters.",
     category: "terminal",
     kind: "command",
     danger: "confirm",
@@ -175,7 +291,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.restart",
     title: "Restart Terminal",
     description:
-      "Begin restarting a terminal's process in place, keeping the pane. This returns before the restart has finished, so the terminal is not ready yet when it does — watch its status before sending anything. A terminal running an agent session is left untouched unless the call itself is marked confirmed; otherwise whatever was running is terminated and unsaved in-process state is lost. A panel with no process is ignored rather than reported as an error.",
+      "Restart a terminal's process in place, keeping the pane. This returns before the restart finishes, so it is not ready when it does; watch its status before sending anything. A terminal running an agent session is left untouched unless the call is marked confirmed; otherwise whatever was running is terminated and unsaved state is lost. A panel with no process is ignored, not an error.",
     category: "terminal",
     kind: "command",
     danger: "confirm",
@@ -462,7 +578,9 @@ export function registerTerminalLifecycleActions(
     danger: "safe",
     scope: "renderer",
     keywords: ["trash", "hide", "clear", "cleanup"],
-    run: async () => {
+    resultSchema: PanelCloseResultSchema,
+    mcpOutputSchema: true,
+    run: async (_args: unknown, ctx) => {
       const state = usePanelStore.getState();
       const activeWorktreeId = callbacks.getActiveWorktreeId();
       // Skip tooling-internal panels — the Daintree Assistant's own dock
@@ -477,7 +595,7 @@ export function registerTerminalLifecycleActions(
           (t.worktreeId ?? undefined) === (activeWorktreeId ?? undefined)
         );
       });
-      if (idsToClose.length === 0) return;
+      if (idsToClose.length === 0) return { closedIds: [] };
       requestPanelClose({
         hideIds: idsToClose,
         commit: () => {
@@ -485,6 +603,7 @@ export function registerTerminalLifecycleActions(
           idsToClose.forEach((id) => latest.trashPanel(id));
         },
       });
+      return settleCloseForDispatch(idsToClose, ctx);
     },
   }));
 
@@ -492,7 +611,7 @@ export function registerTerminalLifecycleActions(
     id: "terminal.killAll",
     title: "Kill All Terminals",
     description:
-      "Permanently destroy every panel in the project at once — across all worktrees, of every kind, including trashed and backgrounded ones — with no trash step and no recovery. This takes the user's own shells and other agents' running work with it; only tooling-internal and dialog-hosted panels are spared. While any agent session is running it destroys nothing unless the call itself is marked confirmed. There is essentially never a reason for an automated caller to use this.",
+      "Permanently destroy every panel in the project, across all worktrees and kinds, including trashed and backgrounded, with no trash step and no recovery. It takes the user's own shells and other agents' work with it; only tooling-internal and dialog-hosted panels are spared. While an agent session runs it destroys nothing unless the call is marked confirmed. Automated callers should never need this.",
     category: "terminal",
     kind: "command",
     danger: "confirm",

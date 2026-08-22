@@ -1,5 +1,79 @@
 import { describe, expect, it } from "vitest";
+import { BUILT_IN_AGENT_IDS, type BuiltInAgentId } from "../../config/agentIds.js";
+import { AGENT_REGISTRY } from "../../config/agentRegistry.js";
+import type { CompletionSourceConfig } from "../completionSources.js";
 import { BUILTIN_SLASH_COMMANDS, getBuiltinSlashCommands } from "../slashCommands.js";
+
+const AGENT_IDS = new Set<string>(BUILT_IN_AGENT_IDS);
+
+/**
+ * The command set Codex 0.147.0's own `/` popup lists, captured from the
+ * installed CLI (#11843). This is an upstream contract, not a copy of the
+ * catalog: it fails whenever the two drift apart in either direction, which is
+ * the regression the catalog kept suffering. To refresh after a Codex upgrade,
+ * launch `codex`, type `/`, scroll the popup, and diff it against this list —
+ * then update the catalog and this fixture together, in that order.
+ */
+const CODEX_0_147_0_POPUP_COMMANDS = [
+  "agent",
+  "app",
+  "approve",
+  "archive",
+  "clear",
+  "compact",
+  "copy",
+  "delete",
+  "diff",
+  "exit",
+  "experimental",
+  "fast",
+  "feedback",
+  "fork",
+  "goal",
+  "hooks",
+  "ide",
+  "import",
+  "init",
+  "keymap",
+  "logout",
+  "mcp",
+  "memories",
+  "mention",
+  "model",
+  "new",
+  "permissions",
+  "personality",
+  "pets",
+  "plan",
+  "plugins",
+  "ps",
+  "raw",
+  "rename",
+  "resume",
+  "review",
+  "side",
+  "skills",
+  "status",
+  "statusline",
+  "stop",
+  "subagents",
+  "theme",
+  "title",
+  "usage",
+  "vim",
+] as const;
+
+/** The `/` sources whose commands come from the shared built-in catalog. */
+function builtinCatalogSources(agentId: BuiltInAgentId): CompletionSourceConfig[] {
+  return (AGENT_REGISTRY[agentId].completionSources ?? []).filter(
+    (source) =>
+      source.discovery.method === "static" && source.discovery.catalog === "builtin-slash-commands"
+  );
+}
+
+function agentsReadingBuiltinCatalog(): BuiltInAgentId[] {
+  return BUILT_IN_AGENT_IDS.filter((agentId) => builtinCatalogSources(agentId).length > 0);
+}
 
 describe("BUILTIN_SLASH_COMMANDS registry", () => {
   it("has no duplicate ids", () => {
@@ -12,148 +86,161 @@ describe("BUILTIN_SLASH_COMMANDS registry", () => {
     expect(new Set(labels).size).toBe(labels.length);
   });
 
-  it("every entry has at least one supportedAgent", () => {
+  it("derives every label from its id as a single slash token", () => {
+    for (const entry of BUILTIN_SLASH_COMMANDS) {
+      expect(entry.label).toBe(`/${entry.id}`);
+      expect(entry.id).toMatch(/^[a-z0-9][a-z0-9-]*$/);
+    }
+  });
+
+  it("has non-empty, trimmed, period-free text on every entry", () => {
+    for (const entry of BUILTIN_SLASH_COMMANDS) {
+      for (const value of [
+        entry.id,
+        entry.description,
+        ...Object.values(entry.descriptions ?? {}),
+      ]) {
+        expect(value).toBe(value.trim());
+        expect(value.length).toBeGreaterThan(0);
+        expect(value.endsWith(".")).toBe(false);
+      }
+    }
+  });
+
+  it("declares only real, non-duplicated agent ids in supportedAgents", () => {
     for (const entry of BUILTIN_SLASH_COMMANDS) {
       expect(entry.supportedAgents.length).toBeGreaterThan(0);
+      expect(new Set(entry.supportedAgents).size).toBe(entry.supportedAgents.length);
+      for (const agentId of entry.supportedAgents) {
+        expect(AGENT_IDS.has(agentId)).toBe(true);
+      }
+    }
+  });
+
+  it("only overrides descriptions for agents the entry actually supports", () => {
+    for (const entry of BUILTIN_SLASH_COMMANDS) {
+      for (const agentId of Object.keys(entry.descriptions ?? {})) {
+        expect(AGENT_IDS.has(agentId)).toBe(true);
+        expect(entry.supportedAgents).toContain(agentId);
+      }
+    }
+  });
+
+  it("never overrides a description with the base text", () => {
+    for (const entry of BUILTIN_SLASH_COMMANDS) {
+      for (const [agentId, override] of Object.entries(entry.descriptions ?? {})) {
+        expect(
+          override,
+          `/${entry.id} declares a ${agentId} override identical to its base description`
+        ).not.toBe(entry.description);
+      }
+    }
+  });
+
+  // Array order is the order the menu renders on a bare `/` (rankSlashCommands
+  // returns the list untouched for an empty query), so the grouping the file
+  // documents has to hold in the data, not just in the comments.
+  it("keeps each support group contiguous and alphabetical", () => {
+    const groupOf = (agents: readonly BuiltInAgentId[]) => [...agents].sort().join("+");
+    const seen = new Set<string>();
+    let current: string | null = null;
+    let previousId = "";
+
+    for (const entry of BUILTIN_SLASH_COMMANDS) {
+      const group = groupOf(entry.supportedAgents);
+      if (group !== current) {
+        expect(seen.has(group), `${group} entries are split across the array`).toBe(false);
+        seen.add(group);
+        current = group;
+        previousId = "";
+      }
+      expect(
+        entry.id > previousId,
+        `/${entry.id} is out of alphabetical order within the ${group} group`
+      ).toBe(true);
+      previousId = entry.id;
     }
   });
 });
 
 describe("getBuiltinSlashCommands", () => {
-  it("returns 34 commands for claude", () => {
-    expect(getBuiltinSlashCommands("claude")).toHaveLength(34);
+  it("returns exactly the entries declaring the agent, in registry order", () => {
+    for (const agentId of BUILT_IN_AGENT_IDS) {
+      const expected = BUILTIN_SLASH_COMMANDS.filter((e) =>
+        e.supportedAgents.includes(agentId)
+      ).map((e) => e.id);
+      expect(getBuiltinSlashCommands(agentId).map((c) => c.id)).toEqual(expected);
+    }
   });
 
-  it("returns 27 commands for gemini", () => {
-    expect(getBuiltinSlashCommands("gemini")).toHaveLength(27);
-  });
-
-  it("returns 35 commands for codex", () => {
-    expect(getBuiltinSlashCommands("codex")).toHaveLength(35);
-  });
-
-  it("returns empty array for unsupported agents", () => {
-    expect(getBuiltinSlashCommands("opencode")).toEqual([]);
-    expect(getBuiltinSlashCommands("cursor")).toEqual([]);
-  });
-
-  it("stamps agentId correctly on all returned commands", () => {
-    for (const agentId of ["claude", "gemini", "codex"] as const) {
-      const commands = getBuiltinSlashCommands(agentId);
-      for (const cmd of commands) {
-        expect(cmd.agentId).toBe(agentId);
+  it("projects each entry to the public SlashCommand shape and nothing else", () => {
+    for (const agentId of BUILT_IN_AGENT_IDS) {
+      for (const command of getBuiltinSlashCommands(agentId)) {
+        const entry = BUILTIN_SLASH_COMMANDS.find((e) => e.id === command.id);
+        expect(entry, `${agentId} returned an unknown command id ${command.id}`).toBeDefined();
+        if (!entry) continue;
+        // toStrictEqual (not toEqual) so an explicitly-undefined `kind`,
+        // `sourcePath` or `trigger` still counts as a leaked key.
+        expect(command).toStrictEqual({
+          id: entry.id,
+          label: entry.label,
+          description: entry.descriptions?.[agentId] ?? entry.description,
+          scope: "built-in",
+          agentId,
+        });
       }
     }
   });
 
-  it("sets scope to built-in on all returned commands", () => {
-    const commands = getBuiltinSlashCommands("claude");
-    for (const cmd of commands) {
-      expect(cmd.scope).toBe("built-in");
+  it("returns unique ids and labels per agent", () => {
+    for (const agentId of BUILT_IN_AGENT_IDS) {
+      const commands = getBuiltinSlashCommands(agentId);
+      expect(new Set(commands.map((c) => c.id)).size).toBe(commands.length);
+      expect(new Set(commands.map((c) => c.label)).size).toBe(commands.length);
+    }
+  });
+});
+
+describe("catalog / agent-registry consistency", () => {
+  it("only declares support for agents that read the built-in catalog", () => {
+    const readers = new Set<string>(agentsReadingBuiltinCatalog());
+    for (const entry of BUILTIN_SLASH_COMMANDS) {
+      for (const agentId of entry.supportedAgents) {
+        expect(
+          readers.has(agentId),
+          `/${entry.id} lists ${agentId}, whose config never declares the built-in catalog`
+        ).toBe(true);
+      }
     }
   });
 
-  it("applies per-agent description overrides for /init", () => {
-    const claudeInit = getBuiltinSlashCommands("claude").find((c) => c.label === "/init");
-    const codexInit = getBuiltinSlashCommands("codex").find((c) => c.label === "/init");
-    const geminiInit = getBuiltinSlashCommands("gemini").find((c) => c.label === "/init");
-
-    expect(claudeInit?.description).toBe("Initialize project configuration");
-    expect(codexInit?.description).toBe("Scaffold AGENTS.md instructions");
-    expect(geminiInit?.description).toBe("Initialize project configuration");
-  });
-
-  it("applies per-agent description overrides for /model", () => {
-    const claudeModel = getBuiltinSlashCommands("claude").find((c) => c.label === "/model");
-    const codexModel = getBuiltinSlashCommands("codex").find((c) => c.label === "/model");
-
-    expect(claudeModel?.description).toBe("Switch active AI model");
-    expect(codexModel?.description).toBe("Switch model or reasoning settings");
-  });
-
-  it("applies per-agent description overrides for /clear", () => {
-    const claudeClear = getBuiltinSlashCommands("claude").find((c) => c.label === "/clear");
-    const geminiClear = getBuiltinSlashCommands("gemini").find((c) => c.label === "/clear");
-
-    expect(claudeClear?.description).toBe("Reset display and attention buffer");
-    expect(geminiClear?.description).toBe("Clear the terminal display");
-  });
-
-  it("applies per-agent description overrides for /goal", () => {
-    const entry = BUILTIN_SLASH_COMMANDS.find((e) => e.id === "goal");
-    const claudeGoal = getBuiltinSlashCommands("claude").find((c) => c.label === "/goal");
-    const codexGoal = getBuiltinSlashCommands("codex").find((c) => c.label === "/goal");
-
-    expect(entry?.descriptions?.codex).toBeTruthy();
-    expect(claudeGoal?.description).toBe(entry?.description);
-    expect(codexGoal?.description).toBe(entry?.descriptions?.codex);
-    expect(claudeGoal?.description).not.toBe(codexGoal?.description);
-  });
-
-  it("/compact appears for claude and codex but not gemini", () => {
-    expect(getBuiltinSlashCommands("claude").some((c) => c.label === "/compact")).toBe(true);
-    expect(getBuiltinSlashCommands("codex").some((c) => c.label === "/compact")).toBe(true);
-    expect(getBuiltinSlashCommands("gemini").some((c) => c.label === "/compact")).toBe(false);
-  });
-
-  it("/goal appears for claude and codex but not gemini", () => {
-    expect(getBuiltinSlashCommands("claude").some((c) => c.label === "/goal")).toBe(true);
-    expect(getBuiltinSlashCommands("codex").some((c) => c.label === "/goal")).toBe(true);
-    expect(getBuiltinSlashCommands("gemini").some((c) => c.label === "/goal")).toBe(false);
-  });
-
-  it("/compress appears for gemini only", () => {
-    expect(getBuiltinSlashCommands("gemini").some((c) => c.label === "/compress")).toBe(true);
-    expect(getBuiltinSlashCommands("claude").some((c) => c.label === "/compress")).toBe(false);
-    expect(getBuiltinSlashCommands("codex").some((c) => c.label === "/compress")).toBe(false);
-  });
-
-  it("/add-dir appears for claude only", () => {
-    expect(getBuiltinSlashCommands("claude").some((c) => c.label === "/add-dir")).toBe(true);
-    expect(getBuiltinSlashCommands("gemini").some((c) => c.label === "/add-dir")).toBe(false);
-    expect(getBuiltinSlashCommands("codex").some((c) => c.label === "/add-dir")).toBe(false);
-  });
-
-  it("codex catalog is refreshed: /approvals dropped, /permissions kept, 14 additions present", () => {
-    const codex = new Set(getBuiltinSlashCommands("codex").map((c) => c.label));
-    // /approvals is a deprecated alias of the already-shared /permissions.
-    expect(codex.has("/approvals")).toBe(false);
-    expect(codex.has("/permissions")).toBe(true);
-    // /mention and /logout are retained (present in installed Codex 0.144.1).
-    expect(codex.has("/mention")).toBe(true);
-    expect(codex.has("/logout")).toBe(true);
-    // The 14 additions researched against the installed CLI.
-    const additions = [
-      "/apps",
-      "/plugins",
-      "/skills",
-      "/fast",
-      "/plan",
-      "/goal",
-      "/personality",
-      "/memories",
-      "/agent",
-      "/feedback",
-      "/raw",
-      "/stop",
-      "/approve",
-      "/sandbox-add-read-dir",
-    ];
-    for (const label of additions) expect(codex.has(label)).toBe(true);
-  });
-
-  it("does not include kind or sourcePath on returned commands", () => {
-    const commands = getBuiltinSlashCommands("claude");
-    for (const cmd of commands) {
-      expect(cmd).not.toHaveProperty("kind");
-      expect(cmd).not.toHaveProperty("sourcePath");
+  it("gives every agent that reads the catalog a non-empty command list", () => {
+    const readers = agentsReadingBuiltinCatalog();
+    expect(readers.length).toBeGreaterThan(0);
+    for (const agentId of readers) {
+      expect(
+        getBuiltinSlashCommands(agentId).length,
+        `${agentId} resolves to no commands`
+      ).toBeGreaterThan(0);
     }
   });
 
-  it("no duplicate labels within any agent's results", () => {
-    for (const agentId of ["claude", "gemini", "codex"] as const) {
-      const labels = getBuiltinSlashCommands(agentId).map((c) => c.label);
-      expect(new Set(labels).size).toBe(labels.length);
+  it("binds the built-in catalog to the slash trigger", () => {
+    // A `$`-triggered built-in source would leave every other test green while
+    // the slash menu silently dropped the agent's whole command list.
+    for (const agentId of agentsReadingBuiltinCatalog()) {
+      for (const source of builtinCatalogSources(agentId)) {
+        expect(source.trigger, `${agentId} reads the built-in catalog under a non-/ trigger`).toBe(
+          "/"
+        );
+      }
     }
+  });
+});
+
+describe("Codex upstream conformance", () => {
+  it("matches the command set Codex 0.147.0 lists in its own popup", () => {
+    const actual = getBuiltinSlashCommands("codex").map((c) => c.id);
+    expect([...actual].sort()).toEqual([...CODEX_0_147_0_POPUP_COMMANDS].sort());
   });
 });

@@ -2,9 +2,12 @@ import { describe, it, expect } from "vitest";
 import {
   getMergedPresets,
   getMergedPreset,
+  getMergedPresetIdentities,
+  PRESET_DESCRIPTION_MAX_CHARS,
   sanitizeAgentEnv,
   sanitizeDisplayTitle,
 } from "@/config/agents";
+import type { AgentPreset } from "@shared/config/agentRegistry";
 
 // Adversarial unit tests for preset merging logic
 describe("Adversarial: Preset Merging", () => {
@@ -633,5 +636,241 @@ describe("getMergedPresets — displayTitle", () => {
   it("leaves displayTitle undefined when absent", () => {
     const result = getMergedPresets("claude", [{ id: "z", name: "Claude" }]);
     expect(result.find((f) => f.id === "z")?.displayTitle).toBeUndefined();
+  });
+});
+
+// `getMergedPresetIdentities` is the discovery projection behind the preset
+// listing action: same merge as `getMergedPresets`, reduced to what identifies
+// a preset and tagged with the layer it came from. `claude` carries no registry
+// presets and `mistral` does, which is what makes the bucket cases below
+// deterministic without mocking the registry.
+describe("Adversarial: Preset Identity Projection", () => {
+  const SECRET = "sk-live-do-not-leak";
+
+  const loadedPreset = {
+    id: "loaded",
+    name: "Loaded",
+    description: "A preset with a payload",
+    env: { ANTHROPIC_API_KEY: SECRET },
+    args: ["--secret-flag"],
+    customFlags: "--dangerous",
+    dangerousEnabled: true,
+    dangerousMode: "on" as const,
+    color: "#ff0000",
+    displayTitle: "Loaded title",
+  };
+
+  it("exposes only identity fields and never the launch payload", () => {
+    const [row] = getMergedPresetIdentities("claude", [loadedPreset]);
+
+    expect(Object.keys(row!).sort()).toEqual(["description", "id", "name", "source"].sort());
+    const serialized = JSON.stringify(getMergedPresetIdentities("claude", [loadedPreset]));
+    expect(serialized).not.toContain(SECRET);
+    expect(serialized).not.toContain("--secret-flag");
+    expect(serialized).not.toContain("dangerous");
+    expect(serialized).not.toContain("displayTitle");
+    expect(serialized).not.toContain("#ff0000");
+  });
+
+  it("omits the description key entirely when the preset has none", () => {
+    const [row] = getMergedPresetIdentities("claude", [{ id: "bare", name: "Bare" }]);
+    expect(Object.keys(row!).sort()).toEqual(["id", "name", "source"]);
+  });
+
+  it("tags each layer and applies custom > project > registry precedence", () => {
+    const rows = getMergedPresetIdentities(
+      "claude",
+      [{ id: "shared", name: "From custom" }],
+      undefined,
+      [
+        { id: "shared", name: "From project" },
+        { id: "project-only", name: "Project only" },
+      ]
+    );
+
+    expect(rows).toEqual([
+      { id: "shared", name: "From custom", source: "custom" },
+      { id: "project-only", name: "Project only", source: "project" },
+    ]);
+  });
+
+  it("reports the winner's own layer rather than the layer it displaced", () => {
+    // The collision loser is a project preset; the surviving row must not
+    // inherit its provenance just because it was merged over it.
+    const [row] = getMergedPresetIdentities("claude", [{ id: "dup", name: "Custom" }], undefined, [
+      { id: "dup", name: "Project" },
+    ]);
+    expect(row).toEqual({ id: "dup", name: "Custom", source: "custom" });
+  });
+
+  it("labels built-in presets `registry` when no CCR data is supplied", () => {
+    const rows = getMergedPresetIdentities("mistral");
+
+    expect(rows.length).toBeGreaterThan(0);
+    expect(rows.every((row) => row.source === "registry")).toBe(true);
+    // Registry presets carry `args`; the projection keeps their description and
+    // drops the payload.
+    expect(rows.some((row) => row.description !== undefined)).toBe(true);
+    expect(JSON.stringify(rows)).not.toContain("--agent");
+  });
+
+  it("lets a defined CCR array replace the registry bucket, including when empty", () => {
+    const replaced = getMergedPresetIdentities("mistral", undefined, [
+      { id: "ccr-route", name: "CCR route" },
+    ]);
+    expect(replaced).toEqual([{ id: "ccr-route", name: "CCR route", source: "ccr" }]);
+
+    // `[]` is data, not "no data": it replaces the registry bucket the same way
+    // a populated array does. Defaulting an absent store value to `[]` before
+    // calling this would silently erase every built-in preset.
+    expect(getMergedPresetIdentities("mistral", undefined, [])).toEqual([]);
+    expect(getMergedPresetIdentities("mistral", undefined, undefined).length).toBeGreaterThan(0);
+  });
+
+  function describeOne(description: unknown): string | undefined {
+    return getMergedPresetIdentities("claude", [
+      { id: "p", name: "P", description: description as string },
+    ])[0]!.description;
+  }
+
+  it("strips markup and invisible characters from a description", () => {
+    const cleaned = describeOne("  <script>alert(1)</script>  ");
+    // Asserted as invariants rather than one exact escaped string, so an
+    // equally safe escaping strategy does not require editing this test.
+    expect(cleaned).not.toMatch(/[<>]/);
+    expect(cleaned).toContain("alert(1)");
+    expect(cleaned?.trim()).toBe(cleaned);
+  });
+
+  it("drops characters that make text read differently than it is stored", () => {
+    // Each of these survives a plain control-char filter but lets a description
+    // disguise itself to a reader, or to an agent reading it as prompt text:
+    // bidi overrides/isolates/marks, zero-width marks and joiners, the word
+    // joiner, the Arabic letter mark, and the BOM.
+    for (const hidden of [
+      "\u202e",
+      "\u202a",
+      "\u2066",
+      "\u200b",
+      "\u200d",
+      "\u200e",
+      "\u200f",
+      "\u061c",
+      "\u2060",
+      "\ufeff",
+    ]) {
+      expect(describeOne(`safe${hidden}text`)).toBe("safetext");
+    }
+  });
+
+  it("drops an unpaired surrogate rather than emitting half a character", () => {
+    // A lone surrogate cannot round-trip through JSON, so it must not reach a
+    // caller even when it was already in the stored description.
+    expect(describeOne("A\ud800B")).toBe("AB");
+    expect(describeOne("A\udc00B")).toBe("AB");
+  });
+
+  it("turns line breaks into spaces instead of welding words together", () => {
+    // Deleting the break would silently invent the word "line1line2".
+    for (const brk of ["\n", "\r\n", "\t", "\u2028", "\u2029"]) {
+      expect(describeOne(`line1${brk}line2`)).toBe("line1 line2");
+    }
+    expect(describeOne("spaced     out")).toBe("spaced out");
+  });
+
+  it("truncates by code point so a description never ends mid-character", () => {
+    const emoji = "😀";
+    const truncated = describeOne("A".repeat(PRESET_DESCRIPTION_MAX_CHARS - 1) + emoji + emoji);
+
+    const points = Array.from(truncated!);
+    expect(points).toHaveLength(PRESET_DESCRIPTION_MAX_CHARS);
+    expect(points.at(-1)).toBe(emoji);
+    // The real hazard of a UTF-16 slice is half a surrogate pair reaching JSON.
+    // `Array.from` iterates by code point, so a split pair shows up as a
+    // standalone surrogate code unit rather than a whole character.
+    const isLoneSurrogate = (ch: string) =>
+      ch.length === 1 && ch.charCodeAt(0) >= 0xd800 && ch.charCodeAt(0) <= 0xdfff;
+    expect(points.some(isLoneSurrogate)).toBe(false);
+  });
+
+  it("leaves a description that already fits untouched", () => {
+    const fits = "Routes through a self-hosted gateway";
+    expect(describeOne(fits)).toBe(fits);
+  });
+
+  it("treats an unusable description as absent rather than empty", () => {
+    // An empty string would add a key with no information to every row on the
+    // wire; absence is both smaller and truthful.
+    for (const unusable of ["   ", 42, null, undefined, "<>"]) {
+      expect(describeOne(unusable)).toBeUndefined();
+    }
+  });
+
+  it("drops presets the shared validator rejects", () => {
+    const rows = getMergedPresetIdentities("claude", [
+      { id: "bad id", name: "Spaces in id" },
+      { id: "no-name", name: "   " },
+      { id: "ok", name: "Fine" },
+    ]);
+    expect(rows.map((row) => row.id)).toEqual(["ok"]);
+  });
+
+  it("does not let a rejected custom preset shadow a valid lower-layer one", () => {
+    // The custom entry is invalid, so the project entry with the same id is the
+    // one a launch would actually resolve — the listing has to agree.
+    const rows = getMergedPresetIdentities("claude", [{ id: "shared", name: "<bad>" }], undefined, [
+      { id: "shared", name: "Project" },
+    ]);
+    expect(rows).toEqual([{ id: "shared", name: "Project", source: "project" }]);
+  });
+
+  it("lets a project preset override a CCR preset of the same id", () => {
+    // Without this the bottom two layers could be swapped and every other
+    // precedence test would still pass.
+    expect(
+      getMergedPresetIdentities(
+        "claude",
+        undefined,
+        [{ id: "dup", name: "From CCR" }],
+        [{ id: "dup", name: "From project" }]
+      )
+    ).toEqual([{ id: "dup", name: "From project", source: "project" }]);
+  });
+
+  it("does not let a rejected project preset shadow a valid CCR preset", () => {
+    expect(
+      getMergedPresetIdentities(
+        "claude",
+        undefined,
+        [{ id: "dup", name: "From CCR" }],
+        [{ id: "dup", name: "   " }]
+      )
+    ).toEqual([{ id: "dup", name: "From CCR", source: "ccr" }]);
+  });
+
+  it("treats a malformed bucket as absent in both merges alike", () => {
+    const junk = "not-an-array" as unknown as AgentPreset[];
+
+    // The launch-facing merge used to throw here while the identity merge
+    // skipped it, which is how a listing could certify presets that the next
+    // launch crashed resolving. Both must now read it the same way.
+    expect(() => getMergedPresets("mistral", junk, junk, junk)).not.toThrow();
+    expect(getMergedPresetIdentities("mistral", junk, junk, junk).map((r) => r.id)).toEqual(
+      getMergedPresets("mistral", junk, junk, junk).map((p) => p.id)
+    );
+    // A malformed CCR bucket reads as absent, so the built-in presets survive
+    // rather than being replaced by nothing.
+    expect(getMergedPresetIdentities("mistral", undefined, junk).length).toBeGreaterThan(0);
+  });
+
+  it("stays in step with the launch-facing merge it mirrors", () => {
+    const custom = [{ id: "one", name: "One" }];
+    const project = [
+      { id: "one", name: "Shadowed" },
+      { id: "two", name: "Two" },
+    ];
+    expect(
+      getMergedPresetIdentities("mistral", custom, undefined, project).map((r) => r.id)
+    ).toEqual(getMergedPresets("mistral", custom, undefined, project).map((p) => p.id));
   });
 });

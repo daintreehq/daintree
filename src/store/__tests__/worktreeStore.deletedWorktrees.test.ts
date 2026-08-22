@@ -21,6 +21,7 @@ import {
   getDeletedWorktreeTerminalIds,
   getPinnedDeletedWorktreeAnchorId,
   recordSidebarWorktreeOrder,
+  createDeletedWorktreeRecord,
   type DeletedWorktree,
 } from "@/store/worktreeStore";
 
@@ -336,5 +337,64 @@ describe("deleted-worktree group expansion (#11260)", () => {
     addRows(3);
 
     expect(useWorktreeSelectionStore.getState().deletedWorktreeGroupExpanded).toBe(false);
+  });
+});
+
+describe("createDeletedWorktreeRecord", () => {
+  beforeEach(() => {
+    recordSidebarWorktreeOrder([]);
+  });
+
+  it("names the row after the branch when one is known", () => {
+    const record = createDeletedWorktreeRecord("/repo/wt-1", {
+      title: "feature/x",
+      path: "/repo/wt-1",
+    });
+    expect(record.title).toBe("feature/x");
+    expect(record.path).toBe("/repo/wt-1");
+  });
+
+  it("falls back to the folder name for a detached-HEAD worktree", () => {
+    const record = createDeletedWorktreeRecord("/repo/wt-1", { path: "/repo/wt-1" });
+    expect(record.title).toBe("wt-1");
+  });
+
+  it("derives both path and title from the id when nothing else survives", () => {
+    // A worktree id IS its path, so a reconstructed row still has a
+    // recognisable name after git has forgotten the worktree entirely.
+    const record = createDeletedWorktreeRecord("/repo/feature-x");
+    expect(record.path).toBe("/repo/feature-x");
+    expect(record.title).toBe("feature-x");
+  });
+
+  it("reads the last segment of a Windows-style path", () => {
+    const record = createDeletedWorktreeRecord("C:\\repo\\feature-x");
+    expect(record.title).toBe("feature-x");
+  });
+
+  it("still produces a usable title for a path that is nothing but separators", () => {
+    // The invariant is that the sidebar always has something to render — the
+    // particular wording is not the contract.
+    const record = createDeletedWorktreeRecord("///");
+    expect(record.title.trim().length).toBeGreaterThan(0);
+  });
+
+  it("records the row unarmed so the cleanup sweep owns the countdown", () => {
+    const record = createDeletedWorktreeRecord("/repo/wt-1");
+    expect(record.expiresAt).toBeNull();
+    expect(record.holdReason).toBeNull();
+  });
+
+  it("stamps deletedAt from the clock at construction", () => {
+    const before = Date.now();
+    const record = createDeletedWorktreeRecord("/repo/wt-1");
+    expect(record.deletedAt).toBeGreaterThanOrEqual(before);
+    expect(record.deletedAt).toBeLessThanOrEqual(Date.now());
+  });
+
+  it("anchors the row to the neighbour it sat above in the sidebar", () => {
+    recordSidebarWorktreeOrder(["wt-a", "wt-b", "wt-c"]);
+    expect(createDeletedWorktreeRecord("wt-b").pinnedBeforeWorktreeId).toBe("wt-c");
+    expect(createDeletedWorktreeRecord("wt-c").pinnedBeforeWorktreeId).toBeNull();
   });
 });

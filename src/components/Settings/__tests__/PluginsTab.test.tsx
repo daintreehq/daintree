@@ -41,6 +41,7 @@ function makePlugin(name: string): LoadedPluginInfo {
         fileDecorationProviders: [],
         agents: [],
         processTools: [],
+        recipes: [],
       },
     },
     dir: `/plugins/${name}`,

@@ -118,7 +118,7 @@ Claude Code evaluates permissions in order **deny → ask → allow**, and the f
 
 **Claude** (`.claude/settings.json`):
 
-- Allows: `Read(**)`, `Glob(**)`, `Grep(**)`, `LS(**)`, `WebFetch`, `mcp__daintree-docs__*`
+- Allows: `Read(**)` — a single `Read` rule covers every file-reading tool (`Glob`, `Grep`, `LS`); listing those separately does nothing and makes Claude Code warn at session start — plus `WebFetch`, `mcp__daintree-docs__*`
 - Allows (auto-approved): `Bash(gh *)`, `Bash(glab *)`, `Bash(tea *)` — the full read surface of each forge CLI
 - Denies: `Edit(**)` — a single `Edit` rule covers every file-editing tool (`Write`, `NotebookEdit`, `MultiEdit`); listing those separately does nothing and makes Claude Code warn at session start — plus the destructive forge write paths (`Bash(gh issue create*)`, `Bash(gh pr create*)`, `Bash(gh pr merge*)`, `Bash(gh repo create*)`, `Bash(gh repo delete*)`, and the `glab`/`tea` equivalents including tea's `issues`/`pulls` plural aliases). A Claude Code `deny` is a hard block, not a confirmation prompt — these commands cannot be invoked at the tool layer at all, so autonomous issue/PR creation via the CLI is impossible regardless of the model's reasoning
 - At provision time, `HelpSessionService` adds `mcp__daintree__*` to the allow list when the user has local MCP enabled, and sets `defaultMode: "bypassPermissions"` when skip-permissions is enabled. The session tier (`workbench` / `action` / `system`) gates the actual `mcp__daintree__*` tool surface server-side.

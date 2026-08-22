@@ -585,13 +585,28 @@ type ProcessHostShape = (pluginId: string) => {
   revoke: () => void;
 };
 
-function makeFakeChild() {
+function makeFakeChild(opts?: { duplex?: boolean }) {
   const listeners = new Map<string, Array<(...args: unknown[]) => void>>();
   const killSignals: Array<NodeJS.Signals | undefined> = [];
+  const stdinWrites: string[] = [];
+  // Matches the real spawner: only duplex mode opens fd 0, so pipe mode gets the
+  // `null` Node hands back for a stdio slot spawned as "ignore".
+  const stdin: NodeJS.WritableStream | null =
+    opts?.duplex === true
+      ? ({
+          write: (chunk: string) => {
+            stdinWrites.push(chunk);
+            return true;
+          },
+          writable: true,
+          on: () => undefined,
+        } as unknown as NodeJS.WritableStream)
+      : null;
   const child: ManagedChildProcess = {
     pid: 9999,
     stdout: null,
     stderr: null,
+    stdin,
     kill(signal) {
       killSignals.push(signal);
       return true;
@@ -603,7 +618,7 @@ function makeFakeChild() {
       return child;
     }) as ManagedChildProcess["on"],
   };
-  return { child, killSignals };
+  return { child, killSignals, stdinWrites };
 }
 
 describe("createHost — host.process (managed processes, #9234)", () => {
@@ -661,6 +676,134 @@ describe("createHost — host.process (managed processes, #9234)", () => {
     expect(typeof handle.id).toBe("string");
     expect(fakes).toHaveLength(1);
     expect(manager.runningCount("acme.proc-cap")).toBe(1);
+  });
+
+  it("hands duplex mode a write-capable handle without resize (#11871)", async () => {
+    await writePlugin("proc-duplex", {
+      name: "acme.proc-duplex",
+      version: "1.0.0",
+      capabilities: ["shell:exec"],
+    });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const fakes: ReturnType<typeof makeFakeChild>[] = [];
+    const modes: string[] = [];
+    const manager = new PluginProcessManager({
+      streamSink: () => {},
+      spawner: (config) => {
+        modes.push(config.mode);
+        const fake = makeFakeChild({ duplex: config.mode === "duplex" });
+        fakes.push(fake);
+        return fake.child;
+      },
+      killGraceMs: 10,
+    });
+    service._setProcessManagerForTests(manager);
+
+    const { host } = (service as unknown as { createHost: ProcessHostShape }).createHost(
+      "acme.proc-duplex"
+    );
+    const spawn = host.process.spawn as (
+      command: string,
+      options?: unknown
+    ) => Promise<{ write?: (data: string) => void; resize?: unknown }>;
+
+    const handle = await spawn("codex", { mode: "duplex", args: ["app-server", "--stdio"] });
+
+    // The mode survives all the way to the spawner…
+    expect(modes).toEqual(["duplex"]);
+    // …and the public handle exposes write but NOT resize: a duplex child has
+    // no terminal, so offering resize would be an operation that goes nowhere.
+    expect(typeof handle.write).toBe("function");
+    expect(handle.resize).toBeUndefined();
+
+    handle.write?.('{"jsonrpc":"2.0","method":"initialize"}\n');
+    expect(fakes[0]!.stdinWrites.join("")).toBe('{"jsonrpc":"2.0","method":"initialize"}\n');
+  });
+
+  it("gates duplex spawn on shell:exec like every other mode (#11871)", async () => {
+    await writePlugin("proc-duplex-nocap", { name: "acme.proc-duplex-nocap", version: "1.0.0" });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const spawner = vi.fn(() => makeFakeChild({ duplex: true }).child);
+    const manager = new PluginProcessManager({ streamSink: () => {}, spawner, killGraceMs: 10 });
+    service._setProcessManagerForTests(manager);
+
+    const { host } = (service as unknown as { createHost: ProcessHostShape }).createHost(
+      "acme.proc-duplex-nocap"
+    );
+    const spawn = host.process.spawn as (command: string, options?: unknown) => Promise<unknown>;
+
+    await expect(spawn("codex", { mode: "duplex" })).rejects.toThrow(
+      /PERMISSION_REQUIRED.*shell:exec/
+    );
+    expect(spawner).not.toHaveBeenCalled();
+  });
+
+  it("blocks a denied-consent duplex spawn before the manager (#11871)", async () => {
+    await writePlugin("proc-duplex-deny", {
+      name: "acme.proc-duplex-deny",
+      version: "1.0.0",
+      capabilities: ["shell:exec"],
+    });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const spawner = vi.fn(() => makeFakeChild({ duplex: true }).child);
+    const manager = new PluginProcessManager({ streamSink: () => {}, spawner, killGraceMs: 10 });
+    service._setProcessManagerForTests(manager);
+    getPluginCapabilityConsentService().setConsentBridge(async () => "rejected");
+
+    const { host } = (service as unknown as { createHost: ProcessHostShape }).createHost(
+      "acme.proc-duplex-deny"
+    );
+    const spawn = host.process.spawn as (command: string, options?: unknown) => Promise<unknown>;
+
+    await expect(spawn("codex", { mode: "duplex" })).rejects.toThrow(/PERMISSION_REQUIRED/);
+    expect(spawner).not.toHaveBeenCalled();
+    expect(manager.runningCount("acme.proc-duplex-deny")).toBe(0);
+  });
+
+  it("tears duplex children down on unload and silences a stale write (#11871)", async () => {
+    await writePlugin("proc-duplex-unload", {
+      name: "acme.proc-duplex-unload",
+      version: "1.0.0",
+      capabilities: ["shell:exec"],
+    });
+    const service = new PluginService(tmpDir);
+    await service.initialize();
+
+    const fakes: ReturnType<typeof makeFakeChild>[] = [];
+    const manager = new PluginProcessManager({
+      streamSink: () => {},
+      spawner: (config) => {
+        const fake = makeFakeChild({ duplex: config.mode === "duplex" });
+        fakes.push(fake);
+        return fake.child;
+      },
+      killGraceMs: 10,
+    });
+    service._setProcessManagerForTests(manager);
+
+    const { host } = (service as unknown as { createHost: ProcessHostShape }).createHost(
+      "acme.proc-duplex-unload"
+    );
+    const spawn = host.process.spawn as (
+      command: string,
+      options?: unknown
+    ) => Promise<{ write?: (data: string) => void }>;
+    const handle = await spawn("codex", { mode: "duplex" });
+
+    service.unloadPlugin("acme.proc-duplex-unload");
+
+    expect(fakes[0]!.killSignals).toContain("SIGTERM");
+    // A handle retained past unload (a leaked timer, say) must not drive the
+    // child: membership gating covers write exactly as it covers kill/restart.
+    const before = fakes[0]!.stdinWrites.length;
+    expect(() => handle.write?.("after-unload\n")).not.toThrow();
+    expect(fakes[0]!.stdinWrites).toHaveLength(before);
   });
 
   it("blocks the spawn and never reaches the manager when consent is denied (#10524)", async () => {
@@ -730,7 +873,10 @@ describe("createHost — host.process (managed processes, #9234)", () => {
     );
     const spawn = host.process.spawn as (command: string, options?: unknown) => Promise<unknown>;
 
+    // The rejection names every mode that IS valid, so a plugin author reading
+    // the error learns duplex exists rather than only that theirs was wrong.
     await expect(spawn("node", { mode: "interactive" })).rejects.toThrow(/mode must be/);
+    await expect(spawn("node", { mode: "interactive" })).rejects.toThrow(/duplex/);
     // An empty panelId would silently match no subscriber — reject, don't coerce.
     await expect(spawn("node", { panelId: "" })).rejects.toThrow(/panelId must be/);
     await expect(spawn("node", { mode: "pty", cols: 0 })).rejects.toThrow(/cols must be/);

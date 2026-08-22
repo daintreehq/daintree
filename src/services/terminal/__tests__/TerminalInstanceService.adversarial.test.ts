@@ -94,36 +94,17 @@ function makeHostElement(): HTMLDivElement {
 }
 
 function makeTerminalElement(): HTMLDivElement {
-  const element = document.createElement("div");
-  const history: string[] = [];
-  const style = element.style;
-  const original = Object.getOwnPropertyDescriptor(style, "paddingTop");
-  Object.defineProperty(style, "paddingTop", {
-    configurable: true,
-    get(): string {
-      return original?.get?.call(style) ?? "";
-    },
-    set(value: string): void {
-      history.push(value);
-      original?.set?.call(style, value);
-    },
-  });
-  (
-    element as HTMLDivElement & {
-      __paddingTopHistory: string[];
-    }
-  ).__paddingTopHistory = history;
-  return element;
+  return document.createElement("div");
 }
 
-function paddingHistory(managed: ManagedTerminal): string[] {
-  return (
-    (
-      managed.terminal.element as HTMLDivElement & {
-        __paddingTopHistory?: string[];
-      }
-    ).__paddingTopHistory ?? []
-  );
+function renderService(managed: ManagedTerminal): { _isPaused: boolean } {
+  return (managed.terminal as unknown as { _core: { _renderService: { _isPaused: boolean } } })
+    ._core._renderService;
+}
+
+/** Put the renderer in the paused state — the only one a repair acts on. */
+function pauseRenderer(managed: ManagedTerminal): void {
+  renderService(managed)._isPaused = true;
 }
 
 function makeManaged(overrides: Partial<ManagedTerminal> = {}): ManagedTerminal {
@@ -135,6 +116,8 @@ function makeManaged(overrides: Partial<ManagedTerminal> = {}): ManagedTerminal 
     terminal: {
       element: terminalElement,
       rows: 24,
+      // Starts unpaused; the reflow tests below opt in via `pauseRenderer`.
+      _core: { _renderService: { _isPaused: false } },
       buffer: { active: { length: 100, type: "normal", baseY: 0, viewportY: 0 } },
       open: vi.fn(),
       write: vi.fn(),
@@ -243,6 +226,8 @@ describe("TerminalInstanceService adversarial", () => {
   it("CONCURRENT_REFLOW_IS_PER_TERMINAL_NOT_GLOBAL", () => {
     const managedA = makeManaged({ lastReflowAt: 2990 });
     const managedB = makeManaged({ lastReflowAt: 0 });
+    pauseRenderer(managedA);
+    pauseRenderer(managedB);
     document.body.appendChild(managedA.hostElement);
     document.body.appendChild(managedB.hostElement);
     service.instances.set("a", managedA);
@@ -250,8 +235,10 @@ describe("TerminalInstanceService adversarial", () => {
 
     vi.advanceTimersByTime(3000);
 
-    expect(paddingHistory(managedA)).toHaveLength(0);
-    expect(paddingHistory(managedB)).toContain("0.01px");
+    // A sits inside its 250ms throttle window and B does not, so B recovers on
+    // this sweep while A waits — one terminal's throttle must never gate another's.
+    expect(renderService(managedA)._isPaused).toBe(true);
+    expect(renderService(managedB)._isPaused).toBe(false);
     expect(managedA.lastReflowAt).toBe(2990);
     expect(managedB.lastReflowAt).toBeGreaterThan(0);
   });

@@ -6,6 +6,7 @@ import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
+import { useDockLaunchHoverSelection } from "./useDockLaunchHoverSelection";
 import { AppPalettePopover } from "@/components/ui/AppPalettePopover";
 import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
 import { PALETTE_ROW_CLASS, PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
@@ -416,6 +417,16 @@ export function DockLaunchButton({
   const activeDescendant =
     selectedRow && !capturingRowKey ? getOptionId(selectedRow.rowKey) : undefined;
   const selectedPinTarget = selectedRow ? resolvePinTarget(selectedRow) : null;
+
+  // Pointer transit must not be read as a choice of row: sweeping past rows to
+  // reach a lower one, and the scrollIntoView below sliding a row under a
+  // resting cursor, are both movement rather than intent (#11919).
+  const { listboxRef, onHover: handleRowHover } = useDockLaunchHoverSelection({
+    open,
+    results,
+    selectedIndex: activeIndex,
+    setSelectedIndex,
+  });
 
   // Set when ArrowRight expands a row, spent once the preset children actually
   // exist. The selection cannot move in the same handler: `setSelectedIndex`
@@ -884,7 +895,7 @@ export function DockLaunchButton({
           {results.length === 0 ? (
             <AppPaletteDialog.Empty query={query} emptyMessage="Nothing to launch" />
           ) : (
-            <div id={listboxId} role="listbox" aria-label="Launcher results">
+            <div ref={listboxRef} id={listboxId} role="listbox" aria-label="Launcher results">
               {results.map((row, index) =>
                 capturingRowKey === row.rowKey ? (
                   <DockLaunchCaptureRow
@@ -902,7 +913,7 @@ export function DockLaunchButton({
                     optionId={getOptionId(row.rowKey)}
                     pinTarget={resolvePinTarget(row)}
                     isExpanded={expandedPresetParentKey === row.rowKey}
-                    onHover={setSelectedIndex}
+                    onHover={handleRowHover}
                     onActivate={activateRow}
                     onTogglePin={togglePin}
                     onStartCapture={setCapturingRowKey}
@@ -971,7 +982,7 @@ function DockLaunchCaptureRow({ row, onDone }: { row: DockLaunchRow; onDone: () 
         <span className="inline-flex h-4 w-4 items-center justify-center shrink-0">
           {agent.icon ? (
             <BrandMark brandColor={agent.brandColor}>
-              <agent.icon brandColor={agent.brandColor} />
+              <agent.icon />
             </BrandMark>
           ) : (
             <SquareTerminal className="h-3.5 w-3.5" />
@@ -1009,7 +1020,7 @@ interface DockLaunchOptionProps {
   /** Null for rows with no toolbar button to pin — the slot is still reserved. */
   pinTarget: DockLaunchPinTarget | null;
   isExpanded: boolean;
-  onHover: (index: number) => void;
+  onHover: (index: number, rowKey: string, pointerType: string) => void;
   onActivate: (row: DockLaunchRow) => void;
   onTogglePin: (target: DockLaunchPinTarget) => void;
   onStartCapture: (rowKey: string) => void;
@@ -1171,7 +1182,7 @@ function DockLaunchOption({
         // DismissableLayer, which needs to see it to classify the next outside
         // click as a dismissal.
         onPointerDown={(event) => event.preventDefault()}
-        onPointerEnter={() => onHover(index)}
+        onPointerEnter={(event) => onHover(index, row.rowKey, event.pointerType)}
         onClick={() => onActivate(row)}
         className={cn(
           PALETTE_ROW_CLASS,
@@ -1304,8 +1315,8 @@ function DockLaunchOptionIcon({ row }: { row: DockLaunchRow }) {
   return (
     <span className="relative mr-2 inline-flex h-3.5 w-3.5 items-center justify-center shrink-0">
       {agent.icon ? (
-        <BrandMark brandColor={brandColor} userChosen={row.kind === "preset" && !!row.preset.color}>
-          <agent.icon className="w-3.5 h-3.5" brandColor={brandColor} />
+        <BrandMark brandColor={brandColor}>
+          <agent.icon className="w-3.5 h-3.5" />
         </BrandMark>
       ) : (
         <SquareTerminal className="w-3.5 h-3.5 shrink-0" />

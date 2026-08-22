@@ -15,6 +15,8 @@ import { TerminalResizePayloadSchema } from "../../../schemas/ipc.js";
 import type { PtyHostActivityTier } from "../../../../shared/types/pty-host.js";
 import { normalizeTerminalGridDimension } from "../../../../shared/types/terminal.js";
 import { normalizeObservedTitle } from "../../../../shared/utils/isUselessTitle.js";
+import { isPanelTitleMode, type PanelTitleMode } from "../../../../shared/types/panel.js";
+import { events } from "../../../services/events.js";
 import { defineIpcNamespace, op } from "../../define.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { AppError } from "../../../utils/errorTypes.js";
@@ -287,6 +289,33 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
       CHANNELS.TERMINAL_UPDATE_OBSERVED_TITLE,
       handleTerminalUpdateObservedTitle
     )
+  );
+
+  // A rename lives in the renderer panel store, but the record the fleet
+  // overview, session journal and shutdown records read is the pty-host's.
+  // Without this hop those surfaces keep naming the run by its launch title
+  // and every `titleMode === "user"` branch in main stays unreachable (#11830).
+  const handleTerminalUpdateTitle = (
+    _event: Electron.IpcMainEvent,
+    payload: { id: string; title: string; titleMode: PanelTitleMode }
+  ) => {
+    try {
+      if (!payload || typeof payload !== "object") return;
+      const { id, title, titleMode } = payload;
+      if (typeof id !== "string" || !id) return;
+      if (typeof title !== "string") return;
+      if (!isPanelTitleMode(titleMode)) return;
+      ptyClient.updateTitle(id, title, titleMode);
+      // The snapshot poll is 5s-aligned and nothing else reports a rename, so
+      // without this the overview lags a hand rename by up to a full cycle.
+      events.emit("terminal:title-changed", { id, timestamp: Date.now() });
+    } catch (error) {
+      console.error("[IPC] Error handling title update:", error);
+    }
+  };
+  ipcMain.on(CHANNELS.TERMINAL_UPDATE_TITLE, handleTerminalUpdateTitle);
+  handlers.push(() =>
+    ipcMain.removeListener(CHANNELS.TERMINAL_UPDATE_TITLE, handleTerminalUpdateTitle)
   );
 
   const handleTerminalForceResume = async (id: string): Promise<void> => {

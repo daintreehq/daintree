@@ -1,7 +1,49 @@
 import type { Project, TerminalSnapshot } from "../project.js";
 import type { TabGroup } from "../panel.js";
+import type { AgentState, WaitingReason } from "../agent.js";
 import type { IdArrayDelta } from "../../utils/layoutMerge.js";
 import type { HydrateResult } from "./app.js";
+
+/**
+ * Live Daintree Assistant presence for one workspace — what the assistant is
+ * doing, not a run the user launched (#11806).
+ *
+ * Carried beside the worker tallies and never inside them. The assistant is a
+ * tooling-internal PTY: it is excluded from `activeAgentCount`,
+ * `waitingAgentCount` and `completedAgentCount`, netted out of `processCount`,
+ * and absent from the fleet run list. Before these fields existed that
+ * exclusion also made it invisible cross-project, so a project whose assistant
+ * was working read as dormant.
+ *
+ * Raw facts, deliberately: whether a given state means "present", "running" or
+ * "needs someone" is a presentation decision, and it is made in exactly one
+ * place on the renderer side (`classifyAssistantActivity`). Shipping the
+ * verdict instead would put that judgement in the producer and let the two
+ * drift, which is the whole failure mode #10989 came from.
+ */
+export interface AssistantPresenceEntry {
+  /**
+   * The assistant terminal's `agentState`. Absent when the workspace has no
+   * live assistant PTY. Settled states (`idle`, `completed`, `exited`) are
+   * reported as faithfully as live ones — the consumer decides which of them
+   * are worth a status line.
+   */
+  assistantState?: AgentState;
+  /**
+   * Why the assistant is waiting. Present only when
+   * {@link AssistantPresenceEntry.assistantState} is `"waiting"` — a terminal
+   * record can keep a stale reason after leaving the state, and a working
+   * assistant carrying a leftover `"error"` would read as blocked.
+   */
+  assistantWaitingReason?: WaitingReason;
+  /**
+   * Epoch ms of the assistant's transition into the reported state, so a wait
+   * can be aged and compared against when the user last had the project on
+   * screen. Absent when no transition has been recorded yet (a pre-detection
+   * boot window).
+   */
+  assistantStateSince?: number;
+}
 
 /**
  * Outgoing state passed alongside project switch/reopen IPC calls.
@@ -84,16 +126,22 @@ export interface ProjectCloseResult {
 }
 
 /**
- * Result from the project:free-memory operation. Reclaims a background
- * project's resident memory (renderer + PTYs + workspace host) while keeping
- * the project in the list as `closed` and preserving its layout for a
- * non-destructive reopen. Failures throw `AppError`.
+ * Result from the project:sleep operation. Shuts one project down the way
+ * quitting shuts them all down — session-preserving kill, captured agent
+ * session ids written back into the saved panel snapshots, a resume record
+ * journaled per agent — then reclaims what it can (renderer + PTYs + workspace
+ * host) and leaves the project in the list as `closed` with its layout intact
+ * for a non-destructive reopen. Failures throw `AppError`.
  */
-export interface ProjectFreeMemoryResult {
+export interface ProjectSleepResult {
   /** Number of terminals gracefully killed (sessions preserved for restore). */
   terminalsKilled: number;
-  /** True when a cached renderer WebContentsView was torn down. */
-  rendererEvicted: boolean;
+  /**
+   * How many windows had a CACHED view for this project torn down. A window
+   * with the project on screen is not counted: it keeps its view and drops to
+   * the no-project state in the renderer instead.
+   */
+  rendererViewsEvicted: number;
   /** True when the project's workspace-host process was evicted. */
   workspaceEvicted: boolean;
 }
@@ -113,7 +161,7 @@ export interface ProjectStats {
 }
 
 /** Per-project entry in bulk stats response, includes agent counts */
-export interface BulkProjectStatsEntry extends ProjectStats {
+export interface BulkProjectStatsEntry extends ProjectStats, AssistantPresenceEntry {
   activeAgentCount: number;
   waitingAgentCount: number;
   /**
@@ -166,7 +214,7 @@ export interface BulkProjectStatsEntry extends ProjectStats {
 export type BulkProjectStats = Record<string, BulkProjectStatsEntry>;
 
 /** Minimal per-project status entry for push-based updates */
-export interface ProjectStatusEntry {
+export interface ProjectStatusEntry extends AssistantPresenceEntry {
   activeAgentCount: number;
   waitingAgentCount: number;
   processCount: number;

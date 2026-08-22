@@ -48,15 +48,22 @@ vi.mock("@/store/terminalPendingDestructiveActionStore", () => ({
 
 // Run the optimistic-close commit synchronously so these tests assert the
 // canonical trash outcome directly; the deferral is covered by
-// optimisticPanelClose.test.ts.
-vi.mock("@/services/terminal/optimisticPanelClose", () => ({
+// optimisticPanelClose.test.ts, and the read-your-writes contract that depends
+// on it by terminalLifecycleActions.optimisticClose.test.ts.
+const optimisticPanelCloseMock = vi.hoisted(() => ({
   requestPanelClose: vi.fn((req: { commit: () => void }) => req.commit()),
   flushOptimisticCloses: vi.fn(),
 }));
+vi.mock("@/services/terminal/optimisticPanelClose", () => optimisticPanelCloseMock);
 
 import { registerTerminalLifecycleActions } from "../terminalLifecycleActions";
 
-type MockPanel = { id: string; location: "grid" | "dock" | "trash" | "background" };
+type MockPanel = {
+  id: string;
+  location: "grid" | "dock" | "trash" | "background";
+  worktreeId?: string;
+  excludeFromPersistence?: boolean;
+};
 
 function setPanelState(options: {
   focusedId?: string | null;
@@ -70,7 +77,12 @@ function setPanelState(options: {
   let focusedId = options.focusedId ?? null;
   const trashPanel =
     options.trashPanel ??
-    vi.fn(() => {
+    vi.fn((id: string) => {
+      // Mirror the real `trashPanel`: the record survives, its location becomes
+      // "trash". `closedIds` is derived from exactly that, so a mock leaving the
+      // panel in the grid would make every close report it closed nothing.
+      const panel = panelsById[id];
+      if (panel) panel.location = "trash";
       if (options.postTrashFocusedId !== undefined) {
         focusedId = options.postTrashFocusedId;
       }
@@ -84,10 +96,9 @@ function setPanelState(options: {
   return { trashPanel };
 }
 
-function setupActions() {
+function setupActions(callbacks: Partial<ActionCallbacks> = {}) {
   const actions: ActionRegistry = new Map();
-  const callbacks = {} as unknown as ActionCallbacks;
-  registerTerminalLifecycleActions(actions, callbacks);
+  registerTerminalLifecycleActions(actions, callbacks as ActionCallbacks);
   return async (id: string, args?: unknown, ctx?: unknown): Promise<unknown> => {
     const factory = actions.get(id);
     if (!factory) throw new Error(`missing ${id}`);
@@ -177,6 +188,139 @@ describe("terminal.close", () => {
     await run("terminal.close");
 
     expect(trashPanel).not.toHaveBeenCalled();
+  });
+});
+
+// An MCP caller reads the roster straight after the ack, so the close has to be
+// canonical before it resolves and a bad id has to fail rather than report "OK"
+// (#11805). The store postcondition itself is covered end-to-end against the
+// real coordinator in terminalLifecycleActions.optimisticClose.test.ts.
+describe("terminal.close result contract (#11805)", () => {
+  it("names the panel it closed", async () => {
+    setPanelState({
+      focusedId: "p1",
+      panels: [
+        { id: "p1", location: "grid" },
+        { id: "p2", location: "grid" },
+      ],
+      postTrashFocusedId: "p2",
+    });
+    const run = setupActions();
+
+    await expect(run("terminal.close", { terminalId: "p1" })).resolves.toEqual({
+      closedIds: ["p1"],
+    });
+  });
+
+  it("rejects a named panel that is not tracked instead of reporting success", async () => {
+    const { trashPanel } = setPanelState({
+      focusedId: "p1",
+      panels: [{ id: "p1", location: "grid" }],
+    });
+    const run = setupActions();
+
+    await expect(run("terminal.close", { terminalId: "ghost" })).rejects.toThrow(/ghost/);
+    expect(trashPanel).not.toHaveBeenCalled();
+    expect(optimisticPanelCloseMock.requestPanelClose).not.toHaveBeenCalled();
+  });
+
+  it("closes nothing when the named panel is already trashed", async () => {
+    const { trashPanel } = setPanelState({
+      focusedId: null,
+      panels: [{ id: "p1", location: "trash" }],
+    });
+    const run = setupActions();
+
+    // Re-trashing would reset the recovery TTL and rewrite the restore target.
+    await expect(run("terminal.close", { terminalId: "p1" })).resolves.toEqual({ closedIds: [] });
+    expect(trashPanel).not.toHaveBeenCalled();
+  });
+
+  it("closes nothing when there is no panel to act on", async () => {
+    setPanelState({ focusedId: null, panels: [{ id: "p1", location: "trash" }] });
+    const run = setupActions();
+
+    await expect(run("terminal.close")).resolves.toEqual({ closedIds: [] });
+  });
+
+  // Routing only — the mocked coordinator settles nothing. That the panel is
+  // genuinely gone by the time the call resolves is proved against the real
+  // coordinator in terminalLifecycleActions.optimisticClose.test.ts.
+  it.each(["agent", "plugin"] as const)(
+    "routes %s dispatch through the synchronous flush",
+    async (dispatchSource) => {
+      setPanelState({ focusedId: "p1", panels: [{ id: "p1", location: "grid" }] });
+      const run = setupActions();
+
+      await run("terminal.close", { terminalId: "p1" }, { dispatchSource });
+
+      expect(optimisticPanelCloseMock.flushOptimisticCloses).toHaveBeenCalled();
+    }
+  );
+
+  it.each(["user", "keybinding", "menu", "context-menu"] as const)(
+    "leaves the deferral intact for %s dispatch",
+    async (dispatchSource) => {
+      setPanelState({ focusedId: "p1", panels: [{ id: "p1", location: "grid" }] });
+      const run = setupActions();
+
+      // The paint-frame protection is the whole point of the optimistic path;
+      // a person is watching this one land. The result still names the panel.
+      await expect(
+        run("terminal.close", { terminalId: "p1" }, { dispatchSource })
+      ).resolves.toEqual({ closedIds: ["p1"] });
+
+      expect(optimisticPanelCloseMock.requestPanelClose).toHaveBeenCalled();
+      expect(optimisticPanelCloseMock.flushOptimisticCloses).not.toHaveBeenCalled();
+    }
+  );
+});
+
+describe("terminal.closeAll result contract (#11805)", () => {
+  const inWorktree = (id: string) => setupActions({ getActiveWorktreeId: () => id });
+
+  it("names every panel it closed in the active worktree", async () => {
+    setPanelState({
+      panels: [
+        { id: "a", location: "grid", worktreeId: "wt1" },
+        { id: "b", location: "grid", worktreeId: "wt1" },
+        { id: "elsewhere", location: "grid", worktreeId: "wt2" },
+        { id: "gone", location: "trash", worktreeId: "wt1" },
+        { id: "internal", location: "grid", worktreeId: "wt1", excludeFromPersistence: true },
+      ],
+    });
+    const run = inWorktree("wt1");
+
+    await expect(run("terminal.closeAll", undefined, { dispatchSource: "agent" })).resolves.toEqual(
+      { closedIds: ["a", "b"] }
+    );
+  });
+
+  it("closes nothing when the active worktree has no eligible panels", async () => {
+    setPanelState({ panels: [{ id: "elsewhere", location: "grid", worktreeId: "wt2" }] });
+    const run = inWorktree("wt1");
+
+    await expect(run("terminal.closeAll", undefined, { dispatchSource: "agent" })).resolves.toEqual(
+      { closedIds: [] }
+    );
+    expect(optimisticPanelCloseMock.requestPanelClose).not.toHaveBeenCalled();
+  });
+
+  it("settles before resolving for agent dispatch but not for a keybinding", async () => {
+    setPanelState({ panels: [{ id: "a", location: "grid", worktreeId: "wt1" }] });
+
+    await inWorktree("wt1")("terminal.closeAll", undefined, { dispatchSource: "agent" });
+    expect(optimisticPanelCloseMock.flushOptimisticCloses).toHaveBeenCalled();
+
+    optimisticPanelCloseMock.flushOptimisticCloses.mockClear();
+    setPanelState({ panels: [{ id: "b", location: "grid", worktreeId: "wt1" }] });
+
+    // Foreground keeps the deferral but still names what it accepted, so a
+    // keybinding caller is not told the close was a no-op.
+    await expect(
+      inWorktree("wt1")("terminal.closeAll", undefined, { dispatchSource: "keybinding" })
+    ).resolves.toEqual({ closedIds: ["b"] });
+    expect(optimisticPanelCloseMock.flushOptimisticCloses).not.toHaveBeenCalled();
   });
 });
 

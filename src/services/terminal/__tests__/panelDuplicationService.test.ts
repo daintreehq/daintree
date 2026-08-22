@@ -1,4 +1,8 @@
-import { describe, it, expect, vi, beforeEach } from "vitest";
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import {
+  setWorktreePathIndexAccessor,
+  resetStoreAccessorsForTesting,
+} from "@/store/storeAccessors";
 import type { PanelInstance, PtyPanelData } from "@shared/types/panel";
 import type { AddPanelOptions } from "@/store/slices/panelRegistry/types";
 import type { BrowserPanelOptions, DevPreviewPanelOptions } from "@shared/types/addPanelOptions";
@@ -62,6 +66,10 @@ vi.mock("@/store/projectPresetsStore", () => ({
     getState: vi.fn(() => ({ presetsByAgent: {} })),
   },
 }));
+
+afterEach(() => {
+  resetStoreAccessorsForTesting();
+});
 
 function makePanel(overrides: Partial<PtyPanelData> | Partial<PanelInstance> = {}): PanelInstance {
   return {
@@ -727,5 +735,177 @@ describe("adversarial: behavioral overrides flow to generateAgentCommand in dupl
 
     const opts = spy.mock.calls[0]![3] as Record<string, unknown>;
     expect(opts.presetArgs).toBeUndefined();
+  });
+});
+
+describe("inherited worktree cwd resolution (#11854)", () => {
+  const stalePath = "/worktrees/source";
+  const filedPath = "/worktrees/destination";
+  const filedId = "wt-destination";
+
+  let resolveInheritedPanelCwd: (panel: { cwd?: string; worktreeId?: string }) => string;
+  let buildPanelSnapshotOptions: (panel: PanelInstance) => AddPanelOptions | null;
+  let buildPanelDuplicateOptions: (
+    panel: PanelInstance,
+    location: "grid" | "dock"
+  ) => Promise<AddPanelOptions>;
+  let indexReads: number;
+
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    indexReads = 0;
+    const { agentSettingsClient, systemClient } = await import("@/clients");
+    (agentSettingsClient.get as ReturnType<typeof vi.fn>).mockResolvedValue({ agents: {} });
+    (systemClient.getTmpDir as ReturnType<typeof vi.fn>).mockResolvedValue("/tmp");
+    const { useCcrPresetsStore } = await import("@/store/ccrPresetsStore");
+    (useCcrPresetsStore.getState as ReturnType<typeof vi.fn>).mockReturnValue({
+      ccrPresetsByAgent: {},
+    });
+    const { useProjectPresetsStore } = await import("@/store/projectPresetsStore");
+    (useProjectPresetsStore.getState as ReturnType<typeof vi.fn>).mockReturnValue({
+      presetsByAgent: {},
+    });
+    const mod = await import("../panelDuplicationService");
+    resolveInheritedPanelCwd = mod.resolveInheritedPanelCwd;
+    buildPanelSnapshotOptions = mod.buildPanelSnapshotOptions;
+    buildPanelDuplicateOptions = mod.buildPanelDuplicateOptions;
+  });
+
+  // Counting reads is what separates "returned the inherited cwd because the
+  // index said so" from "never consulted the index at all".
+  function useIndex(entries: Array<[string, string]> | null): void {
+    setWorktreePathIndexAccessor(() => {
+      indexReads += 1;
+      return entries === null ? null : new Map(entries);
+    });
+  }
+
+  describe("resolveInheritedPanelCwd", () => {
+    it("reroots a launch root that belongs to a different worktree", () => {
+      useIndex([
+        [filedId, filedPath],
+        ["wt-source", stalePath],
+      ]);
+
+      expect(resolveInheritedPanelCwd({ cwd: stalePath, worktreeId: filedId })).toBe(filedPath);
+    });
+
+    it("keeps a subdirectory of the filed worktree, which the user chose deliberately", () => {
+      useIndex([[filedId, filedPath]]);
+      const subdirectory = `${filedPath}/packages/api`;
+
+      expect(resolveInheritedPanelCwd({ cwd: subdirectory, worktreeId: filedId })).toBe(
+        subdirectory
+      );
+    });
+
+    it("does not treat a sibling worktree whose path merely extends the filed one as inside it", () => {
+      useIndex([
+        [filedId, filedPath],
+        ["wt-sibling", `${filedPath}-other`],
+      ]);
+
+      expect(resolveInheritedPanelCwd({ cwd: `${filedPath}-other/src`, worktreeId: filedId })).toBe(
+        filedPath
+      );
+    });
+
+    it("keeps a launch root that belongs to no known worktree, which no drag could produce", () => {
+      useIndex([[filedId, filedPath]]);
+
+      expect(resolveInheritedPanelCwd({ cwd: "/tmp/scratch", worktreeId: filedId })).toBe(
+        "/tmp/scratch"
+      );
+    });
+
+    it("adopts the filed worktree when the panel carries no launch root at all", () => {
+      useIndex([[filedId, filedPath]]);
+
+      expect(resolveInheritedPanelCwd({ cwd: undefined, worktreeId: filedId })).toBe(filedPath);
+    });
+
+    it("keeps the launch root when no view store is mounted", () => {
+      useIndex(null);
+
+      expect(resolveInheritedPanelCwd({ cwd: stalePath, worktreeId: filedId })).toBe(stalePath);
+      expect(indexReads).toBeGreaterThan(0);
+    });
+
+    it("keeps the launch root when the filed worktree is no longer indexed", () => {
+      useIndex([["wt-unrelated", "/worktrees/unrelated"]]);
+
+      expect(resolveInheritedPanelCwd({ cwd: stalePath, worktreeId: filedId })).toBe(stalePath);
+      expect(indexReads).toBeGreaterThan(0);
+    });
+
+    it("never consults the index for a worktree-less panel", () => {
+      useIndex([[filedId, filedPath]]);
+
+      expect(resolveInheritedPanelCwd({ cwd: stalePath, worktreeId: undefined })).toBe(stalePath);
+      expect(indexReads).toBe(0);
+    });
+  });
+
+  // Every kind whose cwd is a real spawn directory, so each of the changed
+  // `cwd:` sites in the duplicate builder is distinguished.
+  const spawningPanels: Array<[string, Partial<PanelInstance>]> = [
+    ["agent terminal", { kind: "terminal", launchAgentId: "claude", command: "claude --flag" }],
+    ["plain terminal", { kind: "terminal", command: "bash" }],
+    ["dev-preview", { kind: "dev-preview", devCommand: "npm run dev" }],
+  ];
+
+  describe.each(spawningPanels)("buildPanelDuplicateOptions: %s", (_label, overrides) => {
+    it("launches in the worktree it is filed under, not the source worktree", async () => {
+      useIndex([
+        [filedId, filedPath],
+        ["wt-source", stalePath],
+      ]);
+      const panel = makePanel({ ...overrides, cwd: stalePath, worktreeId: filedId });
+
+      const options = await buildPanelDuplicateOptions(panel, "grid");
+
+      expect(options.cwd).toBe(filedPath);
+      expect(options.cwd).not.toBe(stalePath);
+      // The filing id is the input to the fix, never an output of it.
+      expect(options.worktreeId).toBe(panel.worktreeId);
+    });
+
+    it("keeps a launch root already inside the filed worktree", async () => {
+      useIndex([[filedId, filedPath]]);
+      const subdirectory = `${filedPath}/packages/api`;
+      const panel = makePanel({ ...overrides, cwd: subdirectory, worktreeId: filedId });
+
+      expect((await buildPanelDuplicateOptions(panel, "grid")).cwd).toBe(subdirectory);
+    });
+  });
+
+  describe.each(spawningPanels)("buildPanelSnapshotOptions: %s", (_label, overrides) => {
+    it("leaves the trash-time launch root untouched for the reopen consumer to resolve", () => {
+      useIndex([
+        [filedId, filedPath],
+        ["wt-source", stalePath],
+      ]);
+      const panel = makePanel({ ...overrides, cwd: stalePath, worktreeId: filedId });
+
+      // Resolving here would freeze one answer into stored state; `terminal.duplicate`
+      // re-resolves at reopen against a fresher index.
+      expect(buildPanelSnapshotOptions(panel)?.cwd).toBe(stalePath);
+      expect(indexReads).toBe(0);
+    });
+  });
+
+  it("never resolves a directory for browser panels, which own none", async () => {
+    useIndex([[filedId, filedPath]]);
+    const panel = makePanel({
+      kind: "browser",
+      browserUrl: "https://example.com",
+      cwd: stalePath,
+      worktreeId: filedId,
+    } as Partial<PanelInstance>);
+
+    const options = await buildPanelDuplicateOptions(panel, "grid");
+
+    expect(options.cwd).not.toBe(filedPath);
+    expect(indexReads).toBe(0);
   });
 });

@@ -30,6 +30,9 @@ export function serializePtyPanel(t: PtySerializeInput): Partial<PanelSnapshot> 
     ...(t.originalPresetId && { originalPresetId: t.originalPresetId }),
     ...(t.isUsingFallback && { isUsingFallback: true }),
     ...(typeof t.fallbackChainIndex === "number" && { fallbackChainIndex: t.fallbackChainIndex }),
+    // worktreeMoveNotice intentionally omitted — it's a live prompt to tell a
+    // running agent where to go (#11853). Persisting it would resurface the
+    // banner for a process that no longer exists after a restart.
     // sessionLostOnRestore intentionally omitted — it's a transient restore-time
     // signal. Persisting it would resurface the "Session no longer reachable"
     // banner on every subsequent restart (issue #9802).

@@ -78,7 +78,12 @@ describe("TerminalIcon", () => {
 
     const icon = container.querySelector("[data-terminal-icon-id='claude']");
     expect(icon?.getAttribute("data-terminal-icon-color")).toBe("#3366ff");
-    expect(icon?.querySelector("path")?.getAttribute("fill")).toBe("#3366ff");
+    // The glyph inherits the ink `BrandMark` resolved rather than carrying a
+    // fill of its own, so the resolved colours ride on the SVG as variables.
+    const svg = icon?.querySelector("svg");
+    expect(svg?.querySelector("path")?.getAttribute("fill")).toBe("currentColor");
+    expect(svg?.style.getPropertyValue("--brand-mark-rest")).toMatch(/^#[0-9a-f]{6}$/i);
+    expect(svg?.style.getPropertyValue("--brand-mark-active")).toMatch(/^#[0-9a-f]{6}$/i);
   });
 
   it("lets an explicit brandColor override the chrome color marker", () => {
@@ -95,7 +100,6 @@ describe("TerminalIcon", () => {
 
     const icon = container.querySelector("[data-terminal-icon-id='claude']");
     expect(icon?.getAttribute("data-terminal-icon-color")).toBe("#ff6600");
-    expect(icon?.querySelector("path")?.getAttribute("fill")).toBe("#ff6600");
   });
 
   it("renders AI process icons for detected CLI processes in terminal panels", () => {

@@ -16,10 +16,16 @@ import { scratchStore } from "../services/ScratchStore.js";
 import { initializeAgentAvailabilityStore } from "../services/AgentAvailabilityStore.js";
 import { initializePowerSaveBlockerService } from "../services/PowerSaveBlockerService.js";
 import { runSmokeFunctionalChecks } from "../services/smokeTest.js";
+import { runFreezeHarness } from "../services/freezeHarness.js";
 import { markPerformance } from "../utils/performance.js";
 import { getCurrentDiskSpaceStatus } from "../services/DiskSpaceMonitor.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
-import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import { isCleaningUp } from "../lifecycle/shutdownCoordinator.js";
+import {
+  runStartupWorktreeLoad,
+  selectStatusTarget,
+  sendStartupWorktreeLoadFailure,
+} from "./startupWorktreeLoad.js";
 import { extractRestorePanelCwds } from "./restorePanelCwds.js";
 import { mergeProjectEnv } from "./restoreProjectEnv.js";
 import { store } from "../store.js";
@@ -32,7 +38,7 @@ import {
   queuePendingOpenDirPath,
 } from "../setup/environment.js";
 import { shouldDeferRendererLoadForE2E } from "./earlyRenderer.js";
-import { isE2EFaultMode } from "../setup/runtimeFlags.js";
+import { isE2EFaultMode, isFreezeHarness } from "../setup/runtimeFlags.js";
 import {
   extractCliPath,
   hasCliPathFlag,
@@ -320,7 +326,17 @@ export async function setupWindowServices(
 
   // Initialize workspace client (first window only) — per-project hosts
   // are started on-demand when loadProject() is called, not at init time.
-  if (!getWorkspaceClientRef()) {
+  //
+  // Captured once here so the worktree-load gate near the end of this function
+  // uses the same instance rather than re-reading the module ref across the two
+  // `Promise.allSettled` gaps below (#11818). The construction path is
+  // first-window-only, so on later windows this capture is the ref read that
+  // used to happen at the gate. Whether the ref is actually cleared mid-boot on
+  // the reported packaged-Windows launches is unconfirmed — capturing removes
+  // the possibility either way, and the gate now reports every outcome that
+  // leaves the renderer without a port regardless of cause.
+  let capturedWorkspaceClient = getWorkspaceClientRef();
+  if (!capturedWorkspaceClient) {
     // Construct the workspace client and prewarm its per-project host
     // concurrently with the PTY host fork. The two utility processes load
     // native modules independently (node-pty vs better-sqlite3 + @parcel/watcher)
@@ -365,6 +381,7 @@ export async function setupWindowServices(
     }
 
     setWorkspaceClientRef(workspaceClient);
+    capturedWorkspaceClient = workspaceClient;
 
     // Give PluginService the WorkspaceClient reference now that it's ready.
     // initialize() is deferred and may run before or after this point — the
@@ -650,64 +667,91 @@ export async function setupWindowServices(
   // Load worktrees — prefer initialProjectPath, else restoreProject for
   // startup windows. Unbound windows (no project) skip worktree loading.
   const projectPathForWorktrees = opts.initialProjectPath ?? restoreProject?.path;
-  const workspaceClient = getWorkspaceClientRef();
-  if (projectPathForWorktrees && workspaceClient && workspaceReady) {
-    console.log("[MAIN] Loading worktrees for project path:", projectPathForWorktrees);
-    try {
-      await workspaceClient.loadProject(projectPathForWorktrees, win.id);
-      console.log("[MAIN] Worktrees loaded");
-
-      // Register the renderer in directPortViews so sendToEntryWindows
-      // routes host events (worktree updates, PR detection, etc.) to it.
-      const directPortTarget = opts.initialAppView?.webContents ?? getAppWebContents(win);
-      if (directPortTarget && !directPortTarget.isDestroyed()) {
-        workspaceClient.attachDirectPort(win.id, directPortTarget);
-        console.log("[MAIN] Workspace direct port attached");
-
-        // Broker new worktree port (Phase 1)
-        const host = workspaceClient.getHostForProject(projectPathForWorktrees);
-        const worktreePortBroker = getWorktreePortBrokerRef();
-        if (host && worktreePortBroker) {
-          worktreePortBroker.brokerPort(host, directPortTarget);
-          console.log("[MAIN] Worktree port brokered");
-        }
-      }
-    } catch (error) {
-      console.error("[MAIN] Failed to load worktrees:", error);
-
-      // Surface the failure to the renderer so the sidebar shows the
-      // WorktreeLoadErrorBanner instead of an infinite loading skeleton
-      // (#8796). Without this, the worktree port is never brokered, the
-      // renderer's worktree store stays `isLoading: true`, and the sidebar
-      // hangs. Mirrors the project-switch path (projectCrud/switch.ts).
-      // The send is deferred until `did-finish-load` while the renderer is
-      // still loading — messages sent before the renderer wires its
-      // ipcRenderer listener are silently dropped.
-      const failedProjectId = restoreProject?.id;
-      // Prefer the project view's webContents, but fall through to the
-      // window's app webContents if it's already destroyed — selecting a
-      // destroyed target would silently drop the message and re-hang.
-      const initialViewWc = opts.initialAppView?.webContents;
-      const statusTarget =
-        initialViewWc && !initialViewWc.isDestroyed() ? initialViewWc : getAppWebContents(win);
-      if (failedProjectId && statusTarget) {
-        const worktreeLoadError = formatErrorMessage(error, "Failed to load worktrees");
-        const sendLoadStatus = (): void => {
-          if (statusTarget.isDestroyed()) return;
-          statusTarget.send(CHANNELS.PROJECT_WORKTREE_LOAD_STATUS, {
-            projectId: failedProjectId,
-            worktreeLoadError,
-          });
-        };
-        if (statusTarget.isLoading()) {
-          statusTarget.once("did-finish-load", sendLoadStatus);
-        } else {
-          sendLoadStatus();
-        }
+  // Skipped outright while the app is quitting: the captured client may already
+  // be disposed, and a banner on a window that is going away helps nobody.
+  if (projectPathForWorktrees && !isCleaningUp()) {
+    // Every outcome below that leaves the renderer without a brokered worktree
+    // port has to reach PROJECT_WORKTREE_LOAD_STATUS (#8796, #11818). When one
+    // does not, the per-view worktree store never leaves its initial
+    // `isLoading: true` — `worktreePort.onReady` is what triggers the first
+    // fetch — so the sidebar renders its skeleton forever with no banner and
+    // nothing in the log. That silent branch is what this block removes.
+    //
+    // A restored window already carries the registered id, which is the one the
+    // renderer filters on — use it directly. Only a window opened by path (CLI
+    // open, Dock drop) has to resolve one, and without that it would resolve no
+    // id at all and drop the status. `resolveProjectIdForPath` is a synchronous
+    // read returning the registered id when the path is known; for a path that
+    // isn't registered yet it hashes the path, which can differ from the id the
+    // project is finally registered under (git-root or realpath resolution).
+    // The renderer's own port watchdog is the backstop for that case.
+    let statusProjectId = restoreProject?.id;
+    if (!statusProjectId) {
+      try {
+        statusProjectId = projectStore.resolveProjectIdForPath(projectPathForWorktrees);
+      } catch (error) {
+        console.warn("[MAIN] Could not resolve a project id for worktree load status:", error);
       }
     }
-  } else if (projectPathForWorktrees && !workspaceReady) {
-    console.warn("[MAIN] Workspace service unavailable - skipping worktree loading");
+
+    // Re-selected at report time rather than captured up front — the window's
+    // app view can be swapped or destroyed while `loadProject()` is awaited.
+    const reportFailure = (error: unknown): void => {
+      if (isCleaningUp()) return;
+      const statusTarget = selectStatusTarget(
+        opts.initialAppView?.webContents ?? null,
+        getAppWebContents(win) ?? null
+      );
+      sendStartupWorktreeLoadFailure(statusTarget, statusProjectId, error);
+    };
+
+    const workspaceClient = capturedWorkspaceClient;
+    if (workspaceClient) {
+      console.log("[MAIN] Loading worktrees for project path:", projectPathForWorktrees);
+    }
+
+    // Register the renderer in directPortViews so sendToEntryWindows routes
+    // host events (worktree updates, PR detection, etc.) to it, then broker the
+    // worktree port (Phase 1).
+    const outcome = await runStartupWorktreeLoad({
+      loadProject: workspaceClient
+        ? () => workspaceClient.loadProject(projectPathForWorktrees, win.id)
+        : null,
+      getPortTarget: () => opts.initialAppView?.webContents ?? getAppWebContents(win) ?? null,
+      getHost: () => workspaceClient?.getHostForProject(projectPathForWorktrees),
+      attachDirectPort: (target) => {
+        workspaceClient?.attachDirectPort(win.id, target);
+        console.log("[MAIN] Workspace direct port attached");
+      },
+      getBrokerPort: () => {
+        const worktreePortBroker = getWorktreePortBrokerRef();
+        return worktreePortBroker
+          ? (host, target) => worktreePortBroker.brokerPort(host, target)
+          : null;
+      },
+      report: reportFailure,
+    });
+
+    switch (outcome.status) {
+      case "loaded":
+        console.log("[MAIN] Worktrees loaded; worktree port brokered");
+        break;
+      case "no-client":
+        console.error(
+          "[MAIN] Workspace client unavailable - cannot load worktrees for:",
+          projectPathForWorktrees
+        );
+        break;
+      case "load-failed":
+        console.error("[MAIN] Failed to load worktrees:", outcome.error);
+        break;
+      case "attach-failed":
+        console.error("[MAIN] Failed to attach the worktree port:", outcome.error);
+        break;
+      case "port-failed":
+        console.error("[MAIN] Worktree port not brokered:", outcome.reason);
+        break;
+    }
   }
 
   // Smoke test
@@ -749,6 +793,45 @@ export async function setupWindowServices(
       /* ignore */
     }
     app.exit(allPassed ? 0 : 1);
+    return "exit-requested";
+  }
+
+  // Freeze harness (#11846). Runs after the normal boot — unlike the smoke
+  // path it does not defer the renderer load, because the point is to measure
+  // the freeze a real user's cached view gets.
+  if (isFreezeHarness) {
+    if (!opts.projectViewManager) {
+      console.error("[FREEZE-HARNESS] FAILED — window has no ProjectViewManager");
+      app.exit(1);
+      return "exit-requested";
+    }
+    // `app.exit` lives in the finally so that nothing between here and it can
+    // strand the process: the harness contracts to return a boolean, but a
+    // throw from it or from `win.destroy()` would otherwise leave a booted app
+    // with no exit issued and the runner waiting out its whole timeout.
+    let passed = false;
+    try {
+      passed = await runFreezeHarness(opts.projectViewManager);
+    } catch (error) {
+      console.error("[FREEZE-HARNESS] FAILED — harness threw:", error);
+    } finally {
+      try {
+        if (win && !win.isDestroyed()) win.destroy();
+      } catch {
+        /* ignore */
+      }
+      try {
+        getWorkspaceClientRef()?.dispose();
+      } catch {
+        /* ignore */
+      }
+      try {
+        getPtyClient()?.dispose();
+      } catch {
+        /* ignore */
+      }
+      app.exit(passed ? 0 : 1);
+    }
     return "exit-requested";
   }
 

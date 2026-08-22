@@ -16,7 +16,7 @@ Daintree's theming system is a three-layer pipeline shared between the renderer 
 
 ## Built-In Themes
 
-14 built-in themes, each in its own file under `shared/theme/builtInThemes/`:
+15 built-in themes, each in its own file under `shared/theme/builtInThemes/`:
 
 | Theme          | File                | Type  |
 | -------------- | ------------------- | ----- |
@@ -27,6 +27,7 @@ Daintree's theming system is a three-layer pipeline shared between the renderer 
 | Highlands      | `highlands.ts`      | dark  |
 | Namib          | `namib.ts`          | dark  |
 | Redwoods       | `redwoods.ts`       | dark  |
+| Movile         | `movile.ts`         | dark  |
 | Bondi          | `bondi.ts`          | light |
 | Table Mountain | `table-mountain.ts` | light |
 | Atacama        | `atacama.ts`        | light |
@@ -121,6 +122,24 @@ Extensions are applied as bare CSS custom properties on `:root` (e.g., `"toolbar
 - Keep terminal colors first-class and independent from workbench surfaces.
 - Keep search highlighting independent from accent when a theme needs it.
 
+## Reviewing a theme in the real app
+
+Token values do not tell you whether a theme reads. `e2e/screenshots/theme-tour.spec.ts` boots the built app on a rich multi-worktree fixture, applies a theme, and drives it through 17 review scenes. It works on any built-in, light or dark.
+
+```bash
+npm run build:e2e          # required — the harness launches the built app
+npm run theme:tour         # interactive: real Electron window + control panel
+npm run theme:tour:shots   # unattended: walks every scene, writes PNGs, exits
+
+DAINTREE_TOUR_THEME=bondi DAINTREE_TOUR_COMPARE=movile npm run theme:tour
+```
+
+Interactive mode injects a control panel (bottom-right, shadow-rooted and deliberately unthemed) with a clickable scene list, prev/next, a **compare** button that hot-swaps two themes without leaving the scene, and a live contrast readout computed from the CSS variables actually painted. Auto mode writes `artifacts/theme-tour/<theme>/NN-<scene>.png` (gitignored).
+
+Scenes cover the workbench, a multi-pane fleet, terminal with seeded ANSI, sidebar hover and search, context menu, filter popover, action palette, project switcher, notifications, review hub, settings, the theme picker with hero art, the destructive confirm dialog, an agent **working**, an agent **waiting**, and the dock. The two agent scenes drive the real agent-state FSM via `e2e/helpers/fakeAgent.ts` rather than faking a CSS class.
+
+The full authoring-and-review process — including the Codex review loop, the tier model for contrast budgets, and the traps that pass every test in the repo — lives in `.claude/skills/daintree-theme-creator/resources/theme-review-workflow.md`.
+
 ## Design review checklist
 
 Before adding a file to `DURABLE_ALLOWLIST` in `src/config/__tests__/accentGuard.contract.test.ts`, answer all four questions:
@@ -139,7 +158,7 @@ Chrome DevTools → Rendering → Emulate vision deficiency: achromatopsia. This
 Additional checks when reviewing a theme that authors the material extension keys:
 
 1. **Focus chrome vs accent budget.** A theme inking `panel-focus-border` / `panel-focus-shadow` / `panel-selected-bg` from its accent family is using the contract as intended — focus IS the load-bearing signal per focus region — but it must NOT also carry another accent fill in the panel region. One accent signal per region still holds.
-2. **Focus chrome never touches high contrast.** The `prefers-contrast: more` and `forced-colors: active` recipes for `.terminal-selected` / `.terminal-focused` / `.assistant-focused` in `src/index.css` stay hardcoded to system colors and win over the extension keys — do not "unify" them into the extension surface.
+2. **Focus chrome never touches high contrast.** The `prefers-contrast: more` and `forced-colors: active` recipes for `.terminal-selected` / `.terminal-selected-quiet` / `.terminal-focused` / `.assistant-focused` in `src/index.css` stay hardcoded to system colors and win over the extension keys — do not "unify" them into the extension surface.
 3. **Grid gradients keep the audited flat layer.** `panel-grid-bg` / `terminal-grid-bg` accept full `background` shorthand, but the flat audited `surfaces.grid` hex must remain the gradient's final layer — it is the contrast/ramp source of truth, and the boot splash reads the flat `--theme-surface-grid` directly.
 4. **`chrome-noise-texture` overrides are wholesale.** Any gradient string is legal and replaces the generated radial entirely; alpha lives inside the string. Review the composited result on the chrome surface, not the string.
 5. **Welcome washes are whisper-alpha.** `welcome-field-wash` stays ≤8% effective alpha and every existing text alpha on the welcome screen must still clear its contrast floor over the composited wash — eyeball gate, since gradient strings defeat perceptibility regexes.

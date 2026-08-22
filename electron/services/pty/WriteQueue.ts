@@ -1,12 +1,20 @@
-import { WRITE_INTERVAL_MS } from "./types.js";
-import { chunkInput } from "./terminalInput.js";
+import type { TerminalSubmitStatusState } from "../../../shared/types/pty-host.js";
 
-const SUBMIT_TIMEOUT_MS = 3000;
+/**
+ * How long one submit may hold the composer before we say so. Reporting only —
+ * the submit keeps the lane (see {@link WriteQueue}).
+ */
+const SUBMIT_SLOW_THRESHOLD_MS = 3000;
+
+/**
+ * Total in-flight time after which a submit is treated as stuck rather than
+ * merely slow, and the renderer escalates from an ambient pill to a banner
+ * with a recovery action.
+ */
+const SUBMIT_STALLED_THRESHOLD_MS = 30000;
 
 export interface WriteQueueOptions {
-  /** Raw byte sink for paced chunks. May throw on PTY errors. */
-  writeToPty: (data: string) => void;
-  /** True once the underlying PTY has exited; aborts pacing and drain waits. */
+  /** True once the underlying PTY has exited; aborts the output-settle wait. */
   isExited: () => boolean;
   /** Current `lastOutputTime` accessor used by `waitForOutputSettle`. */
   lastOutputTime: () => number;
@@ -14,6 +22,12 @@ export interface WriteQueueOptions {
   performSubmit: (text: string) => Promise<void>;
   /** Optional sink for synchronous PTY write errors. */
   onWriteError?: (error: unknown, context: { operation: string }) => void;
+  /**
+   * Optional sink for submit-lane status transitions (#11875). Only called for
+   * submits that cross a threshold or fail; a normal fast submit reports
+   * nothing. Must not throw — it is invoked from a timer callback.
+   */
+  onSubmitStatus?: (state: TerminalSubmitStatusState) => void;
 }
 
 export interface OutputSettleOptions {
@@ -23,45 +37,51 @@ export interface OutputSettleOptions {
 }
 
 /**
- * Owns the two write-pacing state machines that used to live inline on
- * `TerminalProcess`:
+ * Serialises async submit jobs against one terminal so a second submission
+ * cannot interleave its body/Enter writes with an earlier one's output-settle
+ * wait.
  *
- * 1. The chunked input queue + interval timer (paces large payloads through
- *    the PTY at `WRITE_INTERVAL_MS` to avoid overwhelming TUI parsers).
- * 2. The submit queue + in-flight guard (serialises async submit jobs so a
- *    second submission cannot interleave its body/Enter writes with an
- *    earlier one's output-settle wait).
+ * The invariant is composer ownership, not byte pacing: `performSubmit` writes
+ * its body before its first await, so from that moment the agent's composer
+ * holds text that cannot be withdrawn. Whatever happens next, the next submit
+ * must not write until the current one is done — otherwise the second body
+ * appends to the first and a single Enter submits both as one merged prompt.
+ *
+ * This is why the slow-submit timer is report-only. It used to be a
+ * `Promise.race`, which released the in-flight slot when it fired but did
+ * nothing to stop the writer, so the abandoned submit's trailing Enter landed
+ * after the next submit's body (#11875). A submit that never settles now
+ * blocks that terminal's submit lane, and that is the correct trade: starting
+ * the next submit is the unsafe action, and there is no rollback for bytes
+ * already in a composer.
+ *
+ * Byte-level pacing used to live here too — a 50-byte chunk queue on a 5ms
+ * interval, copied from VS Code as a workaround for microsoft/vscode#38137, a
+ * race writing to the FD. node-pty fixed that upstream in microsoft/node-pty#831
+ * and VS Code deleted its throttle two days later (microsoft/vscode#283065);
+ * node-pty now runs its own FIFO write queue against the raw fd and reschedules
+ * on EAGAIN. We pin 1.2.0-beta.14, which carries the fix, so the pacing was
+ * deleted rather than retuned. Writes go straight to `ptyProcess.write()`.
  *
  * Shell-capture side effects (`suppressNextShellSubmitSignal`,
  * `markShellCommandSubmitted`, activity-monitor notification) stay in
- * `TerminalProcess`; the queue's job is purely serialisation and pacing.
+ * `TerminalProcess`; the queue's job is purely serialisation.
  */
 export class WriteQueue {
-  private inputWriteQueue: string[] = [];
-  private inputWriteTimeout: NodeJS.Timeout | null = null;
-  private inputWriteDrainResolvers: Array<() => void> = [];
   private submitQueue: string[] = [];
   private submitInFlight = false;
   private disposed = false;
+  /**
+   * At most one submit is ever in flight, so a single handle is enough. It is
+   * re-armed rather than paired with a second timer so escalation lands at
+   * SUBMIT_STALLED_THRESHOLD_MS total, not slow+stalled.
+   */
+  private submitStatusTimer: NodeJS.Timeout | undefined;
+  /** Whether the current submit has already reported slow/stalled — decides
+   *  whether its completion is worth a `settled` event. */
+  private submitStatusReported = false;
 
   constructor(private readonly options: WriteQueueOptions) {}
-
-  /**
-   * Split `data` into PTY-sized chunks and enqueue for paced delivery. Does
-   * nothing after `dispose()`; an empty payload is a no-op.
-   */
-  enqueueChunked(data: string): void {
-    if (this.disposed) return;
-    const chunks = chunkInput(data);
-    if (chunks.length === 0) return;
-    this.inputWriteQueue.push(...chunks);
-    this.startWrite();
-  }
-
-  /** True while pacing is in flight (queued chunks or pending timer). */
-  hasPendingWrites(): boolean {
-    return this.inputWriteQueue.length > 0 || this.inputWriteTimeout !== null;
-  }
 
   /**
    * Serialise an async submit. The first caller wins the in-flight slot and
@@ -75,19 +95,6 @@ export class WriteQueue {
     if (this.submitInFlight) return;
     this.submitInFlight = true;
     void this.drainSubmitQueue();
-  }
-
-  /**
-   * Resolves once the chunked input queue is fully drained, the PTY has
-   * exited, or the queue has been disposed. Uses a stored Promise resolver
-   * triggered from `startWrite` end-of-flight, `dispose()`, and the
-   * `isExited()` sync gate so no polling is needed.
-   */
-  async waitForInputWriteDrain(): Promise<void> {
-    if (this.disposed || this.options.isExited() || !this.hasPendingWrites()) return;
-    await new Promise<void>((resolve) => {
-      this.inputWriteDrainResolvers.push(resolve);
-    });
   }
 
   /**
@@ -108,68 +115,106 @@ export class WriteQueue {
   }
 
   /**
-   * Cancel the pacing timer, drop pending chunks and submits, and mark the
-   * queue disposed. Idempotent. Any in-flight `waitForInputWriteDrain` /
-   * `waitForOutputSettle` resolves immediately on the next poll because the
-   * `disposed` flag short-circuits both loops — without this, an in-flight
-   * `performSubmit` mid-`await waitForInputWriteDrain()` would deadlock and
-   * leak `submitInFlight`.
+   * Drop everything queued and stop reporting on the in-flight submit, WITHOUT
+   * disposing: the queue stays usable afterwards. The reusable half of
+   * {@link dispose}, added for the graceful-shutdown input lock (#11851).
+   *
+   * `submitInFlight` is deliberately left alone. It is owned by the running
+   * `drainSubmitQueue` loop, which clears it in its own `finally`; forcing it
+   * false here would let a second submit start while the first is still
+   * awaiting, which is the exact interleaving the flag exists to prevent.
+   * Draining the queue is enough — the in-flight submit finds nothing left to
+   * do, and `TerminalInputController`'s generation check stops it writing.
+   *
+   * The status timer is cleared because the caller is tearing this terminal's
+   * input down: escalating a submit to "stalled" mid-shutdown would report a
+   * problem the user can do nothing about. If a status was already reported,
+   * it is retracted in the same breath — dropping the timer without a closing
+   * event would strand the pill or banner on a submit nothing is tracking any
+   * more.
+   *
+   * Note this cannot recall bytes already handed to node-pty — its own write
+   * queue owns them. What it stops is everything Daintree has not yet written.
+   */
+  cancelPendingInput(): void {
+    if (this.disposed) return;
+    this.submitQueue = [];
+    this.clearSubmitStatusTimer();
+    if (this.submitStatusReported) {
+      this.submitStatusReported = false;
+      this.emitSubmitStatus("settled");
+    }
+  }
+
+  /**
+   * Drop pending submits, stop threshold reporting, and mark the queue
+   * disposed. Idempotent. Any in-flight `waitForOutputSettle` resolves on its
+   * next poll because the `disposed` flag short-circuits the loop — without
+   * this, an in-flight `performSubmit` mid-settle would deadlock and leak
+   * `submitInFlight`.
+   *
+   * This stops the slow/stalled TIMERS, not the terminal event: a submit still
+   * running at dispose will emit its `settled`/`failed` when it unwinds. That
+   * is deliberate — the closing event is what clears the renderer, so
+   * suppressing it would be the one way to strand a pill. `PtyManager` drops
+   * events from a superseded incarnation, so a late one cannot land on a
+   * restarted terminal.
    */
   dispose(): void {
     if (this.disposed) return;
     this.disposed = true;
-    if (this.inputWriteTimeout) {
-      clearTimeout(this.inputWriteTimeout);
-      this.inputWriteTimeout = null;
-    }
-    this.inputWriteQueue = [];
     this.submitQueue = [];
-    for (const resolve of this.inputWriteDrainResolvers) {
-      resolve();
-    }
-    this.inputWriteDrainResolvers = [];
+    this.clearSubmitStatusTimer();
   }
 
-  private startWrite(): void {
-    if (this.disposed) return;
-    if (this.inputWriteTimeout !== null || this.inputWriteQueue.length === 0) {
-      if (this.inputWriteQueue.length === 0 && this.inputWriteTimeout === null) {
-        for (const resolve of this.inputWriteDrainResolvers) {
-          resolve();
-        }
-        this.inputWriteDrainResolvers = [];
-      }
-      return;
-    }
-
-    this.doWrite();
-
-    if (this.inputWriteQueue.length > 0) {
-      this.inputWriteTimeout = setTimeout(() => {
-        if (this.disposed) return;
-        this.inputWriteTimeout = null;
-        this.startWrite();
-      }, WRITE_INTERVAL_MS);
-    } else {
-      for (const resolve of this.inputWriteDrainResolvers) {
-        resolve();
-      }
-      this.inputWriteDrainResolvers = [];
-    }
-  }
-
-  private doWrite(): void {
-    if (this.disposed) return;
-    if (this.inputWriteQueue.length === 0) return;
-
-    const chunk = this.inputWriteQueue.shift()!;
-    if (this.options.isExited()) return;
-
+  /** Deliver a status transition without letting a throwing sink escape into a
+   *  timer callback and take down the pty-host. */
+  private emitSubmitStatus(state: TerminalSubmitStatusState): void {
     try {
-      this.options.writeToPty(chunk);
-    } catch (error) {
-      this.options.onWriteError?.(error, { operation: "write(chunk)" });
+      this.options.onSubmitStatus?.(state);
+    } catch {
+      // Reporting is best-effort; the submit itself is unaffected.
     }
+  }
+
+  private clearSubmitStatusTimer(): void {
+    if (this.submitStatusTimer !== undefined) {
+      clearTimeout(this.submitStatusTimer);
+      this.submitStatusTimer = undefined;
+    }
+  }
+
+  /**
+   * Arm the single status handle. `unref()` keeps a slow submit from holding
+   * the pty-host UtilityProcess open on its own, and the identity check makes a
+   * timer that fires after being superseded (or after dispose) a no-op.
+   */
+  private armSubmitStatusTimer(delayMs: number, onFire: () => void): void {
+    const timer = setTimeout(() => {
+      if (this.disposed || this.submitStatusTimer !== timer) return;
+      this.submitStatusTimer = undefined;
+      onFire();
+    }, delayMs);
+    timer.unref?.();
+    this.submitStatusTimer = timer;
+  }
+
+  /**
+   * `startedAt` is captured by the caller before `performSubmit` runs, so the
+   * escalation lands at SUBMIT_STALLED_THRESHOLD_MS measured from the submit's
+   * actual start. Re-arming for a fixed remainder instead would drift: if a
+   * blocked event loop delayed the slow callback, "stalled" would fire that
+   * much late on top.
+   */
+  private armSlowSubmitReporting(startedAt: number): void {
+    this.armSubmitStatusTimer(SUBMIT_SLOW_THRESHOLD_MS, () => {
+      this.submitStatusReported = true;
+      this.emitSubmitStatus("slow");
+      const remaining = Math.max(0, startedAt + SUBMIT_STALLED_THRESHOLD_MS - Date.now());
+      this.armSubmitStatusTimer(remaining, () => {
+        this.emitSubmitStatus("stalled");
+      });
+    });
   }
 
   private async drainSubmitQueue(): Promise<void> {
@@ -177,28 +222,26 @@ export class WriteQueue {
       while (!this.disposed && this.submitQueue.length > 0) {
         const next = this.submitQueue.shift();
         if (next === undefined) continue;
+        this.submitStatusReported = false;
         try {
+          // Await the submit itself — never a race against the timer. The timer
+          // reports; it does not release the lane (#11875).
+          const startedAt = Date.now();
           const work = this.options.performSubmit(next);
-          let timedOut = false;
-          let timeoutId: NodeJS.Timeout | undefined;
-          const timeoutPromise = new Promise<void>((_, reject) => {
-            timeoutId = setTimeout(() => {
-              timedOut = true;
-              reject(new Error(`performSubmit timed out after ${SUBMIT_TIMEOUT_MS}ms`));
-            }, SUBMIT_TIMEOUT_MS);
-          });
-          try {
-            await Promise.race([work, timeoutPromise]);
-          } finally {
-            if (timedOut) {
-              work.catch(() => {
-                // Absorb post-timeout rejection — already routed to onWriteError.
-              });
-            }
-            clearTimeout(timeoutId);
+          this.armSlowSubmitReporting(startedAt);
+          await work;
+          if (this.submitStatusReported) {
+            this.emitSubmitStatus("settled");
           }
         } catch (error) {
+          // A rejected submit is over — it will never write again — so the lane
+          // drains normally and the exclusive-ownership invariant still holds.
+          // It still surfaces, because the body may already be sitting in the
+          // composer with no Enter behind it.
+          this.emitSubmitStatus("failed");
           this.options.onWriteError?.(error, { operation: "performSubmit" });
+        } finally {
+          this.clearSubmitStatusTimer();
         }
       }
     } finally {

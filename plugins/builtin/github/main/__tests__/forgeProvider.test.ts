@@ -50,10 +50,11 @@ import {
   issueTooltipCache,
   prRequiredStatusCache,
   prTooltipCache,
+  repoStatsCache,
 } from "../GitHubCaches.js";
 import { GitHubAuth } from "../GitHubAuth.js";
 import { gitHubRateLimitService } from "../GitHubRateLimitService.js";
-import type { RepoRef } from "../../../../../shared/types/forge.js";
+import type { ListOptions, RepoRef } from "../../../../../shared/types/forge.js";
 
 const repo: RepoRef = { host: "github.com", owner: "owner", repo: "repo", rawData: null };
 
@@ -1415,6 +1416,437 @@ describe("listIssues search", () => {
     const [query] = mockGraphQLClient.mock.calls[0] as [string];
     expect(query).not.toContain("SearchItems");
     expect(page.items[0]?.number).toBe(5);
+  });
+});
+
+/**
+ * A search node carrying every field `SEARCH_QUERY`'s `... on PullRequest`
+ * fragment selects, so a mapping regression can't hide behind a fixture that
+ * happens to omit the field that broke. `__typename` is what the provider
+ * discriminates on, and the real API always returns it.
+ */
+function makePRSearchNode(number: number, overrides: Record<string, unknown> = {}) {
+  return {
+    __typename: "PullRequest",
+    ...makePRNode(number, `feature/${number}`, null, makeCommitsRollup("SUCCESS")),
+    headRepository: { nameWithOwner: "owner/repo" },
+    baseRepository: { nameWithOwner: "owner/repo" },
+    assignees: { nodes: [{ login: "bob", avatarUrl: "" }] },
+    labels: { nodes: [{ name: "theme", color: "ff0000" }] },
+    comments: { totalCount: 4 },
+    ...overrides,
+  };
+}
+
+function prSearchResponse(nodes?: unknown[], issueCount = 1, pageInfo?: unknown) {
+  return {
+    search: {
+      issueCount,
+      pageInfo: pageInfo ?? { hasNextPage: false, endCursor: null },
+      nodes: nodes ?? [makePRSearchNode(42)],
+    },
+    rateLimit: { cost: 1, remaining: 4999, resetAt: "" },
+  };
+}
+
+describe("listPRs search", () => {
+  // Most assertions here count queries or compare query strings, so the
+  // required-check enrichment request is suppressed by default — the two tests
+  // that are *about* enrichment re-open the gate themselves.
+  beforeEach(() => {
+    mockGraphQLClient.mockReset();
+    suppressRequiredStatusEnrichment();
+  });
+
+  it("routes a search term to SEARCH_QUERY with is:pr and a state qualifier", async () => {
+    mockGraphQLClient.mockResolvedValue(prSearchResponse());
+
+    const page = await githubForgeProvider.listPRs(repo, { state: "open", search: "theme" });
+
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(1);
+    const [query, variables] = mockGraphQLClient.mock.calls[0] as [
+      string,
+      { searchQuery: string; type: string },
+    ];
+    expect(query).toContain("SearchItems");
+    // GitHub's search API has no PR-specific type: PRs come back under the
+    // unified ISSUE type, which is how `findPRByBranchImpl` already asks.
+    expect(variables.type).toBe("ISSUE");
+    expect(variables.searchQuery).toBe("repo:owner/repo is:pr is:open sort:created-desc theme");
+    expect(page.totalCount).toBe(1);
+  });
+
+  it("maps a search node through the same PR shape the list path produces", async () => {
+    // The search fragment and the connection fragment are separate selections
+    // feeding one mapper, so a field dropped from one is invisible until a row
+    // renders without it. Assert the derived fields, not just the number.
+    mockGraphQLClient.mockResolvedValue(prSearchResponse());
+
+    const page = await githubForgeProvider.listPRs(repo, { state: "open", search: "theme" });
+
+    expect(page.items[0]).toMatchObject({
+      number: 42,
+      state: "open",
+      baseRef: "main",
+      headRef: "feature/42",
+      commentCount: 4,
+      // Coarse rollup from the fragment's `commits(last:1)`; enrichment is
+      // suppressed in this describe, so this is the mapper's own output.
+      ciStatus: "success",
+    });
+    expect(page.items[0]?.reviewDecision).toBeNull();
+  });
+
+  it("discards non-PullRequest nodes an OR fragment can pull in", async () => {
+    // `is:pr` is query text, not a type constraint, and SEARCH_QUERY selects
+    // both node kinds. An issue mapped through `toForgePR` becomes a PR-shaped
+    // row with empty refs and `merged: false` that nothing downstream can tell
+    // apart from a real PR.
+    mockGraphQLClient.mockResolvedValue(
+      prSearchResponse(
+        [
+          {
+            __typename: "Issue",
+            number: 5,
+            title: "An issue",
+            bodyText: "",
+            url: "https://github.com/other/project/issues/5",
+            state: "OPEN",
+            createdAt: "2025-01-01T00:00:00Z",
+            updatedAt: "2025-01-01T00:00:00Z",
+            closedAt: null,
+          },
+          makePRSearchNode(42),
+        ],
+        2
+      )
+    );
+
+    const page = await githubForgeProvider.listPRs(repo, {
+      state: "open",
+      search: "theme OR is:issue",
+    });
+
+    expect(page.items.map((pr) => pr.number)).toEqual([42]);
+    // The filter reads a field the query has to select. Asserting it on the
+    // submitted document rather than on the fixture is what couples the two:
+    // drop `__typename` from SEARCH_QUERY and every PR silently disappears.
+    const [query] = mockGraphQLClient.mock.calls[0] as [string];
+    expect(query).toContain("__typename");
+    // `issueCount` counted the issue too, so it no longer describes these
+    // rows — reporting 2 PRs when one came back is worse than reporting none.
+    expect(page.totalCount).toBeUndefined();
+  });
+
+  /**
+   * The parity guard. `mapPRGraphQLStates` maps `closed` to CLOSED *and*
+   * MERGED, so bare `is:closed` is what keeps a searched page meaning the same
+   * thing as an unsearched one. The legacy `GitHubPRs.listPullRequests` search
+   * branch narrows it to `is:closed is:unmerged`; copying that here would make
+   * adding a search term silently drop every merged PR from a `state:"closed"`
+   * request. `state:` is wrong for a different reason — GitHub accepts only
+   * open/closed there for PRs, so `state:merged` matches nothing at all.
+   */
+  it.each([
+    ["open", "repo:owner/repo is:pr is:open sort:created-desc theme"],
+    ["closed", "repo:owner/repo is:pr is:closed sort:created-desc theme"],
+    ["merged", "repo:owner/repo is:pr is:merged sort:created-desc theme"],
+    ["all", "repo:owner/repo is:pr sort:created-desc theme"],
+  ] as const)("builds the %s state qualifier with is:, never state:", async (state, expected) => {
+    mockGraphQLClient.mockResolvedValue(prSearchResponse());
+
+    await githubForgeProvider.listPRs(repo, { state, search: "theme" });
+
+    // Exact equality already excludes `is:closed is:unmerged` and `state:`;
+    // a `not.toContain` alongside it would assert nothing further.
+    const { searchQuery } = mockGraphQLClient.mock.calls[0]![1] as { searchQuery: string };
+    expect(searchQuery).toBe(expected);
+  });
+
+  it("falls back to the open qualifier for a state the IPC layer never validated", async () => {
+    // `listCacheState` is typed, but the raw forge IPC handler forwards `opts`
+    // unvalidated. Interpolating the value would splice `author:alice` in as a
+    // second qualifier here while `mapPRGraphQLStates` quietly used OPEN — the
+    // two paths disagreeing is the failure this mapping exists to prevent.
+    mockGraphQLClient.mockResolvedValue(prSearchResponse());
+
+    // Assigned rather than cast: the point is a value TypeScript would have
+    // rejected at the call site but that reaches the provider anyway.
+    const opts: ListOptions = { search: "theme" };
+    Object.assign(opts, { state: "open author:alice" });
+    await githubForgeProvider.listPRs(repo, opts);
+
+    const { searchQuery } = mockGraphQLClient.mock.calls[0]![1] as { searchQuery: string };
+    expect(searchQuery).toBe("repo:owner/repo is:pr is:open sort:created-desc theme");
+  });
+
+  it("maps opts.sort 'updated' to sort:updated-desc", async () => {
+    mockGraphQLClient.mockResolvedValue(prSearchResponse());
+
+    await githubForgeProvider.listPRs(repo, { state: "open", search: "theme", sort: "updated" });
+
+    const { searchQuery } = mockGraphQLClient.mock.calls[0]![1] as { searchQuery: string };
+    expect(searchQuery).toBe("repo:owner/repo is:pr is:open sort:updated-desc theme");
+  });
+
+  it.each([
+    ["created", "asc", "sort:created-asc"],
+    ["created", "desc", "sort:created-desc"],
+    ["updated", "asc", "sort:updated-asc"],
+    ["updated", "desc", "sort:updated-desc"],
+  ] as const)("honors sort '%s' with direction '%s'", async (sort, direction, expected) => {
+    mockGraphQLClient.mockResolvedValue(prSearchResponse());
+
+    await githubForgeProvider.listPRs(repo, { state: "open", search: "theme", sort, direction });
+
+    const { searchQuery } = mockGraphQLClient.mock.calls[0]![1] as { searchQuery: string };
+    expect(searchQuery).toContain(expected);
+  });
+
+  it("asks for a different page when only the direction flips", async () => {
+    mockGraphQLClient.mockResolvedValue(prSearchResponse());
+
+    await githubForgeProvider.listPRs(repo, { search: "theme", direction: "asc" });
+    await githubForgeProvider.listPRs(repo, { search: "theme", direction: "desc" });
+
+    // Both must reach the client: were direction dropped, the two requests
+    // would be byte-identical and the second served from `forgeQueryCache`,
+    // leaving the comparison below to pass vacuously against `undefined`.
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(2);
+    const queries = mockGraphQLClient.mock.calls.map(
+      (call) => (call[1] as { searchQuery: string }).searchQuery
+    );
+    expect(queries[0]).not.toBe(queries[1]);
+  });
+
+  it("passes the requested page size to the search query", async () => {
+    mockGraphQLClient.mockResolvedValue(prSearchResponse());
+
+    await githubForgeProvider.listPRs(repo, { search: "theme", perPage: 3 });
+
+    const [, variables] = mockGraphQLClient.mock.calls[0] as [string, { limit: number }];
+    expect(variables.limit).toBe(3);
+  });
+
+  it("truncates the free-text term so the query stays within GitHub's 256-char cap", async () => {
+    mockGraphQLClient.mockResolvedValue(prSearchResponse());
+
+    await githubForgeProvider.listPRs(repo, { state: "open", search: "x".repeat(400) });
+
+    // Asserting only "≤ 256 and starts with the prefix" would also pass if the
+    // term were cut to a single character — the budget has to be spent, not
+    // just respected.
+    const prefix = "repo:owner/repo is:pr is:open sort:created-desc ";
+    const { searchQuery } = mockGraphQLClient.mock.calls[0]![1] as { searchQuery: string };
+    expect(searchQuery.length).toBe(256);
+    expect(searchQuery).toBe(prefix + "x".repeat(256 - prefix.length));
+  });
+
+  it("paginates with the cursor the previous search page returned", async () => {
+    mockGraphQLClient
+      .mockResolvedValueOnce(
+        prSearchResponse(undefined, 2, { hasNextPage: true, endCursor: "cur1" })
+      )
+      .mockResolvedValueOnce(prSearchResponse([makePRSearchNode(43)], 2));
+
+    const first = await githubForgeProvider.listPRs(repo, { state: "open", search: "theme" });
+    expect(first.hasMore).toBe(true);
+    expect(first.nextCursor).toBe("cur1");
+
+    const second = await githubForgeProvider.listPRs(repo, {
+      state: "open",
+      search: "theme",
+      cursor: first.nextCursor,
+    });
+
+    const [, variables] = mockGraphQLClient.mock.calls[1] as [string, { cursor: string }];
+    expect(variables.cursor).toBe("cur1");
+    expect(second.items[0]?.number).toBe(43);
+  });
+
+  it("returns an empty page with a zero total for a search that matches nothing", async () => {
+    // `totalCount: 0` must survive: a truthiness check instead of the
+    // `typeof === "number"` guard would drop it and the caller would render
+    // "unknown" where GitHub said "none".
+    mockGraphQLClient.mockResolvedValue(prSearchResponse([], 0));
+
+    const page = await githubForgeProvider.listPRs(repo, { state: "open", search: "nomatches" });
+
+    expect(page.items).toEqual([]);
+    expect(page.hasMore).toBe(false);
+    expect(page.totalCount).toBe(0);
+  });
+
+  it("bypassCache refetches instead of reusing the cached search response", async () => {
+    // Search results skip `forgePRListCache`, but `runQuery`'s short-TTL
+    // response cache still serves a repeat term — bypass is the only way past
+    // it, and dropping the flag on the floor here would be invisible.
+    mockGraphQLClient.mockResolvedValueOnce(prSearchResponse());
+    await githubForgeProvider.listPRs(repo, { state: "open", search: "theme" });
+
+    mockGraphQLClient.mockResolvedValueOnce(prSearchResponse([makePRSearchNode(99)]));
+    const fresh = await githubForgeProvider.listPRs(repo, {
+      state: "open",
+      search: "theme",
+      bypassCache: true,
+    });
+
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(2);
+    expect(fresh.items[0]?.number).toBe(99);
+  });
+
+  it("snapshots the options before dedupe defers the fetch", async () => {
+    // The documented bug class: `dedupe` defers by a microtask, so a caller
+    // reusing one options object between calls could otherwise have its first
+    // request issued with the second request's cursor and page size.
+    mockGraphQLClient.mockResolvedValue(prSearchResponse());
+    const opts: ListOptions = {
+      state: "open",
+      search: "theme",
+      cursor: "c1",
+      perPage: 5,
+      direction: "desc",
+    };
+
+    const pending = githubForgeProvider.listPRs(repo, opts);
+    opts.cursor = "c2";
+    opts.perPage = 50;
+    opts.direction = "asc";
+    opts.search = "something-else";
+    await pending;
+
+    const [, variables] = mockGraphQLClient.mock.calls[0] as [
+      string,
+      { searchQuery: string; cursor: string; limit: number },
+    ];
+    expect(variables.cursor).toBe("c1");
+    expect(variables.limit).toBe(5);
+    expect(variables.searchQuery).toBe("repo:owner/repo is:pr is:open sort:created-desc theme");
+  });
+
+  it("does not cross-serve between a search and an unfiltered list in flight", async () => {
+    // The sequential cache test below is weaker: by then the search's in-flight
+    // entry is already gone. Only an overlap catches a shared dedupe key.
+    mockGraphQLClient.mockImplementation(async (query: string) =>
+      query.includes("SearchItems") ? prSearchResponse() : prListResponse()
+    );
+
+    const [searched, listed] = await Promise.all([
+      githubForgeProvider.listPRs(repo, { state: "open", search: "theme" }),
+      githubForgeProvider.listPRs(repo, { state: "open" }),
+    ]);
+
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(2);
+    expect(searched.items[0]?.number).toBe(42);
+    expect(listed.items[0]?.number).toBe(1);
+  });
+
+  it("does not coalesce concurrent calls with different search terms", async () => {
+    mockGraphQLClient
+      .mockResolvedValueOnce(prSearchResponse())
+      .mockResolvedValueOnce(prSearchResponse([makePRSearchNode(43)]));
+
+    const [a, b] = await Promise.all([
+      githubForgeProvider.listPRs(repo, { state: "open", search: "abc" }),
+      githubForgeProvider.listPRs(repo, { state: "open", search: "def" }),
+    ]);
+
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(2);
+    expect(a.items[0]?.number).toBe(42);
+    expect(b.items[0]?.number).toBe(43);
+  });
+
+  it("coalesces concurrent identical search calls into a single query", async () => {
+    mockGraphQLClient.mockResolvedValue(prSearchResponse());
+
+    const [a, b] = await Promise.all([
+      githubForgeProvider.listPRs(repo, { state: "open", search: "theme" }),
+      githubForgeProvider.listPRs(repo, { state: "open", search: "theme" }),
+    ]);
+
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(1);
+    expect(a.items[0]?.number).toBe(42);
+    expect(b.items[0]?.number).toBe(42);
+  });
+
+  it("does not write search results into the forge PR list cache", async () => {
+    mockGraphQLClient.mockResolvedValue(prSearchResponse());
+
+    await githubForgeProvider.listPRs(repo, { state: "open", search: "theme" });
+
+    // Checking only the default key would still pass if the search wrote
+    // itself under some other one; the caches are cleared per test, so
+    // "nothing was written at all" is the assertable invariant.
+    expect(forgePRListCache.size()).toBe(0);
+    expect(forgePRListCache.get(defaultListKey("pr"))).toBeUndefined();
+
+    // A following unfiltered list call misses the cache and issues its own
+    // query — the filtered page must never stand in for the polled one.
+    mockGraphQLClient.mockResolvedValue(prListResponse());
+    const list = await githubForgeProvider.listPRs(repo, { state: "open" });
+    expect(list.items[0]?.number).toBe(1);
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(2);
+  });
+
+  it("reports the search match count without touching the repo-wide PR count", async () => {
+    // `issueCount` counts matches, but the connection path feeds its
+    // `totalCount` to `updateRepoStatsCount`, which backs the toolbar badge.
+    // A search for one term would otherwise relabel the repo as having 1 PR.
+    repoStatsCache.set("owner/repo", { prCount: 500, issueCount: 12, lastUpdated: Date.now() });
+    mockGraphQLClient.mockResolvedValue(prSearchResponse(undefined, 3));
+
+    const page = await githubForgeProvider.listPRs(repo, { state: "open", search: "theme" });
+
+    expect(page.totalCount).toBe(3);
+    expect(repoStatsCache.get("owner/repo")?.prCount).toBe(500);
+  });
+
+  it("ignores a whitespace-only search term and uses the list path", async () => {
+    mockGraphQLClient.mockResolvedValue(prListResponse());
+
+    const page = await githubForgeProvider.listPRs(repo, { state: "open", search: "   " });
+
+    const [query] = mockGraphQLClient.mock.calls[0] as [string];
+    expect(query).not.toContain("SearchItems");
+    expect(page.items[0]?.number).toBe(1);
+  });
+
+  it("enriches searched rows with required-check status, like the list path", async () => {
+    // #11251: the dropdown and the sidebar must not disagree about one PR's
+    // CI. Routing search through a separate query is exactly the kind of
+    // omission that reintroduces it for searched pages only.
+    mockShouldBlockRequest.mockReturnValue({ blocked: false, reason: null });
+    mockGraphQLClient
+      .mockResolvedValueOnce(prSearchResponse([makePRSearchNode(42)]))
+      .mockResolvedValueOnce(
+        requiredChecksResponse([
+          {
+            number: 42,
+            rollupState: "SUCCESS",
+            contexts: [
+              checkRun("required-e2e", "FAILURE", true),
+              checkRun("optional-lint", "SUCCESS", false),
+            ],
+          },
+        ])
+      );
+
+    const page = await githubForgeProvider.listPRs(repo, { state: "open", search: "theme" });
+
+    expect(page.items[0]?.ciStatus).toBe("failure");
+  });
+
+  it("skips the enrichment round trip when no searched row is open", async () => {
+    // Required-check state is meaningless once a PR is closed, and a `merged`
+    // search is the one most likely to return a full page of them.
+    mockShouldBlockRequest.mockReturnValue({ blocked: false, reason: null });
+    mockGraphQLClient.mockResolvedValue(
+      prSearchResponse([makePRSearchNode(7, { state: "MERGED", merged: true })])
+    );
+
+    await githubForgeProvider.listPRs(repo, { state: "merged", search: "theme" });
+
+    expect(mockGraphQLClient).toHaveBeenCalledTimes(1);
   });
 });
 

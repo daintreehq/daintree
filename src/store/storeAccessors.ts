@@ -17,6 +17,16 @@ export interface WorktreeSelectionSnapshot {
   activeWorktreeId: string | null;
   /** Durable selection that should round-trip across project switches (#9512). */
   restoreWorktreeId: string | null;
+  /**
+   * Worktrees that are gone but still hold surviving panels on a sidebar row
+   * (#11232). Exposed because these ids are destinations nothing should be
+   * moved TO: the row's cleanup sweep trashes whatever it holds, so a panel
+   * relocated onto one is scheduled for death (#11911).
+   *
+   * Optional so a harness that only cares about selection can keep supplying
+   * the two ids. Absent reads as "no rows", which is the pre-#11911 behavior.
+   */
+  deletedWorktreeIds?: ReadonlySet<string>;
 }
 
 let _getPanelStoreState: (() => PanelStoreSnapshot) | null = null;

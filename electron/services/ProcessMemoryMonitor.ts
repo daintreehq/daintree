@@ -9,7 +9,7 @@ import { setAlignedInterval } from "../utils/setAlignedInterval.js";
 import { refreshAppMetricsSnapshot } from "../utils/appMetricsSnapshot.js";
 import { getSystemSleepService } from "./SystemSleepService.js";
 import { getWritesSuppressed } from "./diskPressureState.js";
-import { getIsE2EFaultMode } from "../setup/runtimeFlags.js";
+import { getIsE2EFaultMode, getIsE2EMode } from "../setup/runtimeFlags.js";
 import { getSystemMemoryThresholds, readAvailableSystemMemoryMb } from "../utils/systemMemory.js";
 import type { TrimStateSummary } from "../../shared/types/pty-host.js";
 
@@ -499,7 +499,12 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
           state.bucketMin = Infinity;
         }
 
-        if (proc.type === "Browser" && mb > SNAPSHOT_THRESHOLD_MB && !app.isPackaged) {
+        if (
+          proc.type === "Browser" &&
+          mb > SNAPSHOT_THRESHOLD_MB &&
+          !app.isPackaged &&
+          !getIsE2EMode()
+        ) {
           const now = Date.now();
           const last = snapshotCooldowns.get(proc.pid) ?? 0;
           if (now - last > SNAPSHOT_COOLDOWN_MS) {

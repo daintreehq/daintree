@@ -1,8 +1,13 @@
 import { Menu } from "electron";
 import type { HandlerDependencies } from "../types.js";
-import type { MenuItemOption, ShowContextMenuPayload } from "../../../shared/types/menu.js";
+import type {
+  MenuItemOption,
+  ShowApplicationMenuPayload,
+  ShowContextMenuPayload,
+} from "../../../shared/types/menu.js";
 import { defineIpcNamespace, op } from "../define.js";
 import { MENU_METHOD_CHANNELS } from "./menu.preload.js";
+import { isCachedViewWebContents } from "../../window/webContentsRegistry.js";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return !!value && typeof value === "object" && !Array.isArray(value);
@@ -88,9 +93,105 @@ function sanitizeShowContextMenuPayload(value: unknown): ShowContextMenuPayload 
   };
 }
 
+/**
+ * Translate a sender-view CSS-pixel anchor into the window coordinates
+ * `Menu.popup` expects, clamped inside the window's content area.
+ *
+ * The project WebContentsView always fills the window's content area
+ * (`ProjectViewManager` sets `{x: 0, y: 0, width, height}`), so the only
+ * correction between the two spaces is the view's zoom factor — an app zoomed
+ * to 150% renders the button 1.5x further from the origin than its CSS rect
+ * reports. Non-finite input falls back to Electron's own default (the cursor).
+ */
+export function resolveApplicationMenuAnchor(
+  payload: ShowApplicationMenuPayload | undefined,
+  bounds: { width: number; height: number },
+  zoomFactor: number
+): { x: number; y: number } | null {
+  if (!payload) return null;
+  const { x, y } = payload;
+  if (!Number.isFinite(x) || !Number.isFinite(y)) return null;
+
+  // A zero/negative/NaN zoom factor would collapse or invert the anchor.
+  const scale = Number.isFinite(zoomFactor) && zoomFactor > 0 ? zoomFactor : 1;
+  const clamp = (value: number, max: number) =>
+    Math.round(Math.min(Math.max(value * scale, 0), Math.max(max, 0)));
+
+  return { x: clamp(x as number, bounds.width), y: clamp(y as number, bounds.height) };
+}
+
 export const menuNamespace = defineIpcNamespace({
   name: "menu",
   ops: {
+    /**
+     * Pop up the installed application menu at a renderer-supplied anchor
+     * (#11813).
+     *
+     * Windows hides the native title bar for the Window Controls Overlay, which
+     * removes the frame region the menu bar would render into — Alt reveals
+     * nothing and every menu-only action becomes unreachable. Linux keeps a real
+     * frame (Alt works) but nothing advertises the menu.
+     *
+     * This pops up the exact object `Menu.getApplicationMenu()` returns rather
+     * than rebuilding a template, so the popup inherits every dynamic part of
+     * the menu for free: Open Recent, installed-agent items, plugin
+     * contributions, the live "Check for Updates…" label mutated by
+     * `applyUpdateMenuState`, and the project gates mutated by
+     * `refreshProjectMenuState`. Electron runs the items' own click handlers and
+     * roles, so there is no second source of truth to drift.
+     *
+     * macOS keeps its system menu bar and no-ops here even if a renderer calls
+     * this, so the native menu is never shadowed by a duplicate popup.
+     */
+    showApplication: op(
+      MENU_METHOD_CHANNELS.showApplication,
+      async (ctx, payload?: ShowApplicationMenuPayload): Promise<void> => {
+        if (process.platform === "darwin") return;
+
+        const win = ctx.senderWindow;
+        if (!win || win.isDestroyed()) return;
+
+        // The only legitimate caller is a click on the toolbar button of the
+        // window the user is looking at. Refusing unfocused windows keeps a
+        // renderer from summoning the real application menu under the pointer
+        // and baiting a click onto a privileged item such as Exit.
+        if (!win.isFocused()) return;
+
+        // A backgrounded project view can still hold a queued click; without
+        // this it would surface a popup over whichever view is now visible.
+        if (isCachedViewWebContents(ctx.webContentsId)) return;
+
+        const menu = Menu.getApplicationMenu();
+        if (!menu) return;
+
+        let anchor: { x: number; y: number } | null = null;
+        try {
+          // The sender's own zoom factor, not the window's app view: the rect
+          // was measured in the sender's CSS pixels, so only that view's zoom
+          // converts it back to device-independent window coordinates.
+          const sender = ctx.event.sender;
+          if (!sender.isDestroyed()) {
+            anchor = resolveApplicationMenuAnchor(
+              payload,
+              win.getContentBounds(),
+              sender.getZoomFactor()
+            );
+          }
+        } catch {
+          // Fall through to a cursor-anchored popup rather than dropping the
+          // menu entirely — reachability matters more than placement.
+        }
+
+        try {
+          menu.popup({ window: win, ...(anchor ?? {}) });
+        } catch (err) {
+          // Losing the window mid-teardown is a benign race, but an unhandled
+          // rejection here would reach the renderer's global error reporter.
+          console.error("[MAIN] Failed to open the application menu:", err);
+        }
+      },
+      { withContext: true }
+    ),
     showContext: op(
       MENU_METHOD_CHANNELS.showContext,
       async (ctx, payload: ShowContextMenuPayload): Promise<string | null> => {

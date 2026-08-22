@@ -1,4 +1,5 @@
 import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
+import { isPluginRecipe } from "@shared/types/project";
 import type { TerminalRecipe } from "@/types";
 
 export interface RecipeScope {
@@ -22,15 +23,20 @@ export function worktreeDisplayName(
 }
 
 /**
- * Classify which of the three recipe scopes a recipe belongs to, using the
- * vocabulary the Settings recipe list established. In-repo is checked before
- * `projectId` because in-repo recipes can also carry a `projectId` once
- * ProjectFileStore mirrors them.
+ * Classify which recipe scope a recipe belongs to, using the vocabulary the
+ * Settings recipe list established. Plugin provenance is checked first (it is
+ * the only scope that is read-only), then in-repo before `projectId` because
+ * in-repo recipes can also carry a `projectId` once ProjectFileStore mirrors
+ * them.
  */
 export function getRecipeScope(
   recipe: TerminalRecipe,
   resolveWorktreeName?: WorktreeNameResolver
 ): RecipeScope {
+  // Provenance first: a plugin recipe also carries no `projectId`, so the
+  // global inference below would claim it and label a plugin-owned, read-only
+  // recipe as one the user can edit (#11860).
+  if (isPluginRecipe(recipe)) return { label: "Plugin", isGlobal: true };
   if (isInRepoRecipeId(recipe)) return { label: "Team", isGlobal: false };
   if (recipe.projectId === undefined) return { label: "Global", isGlobal: true };
   if (!recipe.worktreeId) return { label: "Project-wide", isGlobal: false };

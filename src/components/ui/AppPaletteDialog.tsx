@@ -346,6 +346,13 @@ interface AppPaletteHeaderProps {
   label: string;
   /** Canonical shortcut string rendered via KbdChord (e.g. "Cmd+N"). */
   shortcut?: string;
+  /**
+   * Ambient metadata for the label row — a count or summary the palette wants
+   * standing beside its name rather than inside its list. Non-interactive: the
+   * header sits outside the arrow-key domain, so anything focusable here is
+   * unreachable by the keyboard the palette is driven with.
+   */
+  trailing?: React.ReactNode;
   children: React.ReactNode;
   className?: string;
   /**
@@ -359,6 +366,7 @@ interface AppPaletteHeaderProps {
 AppPaletteDialog.Header = function AppPaletteHeader({
   label,
   shortcut,
+  trailing,
   children,
   className,
   isLoading = false,
@@ -377,7 +385,21 @@ AppPaletteDialog.Header = function AppPaletteHeader({
     >
       <div className="flex justify-between items-center mb-1.5 text-[11px] text-daintree-text/50">
         <span>{label}</span>
-        {shortcut ? <KbdChord shortcut={shortcut} /> : null}
+        {/*
+         * Grouped only when there is something to group. `justify-between`
+         * spaces its children across the row, so folding the chord into a
+         * wrapper unconditionally would move it on every palette that never
+         * asked for metadata — this way the shortcut-only row stays the row it
+         * has always been.
+         */}
+        {trailing != null ? (
+          <span className="flex items-center gap-2 min-w-0">
+            <span className="truncate">{trailing}</span>
+            {shortcut ? <KbdChord shortcut={shortcut} /> : null}
+          </span>
+        ) : shortcut ? (
+          <KbdChord shortcut={shortcut} />
+        ) : null}
       </div>
       {children}
       <div

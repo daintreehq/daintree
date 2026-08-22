@@ -40,6 +40,8 @@ import { TerminalErrorBanner } from "./TerminalErrorBanner";
 import { SpawnErrorBanner } from "./SpawnErrorBanner";
 import { ReconnectErrorBanner } from "./ReconnectErrorBanner";
 import { ScrollbackRestoreErrorBanner } from "./ScrollbackRestoreErrorBanner";
+import { TerminalSubmitStatusBanner } from "./TerminalSubmitStatusBanner";
+import { useTerminalSubmitStatus } from "./useTerminalSubmitStatus";
 import { TerminalAttachErrorBanner } from "./TerminalAttachErrorBanner";
 import { useShouldSuppressLocalError } from "@/components/Recovery/useShouldSuppressLocalError";
 import { UpdateCwdDialog } from "./UpdateCwdDialog";
@@ -100,6 +102,8 @@ import { registerPanelFocusHandler } from "@/components/Panel/panelFocusRegistry
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
 import { isPtyPanel } from "@shared/types/panel";
 import { useSessionLostBanner } from "./useSessionLostBanner";
+import { useWorktreeMoveBanner, resolveWorktreeMoveRoute } from "./useWorktreeMoveBanner";
+import { WorktreeMoveBanner } from "./WorktreeMoveBanner";
 import type { TerminalRuntimeIdentity } from "@shared/types/panel";
 
 import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
@@ -576,6 +580,18 @@ function TerminalPaneComponent({
     hybridInputEnabled,
     isFleetArmed: isArmed,
     fleetSize: armedIds.size,
+  });
+
+  // Below `showHybridInputBar`/`isHybridInputDisabled` because it needs both:
+  // "the bar is rendered" and "the bar can take input" are different questions,
+  // and delivering the move instruction has to respect the second one (#11867).
+  const worktreeMoveBanner = useWorktreeMoveBanner(id, {
+    route: resolveWorktreeMoveRoute({
+      isHybridInputDisabled,
+      hasHybridInputBar: showHybridInputBar,
+      isFleetComposing: isArmed && armedIds.size >= 2,
+    }),
+    inputBarRef,
   });
 
   const pingedIdSelector = (state: ReturnType<typeof usePanelStore.getState>) =>
@@ -1234,6 +1250,16 @@ function TerminalPaneComponent({
     !suppressParseError && Boolean(scrollbackRestoreError) && !restartError;
   const showRestartStatus = restartBannerVariant.type !== "none";
 
+  // Submit-lane status (#11875). `slow` stays ambient in the header pill; only
+  // the escalated states get a banner, and only when the backend is healthy
+  // enough for the message to mean anything.
+  const submitStatus = useTerminalSubmitStatus(id, { isRestarting, isExited });
+  const showSubmitStatusBanner =
+    !suppressBackendDependent &&
+    (submitStatus === "stalled" || submitStatus === "failed") &&
+    !restartError &&
+    !spawnError;
+
   return (
     <ContentPanel
       ref={containerRef}
@@ -1269,6 +1295,7 @@ function TerminalPaneComponent({
       detectedProcessId={detectedProcessId}
       queueCount={queueCount}
       flowStatus={flowStatus}
+      submitStatus={submitStatus ?? undefined}
       isPinged={isPinged}
       wasJustSelected={wasJustSelected}
       ambientAgentState={ambientAgentState}
@@ -1352,6 +1379,16 @@ function TerminalPaneComponent({
         )}
       </BannerSlot>
 
+      <BannerSlot visible={showSubmitStatusBanner}>
+        {(submitStatus === "stalled" || submitStatus === "failed") && (
+          <TerminalSubmitStatusBanner
+            terminalId={id}
+            status={submitStatus}
+            isRestarting={isRestarting}
+          />
+        )}
+      </BannerSlot>
+
       <BannerSlot visible={showReconnectError}>
         {reconnectError && (
           <ReconnectErrorBanner
@@ -1416,6 +1453,15 @@ function TerminalPaneComponent({
             icon: RotateCcw,
             onClick: resetForceResumeQueue,
           }}
+        />
+      </BannerSlot>
+
+      <BannerSlot visible={worktreeMoveBanner.visible}>
+        <WorktreeMoveBanner
+          destinationPath={worktreeMoveBanner.destinationPath}
+          deliveryFailed={worktreeMoveBanner.deliveryFailed}
+          onTell={worktreeMoveBanner.tell}
+          onDismiss={worktreeMoveBanner.dismiss}
         />
       </BannerSlot>
 
@@ -1494,6 +1540,11 @@ function TerminalPaneComponent({
                     onReady={handleReady}
                     onExit={handleExit}
                     onInput={handleInput}
+                    // Same selection path as a click on the pane, minus the
+                    // event — which is exactly what leaves the shift/cmd fleet
+                    // gestures behind, since those only fire for a real click
+                    // that landed in pane chrome (#11809).
+                    onDropSelect={handleClick}
                     onAttached={handleAttached}
                     className="absolute inset-0"
                     getRefreshTier={getRefreshTierCallback}

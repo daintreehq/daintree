@@ -61,6 +61,7 @@ export const CHANNELS = {
   TERMINAL_BROADCAST_WRITE_RESULT: "terminal:broadcast-write-result",
   TERMINAL_AGENT_TITLE_STATE: "terminal:agent-title-state",
   TERMINAL_UPDATE_OBSERVED_TITLE: "terminal:update-observed-title",
+  TERMINAL_UPDATE_TITLE: "terminal:update-title",
   TERMINAL_REDUCE_SCROLLBACK: "terminal:reduce-scrollback",
   TERMINAL_RESTORE_SCROLLBACK: "terminal:restore-scrollback",
   TERMINAL_RESTART_SERVICE: "terminal:restart-service",
@@ -183,6 +184,7 @@ export const CHANNELS = {
   APP_DISMISS_ROSETTA_WARNING: "app:dismiss-rosetta-warning",
   MENU_ACTION: "menu:action",
   MENU_SHOW_CONTEXT: "menu:show-context",
+  MENU_SHOW_APPLICATION: "menu:show-application",
 
   LOGS_GET_ALL: "logs:get-all",
   LOGS_GET_SOURCES: "logs:get-sources",
@@ -224,6 +226,7 @@ export const CHANNELS = {
   PROJECT_REMOVE: "project:remove",
   PROJECT_UPDATE: "project:update",
   PROJECT_UPDATED: "project:updated",
+  PROJECT_SLEPT: "project:slept",
   PROJECT_REMOVED: "project:removed",
   PROJECT_SWITCH: "project:switch",
   PROJECT_PREFETCH_HYDRATE: "project:prefetch-hydrate",
@@ -236,7 +239,7 @@ export const CHANNELS = {
   PROJECT_DETECT_RUNNERS: "project:detect-runners",
   PROJECT_LIST_REMOTES: "project:list-remotes",
   PROJECT_CLOSE: "project:close",
-  PROJECT_FREE_MEMORY: "project:free-memory",
+  PROJECT_SLEEP: "project:sleep",
   PROJECT_REOPEN: "project:reopen",
   PROJECT_GET_STATS: "project:get-stats",
   PROJECT_GET_BULK_STATS: "project:get-bulk-stats",
@@ -328,6 +331,8 @@ export const CHANNELS = {
 
   ACCESSIBILITY_GET_ENABLED: "accessibility:get-enabled",
   ACCESSIBILITY_SUPPORT_CHANGED: "accessibility:support-changed",
+  /** Broadcast after a configuration bundle applied, so every view refreshes its mirrors (#11889). */
+  CONFIG_BUNDLE_IMPORTED: "config-bundle:imported",
 
   GIT_GET_FILE_DIFF: "git:get-file-diff",
   GIT_GET_PROJECT_PULSE: "git:get-project-pulse",
@@ -430,6 +435,9 @@ export const CHANNELS = {
   KEYBINDING_EXPORT_PROFILE: "keybinding:export-profile",
   KEYBINDING_IMPORT_PROFILE: "keybinding:import-profile",
 
+  CONFIG_BUNDLE_EXPORT: "config-bundle:export",
+  CONFIG_BUNDLE_PREVIEW_IMPORT: "config-bundle:preview-import",
+  CONFIG_BUNDLE_APPLY_IMPORT: "config-bundle:apply-import",
   WORKTREE_CONFIG_GET: "worktree-config:get",
   WORKTREE_CONFIG_SET_PATTERN: "worktree-config:set-pattern",
   WORKTREE_CONFIG_SET_WSL_GIT: "worktree-config:set-wsl-git",
@@ -976,6 +984,11 @@ export const CHANNELS = {
   /** Renderer reports plugin panel lifecycle transitions (mounted/hidden/trashed/removed) for worker delivery. */
   PLUGIN_REPORT_PANEL_LIFECYCLE: "plugin:report-panel-lifecycle",
   PLUGIN_AGENTS_GET: "plugin:agents-get",
+  PLUGIN_RECIPES_GET: "plugin:recipes-get",
+  /** Append one run timestamp to a plugin recipe's sidecar metadata (#11860). */
+  PLUGIN_RECIPE_RECORD_USE: "plugin:recipe-record-use",
+  /** Patch the user-owned half of a plugin recipe (empty-state pin, auto-assign). */
+  PLUGIN_RECIPE_METADATA_UPDATE: "plugin:recipe-metadata-update",
   PLUGIN_FORGE_PROVIDERS_GET: "plugin:forge-providers-get",
   PLUGIN_FILE_DECORATIONS_GET: "plugin:file-decorations-get",
   PLUGIN_WORKTREE_STATUS_GET: "plugin:worktree-status-get",

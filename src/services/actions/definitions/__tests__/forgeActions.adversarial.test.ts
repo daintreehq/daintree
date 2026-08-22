@@ -733,11 +733,28 @@ describe("forge.* query adversarial", () => {
     forgeClientMock.listPRs.mockResolvedValue({ items: [], nextCursor: null, hasMore: false });
     await runAction(
       "forge.listPRs",
-      { state: "all", cursor: "c1" },
+      { state: "all", cursor: "c1", search: "is:draft" },
       { activeWorktreePath: "/repo" }
     );
     const [, opts] = forgeClientMock.listPRs.mock.calls[0]!;
-    expect(opts).toMatchObject({ state: "all", cursor: "c1" });
+    expect(opts).toMatchObject({ state: "all", cursor: "c1", search: "is:draft" });
+  });
+
+  it("listPRs forwards `search` to the provider — validating it is not the same as wiring it", async () => {
+    // The schema accepting the key and the handler forwarding it are separate
+    // edits, and the handler destructures its options explicitly: an omitted
+    // name here returns a confidently unfiltered page rather than an error.
+    forgeClientMock.listPRs.mockResolvedValue({ items: [], nextCursor: null, hasMore: false });
+    await runAction("forge.listPRs", { cwd: "/repo", search: "theme", state: "closed" });
+    expect(forgeClientMock.listPRs).toHaveBeenCalledWith("/repo", {
+      search: "theme",
+      state: "closed",
+      cursor: undefined,
+      perPage: undefined,
+      sort: undefined,
+      direction: undefined,
+      bypassCache: undefined,
+    });
   });
 
   it("listIssues forwards paging and ordering to the provider", async () => {
@@ -824,12 +841,18 @@ describe("forge list arg validation rejects rather than strips", () => {
     expect(parse("forge.listIssues", args).success).toBe(false);
   });
 
-  it("rejects `search` on listPRs — the provider has no PR query path", () => {
-    expect(parse("forge.listPRs", { search: "is:open" }).success).toBe(false);
+  it("accepts `search` on both lists — the PR path routes through search too (#11897)", () => {
+    expect(parse("forge.listPRs", { search: "is:draft" }).success).toBe(true);
+    expect(parse("forge.listIssues", { search: "no:assignee" }).success).toBe(true);
   });
 
-  it("still accepts `search` on listIssues, where it is wired", () => {
-    expect(parse("forge.listIssues", { search: "no:assignee" }).success).toBe(true);
+  it("keeps listPRs strict about everything else — widening admitted one key, not any key", () => {
+    // The point of re-admitting `search` was that a provider can now honor it.
+    // A schema that started accepting unknown keys wholesale would return the
+    // confidently-unfiltered page strictness exists to prevent.
+    expect(parse("forge.listPRs", { labels: ["bug"] }).success).toBe(false);
+    expect(parse("forge.listPRs", { assignee: "octocat" }).success).toBe(false);
+    expect(parse("forge.listPRs", { search: 42 }).success).toBe(false);
   });
 
   it("admits `bypassCache` on both lists — strictness must not strand the freshness knob", () => {
@@ -857,6 +880,23 @@ describe("forge list arg validation rejects rather than strips", () => {
     expect(parse("forge.listIssues", { sort: "comments" }).success).toBe(false);
     expect(parse("forge.listIssues", { direction: "sideways" }).success).toBe(false);
     expect(parse("forge.listIssues", { sort: "updated", direction: "asc" }).success).toBe(true);
+  });
+
+  it("carries a PR search through validation into the provider call", async () => {
+    // The handler test above runs raw args. That would still pass if the
+    // schema parsed `search` to `undefined`, because production forwards
+    // `validation.data`, not the raw input — so run the parsed output.
+    const args = { state: "closed", search: "is:draft -label:wip", perPage: 10 };
+    const parsed = parse("forge.listPRs", args);
+    expect(parsed.success).toBe(true);
+
+    forgeClientMock.listPRs.mockResolvedValue({ items: [], nextCursor: null, hasMore: false });
+    await runAction("forge.listPRs", parsed.success ? parsed.data : args, {
+      activeWorktreePath: "/repo",
+    });
+
+    const [, opts] = forgeClientMock.listPRs.mock.calls[0]!;
+    expect(opts).toMatchObject(args);
   });
 
   it("carries the issue's motivating query through validation into the provider call", async () => {

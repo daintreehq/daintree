@@ -19,6 +19,7 @@ vi.mock("../FileLinksAddon", () => ({
 import {
   setupTerminalAddons,
   createImageAddon,
+  createSearchAddon,
   createWebLinksAddon,
   createFileLinksAddon,
   SEARCH_HIGHLIGHT_LIMIT,
@@ -65,13 +66,12 @@ describe("TerminalAddonManager", () => {
       expect(addons.webLinksAddon).toBeNull();
     });
 
-    it("creates SearchAddon eagerly with highlightLimit for bounded match counts", async () => {
+    it("defers SearchAddon until terminal search is opened", async () => {
       const terminal = createMockTerminal();
-      await setupTerminalAddons(terminal);
+      const addons = await setupTerminalAddons(terminal);
 
-      expect(mockSearchAddon).toHaveBeenCalledWith({
-        highlightLimit: SEARCH_HIGHLIGHT_LIMIT,
-      });
+      expect(mockSearchAddon).not.toHaveBeenCalled();
+      expect(addons.searchAddon).toBeNull();
     });
 
     it("activates Unicode 11 widths so modern emoji and CJK glyphs render at 2 cells (issue #7205)", async () => {
@@ -94,8 +94,20 @@ describe("TerminalAddonManager", () => {
       const addons = await setupTerminalAddons(terminal);
 
       expect(terminal.unicode.activeVersion).toBe("6");
-      expect(mockSearchAddon).toHaveBeenCalledTimes(1);
-      expect(addons.searchAddon).toBeDefined();
+      expect(mockSearchAddon).not.toHaveBeenCalled();
+      expect(addons.searchAddon).toBeNull();
+    });
+  });
+
+  describe("createSearchAddon", () => {
+    it("loads search on demand with a bounded highlight count", async () => {
+      const terminal = createMockTerminal();
+      await createSearchAddon(terminal);
+
+      expect(mockSearchAddon).toHaveBeenCalledWith({
+        highlightLimit: SEARCH_HIGHLIGHT_LIMIT,
+      });
+      expect(terminal.loadAddon).toHaveBeenCalledWith(expect.any(mockSearchAddon));
     });
   });
 

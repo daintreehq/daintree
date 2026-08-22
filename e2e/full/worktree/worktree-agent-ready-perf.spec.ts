@@ -371,7 +371,6 @@ async function measureDelete(branch: string, worktreeId: string): Promise<Delete
       .filter((id): id is string => !!id);
     for (const id of ids) {
       await dispatch?.("terminal.kill", { terminalId: id, confirmed: true }, { source: "test" });
-      await dispatch?.("terminal.close", { terminalId: id }, { source: "test" });
     }
   });
   return await page.evaluate(

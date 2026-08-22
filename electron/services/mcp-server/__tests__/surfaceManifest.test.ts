@@ -398,12 +398,34 @@ describe("hash", () => {
     expect(hashOf(withEnum(["a", "b"]))).not.toBe(hashOf(withEnum(["b", "a"])));
   });
 
+  it("moves when a value bound is tightened", () => {
+    // The case the frozen fixture below cannot see, because it carries no bound
+    // at all. `maximum: 100` -> `maximum: 50` starts rejecting calls that used
+    // to succeed, so it is exactly the incompatibility this digest promises to
+    // report — and it is invisible in the ADVERTISED schema, which projects the
+    // value-range keywords away for the model. This is what pins the preimage to
+    // `entry.inputSchema` rather than to `buildToolInputSchema(entry)`.
+    const withMax = (maximum: number): ActionManifestEntry[] => [
+      entry({
+        id: "actions.list",
+        inputSchema: { type: "object", properties: { limit: { type: "number", maximum } } },
+      }),
+    ];
+
+    expect(hashOf(withMax(100))).not.toBe(hashOf(withMax(50)));
+  });
+
   it("pins the published digest for a frozen surface", () => {
     // The hash is a client-facing contract: a refactor that changed every
     // digest would keep every relative assertion above green while silently
     // breaking every client that stored one. This fixture is deliberately
     // hand-frozen — update it only alongside a MCP_SURFACE_MANIFEST_VERSION
     // bump and a note in the PR, never to make a failing run pass.
+    //
+    // Last moved for v2, which re-pointed the preimage at the unprojected
+    // `entry.inputSchema` (see MCP_SURFACE_MANIFEST_VERSION). That dropped the
+    // `additionalProperties: false` the advertised view injects, so every v1
+    // digest is stale by construction.
     const frozen: ActionManifestEntry[] = [
       entry({
         id: "actions.list",
@@ -419,7 +441,7 @@ describe("hash", () => {
     ];
 
     expect(buildSurfaceManifest(frozen, "action", APP_VERSION).hash).toBe(
-      "00c81d0089fa582bd988cf8fa8280cd703b69b523846f190b5fce5cf2340055b"
+      "e19447a203b1badebb082cd110c51768030ab6f4057afc804b9ba746a679efe4"
     );
   });
 
@@ -446,3 +468,71 @@ describe("hash", () => {
 // Registration is not asserted here: mirroring the allowlist arrays would only
 // restate them. The real guard is that `tools/list` serves `mcp.surface` at
 // every tier, which sessionServer.test.ts checks against the live handler.
+
+describe("buildSurfaceManifest with a workspace-bound session (#11789)", () => {
+  const BOUND = { workspaceBound: true };
+
+  it("omits confirm-gated tools a bound external session cannot reach", () => {
+    const manifest = [
+      entry({ id: "actions.list" }),
+      entry({ id: "recipe.run", kind: "command", danger: "confirm" }),
+    ];
+
+    const unbound = buildSurfaceManifest(manifest, "external", APP_VERSION);
+    const bound = buildSurfaceManifest(manifest, "external", APP_VERSION, BOUND);
+
+    expect(unbound.tools.map((t) => t.id)).toContain("recipe.run");
+    expect(bound.tools.map((t) => t.id)).not.toContain("recipe.run");
+    expect(bound.tools.map((t) => t.id)).toContain("actions.list");
+  });
+
+  it("drops exactly the confirm-gated entries from the unbound report, and nothing else", () => {
+    // Stated against an independently-derived expectation rather than against
+    // `shouldExposeTool` — comparing the builder to its own gate would pass
+    // just as happily with that gate deleted.
+    // `recipe.run`, not `git.commit`: the confirm-gated entry has to be one the
+    // external tier actually permits, or neither report would list it and the
+    // comparison would hold vacuously.
+    const manifest = [
+      entry({ id: "actions.list" }),
+      entry({ id: "terminal.new", kind: "command" }),
+      entry({ id: "recipe.run", kind: "command", danger: "confirm" }),
+    ];
+    const unbound = buildSurfaceManifest(manifest, "external", APP_VERSION).tools.map((t) => t.id);
+    const bound = buildSurfaceManifest(manifest, "external", APP_VERSION, BOUND).tools.map(
+      (t) => t.id
+    );
+    const confirmGated = new Set(manifest.filter((e) => e.danger === "confirm").map((e) => e.id));
+
+    expect(bound).toEqual(unbound.filter((id) => !confirmGated.has(id)));
+    // And the manifest genuinely contained one, so the assertion has teeth.
+    expect(unbound.some((id) => confirmGated.has(id))).toBe(true);
+  });
+
+  it("changes the hash when the bound surface differs from the unbound one", () => {
+    const manifest = [
+      entry({ id: "actions.list" }),
+      entry({ id: "recipe.run", kind: "command", danger: "confirm" }),
+    ];
+
+    expect(buildSurfaceManifest(manifest, "external", APP_VERSION, BOUND).hash).not.toBe(
+      buildSurfaceManifest(manifest, "external", APP_VERSION).hash
+    );
+  });
+
+  it("leaves the unbound output identical to the pre-binding shape", () => {
+    const manifest = realisticManifest();
+    expect(
+      buildSurfaceManifest(manifest, "external", APP_VERSION, { workspaceBound: false })
+    ).toEqual(buildSurfaceManifest(manifest, "external", APP_VERSION));
+  });
+
+  it("does not narrow a non-external tier, so the pinned Assistant is unaffected", () => {
+    const manifest = realisticManifest();
+    for (const tier of ["workbench", "action", "system"] as const) {
+      expect(buildSurfaceManifest(manifest, tier, APP_VERSION, BOUND)).toEqual(
+        buildSurfaceManifest(manifest, tier, APP_VERSION)
+      );
+    }
+  });
+});

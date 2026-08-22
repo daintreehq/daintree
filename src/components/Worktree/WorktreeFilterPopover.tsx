@@ -413,7 +413,7 @@ export function WorktreeFilterPopover({
                     className={cn(
                       "flex items-center gap-2 px-2 py-1 text-xs rounded",
                       orderBy === option.value
-                        ? "bg-overlay-soft text-daintree-text"
+                        ? "bg-overlay-raised text-daintree-text"
                         : "text-daintree-text/70 hover:bg-overlay-medium"
                     )}
                   >

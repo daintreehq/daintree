@@ -12,7 +12,7 @@ import type {
   BrowserHistory,
   AddPanelOptions,
 } from "@/types";
-import type { PanelInstance } from "@shared/types/panel";
+import type { PanelInstance, PanelWorktreeMoveNotice } from "@shared/types/panel";
 
 export type { AddPanelOptions };
 
@@ -26,13 +26,11 @@ export interface RestartTerminalOptions {
    * When `false`, suppresses session continuity from the kill: the session id
    * captured by the graceful shutdown is discarded and the "resume the most
    * recent session" fallback is skipped even if the agent declares
-   * `resumeLatestArgs`. Used by `moveToNewWorktreeAndTransfer` where the CWD
-   * has changed and a fresh launch with buffer-injected context is
-   * intentional — silently resuming a session in the new CWD would mask the
-   * move and double up the injected history. A session id already stored on
-   * the panel still resumes exactly (pre-existing contract; the update-cwd
-   * flow relies on it). See issue #4781 for the cross-worktree-transfer
-   * rationale.
+   * `resumeLatestArgs`. Used by `UpdateCwdDialog`, where the cwd has changed
+   * under the panel and a fresh launch is the intent — silently resuming a
+   * session scoped to the old directory would mask the change. A session id
+   * already stored on the panel still resumes exactly (pre-existing contract;
+   * the update-cwd flow relies on it).
    * Defaults to `true` (resume enabled).
    */
   allowResumeLatest?: boolean;
@@ -210,7 +208,19 @@ export interface PanelRegistrySlice {
   clearTerminalError: (id: string) => void;
   updateTerminalCwd: (id: string, cwd: string) => void;
   moveTerminalToWorktree: (id: string, worktreeId: string) => void;
-  moveToNewWorktreeAndTransfer: (id: string) => void;
+  /**
+   * Create a worktree and file this panel under it. The process is never
+   * restarted: relabelling is instant and the running agent is told where to go
+   * by the pane's own banner, if the user asks for it (#11853).
+   */
+  moveToNewWorktree: (id: string) => void;
+  /**
+   * Raise or clear this pane's "your agent is still in the old worktree" prompt
+   * (#11853). Pass `undefined` to clear — telling the agent and dismissing are
+   * the same store write, because nothing should mark the panel afterwards.
+   * Never persisted: the notice is a prompt to act on now, not durable consent.
+   */
+  setWorktreeMoveNotice: (id: string, notice: PanelWorktreeMoveNotice | undefined) => void;
   updateFlowStatus: (id: string, status: PersistableFlowStatus, timestamp: number) => void;
   setRuntimeStatus: (id: string, status: TerminalRuntimeStatus) => void;
   setInputLocked: (id: string, locked: boolean) => void;

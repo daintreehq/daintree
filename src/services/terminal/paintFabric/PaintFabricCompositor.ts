@@ -731,6 +731,11 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
     return this.plane(id).get(id);
   }
 
+  ensureSearchAddon(id: string): Promise<ManagedTerminal["searchAddon"]> {
+    if (this.isViewOwned(id)) return Promise.resolve(null);
+    return this.plane(id).ensureSearchAddon(id);
+  }
+
   getInstanceForE2E(id: string): ManagedTerminal | undefined {
     if (this.isViewOwned(id)) return undefined;
     return this.plane(id).getInstanceForE2E(id);
@@ -962,6 +967,18 @@ export class PaintFabricCompositor implements TerminalPaintPlane {
 
   getAgentState(id: string): AgentState | undefined {
     return this.readAgentState(this.owningSurface(id), id);
+  }
+
+  // Fan-out, not per-terminal routing: the listener is id-agnostic and any
+  // surface can be the one that tears an instance down, so it subscribes to
+  // every plane and the composite disposer releases all of them. Deliberately
+  // not deduplicated — a single instance lives on exactly one surface, so one
+  // teardown produces exactly one notification.
+  addInstanceDestroyedListener(cb: (id: string) => void): () => void {
+    const unsubs = this.planes().map((plane) => plane.addInstanceDestroyedListener(cb));
+    return () => {
+      for (const unsub of unsubs) unsub();
+    };
   }
 
   addAgentStateListener(id: string, callback: AgentStateCallback): () => void {

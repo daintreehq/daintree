@@ -148,9 +148,11 @@ describe("computeProjectAgentCounts", () => {
     const p1 = counts.get("p1")!;
     // #10989: the assistant is tooling-internal — it must never surface as an
     // agent, and callers subtract `helpTerminals` from the host's raw count.
+    // #11806: its state is reported alongside, never inside, those tallies.
     expect(p1.waiting).toBe(0);
     expect(p1.active).toBe(1);
     expect(p1.helpTerminals).toBe(1);
+    expect(p1.assistantState).toBe("waiting");
   });
 
   it("excludes trashed, dev-preview, PTY-less, and non-agent terminals", () => {
@@ -488,5 +490,255 @@ describe("computeProjectAgentCounts — snooze", () => {
     );
 
     expect(counts.get("p1")!.snoozed).toBe(0);
+  });
+});
+
+describe("computeProjectAgentCounts — assistant presence (#11806)", () => {
+  beforeEach(() => {
+    availabilityMock.isHelpTerminal.mockImplementation((id: string) => id.startsWith("help"));
+  });
+
+  it("carries the assistant's state, reason and transition without touching any tally", () => {
+    const counts = computeProjectAgentCounts(
+      ["p1"],
+      [
+        agent({
+          id: "help",
+          agentState: "waiting",
+          waitingReason: "error",
+          lastStateChange: 5_000,
+        }),
+      ]
+    );
+
+    const p1 = counts.get("p1")!;
+    expect(p1.assistantState).toBe("waiting");
+    expect(p1.assistantWaitingReason).toBe("error");
+    expect(p1.assistantStateSince).toBe(5_000);
+    // The whole point: presence without membership. A project whose only
+    // terminal is the assistant still has nothing the user launched.
+    expect(p1.active + p1.waiting + p1.blocked + p1.completed + p1.snoozed).toBe(0);
+  });
+
+  it("reports nothing for a project with no live assistant", () => {
+    const counts = computeProjectAgentCounts(
+      ["p1"],
+      [agent({ id: "real", agentState: "working", lastStateChange: 1_000 })]
+    );
+
+    const p1 = counts.get("p1")!;
+    expect(p1.assistantState).toBeNull();
+    expect(p1.assistantWaitingReason).toBeNull();
+    expect(p1.assistantStateSince).toBeNull();
+  });
+
+  it("drops a waiting reason that outlived the state it belonged to", () => {
+    // A terminal record can keep the reason from a wait it has since left. A
+    // working assistant carrying a stale "error" would read as blocked on
+    // every row it reaches.
+    const counts = computeProjectAgentCounts(
+      ["p1"],
+      [agent({ id: "help", agentState: "working", waitingReason: "error" })]
+    );
+
+    expect(counts.get("p1")!.assistantState).toBe("working");
+    expect(counts.get("p1")!.assistantWaitingReason).toBeNull();
+  });
+
+  it("stays silent for a trashed or dead assistant", () => {
+    // Both are already excluded from `helpTerminals`; reporting state for them
+    // would leave a killed assistant working forever on every other project's
+    // switcher.
+    const counts = computeProjectAgentCounts(
+      ["p1", "p2"],
+      [
+        agent({ id: "help-trashed", agentState: "working", isTrashed: true }),
+        agent({ id: "help-dead", projectId: "p2", agentState: "working", hasPty: false }),
+      ]
+    );
+
+    expect(counts.get("p1")!.assistantState).toBeNull();
+    expect(counts.get("p2")!.assistantState).toBeNull();
+  });
+
+  it("reports nothing for an assistant the user has hidden", () => {
+    // Closing the panel leaves the PTY alive until the idle-hibernate timer
+    // fires. A session nobody can see is not a state anyone can act on, so the
+    // row must read as if the project had no assistant at all.
+    const terminals = [
+      agent({ id: "help-1", agentState: "waiting", waitingReason: "prompt" }),
+      agent({ id: "help-2", projectId: "p2", agentState: "waiting", waitingReason: "prompt" }),
+    ];
+    const counts = computeProjectAgentCounts(
+      ["p1", "p2"],
+      terminals,
+      undefined,
+      undefined,
+      (id) => id === "p2"
+    );
+
+    expect(counts.get("p1")!.assistantState).toBeNull();
+    expect(counts.get("p1")!.assistantWaitingReason).toBeNull();
+    expect(counts.get("p1")!.assistantStateSince).toBeNull();
+    expect(counts.get("p2")!.assistantState).toBe("waiting");
+  });
+
+  it("still nets out a hidden assistant's PTY", () => {
+    // Hiding the panel does not stop the host counting the process. Dropping it
+    // from `helpTerminals` along with its state would put the phantom process
+    // count of #10989 back on every row with a closed assistant.
+    const counts = computeProjectAgentCounts(
+      ["p1"],
+      [agent({ id: "help", agentState: "waiting", waitingReason: "prompt" })],
+      undefined,
+      undefined,
+      () => false
+    );
+
+    expect(counts.get("p1")!.helpTerminals).toBe(1);
+    expect(counts.get("p1")!.assistantState).toBeNull();
+  });
+
+  it("keeps each project's assistant to its own entry", () => {
+    const counts = computeProjectAgentCounts(
+      ["p1", "p2"],
+      [
+        agent({ id: "help-1", agentState: "working" }),
+        agent({ id: "help-2", projectId: "p2", agentState: "waiting", waitingReason: "prompt" }),
+      ]
+    );
+
+    expect(counts.get("p1")!.assistantState).toBe("working");
+    expect(counts.get("p2")!.assistantState).toBe("waiting");
+  });
+
+  it("picks the live session over a displaced one regardless of listing order", () => {
+    // `HelpSessionService` allows at most one assistant per project, but a
+    // replacement is provisioned while the old PTY is still being killed. The
+    // record still moving is the live one; order must not decide it.
+    const displaced = agent({ id: "help-old", agentState: "waiting", lastStateChange: 1_000 });
+    const live = agent({ id: "help-new", agentState: "working", lastStateChange: 2_000 });
+
+    const forward = computeProjectAgentCounts(["p1"], [displaced, live]);
+    const reverse = computeProjectAgentCounts(["p1"], [live, displaced]);
+
+    expect(forward.get("p1")!.assistantState).toBe("working");
+    expect(forward.get("p1")!.assistantStateSince).toBe(2_000);
+    expect(reverse.get("p1")!.assistantState).toBe("working");
+    expect(reverse.get("p1")!.assistantStateSince).toBe(2_000);
+    // Both are live PTYs, so both still have to be netted out of the process
+    // count even though only one speaks for the project.
+    expect(forward.get("p1")!.helpTerminals).toBe(2);
+  });
+
+  it("prefers the newest record when two assistants share a liveness rank", () => {
+    const older = agent({ id: "help-a", agentState: "waiting", lastStateChange: 1_000 });
+    const newer = agent({ id: "help-b", agentState: "waiting", lastStateChange: 9_000 });
+
+    expect(computeProjectAgentCounts(["p1"], [newer, older]).get("p1")!.assistantStateSince).toBe(
+      9_000
+    );
+    expect(computeProjectAgentCounts(["p1"], [older, newer]).get("p1")!.assistantStateSince).toBe(
+      9_000
+    );
+  });
+
+  it("resolves a dead heat identically whichever way the terminals are listed", () => {
+    // The contract is permutation invariance, not which id happens to win —
+    // asserting the winner would pin an arbitrary tie-break rule in place.
+    const a = agent({ id: "help-a", agentState: "waiting", waitingReason: "prompt" });
+    const b = agent({ id: "help-b", agentState: "waiting", waitingReason: "error" });
+
+    const forward = computeProjectAgentCounts(["p1"], [a, b]).get("p1")!;
+    const reverse = computeProjectAgentCounts(["p1"], [b, a]).get("p1")!;
+
+    // The control: without it, two builds reporting nothing at all would also
+    // agree, and this would pass with the feature removed.
+    expect(forward.assistantState).toBe("waiting");
+    expect(["prompt", "error"]).toContain(forward.assistantWaitingReason);
+
+    expect(forward.assistantWaitingReason).toBe(reverse.assistantWaitingReason);
+    expect(forward.assistantState).toBe(reverse.assistantState);
+    expect(forward.assistantStateSince).toBe(reverse.assistantStateSince);
+  });
+
+  it("lets the newest session win a displacement even while the old one still reads working", () => {
+    // The displaced PTY keeps its last state until the kill lands, so an
+    // outgoing "working" would otherwise outrank the live session's real
+    // state and hide a blocked assistant behind a Running band.
+    const displaced = agent({
+      id: "help-old",
+      spawnedAt: 1_000,
+      agentState: "working",
+      lastStateChange: 5_000,
+    });
+    const live = agent({
+      id: "help-new",
+      spawnedAt: 9_000,
+      agentState: "waiting",
+      waitingReason: "error",
+      lastStateChange: 2_000,
+    });
+
+    for (const listing of [
+      [displaced, live],
+      [live, displaced],
+    ]) {
+      const p1 = computeProjectAgentCounts(["p1"], listing).get("p1")!;
+      expect(p1.assistantState).toBe("waiting");
+      expect(p1.assistantWaitingReason).toBe("error");
+    }
+  });
+
+  it("stays order-independent when a transition time is unusable", () => {
+    // Every comparison against NaN is false, so an unscreened one would leave
+    // whichever record arrived first as the winner.
+    const a = agent({ id: "help-a", agentState: "waiting", lastStateChange: Number.NaN });
+    const b = agent({ id: "help-b", agentState: "waiting", lastStateChange: 4_000 });
+
+    const forward = computeProjectAgentCounts(["p1"], [a, b]).get("p1")!;
+    const reverse = computeProjectAgentCounts(["p1"], [b, a]).get("p1")!;
+
+    expect(forward.assistantStateSince).toBe(reverse.assistantStateSince);
+    expect(forward.assistantStateSince).toBe(4_000);
+  });
+
+  it.each([Number.NaN, Number.POSITIVE_INFINITY, -1, 0])(
+    "refuses the unusable transition time %p",
+    (lastStateChange) => {
+      // An infinite or wildly-future stamp would read as a wait that began
+      // after every possible observation — permanently unseen, while the age
+      // beside it rendered "just now".
+      const counts = computeProjectAgentCounts(
+        ["p1"],
+        [agent({ id: "help", agentState: "waiting", lastStateChange })]
+      );
+
+      expect(counts.get("p1")!.assistantStateSince).toBeNull();
+      expect(counts.get("p1")!.assistantState).toBe("waiting");
+    }
+  );
+
+  it("lets a settled assistant be spoken for by a working one", () => {
+    const settled = agent({ id: "help-a", agentState: "exited", lastStateChange: 9_000 });
+    const working = agent({ id: "help-b", agentState: "working", lastStateChange: 1_000 });
+
+    // Liveness outranks recency: a newer "exited" must not silence an older
+    // session that is genuinely still working.
+    expect(computeProjectAgentCounts(["p1"], [settled, working]).get("p1")!.assistantState).toBe(
+      "working"
+    );
+  });
+
+  it("reports a settled assistant faithfully rather than inventing an absence", () => {
+    // The reducer carries what is there; deciding that "idle" is not worth a
+    // status line belongs to the one renderer-side classifier, not here.
+    const counts = computeProjectAgentCounts(
+      ["p1"],
+      [agent({ id: "help", agentState: "idle", lastStateChange: 4_000 })]
+    );
+
+    expect(counts.get("p1")!.assistantState).toBe("idle");
+    expect(counts.get("p1")!.assistantStateSince).toBe(4_000);
   });
 });

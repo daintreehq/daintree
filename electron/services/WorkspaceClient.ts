@@ -198,6 +198,15 @@ export class WorkspaceClient extends EventEmitter {
     this.pool.unregisterWindow(windowId);
   }
 
+  /**
+   * Release a window's workspace reference only while it still points at
+   * `projectPath`. See {@link WorkspaceHostPool.releaseWindowForProject} — an
+   * unguarded release during a cold switch can drop the wrong project's.
+   */
+  releaseWindowForProject(windowId: number, projectPath: string): boolean {
+    return this.pool.releaseWindowForProject(windowId, projectPath);
+  }
+
   manualRestartForWindow(windowId: number): void {
     if (this.isDisposed) return;
     this.pool.manualRestartForWindow(windowId);

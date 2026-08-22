@@ -30,7 +30,48 @@ export interface TerminalInputControllerHost {
 }
 
 export class TerminalInputController {
+  private shutdownLockDepth = 0;
+  private inputGeneration = 0;
+
   constructor(private readonly host: TerminalInputControllerHost) {}
+
+  /** True while a graceful shutdown owns the PTY's input stream. */
+  get isInputLocked(): boolean {
+    return this.shutdownLockDepth > 0;
+  }
+
+  /**
+   * Take exclusive ownership of this terminal's input for the duration of a
+   * graceful shutdown, and return the release (#11851).
+   *
+   * Teardown writes bypass this controller entirely and go straight to
+   * `ptyProcess.write()`. A single quit write mostly got away with that, but a
+   * gated Ctrl-C escalation spans a second or more, and anything landing
+   * between two presses — a live keystroke, the trailing Enter of an in-flight
+   * submit — either lands in the agent's composer or breaks the press
+   * economics the gate depends on.
+   *
+   * Blocked input is DROPPED, not buffered. Replaying it after teardown would
+   * deliver it to whatever occupies the pane next — a plain shell, or nothing
+   * at all — which is worse than losing a keystroke aimed at a process that is
+   * being killed.
+   *
+   * Bumping the generation is what stops work already past its entry guard:
+   * `performSubmit` re-reads it after every await, so a submit awaiting its
+   * pre-Enter delay when the lock engages abandons the Enter instead of
+   * submitting whatever the shutdown signal left in the composer.
+   */
+  acquireShutdownInputLock(): () => void {
+    this.shutdownLockDepth++;
+    this.inputGeneration++;
+    this.host.writeQueue.cancelPendingInput();
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.shutdownLockDepth--;
+    };
+  }
 
   /**
    * Throwing variant of `write` for the small-keystroke fast path. Used by the
@@ -39,12 +80,21 @@ export class TerminalInputController {
    * swallowed by `logWriteError`. Returns `{ ok: true }` on success and
    * `{ ok: false, error: NodeJS.ErrnoException }` when `pty.write()` throws.
    *
-   * Falls back to `write()` (queued chunking) for payloads >512 bytes; the
-   * caller cannot meaningfully observe failures in the chunked async path,
-   * but broadcast keystrokes are always single chunks so this is fine.
+   * Falls back to `write()` for payloads >512 bytes, which reports failures
+   * through `logWriteError` rather than returning them; broadcast keystrokes
+   * are always well under that, so the distinction never bites in practice.
    */
   tryWrite(data: string, traceId?: string): { ok: boolean; error?: NodeJS.ErrnoException } {
     const terminal = this.host.terminalInfo;
+    if (this.isInputLocked) {
+      // EBUSY rather than EBADF: the PTY is fine, it is just not ours to write
+      // to right now. Broadcast surfaces this per target instead of silently
+      // dropping the keystroke into a terminal mid-teardown.
+      return {
+        ok: false,
+        error: Object.assign(new Error("terminal is shutting down"), { code: "EBUSY" }),
+      };
+    }
     if (terminal.isExited) {
       return {
         ok: false,
@@ -59,8 +109,8 @@ export class TerminalInputController {
     }
 
     if (data.length > 512) {
-      // Long payloads queue through chunkInput in write(); we lose precise
-      // per-call failure visibility but that path isn't used by broadcast.
+      // write() swallows the throw into logWriteError, so we lose precise
+      // per-call failure visibility — but that path isn't used by broadcast.
       this.write(data, traceId);
       return { ok: true };
     }
@@ -88,6 +138,9 @@ export class TerminalInputController {
 
   write(data: string, traceId?: string): void {
     const terminal = this.host.terminalInfo;
+    if (this.isInputLocked) {
+      return;
+    }
     terminal.lastInputTime = Date.now();
 
     if (terminal.isExited) {
@@ -162,20 +215,20 @@ export class TerminalInputController {
       return;
     }
 
-    if (data.length <= 512) {
-      try {
-        terminal.ptyProcess.write(data);
-      } catch (error) {
-        this.host.logWriteError(error, { operation: "write(fast-path)", traceId });
-      }
-      return;
+    // Everything goes straight to the PTY, large payloads included. Daintree
+    // used to re-split anything over 512 bytes into 50-byte chunks on a 5ms
+    // interval; node-pty owns that queueing now (microsoft/node-pty#831), so
+    // the extra lane only added latency — roughly 10KB/s, which is what made
+    // large context injections take tens of seconds (#11875).
+    try {
+      terminal.ptyProcess.write(data);
+    } catch (error) {
+      this.host.logWriteError(error, { operation: "write(direct)", traceId });
     }
-
-    this.host.writeQueue.enqueueChunked(data);
   }
 
   submit(text: string): void {
-    if (this.host.terminalInfo.isExited) {
+    if (this.isInputLocked || this.host.terminalInfo.isExited) {
       return;
     }
 
@@ -202,7 +255,7 @@ export class TerminalInputController {
    */
   stage(text: string): void {
     const terminal = this.host.terminalInfo;
-    if (terminal.isExited || !terminal.ptyProcess) {
+    if (this.isInputLocked || terminal.isExited || !terminal.ptyProcess) {
       return;
     }
     const normalized = normalizeSubmitText(text);
@@ -224,6 +277,13 @@ export class TerminalInputController {
 
   async performSubmit(text: string): Promise<void> {
     const terminal = this.host.terminalInfo;
+    // Re-checked after every await below: a shutdown lock taken mid-submit must
+    // abandon the trailing Enter, or it submits whatever the teardown signal
+    // left in the composer (#11851).
+    const generation = this.inputGeneration;
+    if (this.isInputLocked) {
+      return;
+    }
     terminal.lastInputTime = Date.now();
 
     if (terminal.isExited) {
@@ -269,7 +329,9 @@ export class TerminalInputController {
       }
     }
 
-    await this.host.writeQueue.waitForInputWriteDrain();
+    if (this.isInputLocked || this.inputGeneration !== generation) {
+      return;
+    }
 
     if (useOutputSettle) {
       await this.host.writeQueue.waitForOutputSettle({
@@ -282,6 +344,10 @@ export class TerminalInputController {
     }
 
     if (!this.host.terminalInfo.ptyProcess) {
+      return;
+    }
+
+    if (this.isInputLocked || this.inputGeneration !== generation) {
       return;
     }
 

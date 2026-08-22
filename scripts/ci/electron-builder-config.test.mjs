@@ -98,6 +98,16 @@ describe("electron-builder config — platform files overrides (#11475)", () => 
         expect(pattern, `${platform}.files pattern "${pattern}"`).toMatch(
           /^!node_modules\/better-sqlite3\/prebuilds\//
         );
+        // Foreign *platforms* only — never a CPU arch (#11829). A pattern is
+        // compiled once per platform, and the two trees the macOS universal
+        // merge consumes are packed with the same arch a standalone pack
+        // reports, so an arch-keyed exclusion strips a prebuild from both merge
+        // inputs and @electron/universal aborts on the Mach-O file-set
+        // mismatch. Shedding the foreign arch is afterPack.cjs's job, where the
+        // -x64-temp/-arm64-temp output dir tells the two apart.
+        expect(pattern, `${platform}.files pattern "${pattern}" names a CPU arch`).not.toMatch(
+          /(x64|arm64|ia32|armv7l)/
+        );
       }
     }
   });

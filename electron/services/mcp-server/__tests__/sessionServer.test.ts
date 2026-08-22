@@ -5,6 +5,7 @@ import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
 import type { Transport } from "@modelcontextprotocol/sdk/shared/transport.js";
 import type { ActionManifestEntry, ActionId } from "../../../../shared/types/actions.js";
 import { BUILT_IN_ACTION_IDS } from "../../../../shared/config/actionIds.js";
+import { formatPartialSuccessMessage } from "../../../../shared/utils/partialSuccess.js";
 
 vi.mock("electron", () => ({
   app: {
@@ -17,6 +18,7 @@ import type { SessionServerDeps } from "../sessionServer.js";
 import type { SessionStore } from "../sessionStore.js";
 import { SessionStore as RealSessionStore } from "../sessionStore.js";
 import { GrantCache } from "../grantCache.js";
+import { ResourceOwnershipLedger } from "../resourceOwnership.js";
 import {
   buildToolError,
   buildMcpErrorPayload,
@@ -24,6 +26,8 @@ import {
   TIER_NOT_PERMITTED_CODE,
   EXECUTION_ERROR_CODE,
   SESSION_BINDING_GONE,
+  SESSION_GONE,
+  CONFIRMATION_REQUIRED_CODE,
   CONFIRMATION_TIMEOUT_CODE,
   USER_REJECTED_CODE,
   MCP_DEDUP_KEY_COLLISION_CODE,
@@ -44,7 +48,11 @@ import {
   ACTIONS_SEARCH_TOOL_ID,
   ACTIONS_GET_SCHEMA_TOOL_ID,
 } from "../tierAuth.js";
-import { SessionBindingError, RendererBridgeUnavailableError } from "../rendererBridge.js";
+import {
+  SessionBindingError,
+  WorkspaceBindingError,
+  RendererBridgeUnavailableError,
+} from "../rendererBridge.js";
 import { getAgentAvailabilityStore } from "../../AgentAvailabilityStore.js";
 import { events } from "../../events.js";
 
@@ -55,15 +63,29 @@ function fakeSessionStore(
   // eviction via the optional `now` clock when they need to assert
   // expiry, and they call dispose() at teardown.
   const grantCache = new GrantCache({ sweepIntervalMs: 0 });
+  // Derived from `sessionOriginMap` exactly as the real store derives it, so a
+  // test that seeds an origin gets the grant-eligibility answer the shipped
+  // code would give rather than a hard-coded one (#11910).
+  const sessionOriginMap = new Map<string, string>();
   const store = {
     sessions: new Map(),
     httpSessions: new Map(),
     sessionTierMap: new Map(),
     sessionWebContentsMap: new Map(),
+    sessionOriginMap,
+    isRendererOwnedOrigin: vi.fn((sessionId: string) => {
+      const origin = sessionOriginMap.get(sessionId) ?? "external";
+      return origin === "help" || origin === "assistant-pane";
+    }),
+    sessionWorkspaceMap: new Map(),
     resourceSubscriptions: new Map(),
     dedupInFlight: new Map(),
     dedupResultCache: new Map(),
     grantCache,
+    // A real ledger rather than a stub: it is plain in-memory Maps with no
+    // timers, and the recording hook runs on every dispatch, so a mock here
+    // would make the ownership assertions in this file vacuous (#11909).
+    resourceOwnership: new ResourceOwnershipLedger(),
     drain: vi.fn(),
     getTier: vi.fn(() => tier),
     createIdleTimer: vi.fn(() => setTimeout(() => {}, 1_000_000)),
@@ -232,6 +254,42 @@ async function initializeClient(server: ReturnType<typeof createSessionServer>) 
   } finally {
     await client.close();
   }
+}
+
+/**
+ * Register a live SSE transport plus its tier row on a real `SessionStore`.
+ *
+ * `getTier` gates on transport membership (#11799), so seeding `sessionTierMap`
+ * alone no longer produces a session any request handler will serve — a real
+ * store needs the transport too.
+ */
+function seedLiveSession(
+  store: RealSessionStore,
+  sessionId: string,
+  tier: "workbench" | "action" | "system" | "external",
+  transport: "sse" | "http" = "sse"
+): void {
+  // Unref'd because the store's own `clearTimeout` is reachable only through
+  // the map entry: a test that drops the entry directly — to orphan a tier row,
+  // say — loses the only handle, and a referenced 1,000,000 ms timer then holds
+  // the Vitest worker open past the suite.
+  const idleTimer = setTimeout(() => {}, 1_000_000);
+  idleTimer.unref?.();
+  const entry = {
+    transport: {
+      close: vi.fn().mockResolvedValue(undefined),
+    },
+    server: {
+      sendToolListChanged: vi.fn().mockResolvedValue(undefined),
+    },
+    idleTimer,
+  } as unknown as NonNullable<ReturnType<RealSessionStore["sessions"]["get"]>>;
+  if (transport === "sse") {
+    store.sessions.set(sessionId, entry);
+  } else {
+    store.httpSessions.set(sessionId, entry as never);
+  }
+  store.sessionTierMap.set(sessionId, tier);
 }
 
 function makeManifestEntry(id: string): ActionManifestEntry {
@@ -1204,7 +1262,10 @@ describe("CallTool idempotency dedup", () => {
 
   it("does not resurrect dedup state when drain() runs during an in-flight dispatch", async () => {
     const realStore = new RealSessionStore(() => {});
-    realStore.sessionTierMap.set("dedup-resurrect", "system");
+    // A live transport, not just a tier row: `getTier` gates on transport
+    // membership (#11799), so a tier-map-only session is refused before it can
+    // reach dispatch at all.
+    seedLiveSession(realStore, "dedup-resurrect", "system");
 
     let resolveDispatch: ((envelope: unknown) => void) | undefined;
     const dispatchAction = vi.fn().mockImplementation(
@@ -1240,6 +1301,7 @@ describe("CallTool idempotency dedup", () => {
 
     expect(realStore.dedupResultCache.size).toBe(0);
     expect(realStore.dedupInFlight.size).toBe(0);
+    realStore.grantCache.dispose();
   });
 
   it("rejects requestKey strings beyond the length cap (falls back to auto-hash)", async () => {
@@ -1389,6 +1451,19 @@ describe("buildMcpErrorPayload", () => {
     expect(RETRIABLE_ERROR_CODES.has(CONFIRMATION_TIMEOUT_CODE)).toBe(true);
     expect(RETRIABLE_ERROR_CODES.has(TIER_NOT_PERMITTED_CODE)).toBe(false);
   });
+
+  it("classifies SESSION_GONE as a non-retriable business failure (#11799)", () => {
+    // Retrying is pointless — the session is what went away, so recovery is a
+    // new session rather than the same call again.
+    const payload = buildMcpErrorPayload({ code: SESSION_GONE, message: "gone" });
+    expect(payload).toEqual({
+      code: SESSION_GONE,
+      message: "gone",
+      retriable: false,
+      errorCategory: "business",
+    });
+    expect(RETRIABLE_ERROR_CODES.has(SESSION_GONE)).toBe(false);
+  });
 });
 
 describe("unwrapDispatchResult error path", () => {
@@ -1511,6 +1586,27 @@ describe("sessionServer tier-mismatch notifier", () => {
       expect.objectContaining({
         toolId: "worktree.createWithRecipe",
         targetTier: "action",
+      })
+    );
+  });
+
+  it("offers a recovery tier for worktree.create instead of a dead end (#11880)", async () => {
+    // The reported symptom: in no tier allowlist, the primitive resolved to
+    // targetTier null, and HelpPanelBanners withholds both "Approve once" and
+    // "Always allow" on a null target — a denial the user cannot act on at any
+    // tier. A non-null target is what restores those, so an action-tier
+    // overlay that needs it can still ask rather than being told no twice.
+    const notify = vi.fn();
+    const deps = fakeDeps({ notifyTierMismatch: notify });
+    const server = createSessionServer("session-C2", deps);
+    await server.connect(makeMockTransport());
+
+    await callTool(server, { name: "worktree.create", arguments: {} });
+
+    expect(notify).toHaveBeenCalledWith(
+      expect.objectContaining({
+        toolId: "worktree.create",
+        targetTier: "system",
       })
     );
   });
@@ -2177,9 +2273,10 @@ describe("sessionServer grant cache fallback (#8442)", () => {
     );
   }
 
-  it("floor-permitted tool never consults the grant cache", async () => {
+  it("floor-permitted tool skips the per-tool grant but still peeks native pre-authorization", async () => {
     const sessionStore = fakeSessionStore("workbench");
     const checkSpy = vi.spyOn(sessionStore.grantCache, "check");
+    const peekSpy = vi.spyOn(sessionStore.grantCache, "peekNativeGrant");
     const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: { ok: 1 } } });
     const deps = fakeDeps({ sessionStore, dispatchAction });
     const server = createSessionServer("s", deps);
@@ -2189,7 +2286,290 @@ describe("sessionServer grant cache fallback (#8442)", () => {
     await callTool(server, { name: "worktree.list", arguments: {} });
 
     expect(dispatchAction).toHaveBeenCalled();
+    // A per-tool grant only widens the floor, so it has nothing to say once
+    // the floor already admits the call.
     expect(checkSpy).not.toHaveBeenCalled();
+    // A native grant ALSO pre-authorizes the confirm modal, which is
+    // orthogonal to the floor — so it is consulted on this leg too (#11878).
+    expect(peekSpy).toHaveBeenCalledWith("s", "worktree.list");
+    // No grant exists here, so the dispatch stays unconfirmed.
+    expect(dispatchAction).toHaveBeenCalledWith("worktree.list", expect.any(Object), false);
+    sessionStore.grantCache.dispose();
+  });
+
+  it("native grant pre-authorizes a tier-permitted confirm tool and consumes a use (#11878)", async () => {
+    // worktree.delete is `danger: "confirm"` but IS on the system-tier
+    // allowlist, so the floor admits it and the tier-denied leg never runs.
+    // Before #11878 that made the grant unreachable and the modal fired on
+    // every call despite an explicit Settings pre-authorization.
+    const sessionStore = fakeSessionStore("system");
+    // Unref'd for the reason `seedLiveSession` documents: a referenced
+    // 1,000,000 ms timer holds the Vitest worker open past the suite.
+    const idleTimer = setTimeout(() => {}, 1_000_000);
+    idleTimer.unref?.();
+    sessionStore.sessions.set("s", {
+      transport: {} as never,
+      server: {} as never,
+      idleTimer,
+    });
+    const resetIdle = sessionStore.resetIdleTimer as ReturnType<typeof vi.fn>;
+    resetIdle.mockClear();
+    const grant = sessionStore.grantCache.issueNativeGrant({
+      sessionId: "s",
+      actorId: "help-1",
+      actorType: "help-session",
+      allowedTools: ["worktree.delete"],
+      maxUses: 2,
+    });
+    const refreshSpy = vi.spyOn(sessionStore.grantCache, "refreshNativeGrant");
+    const checkSpy = vi.spyOn(sessionStore.grantCache, "check");
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: { ok: 1 } } });
+    const deps = fakeDeps({ sessionStore, dispatchAction });
+    const server = createSessionServer("s", deps);
+    await server.connect(makeMockTransport());
+
+    const result = (await callTool(server, {
+      name: "worktree.delete",
+      arguments: { worktreeId: "wt-1" },
+    })) as { isError?: boolean };
+
+    expect(result.isError).not.toBe(true);
+    // Pins the leg: an untouched per-tool cache proves the floor admitted this
+    // call, so the bypass below can only have come from the native grant.
+    expect(checkSpy).not.toHaveBeenCalled();
+    expect(dispatchAction).toHaveBeenCalledTimes(1);
+    expect(dispatchAction).toHaveBeenCalledWith(
+      "worktree.delete",
+      expect.objectContaining({ worktreeId: "wt-1" }),
+      true
+    );
+    expect(refreshSpy).toHaveBeenCalledWith(grant.id);
+    expect(resetIdle).toHaveBeenCalledWith("s");
+    expect(sessionStore.grantCache._peekNative(grant.id)?.remainingUses).toBe(1);
+    sessionStore.grantCache.dispose();
+  });
+
+  it("a spent grant leaves a tier-permitted confirm tool dispatching unconfirmed (#11878)", async () => {
+    // The non-mocked proof that the grant only ever bought the modal bypass:
+    // once its single use is gone the call must still run — just with the
+    // modal back. The tier-denied equivalent fails closed instead, because
+    // there the grant was the authorization itself.
+    const sessionStore = fakeSessionStore("system");
+    sessionStore.grantCache.issueNativeGrant({
+      sessionId: "s",
+      actorId: "help-1",
+      actorType: "help-session",
+      allowedTools: ["worktree.delete"],
+      maxUses: 1,
+    });
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: { ok: 1 } } });
+    const deps = fakeDeps({ sessionStore, dispatchAction });
+    const server = createSessionServer("s", deps);
+    await server.connect(makeMockTransport());
+
+    // Distinct args on the second call: worktree.delete is on the dedup
+    // allowlist, so a replay would return the cached result and never reach
+    // the gate this test is about.
+    const first = (await callTool(server, {
+      name: "worktree.delete",
+      arguments: { worktreeId: "wt-1" },
+    })) as { isError?: boolean };
+    const second = (await callTool(server, {
+      name: "worktree.delete",
+      arguments: { worktreeId: "wt-2" },
+    })) as { isError?: boolean };
+
+    expect(first.isError).not.toBe(true);
+    expect(second.isError).not.toBe(true);
+    expect(dispatchAction).toHaveBeenNthCalledWith(1, "worktree.delete", expect.any(Object), true);
+    expect(dispatchAction).toHaveBeenNthCalledWith(2, "worktree.delete", expect.any(Object), false);
+    sessionStore.grantCache.dispose();
+  });
+
+  it("a per-tool grant does not suppress native confirm pre-authorization (#11878)", async () => {
+    // Both grant kinds can be live at once. The per-tool grant is what admits
+    // the call past the denying floor, but only the native grant can waive the
+    // modal — so holding both must still waive it. The native peek used to sit
+    // behind the per-tool check, which made an explicit Settings
+    // pre-authorization silently do nothing here, exactly as it did for a
+    // tier-permitted tool.
+    const sessionStore = fakeSessionStore("workbench");
+    sessionStore.grantCache.issueGrant("s", "worktree.delete");
+    const grant = sessionStore.grantCache.issueNativeGrant({
+      sessionId: "s",
+      actorId: "help-1",
+      actorType: "help-session",
+      allowedTools: ["worktree.delete"],
+      maxUses: 2,
+    });
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: { ok: 1 } } });
+    const deps = fakeDeps({ sessionStore, dispatchAction });
+    const server = createSessionServer("s", deps);
+    await server.connect(makeMockTransport());
+
+    await callTool(server, { name: "worktree.delete", arguments: {} });
+
+    expect(dispatchAction).toHaveBeenCalledWith("worktree.delete", expect.any(Object), true);
+    expect(sessionStore.grantCache._peekNative(grant.id)?.remainingUses).toBe(1);
+    sessionStore.grantCache.dispose();
+  });
+
+  it("a tier-permitted call falls back to the modal when the grant dies between peek and consume (#11878)", async () => {
+    // The tier still admits the call, so losing the grant costs only the
+    // bypass. Refusing here would report "not permitted for the 'system'
+    // tier" for an action that tier plainly permits.
+    const sessionStore = fakeSessionStore("system");
+    const grant = sessionStore.grantCache.issueNativeGrant({
+      sessionId: "s",
+      actorId: "help-1",
+      actorType: "help-session",
+      allowedTools: ["worktree.delete"],
+      maxUses: 2,
+    });
+    const consumeSpy = vi
+      .spyOn(sessionStore.grantCache, "consumeNativeGrantUse")
+      .mockReturnValue(false);
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: { ok: 1 } } });
+    const deps = fakeDeps({ sessionStore, dispatchAction });
+    const server = createSessionServer("s", deps);
+    await server.connect(makeMockTransport());
+
+    const result = (await callTool(server, {
+      name: "worktree.delete",
+      arguments: {},
+    })) as { isError?: boolean };
+
+    // Without this the test would pass for the wrong reason: never peeking at
+    // all also yields an unconfirmed dispatch.
+    expect(consumeSpy).toHaveBeenCalledWith(grant.id, "worktree.delete");
+    expect(result.isError).not.toBe(true);
+    expect(dispatchAction).toHaveBeenCalledWith("worktree.delete", expect.any(Object), false);
+    sessionStore.grantCache.dispose();
+  });
+
+  it("a tier-denied call still fails closed when the grant dies between peek and consume (#11878)", async () => {
+    // Here the grant WAS the authorization, so losing it must fail closed.
+    const sessionStore = fakeSessionStore("workbench");
+    const grant = sessionStore.grantCache.issueNativeGrant({
+      sessionId: "s",
+      actorId: "help-1",
+      actorType: "help-session",
+      allowedTools: ["worktree.delete"],
+      maxUses: 2,
+    });
+    const consumeSpy = vi
+      .spyOn(sessionStore.grantCache, "consumeNativeGrantUse")
+      .mockReturnValue(false);
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: { ok: 1 } } });
+    const deps = fakeDeps({ sessionStore, dispatchAction });
+    const server = createSessionServer("s", deps);
+    await server.connect(makeMockTransport());
+
+    const result = (await callTool(server, {
+      name: "worktree.delete",
+      arguments: {},
+    })) as { isError?: boolean; content?: Array<{ text?: string }> };
+
+    // Proves the refusal came from the consume-failure guard rather than the
+    // ordinary tier denial, which would produce the same error for a
+    // different reason.
+    expect(consumeSpy).toHaveBeenCalledWith(grant.id, "worktree.delete");
+    expect(result.isError).toBe(true);
+    expect(result.content?.[0]?.text ?? "").toContain(TIER_NOT_PERMITTED_CODE);
+    expect(dispatchAction).not.toHaveBeenCalled();
+    sessionStore.grantCache.dispose();
+  });
+
+  it("a per-tool grant keeps a lost native grant from failing the call closed (#11878)", async () => {
+    // The floor denies, so only the per-tool grant admits this — which is why
+    // the consume-failure guard has to ask "did anything else admit this?"
+    // rather than "did the tier permit this?". Under the narrower question
+    // this call would be refused as tier-denied even though a live grant
+    // admitted it.
+    const sessionStore = fakeSessionStore("workbench");
+    sessionStore.grantCache.issueGrant("s", "worktree.delete");
+    const grant = sessionStore.grantCache.issueNativeGrant({
+      sessionId: "s",
+      actorId: "help-1",
+      actorType: "help-session",
+      allowedTools: ["worktree.delete"],
+      maxUses: 2,
+    });
+    const consumeSpy = vi
+      .spyOn(sessionStore.grantCache, "consumeNativeGrantUse")
+      .mockReturnValue(false);
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: { ok: 1 } } });
+    const deps = fakeDeps({ sessionStore, dispatchAction });
+    const server = createSessionServer("s", deps);
+    await server.connect(makeMockTransport());
+
+    const result = (await callTool(server, {
+      name: "worktree.delete",
+      arguments: {},
+    })) as { isError?: boolean };
+
+    expect(consumeSpy).toHaveBeenCalledWith(grant.id, "worktree.delete");
+    expect(result.isError).not.toBe(true);
+    expect(dispatchAction).toHaveBeenCalledWith("worktree.delete", expect.any(Object), false);
+    sessionStore.grantCache.dispose();
+  });
+
+  it("a tier-permitted non-confirm tool in the grant's allowlist still spends a use (#11878)", async () => {
+    // Decision lock, not an endorsement: `maxUses` is a budget of matching
+    // dispatches, and spending one only where the bypass is actually needed
+    // would mean resolving effective danger — async manifest plus
+    // args-conditional elevation — before the consume site. Over-charging
+    // fails toward more confirmation, so it is the safe direction to accept.
+    const sessionStore = fakeSessionStore("workbench");
+    const grant = sessionStore.grantCache.issueNativeGrant({
+      sessionId: "s",
+      actorId: "help-1",
+      actorType: "help-session",
+      allowedTools: ["worktree.list"],
+      maxUses: 2,
+    });
+    const checkSpy = vi.spyOn(sessionStore.grantCache, "check");
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: { ok: 1 } } });
+    const deps = fakeDeps({ sessionStore, dispatchAction });
+    const server = createSessionServer("s", deps);
+    await server.connect(makeMockTransport());
+
+    await callTool(server, { name: "worktree.list", arguments: {} });
+
+    // Pins the leg — an untouched per-tool cache means the floor admitted it.
+    expect(checkSpy).not.toHaveBeenCalled();
+    expect(dispatchAction).toHaveBeenCalledWith("worktree.list", expect.any(Object), true);
+    expect(sessionStore.grantCache._peekNative(grant.id)?.remainingUses).toBe(1);
+    sessionStore.grantCache.dispose();
+  });
+
+  it("an already-admitted introspection carrier does not spend a native use (#11878)", async () => {
+    // actions.search can never raise a confirm modal, so once the floor has
+    // admitted it a grant buys it nothing — peeking would only drain the
+    // automation budget on a discovery call and evict entries mid-enumeration.
+    // The peek still runs when the carrier is NOT otherwise admitted, because
+    // there the grant is what authorizes it.
+    const sessionStore = fakeSessionStore("workbench");
+    const grant = sessionStore.grantCache.issueNativeGrant({
+      sessionId: "s",
+      actorId: "help-1",
+      actorType: "help-session",
+      allowedTools: ["actions.search"],
+      maxUses: 2,
+    });
+    const peekSpy = vi.spyOn(sessionStore.grantCache, "peekNativeGrant");
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: { ok: 1 } } });
+    const deps = fakeDeps({ sessionStore, dispatchAction });
+    const server = createSessionServer("s", deps);
+    await server.connect(makeMockTransport());
+
+    await callTool(server, { name: "actions.search", arguments: { query: "worktree" } });
+
+    // The dispatch assertion keeps this honest: skipping the peek must be the
+    // guard doing its job, not the call bailing out before it gets there.
+    expect(dispatchAction).toHaveBeenCalled();
+    expect(peekSpy).not.toHaveBeenCalled();
+    expect(sessionStore.grantCache._peekNative(grant.id)?.remainingUses).toBe(2);
     sessionStore.grantCache.dispose();
   });
 
@@ -2689,6 +3069,41 @@ describe("MCP_DEDUP_ALLOWLIST criterion correction (#11534)", () => {
     for (const tool of MCP_DEDUP_ALLOWLIST) {
       expect(minimumPermittingTier(tool)).not.toBeNull();
     }
+  });
+});
+
+describe("worktree.create redispatch (#11880)", () => {
+  // The primitive became LLM-callable when it joined the system tier, which is
+  // the first time dedup could apply to it at all. It must stay out: deleting
+  // a worktree leaves its branch behind and the host reuses that stale branch
+  // on the next create (#6463), so create -> delete -> recreate with identical
+  // arguments is a supported workflow. Caching the first id would return a
+  // worktree that no longer exists. The session tier is `system`, the tier the
+  // first-party assistant is forced to, so a reverted tier fix shows up here
+  // as zero dispatches rather than two.
+  const twoDistinctDispatches = () =>
+    vi
+      .fn()
+      .mockResolvedValueOnce({ result: { ok: true, result: "wt-first" } })
+      .mockResolvedValueOnce({ result: { ok: true, result: "wt-second" } });
+
+  const createArgs = {
+    worktreePath: "/repo",
+    options: { baseBranch: "develop", newBranch: "bugfix/issue-6463", path: "/repo-wt-a" },
+  };
+
+  it("recreates after a delete instead of replaying the original worktree id", async () => {
+    const dispatchAction = twoDistinctDispatches();
+    const deps = fakeDeps({ sessionStore: fakeSessionStore("system"), dispatchAction });
+    const server = createSessionServer("recreate-11880", deps);
+
+    await callTool(server, { name: "worktree.create", arguments: createArgs });
+    const second = await callTool(server, { name: "worktree.create", arguments: createArgs });
+
+    expect(dispatchAction).toHaveBeenCalledTimes(2);
+    // The caller sees the second dispatch, not a replay of the first — a
+    // cached id here would name the worktree the delete just removed.
+    expect(JSON.stringify(second)).toContain("wt-second");
   });
 });
 
@@ -3437,6 +3852,149 @@ describe("sessionServer introspection tier filtering", () => {
     expect(body.totalMatches).toBe(1);
   });
 
+  describe("actions.getSchema policy record (#11910)", () => {
+    interface GetSchemaBody {
+      ok: boolean;
+      entry: ActionManifestEntry | null;
+      policy: Record<string, unknown> | null;
+      error: { code: string; message: string } | null;
+    }
+
+    function schemaDeps(
+      tier: "workbench" | "action" | "system" | "external",
+      target: ActionManifestEntry,
+      overrides?: Partial<SessionServerDeps>
+    ) {
+      // The renderer's real return shape: it fills `entry` and leaves `policy`
+      // for main, which is the substitution under test.
+      return introspectionDeps(
+        tier,
+        { ok: true, entry: target, policy: null, error: null },
+        overrides
+      );
+    }
+
+    async function lookup(
+      deps: SessionServerDeps,
+      actionId: string,
+      sessionId = "s1"
+    ): Promise<GetSchemaBody> {
+      const server = createSessionServer(sessionId, deps);
+      const res = await callTool(server, {
+        name: ACTIONS_GET_SCHEMA_TOOL_ID,
+        arguments: { actionId },
+      });
+      return payload<GetSchemaBody>(res);
+    }
+
+    it("substitutes a real policy for the renderer's null placeholder", async () => {
+      const deps = schemaDeps("workbench", entry("terminal.list"));
+      const body = await lookup(deps, "terminal.list");
+
+      // The renderer sent `policy: null`; anything non-null here is main's
+      // substitution, which is the wiring under test.
+      expect(body.ok).toBe(true);
+      expect(body.entry).not.toBeNull();
+      expect(body.error).toBeNull();
+      expect(body.policy).toMatchObject({ callable: true, authorizedBy: "tier" });
+    });
+
+    // The origin is what grant issuance gates on, and a session that never
+    // declared one defaults to `external` — so the honest answer for it is that
+    // no approval flow exists, whatever tier admitted the call.
+    it("reports grantability from the session origin, not its tier", async () => {
+      const unowned = schemaDeps("workbench", entry("terminal.list"));
+      expect((await lookup(unowned, "terminal.list")).policy).toMatchObject({
+        grantable: false,
+      });
+
+      const owned = schemaDeps("workbench", entry("terminal.list"));
+      owned.sessionStore.sessionOriginMap.set("s1", "help");
+      expect((await lookup(owned, "terminal.list")).policy).toMatchObject({
+        grantable: true,
+      });
+    });
+
+    it("reports the flat external tier for an api-key caller", async () => {
+      const deps = schemaDeps("external", entry("terminal.list"));
+      const body = await lookup(deps, "terminal.list");
+
+      // The point of the external branch: `minimumPermittingTier` never returns
+      // "external", so a tier derived from it alone would be wrong here.
+      expect(body.ok).toBe(true);
+      expect(body.policy).toMatchObject({ minimumTier: "external" });
+    });
+
+    // A live grant widens discovery, and the record must name the grant as what
+    // admits the call — the client's cue that this access can lapse.
+    it("names a live per-tool grant as the admitting mechanism", async () => {
+      const deps = schemaDeps("workbench", entry("git.push"));
+      deps.sessionStore.sessionOriginMap.set("s1", "help");
+      deps.sessionStore.grantCache.issueGrant("s1", "git.push");
+
+      const body = await lookup(deps, "git.push");
+
+      expect(body.ok).toBe(true);
+      expect(body.policy).toMatchObject({ authorizedBy: "grant", minimumTier: "system" });
+      // The grant is bridging a real gap rather than rubber-stamping a target
+      // the tier already allowed — stated as the relation, so it keeps meaning
+      // if the fixture's tier changes.
+      expect(body.policy?.effectiveTier).not.toBe(body.policy?.minimumTier);
+    });
+
+    it("still collapses a tier-denied target with no policy attached", async () => {
+      const deps = schemaDeps("workbench", entry("git.push"));
+      const body = await lookup(deps, "git.push");
+
+      expect(body.ok).toBe(false);
+      expect(body.entry).toBeNull();
+      expect(body.policy).toBeNull();
+      expect(body.error?.code).toBe("NOT_FOUND");
+    });
+
+    it("never attaches a policy to a hidden or restricted target", async () => {
+      for (const overrides of [
+        { mcpVisibility: "hidden" as const },
+        { danger: "restricted" as const },
+      ]) {
+        const deps = schemaDeps("workbench", entry("terminal.list", overrides));
+        const body = await lookup(deps, "terminal.list");
+
+        expect(body).toEqual({
+          ok: false,
+          entry: null,
+          policy: null,
+          error: { code: "NOT_FOUND", message: expect.stringContaining("terminal.list") },
+        });
+      }
+    });
+
+    // The policy is a snapshot, not a lease. A grant that lapses between two
+    // reads must stop admitting the target on the second one — otherwise a
+    // client caches an authorization the dispatch gate would already refuse.
+    it("stops reporting a grant once its TTL has lapsed", async () => {
+      let now = 1000;
+      const grantCache = new GrantCache({ ttlMs: 100, sweepIntervalMs: 0, now: () => now });
+      const store = fakeSessionStore("workbench");
+      (store as unknown as { grantCache: GrantCache }).grantCache = grantCache;
+      store.sessionOriginMap.set("s1", "help");
+
+      const deps = schemaDeps("workbench", entry("git.push"), { sessionStore: store });
+      grantCache.issueGrant("s1", "git.push");
+
+      const whileLive = await lookup(deps, "git.push");
+      expect(whileLive.ok).toBe(true);
+      expect(whileLive.policy).toMatchObject({ authorizedBy: "grant" });
+
+      now = 50_000;
+      const afterExpiry = await lookup(deps, "git.push");
+      expect(afterExpiry.ok).toBe(false);
+      expect(afterExpiry.policy).toBeNull();
+
+      grantCache.dispose();
+    });
+  });
+
   it("over-fetches the search page so denied top hits cannot starve it", async () => {
     // 40 denied hits outrank the permitted ones. A renderer honouring the
     // caller's limit of 3 would return only denied entries, so without the
@@ -4021,16 +4579,23 @@ describe("mcp.surface short-circuit (#11549)", () => {
   });
 
   it("builds against the tier the call was authorized at, not a later re-read", async () => {
-    // A session revoked mid-fetch makes `getTier` fall back to `workbench`, and
-    // workbench is a PEER of `external`, not a subset. Re-reading the tier after
-    // the await would hand this external caller a workbench report naming tools
-    // its own allowlist withholds. The gate's tier is the only coherent answer.
+    // Authorization has one lifetime per call: a session revoked mid-fetch has
+    // no tier at all afterwards (#11799), and re-reading would either refuse a
+    // call the gate already admitted or disagree with the audit record that
+    // logs the admitted tier. The gate's tier is the only coherent answer.
+    // The witness has to be a tool `workbench` grants and `external` does not,
+    // or its absence proves nothing — a tool neither tier reaches is missing
+    // either way. Derived rather than named so it cannot rot into a tautology.
+    const workbenchOnly = [...TIER_ALLOWLISTS.workbench].find(
+      (id) => !TIER_ALLOWLISTS.external.has(id)
+    );
+    expect(workbenchOnly).toBeDefined();
     const sessionStore = fakeSessionStore("external");
     const deps = fakeDeps({
       sessionStore,
       requestManifest: vi.fn().mockImplementation(async () => {
-        vi.mocked(sessionStore.getTier).mockReturnValue("workbench");
-        return surfaceManifest();
+        vi.mocked(sessionStore.getTier).mockReturnValue(null);
+        return [...surfaceManifest(), makeManifestEntry(workbenchOnly!)];
       }),
     });
     const server = createSessionServer("session-surface-revoked", deps);
@@ -4043,9 +4608,11 @@ describe("mcp.surface short-circuit (#11549)", () => {
     };
 
     expect(reported.tier).toBe("external");
-    // `git.commit` is workbench-unreachable but system-tier in-app, and is not
-    // on the external allowlist — the concrete tool the leak would have added.
-    expect(reported.tools.map((t) => t.id)).not.toContain("git.commit");
+    // The concrete tool a workbench re-read would have added to the report.
+    expect(reported.tools.map((t) => t.id)).not.toContain(workbenchOnly);
+    // Resolved once, at the gate — the re-read this guards against would show
+    // up here as a second call.
+    expect(sessionStore.getTier).toHaveBeenCalledTimes(1);
   });
 
   it("writes one audit record and settles the activity strip exactly once", async () => {
@@ -4135,5 +4702,1529 @@ describe("mcp.surface short-circuit (#11549)", () => {
 
     expect(denied.isError).toBe(true);
     expect(JSON.stringify(denied.content)).toContain(TIER_NOT_PERMITTED_CODE);
+  });
+});
+
+describe("workspace-bound external sessions (#11789)", () => {
+  const SESSION = "bound-session";
+  const WORKSPACE = "ws-a";
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** A confirm-gated tool that really is on the external allowlist. */
+  function recipeRun(): ActionManifestEntry {
+    return { ...makeManifestEntry("recipe.run"), kind: "command", danger: "confirm" as const };
+  }
+
+  function boundDeps(overrides?: Partial<SessionServerDeps>): SessionServerDeps {
+    const sessionStore = fakeSessionStore("external");
+    sessionStore.sessionOriginMap.set(SESSION, "external");
+    sessionStore.sessionWorkspaceMap.set(SESSION, WORKSPACE);
+    return fakeDeps({
+      sessionStore,
+      workspaceBinding: { kind: "project", workspaceId: WORKSPACE, workspacePath: "/tmp/a" },
+      requestManifest: vi.fn().mockResolvedValue([makeManifestEntry("terminal.list"), recipeRun()]),
+      ...overrides,
+    });
+  }
+
+  function unboundDeps(overrides?: Partial<SessionServerDeps>): SessionServerDeps {
+    return fakeDeps({
+      sessionStore: fakeSessionStore("external"),
+      requestManifest: vi.fn().mockResolvedValue([makeManifestEntry("terminal.list"), recipeRun()]),
+      ...overrides,
+    });
+  }
+
+  describe("effective surface", () => {
+    it("omits the confirm-gated tool from tools/list", async () => {
+      const server = createSessionServer(SESSION, boundDeps());
+      await server.connect(makeMockTransport());
+
+      const names = (await listTools(server)).tools.map((t) => t.name);
+
+      expect(names).toContain("terminal.list");
+      expect(names).not.toContain("recipe.run");
+    });
+
+    it("still lists it for an unbound external session", async () => {
+      // Binding is opt-in: a client that didn't ask for one keeps the
+      // documented focus-following behaviour, dialog and all.
+      const server = createSessionServer("unbound", unboundDeps());
+      await server.connect(makeMockTransport());
+
+      expect((await listTools(server)).tools.map((t) => t.name)).toContain("recipe.run");
+    });
+
+    // The binding ceiling is applied by deleting withheld ids from
+    // `permittedActionIds` after the grant union, so a schema lookup must be
+    // refused the same way `tools/list` withholds the name — policy included.
+    // Handing back a policy here would describe a target this session provably
+    // cannot dispatch (#11910).
+    it("withholds the schema and policy for the confirm-gated tool", async () => {
+      const deps = boundDeps({
+        // `actions.getSchema` itself must be in the bound workspace's surface,
+        // or the guard that refuses a tool this workspace cannot describe fires
+        // before the lookup is ever filtered.
+        requestManifest: vi
+          .fn()
+          .mockResolvedValue([makeManifestEntry(ACTIONS_GET_SCHEMA_TOOL_ID), recipeRun()]),
+        dispatchAction: vi.fn().mockResolvedValue({
+          result: { ok: true, result: { ok: true, entry: recipeRun(), policy: null, error: null } },
+        }),
+      });
+      const server = createSessionServer(SESSION, deps);
+      await server.connect(makeMockTransport());
+
+      const res = await callTool(server, {
+        name: ACTIONS_GET_SCHEMA_TOOL_ID,
+        arguments: { actionId: "recipe.run" },
+      });
+      const body = JSON.parse((res.content as Array<{ text: string }>)[0]!.text) as {
+        ok: boolean;
+        entry: unknown;
+        policy: unknown;
+        error: { code: string } | null;
+      };
+
+      expect(body.ok).toBe(false);
+      expect(body.entry).toBeNull();
+      expect(body.policy).toBeNull();
+      expect(body.error?.code).toBe("NOT_FOUND");
+    });
+
+    it("still answers the schema lookup for a tool the binding does not withhold", async () => {
+      // Guards the test above against passing for the wrong reason — a bound
+      // session that could not answer ANY lookup would satisfy it too.
+      const deps = boundDeps({
+        requestManifest: vi
+          .fn()
+          .mockResolvedValue([
+            makeManifestEntry(ACTIONS_GET_SCHEMA_TOOL_ID),
+            makeManifestEntry("terminal.list"),
+            recipeRun(),
+          ]),
+        dispatchAction: vi.fn().mockResolvedValue({
+          result: {
+            ok: true,
+            result: {
+              ok: true,
+              entry: makeManifestEntry("terminal.list"),
+              policy: null,
+              error: null,
+            },
+          },
+        }),
+      });
+      const server = createSessionServer(SESSION, deps);
+      await server.connect(makeMockTransport());
+
+      const res = await callTool(server, {
+        name: ACTIONS_GET_SCHEMA_TOOL_ID,
+        arguments: { actionId: "terminal.list" },
+      });
+      const body = JSON.parse((res.content as Array<{ text: string }>)[0]!.text) as {
+        ok: boolean;
+        policy: { minimumTier: string } | null;
+      };
+
+      expect(body.ok).toBe(true);
+      expect(body.policy).toMatchObject({ minimumTier: "external" });
+    });
+
+    it("omits it from mcp.surface too, so discovery and listing agree", async () => {
+      const deps = boundDeps({
+        requestManifest: vi
+          .fn()
+          .mockResolvedValue([
+            makeManifestEntry("terminal.list"),
+            makeManifestEntry("mcp.surface"),
+            recipeRun(),
+          ]),
+      });
+      const server = createSessionServer(SESSION, deps);
+      await server.connect(makeMockTransport());
+
+      const result = (await callTool(server, { name: "mcp.surface" })) as {
+        structuredContent: { tools: Array<{ id: string }> };
+      };
+
+      const ids = result.structuredContent.tools.map((t) => t.id);
+      expect(ids).toContain("terminal.list");
+      expect(ids).not.toContain("recipe.run");
+    });
+  });
+
+  describe("pre-dispatch refusal", () => {
+    it("refuses a direct call with CONFIRMATION_REQUIRED and never dispatches", async () => {
+      const deps = boundDeps();
+      const server = createSessionServer(SESSION, deps);
+      await server.connect(makeMockTransport());
+
+      const result = await callTool(server, { name: "recipe.run", arguments: {} });
+
+      expect(result.isError).toBe(true);
+      const text = JSON.stringify(result.content);
+      expect(text).toContain("CONFIRMATION_REQUIRED");
+      // Never reached a renderer: the refusal is the protocol's, not a dialog
+      // rendered into a view nobody is watching.
+      expect(deps.dispatchAction).not.toHaveBeenCalled();
+    });
+
+    it("distinguishes itself from the no-window case so a conductor knows not to retry", async () => {
+      const server = createSessionServer(SESSION, boundDeps());
+      await server.connect(makeMockTransport());
+
+      const result = await callTool(server, { name: "recipe.run", arguments: {} });
+      const payload = JSON.parse((result.content as Array<{ text: string }>)[0]!.text) as {
+        details: { confirmationChannel: string };
+        retriable: boolean;
+      };
+
+      expect(payload.details.confirmationChannel).toBe("workspace-bound");
+      expect(payload.retriable).toBe(false);
+    });
+
+    it("audits the refusal", async () => {
+      const deps = boundDeps();
+      const server = createSessionServer(SESSION, deps);
+      await server.connect(makeMockTransport());
+
+      await callTool(server, { name: "recipe.run", arguments: {} });
+
+      expect(deps.appendAuditRecord).toHaveBeenCalledWith(
+        expect.objectContaining({
+          toolId: "recipe.run",
+          sessionId: SESSION,
+          tier: "external",
+          outcome: {
+            kind: "result",
+            value: {
+              ok: false,
+              error: expect.objectContaining({
+                code: "CONFIRMATION_REQUIRED",
+                details: { confirmationChannel: "workspace-bound" },
+              }),
+            },
+          },
+        })
+      );
+      expect(deps.dispatchAction).not.toHaveBeenCalled();
+    });
+
+    it("beats a live per-tool grant", async () => {
+      // Grants widen dispatch past the tier floor. They must not widen past
+      // this ceiling — the dialog a grant bypasses is the one nobody can see.
+      const deps = boundDeps();
+      deps.sessionStore.grantCache.issueGrant(SESSION, "recipe.run");
+      const server = createSessionServer(SESSION, deps);
+      await server.connect(makeMockTransport());
+
+      const result = await callTool(server, { name: "recipe.run", arguments: {} });
+
+      expect(JSON.stringify(result.content)).toContain("CONFIRMATION_REQUIRED");
+      expect(deps.dispatchAction).not.toHaveBeenCalled();
+    });
+
+    it("does not burn a native grant use", async () => {
+      const deps = boundDeps();
+      const grant = deps.sessionStore.grantCache.issueNativeGrant({
+        sessionId: SESSION,
+        actorId: "help-1",
+        actorType: "help-session",
+        allowedTools: ["recipe.run"],
+        maxUses: 3,
+      });
+      const peekSpy = vi.spyOn(deps.sessionStore.grantCache, "peekNativeGrant");
+      const server = createSessionServer(SESSION, deps);
+      await server.connect(makeMockTransport());
+
+      await callTool(server, { name: "recipe.run", arguments: {} });
+
+      // recipe.run is ON the external allowlist, so this is the tier-PERMITTED
+      // leg — which #11878 newly routes through the native peek. The
+      // workspace-bound refusal is a hard ceiling that still returns before
+      // the consume site, so the peek must not cost the grant anything.
+      expect(peekSpy).toHaveBeenCalledWith(SESSION, "recipe.run");
+      expect(deps.sessionStore.grantCache.getNativeGrant(grant.id)?.remainingUses).toBe(3);
+    });
+
+    it("refuses a statically-safe action whose args elevate it to confirm (#11860)", async () => {
+      // `worktree.createWithRecipe` is on the external allowlist and declares
+      // `danger: "safe"`, so it clears the withheld set — but a call carrying a
+      // `recipeId` is elevated host-side and would raise a dialog in a view
+      // nobody is watching. The static withhold can't see that; the args can.
+      const deps = boundDeps({
+        requestManifest: vi
+          .fn()
+          .mockResolvedValue([
+            makeManifestEntry("terminal.list"),
+            makeManifestEntry("worktree.createWithRecipe"),
+          ]),
+      });
+      const server = createSessionServer(SESSION, deps);
+      await server.connect(makeMockTransport());
+
+      const result = await callTool(server, {
+        name: "worktree.createWithRecipe",
+        arguments: { branchName: "feat/x", recipeId: "r1" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result.content)).toContain("CONFIRMATION_REQUIRED");
+      expect(deps.dispatchAction).not.toHaveBeenCalled();
+    });
+
+    it("still dispatches that action when the args name no recipe", async () => {
+      // The elevation is per-dispatch, so the refusal has to be too: gating the
+      // action id would block every plain worktree creation.
+      const deps = boundDeps({
+        requestManifest: vi
+          .fn()
+          .mockResolvedValue([
+            makeManifestEntry("terminal.list"),
+            makeManifestEntry("worktree.createWithRecipe"),
+          ]),
+      });
+      const server = createSessionServer(SESSION, deps);
+      await server.connect(makeMockTransport());
+
+      const result = await callTool(server, {
+        name: "worktree.createWithRecipe",
+        arguments: { branchName: "feat/x" },
+      });
+
+      expect(result.isError).toBeFalsy();
+      expect(deps.dispatchAction).toHaveBeenCalled();
+    });
+
+    it("leaves the rest of the bound surface dispatchable", async () => {
+      const deps = boundDeps();
+      const server = createSessionServer(SESSION, deps);
+      await server.connect(makeMockTransport());
+
+      const result = await callTool(server, { name: "terminal.list", arguments: {} });
+
+      expect(result.isError).toBeFalsy();
+      expect(deps.dispatchAction).toHaveBeenCalled();
+    });
+
+    it("refuses an action the resolved manifest does not describe", async () => {
+      // A stale or partial manifest that omits a newly confirm-gated action
+      // would otherwise let exactly the call this guard exists to refuse
+      // through to a renderer nobody is watching. Unknown danger is not safe.
+      const deps = boundDeps({
+        requestManifest: vi.fn().mockResolvedValue([makeManifestEntry("terminal.list")]),
+        getCachedManifest: vi.fn(() => null),
+      });
+      const server = createSessionServer(SESSION, deps);
+      await server.connect(makeMockTransport());
+
+      const result = await callTool(server, { name: "recipe.run", arguments: {} });
+
+      expect(result.isError).toBe(true);
+      expect(deps.dispatchAction).not.toHaveBeenCalled();
+    });
+
+    it("still runs main-process tools, which return before the renderer check", async () => {
+      const deps = boundDeps({
+        requestManifest: vi.fn().mockResolvedValue([makeManifestEntry("terminal.list")]),
+        handleSkillsSearch: vi.fn(() => ({ skills: [] })),
+      });
+      const server = createSessionServer(SESSION, deps);
+      await server.connect(makeMockTransport());
+
+      const result = await callTool(server, { name: "skills.search", arguments: { query: "x" } });
+
+      expect(result.isError).toBeFalsy();
+    });
+
+    it("keeps refusing after teardown clears the session's workspace map", async () => {
+      // Routing captures the binding once; the surface policy must share that
+      // lifetime, or a torn-down session loses its ceiling while its dispatch
+      // closure still targets the bound workspace.
+      const deps = boundDeps();
+      const server = createSessionServer(SESSION, deps);
+      await server.connect(makeMockTransport());
+      deps.sessionStore.sessionWorkspaceMap.delete(SESSION);
+
+      const result = await callTool(server, { name: "recipe.run", arguments: {} });
+
+      expect(JSON.stringify(result.content)).toContain("CONFIRMATION_REQUIRED");
+      // And the message names the workspace, not `undefined`.
+      expect(JSON.stringify(result.content)).toContain(WORKSPACE);
+      expect(deps.dispatchAction).not.toHaveBeenCalled();
+    });
+
+    it("fails closed rather than dispatching when the manifest can't be resolved", async () => {
+      // Proceeding on an unresolved manifest would erase the only evidence that
+      // an action is confirm-gated, turning a refusal into a silent dispatch.
+      const deps = boundDeps({
+        requestManifest: vi
+          .fn()
+          .mockRejectedValue(new WorkspaceBindingError(WORKSPACE, "not-found")),
+        getCachedManifest: vi.fn(() => null),
+      });
+      const server = createSessionServer(SESSION, deps);
+      await server.connect(makeMockTransport());
+
+      const result = await callTool(server, { name: "recipe.run", arguments: {} });
+
+      expect(result.isError).toBe(true);
+      expect(JSON.stringify(result.content)).toContain(SESSION_BINDING_GONE);
+      expect(deps.dispatchAction).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("binding failures and metadata", () => {
+    it("surfaces SESSION_BINDING_GONE from tools/list instead of a generic unavailable", async () => {
+      const deps = boundDeps({
+        requestManifest: vi
+          .fn()
+          .mockRejectedValue(new WorkspaceBindingError(WORKSPACE, "not-found")),
+        getCachedManifest: vi.fn(() => null),
+      });
+      const server = createSessionServer(SESSION, deps);
+      await server.connect(makeMockTransport());
+
+      await expect(listTools(server)).rejects.toMatchObject({
+        // Same envelope the resource path uses, so one shape covers both —
+        // `retriable: false` is what stops a conductor hammering a dead binding.
+        data: { code: SESSION_BINDING_GONE, retriable: false, errorCategory: "business" },
+      });
+    });
+
+    it("never serves a cached manifest after a binding failure", async () => {
+      // A cached manifest describes a view this session can no longer reach;
+      // serving it would answer with another workspace's tool surface.
+      const deps = boundDeps({
+        requestManifest: vi
+          .fn()
+          .mockRejectedValue(new WorkspaceBindingError(WORKSPACE, "ambiguous")),
+        getCachedManifest: vi.fn(() => [makeManifestEntry("terminal.list")]),
+      });
+      const server = createSessionServer(SESSION, deps);
+      await server.connect(makeMockTransport());
+
+      await expect(listTools(server)).rejects.toMatchObject({
+        data: { code: SESSION_BINDING_GONE },
+      });
+    });
+
+    it("still falls back to the cache for an ordinary transient fetch failure", async () => {
+      vi.spyOn(console, "warn").mockImplementation(() => {});
+      const deps = boundDeps({
+        requestManifest: vi.fn().mockRejectedValue(new Error("Manifest request timed out")),
+        getCachedManifest: vi.fn(() => [makeManifestEntry("terminal.list")]),
+      });
+      const server = createSessionServer(SESSION, deps);
+      await server.connect(makeMockTransport());
+
+      expect((await listTools(server)).tools.map((t) => t.name)).toEqual(["terminal.list"]);
+    });
+
+    it("advertises the resolved binding in the initialize capabilities", async () => {
+      const server = createSessionServer(SESSION, boundDeps());
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      const client = new Client({ name: "test-client", version: "1.0.0" }, { capabilities: {} });
+      await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+      try {
+        const capabilities = client.getServerCapabilities();
+        expect(capabilities?.experimental?.["org.daintree/workspace-binding"]).toEqual({
+          kind: "project",
+          workspaceId: WORKSPACE,
+          workspacePath: "/tmp/a",
+        });
+        // Declaring it at construction must not cost the SDK's own initialize
+        // handling — client capability capture still has to work.
+        expect(server.getClientCapabilities()).toBeDefined();
+      } finally {
+        await client.close();
+      }
+    });
+
+    it("advertises no binding capability for an unbound session", async () => {
+      const server = createSessionServer("unbound", unboundDeps());
+      const [clientTransport, serverTransport] = InMemoryTransport.createLinkedPair();
+      const client = new Client({ name: "test-client", version: "1.0.0" }, { capabilities: {} });
+      await Promise.all([server.connect(serverTransport), client.connect(clientTransport)]);
+      try {
+        expect(
+          client.getServerCapabilities()?.experimental?.["org.daintree/workspace-binding"]
+        ).toBeUndefined();
+      } finally {
+        await client.close();
+      }
+    });
+  });
+});
+
+describe("session-liveness gate (#11799)", () => {
+  const liveStores: RealSessionStore[] = [];
+
+  function makeStore(): RealSessionStore {
+    const store = new RealSessionStore(() => {});
+    liveStores.push(store);
+    return store;
+  }
+
+  afterEach(() => {
+    // Teardown here, not at the end of each test body: a failing assertion
+    // throws past an inline dispose and leaks the seeded idle timer plus the
+    // grant cache's sweep interval into the rest of the file.
+    while (liveStores.length > 0) {
+      const store = liveStores.pop()!;
+      store.drain();
+      store.grantCache.dispose();
+    }
+  });
+
+  function invoke(
+    server: ReturnType<typeof createSessionServer>,
+    method: string,
+    params: Record<string, unknown> = {}
+  ) {
+    const handlers = (
+      server as unknown as {
+        _requestHandlers: Map<string, (req: unknown, extra: unknown) => Promise<unknown>>;
+      }
+    )._requestHandlers;
+    const handler = handlers.get(method);
+    if (!handler) throw new Error(`${method} handler not found`);
+    return handler(
+      { method, params, jsonrpc: "2.0", id: 1 },
+      {
+        signal: new AbortController().signal,
+        _meta: {},
+        sendNotification: vi.fn(),
+        requestId: 1,
+      }
+    );
+  }
+
+  function parseToolErrorPayload(result: unknown): Record<string, unknown> {
+    const block = (result as { content: Array<{ type: string; text: string }> }).content[0];
+    if (block.type !== "text") throw new Error("Expected a text block");
+    return JSON.parse(block.text) as Record<string, unknown>;
+  }
+
+  /**
+   * A tool `workbench` permits and `external` does not — derived, not named, so
+   * this cannot drift into restating the allowlist. Its existence IS the issue's
+   * premise: if the two tiers were a ladder there would be no such tool, and
+   * falling back to workbench would be a narrowing rather than an escalation.
+   */
+  const WORKBENCH_ONLY_TOOL = [...TIER_ALLOWLISTS.workbench].find(
+    (id) => !TIER_ALLOWLISTS.external.has(id)
+  );
+
+  it("has at least one tool workbench permits and external withholds", () => {
+    // Guards the derivation above rather than a literal: were this to come back
+    // undefined, every escalation test below would silently lose its teeth.
+    expect(WORKBENCH_ONLY_TOOL).toBeDefined();
+  });
+
+  it.each([["sse"], ["http"]] as const)(
+    "refuses a revoked external session's tools/call over %s instead of dispatching it at workbench",
+    async (transport) => {
+      // The issue verbatim: an external bearer's session is revoked while its
+      // request is in flight, and the tier read that follows used to resolve to
+      // `workbench` — a peer allowlist that permits this tool.
+      const store = makeStore();
+      seedLiveSession(store, "revoked-external", "external", transport);
+      const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: null } });
+      const appendAuditRecord = vi.fn();
+      const notifyTierMismatch = vi.fn();
+      const recordDenial = vi.fn(() => ({ tripped: false }));
+      const deps = fakeDeps({
+        sessionStore: store,
+        dispatchAction,
+        appendAuditRecord,
+        notifyTierMismatch,
+        recordDenial,
+      });
+      const server = createSessionServer("revoked-external", deps);
+
+      store.revokeSession("revoked-external");
+
+      const result = await callTool(server, {
+        name: WORKBENCH_ONLY_TOOL!,
+        arguments: { path: "/etc/passwd" },
+      });
+
+      expect((result as { isError?: boolean }).isError).toBe(true);
+      expect(parseToolErrorPayload(result)).toEqual({
+        code: "SESSION_GONE",
+        message: expect.stringContaining("no longer active"),
+        retriable: false,
+        errorCategory: "business",
+      });
+      // Refused at the gate, before anything observable: no dispatch, no audit
+      // row under a tier the caller never held, no denial bookkeeping.
+      expect(dispatchAction).not.toHaveBeenCalled();
+      expect(appendAuditRecord).not.toHaveBeenCalled();
+      expect(notifyTierMismatch).not.toHaveBeenCalled();
+      expect(recordDenial).not.toHaveBeenCalled();
+    }
+  );
+
+  it("leaves no dedup bookkeeping behind for a session refused at the gate", async () => {
+    // The tier row is left behind deliberately while the transport is removed.
+    // Revoking would delete both, and the un-gated read would then resolve to
+    // `workbench`, which does not permit `terminal.new` — the call would exit at
+    // the tier gate before dedup and this would pass without the fix. An orphan
+    // `system` row makes the un-gated path actually dispatch and populate dedup,
+    // so the assertion has something to catch.
+    const store = makeStore();
+    seedLiveSession(store, "gone-dedup", "system");
+    const dispatchAction = vi
+      .fn()
+      .mockResolvedValue({ result: { ok: true, result: { terminalId: "t-1" } } });
+    const deps = fakeDeps({ sessionStore: store, dispatchAction });
+    const server = createSessionServer("gone-dedup", deps);
+
+    store.sessions.delete("gone-dedup");
+
+    const result = await callTool(server, {
+      name: "terminal.new",
+      arguments: { spawnedBy: { kind: "user" } },
+    });
+
+    expect(parseToolErrorPayload(result).code).toBe("SESSION_GONE");
+    expect(dispatchAction).not.toHaveBeenCalled();
+    expect(store.dedupInFlight.size).toBe(0);
+    expect(store.dedupResultCache.size).toBe(0);
+  });
+
+  it("refuses tools/list before it costs a manifest fetch", async () => {
+    // Gated ahead of `resolveManifest` on purpose: that fetch can throw
+    // SESSION_BINDING_GONE, which would answer "your workspace went away" to a
+    // caller whose session is what actually went away.
+    const store = makeStore();
+    seedLiveSession(store, "gone-list", "external");
+    const requestManifest = vi.fn().mockResolvedValue([]);
+    const getCachedManifest = vi.fn(() => null);
+    const deps = fakeDeps({ sessionStore: store, requestManifest, getCachedManifest });
+    const server = createSessionServer("gone-list", deps);
+
+    store.revokeSession("gone-list");
+
+    await expect(listTools(server)).rejects.toMatchObject({
+      data: { code: "SESSION_GONE", retriable: false, errorCategory: "business" },
+    });
+    expect(requestManifest).not.toHaveBeenCalled();
+    expect(getCachedManifest).not.toHaveBeenCalled();
+  });
+
+  it("throws rather than answering discovery with an empty surface", async () => {
+    // `{ tools: [] }` / `{ resources: [] }` are well-formed, cacheable answers
+    // that read as "you legitimately have nothing" and carry no hint that
+    // reconnecting is the fix.
+    const store = makeStore();
+    seedLiveSession(store, "gone-empty", "system");
+    const deps = fakeDeps({ sessionStore: store });
+    const server = createSessionServer("gone-empty", deps);
+
+    store.revokeSession("gone-empty");
+
+    for (const method of [
+      "tools/list",
+      "resources/list",
+      "resources/templates/list",
+      "prompts/list",
+    ]) {
+      await expect(invoke(server, method)).rejects.toMatchObject({
+        data: { code: "SESSION_GONE" },
+      });
+    }
+  });
+
+  it("refuses resources/read for a revoked session without dispatching the backing action", async () => {
+    const store = makeStore();
+    seedLiveSession(store, "gone-read", "system");
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: null } });
+    const deps = fakeDeps({ sessionStore: store, dispatchAction });
+    const server = createSessionServer("gone-read", deps);
+
+    store.revokeSession("gone-read");
+
+    await expect(
+      invoke(server, "resources/read", { uri: "daintree://worktree/wt-1/pulse" })
+    ).rejects.toMatchObject({ data: { code: "SESSION_GONE" } });
+    expect(dispatchAction).not.toHaveBeenCalled();
+  });
+
+  it("refuses resources/subscribe for a revoked session and installs no listener", async () => {
+    // Subscribing a dead session would leave an event listener pushing updates
+    // at a transport that is already gone.
+    const store = makeStore();
+    seedLiveSession(store, "gone-sub", "system");
+    const deps = fakeDeps({ sessionStore: store });
+    const server = createSessionServer("gone-sub", deps);
+
+    store.revokeSession("gone-sub");
+
+    await expect(
+      invoke(server, "resources/subscribe", { uri: "daintree://worktree/wt-1/pulse" })
+    ).rejects.toMatchObject({ data: { code: "SESSION_GONE" } });
+    expect(store.resourceSubscriptions.get("gone-sub")).toBeUndefined();
+  });
+
+  it("refuses prompts/get for a revoked session without reading worktree or terminal state", async () => {
+    // Prompts render from live IDE state, so `collectPromptContext` dispatches
+    // `worktree.getCurrent` and `terminal.getOutput`. Ungated, that is the same
+    // leak as the tool path reached through the prompt surface.
+    const store = makeStore();
+    seedLiveSession(store, "gone-prompt", "external");
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: null } });
+    const deps = fakeDeps({ sessionStore: store, dispatchAction });
+    const server = createSessionServer("gone-prompt", deps);
+
+    store.revokeSession("gone-prompt");
+
+    await expect(
+      invoke(server, "prompts/get", {
+        name: "triage_failed_agent",
+        arguments: { terminal_id: "t-1" },
+      })
+    ).rejects.toMatchObject({ data: { code: "SESSION_GONE" } });
+    expect(dispatchAction).not.toHaveBeenCalled();
+  });
+
+  it("refuses the next call after an abuse trip revokes the session mid-call", async () => {
+    // The one revocation source that fires from inside a tools/call. The
+    // triggering call still answers from its captured tier — it was admitted —
+    // but the session is gone by the time the next request arrives.
+    const store = makeStore();
+    seedLiveSession(store, "abuse", "external");
+    const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: null } });
+    const appendAuditRecord = vi.fn();
+    const notifySessionRevoked = vi.fn();
+    const deps = fakeDeps({
+      sessionStore: store,
+      dispatchAction,
+      appendAuditRecord,
+      recordDenial: vi.fn(() => ({ tripped: true })),
+      notifySessionRevoked,
+      clearDenialState: vi.fn(),
+    });
+    const server = createSessionServer("abuse", deps);
+
+    const denied = await callTool(server, {
+      name: WORKBENCH_ONLY_TOOL!,
+      arguments: { path: "/etc/passwd" },
+    });
+
+    // Admitted, then denied on its own captured tier — not retroactively
+    // rewritten into SESSION_GONE by the revocation it just triggered.
+    expect(parseToolErrorPayload(denied)).toMatchObject({ code: TIER_NOT_PERMITTED_CODE });
+    expect(parseToolErrorPayload(denied).message).toContain("external");
+    expect(notifySessionRevoked).toHaveBeenCalledTimes(1);
+    expect(store.getTier("abuse")).toBeNull();
+
+    appendAuditRecord.mockClear();
+    const afterRevoke = await callTool(server, {
+      name: WORKBENCH_ONLY_TOOL!,
+      arguments: { path: "/etc/passwd" },
+    });
+
+    expect(parseToolErrorPayload(afterRevoke).code).toBe("SESSION_GONE");
+    expect(appendAuditRecord).not.toHaveBeenCalled();
+    expect(dispatchAction).not.toHaveBeenCalled();
+  });
+
+  it("lets an already-admitted call finish on its captured tier when revocation lands mid-dispatch", async () => {
+    // The one-lifetime rule: revocation stops the NEXT request, it does not
+    // rewrite a call the gate already admitted. The admitted call still must
+    // not resurrect dedup state for the torn-down session.
+    const store = makeStore();
+    seedLiveSession(store, "admitted", "system");
+    let resolveDispatch: ((envelope: unknown) => void) | undefined;
+    const dispatchAction = vi.fn().mockImplementation(
+      () =>
+        new Promise((resolve) => {
+          resolveDispatch = resolve as (envelope: unknown) => void;
+        })
+    );
+    const deps = fakeDeps({ sessionStore: store, dispatchAction });
+    const server = createSessionServer("admitted", deps);
+
+    const inFlight = callTool(server, {
+      name: "terminal.new",
+      arguments: { spawnedBy: { kind: "user" } },
+    });
+    for (let i = 0; i < 50 && !resolveDispatch; i++) {
+      await Promise.resolve();
+    }
+    expect(dispatchAction).toHaveBeenCalledTimes(1);
+    expect(store.dedupInFlight.get("admitted")?.size).toBe(1);
+
+    store.revokeSession("admitted");
+
+    resolveDispatch!({ result: { ok: true, result: { terminalId: "t-admitted" } } });
+    const result = await inFlight;
+    for (let i = 0; i < 10; i++) await Promise.resolve();
+
+    // Admitted work completes rather than being retroactively refused...
+    expect((result as { isError?: boolean }).isError).toBeUndefined();
+    // ...but writes nothing back into the torn-down session.
+    expect(store.dedupInFlight.size).toBe(0);
+    expect(store.dedupResultCache.size).toBe(0);
+  });
+});
+
+// #11909 — the cleanup tools are an authorization boundary, so the cases below
+// are the boundary's edges rather than its happy path: another session's id, a
+// forged id, an id the user owns, a half-created composite, and a session whose
+// authority has been revoked.
+describe("session-scoped resource ownership (#11909)", () => {
+  const liveStores: RealSessionStore[] = [];
+
+  function makeStore(): RealSessionStore {
+    const store = new RealSessionStore(() => {});
+    liveStores.push(store);
+    return store;
+  }
+
+  afterEach(() => {
+    while (liveStores.length > 0) {
+      const store = liveStores.pop()!;
+      store.drain();
+      store.grantCache.dispose();
+    }
+    vi.restoreAllMocks();
+  });
+
+  function ownedManifest(): ActionManifestEntry[] {
+    return [
+      makeManifestEntry("terminal.new"),
+      { ...makeManifestEntry("terminal.closeOwned"), kind: "command", danger: "safe" as const },
+      {
+        ...makeManifestEntry("worktree.deleteOwned"),
+        kind: "command",
+        danger: "confirm" as const,
+      },
+      makeManifestEntry("worktree.createWithRecipe"),
+      makeManifestEntry("recipe.run"),
+      makeManifestEntry("agent.launch"),
+    ];
+  }
+
+  /** A store + deps pair whose dispatch returns whatever the test queues up. */
+  function harness(
+    sessionId: string,
+    envelopes: Record<string, unknown>,
+    overrides?: Partial<SessionServerDeps>
+  ) {
+    const store = makeStore();
+    seedLiveSession(store, sessionId, "external");
+    store.sessionOriginMap.set(sessionId, "external");
+    const dispatchAction = vi.fn().mockImplementation((actionId: string) => {
+      const envelope = envelopes[actionId];
+      if (envelope === undefined) return Promise.resolve({ result: { ok: true, result: null } });
+      return Promise.resolve(envelope);
+    });
+    const deps = fakeDeps({
+      sessionStore: store,
+      dispatchAction,
+      requestManifest: vi.fn().mockResolvedValue(ownedManifest()),
+      getCachedManifest: vi.fn(() => ownedManifest()),
+      ...overrides,
+    });
+    return { store, deps, dispatchAction, server: createSessionServer(sessionId, deps) };
+  }
+
+  function errorText(result: { content: unknown }): string {
+    return JSON.stringify(result.content);
+  }
+
+  function payloadOf<T>(res: { content: unknown }): T {
+    return JSON.parse((res.content as Array<{ text: string }>)[0]!.text) as T;
+  }
+
+  describe("recording from trusted results", () => {
+    it("records the terminal a direct terminal.new created", async () => {
+      const { store, server } = harness("s-new", {
+        "terminal.new": {
+          result: { ok: true, result: { terminalId: "terminal-1" } },
+          dispatchedWorkspace: { kind: "project", workspaceId: "ws-a", workspacePath: "/tmp/a" },
+        },
+      });
+
+      await callTool(server, { name: "terminal.new", arguments: {} });
+
+      expect(store.resourceOwnership.owns("s-new", "terminal", "terminal-1")).toBe(true);
+      expect(store.resourceOwnership.get("s-new", "terminal", "terminal-1")?.workspaceId).toBe(
+        "ws-a"
+      );
+    });
+
+    it("records every composite child terminal and the worktree together", async () => {
+      const { store, server } = harness("s-composite", {
+        "worktree.createWithRecipe": {
+          result: {
+            ok: true,
+            result: {
+              worktreeId: "/tmp/wt",
+              worktreePath: "/tmp/wt",
+              branch: "feature/x",
+              recipeLaunched: true,
+              spawnedTerminalCount: 2,
+              spawnedTerminalIds: ["terminal-1", "terminal-2"],
+              failedTerminalCount: 0,
+            },
+          },
+        },
+      });
+
+      await callTool(server, {
+        name: "worktree.createWithRecipe",
+        arguments: { branchName: "x", recipeId: "r1" },
+      });
+
+      expect(store.resourceOwnership.owns("s-composite", "worktree", "/tmp/wt")).toBe(true);
+      expect(store.resourceOwnership.owns("s-composite", "terminal", "terminal-1")).toBe(true);
+      expect(store.resourceOwnership.owns("s-composite", "terminal", "terminal-2")).toBe(true);
+    });
+
+    it("reports a partial composite failure as non-retriable", async () => {
+      // Before #11909 this arrived as `EXECUTION_ERROR`, which the retriable
+      // set includes — so a conductor was being told to try again, and a retry
+      // of a composite that already made a worktree makes a SECOND one. The
+      // provenance code carries the honest answer: the call is not repeatable.
+      const { server } = harness("s-retriable", {
+        "worktree.createWithRecipe": {
+          result: {
+            ok: false,
+            error: {
+              code: "PARTIAL_SUCCESS",
+              message: formatPartialSuccessMessage("recipe blew up", {
+                worktreeId: "/tmp/wt-retriable",
+              }),
+            },
+          },
+        },
+      });
+
+      const result = await callTool(server, {
+        name: "worktree.createWithRecipe",
+        arguments: { branchName: "x", recipeId: "r1" },
+      });
+
+      const payload = payloadOf<{ retriable: boolean; code: string }>(result);
+      expect(payload.code).toBe("PARTIAL_SUCCESS");
+      expect(payload.retriable).toBe(false);
+    });
+
+    it("records the worktree a partially-failed composite left behind", async () => {
+      // The caller has to be able to clean up the mess its own call made, and
+      // the failure arrives as `ok: false` because ActionService flattens the
+      // renderer throw — so the ledger reads the failure leg too.
+      const { store, server } = harness("s-partial", {
+        "worktree.createWithRecipe": {
+          result: {
+            ok: false,
+            error: {
+              code: "PARTIAL_SUCCESS",
+              message: formatPartialSuccessMessage("Recipe r1 failed to run: boom", {
+                worktreeId: "/tmp/wt-partial",
+                worktreePath: "/tmp/wt-partial",
+                branch: "feature/x",
+              }),
+            },
+          },
+        },
+      });
+
+      const result = await callTool(server, {
+        name: "worktree.createWithRecipe",
+        arguments: { branchName: "x", recipeId: "r1" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(store.resourceOwnership.owns("s-partial", "worktree", "/tmp/wt-partial")).toBe(true);
+    });
+
+    it("records nothing when a create fails outright", async () => {
+      const { store, server } = harness("s-failed", {
+        "terminal.new": {
+          result: { ok: false, error: { code: "EXECUTION_ERROR", message: "no worktree" } },
+        },
+      });
+
+      await callTool(server, { name: "terminal.new", arguments: {} });
+
+      expect(store.resourceOwnership.list("s-failed")).toEqual([]);
+    });
+
+    it("records the terminal a launched agent reports, but not its worktree", async () => {
+      const { store, server } = harness("s-agent", {
+        "agent.launch": {
+          result: {
+            ok: true,
+            result: {
+              launched: true,
+              terminalId: "terminal-agent",
+              worktreeId: "/tmp/pre-existing",
+              worktreePath: "/tmp/pre-existing",
+            },
+          },
+        },
+      });
+
+      await callTool(server, { name: "agent.launch", arguments: { agentId: "claude" } });
+
+      expect(store.resourceOwnership.owns("s-agent", "terminal", "terminal-agent")).toBe(true);
+      // The agent launched INTO that worktree; the session did not create it,
+      // so recording it would grant delete authority over someone else's tree.
+      expect(store.resourceOwnership.owns("s-agent", "worktree", "/tmp/pre-existing")).toBe(false);
+    });
+
+    it("records every terminal a recipe run started", async () => {
+      const { store, server } = harness("s-recipe", {
+        "recipe.run": {
+          result: {
+            ok: true,
+            result: {
+              spawnedCount: 2,
+              failedCount: 1,
+              spawnedTerminalIds: ["terminal-1", "terminal-2"],
+              failedTerminals: [{ index: 2, reason: "panel limit" }],
+            },
+          },
+        },
+      });
+
+      await callTool(server, { name: "recipe.run", arguments: { recipeId: "r1" } });
+
+      expect(store.resourceOwnership.owns("s-recipe", "terminal", "terminal-1")).toBe(true);
+      expect(store.resourceOwnership.owns("s-recipe", "terminal", "terminal-2")).toBe(true);
+      // The dropped terminal has no id, so nothing is attributed for it.
+      expect(store.resourceOwnership.list("s-recipe")).toHaveLength(2);
+    });
+
+    it("refuses a partial payload that did not come from a PartialSuccessError", async () => {
+      // The composite calls forge providers and git BEFORE the worktree exists,
+      // and those failures rethrow the provider's message unchanged. A provider
+      // returning a string shaped like a partial result must not mint an
+      // ownership record for a worktree nothing created — provenance is the
+      // error CODE, which only an in-repo `PartialSuccessError` earns.
+      const { store, server } = harness("s-forged-partial", {
+        "worktree.createWithRecipe": {
+          result: {
+            ok: false,
+            error: {
+              code: "EXECUTION_ERROR",
+              message: formatPartialSuccessMessage("upstream said so", {
+                worktreeId: "/tmp/victim",
+              }),
+            },
+          },
+        },
+      });
+
+      await callTool(server, {
+        name: "worktree.createWithRecipe",
+        arguments: { branchName: "x", pullRequestNumber: 1 },
+      });
+
+      expect(store.resourceOwnership.owns("s-forged-partial", "worktree", "/tmp/victim")).toBe(
+        false
+      );
+    });
+
+    it("records nothing for a listing, so enumerated ids never become authority", async () => {
+      const { store, server } = harness("s-list", {
+        "terminal.list": {
+          result: { ok: true, result: { terminals: [{ id: "terminal-users-own" }] } },
+        },
+      });
+
+      await callTool(server, { name: "terminal.list", arguments: {} });
+
+      expect(store.resourceOwnership.owns("s-list", "terminal", "terminal-users-own")).toBe(false);
+    });
+  });
+
+  describe("terminal.closeOwned", () => {
+    it("closes a terminal the session created and delegates to the real terminal.close", async () => {
+      const { store, server, dispatchAction } = harness("s-close", {
+        "terminal.close": { result: { ok: true, result: { closedIds: ["terminal-1"] } } },
+      });
+      store.resourceOwnership.record("s-close", [{ kind: "terminal", id: "terminal-1" }]);
+
+      const result = await callTool(server, {
+        name: "terminal.closeOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      expect(result.isError).toBeUndefined();
+      // Delegation, not reimplementation: trash/recovery and the "reports the
+      // exact panel closed" contract come from the shipped action.
+      expect(dispatchAction).toHaveBeenCalledWith(
+        "terminal.close",
+        { terminalId: "terminal-1" },
+        expect.anything()
+      );
+      // Authority is released once the panel is genuinely gone.
+      expect(store.resourceOwnership.owns("s-close", "terminal", "terminal-1")).toBe(false);
+    });
+
+    it("keeps authority when the delegated close reports nothing closed", async () => {
+      const { store, server } = harness("s-noop", {
+        "terminal.close": { result: { ok: true, result: { closedIds: [] } } },
+      });
+      store.resourceOwnership.record("s-noop", [{ kind: "terminal", id: "terminal-1" }]);
+
+      await callTool(server, {
+        name: "terminal.closeOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      // A no-op close must not revoke the session's authority over a panel that
+      // is still running.
+      expect(store.resourceOwnership.owns("s-noop", "terminal", "terminal-1")).toBe(true);
+    });
+
+    it("refuses another session's terminal without dispatching", async () => {
+      const { store, server, dispatchAction } = harness("session-b", {});
+      store.resourceOwnership.record("session-a", [{ kind: "terminal", id: "terminal-a" }]);
+
+      const result = await callTool(server, {
+        name: "terminal.closeOwned",
+        arguments: { terminalId: "terminal-a" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toContain("RESOURCE_NOT_OWNED");
+      // The acceptance criterion: refused BEFORE renderer mutation.
+      expect(dispatchAction).not.toHaveBeenCalled();
+      expect(store.resourceOwnership.owns("session-a", "terminal", "terminal-a")).toBe(true);
+    });
+
+    it("refuses a forged id with the same error as an unowned one", async () => {
+      // One code, one message: distinguishing "no such panel" from "not yours"
+      // would let a caller enumerate the view it was never granted.
+      const { server, dispatchAction } = harness("s-forged", {});
+
+      const unknown = await callTool(server, {
+        name: "terminal.closeOwned",
+        arguments: { terminalId: "terminal-does-not-exist" },
+      });
+
+      expect(unknown.isError).toBe(true);
+      expect(errorText(unknown)).toContain("RESOURCE_NOT_OWNED");
+      expect(dispatchAction).not.toHaveBeenCalled();
+    });
+
+    it("refuses a worktree id passed as a terminal id", async () => {
+      // Kind is part of the key, so owning the worktree grants no authority
+      // over a panel that happens to share its id string.
+      const { store, server, dispatchAction } = harness("s-kind", {});
+      store.resourceOwnership.record("s-kind", [{ kind: "worktree", id: "/tmp/wt" }]);
+
+      const result = await callTool(server, {
+        name: "terminal.closeOwned",
+        arguments: { terminalId: "/tmp/wt" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toContain("RESOURCE_NOT_OWNED");
+      expect(dispatchAction).not.toHaveBeenCalled();
+    });
+
+    it("rejects a blank id as a validation error rather than an ownership one", async () => {
+      const { server, dispatchAction } = harness("s-blank", {});
+
+      const result = await callTool(server, {
+        name: "terminal.closeOwned",
+        arguments: { terminalId: "   " },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toContain("VALIDATION_ERROR");
+      expect(dispatchAction).not.toHaveBeenCalled();
+    });
+
+    it("loses authority when the session is revoked, without closing anything", async () => {
+      const { store, server, dispatchAction } = harness("s-revoked", {
+        "terminal.close": { result: { ok: true, result: { closedIds: ["terminal-1"] } } },
+      });
+      store.resourceOwnership.record("s-revoked", [{ kind: "terminal", id: "terminal-1" }]);
+
+      store.revokeSession("s-revoked");
+
+      // Revocation clears the authority record and dispatches nothing:
+      // disconnect is not a decision to destroy the user's terminals.
+      expect(store.resourceOwnership.list("s-revoked")).toEqual([]);
+      expect(dispatchAction).not.toHaveBeenCalled();
+
+      // And the terminal stays un-closable by the dead session — the liveness
+      // gate refuses the call before ownership is even consulted.
+      const refused = await callTool(server, {
+        name: "terminal.closeOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+      expect(refused.isError).toBe(true);
+      expect(errorText(refused)).toContain(SESSION_GONE);
+      expect(dispatchAction).not.toHaveBeenCalled();
+    });
+  });
+
+  describe("worktree.deleteOwned", () => {
+    it("delegates to worktree.delete so the real D2 preview and confirmation fire", async () => {
+      const { store, server, dispatchAction } = harness("s-del", {
+        "worktree.delete": { result: { ok: true, result: null } },
+      });
+      store.resourceOwnership.record("s-del", [{ kind: "worktree", id: "/tmp/wt" }]);
+
+      const result = await callTool(server, {
+        name: "worktree.deleteOwned",
+        arguments: { worktreeId: "/tmp/wt" },
+      });
+
+      expect(result.isError).toBeUndefined();
+      // The literal action id matters: `resolveMcpConfirmPreviewTarget` matches
+      // on "worktree.delete" to build the tracked/untracked file preview.
+      //
+      // The third argument is asserted as `false`, not `expect.anything()`:
+      // that flag is what tells the renderer the dispatch is already approved,
+      // so a lenient matcher here would pass just as happily if authorizing
+      // ownership had silently pre-confirmed the delete and skipped the dialog.
+      expect(dispatchAction).toHaveBeenCalledWith(
+        "worktree.delete",
+        { worktreeId: "/tmp/wt" },
+        false
+      );
+      expect(store.resourceOwnership.owns("s-del", "worktree", "/tmp/wt")).toBe(false);
+    });
+
+    it("strips force, deleteBranch and closeTerminals from the delegated call", async () => {
+      // The narrow tool omits them from its schema, but the renderer validates
+      // against `worktree.delete`, which still accepts them — so rebuilding the
+      // args here is the actual enforcement.
+      const { store, server, dispatchAction } = harness("s-strip", {
+        "worktree.delete": { result: { ok: true, result: null } },
+      });
+      store.resourceOwnership.record("s-strip", [{ kind: "worktree", id: "/tmp/wt" }]);
+
+      await callTool(server, {
+        name: "worktree.deleteOwned",
+        arguments: {
+          worktreeId: "/tmp/wt",
+          force: true,
+          deleteBranch: true,
+          closeTerminals: true,
+        },
+      });
+
+      expect(dispatchAction).toHaveBeenCalledWith(
+        "worktree.delete",
+        { worktreeId: "/tmp/wt" },
+        false
+      );
+    });
+
+    it("reports CONFIRMATION_REQUIRED when no window can show the dialog", async () => {
+      // Owning the worktree is not approval. With no renderer to raise the
+      // native dialog the delegated dispatch throws, and the caller must get
+      // the machine-readable "needs a human I can't reach" answer rather than a
+      // generic execution error — and must keep its ownership for the retry.
+      const { store } = harness("s-nowindow", {});
+      store.resourceOwnership.record("s-nowindow", [{ kind: "worktree", id: "/tmp/wt" }]);
+      const deps = fakeDeps({
+        sessionStore: store,
+        dispatchAction: vi.fn().mockRejectedValue(new RendererBridgeUnavailableError()),
+        requestManifest: vi.fn().mockResolvedValue(ownedManifest()),
+        getCachedManifest: vi.fn(() => ownedManifest()),
+      });
+      const windowless = createSessionServer("s-nowindow", deps);
+
+      const result = await callTool(windowless, {
+        name: "worktree.deleteOwned",
+        arguments: { worktreeId: "/tmp/wt" },
+      });
+
+      expect(result.isError).toBe(true);
+      const text = errorText(result);
+      expect(text).toContain(CONFIRMATION_REQUIRED_CODE);
+      expect(text).toContain("unavailable");
+      expect(store.resourceOwnership.owns("s-nowindow", "worktree", "/tmp/wt")).toBe(true);
+    });
+
+    it("refuses a worktree the session did not create without dispatching", async () => {
+      const { server, dispatchAction } = harness("s-unowned-wt", {});
+
+      const result = await callTool(server, {
+        name: "worktree.deleteOwned",
+        arguments: { worktreeId: "/tmp/users-own-worktree" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toContain("RESOURCE_NOT_OWNED");
+      expect(dispatchAction).not.toHaveBeenCalled();
+    });
+
+    it("keeps authority when the delegated delete fails", async () => {
+      // A refused dirty-worktree delete must leave the caller able to retry
+      // after committing, rather than stranding the worktree unownable.
+      const { store, server } = harness("s-dirty", {
+        "worktree.delete": {
+          result: {
+            ok: false,
+            error: { code: "EXECUTION_ERROR", message: "worktree has uncommitted changes" },
+          },
+        },
+      });
+      store.resourceOwnership.record("s-dirty", [{ kind: "worktree", id: "/tmp/wt" }]);
+
+      const result = await callTool(server, {
+        name: "worktree.deleteOwned",
+        arguments: { worktreeId: "/tmp/wt" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(store.resourceOwnership.owns("s-dirty", "worktree", "/tmp/wt")).toBe(true);
+    });
+  });
+
+  describe("confirmation-unavailable / workspace-bound sessions", () => {
+    function boundHarness(sessionId: string) {
+      const store = makeStore();
+      seedLiveSession(store, sessionId, "external");
+      store.sessionOriginMap.set(sessionId, "external");
+      store.sessionWorkspaceMap.set(sessionId, "ws-a");
+      const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: null } });
+      const deps = fakeDeps({
+        sessionStore: store,
+        dispatchAction,
+        workspaceBinding: { kind: "project", workspaceId: "ws-a", workspacePath: "/tmp/a" },
+        requestManifest: vi.fn().mockResolvedValue(ownedManifest()),
+        getCachedManifest: vi.fn(() => ownedManifest()),
+      });
+      return { store, dispatchAction, server: createSessionServer(sessionId, deps) };
+    }
+
+    it("withholds worktree.deleteOwned from a bound session's tools/list but keeps closeOwned", async () => {
+      const { server } = boundHarness("s-bound-list");
+      await server.connect(makeMockTransport());
+
+      const names = (await listTools(server)).tools.map((t) => t.name);
+
+      // `danger: "confirm"` alone drives this — no hand-written id list.
+      expect(names).not.toContain("worktree.deleteOwned");
+      // The safe half stays reachable: it needs no dialog.
+      expect(names).toContain("terminal.closeOwned");
+    });
+
+    it("refuses a bound session's direct worktree.deleteOwned call even when it owns the worktree", async () => {
+      const { store, server, dispatchAction } = boundHarness("s-bound-call");
+      store.resourceOwnership.record("s-bound-call", [{ kind: "worktree", id: "/tmp/wt" }], "ws-a");
+
+      const result = await callTool(server, {
+        name: "worktree.deleteOwned",
+        arguments: { worktreeId: "/tmp/wt" },
+      });
+
+      // Discovery and direct-call authorization agree: owning the worktree is
+      // not enough when nobody can be shown the confirmation.
+      expect(result.isError).toBe(true);
+      expect(dispatchAction).not.toHaveBeenCalled();
+    });
+  });
+
+  // Acceptance criterion: `tools/list`, `actions.search`, `actions.getSchema`,
+  // `mcp.surface` and the direct `tools/call` gate must expose the SAME
+  // effective cleanup surface. They are five separate code paths, so a
+  // regression can hide in any one of them — #11582 is the precedent for a
+  // tool that was listed by one and refused by another.
+  describe("effective cleanup surface agreement", () => {
+    function surfaceDeps(sessionId: string) {
+      const store = makeStore();
+      seedLiveSession(store, sessionId, "external");
+      store.sessionOriginMap.set(sessionId, "external");
+      store.sessionWorkspaceMap.set(sessionId, "ws-a");
+      const manifest = [
+        ...ownedManifest(),
+        makeManifestEntry("mcp.surface"),
+        makeManifestEntry("actions.search"),
+        makeManifestEntry("actions.getSchema"),
+        makeManifestEntry("terminal.list"),
+      ];
+      return {
+        store,
+        deps: fakeDeps({
+          sessionStore: store,
+          workspaceBinding: { kind: "project", workspaceId: "ws-a", workspacePath: "/tmp/a" },
+          requestManifest: vi.fn().mockResolvedValue(manifest),
+          getCachedManifest: vi.fn(() => manifest),
+          dispatchAction: vi.fn((actionId: string) => {
+            // The renderer answers with the UNFILTERED registry; narrowing to
+            // the session's effective surface is main's job, and that narrowing
+            // is exactly what this suite is checking.
+            if (actionId === "actions.search") {
+              return Promise.resolve({
+                result: {
+                  ok: true as const,
+                  result: {
+                    totalMatches: manifest.length,
+                    results: manifest,
+                  },
+                },
+              });
+            }
+            if (actionId === "actions.getSchema") {
+              return Promise.resolve({
+                result: {
+                  ok: true as const,
+                  result: { ok: true, entry: makeManifestEntry("worktree.deleteOwned") },
+                },
+              });
+            }
+            return Promise.resolve({ result: { ok: true as const, result: null } });
+          }),
+        }),
+      };
+    }
+
+    it("agrees across all five surfaces for a workspace-bound external session", async () => {
+      // `terminal.closeOwned` is `danger: "safe"` and stays; `worktree.deleteOwned`
+      // is confirm-gated and no human is watching the bound view, so every
+      // surface must withhold or refuse it.
+      const { deps } = surfaceDeps("s-surface");
+      const server = createSessionServer("s-surface", deps);
+      await server.connect(makeMockTransport());
+
+      const listed = (await listTools(server)).tools.map((t) => t.name);
+      expect(listed).toContain("terminal.closeOwned");
+      expect(listed).not.toContain("worktree.deleteOwned");
+
+      const searched = payloadOf<{ results: Array<{ id: string }> }>(
+        await callTool(server, { name: "actions.search", arguments: { query: "owned" } })
+      ).results.map((r) => r.id);
+      expect(searched).toContain("terminal.closeOwned");
+      expect(searched).not.toContain("worktree.deleteOwned");
+
+      const surfaced = (
+        (await callTool(server, { name: "mcp.surface" })) as {
+          structuredContent: { tools: Array<{ id: string }> };
+        }
+      ).structuredContent.tools.map((t) => t.id);
+      expect(surfaced).toContain("terminal.closeOwned");
+      expect(surfaced).not.toContain("worktree.deleteOwned");
+
+      // `actions.getSchema` deliberately collapses a withheld id onto the same
+      // "no action found" shape an unknown id gets, rather than a distinct
+      // error that would confirm the id exists while offering no way to reach
+      // it. Agreement here means "does not hand back the schema", not "raises
+      // a different error from the other four surfaces".
+      const schema = payloadOf<{ ok: boolean; error?: { code: string }; entry: unknown }>(
+        await callTool(server, {
+          name: "actions.getSchema",
+          arguments: { actionId: "worktree.deleteOwned" },
+        })
+      );
+      expect(schema.ok).toBe(false);
+      expect(schema.error?.code).toBe("NOT_FOUND");
+      expect(schema.entry).toBeNull();
+
+      const called = await callTool(server, {
+        name: "worktree.deleteOwned",
+        arguments: { worktreeId: "/tmp/wt" },
+      });
+      expect(called.isError).toBe(true);
+    });
+
+    it("lists both tools for an unbound external session", async () => {
+      // The counterpart assertion, so the test above cannot pass merely by the
+      // tools being absent from the manifest. Scoped to `tools/list` on
+      // purpose: the four other surfaces are only interesting when something
+      // is being withheld, which is the bound case above.
+      const store = makeStore();
+      seedLiveSession(store, "s-unbound-surface", "external");
+      store.sessionOriginMap.set("s-unbound-surface", "external");
+      const manifest = [...ownedManifest(), makeManifestEntry("mcp.surface")];
+      const server = createSessionServer(
+        "s-unbound-surface",
+        fakeDeps({
+          sessionStore: store,
+          requestManifest: vi.fn().mockResolvedValue(manifest),
+          getCachedManifest: vi.fn(() => manifest),
+        })
+      );
+      await server.connect(makeMockTransport());
+
+      const listed = (await listTools(server)).tools.map((t) => t.name);
+      expect(listed).toContain("terminal.closeOwned");
+      expect(listed).toContain("worktree.deleteOwned");
+    });
+  });
+
+  describe("workspace rebinding", () => {
+    it("refuses cleanup of a resource created in a different workspace", async () => {
+      const store = makeStore();
+      seedLiveSession(store, "s-rebound", "external");
+      store.sessionOriginMap.set("s-rebound", "external");
+      store.sessionWorkspaceMap.set("s-rebound", "ws-b");
+      // Recorded while the dispatch landed on ws-a.
+      store.resourceOwnership.record("s-rebound", [{ kind: "terminal", id: "terminal-1" }], "ws-a");
+      const dispatchAction = vi.fn().mockResolvedValue({ result: { ok: true, result: null } });
+      const server = createSessionServer(
+        "s-rebound",
+        fakeDeps({
+          sessionStore: store,
+          dispatchAction,
+          workspaceBinding: { kind: "project", workspaceId: "ws-b", workspacePath: "/tmp/b" },
+          requestManifest: vi.fn().mockResolvedValue(ownedManifest()),
+          getCachedManifest: vi.fn(() => ownedManifest()),
+        })
+      );
+
+      const result = await callTool(server, {
+        name: "terminal.closeOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(errorText(result)).toContain("RESOURCE_NOT_OWNED");
+      expect(dispatchAction).not.toHaveBeenCalled();
+    });
+
+    it("allows cleanup when the creating dispatch could not resolve a workspace", async () => {
+      // The mismatch check is defence in depth over globally-unique ids, so it
+      // fails OPEN — an unresolved workspace must not strand the caller's own
+      // cleanup.
+      const store = makeStore();
+      seedLiveSession(store, "s-nows", "external");
+      store.sessionOriginMap.set("s-nows", "external");
+      store.sessionWorkspaceMap.set("s-nows", "ws-b");
+      store.resourceOwnership.record("s-nows", [{ kind: "terminal", id: "terminal-1" }]);
+      const dispatchAction = vi
+        .fn()
+        .mockResolvedValue({ result: { ok: true, result: { closedIds: ["terminal-1"] } } });
+      const server = createSessionServer(
+        "s-nows",
+        fakeDeps({
+          sessionStore: store,
+          dispatchAction,
+          requestManifest: vi.fn().mockResolvedValue(ownedManifest()),
+          getCachedManifest: vi.fn(() => ownedManifest()),
+        })
+      );
+
+      const result = await callTool(server, {
+        name: "terminal.closeOwned",
+        arguments: { terminalId: "terminal-1" },
+      });
+
+      expect(result.isError).toBeUndefined();
+      expect(dispatchAction).toHaveBeenCalledWith(
+        "terminal.close",
+        { terminalId: "terminal-1" },
+        expect.anything()
+      );
+    });
   });
 });

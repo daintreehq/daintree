@@ -18,6 +18,7 @@ const {
   mockBuildResumeCommand,
   mockBuildResumeLatestCommand,
   mockGetAssistantSupportedAgentIds,
+  mockGetAgentConfig,
   mockGetHelpAssistantSettings,
   mockSystemSleepGetMetrics,
   mockSystemSleepOnSuspend,
@@ -50,6 +51,8 @@ const {
   mockBuildResumeCommand: vi.fn(),
   mockBuildResumeLatestCommand: vi.fn(),
   mockGetAssistantSupportedAgentIds: vi.fn(() => ["claude"]),
+  // Implementation is installed in resetState() so per-test overrides can't leak.
+  mockGetAgentConfig: vi.fn(),
   mockGetHelpAssistantSettings: vi.fn().mockResolvedValue({
     docSearch: true,
     daintreeControl: true,
@@ -215,7 +218,7 @@ vi.mock("@/config/agents", () => ({
   AGENT_REGISTRY: {
     claude: { name: "Claude", iconId: "claude", color: "#000", icon: () => null },
   },
-  getAgentConfig: () => ({ name: "Claude", icon: () => null, models: [] }),
+  getAgentConfig: (id: string) => mockGetAgentConfig(id),
   getAssistantSupportedAgentIds: () => mockGetAssistantSupportedAgentIds(),
   getAgentIds: () => ["claude"],
 }));
@@ -300,11 +303,22 @@ vi.mock("@/store", () => {
 // Mocked at its leaf path, mirroring the component's import (#11068). The panel
 // pulls `useScratchStore` from `@/store/scratchStore` rather than the `@/store`
 // barrel precisely so barrel-mocking suites like this one don't have to list it.
+// Focus mode parks the assistant off-canvas without closing it, so the panel's
+// report has to be able to say "open but not on screen".
+const focusStoreState = { gestureAssistantHidden: false };
+
 vi.mock("@/store/scratchStore", () => {
   const store = (selector?: (state: typeof scratchStoreState) => unknown) =>
     selector ? selector(scratchStoreState) : scratchStoreState;
   store.getState = () => scratchStoreState;
   return { useScratchStore: store };
+});
+
+vi.mock("@/store/focusStore", () => {
+  const store = (selector?: (s: typeof focusStoreState) => unknown) =>
+    selector ? selector(focusStoreState) : focusStoreState;
+  store.getState = () => focusStoreState;
+  return { useFocusStore: store };
 });
 
 vi.mock("@/store/macroFocusStore", () => {
@@ -386,6 +400,26 @@ async function flushAsyncWork() {
   });
 }
 
+// Per-agent icon stand-ins for the empty-state CTA coverage. `getAgentConfig`
+// hands back a fresh config object on every call, so the icon *component*
+// reference is what has to stay stable — minting one per lookup would remount
+// the glyph each render. `data-agent-icon` is a test-only handle rather than a
+// copy of any production name, and `data-brand-color` records whether the CTA
+// wrapped in BrandMark (it must not: the glyph inherits the button foreground).
+function makeAgentIconStub(agentId: string) {
+  return function AgentIconStub({ style }: { style?: React.CSSProperties }) {
+    const ink = (style as Record<string, string> | undefined)?.["--brand-mark-rest"];
+    return <svg data-agent-icon={agentId} data-brand-color={ink ?? "inherit"} />;
+  };
+}
+const CLAUDE_ICON_STUB = makeAgentIconStub("claude");
+const CODEX_ICON_STUB = makeAgentIconStub("codex");
+const NULL_ICON_STUB = () => null;
+
+function agentIconMarkerIn(container: Element | null): string | null {
+  return container?.querySelector("[data-agent-icon]")?.getAttribute("data-agent-icon") ?? null;
+}
+
 function resetState() {
   helpPanelState.isOpen = true;
   helpPanelState.width = 380;
@@ -439,6 +473,7 @@ function resetState() {
   mockRestorePendingHibernation.mockResolvedValue(false);
   mockReportPanelOpen.mockReset();
   mockReportPanelOpen.mockResolvedValue(undefined);
+  focusStoreState.gestureAssistantHidden = false;
   mockProvisionSession.mockReset();
   mockProvisionSession.mockResolvedValue(null);
   mockRevokeSession.mockReset();
@@ -452,6 +487,14 @@ function resetState() {
   mockBuildResumeLatestCommand.mockReset();
   mockGetAssistantSupportedAgentIds.mockReset();
   mockGetAssistantSupportedAgentIds.mockReturnValue(["claude"]);
+  // Any-id-resolves-to-Claude with a glyph that renders nothing: the pre-#11834
+  // default, so the suite's other cases see exactly what they always did.
+  mockGetAgentConfig.mockReset();
+  mockGetAgentConfig.mockImplementation(() => ({
+    name: "Claude",
+    icon: NULL_ICON_STUB,
+    models: [],
+  }));
   mockGetHelpAssistantSettings.mockReset();
   mockGetHelpAssistantSettings.mockResolvedValue({
     docSearch: true,
@@ -899,6 +942,101 @@ describe("HelpPanel — Resume affordance for eviction-captured sessions", () =>
   });
 });
 
+describe("HelpPanel — empty-state CTA wears the launching agent's mark (#11834)", () => {
+  // A generic glyph on both CTAs said nothing about what was about to start.
+  // Each button now carries the mark of the agent it would actually launch,
+  // and the two buttons read different ids — Start follows the launch
+  // preference, Resume follows whichever agent's conversation was captured.
+  it("Start assistant wears the mark of the agent it would launch", async () => {
+    helpPanelState.autoLaunchEnabled = false; // default user — empty state stays visible
+    helpPanelState.preferredAgentId = "codex";
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+    mockGetAgentConfig.mockImplementation((id: string) =>
+      id === "codex" ? { name: "Codex", icon: CODEX_ICON_STUB, models: [] } : undefined
+    );
+
+    const { findByTestId } = await act(async () => render(<HelpPanel width={380} />));
+    const startButton = await findByTestId("help-start-assistant");
+
+    expect(agentIconMarkerIn(startButton)).toBe("codex");
+    // No resolved ink reaches the glyph, so it inherits the button's own
+    // foreground instead of painting itself the agent's brand hue.
+    expect(startButton.querySelector("[data-agent-icon]")?.getAttribute("data-brand-color")).toBe(
+      "inherit"
+    );
+  });
+
+  it("Resume assistant wears the captured agent's mark, not the launch preference's", async () => {
+    helpPanelState.autoLaunchEnabled = false;
+    // The preference points at codex while the stranded conversation belongs to
+    // claude. Resume relaunches the captured agent, so it must promise claude —
+    // this is what proves the two CTAs read different ids rather than sharing one.
+    helpPanelState.preferredAgentId = "codex";
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+    mockBuildResumeLatestCommand.mockReturnValue("claude resume --last");
+    mockPeekPendingHibernation.mockResolvedValue({
+      agentId: "claude",
+      agentSessionId: "abc-123",
+      cwd: "/tmp/help/proj-1",
+    });
+    mockGetAgentConfig.mockImplementation((id: string) => {
+      if (id === "claude") return { name: "Claude", icon: CLAUDE_ICON_STUB, models: [] };
+      if (id === "codex") return { name: "Codex", icon: CODEX_ICON_STUB, models: [] };
+      return undefined;
+    });
+
+    const { findByTestId } = await act(async () => render(<HelpPanel width={380} />));
+    const resumeButton = await findByTestId("help-resume-assistant");
+
+    expect(agentIconMarkerIn(resumeButton)).toBe("claude");
+  });
+
+  it("infers the mark from the sole supported agent when no preference is set", async () => {
+    helpPanelState.autoLaunchEnabled = false;
+    // No stored preference, so the launch target is inferred from the single
+    // installed supported backend. The mark has to follow that inference rather
+    // than reading the (absent) preference straight off the store.
+    helpPanelState.preferredAgentId = null;
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+    mockGetAgentConfig.mockImplementation((id: string) =>
+      id === "claude" ? { name: "Claude", icon: CLAUDE_ICON_STUB, models: [] } : undefined
+    );
+
+    const { findByTestId } = await act(async () => render(<HelpPanel width={380} />));
+
+    expect(agentIconMarkerIn(await findByTestId("help-start-assistant"))).toBe("claude");
+  });
+
+  it("swaps back to a generic mark when the launchable agent's config disappears", async () => {
+    helpPanelState.autoLaunchEnabled = false;
+    helpPanelState.preferredAgentId = "codex";
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+    // Flipped between renders rather than via mockImplementationOnce: the config
+    // is resolved more than once per render, so a one-shot override would fall
+    // through mid-render and prove nothing.
+    let codexConfigResolves = true;
+    mockGetAgentConfig.mockImplementation((id: string) =>
+      id === "codex" && codexConfigResolves
+        ? { name: "Codex", icon: CODEX_ICON_STUB, models: [] }
+        : undefined
+    );
+
+    const { findByTestId, rerender } = await act(async () => render(<HelpPanel width={380} />));
+    expect(agentIconMarkerIn(await findByTestId("help-start-assistant"))).toBe("codex");
+
+    // The id now outlives its registry entry. The CTA has to keep a glyph rather
+    // than leave an empty slot beside its label.
+    codexConfigResolves = false;
+    await act(async () => {
+      rerender(<HelpPanel width={380} />);
+    });
+    const startButton = await findByTestId("help-start-assistant");
+
+    expect(agentIconMarkerIn(startButton)).toBeNull();
+    expect(startButton.querySelector("svg")).toBeTruthy();
+  });
+});
+
 describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
   it("reports the panel open-state to main for the current project", async () => {
     helpPanelState.isOpen = true;
@@ -908,7 +1046,7 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
       render(<HelpPanel width={380} />);
     });
 
-    expect(mockReportPanelOpen).toHaveBeenCalledWith("proj-1", true);
+    expect(mockReportPanelOpen).toHaveBeenCalledWith("proj-1", true, true);
   });
 
   it("auto-opens and resumes the captured session WITHOUT recording consent on cold restore", async () => {
@@ -1262,7 +1400,11 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
 
     expect(mockPeekPendingHibernation).toHaveBeenCalledWith("scratch-1");
     expect(mockTakePendingHibernation).toHaveBeenCalledWith("scratch-1");
-    expect(mockReportPanelOpen).toHaveBeenCalledWith("scratch-1", expect.any(Boolean));
+    expect(mockReportPanelOpen).toHaveBeenCalledWith(
+      "scratch-1",
+      expect.any(Boolean),
+      expect.any(Boolean)
+    );
     // Provisioning treats the scratch as the workspace — same opaque id/path.
     expect(mockProvisionSession).toHaveBeenCalledWith(
       expect.objectContaining({
@@ -1437,6 +1579,23 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
     );
   });
 
+  it("reports an open-but-parked panel as not visible", async () => {
+    // Focus mode slides the assistant off-canvas and deliberately leaves
+    // `isOpen` true so exiting the gesture can bring it back. The two facts go
+    // to main separately: the open flag still drives cold-resume, while the
+    // project tallies read visibility and must stop reporting an assistant
+    // nobody can see.
+    helpPanelState.isOpen = true;
+    focusStoreState.gestureAssistantHidden = true;
+    projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
+
+    await act(async () => {
+      render(<HelpPanel width={380} />);
+    });
+
+    expect(mockReportPanelOpen).toHaveBeenCalledWith("proj-1", true, false);
+  });
+
   it("reports the panel closed to main when isOpen transitions to false", async () => {
     helpPanelState.isOpen = true;
     projectStoreState.currentProject = { id: "proj-1", path: "/tmp/proj-1" };
@@ -1445,7 +1604,7 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
     await act(async () => {
       view = render(<HelpPanel width={380} />);
     });
-    expect(mockReportPanelOpen).toHaveBeenCalledWith("proj-1", true);
+    expect(mockReportPanelOpen).toHaveBeenCalledWith("proj-1", true, true);
 
     // User closes the panel — main must learn so a later eviction does not
     // stamp panelWasOpen:true and auto-resume an assistant the user dismissed.
@@ -1453,7 +1612,7 @@ describe("HelpPanel — cold switch-back auto-resume (#10815)", () => {
     await act(async () => {
       view!.rerender(<HelpPanel width={380} />);
     });
-    expect(mockReportPanelOpen).toHaveBeenCalledWith("proj-1", false);
+    expect(mockReportPanelOpen).toHaveBeenCalledWith("proj-1", false, false);
   });
 });
 

@@ -45,10 +45,12 @@ const fixture = vi.hoisted(() => {
     panelState: {
       panelsById: Object.fromEntries(dockPanels.map((panel) => [panel.id, panel])),
       panelIds: dockPanels.map((panel) => panel.id),
+      // The rail reads the worktree index alongside `panelIds` so a panel
+      // committed mid-spawn-batch still paints (#9649). These fixtures are all
+      // worktree-less, so they live in the `__none__` bucket.
+      panelIdsByWorktreeId: { __none__: dockPanels.map((panel) => panel.id) },
       trashedTerminals: new Map<string, never>(),
       tabGroups: new Map<string, never>(),
-      getTabGroups: () => [],
-      getTabGroupPanels: () => [],
     },
     // Returning children needs no JSX, which keeps this usable from vi.hoisted.
     passthrough: ({ children }: { children?: React.ReactNode }) => children,

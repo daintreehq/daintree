@@ -39,7 +39,7 @@ export function registerWorkflowCreationActions(
       id: "worktree.createWithRecipe",
       title: "Create Worktree with Recipe",
       description:
-        "Create a git worktree with its branch, optionally tracking a pull request, and optionally launch a recipe's terminals in it. This is the heavy composite path: it writes to disk, may check out a remote branch, and may start several processes. Create the worktree alone when no terminals are wanted. Partial failure is possible — the worktree can exist while its recipe did not fully start.",
+        "Create a git worktree with its branch, optionally tracking a pull request, and optionally launch a recipe's terminals in it. This is the heavy composite path: it writes to disk, may check out a remote branch, and may start several processes. Create the worktree alone when neither is wanted. Partial failure is possible: the worktree can exist while its recipe did not fully start.",
       category: "worktree",
       kind: "command",
       danger: "safe",
@@ -106,6 +106,15 @@ export function registerWorkflowCreationActions(
         branch: z.string(),
         recipeLaunched: z.boolean(),
         spawnedTerminalCount: z.number().int().nonnegative(),
+        // The composite's child panels, by id. Without these the terminals this
+        // call created are indistinguishable from every other panel in the
+        // view, so neither the caller nor the MCP ownership ledger can act on
+        // them (#11909).
+        spawnedTerminalIds: z
+          .array(z.string())
+          .describe(
+            "The recipe panels this call actually started, in spawn order. Use these ids to read output from or close the terminals it created."
+          ),
         failedTerminalCount: z.number().int().nonnegative(),
         assignedToSelf: z.boolean(),
         assignedUsername: z.string().nullable(),
@@ -140,11 +149,13 @@ export function registerWorkflowCreationActions(
 
         const rootPath = currentProject.path;
 
-        // Spawning recipe terminals is gated behind recipe.run (danger:"confirm"),
-        // which ActionService hard-blocks for plugin sources. Reject the same
-        // effect here — before any IPC — so plugins can't bypass that gate by
-        // passing a recipeId to an otherwise-safe worktree action. Agent/user
-        // sources are unaffected.
+        // Plugins have no confirm bypass at all, so this stays a hard rejection
+        // rather than a confirmation: there is no surface on which a plugin
+        // dispatch could be approved. Agent dispatch is NOT rejected here — it
+        // is elevated to an effective confirm tier in ActionService before
+        // `run()` is ever entered (`resolveEffectiveActionDanger`, #11860), so
+        // by the time this line runs an agent caller has already been approved.
+        // User dispatch is unaffected.
         if (recipeId && ctx.dispatchSource === "plugin") {
           throw new Error(
             "Plugins cannot spawn recipe terminals through worktree creation. Dispatch recipe.run instead."
@@ -224,6 +235,7 @@ export function registerWorkflowCreationActions(
 
         let recipeLaunched = false;
         let spawnedTerminalCount = 0;
+        let spawnedTerminalIds: string[] = [];
         let failedTerminalCount = 0;
         if (recipeId) {
           try {
@@ -248,6 +260,7 @@ export function registerWorkflowCreationActions(
             // report success to agent callers.
             recipeLaunched = results.spawned.length > 0;
             spawnedTerminalCount = results.spawned.length;
+            spawnedTerminalIds = results.spawned.map((s) => s.terminalId);
             failedTerminalCount = results.failed.length;
             notifyRecipeSpawnFailures(results, {
               recipeName: useRecipeStore.getState().getRecipeById(recipeId)?.name,
@@ -262,6 +275,7 @@ export function registerWorkflowCreationActions(
                 branch: effectiveBranch,
                 recipeLaunched: false,
                 spawnedTerminalCount: 0,
+                spawnedTerminalIds: [],
                 failedTerminalCount: 0,
                 assignedToSelf: false,
                 assignedUsername: null,
@@ -311,6 +325,7 @@ export function registerWorkflowCreationActions(
           branch: effectiveBranch,
           recipeLaunched,
           spawnedTerminalCount,
+          spawnedTerminalIds,
           failedTerminalCount,
           assignedToSelf,
           assignedUsername,
@@ -405,11 +420,13 @@ export function registerWorkflowCreationActions(
           throw new Error("No active project");
         }
 
-        // Spawning recipe terminals is gated behind recipe.run (danger:"confirm"),
-        // which ActionService hard-blocks for plugin sources. Reject the same
-        // effect here — before any IPC — so plugins can't bypass that gate by
-        // passing a recipeId to an otherwise-safe worktree action. Agent/user
-        // sources are unaffected.
+        // Plugins have no confirm bypass at all, so this stays a hard rejection
+        // rather than a confirmation: there is no surface on which a plugin
+        // dispatch could be approved. Agent dispatch is NOT rejected here — it
+        // is elevated to an effective confirm tier in ActionService before
+        // `run()` is ever entered (`resolveEffectiveActionDanger`, #11860), so
+        // by the time this line runs an agent caller has already been approved.
+        // User dispatch is unaffected.
         if (recipeId && ctx.dispatchSource === "plugin") {
           throw new Error(
             "Plugins cannot spawn recipe terminals through worktree creation. Dispatch recipe.run instead."

@@ -1762,6 +1762,34 @@ describe("buildArgsForNonPtyRecreation", () => {
     expect(result.browserSidebarWidth).toBe(360);
   });
 
+  it("restores a persisted file-browser to the dock it was left in (#11917)", () => {
+    // A combination that could not exist before the kind became dockable, and
+    // the rescue below is keyed on `panelKindIsDockable` — so a regression on
+    // the registry flag resurfaces here as a panel silently reappearing in the
+    // grid, with the layout state intact and the placement wrong.
+    const result = buildArgsForNonPtyRecreation(
+      {
+        id: "fb-dock",
+        kind: "file-browser",
+        title: "Files — develop",
+        location: "dock",
+        worktreeId: "wt-1",
+        browserRootPath: "src",
+        browserExpandedPaths: ["src", "src/components"],
+      },
+      "file-browser",
+      "/project",
+      "wt-active"
+    );
+
+    expect(result.location).toBe("dock");
+    // The rescue's worktree adoption is for panels it pulls back to the grid;
+    // a kept dock placement must not have its attribution rewritten.
+    expect(result.worktreeId).toBe("wt-1");
+    expect(result.browserRootPath).toBe("src");
+    expect(result.browserExpandedPaths).toEqual(["src", "src/components"]);
+  });
+
   it("falls back to projectRoot when a non-PTY saved cwd is relative", () => {
     const result = buildArgsForNonPtyRecreation(
       {
@@ -2893,7 +2921,7 @@ describe("adversarial: behavioral overrides flow through to generateAgentCommand
 // ── adversarial: agentPresetColor must be restored on respawn ─────────────────
 // Bug: buildArgsForRespawn looks up the preset (which has a color field) but
 // never writes agentPresetColor into the returned AddTerminalArgs object.
-// After an Electron reload, the dock icon loses its preset tint and falls back
+// After an Electron reload, the dock icon loses its preset-derived mark ink and falls back
 // to the default brand color instead of the preset color.
 
 describe("adversarial: agentPresetColor must be carried through buildArgsForRespawn", () => {

@@ -3,7 +3,7 @@ import os from "os";
 import { app } from "electron";
 import { store } from "../store.js";
 import { projectStore } from "./ProjectStore.js";
-import { TerminalSnapshotSchema, filterValidTerminalEntries } from "../schemas/ipc.js";
+import { filterRestorableTerminalSnapshots } from "./projectStateRestore.js";
 import { getGpuFeatureStatus, isWebGLHardwareAccelerated } from "../utils/gpuDetection.js";
 import { isRunningUnderRosetta } from "../utils/rosettaDetection.js";
 import { isGpuDisabledByFlag, isGpuAngleFallbackApplied } from "./GpuCrashMonitorService.js";
@@ -73,18 +73,14 @@ export async function buildSwitchHydrateResult(projectId: string): Promise<Hydra
   }
 
   if (projectState?.terminals !== undefined) {
-    const validatedTerminals = filterValidTerminalEntries(
+    terminalsToUse = filterRestorableTerminalSnapshots(
       projectState.terminals,
-      TerminalSnapshotSchema,
       `switch-hydrate(project:${projectId})`
-    );
-    terminalsToUse = validatedTerminals
-      .filter((t) => t.location !== "trash")
-      .map((t) => ({
-        ...t,
-        kind: inferKind(t),
-        location: t.location as "grid" | "dock",
-      }));
+    ).map((t) => ({
+      ...t,
+      kind: inferKind(t),
+      location: t.location as "grid" | "dock",
+    }));
 
     if (projectState.activeWorktreeId !== undefined) {
       activeWorktreeIdToUse = projectState.activeWorktreeId;

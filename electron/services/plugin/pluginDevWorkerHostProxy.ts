@@ -35,6 +35,7 @@ import type {
   PluginGitStatus,
   PluginGitCommitResult,
   PluginProcessHandle,
+  PluginDuplexProcessHandle,
   PluginPtyProcessHandle,
   PluginProcessDataChunk,
   PluginProcessMode,
@@ -640,7 +641,9 @@ export class PluginDevWorkerHostProxy {
             "process.spawn",
             { command, options }
           );
-          return this.buildProcessHandle(id, mode === "pty");
+          // A host that somehow omits the mode is treated as pipe — the least
+          // capable shape, so a missing field can never manufacture a `write`.
+          return this.buildProcessHandle(id, mode ?? "pipe");
         }) as PluginHostApi["process"]["spawn"],
       },
       // host.fs request/response methods are fully async, so they relay over the
@@ -795,7 +798,7 @@ export class PluginDevWorkerHostProxy {
    * comes from the host's reported mode, so `write`/`resize` exist only when
    * there is a real PTY behind them.
    */
-  private buildProcessHandle(id: string, interactive: boolean): PluginProcessHandle {
+  private buildProcessHandle(id: string, mode: PluginProcessMode): PluginProcessHandle {
     const subscribeLifecycle = (
       kind: "process-exit" | "process-crash",
       callback: (info: { exitCode: number | null; signal: string | null }) => void
@@ -824,11 +827,15 @@ export class PluginDevWorkerHostProxy {
           (payload) => callback(payload as PluginProcessDataChunk)
         ),
     };
-    if (!interactive) return base;
-    const ptyHandle: PluginPtyProcessHandle = {
+    if (mode === "pipe") return base;
+    // Void in the public contract, like `kill` — fire-and-forget over the port.
+    const writableHandle: PluginDuplexProcessHandle = {
       ...base,
-      // Void in the public contract, like `kill` — fire-and-forget over the port.
       write: (data) => this.notify("process.write", { processId: id, data }),
+    };
+    if (mode === "duplex") return writableHandle;
+    const ptyHandle: PluginPtyProcessHandle = {
+      ...writableHandle,
       resize: (cols, rows) => this.notify("process.resize", { processId: id, cols, rows }),
     };
     return ptyHandle;

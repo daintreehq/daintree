@@ -181,7 +181,7 @@ const PERMISSIVE_ALLOWLIST: ReadonlyArray<{ actionId: string; pointer: string; r
   // --- self-describing -----------------------------------------------------
   {
     actionId: "actions.getSchema",
-    pointer: "/anyOf/0/properties/entry",
+    pointer: "/properties/entry/anyOf/0/additionalProperties",
     reason: "self-describing: an action manifest entry, whose own field is a JSON Schema",
   },
   {

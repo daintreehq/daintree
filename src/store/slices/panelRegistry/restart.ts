@@ -29,13 +29,13 @@ import { getAgentConfig } from "@/config/agents";
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
-import { isPtyPanel, type PanelInstance } from "@shared/types/panel";
+import { isPtyPanel, type PanelInstance, type PanelTitleMode } from "@shared/types/panel";
 import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
 import { computeEnvProvenance } from "@shared/utils/agentLifecycleLedger";
 import { markTerminalRestarting, unmarkTerminalRestarting } from "@/store/restartExitSuppression";
 import { saveNormalized } from "./persistence";
 import { optimizeForDock } from "./layout";
-import { deriveRuntimeStatus } from "./helpers";
+import { deriveRuntimeStatus, recordExplicitWorktreeAttribution } from "./helpers";
 import { cancelReconnectErrorDebounce } from "./browser";
 import { logDebug, logWarn, logError } from "@/utils/logger";
 import {
@@ -65,7 +65,22 @@ async function resolveProjectStore() {
 type Set = PanelRegistryStoreApi["setState"];
 type Get = PanelRegistryStoreApi["getState"];
 
-const INJECTION_TIMEOUT_MS = 30_000;
+/**
+ * The panel's title as of the spawn call rather than as of the capture several
+ * awaits earlier. Renaming stays enabled while a terminal restarts, so a rename
+ * landing mid-restart would otherwise be overwritten by the respawn, and the
+ * pty-host cache rewrite cannot save it — the kill already dropped that entry
+ * (#11830). Falls back to the captured panel if this one has since gone.
+ */
+function titleAtSpawn(
+  get: Get,
+  id: string,
+  captured: { title: string; titleMode?: PanelTitleMode }
+): { title: string; titleMode?: PanelTitleMode } {
+  const panel = get().panelsById[id];
+  const source = panel && isPtyPanel(panel) ? panel : captured;
+  return { title: source.title, titleMode: source.titleMode };
+}
 
 interface LoadedAgentRuntimeSettings {
   entry: AgentSettingsEntry;
@@ -116,39 +131,6 @@ async function buildRestartEnv(
   return mergeSpawnEnv(globalEnv, projectEnv, runtimeEnv);
 }
 
-function scheduleHistoryInjection(id: string, history: string, worktreePath: string): void {
-  const prompt = [
-    "Here is the conversation history from your previous session in a different worktree:\n",
-    "<previous-session-history>",
-    history,
-    "</previous-session-history>\n",
-    `You have been moved to a new git worktree at ${worktreePath}. Continue where you left off.`,
-  ].join("\n");
-
-  let injected = false;
-  let unsub: () => void = () => {};
-
-  const inject = () => {
-    if (injected) return;
-    injected = true;
-    unsub();
-    terminalClient.submit(id, prompt).catch((err) => {
-      logWarn("[TerminalStore] Failed to inject history prompt", { error: err });
-    });
-  };
-
-  const timeout = setTimeout(() => {
-    inject();
-  }, INJECTION_TIMEOUT_MS);
-
-  unsub = terminalInstanceService.addAgentStateListener(id, (state: AgentState) => {
-    if (state === "idle" || state === "waiting") {
-      clearTimeout(timeout);
-      inject();
-    }
-  });
-}
-
 // Helper to update a single terminal field in the normalized store
 function updateTerminal(
   state: PanelRegistrySlice,
@@ -169,7 +151,8 @@ export const createRestartActions = (
   | "clearTerminalError"
   | "updateTerminalCwd"
   | "moveTerminalToWorktree"
-  | "moveToNewWorktreeAndTransfer"
+  | "moveToNewWorktree"
+  | "setWorktreeMoveNotice"
   | "updateFlowStatus"
   | "setRuntimeStatus"
   | "setInputLocked"
@@ -670,12 +653,11 @@ export const createRestartActions = (
         //     (detected), so a pane whose detected identity diverged from its
         //     launch identity (e.g. a Claude pane hosting a hand-started
         //     Codex) would otherwise build `claude --resume <codex-id>`.
-        //   - fresh intent: `allowResumeLatest: false` (the worktree-move
-        //     flow) discards the capture too — it re-seeds context by
-        //     injecting the old buffer, and resuming would make that
-        //     injection land in an already-loaded conversation. A stored id
-        //     still resumes in that case (pre-existing contract the
-        //     update-cwd flow relies on).
+        //   - fresh intent: `allowResumeLatest: false` (the update-cwd flow)
+        //     discards the capture too — the directory under the panel has
+        //     changed, and resuming a session scoped to the old one would mask
+        //     that. A stored id still resumes in that case (pre-existing
+        //     contract the update-cwd flow relies on).
         const captureTrusted =
           allowResumeLatest &&
           (currentTerminal.detectedAgentId === undefined ||
@@ -811,10 +793,9 @@ export const createRestartActions = (
         // IPC handler does not treat them as agent spawns (issue #5764).
         kind: "terminal",
         launchAgentId: isAgent ? currentTerminal.launchAgentId : undefined,
-        title: currentTerminal.title,
         // Keep the ownership rung across restart so the backend's own
         // default-title rewrites stay gated for pinned/user titles.
-        titleMode: currentTerminal.titleMode,
+        ...titleAtSpawn(get, id, currentTerminal),
         command: isAgent ? spawnCommand : undefined,
         restore: false,
         env: restartEnv,
@@ -954,11 +935,13 @@ export const createRestartActions = (
     let movedToLocation: PanelLocation | null = null;
 
     // A user-initiated move is explicit worktree attribution — recorded so
-    // later cwd-based inference can never silently overwrite it.
-    const ledgerGeneration = agentLifecycleLedger.currentGeneration(id);
-    if (ledgerGeneration !== undefined) {
-      agentLifecycleLedger.recordWorktreeAttribution(id, ledgerGeneration, worktreeId, "explicit");
-    }
+    // later cwd-based inference can never silently overwrite it. Still
+    // "explicit" even when the user knowingly kept the process where it is
+    // (#11840): the filing was deliberate, and letting inference re-home the
+    // panel back to its launch root would undo that choice silently. The
+    // divergence it creates is corrected by the recorded opt-out and its HEAD
+    // backstop, which are visible, rather than by an invisible re-attribution.
+    recordExplicitWorktreeAttribution(id, worktreeId);
 
     set((state) => {
       // Scrollable grid (#8805): restoring a panel always lands it in the
@@ -1004,87 +987,45 @@ export const createRestartActions = (
     terminalInstanceService.applyRendererPolicy(id, TerminalRefreshTier.VISIBLE);
   },
 
-  moveToNewWorktreeAndTransfer: (id) => {
+  // No transfer, no capture, no restart: creating the worktree and filing the
+  // panel under it is the whole gesture (#11853). Routed through the same
+  // choke point as every other cross-worktree move so the create path cannot
+  // drift from the drag paths — that is also what raises the pane's banner.
+  moveToNewWorktree: (id) => {
     const terminal = get().panelsById[id];
     if (!terminal || terminal.location === "trash") return;
     if (!isPtyPanel(terminal)) return;
+    // A restart captures its spawn cwd before awaiting teardown, so a move
+    // landing inside that window would file the panel under a worktree the
+    // in-flight process is not going to start in.
     if (terminal.isRestarting) return;
 
-    // Determine if this is an agent terminal before any async work
-    const effectiveAgentId = terminal.launchAgentId;
-    const isAgent = !!effectiveAgentId;
-
-    // Capture the terminal buffer BEFORE any teardown (xterm instance is still alive)
-    const capturedHistory = isAgent ? terminalInstanceService.captureBufferText(id, 20000) : "";
-
-    void import("@/store/worktreeStore")
-      .then(({ useWorktreeSelectionStore }) => {
+    void Promise.all([
+      import("@/store/worktreeStore"),
+      import("@/services/terminal/crossWorktreeMove"),
+    ])
+      .then(([{ useWorktreeSelectionStore }, { moveTerminalToWorktreeAndFollowRescue }]) => {
         useWorktreeSelectionStore.getState().openCreateDialog(null, {
-          onCreated: async (worktreeId) => {
-            let newCwd = terminal.cwd;
+          onCreated: (worktreeId) => {
+            // Revalidated, not trusted: the dialog stays open for as long as
+            // the user takes, and moving a panel that was trashed meanwhile
+            // would file it back onto the grid.
+            const current = get().panelsById[id];
+            if (!current || current.location === "trash" || !isPtyPanel(current)) return;
+            if (current.isRestarting) return;
+            // Isolated from the dialog's own creation transaction: `onCreated`
+            // runs inside it, so a throw here would surface as "Couldn't create
+            // worktree" for a worktree that was created successfully.
             try {
-              const { worktreeClient } = await import("@/clients");
-              const worktrees = await worktreeClient.getAll();
-              const newWorktree = worktrees.find((w) => w.id === worktreeId);
-              newCwd = newWorktree?.path ?? terminal.cwd;
-
-              // Update cwd, worktreeId, and clear agentSessionId so restartTerminal
-              // spawns fresh instead of attempting a broken session resume
-              set((state) => {
-                const t = state.panelsById[id];
-                if (!t) return state;
-                const newById = {
-                  ...state.panelsById,
-                  [id]: {
-                    ...t,
-                    cwd: newCwd,
-                    worktreeId,
-                    agentSessionId: undefined,
-                    restartError: undefined,
-                  },
-                };
-                const newIndex = transferBetweenWorktreeIndex(
-                  state.panelIdsByWorktreeId,
-                  t.worktreeId,
-                  worktreeId,
-                  id
-                );
-                return { panelsById: newById, panelIdsByWorktreeId: newIndex };
-              });
-
-              // Suppress resume-latest: the CWD has changed; we want a fresh
-              // launch + buffer-injected context, not a stale CWD-scoped session.
-              await get().restartTerminal(id, { allowResumeLatest: false });
-
-              // After restart, inject captured history as a first prompt for agent terminals
-              const restarted = get().panelsById[id];
-              const restartedPty = restarted && isPtyPanel(restarted) ? restarted : undefined;
-              if (isAgent && capturedHistory.trim().length > 0 && !restartedPty?.restartError) {
-                scheduleHistoryInjection(id, capturedHistory, newCwd ?? "");
-              }
-            } catch (err) {
-              logError("[TerminalStore] moveToNewWorktreeAndTransfer failed", err);
-              set((state) =>
-                updateTerminal(state, id, (t) => ({
-                  ...t,
-                  isRestarting: false,
-                  restartError: {
-                    message: formatErrorMessage(err, "Failed to move terminal to new worktree"),
-                    timestamp: Date.now(),
-                    recoverable: false,
-                    context: {
-                      failedCwd: newCwd,
-                      phase: "move-to-new-worktree",
-                    },
-                  },
-                }))
-              );
+              moveTerminalToWorktreeAndFollowRescue(id, worktreeId);
+            } catch (error) {
+              logError("[TerminalStore] Failed to move the panel to the new worktree", error);
             }
           },
         });
       })
       .catch((err) => {
-        logError("[TerminalStore] Failed to load worktreeStore", err);
+        logError("[TerminalStore] Failed to open the create-worktree dialog", err);
       });
   },
 
@@ -1123,6 +1064,36 @@ export const createRestartActions = (
         panelsById: {
           ...state.panelsById,
           [id]: { ...terminal, runtimeStatus: status },
+        },
+      };
+    });
+  },
+
+  // Never `saveNormalized`, unlike the consent record this replaces: the notice
+  // is a prompt to act on now, so it must not come back after a quit. Living in
+  // `panelsById` is still what makes it survive the unmount a worktree switch
+  // causes — the same split `sessionLostOnRestore` makes (#11589).
+  setWorktreeMoveNotice: (id, notice) => {
+    set((state) => {
+      const terminal = state.panelsById[id];
+      if (!terminal || !isPtyPanel(terminal)) return state;
+      // Clearing an already-clear notice, or re-raising the same destination in
+      // the same delivery state, keeps the same state object so repeat writes
+      // don't wake subscribers. `deliveryFailed` has to be part of that
+      // comparison: marking an existing notice as failed changes nothing else
+      // about it, so a destination-only check would silently drop the write
+      // (#11867). Normalized because absent and `false` mean the same thing.
+      const current = terminal.worktreeMoveNotice;
+      if (
+        current?.destinationWorktreeId === notice?.destinationWorktreeId &&
+        (current?.deliveryFailed ?? false) === (notice?.deliveryFailed ?? false)
+      ) {
+        return state;
+      }
+      return {
+        panelsById: {
+          ...state.panelsById,
+          [id]: { ...terminal, worktreeMoveNotice: notice },
         },
       };
     });
@@ -1341,7 +1312,10 @@ export const createRestartActions = (
         rows: spawnRows,
         kind: "terminal",
         launchAgentId: terminal.launchAgentId,
-        title: terminal.title,
+        // Carried with the title, never without it: a title that arrives
+        // unaccompanied re-stamps as "default" and the next detection sweep
+        // overwrites the user's rename (#10794).
+        ...titleAtSpawn(get, id, terminal),
         command: commandToRun,
         restore: false,
         env: restartEnv,

@@ -24,10 +24,13 @@ import { store } from "../store.js";
 import { getSharedDb } from "./persistence/db.js";
 import {
   projects as projectsTable,
+  scratches as scratchesTable,
   appState as appStateTable,
   type ProjectRow,
 } from "./persistence/schema.js";
-import { eq, desc } from "drizzle-orm";
+import { eq, desc, and, isNull, ne, or, sql } from "drizzle-orm";
+import { countResumableAgentPanels } from "./projectStateRestore.js";
+import { isProjectWorkspaceId, isScratchWorkspaceId } from "../../shared/utils/workspaceIds.js";
 import {
   generateProjectId,
   mintProjectId,
@@ -144,6 +147,11 @@ function rowToProject(row: ProjectRow): Project {
   if (typeof row.lastCompletionSeenAt === "number")
     project.lastCompletionSeenAt = row.lastCompletionSeenAt;
   if (typeof row.autoParkedAt === "number") project.autoParkedAt = row.autoParkedAt;
+  // Read through the same validator as the stats counts, so a corrupt row
+  // holding `-1` or `1.5` reads as unknown rather than as a claim. Absence is
+  // carried by leaving the field off entirely (#11801).
+  const resumableAgentCount = readPersistedCount(row.resumableAgentCount);
+  if (resumableAgentCount !== null) project.resumableAgentCount = resumableAgentCount;
   // Only `false` is carried: null means git-backed, and so does absence.
   if (row.gitBacked === false) project.gitBacked = false;
   const lastKnownStats = rowToRepoStats(row);
@@ -194,6 +202,133 @@ export class ProjectStore {
     this.fileStore = new ProjectFileStore(this.projectsConfigDir);
     this.globalFileStore = new GlobalFileStore(this.globalConfigDir);
     this.identityFiles = new ProjectIdentityFiles();
+    // Every write of the terminals array recomputes the switcher's resume count
+    // (#11801), so the number a dormant row carries is whatever its last save
+    // actually persisted rather than whatever was true when it was last opened.
+    // The slot holds one observer, and scratch state comes through this same
+    // manager — so this one routes both kinds by id shape (#11821) rather than
+    // a second observer replacing this one.
+    this.stateManager.setStatePersistedObserver((workspaceId, state) =>
+      this.persistResumableAgentCount(workspaceId, state)
+    );
+  }
+
+  /**
+   * Write the derived resume count for a workspace whose state just landed.
+   *
+   * One observer serves both kinds because one state manager does: scratches
+   * persist their panel grid under the same `projects/<id>/` layout (#11484), so
+   * every scratch save arrives here too. The id's shape says which table owns
+   * the row (#11821) — `workspaceIds` is the authority, and asking a store
+   * "is this id a scratch?" would instead answer whether that store had
+   * finished hydrating. An id of neither shape belongs to no table and writes
+   * nothing.
+   *
+   * Derived metadata, so it never throws into the write path: the state file is
+   * already committed, and a miss here self-heals on the next save or on the
+   * deferred maintenance pass.
+   */
+  private persistResumableAgentCount(workspaceId: string, state: ProjectState | null): void {
+    try {
+      const isScratch = isScratchWorkspaceId(workspaceId);
+      if (!isScratch && !isProjectWorkspaceId(workspaceId)) return;
+      const kind = isScratch ? "scratch" : "project";
+      const count = state
+        ? countResumableAgentPanels(state.terminals, `resume-count(${kind}:${workspaceId})`)
+        : // Cleared state restores nothing. That is an answer, not an absence
+          // of one, so it is written rather than left unknown.
+          0;
+      const db = getSharedDb();
+      // Guarded on the value so the common case writes nothing. Layout, focus,
+      // size and draft edits all save state without touching the panel set, and
+      // an unconditional UPDATE would put every one of them through SQLite and
+      // the WAL on the main process for a number that did not move.
+      if (isScratch) {
+        db.update(scratchesTable)
+          .set({ resumableAgentCount: count })
+          .where(
+            and(
+              eq(scratchesTable.id, workspaceId),
+              // A tombstoned scratch is already gone from every renderer-facing
+              // query, so maintenance writes stop at the tombstone the way every
+              // other write in `ScratchStore` does.
+              isNull(scratchesTable.deletedAt),
+              or(
+                isNull(scratchesTable.resumableAgentCount),
+                ne(scratchesTable.resumableAgentCount, count)
+              )
+            )
+          )
+          .run();
+        return;
+      }
+      db.update(projectsTable)
+        .set({ resumableAgentCount: count })
+        .where(
+          and(
+            eq(projectsTable.id, workspaceId),
+            or(
+              isNull(projectsTable.resumableAgentCount),
+              ne(projectsTable.resumableAgentCount, count)
+            )
+          )
+        )
+        .run();
+    } catch (error) {
+      logError(`[ProjectStore] Failed to persist resume count for ${workspaceId}`, error);
+    }
+  }
+
+  /**
+   * Bring a row's resume count in line with a state read taken outside the
+   * write path — the deferred maintenance pass, which is how rows that predate
+   * the field ever get one.
+   *
+   * Compare-and-swap against the value read before that state load, because the
+   * two race: a save landing mid-scan is newer than anything the scan holds, and
+   * an unconditional write would replace a fresh count with a stale one. The
+   * guard is the whole point of the method — a row that had no count matches
+   * only while it still has none, and a row that had one matches only while it
+   * still holds that value, so a row that moved on is left alone.
+   *
+   * Passing `count: null` retracts the row's claim rather than replacing it —
+   * for a project whose state could not be read, where the honest answer is
+   * "unknown" and holding the old number would keep promising panels nothing
+   * can enumerate any more.
+   *
+   * Returns the updated project when the row actually changed, so the caller can
+   * broadcast exactly the rows a palette would need to redraw, and `null`
+   * otherwise.
+   */
+  reconcileResumableAgentCount(
+    projectId: string,
+    previousCount: number | null,
+    count: number | null
+  ): Project | null {
+    if (previousCount === count) return null;
+    const db = getSharedDb();
+    const result = db
+      .update(projectsTable)
+      .set({ resumableAgentCount: count })
+      .where(
+        previousCount === null
+          ? and(
+              eq(projectsTable.id, projectId),
+              // "Unknown" is wider than SQL NULL. `readPersistedCount` also
+              // reports a negative or fractional cell as unknown, so matching
+              // NULL alone would leave a corrupt row permanently unrepairable:
+              // the reader keeps answering unknown, and the swap keeps missing
+              // the very value that made it answer that way.
+              sql`(${projectsTable.resumableAgentCount} IS NULL OR ${projectsTable.resumableAgentCount} < 0 OR ${projectsTable.resumableAgentCount} <> CAST(${projectsTable.resumableAgentCount} AS INTEGER))`
+            )
+          : and(
+              eq(projectsTable.id, projectId),
+              eq(projectsTable.resumableAgentCount, previousCount)
+            )
+      )
+      .run();
+    if (result.changes === 0) return null;
+    return this.getProjectById(projectId);
   }
 
   async initialize(): Promise<void> {
@@ -836,7 +971,10 @@ export class ProjectStore {
     // number sets it; omitting the key leaves it untouched. Don't route the clear
     // through `undefined` — a callee that strips undefined keys would silently
     // drop the clear (review #4).
-    updates: Partial<Omit<Project, "autoParkedAt">> & { autoParkedAt?: number | null }
+    updates: Partial<Omit<Project, "autoParkedAt" | "resumableAgentCount">> & {
+      autoParkedAt?: number | null;
+      resumableAgentCount?: number | null;
+    }
   ): Project {
     const db = getSharedDb();
 
@@ -854,6 +992,7 @@ export class ProjectStore {
       lastAccessedAt: number;
       lastCompletionSeenAt: number;
       autoParkedAt: number | null;
+      resumableAgentCount: number | null;
       gitBacked: boolean | null;
     }> = {};
     if (updates.name !== undefined) set.name = updates.name;
@@ -871,6 +1010,8 @@ export class ProjectStore {
     if (updates.lastCompletionSeenAt !== undefined)
       set.lastCompletionSeenAt = updates.lastCompletionSeenAt;
     if ("autoParkedAt" in updates) set.autoParkedAt = updates.autoParkedAt ?? null;
+    if ("resumableAgentCount" in updates)
+      set.resumableAgentCount = updates.resumableAgentCount ?? null;
     // Keyed on presence, not on `!== undefined`: promoting a lightweight
     // workspace clears the flag by passing `undefined`, which an existence-blind
     // check would silently drop and leave the row lightweight forever.
@@ -991,13 +1132,16 @@ export class ProjectStore {
     status: ProjectStatus,
     options?: { autoParkedAt?: number | null }
   ): Project {
-    const updates: Partial<Omit<Project, "autoParkedAt">> & { autoParkedAt?: number | null } = {
+    const updates: Partial<Omit<Project, "autoParkedAt">> & {
+      autoParkedAt?: number | null;
+    } = {
       status,
     };
     if (options && "autoParkedAt" in options) {
       // Pass null straight through to clear; updateProject writes NULL for it.
       updates.autoParkedAt = options.autoParkedAt;
     }
+
     return this.updateProject(projectId, updates);
   }
 
@@ -1155,7 +1299,9 @@ export class ProjectStore {
           // Clear any stale auto-parked marker — a project that went missing and
           // came back wasn't suspended by the idle sweep, so the switcher must
           // not label it "Suspended to free memory".
-          this.updateProjectStatus(project.id, "closed", { autoParkedAt: null });
+          this.updateProjectStatus(project.id, "closed", {
+            autoParkedAt: null,
+          });
         }
       })
     );
@@ -1388,7 +1534,10 @@ export class ProjectStore {
           // Bump the departing project's lastOpened to just before `now` so it
           // becomes the top MRU candidate on the next switch — gives the
           // Cmd+Alt+= shortcut Alt+Tab-style toggle behavior.
-          const previousUpdate: { status: "background"; lastOpened?: number } = {
+          const previousUpdate: {
+            status: "background";
+            lastOpened?: number;
+          } = {
             status: "background",
           };
           if (!writesSuppressed) {

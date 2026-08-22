@@ -53,14 +53,20 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
   }, []);
 
   useEffect(() => {
-    const managed = terminalInstanceService.get(terminalId);
-    const addon = managed?.searchAddon;
-    if (!addon?.onDidChangeResults) return;
-    const disposable = addon.onDidChangeResults(({ resultIndex, resultCount }) => {
-      setMatchResults({ resultIndex, resultCount });
-    });
+    let disposed = false;
+    let resultSubscription: { dispose: () => void } | null = null;
+    void terminalInstanceService
+      .ensureSearchAddon(terminalId)
+      .then((addon) => {
+        if (disposed || !addon?.onDidChangeResults) return;
+        resultSubscription = addon.onDidChangeResults(({ resultIndex, resultCount }) => {
+          setMatchResults({ resultIndex, resultCount });
+        });
+      })
+      .catch(() => {});
     return () => {
-      disposable.dispose();
+      disposed = true;
+      resultSubscription?.dispose();
     };
   }, [terminalId]);
 
@@ -88,15 +94,12 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
           setMatchResults(null);
           setRegexError(validation.error ?? "Invalid regex pattern");
           const managed = terminalInstanceService.get(terminalId);
-          managed?.searchAddon.clearDecorations();
+          managed?.searchAddon?.clearDecorations();
           return;
         }
       }
 
       setRegexError(null);
-
-      const managed = terminalInstanceService.get(terminalId);
-      if (!managed) return;
 
       const options = buildSearchOptions(
         effectiveCaseSensitive,
@@ -104,25 +107,29 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
         effectiveWholeWord
       );
 
-      try {
-        const found =
-          direction === "next"
-            ? managed.searchAddon.findNext(term, options)
-            : managed.searchAddon.findPrevious(term, options);
+      void terminalInstanceService
+        .ensureSearchAddon(terminalId)
+        .then((searchAddon) => {
+          if (!searchAddon) return;
+          const found =
+            direction === "next"
+              ? searchAddon.findNext(term, options)
+              : searchAddon.findPrevious(term, options);
 
-        if (!found) {
-          managed.searchAddon.clearDecorations();
+          if (!found) {
+            searchAddon.clearDecorations();
+            setMatchResults(null);
+          }
+          setSearchStatus(found ? "found" : "none");
+        })
+        .catch((error: unknown) => {
+          setSearchStatus(effectiveRegexEnabled ? "invalidRegex" : "none");
           setMatchResults(null);
-        }
-        setSearchStatus(found ? "found" : "none");
-      } catch (e) {
-        setSearchStatus(effectiveRegexEnabled ? "invalidRegex" : "none");
-        setMatchResults(null);
-        if (effectiveRegexEnabled && e instanceof Error) {
-          setRegexError(e.message);
-        }
-        managed.searchAddon.clearDecorations();
-      }
+          if (effectiveRegexEnabled && error instanceof Error) {
+            setRegexError(error.message);
+          }
+          terminalInstanceService.get(terminalId)?.searchAddon?.clearDecorations();
+        });
     },
     [terminalId, caseSensitive, regexEnabled, wholeWord]
   );
@@ -137,7 +144,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
   const clearSearch = useCallback(() => {
     cancelPendingSearch();
     const managed = terminalInstanceService.get(terminalId);
-    managed?.searchAddon.clearDecorations();
+    managed?.searchAddon?.clearDecorations();
     setSearchStatus("idle");
     setMatchResults(null);
     setRegexError(null);

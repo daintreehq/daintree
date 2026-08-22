@@ -13,7 +13,7 @@ import {
   Lock,
   GitBranch,
 } from "lucide-react";
-import { Workflow } from "@/components/icons";
+import { Plug, Workflow } from "@/components/icons";
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { AppDialog } from "@/components/ui/AppDialog";
@@ -27,6 +27,7 @@ import { LiveTimeAgo } from "@/components/Worktree/LiveTimeAgo";
 import type { TerminalRecipe } from "@/types";
 import { useRef } from "react";
 import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
+import { isPluginRecipe } from "@shared/types/project";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 interface RecipeManagerProps {
@@ -45,6 +46,7 @@ export function RecipeManager({
   const globalRecipes = useRecipeStore((s) => s.globalRecipes);
   const projectRecipes = useRecipeStore((s) => s.projectRecipes);
   const inRepoRecipes = useRecipeStore((s) => s.inRepoRecipes);
+  const pluginRecipes = useRecipeStore((s) => s.pluginRecipes);
 
   // Derive which project recipes are shadowed by in-repo recipes
   const inRepoNames = useMemo(() => new Set(inRepoRecipes.map((r) => r.name)), [inRepoRecipes]);
@@ -156,9 +158,16 @@ export function RecipeManager({
     }
   };
 
-  const renderRecipeRow = (recipe: TerminalRecipe, readOnly = false, isShadowed = false) => {
+  const renderRecipeRow = (recipe: TerminalRecipe, forcedReadOnly = false, isShadowed = false) => {
+    // A plugin owns its recipes' content — editing or deleting one here would
+    // be undone on the plugin's next load, so the row reuses the existing
+    // read-only treatment rather than offering controls the store rejects
+    // (#11860). "Save to repo" stays available: duplicating into a user-owned
+    // tier is the sanctioned way to customise one.
+    const fromPlugin = isPluginRecipe(recipe);
+    const readOnly = forcedReadOnly || fromPlugin;
     const exported = exportFeedback === recipe.id;
-    const isGlobal = !isInRepoRecipeId(recipe) && recipe.projectId === undefined;
+    const isGlobal = !fromPlugin && !isInRepoRecipeId(recipe) && recipe.projectId === undefined;
     return (
       <div
         key={recipe.id}
@@ -187,6 +196,11 @@ export function RecipeManager({
                 <span className="text-[11px] text-status-info bg-status-info/10 px-1.5 py-0.5 rounded font-medium shrink-0 flex items-center gap-1">
                   <Globe className="h-3 w-3" />
                   Global
+                </span>
+              )}
+              {fromPlugin && (
+                <span className="text-[11px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0 truncate">
+                  {recipe.origin.pluginId}
                 </span>
               )}
               <span className="text-[11px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0">
@@ -348,6 +362,22 @@ export function RecipeManager({
               </>
             )}
           </div>
+
+          {/* Plugin Recipes Section (#11860) */}
+          {pluginRecipes.length > 0 && (
+            <div className="mb-6">
+              <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
+                <Plug className="h-4 w-4" />
+                Plugin Recipes
+              </h3>
+              <p className="text-xs text-daintree-text/60 mb-3">
+                Provided by installed plugins and available in every project
+              </p>
+              <div className="border border-daintree-border rounded-[var(--radius-md)] divide-y divide-daintree-border">
+                {pluginRecipes.map((r) => renderRecipeRow(r))}
+              </div>
+            </div>
+          )}
 
           {/* Team Recipes Section (in-repo) */}
           {inRepoRecipes.length > 0 && (

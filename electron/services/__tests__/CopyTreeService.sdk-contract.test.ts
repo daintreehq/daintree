@@ -906,23 +906,7 @@ describe("CopyTreeService against the installed CopyTree", () => {
       ]);
     });
 
-    // KNOWN UPSTREAM GAP, not a Daintree one: a curated glob cannot reach a
-    // dotfile. CopyTree 0.17 builds its include matcher as
-    // `micromatch.matcher(this.patterns)` (FileDiscoveryStage.js:485) with no
-    // `dot: true`, while the force-include matcher three lines up
-    // (FileDiscoveryStage.js:472) sets it — so `always` sees dotfiles and
-    // `filter`/`includePaths` do not. That costs a curated bundle things like
-    // `.github/workflows/**` or a dotfile config; ordinary sources and tests,
-    // which is what the feature is for, are unaffected.
-    //
-    // Pinned as current behavior rather than `it.fails`, which flips ANY
-    // failure to green — a broken fixture write or a renamed option would have
-    // "passed" it forever. The non-dot control is what makes this honest: it
-    // proves the glob and the traversal work, so the dotfile's absence is the
-    // upstream gap and not a typo. When a copytree release with `{ dot: true }`
-    // lands and this repo's dependency is raised to it, the second assertion
-    // starts failing — flip it to `toContain` and delete this comment.
-    it("does not reach a dotfile through a curated glob (upstream copytree gap)", async () => {
+    it("reaches a dotfile through a curated glob", async () => {
       await writeFixture("config/landscape/.defaults.json", '{"DOTFILE_SENTINEL":1}\n');
       await writeFixture("config/landscape/visible.json", '{"CONTROL_SENTINEL":1}\n');
 
@@ -933,7 +917,7 @@ describe("CopyTreeService against the installed CopyTree", () => {
       expect(result.error).toBeUndefined();
       const selected = (result.files ?? []).map((file) => file.path);
       expect(selected).toContain("config/landscape/visible.json");
-      expect(selected).not.toContain("config/landscape/.defaults.json");
+      expect(selected).toContain("config/landscape/.defaults.json");
     });
 
     it("still selects everything when neither field is given", async () => {
@@ -974,6 +958,53 @@ describe("CopyTreeService against the installed CopyTree", () => {
       const result = await copyTreeService.testConfig(tempDir, { includePaths: [] });
 
       expect((result.files ?? []).map((file) => file.path)).toContain("src/landscape/preview.ts");
+    });
+  });
+  // Project profiles are discovered automatically — `userConfig: false` disables
+  // the user's global config but not `.copytree.yml` — so a profile the SDK
+  // cannot parse fails the whole run. copytree 1.0.0-rc.2 shipped a js-yaml v5
+  // bump whose default schema drops the `!!merge` tag, which left `<<:` in the
+  // parsed profile as a literal key and turned every anchor-using profile into
+  // `ERR_PROFILE_INVALID`. Nothing here used a profile, so the suite stayed green.
+  describe("project profile parsing", () => {
+    beforeEach(async () => {
+      await fs.writeFile(path.join(tempDir, "second.ts"), "export const b = 2;\n");
+    });
+
+    // `maxFileCount` rather than a flag: it is inherited only through the merge,
+    // so if `<<:` stops resolving the limit silently vanishes and both files come
+    // back — a failure a "did not throw" assertion would sail straight past.
+    it("resolves a merge key so an inherited option takes effect", async () => {
+      await fs.writeFile(
+        path.join(tempDir, ".copytree.yml"),
+        "x-shared: &shared\n  maxFileCount: 1\noptions:\n  <<: *shared\n"
+      );
+
+      const result = await copyTreeService.testConfig(tempDir);
+
+      expect(result.error).toBeUndefined();
+      expect(result.files).toHaveLength(1);
+    });
+
+    it("resolves a merge key anchored on a profile's own option block", async () => {
+      await fs.writeFile(
+        path.join(tempDir, ".copytree.yml"),
+        "options: &opts\n  maxFileCount: 1\noutput:\n  <<: *opts\n"
+      );
+
+      const result = await copyTreeService.testConfig(tempDir);
+
+      expect(result.error).toBeUndefined();
+      expect(result.files).toHaveLength(1);
+    });
+
+    it("reads an empty profile as an empty profile rather than a parse failure", async () => {
+      await fs.writeFile(path.join(tempDir, ".copytree.yml"), "");
+
+      const result = await copyTreeService.testConfig(tempDir);
+
+      expect(result.error).toBeUndefined();
+      expect(result.files?.map((file) => file.path)).toContain("small.ts");
     });
   });
 });

@@ -51,12 +51,14 @@ import { isAssistantFocused, useMacroFocusStore } from "@/store/macroFocusStore"
 // hand-listed hook set) across the HelpPanel/controller suites, so pulling a new
 // hook through it would crash every one of them on an undefined destructure.
 import { useScratchStore } from "@/store/scratchStore";
+import { useFocusStore } from "@/store/focusStore";
 import { getAgentConfig, getAssistantSupportedAgentIds } from "@/config/agents";
 import { buildResumeLatestCommand } from "@shared/types/agentSettings";
 import { isAgentInstalled } from "../../../shared/utils/agentAvailability";
 import { actionService } from "@/services/ActionService";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
 import { suppressSidebarResizes } from "@/lib/sidebarToggle";
+import { dismissAllTooltips } from "@/lib/tooltipDismissRegistry";
 import { TerminalRefreshTier } from "@/types";
 import { CLOSE_CONFIRM_AGENT_STATES } from "@shared/types/agent";
 import { isPtyPanel } from "@shared/types/panel";
@@ -436,11 +438,23 @@ export function HelpPanel({
   // #10815: report this workspace's panel open-state to main on every change so
   // an LRU eviction / crash capture can stamp `panelWasOpen` onto the resume
   // token. Fire-and-forget — a slow or missing binding must never block the UI.
+  //
+  // Visibility rides along as a second fact, because the project tallies want a
+  // different question answered: focus mode parks the panel off-canvas without
+  // touching `isOpen` (`AppLayout`'s `showAssistant`), and an assistant nobody
+  // can see must not put its project in the switcher's attention band. The open
+  // flag stays exactly what it was so the cold-resume decision it feeds is
+  // unchanged — a panel parked by a gesture is still one the user expects back.
+  const gestureAssistantHidden = useFocusStore((s) => s.gestureAssistantHidden);
   useEffect(() => {
     if (!activeWorkspaceId) return;
-    const reported = window.electron.help.reportPanelOpen?.(activeWorkspaceId, isOpen);
+    const reported = window.electron.help.reportPanelOpen?.(
+      activeWorkspaceId,
+      isOpen,
+      isOpen && !gestureAssistantHidden
+    );
     if (reported) safeFireAndForget(reported, { context: "HelpPanel.reportPanelOpen" });
-  }, [isOpen, activeWorkspaceId]);
+  }, [isOpen, gestureAssistantHidden, activeWorkspaceId]);
 
   // #10815: cold switch-back auto-resume — driven by the reliable pull-on-mount
   // peek, NOT a racy main→renderer push. The lazy HelpPanel mounts behind
@@ -866,6 +880,15 @@ export function HelpPanel({
       document.contains(el) &&
       !panelRef.current?.contains(el)
     ) {
+      // Radix opens tooltips on focus as well as hover, so handing focus back
+      // to a tooltip trigger — the toolbar assistant button is the usual opener
+      // — pops a tooltip nothing is hovering. Same failure the dialog
+      // primitives already arm against (#11030); the suppression window is
+      // honored by both the tooltip open path and useShortcutHintHover's focus
+      // branch, and any real pointerenter clears it, so genuine hovers still
+      // teach. Inside the guard on purpose: a restore we decline must not
+      // suppress a tooltip the user did ask for.
+      dismissAllTooltips();
       el.focus();
     }
     return undefined;
@@ -1117,6 +1140,21 @@ export function HelpPanel({
   const launchableAgentId =
     preferredAgentId ??
     (supportedInstalledAgentIds.length === 1 ? (supportedInstalledAgentIds[0] ?? null) : null);
+
+  // Each empty-state CTA wears the mark of the agent it would actually launch,
+  // so the button says what's about to start. Rendered bare: the Button variant
+  // sizes descendant svgs and it is not wrapped in `BrandMark`, so the glyph
+  // inherits the accent fill's foreground rather than the brand hue. Falls
+  // back to the generic mark when an id outlives its registry entry — stored
+  // preferences are only revalidated on hydration, and uninstalling a CLI flips
+  // availability without dropping its config, so the live gap is an entry that
+  // disappears after selection. Mirrors the droppedPreferredAgentId lookup below.
+  const StartAssistantIcon = launchableAgentId
+    ? (getAgentConfig(launchableAgentId)?.icon ?? Sparkles)
+    : Sparkles;
+  const ResumeAssistantIcon = resumableAgentId
+    ? (getAgentConfig(resumableAgentId)?.icon ?? Sparkles)
+    : Sparkles;
 
   // Explicit, billed start (#10699). Records consent so future opens may
   // auto-launch, then launches directly — relying on syncInputs re-evaluation
@@ -1429,7 +1467,7 @@ export function HelpPanel({
                     onClick={handleResumeAssistant}
                     data-testid="help-resume-assistant"
                   >
-                    <Sparkles />
+                    <ResumeAssistantIcon />
                     Resume assistant
                   </Button>
                 </div>
@@ -1443,7 +1481,7 @@ export function HelpPanel({
                     onClick={() => handleStartAssistant()}
                     data-testid="help-start-assistant"
                   >
-                    <Sparkles />
+                    <StartAssistantIcon />
                     Start assistant
                   </Button>
                   {!hasEverLaunchedAgent && (

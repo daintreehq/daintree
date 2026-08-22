@@ -318,6 +318,19 @@ export async function getTerminalDimensions(
   }, panelId);
 }
 
+/** What xterm reports as selected. Empty string when there is no selection. */
+export async function getTerminalSelection(panelLocator: Locator): Promise<string> {
+  const page = panelLocator.page();
+  const panelId = await getPanelId(panelLocator);
+  if (!panelId) return "";
+
+  return page.evaluate((id) => {
+    const fn = (window as unknown as Record<string, unknown>).__daintreeGetTerminalSelection;
+    if (typeof fn === "function") return fn(id) as string;
+    return "";
+  }, panelId);
+}
+
 export async function selectAllTerminalText(panelLocator: Locator): Promise<void> {
   const page = panelLocator.page();
   const panelId = await getPanelId(panelLocator);

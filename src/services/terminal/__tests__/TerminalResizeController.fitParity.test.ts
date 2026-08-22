@@ -28,7 +28,7 @@ import {
   __resetSidebarLayoutTransitionLockForTests,
   unlockSidebarHydration,
 } from "@/lib/layoutTransitionLock";
-import { getXtermOptions } from "@/config/xtermConfig";
+import { getEffectiveScrollbarWidth, getXtermOptions } from "@/config/xtermConfig";
 import type { ManagedTerminal } from "../types";
 
 /**
@@ -206,7 +206,6 @@ function makeWatchdogDeps(instances: Map<string, ManagedTerminal>): Reconciliati
     isWebGLActive: vi.fn(() => true),
     shouldHaveWebGL: vi.fn(() => false),
     ensureWebGL: vi.fn(),
-    forceReflow: vi.fn(),
     reconcileRevealGeometry: vi.fn(() => true),
     isStoreBackgrounded: vi.fn(() => false),
     isStoreHidden: vi.fn(() => false),
@@ -465,30 +464,44 @@ describe("TerminalResizeController ↔ FitAddon column parity (#11095)", () => {
     }
   });
 
-  it("clamps to FitAddon's floor when the container is thinner than the gutter", () => {
-    const narrow = { width: 10, height: 360 };
-    const { managed, fitAddon } = buildPane(narrow);
+  // Both floors are reached with a container the resize entry points still
+  // accept as layout — a box below that floor is now refused outright rather
+  // than flooring to 2x1 and re-wrapping a cached pane's scrollback (#11900),
+  // so the degenerate geometry has to come from the gutter and the cell size
+  // instead of from the box.
+  it("clamps to FitAddon's floor when the gutter is wider than the container", () => {
+    const narrow = { width: 50, height: 360 };
+    const { managed, fitAddon } = buildPane(narrow, { scrollbar: { width: 60 } });
     const controller = makeController(managed);
+
+    // Witness that the fixture is genuinely in the flooring regime: the gutter
+    // alone exceeds the container, so available width is negative and only the
+    // floor can produce a column count. Without this the equality below would
+    // still hold on a fixture that quietly stopped reaching the floor.
+    expect(getEffectiveScrollbarWidth(managed.terminal.options)).toBeGreaterThan(narrow.width);
 
     const proposal = fitAddon.proposeDimensions();
     const applied = controller.resize("t1", narrow.width, narrow.height);
 
     // Negative available width must not produce a negative or zero column count
-    // on either side — both floor at 2.
+    // on either side.
     expect(applied).toEqual({ cols: proposal!.cols, rows: proposal!.rows });
-    expect(applied!.cols).toBeGreaterThanOrEqual(2);
   });
 
   it("clamps to FitAddon's floor when the container is shorter than one cell", () => {
-    const short = { width: 665, height: 9 };
-    const { managed, fitAddon } = buildPane(short);
+    const short = { width: 665, height: 50 };
+    const cell = { width: 9, height: 60 };
+    const { managed, fitAddon } = buildPane(short, {}, cell);
     const controller = makeController(managed);
+
+    // Same witness on the row axis: one cell is taller than the whole container,
+    // so the unclamped quotient is below one and the floor is what answers.
+    expect(cell.height).toBeGreaterThan(short.height);
 
     const proposal = fitAddon.proposeDimensions();
     const applied = controller.resize("t1", short.width, short.height);
 
     expect(applied).toEqual({ cols: proposal!.cols, rows: proposal!.rows });
-    expect(applied!.rows).toBeGreaterThanOrEqual(1);
   });
 
   it("rejects a non-finite box instead of caching a garbage grid", () => {

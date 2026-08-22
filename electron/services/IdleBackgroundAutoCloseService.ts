@@ -11,7 +11,6 @@ import { getPtyClient, getWorkspaceClientRef } from "../window/serviceRefs.js";
 import { store } from "../store.js";
 import { projectStore } from "./ProjectStore.js";
 import { getHibernationService } from "./HibernationService.js";
-import { getAgentAvailabilityStore } from "./AgentAvailabilityStore.js";
 import { helpSessionService } from "./HelpSessionService.js";
 import { writeHibernatedMarker } from "./pty/terminalSessionPersistence.js";
 import { getSystemSleepService } from "./SystemSleepService.js";
@@ -27,6 +26,12 @@ const DEFAULT_CONFIG: IdleBackgroundAutoCloseConfig = {
 const MIN_THRESHOLD_MINUTES = 15;
 const MAX_THRESHOLD_MINUTES = 1440; // 24h
 
+/** One entry of the live terminal snapshot PtyClient serves. */
+type AutoCloseTerminal = Awaited<ReturnType<PtyClient["getAllTerminalsAsync"]>>[number];
+
+/** Why a project must not be reclaimed this sweep. */
+type BlockingReason = "terminal" | "assistant";
+
 /**
  * IdleBackgroundAutoCloseService — Auto-closes background projects that have
  * been idle past a configurable threshold (default 15 min) AND hold zero
@@ -37,10 +42,13 @@ const MAX_THRESHOLD_MINUTES = 1440; // 24h
  *
  * Structurally mirrors {@link IdleTerminalNotificationService} (timer, startup
  * quiet, wake quiet, sleep/wake lifecycle) but ACTS instead of notifying:
- * - Gate is terminal presence only — any terminal means skip (never destroy
- *   agent scrollback silently). Exception: the Daintree Assistant's help PTY
- *   is tooling-internal and never blocks the reclaim; it's capture-revoked
- *   (conversation preserved via pending hibernation) before teardown.
+ * - Gate is terminal presence only — any live terminal means skip (never
+ *   destroy agent scrollback silently), and that includes the Daintree
+ *   Assistant's help PTY (#11807). A live assistant is floored a second time
+ *   by its session binding, so a pty-host snapshot that never listed it still
+ *   can't get it reclaimed out from under itself. Once the assistant's PTY is
+ *   gone the project is eligible again, and `closeProject` capture-revokes any
+ *   leftover binding (conversation preserved via pending hibernation).
  * - Never touches the foreground/active project in ANY window — the multi-window
  *   guard reads every per-window ProjectViewManager's active project, not just
  *   the SQLite-backed `getCurrentProjectId()` (which only reflects the
@@ -88,19 +96,82 @@ export class IdleBackgroundAutoCloseService {
   }
 
   /**
-   * Is this PTY the Daintree Assistant's tooling-internal help terminal?
-   * Checks BOTH registries: the renderer-fed availability mark (durable, but
-   * lands only after the renderer's `help.markTerminal` — a parked renderer
-   * may never send it) and main's own live session binding (set at spawn,
-   * dropped on revoke). Either alone has a blind window; together the
-   * assistant PTY can never masquerade as a real terminal and block sweeps
-   * indefinitely.
+   * Is a Daintree Assistant still running in this project?
+   *
+   * Binding + PTY liveness — the same pair `ProjectViewEvictionController` and
+   * `HibernationService` already gate on (#11477). The binding alone is NOT
+   * liveness: nothing drops it when the assistant exits under its own steam,
+   * so without the second half a quit assistant would pin its project forever.
+   * `hasTerminal` is PtyClient's main-local spawn registry, written
+   * synchronously by `spawn()` and dropped on both exit and kill, so it is
+   * authoritative from the assistant's first instant and — unlike
+   * `getAllTerminalsAsync` — cannot be silently truncated by a pty-host shard
+   * timeout.
+   *
+   * Agent state is deliberately NOT consulted. An assistant that scheduled a
+   * wakeup or dispatched a sub-agent reads `idle` while that work is still
+   * pending, and `help/CLAUDE.md` tells it to pace long work exactly that way.
+   * Nothing main-process-side separates "idle at its prompt" from "idle with
+   * work pending" (#11807, and #11157/#11477 before it), so the floor has to
+   * be unconditional; it lifts as soon as the PTY exits.
    */
-  private isHelpTerminal(terminalId: string): boolean {
-    return (
-      getAgentAvailabilityStore().isHelpTerminal(terminalId) ||
-      helpSessionService.isHelpTerminal(terminalId)
-    );
+  private hasLiveAssistantBackend(projectId: string): boolean {
+    const backend = helpSessionService.getAssistantBackend(projectId);
+    if (!backend) return false;
+    return this.ptyClient?.hasTerminal(backend.terminalId) === true;
+  }
+
+  /**
+   * A terminal snapshot we can actually act on, or `null` when there isn't one.
+   *
+   * `getAllTerminalsAsync` substitutes `[]` for a shard that failed to answer,
+   * which makes a pty-host outage indistinguishable from a machine with no
+   * terminals. That is fine for a self-correcting count and disqualifying for
+   * this gate, whose whole contract is "empty means genuinely nothing running"
+   * — reporting a busy project as clear is the one wrong answer here, because
+   * the next step kills its processes. So read completeness explicitly and fail
+   * closed on a degraded snapshot; the sweep runs again in five minutes, and a
+   * deferred reclaim costs nothing next to a wrongly reclaimed one.
+   *
+   * Also `null` once `stop()` has cleared the client mid-sweep — same reasoning.
+   */
+  private async readTerminals(): Promise<AutoCloseTerminal[] | null> {
+    const client = this.ptyClient;
+    if (!client) return null;
+    const snapshot = await client.getAllTerminalsWithCompletenessAsync();
+    // `stop()` may have landed while that request was in flight — app shutdown
+    // clears the client without touching `enabled`, so the config re-checks
+    // downstream would wave this through on a snapshot nobody owns any more.
+    if (this.ptyClient !== client) return null;
+    if (snapshot.degraded) {
+      logInfo("idle-background-auto-close-skip-degraded-snapshot", {
+        shardsFailed: snapshot.shardsFailed,
+        shardsTotal: snapshot.shardsTotal,
+      });
+      return null;
+    }
+    return snapshot.terminals;
+  }
+
+  /**
+   * Why this project must not be reclaimed right now, or `null` when it is
+   * free to close. ONE predicate behind all three gates — the sweep filter and
+   * both `closeProject` TOCTOU re-checks — so they cannot drift apart (#11800).
+   *
+   * The assistant floor is consulted FIRST so that a live assistant is named as
+   * the reason even when its help PTY is also sitting in the snapshot as an
+   * ordinary terminal. Both answers block; only this order makes the skip log
+   * report the case operators actually hit.
+   */
+  private blockingReason(
+    projectId: string,
+    terminals: readonly AutoCloseTerminal[]
+  ): BlockingReason | null {
+    if (this.hasLiveAssistantBackend(projectId)) return "assistant";
+    if (terminals.some((t) => t.projectId === projectId && t.hasPty !== false)) {
+      return "terminal";
+    }
+    return null;
   }
 
   private normalizeThreshold(value: unknown, fallback: number): number {
@@ -288,17 +359,20 @@ export class IdleBackgroundAutoCloseService {
     const projects = projectStore.getAllProjects();
     if (projects.length === 0) return;
 
-    if (!this.ptyClient) return;
     // Read the live terminal registry every sweep — never cache it in the timer
     // closure, so a project that briefly held a terminal and dropped back to
-    // zero is re-evaluated fresh (lesson #8998).
-    const allTerminals = await this.ptyClient.getAllTerminalsAsync();
+    // zero is re-evaluated fresh (lesson #8998). A degraded read aborts the
+    // whole sweep: one silent shard would make every project on it look empty.
+    const allTerminals = await this.readTerminals();
+    if (!allTerminals) return;
 
     const now = Date.now();
     const thresholdMs = config.thresholdMinutes * 60 * 1000;
     const activeIds = this.collectActiveProjectIds();
 
     const closed: IdleBackgroundClosedProjectEntry[] = [];
+    /** Projects held back purely by a live assistant — logged once per sweep. */
+    const assistantProtected: string[] = [];
 
     for (const project of projects) {
       if (!project.id) continue;
@@ -322,16 +396,17 @@ export class IdleBackgroundAutoCloseService {
       // Still within the idle threshold.
       if (now - project.lastOpened < thresholdMs) continue;
 
-      // Gate: terminal presence only. Any live PTY means skip — we never tear
-      // down a project that still has agent/terminal scrollback. The Daintree
-      // Assistant's help PTY is the one exception: it's tooling-internal (the
-      // switcher already hides it, #10989) and must not keep an idle project
-      // resident — `closeProject` capture-revokes it so the conversation
-      // still resumes on the next open.
-      const hasTerminal = allTerminals.some(
-        (t) => t.projectId === pid && t.hasPty !== false && !this.isHelpTerminal(t.id)
-      );
-      if (hasTerminal) continue;
+      // Gate: terminal presence. Any live PTY means skip — we never tear down a
+      // project that still has agent/terminal scrollback, and the Daintree
+      // Assistant's help PTY now counts too (#11807). It used to be waved
+      // through as tooling-internal, but the capture-revoke only preserves the
+      // conversation: whatever wakeup or sub-agent the assistant had in flight
+      // dies with the PTY, which is the reclaim this issue reports losing.
+      const blocked = this.blockingReason(pid, allTerminals);
+      if (blocked) {
+        if (blocked === "assistant") assistantProtected.push(pid);
+        continue;
+      }
 
       try {
         const result = await this.closeProject(pid, now, thresholdMs);
@@ -340,6 +415,15 @@ export class IdleBackgroundAutoCloseService {
         // Isolate per project — one teardown failure must not abort the sweep.
         logError("idle-background-auto-close-project-failed", error, { projectId: pid });
       }
+    }
+
+    // Mirrors HibernationService's `hibernate-skip-live-assistant`. Emitted from
+    // the sweep only — the two `closeProject` re-checks share the predicate, so
+    // logging there as well would just repeat this line.
+    if (assistantProtected.length > 0) {
+      logInfo("idle-background-auto-close-skip-live-assistant", {
+        projectIds: assistantProtected,
+      });
     }
 
     if (closed.length === 0) return;
@@ -387,23 +471,23 @@ export class IdleBackgroundAutoCloseService {
     if (now - fresh.lastOpened < thresholdMs) return null;
     if (this.collectActiveProjectIds().has(projectId)) return null;
 
-    const liveTerminals = (await this.ptyClient?.getAllTerminalsAsync()) ?? [];
-    if (
-      liveTerminals.some(
-        (t) => t.projectId === projectId && t.hasPty !== false && !this.isHelpTerminal(t.id)
-      )
-    ) {
-      return null;
-    }
+    const liveTerminals = await this.readTerminals();
+    // Re-read `enabled` after the await too: `stop()` nulls the client, and
+    // without this a toggle-off landing mid-request would sail past every
+    // remaining guard on an empty snapshot and tear the project down anyway.
+    if (!liveTerminals || !this.getConfig().enabled) return null;
+    if (this.blockingReason(projectId, liveTerminals)) return null;
 
     const project = fresh;
 
-    // A still-running assistant help PTY must not survive the reclaim, and it
-    // must not lose the conversation either: capture-revoke it first (graceful
-    // kill + pending-hibernation entry — the LRU-eviction path), so the next
-    // panel open resumes the session. Await it so the PTY is down before the
-    // project-wide kill below; a failure degrades to that kill, losing only
-    // the resume entry, never blocking the reclaim.
+    // The gate above floors a live assistant, so this revoke settles whatever
+    // non-live session records the project has left: one whose terminal exited
+    // under its own steam (nothing drops that binding), or one provisioned but
+    // never bound because the renderer crashed or the spawn failed. Only a
+    // previously bound record has a conversation to keep, and only that case
+    // writes the pending-hibernation entry that resumes on the next open. Await
+    // it so the records are settled before the project-wide kill below; a
+    // failure degrades to that kill, losing only the resume entry.
     try {
       await helpSessionService.revokeByProjectId(projectId);
     } catch (error) {
@@ -411,21 +495,17 @@ export class IdleBackgroundAutoCloseService {
     }
 
     // The capture-revoke's gracefulKill can take seconds — long enough for the
-    // user to switch to this project or spawn a real terminal in it. Re-verify
-    // eligibility once more before the irreversible teardown; bailing here is
-    // safe because the revoke above already persisted the assistant's
-    // pending-hibernation entry, so a reopened panel still resumes.
+    // user to switch to this project, spawn a real terminal in it, or reopen the
+    // assistant panel. Re-verify eligibility once more before the irreversible
+    // teardown; bailing here is safe because the revoke above already persisted
+    // the assistant's pending-hibernation entry, so a reopened panel still
+    // resumes.
     if (this.collectActiveProjectIds().has(projectId)) return null;
     const refreshed = projectStore.getProjectById(projectId);
     if (!refreshed || refreshed.status !== "background") return null;
-    const postRevokeTerminals = (await this.ptyClient?.getAllTerminalsAsync()) ?? [];
-    if (
-      postRevokeTerminals.some(
-        (t) => t.projectId === projectId && t.hasPty !== false && !this.isHelpTerminal(t.id)
-      )
-    ) {
-      return null;
-    }
+    const postRevokeTerminals = await this.readTerminals();
+    if (!postRevokeTerminals || !this.getConfig().enabled) return null;
+    if (this.blockingReason(projectId, postRevokeTerminals)) return null;
 
     // Graceful, session-preserving kill — scrollback survives via hibernation
     // markers so a later reopen restores panels instead of starting cold. For a
@@ -448,7 +528,9 @@ export class IdleBackgroundAutoCloseService {
     // Keep the project in the list as `closed` WITHOUT clearProjectState, so its
     // panel/terminal layout survives a non-destructive reopen. The autoParkedAt
     // marker distinguishes this from a manual close in the switcher.
-    projectStore.updateProjectStatus(projectId, "closed", { autoParkedAt: now });
+    projectStore.updateProjectStatus(projectId, "closed", {
+      autoParkedAt: now,
+    });
     const updated = projectStore.getProjectById(projectId);
     if (updated) {
       try {

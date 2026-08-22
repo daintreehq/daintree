@@ -50,6 +50,12 @@ describe("parseSkillMarkdown", () => {
     expect(body).not.toContain("---");
   });
 
+  it("resolves YAML merge keys so a description inherited via an anchor survives", () => {
+    const raw = "---\nshared: &shared\n  description: Inherited.\n<<: *shared\n---\n\nBody.\n";
+    const { description } = parseSkillMarkdown(raw);
+    expect(description).toBe("Inherited.");
+  });
+
   it("does not treat a --- line inside the body as the closing fence", () => {
     const raw = "---\ndescription: Real.\n---\n\nIntro.\n\n---\n\nMore.\n";
     const { description, body } = parseSkillMarkdown(raw);

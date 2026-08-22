@@ -29,7 +29,7 @@ export function registerTerminalQueryActions(
     id: "terminal.list",
     title: "List Terminals",
     description:
-      "Enumerate the open terminals and panels, with just enough metadata to pick one to act on. Start here to discover terminal ids, then read status or output for the ones that matter — this is a cheap inventory, not a polling path, and the status snapshot carries richer agent state for a whole fleet in one call. Ephemeral and internal panels are left out, and an empty result means no terminals are open rather than a failure.",
+      "Enumerate the open terminals and panels, with just enough metadata to pick one. Start here to discover terminal ids, then read status or output for the ones that matter: this is a cheap inventory, not a polling path; the status snapshot carries richer agent state for a fleet in one call. Ephemeral and internal panels are left out; an empty result means none are open, not a failure.",
     category: "terminal",
     kind: "query",
     danger: "safe",
@@ -101,7 +101,7 @@ export function registerTerminalQueryActions(
     id: "terminal.getOutput",
     title: "Get Terminal Output",
     description:
-      "Read the trailing scrollback of one terminal, for inspecting what an agent or command actually printed. Use the terminal status snapshot instead when watching several terminals — it fetches output tails for a whole fleet in one call, and reading them one at a time is the common mistake here. Output has ANSI codes stripped by default and may be truncated to the requested tail; a terminal that no longer exists comes back as an error field in the result rather than failing the call.",
+      "Read the trailing scrollback of one terminal, to inspect what an agent or command printed. Use the status snapshot when watching several terminals: it fetches tails for a whole fleet in one call, and reading one at a time is the common mistake. ANSI codes are stripped by default; output may be truncated to the requested tail, and a missing terminal returns an error field, not a failed call.",
     category: "terminal",
     kind: "query",
     danger: "safe",
@@ -193,7 +193,7 @@ export function registerTerminalQueryActions(
     id: "terminal.getStatus",
     title: "Get Terminal Status",
     description:
-      "Take a point-in-time snapshot of agent and process state across many terminals at once, optionally with recent output tails. This is the batched polling path: prefer it over listing terminals for agent state or reading each terminal's output in turn. It never blocks and never fails as a whole — an entry's own error can mean that terminal was missing or that the shared output fetch failed — so use the blocking wait instead when the goal is to proceed the moment an agent finishes.",
+      "Snapshot agent and process state across many terminals, with optional output tails. This is the batched polling path: prefer it over listing terminals for agent state, or reading each terminal's output in turn. It never blocks or fails as a whole; an entry's error can mean that terminal was missing or the shared fetch failed. Use the blocking wait to proceed the moment an agent finishes.",
     category: "terminal",
     kind: "query",
     danger: "safe",
@@ -457,7 +457,7 @@ export function registerTerminalQueryActions(
         .min(1)
         .max(MAX_WAIT_UNTIL_IDLE_BATCH_TERMINALS)
         .describe(
-          "Identifies the terminals to watch, using panel ids from the terminal-listing capability. Ids no longer tracked count as already finished rather than failing the batch."
+          `Identifies the terminals to watch (1-${MAX_WAIT_UNTIL_IDLE_BATCH_TERMINALS}), using panel ids from the terminal-listing capability. Ids no longer tracked count as already finished rather than failing the batch.`
         ),
       mode: z
         .enum(["first", "all"])
@@ -496,6 +496,10 @@ export function registerTerminalQueryActions(
     category: "terminal",
     kind: "command",
     danger: "safe",
+    // Never captured into `lastAction`: replaying `action.repeatLast` would
+    // re-inject the exact same text into the agent pane, which for a composed
+    // submission (instruction plus the user's draft) is a silent duplicate send.
+    nonRepeatable: true,
     // Reachable by user and agent (MCP) dispatch, but NOT by plugin
     // host.dispatch — sending text into an agent terminal is exactly the
     // injection the capability model gates. Plugins must declare `agent:input`

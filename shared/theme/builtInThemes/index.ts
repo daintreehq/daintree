@@ -14,6 +14,7 @@ import { theme as bali } from "./bali.js";
 import { theme as hokkaido } from "./hokkaido.js";
 import { theme as serengeti } from "./serengeti.js";
 import { theme as svalbard } from "./svalbard.js";
+import { theme as movile } from "./movile.js";
 
 export const BUILT_IN_THEME_SOURCES: BuiltInThemeSource[] = [
   daintree,
@@ -30,4 +31,5 @@ export const BUILT_IN_THEME_SOURCES: BuiltInThemeSource[] = [
   hokkaido,
   serengeti,
   svalbard,
+  movile,
 ];

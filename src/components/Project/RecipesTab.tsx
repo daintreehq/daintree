@@ -25,6 +25,7 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import type { TerminalRecipe, Worktree } from "@/types";
 import { logError } from "@/utils/logger";
 import { getRecipeScope, worktreeDisplayName } from "@/utils/recipeScope";
+import { isPluginRecipe } from "@shared/types/project";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 
 interface RecipesTabProps {
@@ -252,6 +253,11 @@ export function RecipesTab({
                 const isEligibleForDefault = !recipe.worktreeId && !recipe.shadowedBy;
                 const isDefault = recipe.id === defaultWorktreeRecipeId;
                 const isShadowed = !!recipe.shadowedBy;
+                // A plugin owns its recipes' content — editing or deleting one
+                // here would be undone on the plugin's next load, and the store
+                // rejects both. Hide the controls rather than surface an error
+                // toast for an action that was never possible (#11860).
+                const fromPlugin = isPluginRecipe(recipe);
                 return (
                   <div
                     key={recipe.id}
@@ -349,20 +355,22 @@ export function RecipesTab({
                           </Tooltip>
                         )}
                         <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity">
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => handleEditRecipe(recipe)}
-                                className="h-7 px-2"
-                                aria-label={`Edit recipe ${recipe.name}`}
-                              >
-                                <Edit3 />
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent side="bottom">Edit recipe</TooltipContent>
-                          </Tooltip>
+                          {!fromPlugin && (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => handleEditRecipe(recipe)}
+                                  className="h-7 px-2"
+                                  aria-label={`Edit recipe ${recipe.name}`}
+                                >
+                                  <Edit3 />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent side="bottom">Edit recipe</TooltipContent>
+                            </Tooltip>
+                          )}
                           <Tooltip>
                             <TooltipTrigger asChild>
                               <Button
@@ -387,20 +395,22 @@ export function RecipesTab({
                               {exported ? "Exported" : "Export recipe to clipboard"}
                             </TooltipContent>
                           </Tooltip>
-                          <Tooltip>
-                            <TooltipTrigger asChild>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => setRecipeToDelete(recipe.id)}
-                                className="h-7 px-2"
-                                aria-label={`Delete recipe ${recipe.name}`}
-                              >
-                                <Trash2 className="text-status-error" />
-                              </Button>
-                            </TooltipTrigger>
-                            <TooltipContent side="bottom">Delete recipe</TooltipContent>
-                          </Tooltip>
+                          {!fromPlugin && (
+                            <Tooltip>
+                              <TooltipTrigger asChild>
+                                <Button
+                                  variant="ghost"
+                                  size="sm"
+                                  onClick={() => setRecipeToDelete(recipe.id)}
+                                  className="h-7 px-2"
+                                  aria-label={`Delete recipe ${recipe.name}`}
+                                >
+                                  <Trash2 className="text-status-error" />
+                                </Button>
+                              </TooltipTrigger>
+                              <TooltipContent side="bottom">Delete recipe</TooltipContent>
+                            </Tooltip>
+                          )}
                         </div>
                       </div>
                     </div>

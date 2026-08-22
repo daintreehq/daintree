@@ -66,7 +66,12 @@ import {
   setWorktreePathIndexAccessor,
   resetStoreAccessorsForTesting,
 } from "@/store/storeAccessors";
-import { _resetCopyTreeNoticePresenterForTest } from "@/lib/copyTreeFeedback";
+import {
+  registerCopyTreeNoticePresenter,
+  _resetCopyTreeNoticePresenterForTest,
+  type CopyTreeCompletionNotice,
+} from "@/lib/copyTreeFeedback";
+import type { ActionSource } from "@shared/types/actions";
 import { useCopyTreeRunStore } from "@/store/copyTreeRunStore";
 
 function setupActions(): {
@@ -343,37 +348,53 @@ describe("systemActions adversarial", () => {
       expect(payload.message).not.toContain("clipboard");
     });
 
-    it("is the one copy-tree completion that never reaches the toast surface", async () => {
-      // `copyTree.generate` is kind "query", so useActionPalette — which drops
-      // everything but kind "command" — never surfaces it: no human route at
-      // all, only MCP and the in-app assistant, where it sits in the lowest
-      // tier beside pure reads like file.read. It writes a temp file and hands
-      // the path back to the caller, so nothing the user owns changes, unlike
-      // generateAndCopyFile (replaces the clipboard) and injectToTerminal
-      // (writes into a live terminal). Asserted as a partition over all three
-      // so what's pinned is the distinction between them, not one literal.
-      const { run } = setupActions();
-      const ctx = { activeWorktreeId: "wt-active" };
-      const cases: [id: string, args: unknown][] = [
-        ["copyTree.generate", undefined],
-        ["copyTree.generateAndCopyFile", undefined],
-        ["copyTree.injectToTerminal", { terminalId: "t-1" }],
-      ];
+    it("anchors the bundle completion to the Copy context button, not a toast", async () => {
+      // The two actions that produce a bundle the user asked for — the clipboard
+      // copy and this temp-file generate — both pin their completion to the
+      // toolbar button, which is where their run history already lives. Terminal
+      // injection is the odd one out: its result lands in a pane rather than on
+      // that button, so it stays a plain toast. Asserted as a partition over all
+      // three so what's pinned is the distinction between them, not one literal.
+      const seenByButton: string[] = [];
+      const presenter = vi.fn((notice: { title: string }) => {
+        seenByButton.push(notice.title);
+        return true;
+      });
+      const restore = registerCopyTreeNoticePresenter(presenter);
+      try {
+        const { run } = setupActions();
+        const ctx = { activeWorktreeId: "wt-active" };
+        const cases: [id: string, args: unknown][] = [
+          ["copyTree.generate", undefined],
+          ["copyTree.generateAndCopyFile", undefined],
+          ["copyTree.injectToTerminal", { terminalId: "t-1" }],
+        ];
 
-      const inboxOnly: string[] = [];
-      const interrupting: string[] = [];
-      for (const [id, args] of cases) {
-        notifyMock.mockClear();
-        await run(id, args, ctx);
-        // Guards the partition: an action that stopped announcing entirely
-        // would otherwise be silently filed under "interrupting".
-        expect(notifyMock).toHaveBeenCalledTimes(1);
-        const { priority } = notifyMock.mock.calls[0]?.[0] as { priority?: string };
-        (priority === "low" ? inboxOnly : interrupting).push(id);
+        const anchored: string[] = [];
+        const toasted: string[] = [];
+        for (const [id, args] of cases) {
+          notifyMock.mockClear();
+          presenter.mockClear();
+          await run(id, args, ctx);
+          // Guards the partition: an action that stopped announcing entirely
+          // would otherwise be silently filed under "toasted".
+          expect(presenter.mock.calls.length + notifyMock.mock.calls.length).toBe(1);
+          (presenter.mock.calls.length === 1 ? anchored : toasted).push(id);
+        }
+
+        expect(anchored).toEqual(["copyTree.generate", "copyTree.generateAndCopyFile"]);
+        expect(toasted).toEqual(["copyTree.injectToTerminal"]);
+        // Each anchored notice must name its OWN destination: distinct titles
+        // alone would pass even if both claimed the clipboard, and the whole
+        // point of routing the temp-file bundle here is that it says so.
+        const [generated, copied] = seenByButton;
+        expect(generated).not.toMatch(/clipboard|copied/i);
+        expect(generated).toMatch(/generated/i);
+        expect(copied).toMatch(/copied/i);
+      } finally {
+        restore();
+        _resetCopyTreeNoticePresenterForTest();
       }
-
-      expect(inboxOnly).toEqual(["copyTree.generate"]);
-      expect(interrupting).toEqual(["copyTree.generateAndCopyFile", "copyTree.injectToTerminal"]);
     });
 
     it("never announces a generate that failed", async () => {
@@ -401,6 +422,70 @@ describe("systemActions adversarial", () => {
         run("copyTree.generate", undefined, { activeWorktreeId: "wt-active" })
       ).rejects.toThrow();
       expect(notifyMock).not.toHaveBeenCalled();
+    });
+
+    it("leaves the toolbar spinner alone so a background bundle never disables the user's button", async () => {
+      // The run store drives the Copy context spinner, and that button goes
+      // aria-disabled while it spins. Bracketing an agent's background bundle
+      // would take the user's own control away for the duration — the run store
+      // is for runs the user is waiting on, not for work the assistant started.
+      const { run } = setupActions();
+      let midFlightCount = -1;
+      copyTreeClientMock.generate.mockImplementationOnce(async () => {
+        midFlightCount = useCopyTreeRunStore.getState().activeRunCount;
+        return { ...COPY_TREE_RESULT };
+      });
+
+      await run("copyTree.generate", { worktreeId: "wt-1" }, { dispatchSource: "agent" });
+
+      expect(midFlightCount).toBe(0);
+      expect(useCopyTreeRunStore.getState().activeRunCount).toBe(0);
+    });
+
+    it("names an agent as the actor on exactly the agent route, and no other", async () => {
+      // An autonomous state change reported passively reads as the user's own
+      // earlier action landing late, so the agent route says who acted. Swept
+      // over the whole ActionSource union rather than agent-vs-user: a
+      // regression to `!== "user"` would attribute a menu pick or a plugin
+      // dispatch to an agent, which is the same misattribution the actor
+      // prefix exists to prevent. The run label is adversarial — it contains
+      // the actor word itself — so a title is only counted as attributed when
+      // the actor leads it, not when the user's own label happens to say it.
+      const SOURCES: ActionSource[] = [
+        "user",
+        "keybinding",
+        "menu",
+        "agent",
+        "context-menu",
+        "plugin",
+      ];
+      const titles = new Map<ActionSource, string>();
+      const seen: CopyTreeCompletionNotice[] = [];
+      const restore = registerCopyTreeNoticePresenter((notice) => {
+        seen.push(notice);
+        return true;
+      });
+      try {
+        const { run } = setupActions();
+        for (const dispatchSource of SOURCES) {
+          seen.length = 0;
+          await run(
+            "copyTree.generate",
+            { worktreeId: "wt-1", name: "Agent assistant notes" },
+            { dispatchSource }
+          );
+          titles.set(dispatchSource, seen[0]?.title ?? "");
+        }
+      } finally {
+        restore();
+        _resetCopyTreeNoticePresenterForTest();
+      }
+
+      const attributed = SOURCES.filter((src) => /^Agent\b/.test(titles.get(src) ?? ""));
+      expect(attributed).toEqual(["agent"]);
+      // Whoever acted, this endpoint writes a temp file — no title may imply
+      // the clipboard changed.
+      expect([...titles.values()].join(" ")).not.toMatch(/clipboard|copied/i);
     });
   });
 
@@ -1101,6 +1186,35 @@ describe("systemActions adversarial", () => {
       // selector at fault, and a present-but-empty field reads as one.
       expect(result.stats).not.toHaveProperty("unmatchedSelector");
       expect(result.stats).toMatchObject({ noFilesMatched: true });
+    });
+
+    it("still announces an empty bundle, reporting the zero rather than going quiet", async () => {
+      // `noFilesMatched` is a valid outcome, not a failure — the file exists and
+      // the caller is holding a path to it. Staying silent here would be the
+      // worse half of both worlds: the run happened, the user saw nothing, and
+      // the count that would have told them the curation missed is the one
+      // thing suppressed. Distinct from the failure cases above, which announce
+      // nothing precisely because no bundle landed.
+      const seen: CopyTreeCompletionNotice[] = [];
+      const restore = registerCopyTreeNoticePresenter((notice) => {
+        seen.push(notice);
+        return true;
+      });
+      try {
+        const { run } = setupActions();
+        copyTreeClientMock.generate.mockResolvedValueOnce({
+          ...EMPTY_RUN,
+          stats: { totalSize: 0, duration: 1800, noFilesMatched: true },
+        });
+        await run("copyTree.generate", undefined, { activeWorktreeId: "wt-active" });
+      } finally {
+        restore();
+        _resetCopyTreeNoticePresenterForTest();
+      }
+
+      expect(seen).toHaveLength(1);
+      expect(seen[0]?.message).toMatch(/\b0 files\b/);
+      expect(seen[0]?.message).toMatch(/temporary file/i);
     });
 
     it.each(COPY_TREE_UNMATCHED_SELECTORS)(

@@ -8,6 +8,7 @@ import type {
   BackendTerminalInfo,
   TerminalReconnectResult,
   TerminalStatusPayload,
+  TerminalSubmitStatusPayload,
   BroadcastWriteResultPayload,
   SpawnResult,
   SerializedTerminalSnapshot,
@@ -17,6 +18,7 @@ import type {
   TerminalReliabilityMetricPayload,
   TerminalResizeResult,
 } from "@shared/types/pty-host";
+import type { PanelTitleMode } from "@shared/types/panel";
 import { normalizeTerminalGridDimension } from "@shared/types/terminal";
 import { PERF_MARKS } from "@shared/perf/marks";
 import { logDebug, logWarn } from "@/utils/logger";
@@ -368,6 +370,16 @@ export const terminalClient = {
    */
   sendKey: (id: string, key: string): void => {
     window.electron.terminal.sendKey(id, key);
+  },
+
+  /**
+   * Mirror a panel rename onto the pty-host's terminal record. The renderer
+   * store is the display source, but the fleet overview, session journal and
+   * shutdown records all read the pty-host copy — without this they keep
+   * naming the run by its launch title (#11830).
+   */
+  updateTitle: (id: string, title: string, titleMode: PanelTitleMode): void => {
+    window.electron.terminal.updateTitle(id, title, titleMode);
   },
 
   /**
@@ -825,6 +837,15 @@ export const terminalClient = {
       ipcCleanup();
     };
   },
+
+  /**
+   * Listen for submit-lane status on any terminal (#11875). Unlike `onStatus`
+   * this is a plain event-bus passthrough — there is no MessagePort path,
+   * because a slow submit is a rare per-terminal transition rather than a
+   * throughput pulse. Callers filter by `payload.id` themselves.
+   */
+  onSubmitStatus: (callback: (data: TerminalSubmitStatusPayload) => void): (() => void) =>
+    window.electron.terminal.onSubmitStatus(callback),
 
   /**
    * Listen for terminal reliability metrics (pause-start/end, suspend,

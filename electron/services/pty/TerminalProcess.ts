@@ -8,7 +8,11 @@ import serialize, { type SerializeAddon as SerializeAddonType } from "@xterm/add
 const { SerializeAddon } = serialize;
 import unicode11 from "@xterm/addon-unicode11";
 const { Unicode11Addon } = unicode11;
-import type { TerminalResizeResult } from "../../../shared/types/pty-host.js";
+import type {
+  TerminalResizeResult,
+  TerminalSubmitStatusState,
+} from "../../../shared/types/pty-host.js";
+import type { PanelTitleMode } from "../../../shared/types/panel.js";
 import { getEffectiveAgentConfig } from "../../../shared/config/agentRegistry.js";
 import { applyXtermReflowFastpath } from "../../../shared/utils/xtermReflowFastpath.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
@@ -115,6 +119,12 @@ export interface TerminalProcessCallbacks {
    * counted, so a burst of exits can't slip past the cap.
    */
   onPreserved?: (id: string) => void;
+  /**
+   * Fired when a submit crosses the slow/stalled threshold, settles after
+   * having done so, or fails (#11875). Absent for the overwhelming majority of
+   * submits, which complete well inside the threshold and report nothing.
+   */
+  onSubmitStatus?: (id: string, state: TerminalSubmitStatusState) => void;
 }
 
 export interface TerminalProcessDependencies {
@@ -172,6 +182,7 @@ export class TerminalProcess {
   private semanticBufferManager!: SemanticBufferManager;
   private identityWatcher!: IdentityWatcher;
 
+  private gracefulShutdownInFlight: Promise<string | null> | null = null;
   private writeQueue!: WriteQueue;
   private inputController!: TerminalInputController;
   private ptyDataPipeline!: PtyDataPipeline;
@@ -453,13 +464,11 @@ export class TerminalProcess {
       },
     });
     this.writeQueue = new WriteQueue({
-      writeToPty: (data) => {
-        this.terminalInfo.ptyProcess.write(data);
-      },
       isExited: () => !this.lifecycle.isAlive,
       lastOutputTime: () => this.terminalInfo.lastOutputTime,
       performSubmit: (text) => this.performSubmit(text),
       onWriteError: (error, context) => this.logWriteError(error, context),
+      onSubmitStatus: (state) => this.callbacks.onSubmitStatus?.(this.id, state),
     });
     this.sessionSnapshotter = this.createSessionSnapshotter();
     this.identityWatcher = new IdentityWatcher(this.createIdentityWatcherDelegate());
@@ -1192,6 +1201,16 @@ export class TerminalProcess {
     this.terminalInfo.lastObservedTitle = title;
   }
 
+  /**
+   * Mirror a renderer-side rename onto the authoritative record. `title` and
+   * `titleMode` move together: a title without its mode would still read as
+   * `"default"` and be overwritten by the next agent-detection sweep (#10794).
+   */
+  setTitle(title: string, titleMode: PanelTitleMode): void {
+    this.terminalInfo.title = title;
+    this.terminalInfo.titleMode = titleMode;
+  }
+
   acknowledgeData(_byteCount: number): void {
     // No-op: SAB-based backpressure in pty-host.ts handles all flow control
   }
@@ -1203,9 +1222,9 @@ export class TerminalProcess {
    * swallowed by `logWriteError`. Returns `{ ok: true }` on success and
    * `{ ok: false, error: NodeJS.ErrnoException }` when `pty.write()` throws.
    *
-   * Falls back to `write()` (queued chunking) for payloads >512 bytes; the
-   * caller cannot meaningfully observe failures in the chunked async path,
-   * but broadcast keystrokes are always single chunks so this is fine.
+   * Falls back to `write()` for payloads >512 bytes, which reports failures
+   * through `logWriteError` rather than returning them; broadcast keystrokes
+   * are always well under that, so the distinction never bites in practice.
    */
   tryWrite(data: string, traceId?: string): { ok: boolean; error?: NodeJS.ErrnoException } {
     return this.inputController.tryWrite(data, traceId);
@@ -1372,16 +1391,46 @@ export class TerminalProcess {
     };
   }
 
+  /**
+   * Single-flight: concurrent callers share one teardown rather than each
+   * running their own. The entry gates inside `runGracefulShutdown` (`isExited`
+   * / `wasKilled`) can't do this — neither is set until the teardown finishes,
+   * so two callers arriving together both pass. Overlapping teardowns used to
+   * be merely untidy (two `/quit` writes), but a gated key escalation makes
+   * them dangerous: each loop counts only its OWN presses, so two loops can
+   * write past the cap the agent's config exists to enforce (#11851). Hibernate
+   * racing app quit, or a bookmark capture racing a project close, is enough.
+   */
   gracefulShutdown(): Promise<string | null> {
+    if (this.gracefulShutdownInFlight) {
+      return this.gracefulShutdownInFlight;
+    }
     // eslint-disable-next-line @typescript-eslint/no-this-alias
     const self = this;
-    return runGracefulShutdown({
+    const inFlight = runGracefulShutdown({
       terminalInfo: this.terminalInfo,
       get isAgentLive() {
         return self.isAgentLive;
       },
+      acquireInputLock: () => this.inputController.acquireShutdownInputLock(),
       kill: (reason) => this.kill(reason),
     });
+    this.gracefulShutdownInFlight = inFlight;
+    // Latch cleared on a SEPARATE chain rather than by returning `inFlight
+    // .finally(...)`: chaining would add a microtask hop to every caller, and
+    // the preassigned path's whole promise is that it settles without spending
+    // anything. Cleared only if we are still the current attempt, so a late
+    // settle from a superseded promise can't unlatch a newer one. The cost is a
+    // one-tick window after settlement where a fresh call gets the finished
+    // promise back — which answers with the same captured id, and by then the
+    // terminal is killed anyway, so a real second teardown had nothing to do.
+    const clear = () => {
+      if (self.gracefulShutdownInFlight === inFlight) {
+        self.gracefulShutdownInFlight = null;
+      }
+    };
+    void inFlight.then(clear, clear);
+    return inFlight;
   }
 
   kill(

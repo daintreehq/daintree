@@ -561,7 +561,7 @@ function AgentWelcomeCard() {
                   >
                     <span className="inline-flex h-3.5 w-3.5 items-center justify-center">
                       <BrandMark brandColor={getBrandColorHex(id)} className="h-3.5 w-3.5">
-                        <Icon brandColor={getBrandColorHex(id)} />
+                        <Icon />
                       </BrandMark>
                     </span>
                     {config.name}

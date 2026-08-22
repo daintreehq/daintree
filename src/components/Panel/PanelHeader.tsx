@@ -89,6 +89,7 @@ import { fireWatchNotification } from "@/lib/watchNotification";
 import { useFleetFailureStore } from "@/store/fleetFailureStore";
 import { useFleetArmingStore } from "@/store/fleetArmingStore";
 import type { TerminalChromeDescriptor } from "@/utils/terminalChrome";
+import type { BrandMarkSurface } from "@/lib/brandIcon";
 
 export interface PanelHeaderProps {
   id: string;
@@ -312,9 +313,9 @@ function PanelHeaderComponent({
   const isHibernated = useIsHibernated(id);
 
   // Whether the overflow "..." menu has any items to show.
-  // Dock membership is capability-gated: PTY kinds plus non-PTY kinds that
-  // opt in via the registry's `dockable` flag (file panels — #10985).
-  // Offering the affordance for any other kind would silently strand it.
+  // Dock membership is capability-gated by the registry: kinds are dockable by
+  // default and a handful opt out with `dockable: false` (#10985, #11917).
+  // Offering the affordance for an opted-out kind would silently strand it.
   const showMoveToDock =
     !!onMinimize && !isMaximized && location !== "dock" && panelKindIsDockable(kind);
   const hasOverflowItems = true;
@@ -605,7 +606,6 @@ function PanelHeaderComponent({
                 chrome={tab.chrome}
                 className="w-3.5 h-3.5"
                 brandColor={tab.presetColor ?? tab.chrome.color}
-                userChosen={!!tab.presetColor}
               />
             </span>
             <span className="truncate">{tab.title}</span>
@@ -626,6 +626,22 @@ function PanelHeaderComponent({
   const headerHasDrag = !!dragListeners;
   const headerActivatorRef = headerHasDrag ? dragHandle?.setActivatorNodeRef : undefined;
 
+  // The backdrop this title bar's brand marks are measured against — the same
+  // colour the header paints below, named rather than re-derived. Several light
+  // themes repaint title bars outright through `panel-header-*`, so the
+  // extension is part of the answer rather than a refinement of it.
+  const brandSurface: BrandMarkSurface = isMaximized
+    ? { surface: "surface-sidebar" }
+    : location === "dock"
+      ? { surface: "surface-panel" }
+      : isFocused || isSelected
+        ? {
+            surface: "surface-panel",
+            extension: "panel-header-focus-bg",
+            lift: "overlay-subtle",
+          }
+        : { surface: "surface-panel", extension: "panel-header-bg" };
+
   return (
     // Compact density supplies the shared frame (h-8, px-3, border-b
     // border-divider, flex alignment, shrink-0); everything panel-only —
@@ -634,6 +650,7 @@ function PanelHeaderComponent({
     // primitive.
     <SurfaceHeader
       density="compact"
+      brandSurface={brandSurface}
       ref={headerActivatorRef}
       {...dragListeners}
       tabIndex={headerHasDrag ? 0 : undefined}
@@ -751,13 +768,19 @@ function PanelHeaderComponent({
         )
       ) : (
         <div className="flex items-center gap-2 min-w-0">
-          <span className="shrink-0 flex items-center justify-center w-3.5 h-3.5 text-daintree-text">
+          {/* The pane you are working in wears its agent's real brand colour;
+              the ones you are not sit a step back. `data-brand-active` goes on
+              the glyph's own wrapper rather than the header so it cannot leak
+              onto the tab strip, where selection is each tab's to signal. */}
+          <span
+            data-brand-active={isFocused || isSelected || undefined}
+            className="shrink-0 flex items-center justify-center w-3.5 h-3.5 text-daintree-text"
+          >
             <TerminalIcon
               kind={kind}
               chrome={chrome}
               className="w-3.5 h-3.5"
               brandColor={presetColor ?? chrome.color}
-              userChosen={!!presetColor}
             />
           </span>
 
@@ -912,6 +935,9 @@ function PanelHeaderComponent({
               <span className="truncate">{worktreeBranch}</span>
             </span>
           )}
+
+          {/* Process runs somewhere other than the worktree this panel is filed
+              under, by the user's own choice (#11840). */}
         </div>
       )}
 

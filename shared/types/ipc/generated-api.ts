@@ -80,6 +80,17 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["commands:list"]["args"]
     ): Promise<IpcInvokeMap["commands:list"]["result"]>;
   };
+  configBundle: {
+    applyImport(
+      ...args: IpcInvokeMap["config-bundle:apply-import"]["args"]
+    ): Promise<IpcInvokeMap["config-bundle:apply-import"]["result"]>;
+    export(
+      ...args: IpcInvokeMap["config-bundle:export"]["args"]
+    ): Promise<IpcInvokeMap["config-bundle:export"]["result"]>;
+    previewImport(
+      ...args: IpcInvokeMap["config-bundle:preview-import"]["args"]
+    ): Promise<IpcInvokeMap["config-bundle:preview-import"]["result"]>;
+  };
   connectivity: {
     getState(
       ...args: IpcInvokeMap["connectivity:get-state"]["args"]
@@ -360,6 +371,9 @@ export interface GeneratedElectronAPI {
     ): Promise<IpcInvokeMap["mcp-server:set-session-tier"]["result"]>;
   };
   menu: {
+    showApplication(
+      ...args: IpcInvokeMap["menu:show-application"]["args"]
+    ): Promise<IpcInvokeMap["menu:show-application"]["result"]>;
     showContext(
       ...args: IpcInvokeMap["menu:show-context"]["args"]
     ): Promise<IpcInvokeMap["menu:show-context"]["result"]>;
@@ -487,6 +501,9 @@ export interface GeneratedElectronAPI {
     getPanelKinds(
       ...args: IpcInvokeMap["plugin:panel-kinds-get"]["args"]
     ): Promise<IpcInvokeMap["plugin:panel-kinds-get"]["result"]>;
+    getRecipes(
+      ...args: IpcInvokeMap["plugin:recipes-get"]["args"]
+    ): Promise<IpcInvokeMap["plugin:recipes-get"]["result"]>;
     getSettingValues(
       ...args: IpcInvokeMap["plugin:settings-get-values"]["args"]
     ): Promise<IpcInvokeMap["plugin:settings-get-values"]["result"]>;
@@ -517,6 +534,9 @@ export interface GeneratedElectronAPI {
     pickPath(
       ...args: IpcInvokeMap["plugin:pick-path"]["args"]
     ): Promise<IpcInvokeMap["plugin:pick-path"]["result"]>;
+    recordRecipeUse(
+      ...args: IpcInvokeMap["plugin:recipe-record-use"]["args"]
+    ): Promise<IpcInvokeMap["plugin:recipe-record-use"]["result"]>;
     registerAction(
       ...args: IpcInvokeMap["plugin:actions-register"]["args"]
     ): Promise<IpcInvokeMap["plugin:actions-register"]["result"]>;
@@ -550,6 +570,9 @@ export interface GeneratedElectronAPI {
     unregisterAction(
       ...args: IpcInvokeMap["plugin:actions-unregister"]["args"]
     ): Promise<IpcInvokeMap["plugin:actions-unregister"]["result"]>;
+    updateRecipeMetadata(
+      ...args: IpcInvokeMap["plugin:recipe-metadata-update"]["args"]
+    ): Promise<IpcInvokeMap["plugin:recipe-metadata-update"]["result"]>;
     validateActionIds(
       ...args: IpcInvokeMap["plugin:validate-action-ids"]["args"]
     ): Promise<IpcInvokeMap["plugin:validate-action-ids"]["result"]>;

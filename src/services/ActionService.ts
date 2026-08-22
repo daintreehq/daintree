@@ -16,12 +16,17 @@ import { keybindingService } from "./KeybindingService";
 import { shortcutHintStore } from "../store/shortcutHintStore";
 import { useUIStore } from "@/store/uiStore";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { PartialSuccessError } from "@shared/utils/partialSuccess";
 import {
   WORKBENCH_TIER_TOOLS,
   ACTION_TIER_ADDONS,
   SYSTEM_TIER_ADDONS,
 } from "@shared/config/helpAssistantTierAllowlists";
 import { deriveBand } from "../../shared/utils/actionRiskBand.js";
+import {
+  RECIPE_DISPATCH_DANGER_RATIONALE,
+  resolveEffectiveActionDanger,
+} from "./actions/effectiveDanger";
 
 /**
  * Fields that should be redacted from event payloads to prevent secret leakage.
@@ -353,7 +358,18 @@ export class ActionService {
    * compilation and cloning) — use when only danger/title/description are
    * needed, e.g. the MCP bridge's confirmation gate.
    */
-  getDispatchMeta(id: ActionId): {
+  getDispatchMeta(
+    id: ActionId,
+    /**
+     * The dispatch this metadata is for. Omitted, `danger` is the definition's
+     * declared value; supplied, it is the EFFECTIVE tier
+     * `dispatch()` will enforce for that exact call — which is what lets the
+     * MCP bridge raise a modal for an args-conditional elevation instead of
+     * dispatching straight into a `CONFIRMATION_REQUIRED` it can't resolve
+     * (#11860).
+     */
+    dispatch?: { source: ActionSource; args: unknown }
+  ): {
     danger: ActionDanger;
     title: string;
     description: string;
@@ -361,14 +377,24 @@ export class ActionService {
   } | null {
     const definition = this.registry.get(id);
     if (!definition) return null;
+    const danger = dispatch
+      ? resolveEffectiveActionDanger(definition.danger, dispatch.source, dispatch.args)
+      : definition.danger;
+    const elevated = danger !== definition.danger;
     return {
-      danger: definition.danger,
+      danger,
       title: definition.title ?? "",
       description: definition.description ?? "",
       // Surfaces in the MCP host confirmation dialog so the human sees the same
       // "why this is gated" reasoning the model does (#11342). Omitted when
-      // absent so callers/tests observe exactly the populated fields.
-      ...(definition.dangerRationale ? { dangerRationale: definition.dangerRationale } : {}),
+      // absent so callers/tests observe exactly the populated fields. An
+      // elevated dispatch falls back to the elevation's own rationale, since a
+      // statically-safe action has no reason to carry one.
+      ...(definition.dangerRationale
+        ? { dangerRationale: definition.dangerRationale }
+        : elevated
+          ? { dangerRationale: RECIPE_DISPATCH_DANGER_RATIONALE }
+          : {}),
     };
   }
 
@@ -517,8 +543,13 @@ export class ActionService {
     // have NO confirm bypass — the `confirmed` flag is ignored for plugin
     // sources, so danger:"confirm" actions always return CONFIRMATION_REQUIRED
     // for them even if a caller spoofs `confirmed: true` on a "plugin" dispatch.
+    // Computed from VALIDATED args and before `run()`, so an args-conditional
+    // elevation (an agent dispatch carrying a recipeId) is rejected before the
+    // composite has created a worktree or fetched an issue — not prompted for
+    // after the effects have already landed (#11860).
+    const effectiveDanger = resolveEffectiveActionDanger(definition.danger, source, validatedArgs);
     if (
-      definition.danger === "confirm" &&
+      effectiveDanger === "confirm" &&
       (source === "plugin" || (source === "agent" && !options?.confirmed))
     ) {
       const error: ActionError = {
@@ -614,7 +645,14 @@ export class ActionService {
       return { ok: true, result: (validatedResult ? validatedResult.data : result) as Result };
     } catch (err) {
       const error: ActionError = {
-        code: "EXECUTION_ERROR",
+        // `PartialSuccessError` is the one throw that carries a provenance
+        // claim: a composite created a real worktree before failing, and the
+        // MCP ownership ledger attributes it on the strength of this code
+        // rather than the message shape (#11909). An `instanceof` check is
+        // sound here because the throw and this catch are the same realm; an
+        // upstream forge/git rejection reaching this line is an ordinary
+        // `EXECUTION_ERROR` however its message happens to read.
+        code: err instanceof PartialSuccessError ? "PARTIAL_SUCCESS" : "EXECUTION_ERROR",
         message: formatErrorMessage(err, `Action "${actionId}" failed`),
         details: err,
       };

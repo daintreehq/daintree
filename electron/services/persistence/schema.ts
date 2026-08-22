@@ -27,6 +27,12 @@ export const projects = sqliteTable(
     // "Suspended to free memory" label in the project switcher. Cleared when the
     // project is reopened (`setCurrentProject`).
     autoParkedAt: integer("auto_parked_at"),
+    // How many saved agent panels this project would restore if opened (#11801)
+    // — the switcher's resume dot. Derived from the persisted project state
+    // whenever it is written, and reconciled for older rows by the deferred
+    // session-maintenance pass. Null means "not computed yet" and is distinct
+    // from a computed 0: a row that has never been resolved makes no claim.
+    resumableAgentCount: integer("resumable_agent_count"),
     // False for a folder adopted without git (issue #11405). Null for every
     // legacy row and every repository-backed project — absence means
     // git-backed, so no backfill is needed.
@@ -74,6 +80,12 @@ export const scratches = sqliteTable("scratches", {
   // all renderer-facing queries.
   deletedAt: integer("deleted_at"),
   lastCompletionSeenAt: integer("last_completion_seen_at"),
+  // How many saved agent panels this scratch would restore if opened (#11821)
+  // — the same switcher resume dot projects carry. Scratches persist their
+  // panel grid under the shared `projects/<id>/` layout, so the count is
+  // derived by the same write-through observer and reconciled by the same
+  // deferred sweep. Null means "not computed yet", distinct from a computed 0.
+  resumableAgentCount: integer("resumable_agent_count"),
 });
 
 export type ProjectRow = typeof projects.$inferSelect;

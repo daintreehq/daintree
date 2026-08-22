@@ -102,6 +102,7 @@ import type {
   SpawnResult,
   TerminalReliabilityMetricPayload,
   TerminalResizeResult,
+  TerminalSubmitStatusPayload,
   TerminalStatusPayload,
   TerminalResourceBatchPayload,
   BroadcastWriteResultPayload,
@@ -1400,6 +1401,7 @@ export interface IpcEventMap {
     timestamp: number;
   };
   "terminal:status": TerminalStatusPayload;
+  "terminal:submit-status": TerminalSubmitStatusPayload;
   "terminal:reliability-metric": TerminalReliabilityMetricPayload;
   "terminal:fd-leak-warning": FdLeakWarningPayload;
   "terminal:resource-metrics": { metrics: TerminalResourceBatchPayload; timestamp: number };
@@ -1655,6 +1657,17 @@ export interface IpcEventMap {
   "project:stats-updated": ProjectStatusMap;
   "fleet:snapshot-updated": FleetSnapshot;
   "project:updated": Project;
+  /**
+   * A project was put to sleep. Carries the project id so a window showing it
+   * drops to the no-project state — its view is deliberately left alive (the
+   * window's renderer IS that project's WebContentsView), so nothing else tells
+   * a SECOND window its project's terminals are gone. Deliberately its own
+   * event rather than an inference from `project:updated` reaching `closed`:
+   * relocation, project adoption, the idle sweep and a plain metadata write all
+   * reach that status too, and blanking a visible window on any of them is
+   * wrong.
+   */
+  "project:slept": string;
   "project:removed": string;
   // Main asks the renderer to open the guided git-init dialog for a folder the
   // user tried to open that isn't a repository yet (Dock drop, Cmd+O, Recent
@@ -1818,6 +1831,11 @@ export interface IpcEventMap {
 
   // Accessibility events
   "accessibility:support-changed": { enabled: boolean };
+  /**
+   * A configuration bundle was applied (#11889). No payload — each view
+   * re-reads the config it mirrors rather than trusting a pushed snapshot.
+   */
+  "config-bundle:imported": undefined;
 
   // Hibernation events
   "hibernation:project-hibernated": HibernationProjectHibernatedPayload;
@@ -1905,6 +1923,16 @@ export interface IpcEventMap {
   // broadcasts.
   "plugin:agents-changed": {
     agents: Record<string, import("../../config/agentRegistry.js").AgentConfig>;
+    complete: boolean;
+  };
+
+  // Plugin recipe registry events (main → renderer, #11860). Carries the full
+  // effective plugin recipe list — manifest content with the user's sidecar
+  // metadata already overlaid — so the renderer replaces its plugin tier
+  // wholesale rather than reconciling per-plugin. Same `complete` flag
+  // semantics as toolbar buttons.
+  "plugin:recipes-changed": {
+    recipes: import("../project.js").TerminalRecipe[];
     complete: boolean;
   };
 
@@ -2077,6 +2105,8 @@ export type IpcEventBusMap = Pick<
   | "plugin:context-menu-items-changed"
   // Plugin agent registry (global broadcast)
   | "plugin:agents-changed"
+  // Plugin recipe registry (global broadcast)
+  | "plugin:recipes-changed"
   // Plugin file-decoration invalidation (global broadcast)
   | "plugin:decorations-changed"
   // Plugin panel-badge state (global broadcast)
@@ -2106,6 +2136,7 @@ export type IpcEventBusMap = Pick<
   | "terminal:resize-result"
   | "terminal:reliability-metric"
   | "terminal:status"
+  | "terminal:submit-status"
   // Agent session journaled — resume surfaces refetch (global broadcast)
   | "agent-session:recorded"
   // A gated park auto-released — the ready-again hand-back (global broadcast)

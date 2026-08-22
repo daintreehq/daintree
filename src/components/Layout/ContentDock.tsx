@@ -8,18 +8,17 @@ import { cn } from "@/lib/utils";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { usePanelStore, useWorktreeSelectionStore } from "@/store";
 import {
-  isBrowserPanel,
   isDockPanel,
-  isFilePanel,
   isPtyPanel,
-  type BrowserPanelData,
   type DockPanelData,
-  type FilePanelData,
   type PanelInstance,
 } from "@shared/types/panel";
-import { extractHostPort } from "@/components/Browser/browserUtils";
+import { dockChipTitle } from "./dockChipTitle";
 import { getRenderablePanel } from "@/store/slices/panelRegistry/selectors";
-import { panelMatchesWorktreeScope } from "@/store/slices/panelRegistry/worktreeIndex";
+import {
+  collectUngroupedCandidateIds,
+  panelMatchesWorktreeScope,
+} from "@/store/slices/panelRegistry/worktreeIndex";
 import type { TrashedTerminal } from "@/store/slices";
 import { DockedTerminalItem } from "./DockedTerminalItem";
 import { DockedNonPtyPanelItem } from "./DockedNonPtyPanelItem";
@@ -79,40 +78,10 @@ export type { DockDensity } from "@/store/preferencesStore";
 
 // Stable empty refs so the narrowed dock subscriptions below can bail under
 // `useShallow` when the dock is empty instead of yielding a fresh `[]`.
-const EMPTY_DOCK_SIGNATURE: readonly string[] = [];
 const EMPTY_DOCK_TERMINALS: readonly DockPanelData[] = [];
 
 interface ContentDockProps {
   density?: DockDensity;
-}
-
-// File name beats the generic kind title in the chip, mirroring FilePane's own
-// title layering (a user-locked rename still wins).
-function fileChipTitle(panel: FilePanelData): string {
-  const fileName = panel.filePath?.split(/[/\\]/).filter(Boolean).pop();
-  return panel.titleMode === "user" ? panel.title : (fileName ?? panel.title);
-}
-
-// Host beats the generic "Browser" title in the chip, mirroring BrowserPane's
-// displayTitle (a page-supplied title still wins; a user-locked rename always
-// wins). Falls back to the kind title when there's no host to show (e.g.
-// about:blank, whose URL.host is empty) so the chip is never blank.
-function browserChipTitle(panel: BrowserPanelData): string {
-  if (panel.titleMode === "user") return panel.title;
-  if (panel.title && panel.title !== "Browser") return panel.title;
-  const currentUrl = panel.browserHistory?.present || panel.browserUrl || "";
-  const host = currentUrl ? extractHostPort(currentUrl) : "";
-  // Ultimate fallback so the chip is never blank (e.g. empty title + no URL).
-  return host || panel.title || "Browser";
-}
-
-// Chip label for a non-PTY dock panel. File and browser get their kind-specific
-// derivations; every other dockable kind (dev-preview if opted in, plugin view
-// panels — #11332) falls back to the panel title so the chip is never blank.
-function dockChipTitle(panel: PanelInstance): string {
-  if (isFilePanel(panel)) return fileChipTitle(panel);
-  if (isBrowserPanel(panel)) return browserChipTitle(panel);
-  return panel.title;
 }
 
 export function ContentDock({ density = "normal" }: ContentDockProps) {
@@ -133,14 +102,12 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
 
   const trashedTerminals = usePanelStore((state) => state.trashedTerminals);
   const storeTabGroups = usePanelStore((state) => state.tabGroups);
-  const getTabGroups = usePanelStore((state) => state.getTabGroups);
-  const getTabGroupPanels = usePanelStore((state) => state.getTabGroupPanels);
   const helpTerminalId = useHelpPanelStore((s) => s.terminalId);
   const setDockDensity = usePreferencesStore((s) => s.setDockDensity);
 
-  // Narrow dock subscriptions (#10908). Subscribing to the whole `panelsById`
+  // Narrow dock subscription (#10908). Subscribing to the whole `panelsById`
   // re-rendered the dock on every panel's rAF status-buffer flush — including
-  // grid agents that never appear here. Both selectors below react only to dock
+  // grid agents that never appear here. This selector reacts only to dock
   // panels. Membership is `isDockPanel` — every registered kind that hasn't
   // opted out with `dockable: false`, PTY and non-PTY alike, including plugin
   // kinds (#11332). Panels are read through `getRenderablePanel` (not
@@ -149,38 +116,32 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
   // #10512 grid render-eligibility predicate, which deliberately does not
   // apply to the dock.
   //
-  // `dockPanelSignature` is a structural `${id}:${worktreeId}` list that stays
-  // referentially stable across status-buffer flushes, so the (activity-agnostic)
-  // `tabGroups` derivation recomputes only on real dock membership/scope changes.
-  // It iterates `panelsById` (not `panelIds`) so a batched dock panel — committed
-  // to `panelsById` before `panelIds` is revealed at flush — still invalidates
-  // `tabGroups`, matching the old whole-map subscription's recompute and letting
-  // `getTabGroups` surface the index-only panel (#9649).
-  const dockPanelSignature = usePanelStore(
-    useShallow((state) => {
-      const result: string[] = [];
-      for (const id of Object.keys(state.panelsById)) {
-        const terminal = getRenderablePanel(state.panelsById, id);
-        if (
-          terminal &&
-          isDockPanel(terminal) &&
-          terminal.location === "dock" &&
-          !state.trashedTerminals.has(terminal.id)
-        ) {
-          result.push(`${terminal.id}:${terminal.worktreeId ?? ""}`);
-        }
-      }
-      return result.length === 0 ? EMPTY_DOCK_SIGNATURE : result;
-    })
-  );
-
-  // Live dock panel objects. The dock renders live activity/agent state from
-  // these, so unlike the grid this stays object-valued — but `useShallow` only
-  // fires when a *dock* panel's reference changes, not on grid-agent churn.
+  // The list is object-valued (the dock renders live activity/agent state from
+  // it) and ordered, and it is the sole authority for chip order — so a pure
+  // `reorderTerminals`, which rewrites only `panelIds`/`panelIdsByWorktreeId`,
+  // repaints the rail. Order used to come from the `getTabGroups` action behind
+  // a `useMemo` whose deps were read for invalidation only; React Compiler
+  // drops deps a callback never consumes, so that memo held the pre-drag order
+  // and every dock reorder snapped back (#11873). Everything downstream now
+  // consumes its inputs for real, so the compiler keeps them in the cache key.
+  //
+  // Candidate ids come from `collectUngroupedCandidateIds`, the same helper
+  // `getTabGroups` uses, so a panel committed mid-spawn-batch — eagerly in the
+  // worktree index while `panelIds` only appends at flush — still paints on
+  // first mount (#9649). Pass the active worktree, not `undefined`: the scoped
+  // call orders pending ids active-bucket-then-global, while the unscoped one
+  // follows `panelIdsByWorktreeId`'s insertion order. Only the pending tail
+  // differs, and only while a batch is open, but the downstream worktree filter
+  // can't restore the order — so scope it here and stay identical to
+  // `getTabGroups`. Committed `panelIds` order is unaffected either way.
   const dockTerminalsRaw = usePanelStore(
     useShallow((state) => {
       const result: DockPanelData[] = [];
-      for (const id of state.panelIds) {
+      for (const id of collectUngroupedCandidateIds(
+        state.panelIds,
+        state.panelIdsByWorktreeId,
+        activeWorktreeId ?? undefined
+      )) {
         const terminal = getRenderablePanel(state.panelsById, id);
         if (
           terminal &&
@@ -194,23 +155,6 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
       return result.length === 0 ? EMPTY_DOCK_TERMINALS : result;
     })
   );
-
-  // Get tab groups for the dock, excluding the help panel terminal
-  const tabGroups = useMemo(() => {
-    void dockPanelSignature;
-    void storeTabGroups;
-    void trashedTerminals;
-    const groups = getTabGroups("dock", activeWorktreeId ?? undefined);
-    if (!helpTerminalId) return groups;
-    return groups.filter((g) => !(g.panelIds.length === 1 && g.panelIds[0] === helpTerminalId));
-  }, [
-    getTabGroups,
-    activeWorktreeId,
-    dockPanelSignature,
-    storeTabGroups,
-    trashedTerminals,
-    helpTerminalId,
-  ]);
 
   const dockTerminals = useMemo<DockPanelData[]>(() => {
     // `dockTerminalsRaw` already narrows to dock/dockable/non-trashed panels;
@@ -439,14 +383,11 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
         item.terminal !== undefined
     );
 
+  // Every input is genuinely consumed, so React Compiler keeps all three in the
+  // cache key — the reason chip order now tracks `panelIds` (#11873).
   const dockItems = useMemo<DockRenderItem[]>(() => {
-    return buildDockRenderItems(
-      tabGroups,
-      (groupId) => getTabGroupPanels(groupId, "dock").filter(isPtyPanel),
-      helpTerminalId,
-      dockTerminals
-    );
-  }, [tabGroups, getTabGroupPanels, helpTerminalId, dockTerminals]);
+    return buildDockRenderItems(dockTerminals, storeTabGroups, activeWorktreeId);
+  }, [dockTerminals, storeTabGroups, activeWorktreeId]);
 
   // Tab group IDs for SortableContext
   const panelIds = useMemo(() => {
@@ -560,8 +501,8 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
                       }
 
                       // Multi-panel group: pass group context for group-aware DnD.
-                      // Groups resolve through the isPtyPanel filter above, so
-                      // the runtime narrow below never drops a panel.
+                      // `buildDockRenderItems` resolves group members PTY-only,
+                      // so the runtime narrow below never drops a panel.
                       const firstPanel = panels[0]!;
                       return (
                         <SortableDockItem

@@ -2,13 +2,21 @@ import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import { z } from "zod";
 import { usePanelStore } from "@/store/panelStore";
 import { useLayoutUndoStore } from "@/store/layoutUndoStore";
-import { buildPanelDuplicateOptions } from "@/services/terminal/panelDuplicationService";
+import {
+  buildPanelDuplicateOptions,
+  panelKindHasLaunchRoot,
+  resolveInheritedPanelCwd,
+} from "@/services/terminal/panelDuplicationService";
 import { flushOptimisticCloses } from "@/services/terminal/optimisticPanelClose";
 import { moveTerminalToWorktreeAndFollowRescue } from "@/services/terminal/crossWorktreeMove";
 import { buildResumePanelOptions } from "@/services/agentResume";
 import { getDefaultTitle } from "@/store/slices/panelRegistry/helpers";
 import { getNarrowPanel } from "@/store/slices/panelRegistry/selectors";
 import { TerminalSpawnSourceSchema, AddPanelFocusPolicySchema } from "./schemas";
+import { requireExplicitTerminalIdForAgentDispatch } from "./terminalTargetBinding";
+import { getCurrentViewStoreOrNull } from "@/store/createWorktreeStore";
+import { isForegroundDispatch } from "./dispatchSource";
+import type { AddPanelOptions } from "@/store/slices/panelRegistry/types";
 import type { PtyPanelData, TerminalSpawnSource } from "@shared/types/panel";
 import { isPtyPanel } from "@shared/types/panel";
 
@@ -153,12 +161,19 @@ export function registerTerminalSpawnActions(
                 "grid"
               )
             : lastClosed;
-          await state.addPanel({
+          const reopenOptions: AddPanelOptions = {
             ...baseOptions,
             location: "grid",
             worktreeId: lastClosed.worktreeId ?? callbacks.getActiveWorktreeId(),
             ...(spawnedBy ? { spawnedBy } : {}),
-          });
+          };
+          // The worktree id above can fall back to the active worktree while
+          // `cwd` still carries the closed panel's directory, so re-derive the
+          // directory from whichever id actually won (#11854).
+          if (panelKindHasLaunchRoot(reopenOptions.kind)) {
+            reopenOptions.cwd = resolveInheritedPanelCwd(reopenOptions);
+          }
+          await state.addPanel(reopenOptions);
         } else {
           await state.addPanel({
             kind: "terminal",
@@ -244,22 +259,64 @@ export function registerTerminalSpawnActions(
   actions.set("terminal.moveToWorktree", () => ({
     id: "terminal.moveToWorktree",
     title: "Move to Worktree",
-    description: "Move terminal to a different worktree",
+    description:
+      "Move a terminal panel to a different worktree. The process is never restarted: a live " +
+      "agent keeps running in the directory it launched from, and its pane offers to tell it " +
+      "to continue there. A panel sharing a tab group travels with the rest of that group, " +
+      "so this can relocate more than the panel named. The move is reversible. Name the " +
+      "target: an automated caller cannot see what the user focused.",
     category: "terminal",
     kind: "command",
+    // Relabelling a panel is reversible — drag it back — and nothing here
+    // touches the running process, so there is no confirmation (#11853). The
+    // pane's own banner is what surfaces the launch-root mismatch, and telling
+    // the agent takes a second, explicit click.
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({
       terminalId: z.string().optional(),
-      worktreeId: z.string(),
+      worktreeId: z.string().min(1),
     }),
-    run: async (args: unknown) => {
+    run: async (args: unknown, ctx) => {
       const { terminalId, worktreeId } = args as { terminalId?: string; worktreeId: string };
+      requireExplicitTerminalIdForAgentDispatch("terminal.moveToWorktree", terminalId, ctx);
       const state = usePanelStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (targetId) {
+        // Only a person who can see the panel gets a silent no-op; anything
+        // headless — agent, plugin, or a source we don't recognise — is told,
+        // because it cannot observe the difference between "moved" and
+        // "nothing there" and would reason on from a false success.
+        const reportsFailures = !isForegroundDispatch(ctx.dispatchSource);
+        // `Object.hasOwn`, not a truthiness check: `panelsById` is a plain
+        // object, so an id like "constructor" resolves off the prototype and
+        // would be moved as if it were a real panel (same reason
+        // `terminal.close` does this).
+        if (!Object.hasOwn(state.panelsById, targetId)) {
+          if (reportsFailures) {
+            throw new Error(
+              "terminal.moveToWorktree found no panel with that `terminalId` — it may have been closed. Re-read the terminal listing and pass a current panel id."
+            );
+          }
+          return;
+        }
         const terminal = state.panelsById[targetId];
         if (!terminal || terminal.worktreeId === worktreeId) {
+          return;
+        }
+        // Checked for EVERY caller, not just headless ones: filing a panel
+        // under an id no view can select hides a live process whoever asked for
+        // it, and a menu row can go stale between opening and clicking. Only
+        // the reporting differs. Verified when a view store can answer — the
+        // accessor is null only before the provider mounts, which cannot
+        // coexist with a panel to move, so there is nothing to fail closed on.
+        const worktrees = getCurrentViewStoreOrNull()?.getState().worktrees;
+        if (worktrees && !worktrees.has(worktreeId)) {
+          if (reportsFailures) {
+            throw new Error(
+              "terminal.moveToWorktree found no open worktree with that `worktreeId`. Pass an id from the worktree listing, or create the worktree first and use the id it returns."
+            );
+          }
           return;
         }
 
@@ -272,18 +329,33 @@ export function registerTerminalSpawnActions(
   actions.set("terminal.moveToNewWorktree", () => ({
     id: "terminal.moveToNewWorktree",
     title: "Move to New Worktree…",
-    description: "Create a new worktree and transfer the agent session there",
+    description: "Create a new worktree and move this terminal panel to it",
     category: "terminal",
     kind: "command",
     danger: "safe",
     scope: "renderer",
     argsSchema: z.object({ terminalId: z.string().optional() }).optional(),
-    run: async (args: unknown) => {
+    run: async (args: unknown, ctx) => {
       const { terminalId } = (args as { terminalId?: string } | undefined) ?? {};
+      // Deliberately not in any tier allowlist, and guarded here anyway as
+      // defense in depth — the same treatment `terminal.toggleMaximize` gets.
+      // This action's whole gesture is the interactive create-worktree dialog
+      // (#11853): the move happens in the dialog's `onCreated` callback, which
+      // a headless caller can never answer, and `run()` has already returned by
+      // then. Allowlisting it would hang a modal in front of the user and
+      // report a move that never happened (#11532, #11877). An agent that wants
+      // a panel in a fresh worktree creates the worktree with the headless
+      // worktree-creation capability, then moves the panel to the id it
+      // returns.
+      if (ctx.dispatchSource === "agent") {
+        throw new Error(
+          "terminal.moveToNewWorktree can't be dispatched by an agent or MCP client — it opens the new-worktree dialog, which a headless caller can never answer. Don't retry it. Create the worktree headlessly with `worktree.createWithRecipe` (pass `branchName`, and omit `recipeId` when no recipe is wanted), then call `terminal.moveToWorktree` with the original `terminalId` and the `worktreeId` it returns."
+        );
+      }
       const state = usePanelStore.getState();
       const targetId = terminalId ?? state.focusedId;
       if (!targetId) return;
-      state.moveToNewWorktreeAndTransfer(targetId);
+      state.moveToNewWorktree(targetId);
     },
   }));
 }

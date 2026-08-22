@@ -39,7 +39,7 @@ describe("FileSearchService", () => {
     simpleGitMock.mockImplementation(() => gitClientMock);
     gitClientMock.env.mockReturnValue(gitClientMock);
     gitClientMock.checkIsRepo.mockResolvedValue(false);
-    gitClientMock.revparse.mockResolvedValue("");
+    gitClientMock.revparse.mockRejectedValue(new Error("not a git repository"));
     gitClientMock.raw.mockResolvedValue("");
   });
 
@@ -85,7 +85,7 @@ describe("FileSearchService", () => {
     const result = await service.search({ cwd: dir, query: "app", limit: 10 });
 
     expect(result).toContain("src/app.ts");
-    expect(gitClientMock.checkIsRepo).toHaveBeenCalledTimes(1);
+    expect(gitClientMock.raw).toHaveBeenCalledTimes(1);
   });
 
   it("uses git file listing when repository is available", async () => {
@@ -128,7 +128,6 @@ describe("FileSearchService", () => {
 
     expect(first).toContain("src/main.ts");
     expect(second).toContain("README.md");
-    expect(gitClientMock.checkIsRepo).toHaveBeenCalledTimes(1);
     expect(gitClientMock.raw).toHaveBeenCalledTimes(1);
   });
 

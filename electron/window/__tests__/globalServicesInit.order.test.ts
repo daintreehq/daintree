@@ -252,20 +252,39 @@ vi.mock("../windowRef.js", () => ({
   getProjectViewManager: vi.fn(),
 }));
 
+const broadcastToRendererMock = vi.hoisted(() => vi.fn());
+vi.mock("../../ipc/utils.js", () => ({
+  broadcastToRenderer: broadcastToRendererMock,
+}));
+
 vi.mock("../../ipc/handlers/projectCrud/index.js", () => ({
   getProjectStatsService: vi.fn(),
 }));
 
 const projectStoreMock = vi.hoisted(() => ({
-  getAllProjects: vi.fn<() => { id: string }[]>(() => []),
-  getProjectState: vi.fn<(id: string) => Promise<{ terminals?: { id: string }[] } | null>>(
+  getAllProjects: vi.fn<() => { id: string; resumableAgentCount?: number }[]>(() => []),
+  getProjectState: vi.fn<(id: string) => Promise<{ terminals?: Record<string, unknown>[] } | null>>(
     async () => null
   ),
   wasStateUnreadableThisSession: vi.fn<(id: string) => boolean>(() => false),
+  reconcileResumableAgentCount: vi.fn<
+    (id: string, previous: number | null, count: number | null) => unknown
+  >(() => null),
 }));
 
 vi.mock("../../services/ProjectStore.js", () => ({
   projectStore: projectStoreMock,
+}));
+
+const scratchStoreMock = vi.hoisted(() => ({
+  getAllScratches: vi.fn<() => { id: string; resumableAgentCount?: number }[]>(() => []),
+  reconcileResumableAgentCount: vi.fn<
+    (id: string, previous: number | null, count: number | null) => unknown
+  >(() => null),
+}));
+
+vi.mock("../../services/ScratchStore.js", () => ({
+  scratchStore: scratchStoreMock,
 }));
 
 vi.mock("../../setup/environment.js", () => ({
@@ -341,12 +360,30 @@ describe("evictStaleSessionFiles orphan-pass safety (#11349)", () => {
     projectStoreMock.getProjectState.mockResolvedValue(null);
     projectStoreMock.wasStateUnreadableThisSession.mockReset();
     projectStoreMock.wasStateUnreadableThisSession.mockReturnValue(false);
+    projectStoreMock.reconcileResumableAgentCount.mockReset();
+    projectStoreMock.reconcileResumableAgentCount.mockReturnValue(null);
+    scratchStoreMock.getAllScratches.mockReset();
+    scratchStoreMock.getAllScratches.mockReturnValue([]);
+    scratchStoreMock.reconcileResumableAgentCount.mockReset();
+    scratchStoreMock.reconcileResumableAgentCount.mockReturnValue(null);
+    broadcastToRendererMock.mockReset();
   }
 
   beforeEach(resetSweepMocks);
   // Restore defaults so a custom implementation set here can't leak into the
   // sibling "task ordering" describe — these hoisted mocks are shared.
   afterEach(resetSweepMocks);
+
+  /** A saved panel the resume count is allowed to count. */
+  const agentPanel = (id: string, overrides: Record<string, unknown> = {}) => ({
+    id,
+    title: "Agent",
+    kind: "terminal",
+    cwd: "/repo",
+    location: "grid",
+    launchAgentId: "claude",
+    ...overrides,
+  });
 
   it("passes a populated knownIds set when every project-state read is reliable", async () => {
     projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-a" }, { id: "proj-b" }]);
@@ -405,6 +442,273 @@ describe("evictStaleSessionFiles orphan-pass safety (#11349)", () => {
 
     expect(evictSessionFilesMock).toHaveBeenCalledTimes(1);
     expect(evictSessionFilesMock.mock.calls[0][0].knownIds).toBeUndefined();
+  });
+
+  /**
+   * The sweep also backfills the switcher's resume count (#11801), reusing the
+   * project states it already loaded. These cover the half that decides what a
+   * row is allowed to claim — the reconciler itself is tested against a real DB
+   * in ProjectStore.resumableAgentCount.test.ts.
+   */
+  describe("resume-count backfill", () => {
+    it("counts the agent panels a readable state would restore", async () => {
+      projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-a" }]);
+      projectStoreMock.getProjectState.mockResolvedValue({
+        terminals: [
+          agentPanel("t1"),
+          agentPanel("t2"),
+          agentPanel("t3", { launchAgentId: undefined }),
+        ],
+      });
+
+      await __test__.evictStaleSessionFiles();
+
+      expect(projectStoreMock.reconcileResumableAgentCount).toHaveBeenCalledWith("proj-a", null, 2);
+    });
+
+    it("treats a project that never persisted state as a counted zero", async () => {
+      // Benign ENOENT: nothing to restore is an answer, not an unknown.
+      projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-a" }]);
+      projectStoreMock.getProjectState.mockResolvedValue(null);
+
+      await __test__.evictStaleSessionFiles();
+
+      expect(projectStoreMock.reconcileResumableAgentCount).toHaveBeenCalledWith("proj-a", null, 0);
+    });
+
+    it("retracts the claim for a project whose state could not be read", async () => {
+      // A corrupt or future-schema state.json enumerates nothing, so a row
+      // holding an old count must go back to making no claim — not to zero,
+      // which would assert something nobody established.
+      projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-a", resumableAgentCount: 2 }]);
+      projectStoreMock.getProjectState.mockResolvedValue(null);
+      projectStoreMock.wasStateUnreadableThisSession.mockReturnValue(true);
+
+      await __test__.evictStaleSessionFiles();
+
+      expect(projectStoreMock.reconcileResumableAgentCount).toHaveBeenCalledWith("proj-a", 2, null);
+    });
+
+    it("compares against the count each row already carried", async () => {
+      // The previous value is what makes the reconciler's compare-and-swap
+      // meaningful; passing null for a row that had a count would let a stale
+      // read clobber a fresher one.
+      projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-a", resumableAgentCount: 0 }]);
+      projectStoreMock.getProjectState.mockResolvedValue({ terminals: [agentPanel("t1")] });
+
+      await __test__.evictStaleSessionFiles();
+
+      expect(projectStoreMock.reconcileResumableAgentCount).toHaveBeenCalledWith("proj-a", 0, 1);
+    });
+
+    it("broadcasts only the rows that actually moved", async () => {
+      projectStoreMock.getAllProjects.mockReturnValue([{ id: "moved" }, { id: "unchanged" }]);
+      projectStoreMock.getProjectState.mockResolvedValue({ terminals: [agentPanel("t1")] });
+      projectStoreMock.reconcileResumableAgentCount.mockImplementation((id: string) =>
+        id === "moved" ? { id: "moved", resumableAgentCount: 1 } : null
+      );
+
+      await __test__.evictStaleSessionFiles();
+
+      const projectUpdates = broadcastToRendererMock.mock.calls.filter(
+        ([channel]) => channel === "project:updated"
+      );
+      expect(projectUpdates).toHaveLength(1);
+      expect(projectUpdates[0][1]).toMatchObject({ id: "moved" });
+    });
+
+    it("still runs the orphan pass when a row's count cannot be written", async () => {
+      // The count is derived metadata riding a destructive sweep. A DB failure
+      // must not cost the eviction pass it is a passenger on.
+      projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-a" }]);
+      projectStoreMock.getProjectState.mockResolvedValue({ terminals: [agentPanel("t1")] });
+      projectStoreMock.reconcileResumableAgentCount.mockImplementation(() => {
+        throw new Error("database is locked");
+      });
+
+      await __test__.evictStaleSessionFiles();
+
+      expect(evictSessionFilesMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  /**
+   * The same backfill for scratches (#11821). Without it the write-path fix
+   * alone leaves every scratch that existed before the field dark forever —
+   * which is the bug again, one population over.
+   */
+  describe("scratch resume-count backfill", () => {
+    it("counts a dormant scratch's saved agents and fills its row", async () => {
+      scratchStoreMock.getAllScratches.mockReturnValue([{ id: "scratch-a" }]);
+      projectStoreMock.getProjectState.mockResolvedValue({
+        terminals: [agentPanel("t1"), agentPanel("t2")],
+      });
+
+      await __test__.evictStaleSessionFiles();
+
+      expect(scratchStoreMock.reconcileResumableAgentCount).toHaveBeenCalledWith(
+        "scratch-a",
+        null,
+        2
+      );
+    });
+
+    it("reads an absent scratch state as an authoritative zero", async () => {
+      scratchStoreMock.getAllScratches.mockReturnValue([{ id: "scratch-a" }]);
+      projectStoreMock.getProjectState.mockResolvedValue(null);
+
+      await __test__.evictStaleSessionFiles();
+
+      expect(scratchStoreMock.reconcileResumableAgentCount).toHaveBeenCalledWith(
+        "scratch-a",
+        null,
+        0
+      );
+    });
+
+    it("retracts the claim when a scratch's state was unreadable", async () => {
+      scratchStoreMock.getAllScratches.mockReturnValue([
+        { id: "scratch-a", resumableAgentCount: 2 },
+      ]);
+      projectStoreMock.getProjectState.mockResolvedValue(null);
+      projectStoreMock.wasStateUnreadableThisSession.mockImplementation(
+        (id: string) => id === "scratch-a"
+      );
+
+      await __test__.evictStaleSessionFiles();
+
+      expect(scratchStoreMock.reconcileResumableAgentCount).toHaveBeenCalledWith(
+        "scratch-a",
+        2,
+        null
+      );
+    });
+
+    it("carries the previously known count into the compare-and-swap", async () => {
+      scratchStoreMock.getAllScratches.mockReturnValue([
+        { id: "scratch-a", resumableAgentCount: 0 },
+      ]);
+      projectStoreMock.getProjectState.mockResolvedValue({ terminals: [agentPanel("t1")] });
+
+      await __test__.evictStaleSessionFiles();
+
+      expect(scratchStoreMock.reconcileResumableAgentCount).toHaveBeenCalledWith("scratch-a", 0, 1);
+    });
+
+    it("broadcasts moved scratches on the scratch channel, not the project one", async () => {
+      // The reconciler's OWN return value is what must go out — it is the
+      // freshly-read row. Broadcasting the input scratch instead would push the
+      // pre-backfill count and leave the palette drawing the old dot.
+      const reconciled = { id: "moved", resumableAgentCount: 1 };
+      scratchStoreMock.getAllScratches.mockReturnValue([{ id: "moved" }, { id: "unchanged" }]);
+      projectStoreMock.getProjectState.mockResolvedValue({ terminals: [agentPanel("t1")] });
+      scratchStoreMock.reconcileResumableAgentCount.mockImplementation((id: string) =>
+        id === "moved" ? reconciled : null
+      );
+
+      await __test__.evictStaleSessionFiles();
+
+      const scratchUpdates = broadcastToRendererMock.mock.calls.filter(
+        ([channel]) => channel === CHANNELS.SCRATCH_UPDATED
+      );
+      expect(scratchUpdates).toHaveLength(1);
+      expect(scratchUpdates[0][1]).toBe(reconciled);
+      expect(
+        broadcastToRendererMock.mock.calls.filter(
+          ([channel]) => channel === CHANNELS.PROJECT_UPDATED
+        )
+      ).toHaveLength(0);
+    });
+
+    it("still runs the orphan pass when a scratch's count cannot be written", async () => {
+      scratchStoreMock.getAllScratches.mockReturnValue([{ id: "scratch-a" }]);
+      projectStoreMock.getProjectState.mockResolvedValue({ terminals: [agentPanel("t1")] });
+      scratchStoreMock.reconcileResumableAgentCount.mockImplementation(() => {
+        throw new Error("database is locked");
+      });
+
+      await __test__.evictStaleSessionFiles();
+
+      expect(evictSessionFilesMock).toHaveBeenCalledTimes(1);
+    });
+  });
+
+  /**
+   * Scratch `.restore` files sit in the same pool as project ones and carry no
+   * workspace reference, so the orphan pass has to be told about them too or it
+   * reads a live scratch's scrollback as unattributed.
+   */
+  describe("scratch terminals in the orphan pass", () => {
+    it("declares a scratch's terminals known", async () => {
+      projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-a" }]);
+      scratchStoreMock.getAllScratches.mockReturnValue([{ id: "scratch-a" }]);
+      projectStoreMock.getProjectState.mockImplementation(async (id: string) =>
+        id === "proj-a" ? { terminals: [{ id: "term-p1" }] } : { terminals: [{ id: "term-s1" }] }
+      );
+
+      await __test__.evictStaleSessionFiles();
+
+      const arg = evictSessionFilesMock.mock.calls[0][0];
+      expect([...(arg.knownIds ?? [])].sort()).toEqual(["term-p1", "term-s1"]);
+    });
+
+    it("reads workspace states with a bounded fan-out", async () => {
+      // Not a style preference: `ProjectStateManager` cannot tell an EMFILE from
+      // a corrupt file, so a descriptor exhaustion here marks a workspace
+      // unreadable AND renames its healthy state.json to `.corrupted.*`. An
+      // unbounded read over every project and scratch would make the sweep the
+      // thing that destroys the state it exists to preserve.
+      projectStoreMock.getAllProjects.mockReturnValue(
+        Array.from({ length: 40 }, (_, i) => ({ id: `proj-${i}` }))
+      );
+      scratchStoreMock.getAllScratches.mockReturnValue(
+        Array.from({ length: 40 }, (_, i) => ({ id: `scratch-${i}` }))
+      );
+
+      let inFlight = 0;
+      let peak = 0;
+      const release: (() => void)[] = [];
+      projectStoreMock.getProjectState.mockImplementation(async () => {
+        inFlight += 1;
+        peak = Math.max(peak, inFlight);
+        await new Promise<void>((resolve) => release.push(resolve));
+        inFlight -= 1;
+        return null;
+      });
+
+      const sweep = __test__.evictStaleSessionFiles();
+      // Drain in waves: each release lets the next queued read start, so `peak`
+      // records the real ceiling rather than the first batch's size.
+      while (release.length > 0) {
+        release.shift()!();
+        await Promise.resolve();
+      }
+      await sweep;
+
+      // Against the ceiling itself, not the item count. The queue above is
+      // deliberately far longer than the limit, so a bounded fan-out saturates
+      // and never exceeds: the observed peak IS the declared limit. Compared to
+      // the constant rather than restating its value, so retuning the ceiling
+      // retunes the test — and a fan-out that quietly went unbounded, or
+      // collapsed to serial, fails here instead of passing a range check that
+      // the item count would have satisfied at any limit.
+      expect(peak).toBe(__test__.STATE_READ_CONCURRENCY);
+    });
+
+    it("disables the orphan pass when a scratch's state was unreadable", async () => {
+      // Fail closed for the same reason a project does: the missing ids can't be
+      // attributed back, so deleting on that basis would eat live scrollback.
+      projectStoreMock.getAllProjects.mockReturnValue([{ id: "proj-a" }]);
+      scratchStoreMock.getAllScratches.mockReturnValue([{ id: "scratch-quarantined" }]);
+      projectStoreMock.getProjectState.mockResolvedValue({ terminals: [{ id: "term-p1" }] });
+      projectStoreMock.wasStateUnreadableThisSession.mockImplementation(
+        (id: string) => id === "scratch-quarantined"
+      );
+
+      await __test__.evictStaleSessionFiles();
+
+      expect(evictSessionFilesMock.mock.calls[0][0].knownIds).toBeUndefined();
+    });
   });
 });
 

@@ -17,6 +17,8 @@ import {
   MenuItemContributionSchema,
   PanelContributionObjectSchema,
   ProcessToolContributionSchema,
+  RecipeContributionSchema,
+  RecipeContributionTerminalSchema,
   SettingDefinitionObjectSchema,
   SkillContributionSchema,
   ToolbarButtonContributionSchema,
@@ -80,6 +82,9 @@ const AGENT_REGISTRY = "shared/config/pluginAgentRegistry.ts";
 const MCP_SUPERVISOR = "electron/services/PluginMcpSupervisor.ts";
 const PLUGIN_SCHEMA = "electron/schemas/plugin.ts";
 const SKILL_REGISTRY = "electron/services/plugin/PluginSkillRegistry.ts";
+const RECIPE_REGISTRY = "electron/services/plugin/PluginRecipeRegistry.ts";
+const RECIPE_SANITIZER = "shared/utils/recipeSanitizer.ts";
+const ARCHIVE_INSTALL_INTENT = "electron/setup/archiveInstallIntent.ts";
 const PROCESS_TOOL_REGISTRY = "shared/config/pluginProcessToolRegistry.ts";
 const PROCESS_DETECTOR_REGISTRIES = "electron/services/ProcessDetector/registries.ts";
 
@@ -104,7 +109,9 @@ const SWEPT_SCHEMAS = {
   agents: AgentContributionSchema,
   processTools: ProcessToolContributionSchema,
   settings: SettingDefinitionObjectSchema,
+  recipes: RecipeContributionSchema,
   "agents.detection": AgentDetectionConfigSchema,
+  "recipes.terminals": RecipeContributionTerminalSchema,
   "forgeProviders.credentialFields": CredentialFieldSchema,
   "forgeProviders.slots": ForgeProviderContributionSchema.shape.slots,
 } as const;
@@ -131,6 +138,7 @@ const TOP_LEVEL_GROUPS = [
   "agents",
   "processTools",
   "settings",
+  "recipes",
 ] as const;
 
 /** Reduce a swept schema entry to its ZodObject and read the field keys. */
@@ -171,7 +179,12 @@ type FieldConsumerCoverage = {
   agents: Record<keyof z.infer<typeof AgentContributionSchema>, ConsumerDescriptor>;
   processTools: Record<keyof z.infer<typeof ProcessToolContributionSchema>, ConsumerDescriptor>;
   settings: Record<keyof z.infer<typeof SettingDefinitionObjectSchema>, ConsumerDescriptor>;
+  recipes: Record<keyof z.infer<typeof RecipeContributionSchema>, ConsumerDescriptor>;
   "agents.detection": Record<keyof z.infer<typeof AgentDetectionConfigSchema>, ConsumerDescriptor>;
+  "recipes.terminals": Record<
+    keyof z.infer<typeof RecipeContributionTerminalSchema>,
+    ConsumerDescriptor
+  >;
   "forgeProviders.credentialFields": Record<
     keyof z.infer<typeof CredentialFieldSchema>,
     ConsumerDescriptor
@@ -701,6 +714,86 @@ const MANIFEST_CONTRIBUTION_FIELD_CONSUMERS = {
         { file: PLUGIN_SCHEMA, symbol: "SettingDefinitionSchema transform (→ type 'secret')" },
       ],
       note: "Normalized into type: 'secret' by the schema; also read directly by the form.",
+    },
+  },
+  recipes: {
+    id: {
+      mode: "verbatim",
+      consumers: [
+        {
+          file: RECIPE_REGISTRY,
+          symbol: "registerPluginRecipes (qualifiedId `${pluginId}.${id}`)",
+        },
+      ],
+      note: "Namespaced into the registered recipe's qualified id and its provenance field.",
+    },
+    name: {
+      mode: "verbatim",
+      consumers: [
+        { file: RECIPE_REGISTRY, symbol: "toTerminalRecipe (TerminalRecipe.name)" },
+        { file: ARCHIVE_INSTALL_INTENT, symbol: "runPreviewWorker (install-time disclosure)" },
+      ],
+      note: "Displayed name of the merged recipe, and listed in the archive install confirmation.",
+    },
+    terminals: {
+      mode: "derived-input",
+      consumers: [
+        { file: RECIPE_SANITIZER, symbol: "sanitizeRecipeTerminals" },
+        { file: RECIPE_REGISTRY, symbol: "registerPluginRecipes" },
+      ],
+      note: "Content-validated at registration; only surviving terminals reach the spawn path.",
+    },
+    showInEmptyState: {
+      mode: "derived-input",
+      consumers: [{ file: RECIPE_REGISTRY, symbol: "toTerminalRecipe (metadata overlay)" }],
+      note: "Default for the empty-state pin; a user override in the sidecar wins.",
+    },
+    autoAssign: {
+      mode: "derived-input",
+      consumers: [{ file: RECIPE_REGISTRY, symbol: "toTerminalRecipe (metadata overlay)" }],
+      note: "Default issue auto-assign mode; a user override in the sidecar wins.",
+    },
+  },
+  "recipes.terminals": {
+    type: {
+      mode: "cross-reference",
+      consumers: [{ file: RECIPE_SANITIZER, symbol: "isAllowedRecipeType" }],
+      note: "Must be a built-in terminal kind or an agent id the same plugin owns, else dropped.",
+    },
+    title: {
+      mode: "verbatim",
+      consumers: [{ file: RECIPE_SANITIZER, symbol: "sanitizeRecipeTerminal" }],
+      note: "Copied to the spawned panel's title.",
+    },
+    command: {
+      mode: "verbatim",
+      consumers: [{ file: RECIPE_SANITIZER, symbol: "sanitizeRecipeTerminal" }],
+      note: "Shell command for a `terminal` entry, forwarded to the spawn path.",
+    },
+    env: {
+      mode: "verbatim",
+      consumers: [{ file: RECIPE_SANITIZER, symbol: "sanitizeRecipeTerminal" }],
+      note: "Environment applied to the spawned terminal; keys and values are control-char checked.",
+    },
+    initialPrompt: {
+      mode: "verbatim",
+      consumers: [{ file: RECIPE_SANITIZER, symbol: "sanitizeRecipeTerminal" }],
+      note: "Sent to an agent terminal after boot.",
+    },
+    args: {
+      mode: "verbatim",
+      consumers: [{ file: RECIPE_SANITIZER, symbol: "sanitizeRecipeTerminal" }],
+      note: "Extra CLI flags for an agent entry.",
+    },
+    devCommand: {
+      mode: "verbatim",
+      consumers: [{ file: RECIPE_SANITIZER, symbol: "sanitizeRecipeTerminal" }],
+      note: "Command for a `dev-preview` entry.",
+    },
+    exitBehavior: {
+      mode: "verbatim",
+      consumers: [{ file: RECIPE_SANITIZER, symbol: "sanitizeRecipeTerminal" }],
+      note: "What happens to the panel when its process exits.",
     },
   },
   "agents.detection": {

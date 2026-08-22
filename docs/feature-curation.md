@@ -125,7 +125,7 @@ If the answer is **Workshop**, we don't build the feature. At most, we build a *
 | --- | --- | --- |
 | Full File Editor | **REJECT** | Workshop feature. VS Code exists. Red Light: reinvents code editor. |
 | Agent "Retry" Button | **APPROVE** | Reduces cognitive load. Unblocks agent. Bridges CLI gap. |
-| Theme System | **APPROVE** | Reinforces identity, serves comfort/accessibility, differentiates Daintree. 14 built-in themes with accessibility modes. |
+| Theme System | **APPROVE** | Reinforces identity, serves comfort/accessibility, differentiates Daintree. 15 built-in themes with accessibility modes. |
 | Custom Themes | **APPROVE** | Natural extension of theme system. User identity, community sharing potential. Approve when infrastructure is ready. |
 | Read-Only File Viewer | **APPROVE** | Accelerates context injection. Read-only with syntax highlighting for reviewing agent output. Not a code editor. |
 | Cross-Worktree Diff | **APPROVE** | Manages multiplicity. Provides omniscience. Unique to orchestration. |

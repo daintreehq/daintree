@@ -45,6 +45,26 @@ const ALLOWED_RECIPE_TYPES: ReadonlySet<string> = new Set<string>([
   ...BUILT_IN_AGENT_IDS,
 ]);
 
+/**
+ * Extra terminal types a specific trust boundary admits on top of
+ * {@link ALLOWED_RECIPE_TYPES}. Only the plugin-recipe registration path passes
+ * one, and only with agent ids the SAME plugin effectively owns — otherwise a
+ * plugin shipping both an agent and a recipe that launches it would have every
+ * such terminal silently dropped (#11860).
+ *
+ * Deliberately an explicit argument rather than a live registry read: the
+ * in-repo and import boundaries run at times when the plugin agent registry may
+ * be empty or half-populated, and a set that changes under them would make the
+ * same file sanitize differently depending on startup ordering.
+ */
+export interface RecipeSanitizeOptions {
+  additionalAllowedTypes?: ReadonlySet<string>;
+}
+
+function isAllowedRecipeType(type: string, options: RecipeSanitizeOptions | undefined): boolean {
+  return ALLOWED_RECIPE_TYPES.has(type) || options?.additionalAllowedTypes?.has(type) === true;
+}
+
 // "restart" is QuickRun-only and never a valid recipe exit behavior (the recipe
 // editor normalizes it away), so it is intentionally excluded here.
 const ALLOWED_EXIT_BEHAVIORS: ReadonlySet<string> = new Set<string>(["keep", "trash", "remove"]);
@@ -57,11 +77,14 @@ function isPlainObject(value: unknown): value is Record<string, unknown> {
  * Validates a single raw terminal and maps it to a clean {@link RecipeTerminal}
  * with only known fields, or returns `null` if it fails any content check.
  */
-function sanitizeRecipeTerminal(raw: unknown): RecipeTerminal | null {
+function sanitizeRecipeTerminal(
+  raw: unknown,
+  options?: RecipeSanitizeOptions
+): RecipeTerminal | null {
   if (!isPlainObject(raw)) return null;
 
   const type = raw.type;
-  if (typeof type !== "string" || !ALLOWED_RECIPE_TYPES.has(type)) return null;
+  if (typeof type !== "string" || !isAllowedRecipeType(type, options)) return null;
 
   if (raw.command !== undefined) {
     if (typeof raw.command !== "string") return null;
@@ -134,11 +157,14 @@ function sanitizeRecipeTerminal(raw: unknown): RecipeTerminal | null {
  * passthrough). Invalid terminals are dropped silently; the caller is
  * responsible for handling a now-empty result.
  */
-export function sanitizeRecipeTerminals(terminals: unknown): RecipeTerminal[] {
+export function sanitizeRecipeTerminals(
+  terminals: unknown,
+  options?: RecipeSanitizeOptions
+): RecipeTerminal[] {
   if (!Array.isArray(terminals)) return [];
   const result: RecipeTerminal[] = [];
   for (const raw of terminals) {
-    const sanitized = sanitizeRecipeTerminal(raw);
+    const sanitized = sanitizeRecipeTerminal(raw, options);
     if (sanitized) result.push(sanitized);
   }
   return result;

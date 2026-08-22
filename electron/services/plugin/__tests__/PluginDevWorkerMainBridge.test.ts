@@ -116,6 +116,26 @@ function makePtyProcessHandle(id = "p1") {
   };
 }
 
+/**
+ * The duplex variant (#11871): a writable handle with NO `resize`. This is the
+ * shape that must be classified as "duplex", not misread as pipe (which would
+ * strand the plugin without a write) or as pty (which would offer a resize the
+ * child has no terminal for).
+ */
+function makeDuplexProcessHandle(id = "p1") {
+  const base = makeProcessHandle(id);
+  let dataCb: ((chunk: unknown) => void) | undefined;
+  return {
+    ...base,
+    write: vi.fn(),
+    onData: vi.fn((cb: (chunk: unknown) => void) => {
+      dataCb = cb;
+      return vi.fn();
+    }),
+    emitData: (chunk: unknown) => dataCb?.(chunk),
+  };
+}
+
 function makeBridge(
   overrides?: Partial<{
     capabilities: string[];
@@ -704,6 +724,40 @@ describe("PluginDevWorkerMainBridge", () => {
       // The worker proxy builds write()/resize() off this value, so it must
       // describe the real backend.
       expect(res).toMatchObject({ ok: true, result: { id: "p1", mode: "pty" } });
+    });
+
+    it("classifies a write-only handle as duplex, not pipe (#11871)", async () => {
+      const { host, workerHost } = makeBridge();
+      await spawn(workerHost, host, makeDuplexProcessHandle("p1"));
+      const res = workerHost.sent.find(
+        (m: any) => m.type === "host-result" && m.requestId === "spawn1"
+      );
+      // Misreporting this as "pipe" would leave the worker proxy building a
+      // handle with no write() for a child whose stdin is genuinely open.
+      expect(res).toMatchObject({ ok: true, result: { id: "p1", mode: "duplex" } });
+    });
+
+    it("relays write to a duplex handle but refuses resize (#11871)", async () => {
+      const { host, workerHost } = makeBridge();
+      const handle: any = await spawn(workerHost, host, makeDuplexProcessHandle("p1"));
+      workerHost.emit("worker-message", {
+        type: "host-notify",
+        method: "process.write",
+        params: { processId: "p1", data: '{"jsonrpc":"2.0"}\n' },
+      });
+      workerHost.emit("worker-message", {
+        type: "host-notify",
+        method: "process.resize",
+        params: { processId: "p1", cols: 120, rows: 40 },
+      });
+      await flush();
+
+      expect(handle.write).toHaveBeenCalledWith('{"jsonrpc":"2.0"}\n');
+      // The resize notification must be DROPPED, not rerouted or thrown: exactly
+      // one relayed call total, so nothing turned the resize into a second write.
+      expect(handle.write).toHaveBeenCalledTimes(1);
+      // A duplex child has no terminal, so resize is not part of its shape.
+      expect(handle.resize).toBeUndefined();
     });
 
     it("relays write and resize to an interactive handle", async () => {

@@ -75,9 +75,18 @@ export function evaluateScenarioBudget(params: GateParams): GateResult {
   if (budget.maxMetricValues) {
     for (const [metricName, maxValue] of Object.entries(budget.maxMetricValues)) {
       const actual = metricAverages[metricName];
+      // A configured ceiling whose metric is no longer emitted is a gate that
+      // has silently disappeared — the exact failure this file exists to
+      // prevent — so an absent metric fails rather than passes. Renaming a
+      // metric must therefore rename it in budgets.json too.
+      if (actual === undefined) {
+        failedBudget = true;
+        reasons.push(`${metricName} has a configured ceiling but was not emitted - failing closed`);
+        continue;
+      }
       // Treat a non-finite metric as a breach: NaN > maxValue is false, which
       // would otherwise let a broken metric slip past its ceiling.
-      if (actual !== undefined && (!Number.isFinite(actual) || actual > maxValue)) {
+      if (!Number.isFinite(actual) || actual > maxValue) {
         failedBudget = true;
         reasons.push(`${metricName} ${round(actual)} > max ${maxValue}`);
       }
@@ -86,7 +95,23 @@ export function evaluateScenarioBudget(params: GateParams): GateResult {
 
   const hasUsableBaseline = baselineP95 !== undefined && Number.isFinite(baselineP95);
 
-  if (!hasUsableBaseline) {
+  // Checked before the baseline branches: a calibrating scenario has no
+  // baseline BY DESIGN, so reporting it as a missing-baseline gap would be
+  // misleading — and for a critical one it would fail closed on the expected
+  // state rather than on a real problem.
+  if (budget.calibrating && isCritical) {
+    // A critical scenario is one whose regression gate must never be skipped,
+    // so the two settings are contradictory. Fail on the contradiction rather
+    // than silently letting `calibrating` win and disarm a critical gate.
+    failedBudget = true;
+    reasons.push("critical scenario marked calibrating - contradictory budget config");
+  } else if (budget.calibrating) {
+    reasons.push(
+      hasUsableBaseline
+        ? "calibrating but a baseline now exists - remove `calibrating` to arm the regression gate"
+        : "calibrating - regression gate not yet enabled"
+    );
+  } else if (!hasUsableBaseline) {
     if (isCritical) {
       failedBudget = true;
       reasons.push(

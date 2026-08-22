@@ -2,7 +2,7 @@ import type { PushProgressEvent } from "./gitPush.js";
 import type { IdArrayFieldEdit } from "../../utils/layoutMerge.js";
 import type { GitStatus, StagingStatus } from "../git.js";
 import type { AgentId } from "../agent.js";
-import type { TabGroup } from "../panel.js";
+import type { TabGroup, PanelTitleMode } from "../panel.js";
 import type { WorktreeState } from "../worktree.js";
 import type {
   Project,
@@ -122,7 +122,7 @@ import type { RetryAction, ErrorRecord, RetryProgressPayload } from "./errors.js
 import type { EventRecord } from "./events.js";
 import type {
   ProjectCloseResult,
-  ProjectFreeMemoryResult,
+  ProjectSleepResult,
   ProjectStats,
   ProjectStatusMap,
   BulkProjectStats,
@@ -156,6 +156,7 @@ export interface KeybindingImportResult {
 }
 import type {
   TerminalStatusPayload,
+  TerminalSubmitStatusPayload,
   PtyHostActivityTier,
   SpawnResult,
   TerminalResourceBatchPayload,
@@ -311,6 +312,9 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     requestWorkerIngestPort(id: string): Promise<{ token: string } | null>;
     releaseWorkerIngestPort(id: string): Promise<void>;
     onStatus(callback: (data: TerminalStatusPayload) => void): () => void;
+    /** Submit-lane status for one terminal (#11875). Fires only for submits that
+     *  cross the slow/stalled threshold or fail. */
+    onSubmitStatus(callback: (data: TerminalSubmitStatusPayload) => void): () => void;
     onReliabilityMetric(callback: (data: TerminalReliabilityMetricPayload) => void): () => void;
     /**
      * Geometry the PTY actually holds after each resize it processed. Compare
@@ -344,6 +348,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onBroadcastWriteResult(callback: (data: BroadcastWriteResultPayload) => void): () => void;
     reportTitleState(id: string, state: "working" | "waiting"): void;
     updateObservedTitle(id: string, title: string): void;
+    updateTitle(id: string, title: string, titleMode: PanelTitleMode): void;
     onSpawnResult(callback: (id: string, result: SpawnResult) => void): () => void;
     onReduceScrollback(
       callback: (data: { terminalIds: string[]; targetLines: number }) => void
@@ -607,6 +612,8 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     ): () => void;
     onBackgroundResize(callback: (payload: { width: number; height: number }) => void): () => void;
     onUpdated(callback: (project: Project) => void): () => void;
+    /** A project was put to sleep — a window showing it drops to no-project. */
+    onSlept(callback: (projectId: string) => void): () => void;
     onRemoved(callback: (projectId: string) => void): () => void;
     getSettings(projectId: string): Promise<ProjectSettings>;
     saveSettings(projectId: string, settings: ProjectSettings): Promise<void>;
@@ -624,13 +631,15 @@ export interface ElectronAPI extends GeneratedElectronAPI {
      */
     close(projectId: string, options?: { killTerminals?: boolean }): Promise<ProjectCloseResult>;
     /**
-     * Reclaim a background project's resident memory — tears down its cached
-     * renderer, gracefully kills its PTYs (sessions preserved), and evicts its
-     * workspace host — while keeping the project in the list as `closed` and
-     * preserving its layout for a non-destructive reopen. Rejects if the
-     * project is currently active (switch away first).
+     * Put one project to sleep the way quitting puts them all to sleep —
+     * gracefully kills its PTYs preserving their sessions, writes each captured
+     * agent session id back into the saved panel snapshots, journals a resume
+     * record per agent, then reclaims its cached renderer views and workspace
+     * host. Keeps the project in the list as `closed` with its layout intact for
+     * a non-destructive reopen. Accepts the project that is on screen: that
+     * window keeps its view and drops to the no-project state in the renderer.
      */
-    freeMemory(projectId: string): Promise<ProjectFreeMemoryResult>;
+    sleepProject(projectId: string): Promise<ProjectSleepResult>;
     /**
      * Reopen a background project, making it the active project.
      * Terminals that were running in the background will be reconnected.
@@ -979,6 +988,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
   // renderer-only subscription.
   accessibility: GeneratedElectronAPI["accessibility"] & {
     onSupportChanged(callback: (data: { enabled: boolean }) => void): () => void;
+  };
+  // export / previewImport / applyImport come from GeneratedElectronAPI;
+  // onImported is a renderer-only subscription (#11889).
+  configBundle: GeneratedElectronAPI["configBundle"] & {
+    onImported(callback: () => void): () => void;
   };
   // create / show / hide / resize / navigate / goBack / goForward / reload /
   // closeTab / showNewTabMenu come from GeneratedElectronAPI; the rest are
@@ -1921,6 +1935,18 @@ export interface ElectronAPI extends GeneratedElectronAPI {
          * provenance-free.
          */
         callerInfo?: import("./mcpServer.js").McpBearerIdentity;
+        /**
+         * How the dispatching session authenticated (#11808), resolved in main
+         * from the session store — never sent by the client. Lets the renderer
+         * stamp a spawn it creates as assistant-launched rather than lumping
+         * every MCP-borne spawn under one origin.
+         *
+         * Optional because nothing type-checks the `webContents.send` side of
+         * this channel: main always sends it, but the renderer cannot prove
+         * that, so the consumer treats an absent value as `external` rather
+         * than trusting the declaration. That fallback is the real guarantee.
+         */
+        sessionOrigin?: import("./mcpServer.js").McpSessionOrigin;
       }) => void
     ): () => void;
     /** Send action dispatch result to main process */
@@ -2095,6 +2121,13 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     onAgentsChanged(
       callback: (payload: {
         agents: Record<string, import("../../config/agentRegistry.js").AgentConfig>;
+        complete: boolean;
+      }) => void
+    ): () => void;
+    /** Subscribe to plugin-contributed recipe changes (#11860). Returns a cleanup. */
+    onRecipesChanged(
+      callback: (payload: {
+        recipes: import("../project.js").TerminalRecipe[];
         complete: boolean;
       }) => void
     ): () => void;
@@ -2317,9 +2350,16 @@ export interface HelpAssistantSettings {
    */
   tier: HelpAssistantTier;
   /**
-   * Pass `--dangerously-skip-permissions` (Claude) and write
-   * `defaultMode: "bypassPermissions"` into the session's `.claude/settings.json`.
-   * Bypasses Claude Code's per-tool confirmation gate. Defaults to false.
+   * Run the assistant without its per-tool confirmation gate. One flag, but
+   * each backend honours it differently — Claude gets
+   * `--dangerously-skip-permissions` plus `defaultMode: "bypassPermissions"` in
+   * the session's `.claude/settings.json`, Codex gets
+   * `--dangerously-bypass-approvals-and-sandbox`, and the Daintree Assistant
+   * (which has no such flag) gets `DAINTREE_ASSISTANT_AUTO_APPROVE=1` in its
+   * spawn env. The canonical per-agent flag lives in `DEFAULT_DANGEROUS_ARGS`
+   * and is only appended for agents declaring `supports.permissionBypass`; see
+   * the help-launch branch in `electron/ipc/handlers/terminal/lifecycle.ts`.
+   * Defaults to false.
    */
   bypassPermissions: boolean;
   /** How long to retain help-session audit logs. 7 = 7 days, 30 = 30 days, 0 = off. Defaults to 7. */
@@ -2336,7 +2376,7 @@ export interface HelpAssistantSettings {
   customArgs: string;
   /**
    * Minutes the assistant panel must be continuously hidden before its PTY is
-   * gracefully shut down to capture the Claude resume session ID. 0 disables
+   * gracefully shut down to capture the agent's resume session ID. 0 disables
    * idle hibernation. Defaults to 5 — hiding is a layout gesture, so an idle
    * hidden assistant releases its memory quickly and reopening resumes the
    * same conversation transparently (return-to-panel rates fall off within a

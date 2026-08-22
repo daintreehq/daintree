@@ -19,6 +19,7 @@ import {
   type AssistantSupports,
 } from "../agentRegistry.js";
 import { UserAgentConfigSchema } from "../../types/userAgentRegistry.js";
+import { buildResumeCommand, buildResumeLatestCommand } from "../../types/agentSettings.js";
 import {
   BUILT_IN_AGENT_IDS,
   LAUNCHABLE_AGENT_IDS,
@@ -533,12 +534,12 @@ describe("mistral configuration", () => {
 
   it("captures session IDs from 'vibe --resume {id}' output", () => {
     const resume = getAgentConfig("mistral")?.resume;
-    if (resume?.kind === "session-id") {
-      const re = new RegExp(resume.sessionIdPattern);
-      const match = "Or: vibe --resume abc-123-def-456".match(re);
-      expect(match?.[1]).toBe("abc-123-def-456");
-      expect("vibe --continue".match(re)).toBeNull();
-    }
+    if (resume?.kind !== "session-id") throw new Error("mistral resume must be session-id");
+    expect(resume.sessionIdPattern).toBeDefined();
+    const re = new RegExp(resume.sessionIdPattern!);
+    const match = "Or: vibe --resume abc-123-def-456".match(re);
+    expect(match?.[1]).toBe("abc-123-def-456");
+    expect("vibe --continue".match(re)).toBeNull();
   });
 
   it("relies on prompt fast-path without a per-agent quiet override", () => {
@@ -855,14 +856,15 @@ describe("opencode TUI environment", () => {
 });
 
 describe("model configuration", () => {
-  it("claude has models with expected IDs", () => {
+  // `claude --model` accepts either a full name or a family alias resolving to
+  // the latest release. Pinned IDs go stale on every release (#11879), so the
+  // invariant is the *shape* of the list, not which families are in it today.
+  it("claude offers bare family aliases, never pinned release IDs", () => {
     const config = getAgentConfig("claude");
     expect(config?.models).toBeDefined();
     expect(config!.models!.length).toBeGreaterThanOrEqual(3);
-    const modelIds = config!.models!.map((m) => m.id);
-    expect(modelIds).toContain("claude-sonnet-4-6");
-    expect(modelIds).toContain("claude-opus-4-6");
-    expect(modelIds).toContain("claude-haiku-4-5-20251001");
+    const pinned = config!.models!.map((m) => m.id).filter((id) => /\d/.test(id));
+    expect(pinned).toEqual([]);
   });
 
   it("gemini has models", () => {
@@ -874,13 +876,19 @@ describe("model configuration", () => {
     expect(modelIds).toContain("gemini-2.5-flash");
   });
 
-  it("codex has models", () => {
+  // Codex doesn't validate `--model` against an allowlist — an unrecognised
+  // slug silently falls back to generic metadata rather than erroring — so the
+  // fallback list must name explicit tier slugs, never the ambiguous family
+  // alias that prefixes them (#11879).
+  it("codex offers explicit tier slugs, never a bare family alias", () => {
     const config = getAgentConfig("codex");
     expect(config?.models).toBeDefined();
     expect(config!.models!.length).toBeGreaterThanOrEqual(1);
     const modelIds = config!.models!.map((m) => m.id);
-    expect(modelIds).toContain("gpt-5.4");
-    expect(modelIds).toContain("gpt-5.3-codex-spark");
+    const ambiguous = modelIds.filter((id) =>
+      modelIds.some((other) => other !== id && other.startsWith(`${id}-`))
+    );
+    expect(ambiguous).toEqual([]);
   });
 
   it("each model has id, name, and shortLabel", () => {
@@ -904,10 +912,12 @@ describe("model configuration", () => {
 
 describe("getAgentModelConfig", () => {
   it("returns model config for valid agent and model ID", () => {
-    const model = getAgentModelConfig("claude", "claude-opus-4-6");
-    expect(model).toBeDefined();
-    expect(model!.name).toBe("Opus 4.6");
-    expect(model!.shortLabel).toBe("Opus");
+    // A non-first entry whose name and shortLabel differ, so "returns the
+    // first model" and "returns name instead of shortLabel" both fail here.
+    const expected = getAgentConfig("codex")!.models![1]!;
+    const model = getAgentModelConfig("codex", expected.id);
+    expect(model).toEqual(expected);
+    expect(model!.name).not.toBe(model!.shortLabel);
   });
 
   it("returns undefined for invalid model ID", () => {
@@ -921,7 +931,9 @@ describe("getAgentModelConfig", () => {
 
 describe("getAgentDisplayTitle", () => {
   it("returns agent name with model shortLabel when modelId matches", () => {
-    expect(getAgentDisplayTitle("claude", "claude-opus-4-6")).toBe("Claude (Opus)");
+    const model = getAgentConfig("codex")!.models![1]!;
+    expect(getAgentDisplayTitle("codex", model.id)).toBe(`Codex (${model.shortLabel})`);
+    expect(getAgentDisplayTitle("codex", model.id)).not.toContain(model.name);
   });
 
   it("returns plain agent name when no modelId provided", () => {
@@ -1060,16 +1072,96 @@ describe("screen-mode flag capabilities (#11423)", () => {
 });
 
 describe("resume configuration", () => {
-  it("session-id agents have a quitCommand and a sessionIdPattern", () => {
-    const ids = getAgentIds();
-    for (const id of ids) {
+  it("every session-id agent declares exactly one shutdown protocol", () => {
+    // Weaker than "must have a quitCommand" on purpose: an agent may take a
+    // structured `shutdownSignal` instead (#11851). Stronger in the direction
+    // that matters — declaring BOTH is the bug the type exists to prevent, since
+    // a gated escalation exists precisely to avoid writing a slash command.
+    for (const id of getAgentIds()) {
       const resume = getAgentConfig(id)?.resume;
-      if (resume?.kind === "session-id") {
-        expect(typeof resume.args).toBe("function");
-        expect(resume.quitCommand).toBeTruthy();
-        expect(resume.sessionIdPattern).toBeTruthy();
+      if (resume?.kind !== "session-id") continue;
+      expect(typeof resume.args).toBe("function");
+      // `shutdownKeySequence` counts as part of the legacy protocol: pairing it
+      // with a structured signal is the same contradiction, and leaving it out
+      // of this check would let that pair through.
+      const legacy = Boolean(resume.quitCommand) || Boolean(resume.shutdownKeySequence);
+      const structured = Boolean(resume.shutdownSignal);
+      expect(
+        [legacy, structured].filter(Boolean),
+        `${id} must declare a legacy quit signal or a shutdownSignal, not both`
+      ).toHaveLength(1);
+      if (legacy) {
+        // An empty string is falsy to the teardown's own `if (quitCommand)`
+        // guard, so it would silently send nothing at all.
+        expect(resume.quitCommand ?? resume.shutdownKeySequence).not.toBe("");
       }
     }
+  });
+
+  it("no session-id agent ships an empty or uncompilable sessionIdPattern", () => {
+    // The field is optional now — an agent whose id was never observable omits
+    // it rather than carrying a pattern that matches nothing (#11851). What is
+    // NOT allowed is a present-but-useless one: an empty string matches
+    // everywhere, and an uncompilable one throws inside the teardown listener.
+    for (const id of getAgentIds()) {
+      const resume = getAgentConfig(id)?.resume;
+      if (resume?.kind !== "session-id" || resume.sessionIdPattern === undefined) continue;
+      expect(resume.sessionIdPattern, `${id} declares an empty sessionIdPattern`).not.toBe("");
+      // The teardown reads `match[1]`, so a pattern with no capture group can
+      // never yield an id no matter what the agent prints. Alternating with an
+      // empty branch forces a match on "" so the group count is readable even
+      // when the pattern itself matches nothing.
+      const groupCount = (new RegExp(`${resume.sessionIdPattern}|`).exec("")?.length ?? 1) - 1;
+      expect(groupCount, `${id}'s sessionIdPattern has no capture group`).toBeGreaterThanOrEqual(1);
+    }
+  });
+
+  it("an agent with no capture path still has a way to resume", () => {
+    // Dropping a fabricated pattern must not strand the agent: without either a
+    // capture path or a resume-latest fallback it could never come back at all.
+    for (const id of getAgentIds()) {
+      const resume = getAgentConfig(id)?.resume;
+      if (resume?.kind !== "session-id") continue;
+      const canCapture = Boolean(resume.sessionIdPattern) || Boolean(resume.assignSessionIdArgs);
+      if (canCapture) continue;
+      expect(
+        resume.resumeLatestArgs?.length,
+        `${id} can neither capture nor resume-latest`
+      ).toBeGreaterThan(0);
+    }
+  });
+
+  it("codex quits on a gated Ctrl-C and writes no slash command", () => {
+    const resume = getAgentConfig("codex")?.resume;
+    expect(resume?.kind).toBe("session-id");
+    if (resume?.kind !== "session-id") return;
+    // The `/quit` write is what landed in the user's own transcript (#11851).
+    expect(resume.quitCommand).toBeUndefined();
+    const signal = resume.shutdownSignal;
+    expect(signal?.kind).toBe("gated-key-escalation");
+    expect(signal?.keySequence).toBe(String.fromCharCode(3));
+    // A gate the TUI never prints would silently degrade to a single press.
+    expect("  Ctrl+C again to quit  ").toContain(signal?.gateText);
+    // Budget fit lives in the pty suite, which owns GRACEFUL_SHUTDOWN_TIMEOUT_MS —
+    // importing it here would drag electron into a shared/ test.
+    expect(signal?.maxPresses).toBeGreaterThan(1);
+    expect(signal?.perPressTimeoutMs).toBeGreaterThan(0);
+  });
+
+  it("antigravity claims no session-id capture it cannot make", () => {
+    // 0 captures in 6 teardowns, and no public `agy` output to verify a
+    // corrected pattern against (#11851). Resuming by an id it already holds
+    // still works, and `-c` remains the path that actually restores.
+    const resume = getAgentConfig("antigravity")?.resume;
+    expect(resume?.kind).toBe("session-id");
+    if (resume?.kind !== "session-id") return;
+    expect(resume.sessionIdPattern).toBeUndefined();
+    // Staying `session-id` is load-bearing, not incidental: the resume-latest
+    // builder is gated on that kind, so reclassifying would silently take away
+    // the `-c` restore that actually works. Pinned as built commands rather than
+    // raw arrays so a change to either builder has to face this.
+    expect(buildResumeCommand("antigravity", "conv-42")).toBe("agy --conversation conv-42");
+    expect(buildResumeLatestCommand("antigravity")).toBe("agy -c");
   });
 
   it("claude is session-id and produces --resume flag args", () => {
@@ -1162,12 +1254,11 @@ describe("resume configuration", () => {
 
   it("goose sessionIdPattern extracts the id from the session-closed line", () => {
     const resume = getAgentConfig("goose")?.resume;
-    expect(resume?.kind).toBe("session-id");
-    if (resume?.kind === "session-id") {
-      const re = new RegExp(resume.sessionIdPattern);
-      const match = re.exec("● session closed · 20260429_1");
-      expect(match?.[1]).toBe("20260429_1");
-    }
+    if (resume?.kind !== "session-id") throw new Error("goose resume must be session-id");
+    expect(resume.sessionIdPattern).toBeDefined();
+    const re = new RegExp(resume.sessionIdPattern!);
+    const match = re.exec("● session closed · 20260429_1");
+    expect(match?.[1]).toBe("20260429_1");
   });
 });
 

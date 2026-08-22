@@ -37,6 +37,7 @@ import { createHash } from "node:crypto";
 import { HttpLifecycle } from "../httpLifecycle.js";
 import type { HttpLifecycleDeps } from "../httpLifecycle.js";
 import { minimumPermittingTier } from "../shared.js";
+import { WorkspaceBindingError } from "../rendererBridge.js";
 
 type BearerTestHandle = {
   touchBearer: (
@@ -82,8 +83,26 @@ function fakeDeps(overrides?: Partial<HttpLifecycleDeps>): HttpLifecycleDeps {
       sessionTierMap: new Map(),
       sessionWebContentsMap: new Map(),
       sessionContextMap: new Map(),
+      sessionOriginMap: new Map(),
+      sessionWorkspaceMap: new Map(),
       sessionHelpIdMap: new Map(),
       resourceSubscriptions: new Map(),
+      // Real behaviour, not a stub: these are authorization predicates, and a
+      // fixture that always answered `true` would make every origin gate in
+      // this suite vacuous (#11789).
+      getOrigin(sessionId: string) {
+        return this.sessionOriginMap.get(sessionId) ?? "external";
+      },
+      isRendererOwnedOrigin(sessionId: string) {
+        const origin = this.getOrigin(sessionId);
+        return origin === "help" || origin === "assistant-pane";
+      },
+      clearSessionBinding(sessionId: string) {
+        this.sessionWebContentsMap.delete(sessionId);
+        this.sessionContextMap.delete(sessionId);
+        this.sessionOriginMap.delete(sessionId);
+        this.sessionWorkspaceMap.delete(sessionId);
+      },
       drain: vi.fn(),
       getTier: vi.fn(() => "workbench" as const),
       createIdleTimer: vi.fn(() => setTimeout(() => {}, 1_000_000)),
@@ -324,6 +343,8 @@ describe("HttpLifecycle", () => {
   describe("setSessionTier", () => {
     function pinnedSession(deps: HttpLifecycleDeps, sessionId: string, wcId: number) {
       deps.sessionStore.sessionWebContentsMap.set(sessionId, wcId);
+      // Elevation is gated on origin, not merely on having a route (#11789).
+      deps.sessionStore.sessionOriginMap.set(sessionId, "help");
       // Mark transport active so the live-session guard passes.
       (deps.sessionStore.httpSessions as Map<string, unknown>).set(sessionId, {
         transport: { close: vi.fn().mockResolvedValue(undefined) },
@@ -540,6 +561,8 @@ describe("HttpLifecycle", () => {
       const deps = fakeDeps();
       deps.sessionStore.httpSessions.set("sess-1", {} as never);
       deps.sessionStore.sessionWebContentsMap.set("sess-1", 42);
+      // Grants are gated on origin, not merely on having a route (#11789).
+      deps.sessionStore.sessionOriginMap.set("sess-1", "help");
       return deps;
     }
 
@@ -1229,10 +1252,13 @@ describe("HttpLifecycle", () => {
 
       await sessionDeps.dispatchAction("terminal.kill", { id: "t-1" }, false);
 
-      expect(deps.dispatchAction).toHaveBeenCalledWith("terminal.kill", { id: "t-1" }, false, {
-        token4LastChars: "1234",
-        userAgent: "Claude Code",
-      });
+      expect(deps.dispatchAction).toHaveBeenCalledWith(
+        "terminal.kill",
+        { id: "t-1" },
+        false,
+        { token4LastChars: "1234", userAgent: "Claude Code" },
+        "external"
+      );
     });
 
     it("passes callerInfo: undefined when the session has no tracked bearer", async () => {
@@ -1249,15 +1275,108 @@ describe("HttpLifecycle", () => {
 
       await sessionDeps.dispatchAction("actions.list", {}, false);
 
-      expect(deps.dispatchAction).toHaveBeenCalledWith("actions.list", {}, false, undefined);
+      expect(deps.dispatchAction).toHaveBeenCalledWith(
+        "actions.list",
+        {},
+        false,
+        undefined,
+        "external"
+      );
+    });
+  });
+
+  describe("buildSessionServerDeps — spawn provenance origin (#11808)", () => {
+    type OriginHandle = {
+      buildSessionServerDeps: (
+        sessionId: string
+      ) => import("../sessionServer.js").SessionServerDeps;
+    };
+
+    /** Pinned-route fixture: `fakeDeps` leaves the pinned dispatcher unwired. */
+    function pinnedOriginDeps(): HttpLifecycleDeps {
+      return fakeDeps({
+        dispatchActionForWebContents: vi
+          .fn()
+          .mockResolvedValue({ result: { ok: true, result: null } }),
+      } as unknown as Partial<HttpLifecycleDeps>);
+    }
+
+    it.each(["help", "assistant-pane", "external"] as const)(
+      "forwards a %s session's origin on the pinned dispatch route",
+      async (origin) => {
+        const deps = pinnedOriginDeps();
+        const lc = new HttpLifecycle(deps);
+        deps.sessionStore.sessionOriginMap.set("sess-origin", origin);
+        deps.sessionStore.sessionWebContentsMap.set("sess-origin", 42);
+
+        const sessionDeps = (lc as unknown as OriginHandle).buildSessionServerDeps("sess-origin");
+        await sessionDeps.dispatchAction("agent.launch", {}, false);
+
+        expect(deps.dispatchActionForWebContents).toHaveBeenCalledWith(
+          42,
+          "agent.launch",
+          {},
+          false,
+          undefined,
+          origin
+        );
+      }
+    );
+
+    it("keeps the build-time origin after the session's binding is torn down", async () => {
+      const deps = pinnedOriginDeps();
+      const lc = new HttpLifecycle(deps);
+      deps.sessionStore.sessionOriginMap.set("sess-teardown", "assistant-pane");
+      deps.sessionStore.sessionWebContentsMap.set("sess-teardown", 7);
+
+      const sessionDeps = (lc as unknown as OriginHandle).buildSessionServerDeps("sess-teardown");
+
+      // `clearSessionBinding` runs on teardown while a dispatch can still be in
+      // flight, and `getOrigin` fails closed to "external" once the entry is
+      // gone. Reading origin inside the closure would therefore relabel the
+      // assistant's own spawn as an external client's the moment its session
+      // ended — the build-time snapshot is what stops that. The pin is cleared
+      // by the same call, so this asserts through the unpinned route.
+      deps.sessionStore.clearSessionBinding("sess-teardown");
+      await sessionDeps.dispatchAction("agent.launch", {}, false);
+
+      expect(deps.dispatchAction).toHaveBeenCalledWith(
+        "agent.launch",
+        {},
+        false,
+        undefined,
+        "assistant-pane"
+      );
+    });
+
+    it("falls back to external for a session that never recorded an origin", async () => {
+      const deps = pinnedOriginDeps();
+      const lc = new HttpLifecycle(deps);
+      deps.sessionStore.sessionWebContentsMap.set("sess-no-origin", 9);
+
+      const sessionDeps = (lc as unknown as OriginHandle).buildSessionServerDeps("sess-no-origin");
+      await sessionDeps.dispatchAction("agent.launch", {}, false);
+
+      expect(deps.dispatchActionForWebContents).toHaveBeenCalledWith(
+        9,
+        "agent.launch",
+        {},
+        false,
+        undefined,
+        "external"
+      );
     });
   });
 
   describe("assistant-pane pinning resolvers (#10647)", () => {
-    function pinnedResolver(lc: HttpLifecycle) {
+    function pinResolver(lc: HttpLifecycle) {
       return (
-        lc as unknown as { resolvePinnedWebContentsId: (h: string) => number | null }
-      ).resolvePinnedWebContentsId.bind(lc);
+        lc as unknown as {
+          resolveSessionPin: (
+            h: string
+          ) => { origin: "help" | "assistant-pane" | "external"; webContentsId: number } | null;
+        }
+      ).resolveSessionPin.bind(lc);
     }
     function ctxResolver(lc: HttpLifecycle) {
       return (
@@ -1271,8 +1390,11 @@ describe("HttpLifecycle", () => {
       lc.setHelpSessionWebContentsResolver(() => null);
       lc.setAssistantPaneWebContentsResolver((token) => (token === "assistant-tok" ? 77 : null));
 
-      const resolve = pinnedResolver(lc);
-      expect(resolve("Bearer assistant-tok")).toBe(77);
+      const resolve = pinResolver(lc);
+      expect(resolve("Bearer assistant-tok")).toEqual({
+        origin: "assistant-pane",
+        webContentsId: 77,
+      });
       expect(resolve("Bearer unknown-tok")).toBeNull();
     });
 
@@ -1282,7 +1404,7 @@ describe("HttpLifecycle", () => {
       const assistant = vi.fn(() => 99);
       lc.setAssistantPaneWebContentsResolver(assistant);
 
-      expect(pinnedResolver(lc)("Bearer help-tok")).toBe(11);
+      expect(pinResolver(lc)("Bearer help-tok")).toEqual({ origin: "help", webContentsId: 11 });
       // Help match short-circuits — the assistant resolver is never consulted.
       expect(assistant).not.toHaveBeenCalled();
     });
@@ -1301,7 +1423,7 @@ describe("HttpLifecycle", () => {
     it("returns null for external/api-key bearers so they keep the focused-window fallback", () => {
       const lc = new HttpLifecycle(fakeDeps());
       // No resolvers wired at all (e.g. server up before any assistant spawn).
-      expect(pinnedResolver(lc)("Bearer anything")).toBeNull();
+      expect(pinResolver(lc)("Bearer anything")).toBeNull();
       expect(ctxResolver(lc)("Bearer anything")).toBeNull();
     });
   });
@@ -1446,6 +1568,521 @@ describe("HttpLifecycle", () => {
       lc.notifyTurnOutcomeAlert({ helpSessionId: "help-9", outcome: "agent-stuck" });
 
       expect(wc.send).not.toHaveBeenCalled();
+    });
+  });
+  describe("workspace binding (#11789)", () => {
+    beforeEach(() => {
+      mockWebContentsById.clear();
+    });
+
+    type StreamableHandler = (
+      req: http.IncomingMessage,
+      res: http.ServerResponse,
+      url: URL
+    ) => Promise<void>;
+
+    function handshakeHandler(lc: HttpLifecycle): StreamableHandler {
+      return (
+        lc as unknown as { handleStreamableHttpRequest: StreamableHandler }
+      ).handleStreamableHttpRequest.bind(lc);
+    }
+
+    function sessionDepsFor(
+      lc: HttpLifecycle,
+      sessionId: string,
+      binding?: { workspaceId: string }
+    ) {
+      return (
+        lc as unknown as {
+          buildSessionServerDeps: (
+            id: string,
+            b?: { workspaceId: string }
+          ) => import("../sessionServer.js").SessionServerDeps;
+        }
+      ).buildSessionServerDeps(sessionId, binding);
+    }
+
+    function fakeReq(headers: Record<string, string | string[]>): http.IncomingMessage {
+      return { method: "POST", headers } as unknown as http.IncomingMessage;
+    }
+
+    function fakeRes() {
+      return {
+        writeHead: vi.fn(),
+        end: vi.fn(),
+        headersSent: false,
+      } as unknown as http.ServerResponse & {
+        writeHead: ReturnType<typeof vi.fn>;
+        end: ReturnType<typeof vi.fn>;
+      };
+    }
+
+    function parseRejection(res: { end: ReturnType<typeof vi.fn> }) {
+      return JSON.parse(res.end.mock.calls[0]![0] as string) as {
+        error: { code: number; message: string; data: { code: string } };
+      };
+    }
+
+    /** Deps whose workspace resolver knows exactly one workspace, "ws-a". */
+    function bindingDeps(overrides?: Partial<HttpLifecycleDeps>) {
+      return fakeDeps({
+        resolveWorkspaceBinding: vi.fn((workspaceId: string) => {
+          if (workspaceId !== "ws-a") throw new WorkspaceBindingError(workspaceId, "not-found");
+          return { workspaceId, kind: "project" as const, workspacePath: "/tmp/a" };
+        }),
+        ...overrides,
+      });
+    }
+
+    describe("handshake rejection", () => {
+      it.each([
+        [
+          "disagreeing header and query param",
+          { "daintree-workspace-id": "ws-a" },
+          "?workspaceId=ws-b",
+          "WORKSPACE_SELECTOR_MISMATCH",
+        ],
+        [
+          "a workspace with no live view",
+          { "daintree-workspace-id": "ws-missing" },
+          "",
+          "WORKSPACE_NOT_FOUND",
+        ],
+        [
+          "a comma-folded header",
+          { "daintree-workspace-id": "ws-a,ws-b" },
+          "",
+          "WORKSPACE_SELECTOR_INVALID",
+        ],
+      ])("refuses %s", async (_label, headers, query, expectedCode) => {
+        const deps = bindingDeps();
+        const lc = new HttpLifecycle(deps);
+        const res = fakeRes();
+
+        await handshakeHandler(lc)(
+          fakeReq(headers),
+          res,
+          new URL(`http://127.0.0.1:45454/mcp${query}`)
+        );
+
+        expect(res.writeHead).toHaveBeenCalledWith(400, { "Content-Type": "application/json" });
+        expect(parseRejection(res).error.data.code).toBe(expectedCode);
+      });
+
+      it("refuses an ambiguous workspace rather than picking a view", async () => {
+        const deps = fakeDeps({
+          resolveWorkspaceBinding: vi.fn(() => {
+            throw new WorkspaceBindingError("ws-dup", "ambiguous");
+          }),
+        });
+        const lc = new HttpLifecycle(deps);
+        const res = fakeRes();
+
+        await handshakeHandler(lc)(
+          fakeReq({ "daintree-workspace-id": "ws-dup" }),
+          res,
+          new URL("http://127.0.0.1:45454/mcp")
+        );
+
+        expect(parseRejection(res).error.data.code).toBe("WORKSPACE_AMBIGUOUS");
+      });
+
+      it("leaves no session state behind — no id, tier, origin, or client metadata", async () => {
+        const deps = bindingDeps();
+        const lc = new HttpLifecycle(deps);
+        const res = fakeRes();
+
+        await handshakeHandler(lc)(
+          fakeReq({ "daintree-workspace-id": "ws-missing" }),
+          res,
+          new URL("http://127.0.0.1:45454/mcp")
+        );
+
+        expect(deps.sessionStore.sessionTierMap.size).toBe(0);
+        expect(deps.sessionStore.sessionOriginMap.size).toBe(0);
+        expect(deps.sessionStore.sessionWorkspaceMap.size).toBe(0);
+        expect(deps.sessionStore.registerClientMetadata).not.toHaveBeenCalled();
+        // No Mcp-Session-Id: there is no session to resume.
+        expect(res.writeHead.mock.calls[0]![1]).not.toHaveProperty("Mcp-Session-Id");
+        expect(res.writeHead.mock.calls[0]![1]).not.toHaveProperty("mcp-session-id");
+      });
+
+      it("uses a JSON-RPC code in the implementation-defined range, distinct from session-not-found", async () => {
+        const deps = bindingDeps();
+        const lc = new HttpLifecycle(deps);
+        const res = fakeRes();
+
+        await handshakeHandler(lc)(
+          fakeReq({ "daintree-workspace-id": "ws-missing" }),
+          res,
+          new URL("http://127.0.0.1:45454/mcp")
+        );
+
+        const { code } = parseRejection(res).error;
+        expect(code).toBeLessThanOrEqual(-32000);
+        expect(code).toBeGreaterThanOrEqual(-32099);
+        expect(code).not.toBe(-32001);
+      });
+
+      it("refuses a selector from a bearer that already routes through its own renderer", async () => {
+        // A help bearer sending a workspace selector has two plausible targets.
+        // Letting either win silently is the ambiguity this feature removes.
+        const deps = bindingDeps();
+        const lc = new HttpLifecycle(deps);
+        lc.setHelpSessionWebContentsResolver((token) => (token === "help-tok" ? 42 : null));
+        const res = fakeRes();
+
+        await handshakeHandler(lc)(
+          fakeReq({ authorization: "Bearer help-tok", "daintree-workspace-id": "ws-a" }),
+          res,
+          new URL("http://127.0.0.1:45454/mcp")
+        );
+
+        expect(parseRejection(res).error.data.code).toBe("WORKSPACE_SELECTOR_NOT_ALLOWED");
+        expect(deps.resolveWorkspaceBinding).not.toHaveBeenCalled();
+      });
+    });
+
+    describe("selector on an established session", () => {
+      function liveSession(deps: HttpLifecycleDeps, sessionId: string, workspaceId?: string) {
+        (deps.sessionStore.httpSessions as Map<string, unknown>).set(sessionId, {
+          transport: { handleRequest: vi.fn().mockResolvedValue(undefined) },
+          idleTimer: setTimeout(() => {}, 1_000_000),
+        } as never);
+        if (workspaceId) deps.sessionStore.sessionWorkspaceMap.set(sessionId, workspaceId);
+      }
+
+      function transportOf(deps: HttpLifecycleDeps, sessionId: string) {
+        return (
+          deps.sessionStore.httpSessions.get(sessionId) as unknown as {
+            transport: { handleRequest: ReturnType<typeof vi.fn> };
+          }
+        ).transport;
+      }
+
+      it("passes a repeated matching selector straight through", async () => {
+        const deps = bindingDeps();
+        liveSession(deps, "sess-1", "ws-a");
+        const lc = new HttpLifecycle(deps);
+        const res = fakeRes();
+
+        await handshakeHandler(lc)(
+          fakeReq({ "mcp-session-id": "sess-1", "daintree-workspace-id": "ws-a" }),
+          res,
+          new URL("http://127.0.0.1:45454/mcp")
+        );
+
+        expect(transportOf(deps, "sess-1").handleRequest).toHaveBeenCalled();
+        expect(res.writeHead).not.toHaveBeenCalled();
+      });
+
+      it("refuses a selector naming a different workspace rather than rebinding", async () => {
+        const deps = bindingDeps();
+        liveSession(deps, "sess-1", "ws-a");
+        const lc = new HttpLifecycle(deps);
+        const res = fakeRes();
+
+        await handshakeHandler(lc)(
+          fakeReq({ "mcp-session-id": "sess-1", "daintree-workspace-id": "ws-b" }),
+          res,
+          new URL("http://127.0.0.1:45454/mcp")
+        );
+
+        expect(parseRejection(res).error.data.code).toBe("WORKSPACE_SELECTOR_MISMATCH");
+        // The call never reached the transport, so it cannot have run anywhere.
+        expect(transportOf(deps, "sess-1").handleRequest).not.toHaveBeenCalled();
+        // And the binding is unchanged — a selector never rebinds.
+        expect(deps.sessionStore.sessionWorkspaceMap.get("sess-1")).toBe("ws-a");
+      });
+
+      it("refuses a selector on a session that never bound one", async () => {
+        // The client believes its calls are scoped; every one of them would in
+        // fact follow focus. Failing loud is the whole point.
+        const deps = bindingDeps();
+        liveSession(deps, "sess-1");
+        const lc = new HttpLifecycle(deps);
+        const res = fakeRes();
+
+        await handshakeHandler(lc)(
+          fakeReq({ "mcp-session-id": "sess-1", "daintree-workspace-id": "ws-a" }),
+          res,
+          new URL("http://127.0.0.1:45454/mcp")
+        );
+
+        expect(parseRejection(res).error.data.code).toBe("WORKSPACE_SELECTOR_MISMATCH");
+        expect(transportOf(deps, "sess-1").handleRequest).not.toHaveBeenCalled();
+      });
+
+      it("exempts DELETE so a conflicting selector cannot strand a client", async () => {
+        // DELETE terminates the session and routes no action anywhere, so
+        // refusing it would only stop a client cleaning up after itself.
+        const deps = bindingDeps();
+        liveSession(deps, "sess-1", "ws-a");
+        const lc = new HttpLifecycle(deps);
+        const res = fakeRes();
+
+        await handshakeHandler(lc)(
+          {
+            method: "DELETE",
+            headers: { "mcp-session-id": "sess-1", "daintree-workspace-id": "ws-b" },
+          } as unknown as http.IncomingMessage,
+          res,
+          new URL("http://127.0.0.1:45454/mcp")
+        );
+
+        expect(transportOf(deps, "sess-1").handleRequest).toHaveBeenCalled();
+        expect(res.writeHead).not.toHaveBeenCalled();
+      });
+
+      it("refuses a malformed selector on an established session", async () => {
+        const deps = bindingDeps();
+        liveSession(deps, "sess-1", "ws-a");
+        const lc = new HttpLifecycle(deps);
+        const res = fakeRes();
+
+        await handshakeHandler(lc)(
+          fakeReq({ "mcp-session-id": "sess-1", "daintree-workspace-id": "  " }),
+          res,
+          new URL("http://127.0.0.1:45454/mcp")
+        );
+
+        expect(parseRejection(res).error.data.code).toBe("WORKSPACE_SELECTOR_INVALID");
+        expect(transportOf(deps, "sess-1").handleRequest).not.toHaveBeenCalled();
+      });
+
+      it("refuses a query-param selector naming a different workspace", async () => {
+        const deps = bindingDeps();
+        liveSession(deps, "sess-1", "ws-a");
+        const lc = new HttpLifecycle(deps);
+        const res = fakeRes();
+
+        await handshakeHandler(lc)(
+          fakeReq({ "mcp-session-id": "sess-1" }),
+          res,
+          new URL("http://127.0.0.1:45454/mcp?workspaceId=ws-b")
+        );
+
+        expect(parseRejection(res).error.data.code).toBe("WORKSPACE_SELECTOR_MISMATCH");
+        expect(transportOf(deps, "sess-1").handleRequest).not.toHaveBeenCalled();
+      });
+
+      it("leaves a session carrying no selector completely alone", async () => {
+        const deps = bindingDeps();
+        liveSession(deps, "sess-1", "ws-a");
+        const lc = new HttpLifecycle(deps);
+        const res = fakeRes();
+
+        await handshakeHandler(lc)(
+          fakeReq({ "mcp-session-id": "sess-1" }),
+          res,
+          new URL("http://127.0.0.1:45454/mcp")
+        );
+
+        expect(transportOf(deps, "sess-1").handleRequest).toHaveBeenCalled();
+      });
+    });
+
+    describe("routing", () => {
+      it("routes a bound session's manifest and dispatch through its workspace", async () => {
+        const deps = bindingDeps({
+          requestManifestForWorkspace: vi.fn().mockResolvedValue([]),
+          dispatchActionForWorkspace: vi.fn().mockResolvedValue({ result: { ok: true } }),
+        });
+        const lc = new HttpLifecycle(deps);
+        const sessionDeps = sessionDepsFor(lc, "bound", { workspaceId: "ws-a" });
+
+        await sessionDeps.requestManifest();
+        await sessionDeps.dispatchAction("terminal.list", {}, false);
+
+        expect(deps.requestManifestForWorkspace).toHaveBeenCalledWith("ws-a");
+        // Only external sessions may bind a workspace — a selector from a
+        // pinned bearer is refused at handshake — so the origin threaded here
+        // is always "external" (#11808).
+        expect(deps.dispatchActionForWorkspace).toHaveBeenCalledWith(
+          "ws-a",
+          "terminal.list",
+          {},
+          false,
+          "external"
+        );
+        // Never the focus-following path — that is the retargeting this removes.
+        expect(deps.dispatchAction).not.toHaveBeenCalled();
+        expect(deps.requestManifest).not.toHaveBeenCalled();
+      });
+
+      it("keeps an unbound external session on the focus-following path", () => {
+        const deps = bindingDeps({
+          dispatchActionForWorkspace: vi.fn(),
+        });
+        const lc = new HttpLifecycle(deps);
+        const sessionDeps = sessionDepsFor(lc, "unbound");
+
+        void sessionDeps.dispatchAction("terminal.list", {}, false);
+
+        expect(deps.dispatchActionForWorkspace).not.toHaveBeenCalled();
+        expect(deps.dispatchAction).toHaveBeenCalled();
+      });
+
+      it.each(["requestManifestForWorkspace", "dispatchActionForWorkspace"] as const)(
+        "fails closed rather than following focus when %s is unwired",
+        async (missing) => {
+          // "Bound, and quietly following focus instead" is the precise bug
+          // this feature removes, so a missing workspace helper can never be a
+          // fallback — even though production wires them all.
+          const deps = bindingDeps({
+            requestManifestForWorkspace:
+              missing === "requestManifestForWorkspace" ? undefined : vi.fn().mockResolvedValue([]),
+            dispatchActionForWorkspace:
+              missing === "dispatchActionForWorkspace"
+                ? undefined
+                : vi.fn().mockResolvedValue({ result: { ok: true } }),
+          });
+          const lc = new HttpLifecycle(deps);
+          const sessionDeps = sessionDepsFor(lc, "bound", { workspaceId: "ws-a" });
+
+          const call =
+            missing === "requestManifestForWorkspace"
+              ? sessionDeps.requestManifest()
+              : sessionDeps.dispatchAction("terminal.list", {}, false);
+
+          await expect(call).rejects.toMatchObject({ code: "SESSION_BINDING_GONE" });
+          expect(deps.dispatchAction).not.toHaveBeenCalled();
+          expect(deps.requestManifest).not.toHaveBeenCalled();
+        }
+      );
+
+      it("reads the bound workspace's cached manifest, never the shared one", () => {
+        const deps = bindingDeps({
+          getCachedManifestForWorkspace: vi.fn(() => []),
+        });
+        const lc = new HttpLifecycle(deps);
+
+        expect(sessionDepsFor(lc, "bound", { workspaceId: "ws-a" }).getCachedManifest()).toEqual(
+          []
+        );
+        expect(deps.getCachedManifestForWorkspace).toHaveBeenCalledWith("ws-a");
+        expect(deps.getCachedManifest).not.toHaveBeenCalled();
+      });
+    });
+
+    describe("origin gates", () => {
+      function boundExternal(deps: HttpLifecycleDeps, sessionId: string, wcId: number) {
+        (deps.sessionStore.httpSessions as Map<string, unknown>).set(sessionId, {
+          transport: { close: vi.fn().mockResolvedValue(undefined) },
+          idleTimer: setTimeout(() => {}, 1_000_000),
+        } as never);
+        deps.sessionStore.sessionTierMap.set(sessionId, "external");
+        deps.sessionStore.sessionOriginMap.set(sessionId, "external");
+        deps.sessionStore.sessionWorkspaceMap.set(sessionId, "ws-a");
+        deps.sessionStore.sessionWebContentsMap.set(sessionId, wcId);
+      }
+
+      it("refuses issueGrant for a bound external session even though it has a route", () => {
+        // The sharp edge the origin split exists for: issueGrant has no rank
+        // floor, and the call gate honours a grant over failed tier membership,
+        // so reaching it would mint access to tools outside the external list.
+        const deps = bindingDeps();
+        boundExternal(deps, "bound", 42);
+        const lc = new HttpLifecycle(deps);
+
+        expect(() => lc.issueGrant("bound", "git.commit", 42)).toThrow(/not eligible/);
+      });
+
+      it("refuses setSessionTier for a bound external session", () => {
+        const deps = bindingDeps();
+        boundExternal(deps, "bound", 42);
+        const lc = new HttpLifecycle(deps);
+
+        expect(() => lc.setSessionTier("bound", "system", 42)).toThrow(/not eligible/);
+        expect(deps.sessionStore.sessionTierMap.get("bound")).toBe("external");
+      });
+
+      it.each(["notifyToolCallStarted", "notifyTierMismatch"] as const)(
+        "suppresses %s for a bound external session",
+        (channel) => {
+          const deps = bindingDeps();
+          boundExternal(deps, "bound", 42);
+          const wc = { isDestroyed: () => false, send: vi.fn() };
+          mockWebContentsById.set(42, wc);
+          const lc = new HttpLifecycle(deps);
+          const sessionDeps = sessionDepsFor(lc, "bound", { workspaceId: "ws-a" });
+
+          if (channel === "notifyToolCallStarted") {
+            sessionDeps.notifyToolCallStarted?.({
+              sessionId: "bound",
+              toolId: "terminal.list",
+              args: {},
+              startedAt: Date.now(),
+              danger: false,
+              capturedTurnId: null,
+            });
+          } else {
+            sessionDeps.notifyTierMismatch?.({
+              sessionId: "bound",
+              toolId: "git.push",
+              tier: "external",
+              targetTier: "system",
+            });
+          }
+
+          expect(wc.send).not.toHaveBeenCalled();
+        }
+      );
+
+      it("still notifies a revoked help session, whose origin the revoke already cleared", () => {
+        // The caller snapshots ownership and the pin before revoking; a live
+        // re-read here would hit the fail-closed `external` default and drop
+        // the recovery banner a genuine help session needs.
+        const deps = bindingDeps();
+        const wc = { isDestroyed: () => false, send: vi.fn() };
+        mockWebContentsById.set(42, wc);
+        const lc = new HttpLifecycle(deps);
+
+        // No origin entry at all — exactly the post-revocation state.
+        sessionDepsFor(lc, "revoked").notifySessionRevoked?.({
+          sessionId: "revoked",
+          denialKind: "tierMismatch",
+          pinnedWebContentsId: 42,
+          rendererOwned: true,
+        });
+
+        expect(wc.send).toHaveBeenCalledTimes(1);
+      });
+
+      it("does not notify a revoked external session", () => {
+        const deps = bindingDeps();
+        const wc = { isDestroyed: () => false, send: vi.fn() };
+        mockWebContentsById.set(42, wc);
+        const lc = new HttpLifecycle(deps);
+
+        sessionDepsFor(lc, "revoked").notifySessionRevoked?.({
+          sessionId: "revoked",
+          denialKind: "tierMismatch",
+          pinnedWebContentsId: 42,
+          rendererOwned: false,
+        });
+
+        expect(wc.send).not.toHaveBeenCalled();
+      });
+
+      it("still delivers notifications to a help session", () => {
+        const deps = bindingDeps();
+        (deps.sessionStore.httpSessions as Map<string, unknown>).set("help", {} as never);
+        deps.sessionStore.sessionOriginMap.set("help", "help");
+        deps.sessionStore.sessionWebContentsMap.set("help", 42);
+        const wc = { isDestroyed: () => false, send: vi.fn() };
+        mockWebContentsById.set(42, wc);
+        const lc = new HttpLifecycle(deps);
+
+        sessionDepsFor(lc, "help").notifyTierMismatch?.({
+          sessionId: "help",
+          toolId: "git.push",
+          tier: "workbench",
+          targetTier: "system",
+        });
+
+        expect(wc.send).toHaveBeenCalledTimes(1);
+      });
     });
   });
 });

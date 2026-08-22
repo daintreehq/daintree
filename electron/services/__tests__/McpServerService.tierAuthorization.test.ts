@@ -598,6 +598,10 @@ describe("McpServerService", () => {
         "forge.getChecks",
         "worktree.reviewReadiness",
         "project.runCheck",
+        // System-tier but never external (#11880) — same reasoning as the cuts
+        // above: without it here, the workbench, action and external "not
+        // listed" assertions would pass on an empty fixture, not on the filter.
+        "worktree.create",
       ];
       return ids.map((id) =>
         createManifestEntry({
@@ -884,6 +888,11 @@ describe("McpServerService", () => {
         description: "Permanently remove a worktree",
       }),
       createManifestEntry({
+        id: "worktree.deleteOwned" as ActionId,
+        title: "Delete Owned Worktree",
+        description: "Remove a worktree this MCP session created",
+      }),
+      createManifestEntry({
         id: "terminal.sendCommand" as ActionId,
         title: "Send Terminal Command",
         description: "Run an arbitrary command in a terminal",
@@ -892,6 +901,11 @@ describe("McpServerService", () => {
         id: "terminal.close" as ActionId,
         title: "Close Terminal",
         description: "Move a terminal to trash",
+      }),
+      createManifestEntry({
+        id: "terminal.closeOwned" as ActionId,
+        title: "Close Owned Terminal",
+        description: "Move a terminal this MCP session created to trash",
       }),
       createManifestEntry({
         id: "terminal.closeAll" as ActionId,
@@ -1102,6 +1116,27 @@ describe("McpServerService", () => {
           "Move the target terminal from the dock back into the grid. Accepts an optional terminalId; defaults to the currently focused terminal.",
       }),
       createManifestEntry({
+        id: "terminal.moveToWorktree" as ActionId,
+        title: "Move to Worktree",
+        description:
+          "Move the named terminal to another worktree. An agent caller must name the terminal and a live destination worktree.",
+        requiresArgs: true,
+        inputSchema: {
+          type: "object",
+          properties: { terminalId: { type: "string" }, worktreeId: { type: "string" } },
+          required: ["worktreeId"],
+        },
+      }),
+      // Present in the manifest but in no tier allowlist (#11877), so the
+      // absence assertions below are answered by the tier gate rather than by
+      // a fixture that simply never offered it.
+      createManifestEntry({
+        id: "terminal.moveToNewWorktree" as ActionId,
+        title: "Move to New Worktree…",
+        description:
+          "Open the new-worktree dialog and move a terminal into the worktree it creates",
+      }),
+      createManifestEntry({
         id: "terminal.toggleDock" as ActionId,
         title: "Toggle Dock",
         description:
@@ -1115,6 +1150,52 @@ describe("McpServerService", () => {
       }),
       waitUntilIdleManifestEntry(),
       waitUntilIdleBatchManifestEntry(),
+      // Session continuity + recipe-editor handoffs added to ACTION_TIER_ADDONS
+      // by #11908. The coverage loops below iterate the live allowlist, so an
+      // id tiered without an entry here fails as a missing tool rather than as
+      // the fixture gap it actually is.
+      createManifestEntry({
+        id: "agentSessionHistory.resume" as ActionId,
+        title: "Resume Agent Session",
+        description:
+          "Relaunch one closed agent session by its exact id and hand back the pane carrying it.",
+      }),
+      createManifestEntry({
+        id: "session.bookmarkAndClose" as ActionId,
+        title: "Bookmark and close",
+        danger: "confirm",
+        description:
+          "Save a live agent pane's conversation as a durable bookmark, then close the pane.",
+      }),
+      createManifestEntry({
+        id: "session.bookmark.promote" as ActionId,
+        title: "Add bookmark to session",
+        description: "Pin a session that is already in history as a durable bookmark.",
+      }),
+      createManifestEntry({
+        id: "session.bookmark.rename" as ActionId,
+        title: "Rename bookmark",
+        description: "Change the label on an existing bookmark.",
+      }),
+      createManifestEntry({
+        id: "session.bookmark.delete" as ActionId,
+        title: "Delete bookmark",
+        danger: "confirm",
+        description:
+          "Remove a bookmark, demoting its session back to ordinary time-limited history.",
+      }),
+      createManifestEntry({
+        id: "recipe.editor.open" as ActionId,
+        title: "Open Recipe Editor",
+        description:
+          "Put a recipe draft in front of the user in the editor. A handoff, not a write.",
+      }),
+      createManifestEntry({
+        id: "recipe.editor.openFromLayout" as ActionId,
+        title: "Open Recipe Editor From Layout",
+        description:
+          "Turn a worktree's live terminals into a recipe draft and open the editor on it.",
+      }),
       createManifestEntry({
         id: "recipe.list" as ActionId,
         title: "List Recipes",
@@ -1498,7 +1579,7 @@ describe("McpServerService", () => {
 
       const ids = (await client.listTools()).tools.map((tool) => tool.name);
       expect(ids).toContain("worktree.list");
-      expect(ids).not.toContain("worktree.create");
+      expect(ids).toContain("worktree.create");
       expect(ids).toContain("worktree.createWithRecipe");
       for (const id of ACTION_TIER_ADDONS) {
         expect(ids).toContain(id);
@@ -1534,6 +1615,74 @@ describe("McpServerService", () => {
       })) as TextToolResult;
       expect(denied.isError).toBe(true);
       expect(denied.content[0]?.text).toContain("TIER_NOT_PERMITTED");
+      expect(dispatchMock).not.toHaveBeenCalled();
+    });
+
+    // Fixed ids, not a loop over ACTION_TIER_ADDONS: the derived loops above
+    // shrink with the allowlist, so dropping the entry again would leave them
+    // green. These two pin the #11877 decision itself — the cross-worktree move
+    // is reachable, and its dialog-bound sibling is deliberately not.
+    it("lets the action tier move a terminal across worktrees (#11877)", async () => {
+      paneTokenTiers.set("token-action", "action");
+      const dispatchMock = vi.fn((): ActionDispatchResult => ({ ok: true, result: undefined }));
+      const { window } = createMockWindow({
+        getManifest: tierManifest,
+        dispatchAction: dispatchMock,
+      });
+
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!, {
+        Authorization: "Bearer token-action",
+      });
+      transports.push(transport);
+
+      const ids = (await client.listTools()).tools.map((tool) => tool.name);
+      expect(ids).toContain("terminal.moveToWorktree");
+
+      const moved = (await client.callTool({
+        name: "terminal.moveToWorktree",
+        arguments: { terminalId: "panel-1", worktreeId: "wt-2" },
+      })) as TextToolResult;
+
+      expect(moved.isError).toBeFalsy();
+      expect(dispatchMock).toHaveBeenCalledWith(
+        expect.objectContaining({
+          actionId: "terminal.moveToWorktree",
+          args: { terminalId: "panel-1", worktreeId: "wt-2" },
+        })
+      );
+    });
+
+    it("keeps the dialog-bound move-to-new-worktree off every tier (#11877)", async () => {
+      paneTokenTiers.set("token-sys", "system");
+      const dispatchMock = vi.fn((): ActionDispatchResult => ({
+        ok: true,
+        result: "should-not-run",
+      }));
+      const { window } = createMockWindow({
+        getManifest: tierManifest,
+        dispatchAction: dispatchMock,
+      });
+
+      await service.start(window);
+      const { client, transport } = await connectClient(service.currentPort!, {
+        Authorization: "Bearer token-sys",
+      });
+      transports.push(transport);
+
+      // System is the widest tier, so absence here covers the narrower ones.
+      const ids = (await client.listTools()).tools.map((tool) => tool.name);
+      expect(ids).not.toContain("terminal.moveToNewWorktree");
+
+      const denied = (await client.callTool({
+        name: "terminal.moveToNewWorktree",
+        arguments: { terminalId: "panel-1" },
+      })) as TextToolResult;
+
+      expect(denied.isError).toBe(true);
+      expect(denied.content[0]?.text).toContain("TIER_NOT_PERMITTED");
+      // Never reaches the renderer, so its own defense-in-depth throw is a
+      // second line rather than the one doing the work.
       expect(dispatchMock).not.toHaveBeenCalled();
     });
 

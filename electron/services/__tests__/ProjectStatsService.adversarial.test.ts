@@ -27,6 +27,12 @@ const availabilityMock = vi.hoisted(() => ({
   isHelpTerminal: vi.fn<(id: string) => boolean>(() => false),
 }));
 
+// The panel is on screen unless a test says otherwise: these suites are about
+// what a live assistant reports, not about where it is rendered.
+const helpSessionMock = vi.hoisted(() => ({
+  isPanelVisible: vi.fn<(id: string) => boolean>(() => true),
+}));
+
 vi.mock("../../ipc/utils.js", () => ({
   typedBroadcast: broadcastMock,
 }));
@@ -37,8 +43,13 @@ vi.mock("../ScratchStore.js", () => ({ scratchStore: scratchStoreMock }));
 vi.mock("../AgentAvailabilityStore.js", () => ({
   getAgentAvailabilityStore: () => availabilityMock,
 }));
+vi.mock("../HelpSessionService.js", () => ({ helpSessionService: helpSessionMock }));
 
 import { ProjectStatsService } from "../ProjectStatsService.js";
+import {
+  ASSISTANT_PROJECTION_PARITY,
+  PARITY_ASSISTANT_TERMINAL,
+} from "./helpers/assistantProjectionParity.js";
 
 type FakePtyClient = {
   getAllTerminalsAsync: ReturnType<typeof vi.fn>;
@@ -888,6 +899,221 @@ describe("ProjectStatsService scratch workspaces", () => {
     await vi.runAllTimersAsync();
 
     expect(broadcastMock.mock.calls.at(-1)![1]).not.toHaveProperty(SCRATCH_ID);
+    svc.stop();
+  });
+});
+
+describe("ProjectStatsService assistant presence (#11806)", () => {
+  function helpTerminal(over: Record<string, unknown> = {}) {
+    return {
+      id: "help-1",
+      projectId: "p1",
+      kind: "terminal",
+      launchAgentId: "daintree-assistant",
+      ...over,
+    };
+  }
+
+  function lastPayload() {
+    return broadcastMock.mock.calls.at(-1)![1] as Record<
+      string,
+      {
+        assistantState?: string;
+        assistantWaitingReason?: string;
+        assistantStateSince?: number;
+        activeAgentCount: number;
+        waitingAgentCount: number;
+        processCount: number;
+      }
+    >;
+  }
+
+  beforeEach(() => {
+    projectStoreMock.getAllProjects.mockReturnValue([{ id: "p1" }]);
+    availabilityMock.isHelpTerminal.mockImplementation((id: string) => id.startsWith("help"));
+    helpSessionMock.isPanelVisible.mockReturnValue(true);
+  });
+
+  it("reports nothing at all once the user hides the panel", async () => {
+    // Closing the panel does not kill the session — the PTY lives until the
+    // idle-hibernate timer fires — but it does end the reporting. A row must
+    // not ask the user to deal with an assistant they have put away.
+    const ptyClient = makePtyClient();
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([
+      helpTerminal({ agentState: "waiting", waitingReason: "prompt", lastStateChange: 1_000 }),
+    ]);
+    ptyClient.getProjectStats.mockResolvedValue({ projectId: "p1", terminalCount: 1 });
+    helpSessionMock.isPanelVisible.mockReturnValue(false);
+
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+
+    const p1 = lastPayload().p1;
+    expect(p1).not.toHaveProperty("assistantState");
+    expect(p1).not.toHaveProperty("assistantWaitingReason");
+    expect(p1).not.toHaveProperty("assistantStateSince");
+    // The PTY is still the host's to account for, hidden or not.
+    expect(p1.processCount).toBe(0);
+    svc.stop();
+  });
+
+  it("pushes the assistant's state while still keeping it out of every count", async () => {
+    const ptyClient = makePtyClient();
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([
+      helpTerminal({ agentState: "working", lastStateChange: 1_000 }),
+    ]);
+    ptyClient.getProjectStats.mockResolvedValue({ projectId: "p1", terminalCount: 1 });
+
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+
+    const p1 = lastPayload().p1;
+    expect(p1.assistantState).toBe("working");
+    expect(p1.assistantStateSince).toBe(1_000);
+    expect(p1.activeAgentCount).toBe(0);
+    expect(p1.waitingAgentCount).toBe(0);
+    // Still netted out of the host's count — presence is not residency.
+    expect(p1.processCount).toBe(0);
+    svc.stop();
+  });
+
+  it("omits the assistant fields entirely when no assistant is live", async () => {
+    const ptyClient = makePtyClient();
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([]);
+
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+
+    expect(lastPayload().p1).not.toHaveProperty("assistantState");
+    expect(lastPayload().p1).not.toHaveProperty("assistantWaitingReason");
+    expect(lastPayload().p1).not.toHaveProperty("assistantStateSince");
+    svc.stop();
+  });
+
+  // The change gate is hand-enumerated, so each field needs its own proof: one
+  // left out of `shallowEqual` would leave an already-open switcher showing
+  // stale assistant state until some unrelated worker tally happened to move.
+  it.each([
+    {
+      field: "assistantState",
+      before: { agentState: "working", lastStateChange: 1_000 },
+      after: { agentState: "waiting", lastStateChange: 1_000 },
+    },
+    {
+      field: "assistantWaitingReason",
+      before: { agentState: "waiting", waitingReason: "prompt", lastStateChange: 1_000 },
+      after: { agentState: "waiting", waitingReason: "error", lastStateChange: 1_000 },
+    },
+    {
+      field: "assistantStateSince",
+      before: { agentState: "waiting", waitingReason: "prompt", lastStateChange: 1_000 },
+      after: { agentState: "waiting", waitingReason: "prompt", lastStateChange: 2_000 },
+    },
+  ])("broadcasts when only $field changes", async ({ before, after }) => {
+    const ptyClient = makePtyClient();
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([helpTerminal(before)]);
+
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+    const firstCount = broadcastMock.mock.calls.length;
+
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([helpTerminal(after)]);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+
+    expect(broadcastMock.mock.calls.length).toBeGreaterThan(firstCount);
+    svc.stop();
+  });
+
+  it("broadcasts the assistant going away so the row can stop reporting it", async () => {
+    const ptyClient = makePtyClient();
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([
+      helpTerminal({ agentState: "working", lastStateChange: 1_000 }),
+    ]);
+
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+    expect(lastPayload().p1.assistantState).toBe("working");
+
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([]);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+
+    expect(lastPayload().p1).not.toHaveProperty("assistantState");
+    svc.stop();
+  });
+
+  it("still suppresses a payload whose assistant state did not move", async () => {
+    const ptyClient = makePtyClient();
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([
+      helpTerminal({ agentState: "waiting", waitingReason: "prompt", lastStateChange: 1_000 }),
+    ]);
+
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+    const firstCount = broadcastMock.mock.calls.length;
+    // The control. Without it this passes against a build that projects no
+    // assistant facts at all, proving only that two empty payloads are equal.
+    expect(lastPayload().p1.assistantWaitingReason).toBe("prompt");
+
+    svc.refresh();
+    await vi.runAllTimersAsync();
+
+    expect(broadcastMock.mock.calls.length).toBe(firstCount);
+    svc.stop();
+  });
+
+  it("clears every assistant field when the assistant goes away", async () => {
+    // Starts from a fully-populated assistant so all three fields have
+    // something to lose — a fixture with no waiting reason cannot prove the
+    // reason is cleared.
+    const ptyClient = makePtyClient();
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([
+      helpTerminal({ agentState: "waiting", waitingReason: "error", lastStateChange: 1_000 }),
+    ]);
+
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+    expect(lastPayload().p1.assistantWaitingReason).toBe("error");
+
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([]);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+
+    expect(lastPayload().p1).not.toHaveProperty("assistantState");
+    expect(lastPayload().p1).not.toHaveProperty("assistantWaitingReason");
+    expect(lastPayload().p1).not.toHaveProperty("assistantStateSince");
+    svc.stop();
+  });
+
+  it("projects exactly the assistant subobject the bulk seed projects", async () => {
+    // The #10989 shape: two hand-written projections of the same reducer
+    // output. `project.bulkStats.test.ts` asserts this identical expectation
+    // against the other producer, so either one drifting fails its own suite.
+    const ptyClient = makePtyClient();
+    ptyClient.getAllTerminalsAsync.mockResolvedValue([helpTerminal(PARITY_ASSISTANT_TERMINAL)]);
+    ptyClient.getProjectStats.mockResolvedValue({ projectId: "p1", terminalCount: 1 });
+
+    const svc = new ProjectStatsService(ptyClient as never);
+    svc.refresh();
+    await vi.runAllTimersAsync();
+
+    const p1 = lastPayload().p1 as Record<string, unknown>;
+    expect({
+      assistantState: p1.assistantState,
+      assistantWaitingReason: p1.assistantWaitingReason,
+      assistantStateSince: p1.assistantStateSince,
+      activeAgentCount: p1.activeAgentCount,
+      waitingAgentCount: p1.waitingAgentCount,
+      processCount: p1.processCount,
+    }).toEqual(ASSISTANT_PROJECTION_PARITY);
     svc.stop();
   });
 });

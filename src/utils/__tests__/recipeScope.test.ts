@@ -76,4 +76,32 @@ describe("getRecipeScope", () => {
     const local = makeRecipe({ id: "l", name: "Work", projectId: "proj-1" });
     expect(getRecipeScope(global).label).not.toBe(getRecipeScope(local).label);
   });
+
+  it("classifies a plugin recipe by provenance, not by its missing projectId (#11860)", () => {
+    // A plugin recipe carries no projectId either, so the global branch would
+    // claim it and label a read-only recipe as one the user can edit.
+    const plugin = makeRecipe({
+      projectId: undefined,
+      origin: { kind: "plugin", pluginId: "acme.tools", contributionId: "deploy" },
+    });
+    const global = makeRecipe({ projectId: undefined });
+    expect(getRecipeScope(plugin).label).not.toBe(getRecipeScope(global).label);
+    // Still globally available — the axis it shares with global recipes.
+    expect(getRecipeScope(plugin).isGlobal).toBe(true);
+  });
+
+  it("plugin provenance wins even when the recipe also looks in-repo", () => {
+    const plugin = makeRecipe({
+      projectId: "p",
+      scope: "inrepo",
+      origin: { kind: "plugin", pluginId: "acme.tools", contributionId: "deploy" },
+    });
+    expect(getRecipeScope(plugin).label).toBe(
+      getRecipeScope(
+        makeRecipe({
+          origin: { kind: "plugin", pluginId: "acme.tools", contributionId: "deploy" },
+        })
+      ).label
+    );
+  });
 });

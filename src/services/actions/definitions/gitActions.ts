@@ -175,7 +175,7 @@ export function registerGitActions(actions: ActionRegistry, _callbacks: ActionCa
     id: "git.getFileDiff",
     title: "Get File Diff",
     description:
-      "Read one file's git diff as a byte-bounded window, so a large diff cannot flood the response. When the result is flagged truncated, call again from the offset it hands back to continue — a single call is not guaranteed to be the whole diff. Some files have no diff text at all: binary files, unchanged files and oversized files come back as a marker instead, which is a valid result rather than a failure.",
+      "Read one file's git diff as a byte-bounded window, so a large diff cannot flood the response. When the result is flagged truncated, call again from the offset it hands back to continue: a single call is not guaranteed to be the whole diff. Some files have no diff text at all, and binary, unchanged and oversized files come back as a marker instead, which is a valid result rather than a failure.",
     category: "git",
     kind: "query",
     danger: "safe",

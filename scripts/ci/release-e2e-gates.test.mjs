@@ -2,7 +2,7 @@ import { describe, it, expect } from "vitest";
 import { readFileSync } from "fs";
 import { fileURLToPath } from "url";
 import path from "path";
-import yaml from "js-yaml";
+import { load } from "js-yaml";
 
 // Regression guard for #11117: online E2E gated the macOS release but not Linux
 // or Windows, so a failing real-agent run could still publish on two of three
@@ -102,7 +102,7 @@ const blockingUpstreamOf = (jobs, jobId) => {
 };
 
 const workflows = RELEASE_WORKFLOWS.map((file) => {
-  const jobs = yaml.load(readFileSync(path.join(workflowsDir, file), "utf8")).jobs;
+  const jobs = load(readFileSync(path.join(workflowsDir, file), "utf8")).jobs;
   const jobIds = Object.keys(jobs);
   const gates = jobIds.filter(isGate);
   return {

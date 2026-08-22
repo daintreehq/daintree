@@ -1469,8 +1469,9 @@ async function cleanupCase(
           if (titleSet.has(terminal.title)) targetIds.add(terminal.id);
         }
         for (const terminalId of targetIds) {
+          // No close after the kill: `terminal.kill` removes the panel outright,
+          // and `terminal.close` now rejects an id it can no longer find.
           await run("terminal.kill", { terminalId, confirmed: true });
-          await run("terminal.close", { terminalId });
         }
 
         if (mode === "new-worktree" && targetWorktreeId) {
@@ -1808,7 +1809,6 @@ async function closeInitialPanels(page: Page): Promise<void> {
         { terminalId: terminal.id, confirmed: true },
         { source: "test" }
       );
-      await dispatch?.("terminal.close", { terminalId: terminal.id }, { source: "test" });
     }
   });
   await expect.poll(() => page.locator(SEL.panel.gridPanel).count(), { timeout: T_LONG }).toBe(0);
@@ -1894,7 +1894,6 @@ async function cleanupRemainingResources(): Promise<void> {
               { terminalId: terminal.id, confirmed: true },
               { source: "test" }
             );
-            await dispatch?.("terminal.close", { terminalId: terminal.id }, { source: "test" });
           }
           await dispatch?.("worktree.select", { worktreeId: mainWorktreeId }, { source: "test" });
           for (const worktreeId of worktreeIds) {

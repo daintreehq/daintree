@@ -106,7 +106,9 @@ describe("TerminalProcess write-error throttle", () => {
 
     const logs = errorLogs();
     expect(logs).toHaveLength(1);
-    expect(logs[0]).toContain("PTY write(fast-path) failed for t1");
+    // Was "write(fast-path)" while a separate chunked lane existed for >512-byte
+    // payloads. Both lanes are now one direct write, so there is one label (#11875).
+    expect(logs[0]).toContain("PTY write(direct) failed for t1");
     // The error object is forwarded as the second arg.
     expect(errSpy.mock.calls[0]?.[1]).toBeInstanceOf(Error);
   });
@@ -182,5 +184,31 @@ describe("TerminalProcess write-error throttle", () => {
     terminal.write("a", "trace-42");
 
     expect(errorLogs()[0]).toContain("traceId=trace-42");
+  });
+
+  // #11875. Payloads over 512 bytes used to be re-split into 50-byte chunks and
+  // dripped through a 5ms interval timer. node-pty owns write queueing now, so
+  // they go straight through — one call, whole payload, no timers involved.
+  it("passes an oversized write to the PTY once, whole and unchunked", () => {
+    const handles = createMockPty();
+    const terminal = createTerminal(handles);
+    const big = "x".repeat(4096);
+
+    terminal.write(big);
+
+    expect(handles.writeMock).toHaveBeenCalledTimes(1);
+    expect(handles.writeMock).toHaveBeenCalledWith(big);
+    expect(errorLogs()).toHaveLength(0);
+  });
+
+  it("reports a throwing oversized write instead of dropping it silently", () => {
+    const handles = createMockPty(() => {
+      throw new Error("EPIPE");
+    });
+    const terminal = createTerminal(handles);
+
+    terminal.write("y".repeat(4096));
+
+    expect(errorLogs()[0]).toContain("write(direct)");
   });
 });

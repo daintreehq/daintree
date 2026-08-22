@@ -549,10 +549,11 @@ describe("panelKindIsDockable", () => {
     expect(panelKindIsDockable("terminal")).toBe(true);
     expect(panelKindIsDockable("file")).toBe(true);
     expect(panelKindIsDockable("browser")).toBe(true);
+    expect(panelKindIsDockable("file-browser")).toBe(true);
   });
 
-  it("the four built-ins that opt out are not dockable", () => {
-    for (const kind of ["dev-preview", "review", "file-browser", "diff"]) {
+  it("the three built-ins that opt out are not dockable", () => {
+    for (const kind of ["dev-preview", "review", "diff"]) {
       expect(panelKindIsDockable(kind), `${kind} opts out via dockable:false`).toBe(false);
     }
   });

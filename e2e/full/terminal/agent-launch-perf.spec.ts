@@ -257,8 +257,8 @@ perfDescribe("Perf: agent-terminal launch latency", () => {
       // agent into later rounds. `confirmed: true` matters: an unconfirmed
       // kill of a running-agent panel doesn't kill — it opens a pending
       // destructive-action confirm that lingers over the app and pollutes
-      // subsequent rounds with overlay renders. The close is a fallback for
-      // a panel the kill already removed (no-op) or an already-exited agent.
+      // subsequent rounds with overlay renders. The kill removes the panel
+      // outright, so no close is needed after it.
       await page.evaluate(async () => {
         const dispatch = (window as any).__daintreeDispatchAction;
         const ids = Array.from(document.querySelectorAll('[data-panel-location="grid"]'))
@@ -270,7 +270,6 @@ perfDescribe("Perf: agent-terminal launch latency", () => {
             { terminalId: id, confirmed: true },
             { source: "test" }
           );
-          await dispatch?.("terminal.close", { terminalId: id }, { source: "test" });
         }
       });
       await expect

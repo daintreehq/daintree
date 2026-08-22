@@ -2,6 +2,7 @@ import type { PtyClient } from "../PtyClient.js";
 import type { WorkspaceClient } from "../WorkspaceClient.js";
 import { getLifecycleLedger } from "./lifecycleLedger.js";
 import { journalAgentSession } from "./agentSessionJournal.js";
+import { projectStore } from "../ProjectStore.js";
 import { createLogger } from "../../utils/logger.js";
 
 const logger = createLogger("main:ProjectSessionJournal");
@@ -11,6 +12,31 @@ type TerminalInfo = Awaited<ReturnType<PtyClient["getAllTerminalsAsync"]>>[numbe
 /** How long to wait for a worktree branch lookup before journaling without it. */
 const BRANCH_LOOKUP_TIMEOUT_MS = 200;
 
+/** Options for {@link gracefulTeardownAndJournalProject}. */
+export interface ProjectTeardownOptions {
+  /**
+   * Keep each terminal's persisted session file (scrollback + resume state)
+   * instead of deleting it during the kill. Callers that preserve the scope's
+   * restoration state for a later reopen — `project:sleep` — must set this;
+   * callers that delete that state right after (close+kill, remove) leave it
+   * off so the orphaned session files go with it.
+   */
+  preserveSession?: boolean;
+  /**
+   * Write each captured `agentSessionId` back into the scope's saved terminal
+   * snapshots, the way app shutdown does. Only meaningful when the caller keeps
+   * that state: a caller that clears it immediately would be writing into a
+   * record it is about to delete.
+   */
+  writeBackSessionIds?: boolean;
+}
+
+/** One terminal the host reported tearing down. */
+export interface CapturedProjectSession {
+  id: string;
+  agentSessionId: string | null;
+}
+
 /**
  * Gracefully tear down every terminal in a project scope (a project id or a
  * scratch id — both are opaque scope ids to the PTY host) and journal each
@@ -18,31 +44,40 @@ const BRANCH_LOOKUP_TIMEOUT_MS = 200;
  * scope's restoration state.
  *
  * This mirrors the journaling block in `electron/lifecycle/shutdown.ts` at
- * single-scope granularity, minus the projectStore terminal-state writeback:
- * every caller here (project close+kill, project remove, scratch remove) clears
- * or deletes that state immediately, so writing captured session ids back into
- * it would be pointless. The exactly-once journal funnel is what actually keeps
- * the agent conversations resumable from the picker.
+ * single-scope granularity. The projectStore terminal-state writeback that
+ * shutdown performs is opt-in via `writeBackSessionIds`: the original callers
+ * here (project close+kill, project remove, scratch remove) clear or delete
+ * that state immediately, so writing captured session ids back into it would be
+ * pointless. `project:sleep` keeps the state for a later reopen and so asks for
+ * it. The exactly-once journal funnel is what keeps the agent conversations
+ * resumable from the picker.
  *
  * Returns `confirmed` straight from the kill: when it is false a live host timed
  * out without acknowledging the kill, so the caller MUST fail closed — keep the
  * restoration state / don't remove the entity — or still-running agents are
  * orphaned. `terminalsKilled` counts the terminals the host reported tearing
- * down (0 when the host was already gone).
+ * down (0 when the host was already gone), and `sessions` returns those
+ * terminals so a caller can act per terminal (Sleep writes one hibernation
+ * marker each).
  *
- * Journaling is best-effort and does NOT gate `confirmed`: a failed pre-kill
- * snapshot, a capture whose terminal info didn't survive the snapshot, or a
- * single journal write that throws all lose that one resume record but never
- * block the teardown the caller asked for — exactly as `shutdown.ts` behaves.
- * The kill confirmation, not journaling success, is what protects restoration
- * state. Losing a resume record is strictly better than the pre-fix behavior,
- * which journaled nothing at all.
+ * Journaling and the writeback are best-effort and do NOT gate `confirmed`: a
+ * failed pre-kill snapshot, a capture whose terminal info didn't survive the
+ * snapshot, a failed state write, or a single journal write that throws all lose
+ * that one resume record but never block the teardown the caller asked for —
+ * exactly as `shutdown.ts` behaves. The kill confirmation, not journaling
+ * success, is what protects restoration state. Losing a resume record is
+ * strictly better than the pre-fix behavior, which journaled nothing at all.
  */
 export async function gracefulTeardownAndJournalProject(
   scopeId: string,
   ptyClient: PtyClient,
-  workspaceClient?: WorkspaceClient
-): Promise<{ confirmed: boolean; terminalsKilled: number }> {
+  workspaceClient?: WorkspaceClient,
+  options: ProjectTeardownOptions = {}
+): Promise<{
+  confirmed: boolean;
+  terminalsKilled: number;
+  sessions: CapturedProjectSession[];
+}> {
   // Snapshot terminal infos for this scope BEFORE the kill — info is gone once
   // the PTY exits. Best-effort: a failed snapshot just skips journaling.
   let infoById = new Map<string, TerminalInfo>();
@@ -61,7 +96,37 @@ export async function gracefulTeardownAndJournalProject(
     [...infoById.keys()].map((id) => [id, ledger.currentGeneration(id)])
   );
 
-  const outcome = await ptyClient.gracefulKillByProjectConfirmed(scopeId);
+  const outcome = await ptyClient.gracefulKillByProjectConfirmed(
+    scopeId,
+    options.preserveSession !== undefined ? { preserveSession: options.preserveSession } : undefined
+  );
+
+  // Persist the captured ids into the saved terminal snapshots before
+  // journaling, mirroring `shutdown.ts`: the snapshot is what a reopen reads to
+  // resume each agent in place, the journal is what the session picker reads.
+  // Only callers that keep the restoration state ask for this.
+  if (options.writeBackSessionIds) {
+    const capturedIds = outcome.sessions.filter((r) => r.agentSessionId);
+    if (capturedIds.length > 0) {
+      try {
+        await projectStore.enqueueProjectStateUpdate(scopeId, (state) => {
+          if (!state?.terminals) return null;
+          for (const result of capturedIds) {
+            const snapshot = state.terminals.find((t: { id: string }) => t.id === result.id);
+            if (snapshot) {
+              snapshot.agentSessionId = result.agentSessionId ?? undefined;
+            }
+          }
+          return state;
+        });
+      } catch (error) {
+        // Best-effort, exactly as in shutdown: losing the writeback costs an
+        // in-place resume, but must not block the teardown or the journal —
+        // which is the other half of the resume story and recoverable alone.
+        logger.warn(`Persisting captured sessions failed for ${scopeId}`, { err: error });
+      }
+    }
+  }
 
   const captured = outcome.sessions
     .filter((r) => r.agentSessionId)
@@ -132,5 +197,9 @@ export async function gracefulTeardownAndJournalProject(
     }
   }
 
-  return { confirmed: outcome.confirmed, terminalsKilled: outcome.sessions.length };
+  return {
+    confirmed: outcome.confirmed,
+    terminalsKilled: outcome.sessions.length,
+    sessions: outcome.sessions,
+  };
 }

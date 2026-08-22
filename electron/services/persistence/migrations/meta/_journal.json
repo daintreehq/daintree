@@ -78,6 +78,27 @@
       "when": 1785468253694,
       "tag": "0010_add_scratch_completion_seen",
       "breakpoints": true
+    },
+    {
+      "idx": 11,
+      "version": "6",
+      "when": 1786786208480,
+      "tag": "0011_add_project_recently_closed_at",
+      "breakpoints": true
+    },
+    {
+      "idx": 12,
+      "version": "6",
+      "when": 1786861242046,
+      "tag": "0012_replace_project_recency_with_resumable_agents",
+      "breakpoints": true
+    },
+    {
+      "idx": 13,
+      "version": "6",
+      "when": 1786880380226,
+      "tag": "0013_add_scratch_resumable_agent_count",
+      "breakpoints": true
     }
   ]
 }

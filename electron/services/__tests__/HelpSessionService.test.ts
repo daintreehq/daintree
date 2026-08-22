@@ -119,9 +119,6 @@ async function makeBundledHelpFolder(root: string): Promise<string> {
       permissions: {
         allow: [
           "Read(**)",
-          "Glob(**)",
-          "Grep(**)",
-          "LS(**)",
           "WebFetch",
           "mcp__daintree-docs__*",
           "Bash(gh *)",
@@ -478,32 +475,43 @@ describe("HelpSessionService", () => {
     expect(settings.defaultMode).toBeUndefined();
   });
 
-  it("provisions the Daintree Assistant at the system tier regardless of the stored setting", async () => {
-    // Selecting the Daintree Assistant grants full capability (system tier),
-    // overriding the action-tier floor that governs the Claude/Codex help
-    // overlays. The stored setting here says `action`; the agent identity wins.
-    mockStoreGet.mockReturnValue({ tier: "action", bypassPermissions: false });
+  // #11907: agent identity must never widen the MCP surface. The Daintree
+  // Assistant used to be pinned to `system` here regardless of the stored
+  // setting, which made the Settings tier selector promise a narrower surface
+  // than it handed out. Assert the bearer too, not just the returned payload —
+  // `validateToken` is what the MCP auth layer actually reads.
+  it.each(["workbench", "action", "system"] as const)(
+    "provisions the Daintree Assistant at the stored %s tier",
+    async (tier) => {
+      mockStoreGet.mockReturnValue({ tier, bypassPermissions: false });
 
-    const result = await service.provisionSession({
-      ...provisionInput(),
-      agentId: "daintree-assistant",
-    });
-    if (!result) throw new Error("expected result");
-    expect(result.tier).toBe("system");
-  });
+      const result = await service.provisionSession({
+        ...provisionInput(),
+        agentId: "daintree-assistant",
+      });
+      if (!result) throw new Error("expected result");
+      expect(result.tier).toBe(tier);
+      expect(service.validateToken(result.token)).toBe(tier);
+    }
+  );
 
-  it("leaves non-assistant help agents on the stored action tier", async () => {
-    // Contrast with the Daintree Assistant override above: a Claude help overlay
-    // keeps the deliberate action floor so irreversible mutations still need a grant.
-    mockStoreGet.mockReturnValue({ tier: "action", bypassPermissions: false });
+  it.each(["workbench", "action", "system"] as const)(
+    "provisions a non-assistant help agent at the stored %s tier",
+    async (tier) => {
+      // The non-assistant path stays independently configurable — a Claude
+      // overlay follows the same stored preference, unaffected by whatever the
+      // assistant path does.
+      mockStoreGet.mockReturnValue({ tier, bypassPermissions: false });
 
-    const result = await service.provisionSession({
-      ...provisionInput(),
-      agentId: "claude",
-    });
-    if (!result) throw new Error("expected result");
-    expect(result.tier).toBe("action");
-  });
+      const result = await service.provisionSession({
+        ...provisionInput(),
+        agentId: "claude",
+      });
+      if (!result) throw new Error("expected result");
+      expect(result.tier).toBe(tier);
+      expect(service.validateToken(result.token)).toBe(tier);
+    }
+  );
 
   it("getBypassPermissions returns the snapshot taken at provision time", async () => {
     mockStoreGet.mockReturnValue({ tier: "action", bypassPermissions: true });
@@ -1810,6 +1818,29 @@ describe("HelpSessionService", () => {
       expect(setCalls[setCalls.length - 1][1].panelWasOpen).toBe(false);
     });
 
+    it("separates a parked panel from a closed one", () => {
+      // Focus mode leaves `isOpen` true while the panel sits off-canvas. The
+      // cold-resume decision still wants the open answer — the user expects the
+      // panel back when the gesture ends — but the project tallies want the
+      // visible one, so an assistant nobody can see stops being reported.
+      expect(service.reportPanelOpen("proj-parked", true, false)).toBe(false);
+      expect(service.isPanelVisible("proj-parked")).toBe(false);
+
+      // Ending the gesture makes it visible again, and says so.
+      expect(service.reportPanelOpen("proj-parked", true, true)).toBe(true);
+      expect(service.isPanelVisible("proj-parked")).toBe(true);
+
+      // Omitting the second fact means the caller doesn't distinguish them.
+      expect(service.reportPanelOpen("proj-plain", true)).toBe(true);
+      expect(service.isPanelVisible("proj-plain")).toBe(true);
+      expect(service.reportPanelOpen("proj-plain", false)).toBe(true);
+      expect(service.isPanelVisible("proj-plain")).toBe(false);
+
+      // Unchanged reports report no change — the caller pushes a recompute on
+      // the return value, and a repeat must not schedule one.
+      expect(service.reportPanelOpen("proj-plain", false)).toBe(false);
+    });
+
     it("peekPendingHibernation mid-capture neither consumes the entry nor blocks the real resume-id write", async () => {
       // A switch-back can peek (to render the Resume CTA) while main's
       // gracefulKill is still resolving. Peek must be a pure read: it must NOT
@@ -2618,9 +2649,6 @@ describe("HelpSessionService", () => {
           permissions: {
             allow: [
               "Read(**)",
-              "Glob(**)",
-              "Grep(**)",
-              "LS(**)",
               "WebFetch",
               "mcp__daintree-docs__*",
               "Bash(gh *)",

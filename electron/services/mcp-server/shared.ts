@@ -29,6 +29,7 @@ import {
   WORKBENCH_TIER_TOOLS as WORKBENCH_TIER_TOOLS_LIST,
 } from "../../../shared/config/helpAssistantTierAllowlists.js";
 import { MCP_EXTERNAL_TIER_TOOLS } from "../../../shared/config/mcpExternalTierAllowlist.js";
+import { MCP_WORKSPACE_ID_HEADER as MCP_WORKSPACE_ID_HEADER_CANONICAL } from "../../../shared/config/mcpClientConfigs.js";
 import { safeSerializeToolResult } from "../../utils/safeSerializeToolResult.js";
 import { buildToolCallTextResult } from "./toolCallResult.js";
 
@@ -231,9 +232,118 @@ export const CONFIRMATION_TIMEOUT_CODE = "CONFIRMATION_TIMEOUT";
 export const EXECUTION_ERROR_CODE = "EXECUTION_ERROR";
 export const BINDING_STALE = "BINDING_STALE";
 export const SESSION_BINDING_GONE = "SESSION_BINDING_GONE";
+/**
+ * The session itself no longer exists — revoked, idled out, or closed — so the
+ * request cannot be authorized against any tier (#11799).
+ *
+ * Distinct from {@link SESSION_BINDING_GONE}, which describes a session that is
+ * still live but can no longer reach the workspace it bound to at handshake.
+ * That one says "your target went away"; this one says "you went away". A
+ * client can recover from a binding failure by rebinding, but the only recovery
+ * from this is a new session, so conflating them would tell a client to retry a
+ * route it no longer has any session to route.
+ */
+export const SESSION_GONE = "SESSION_GONE";
 export const MCP_DEDUP_KEY_COLLISION_CODE = "MCP_DEDUP_KEY_COLLISION";
 export const PRE_AUTH_FAILED_CODE = "PRE_AUTH_FAILED";
 export const INVALID_URL_CODE = "INVALID_URL";
+/**
+ * The named resource is not one this session created, so an `*Owned` cleanup
+ * tool will not act on it (#11909).
+ *
+ * Deliberately one code for three situations — the id never existed, it belongs
+ * to another MCP session, or it belongs to the user, a plugin, or the in-app
+ * assistant. Distinguishing them would turn the cleanup tools into an
+ * enumeration oracle: a caller could probe ids and read "exists but not yours"
+ * apart from "no such thing", learning the shape of a view it was never granted
+ * (`terminal.list` shows it the bound view's panels, not other workspaces').
+ * The refusal is also uniform in time — it is a Map lookup either way — and it
+ * lands BEFORE the delegated dispatch, so a refused call never reaches the
+ * renderer at all.
+ *
+ * Schema-invalid arguments still fail as ordinary validation errors; this code
+ * is only for a well-formed id the session has no authority over.
+ */
+export const RESOURCE_NOT_OWNED_CODE = "RESOURCE_NOT_OWNED";
+
+/**
+ * Re-exported from its canonical home in `shared/types/ipc/mcpServer.ts`, which
+ * is where it had to move once the renderer needed it too (#11808). Kept
+ * exported from here so the main-process modules that have always imported it
+ * from this file keep working — one definition, two spellings of the path.
+ */
+export type { McpSessionOrigin } from "../../../shared/types/ipc/mcpServer.js";
+
+/**
+ * Lookup key for the workspace-selector header on an incoming request (#11789).
+ *
+ * Derived from the canonical spelling the config builders emit rather than
+ * written out again, because Node lower-cases incoming header names and the two
+ * strings would otherwise be free to drift — leaving clients sending a header
+ * the server no longer reads.
+ */
+export const MCP_WORKSPACE_ID_HEADER = MCP_WORKSPACE_ID_HEADER_CANONICAL.toLowerCase();
+
+/** Query-param spelling of {@link MCP_WORKSPACE_ID_HEADER}, for clients that cannot set headers. */
+export const MCP_WORKSPACE_ID_QUERY_PARAM = "workspaceId";
+
+/**
+ * `capabilities.experimental` key carrying the workspace a session resolved to,
+ * echoed in the `initialize` result so a client can verify its binding before
+ * issuing a single mutation (#11789).
+ *
+ * Declared at `Server` construction — the SDK folds `getCapabilities()` into the
+ * initialize result itself, so no handler of ours is involved. Registering a
+ * second `InitializeRequestSchema` handler to inject `_meta` instead would skip
+ * the SDK's own `_oninitialize`, losing the `_clientCapabilities` /
+ * `_clientVersion` capture that `getClientCapabilities()` — and therefore the
+ * elicitation-capability negotiation — depends on.
+ *
+ * Distinct from {@link RESOLVED_WORKSPACE_META_KEY}: that reports where a call
+ * actually landed, after the fact. This declares where every call *will* land.
+ */
+export const WORKSPACE_BINDING_CAPABILITY_KEY = "org.daintree/workspace-binding";
+
+/**
+ * Payload advertised under {@link WORKSPACE_BINDING_CAPABILITY_KEY} (#11789).
+ *
+ * `workspaceId` is the routing identity and is always present — it is the value
+ * the client sent and the one every later call resolves through. `kind` and
+ * `workspacePath` are human-verification detail resolved from the bound view;
+ * they are optional because a host whose view manager predates the workspace-ref
+ * accessor still binds and routes correctly, and losing a label must never cost
+ * a working binding.
+ */
+export interface McpWorkspaceBinding {
+  workspaceId: string;
+  kind?: DispatchedWorkspaceRef["kind"];
+  workspacePath?: string;
+}
+
+/**
+ * JSON-RPC error code for a refused handshake (#11789). In the `-32000..-32099`
+ * range the spec reserves for implementation-defined server errors, and distinct
+ * from the `-32001` this server already returns for "Session not found" so a
+ * client can tell "your selector is wrong" from "your session expired".
+ */
+export const MCP_HANDSHAKE_REJECTED_CODE = -32002;
+
+/**
+ * Stable machine-readable reasons a workspace selector was refused, carried in
+ * `error.data.code`. Clients branch on these; the human-readable `message` is
+ * free to change.
+ */
+export type McpWorkspaceSelectorRejectionCode =
+  /** Header and query param both present, naming different workspaces. */
+  | "WORKSPACE_SELECTOR_MISMATCH"
+  /** Empty, repeated, or comma-folded selector — no single unambiguous value. */
+  | "WORKSPACE_SELECTOR_INVALID"
+  /** Selector sent by a bearer that binds through its own renderer pin instead. */
+  | "WORKSPACE_SELECTOR_NOT_ALLOWED"
+  /** No live registered view owns that workspace. */
+  | "WORKSPACE_NOT_FOUND"
+  /** More than one live view owns it, so "the" target is undefined. */
+  | "WORKSPACE_AMBIGUOUS";
 
 /**
  * Application-level convention: codes here flag transient failures that a
@@ -278,7 +388,11 @@ export function buildMcpErrorPayload(input: {
     message: input.message,
     retriable: RETRIABLE_ERROR_CODES.has(input.code),
   };
-  if (input.code === BINDING_STALE || input.code === SESSION_BINDING_GONE) {
+  if (
+    input.code === BINDING_STALE ||
+    input.code === SESSION_BINDING_GONE ||
+    input.code === SESSION_GONE
+  ) {
     payload.errorCategory = "business";
   }
   if (input.details !== undefined) {
@@ -507,11 +621,23 @@ const MCP_DEDUP_ALLOWLIST_ENTRIES = [
   // Worktree/workflow creation. `workflow.startWorkOnIssue` is a creation
   // superset of the two below it — a replay duplicates the entire work setup
   // (worktree + branch + agent + injected context) (#11534). Provisioning
-  // spins up a remote/cloud resource a retry could double.
+  // spins up a remote/cloud resource a retry could double. Creating a worktree
+  // is deliberately absent: deleting one leaves its branch behind and the host
+  // reuses that stale branch on the next create (#6463), so create → delete →
+  // recreate with identical arguments is a supported workflow, and caching the
+  // first id would hand back a worktree that no longer exists (#11880).
   "worktree.createWithRecipe",
   "workflow.startWorkOnIssue",
   "worktree.resource.provision",
   "worktree.delete",
+  // `worktree.deleteOwned` is deliberately NOT here, though the "replay the
+  // original success" argument for `worktree.delete` above reads like it should
+  // be. Worktree ids are paths, and create → delete → recreate with the same
+  // path is a supported workflow — the very reason `worktree.create` is absent
+  // from this list. Caching a delete would then suppress a genuine second
+  // deletion of a genuinely different worktree and report success for it. The
+  // replay it would have absorbed is only a confusing `RESOURCE_NOT_OWNED` on a
+  // redundant call, which is a worse error message but an honest one (#11909).
 
   // Forge writes worth absorbing a replay for. `createIssue`,
   // `addIssueComment`, `commentOnPR`, `approvePR` and `requestChanges` each

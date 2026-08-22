@@ -26,6 +26,7 @@ import type {
   PluginInputBoxOptions,
   PluginConfirmOptions,
   PluginProcessSpawnOptions,
+  PluginDuplexProcessSpawnOptions,
   PluginPtyProcessSpawnOptions,
   PluginProcessMode,
   PluginPanelBadge,
@@ -442,7 +443,8 @@ export interface SystemPathParams {
 /** Params for `process.spawn` (`host-call`). */
 export interface ProcessSpawnParams {
   command: string;
-  options?: PluginProcessSpawnOptions | PluginPtyProcessSpawnOptions;
+  options?:
+    PluginProcessSpawnOptions | PluginDuplexProcessSpawnOptions | PluginPtyProcessSpawnOptions;
 }
 
 /**
@@ -452,8 +454,9 @@ export interface ProcessSpawnParams {
  * `process-data` subscriptions.
  *
  * `mode` is authoritative, not an echo of what the worker asked for: the proxy
- * builds the interactive handle shape only when the host actually allocated a
- * PTY, so a plugin can never be handed a `write()` that silently goes nowhere.
+ * builds each handle shape from what the host actually allocated — `write()`
+ * only for a writable backend (duplex stdin or a PTY), `resize()` only for a
+ * real PTY — so a plugin can never be handed an operation that goes nowhere.
  */
 export interface ProcessSpawnResult {
   id: string;
@@ -465,13 +468,13 @@ export interface ProcessHandleRefParams {
   processId: string;
 }
 
-/** Params for `process.write` (`host-notify`) — interactive processes only. */
+/** Params for `process.write` (`host-notify`) — writable (duplex/PTY) processes only. */
 export interface ProcessWriteParams {
   processId: string;
   data: string;
 }
 
-/** Params for `process.resize` (`host-notify`) — interactive processes only. */
+/** Params for `process.resize` (`host-notify`) — PTY processes only. */
 export interface ProcessResizeParams {
   processId: string;
   cols: number;

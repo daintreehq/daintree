@@ -5,6 +5,7 @@ import { AGENT_REGISTRY } from "@/config/agents";
 import { getEffectiveAgentIds, getEffectiveAgentConfig } from "@shared/config/agentRegistry";
 import { isAssistantOnlyAgentId } from "@shared/config/agentIds";
 import { resolveAgentIcon } from "@/config/agentIcons";
+import { BrandMark } from "@/components/icons";
 
 export interface LaunchOption {
   id: string;
@@ -36,7 +37,11 @@ export function getLaunchOptions(): LaunchOption[] {
         launchAgentId: id,
         label: config?.name ?? id,
         description: `${description}${presetSuffix}`.trim(),
-        icon: <Icon className="w-4 h-4" brandColor={getBrandColorHex(id)} />,
+        icon: (
+          <BrandMark brandColor={getBrandColorHex(id)}>
+            <Icon className="w-4 h-4" />
+          </BrandMark>
+        ),
       };
     });
 

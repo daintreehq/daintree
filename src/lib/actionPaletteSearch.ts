@@ -93,10 +93,22 @@ export function scoreSubsequence(lowerQuery: string, field: string, lowerField: 
     return 0;
   }
 
+  // One indexOf answers both the prefix and the substring bonus.
+  const substringIdx = lowerField.indexOf(lowerQuery);
+
+  // Single-character query: the greedy walk below reduces to exactly the first
+  // occurrence, so its score is computable straight from that index. Short
+  // queries are the palette's worst case (nearly every action survives them),
+  // which makes this the hottest branch under real typing.
+  if (qLen === 1) {
+    if (substringIdx === -1) return 0;
+    return (substringIdx === 0 ? 500 : 200) + (isBoundary(field, substringIdx) ? 90 : 0) + 10;
+  }
+
   let score = 0;
-  if (lowerField.startsWith(lowerQuery)) {
+  if (substringIdx === 0) {
     score += 500;
-  } else if (lowerField.includes(lowerQuery)) {
+  } else if (substringIdx > 0) {
     score += 200;
   }
 
@@ -169,24 +181,39 @@ function scoreKeywords(lowerQuery: string, keywordsLower: readonly string[]): nu
 
 export function scoreAction(query: string, item: SearchableAction): number {
   if (!query) return 0;
-  return scoreActionLower(query.toLowerCase(), item);
+  const lowerQuery = query.toLowerCase();
+  return scoreActionLower(lowerQuery, charMaskOf(lowerQuery), item, computeCharMasks([item]), 0);
 }
 
-function scoreActionLower(lowerQuery: string, item: SearchableAction): number {
-  const titleScore = scoreTitle(lowerQuery, item.title, item.titleLower, item.titleAcronym);
+function scoreActionLower(
+  lowerQuery: string,
+  queryMask: number,
+  item: SearchableAction,
+  charMasks: Int32Array,
+  maskBase: number
+): number {
+  // A field whose fingerprint is missing any query character cannot contain
+  // the query as a subsequence (the acronym's characters are a subset of the
+  // title's, so the title mask covers the acronym branch too).
+  const titleScore =
+    (queryMask & ~charMasks[maskBase]!) === 0
+      ? scoreTitle(lowerQuery, item.title, item.titleLower, item.titleAcronym)
+      : 0;
 
   const categoryRaw =
-    item.categoryLower === GENERIC_CATEGORY
+    item.categoryLower === GENERIC_CATEGORY || (queryMask & ~charMasks[maskBase + 1]!) !== 0
       ? 0
       : scoreSubsequence(lowerQuery, item.category, item.categoryLower);
 
   const descriptionRaw =
-    item.descriptionLower.length > 0
+    item.descriptionLower.length > 0 && (queryMask & ~charMasks[maskBase + 2]!) === 0
       ? scoreSubsequence(lowerQuery, item.description, item.descriptionLower)
       : 0;
 
   const keywordRaw =
-    item.keywordsLower.length > 0 ? scoreKeywords(lowerQuery, item.keywordsLower) : 0;
+    item.keywordsLower.length > 0 && (queryMask & ~charMasks[maskBase + 3]!) === 0
+      ? scoreKeywords(lowerQuery, item.keywordsLower)
+      : 0;
 
   if (titleScore <= 0 && categoryRaw <= 0 && descriptionRaw <= 0 && keywordRaw <= 0) return 0;
 
@@ -258,6 +285,7 @@ export function getBoostedCategories(context: RankContext | undefined): Set<stri
 interface TitleRankCacheEntry {
   snapshot: readonly SearchableAction[];
   ranks: number[];
+  charMasks: Int32Array;
 }
 
 const titleRankCache = new WeakMap<readonly SearchableAction[], TitleRankCacheEntry>();
@@ -269,7 +297,7 @@ function computeTitleRanks(items: readonly SearchableAction[]): TitleRankCacheEn
   for (let rank = 0; rank < indices.length; rank++) {
     ranks[indices[rank]!] = rank;
   }
-  return { snapshot: items.slice(), ranks };
+  return { snapshot: items.slice(), ranks, charMasks: computeCharMasks(items) };
 }
 
 function isSnapshotCurrent(
@@ -300,6 +328,7 @@ export function rankActionMatches<T extends SearchableAction>(
     lowerQuery,
     items,
     cache.ranks,
+    cache.charMasks,
     buildMruMap(mruList),
     getBoostedCategories(context)
   );
@@ -314,7 +343,7 @@ export type ActionRanker<T extends SearchableAction> = (
 export function createActionRanker<T extends SearchableAction>(
   items: readonly T[]
 ): ActionRanker<T> {
-  let titleRanks: number[] | undefined;
+  let rankCache: TitleRankCacheEntry | undefined;
   let cachedMruList: readonly ActionFrecencyEntry[] | undefined;
   let cachedMruMap: ReadonlyMap<string, ActionFrecencyEntry> | undefined;
   let cachedTerminalKind: string | undefined;
@@ -325,7 +354,7 @@ export function createActionRanker<T extends SearchableAction>(
   return (query, mruList, context) => {
     const lowerQuery = normalizeRankQuery(query);
     if (lowerQuery === undefined) return [];
-    titleRanks ??= computeTitleRanks(items).ranks;
+    rankCache ??= computeTitleRanks(items);
     if (cachedMruList !== mruList) {
       cachedMruList = mruList;
       cachedMruMap = buildMruMap(mruList);
@@ -344,11 +373,49 @@ export function createActionRanker<T extends SearchableAction>(
     return rankActionMatchesWithTitleRanks(
       lowerQuery,
       items,
-      titleRanks,
+      rankCache.ranks,
+      rankCache.charMasks,
       cachedMruMap!,
       cachedBoostedCategories
     );
   };
+}
+
+// 32-bit character fingerprints: bit i set when the field contains a character
+// hashing to bit i (a-z map to bits 0-25, digits fold into bits 26-31; other
+// characters contribute no bit, which keeps the test conservative). A query
+// whose bits are not a subset of a field's bits cannot be a subsequence of it,
+// so the per-item scoring loop can reject most fields with one AND instead of
+// a character walk. Masks are computed once per catalog (they only depend on
+// the precomputed *Lower fields) and reused every keystroke.
+function charMaskOf(lower: string): number {
+  let mask = 0;
+  for (let i = 0; i < lower.length; i += 1) {
+    const code = lower.charCodeAt(i);
+    if (code >= 97 && code <= 122) {
+      mask |= 1 << (code - 97);
+    } else if (code >= 48 && code <= 57) {
+      mask |= 1 << (26 + ((code - 48) % 6));
+    }
+  }
+  return mask;
+}
+
+const MASK_STRIDE = 4;
+
+function computeCharMasks(items: readonly SearchableAction[]): Int32Array {
+  const masks = new Int32Array(items.length * MASK_STRIDE);
+  for (let i = 0; i < items.length; i += 1) {
+    const item = items[i]!;
+    const base = i * MASK_STRIDE;
+    masks[base] = charMaskOf(item.titleLower);
+    masks[base + 1] = charMaskOf(item.categoryLower);
+    masks[base + 2] = charMaskOf(item.descriptionLower);
+    let keywordMask = 0;
+    for (const kw of item.keywordsLower) keywordMask |= charMaskOf(kw);
+    masks[base + 3] = keywordMask;
+  }
+  return masks;
 }
 
 function normalizeRankQuery(query: string): string | undefined {
@@ -368,13 +435,15 @@ function rankActionMatchesWithTitleRanks<T extends SearchableAction>(
   lowerQuery: string,
   items: readonly T[],
   titleRanks: readonly number[],
+  charMasks: Int32Array,
   mruById: ReadonlyMap<string, ActionFrecencyEntry>,
   boostedCategories: ReadonlySet<string>
 ): T[] {
+  const queryMask = charMaskOf(lowerQuery);
   const scored: Array<{ item: T; score: number; recency: number; rank: number }> = [];
   for (let i = 0; i < items.length; i++) {
     const item = items[i]!;
-    const base = scoreActionLower(lowerQuery, item);
+    const base = scoreActionLower(lowerQuery, queryMask, item, charMasks, i * MASK_STRIDE);
     if (base <= 0) continue;
     const mru = mruById.get(item.id);
     const mruBonus = mru ? MRU_BONUS_CAP * Math.tanh(mru.score / MRU_SCORE_SCALE) : 0;

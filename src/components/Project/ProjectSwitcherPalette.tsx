@@ -1,6 +1,6 @@
-import { useMemo, useEffect, useRef, useState, useCallback } from "react";
+import { Fragment, useMemo, useEffect, useRef, useState, useCallback } from "react";
+import type { JSX } from "react";
 import {
-  ArchiveX,
   BellOff,
   ChevronDown,
   ChevronRight,
@@ -21,6 +21,7 @@ import {
   X,
   AppWindow,
 } from "lucide-react";
+import { Moon } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
 import { AppPaletteDialog, KBD_CLASS } from "@/components/ui/AppPaletteDialog";
@@ -46,14 +47,19 @@ import {
 import { ArrowDownAZ, ChartNoAxesColumn, Clock } from "@/components/icons";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import {
+  formatFleetLiveness,
   getProjectRowStatus,
   getScratchRowStatus,
   ROW_DOT_CLASS,
+  ROW_MARK_COLOR,
+  runningShare,
+  type ProjectRowTone,
   ROW_TONE_CLASS,
   type ProjectRowStatus,
 } from "@/lib/projectRowStatus";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
 import { useModifierKeys } from "@/hooks/useModifierKeys";
+import { useGlobalMinuteClock } from "@/hooks/useGlobalMinuteTicker";
 import { useScratchDeletionProgress } from "@/hooks/useScratchDeletionProgress";
 import { useOverlayClaim } from "@/hooks";
 // Leaf import, not the `@/hooks` barrel: several palette suites mock that barrel
@@ -112,7 +118,7 @@ export interface ProjectSwitcherPaletteProps {
   onCreateFolder?: () => void;
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
-  onFreeMemoryProject?: (projectId: string) => void;
+  onSleepProject?: (projectId: string) => void;
   onLocateProject?: (projectId: string) => void;
   onMoveOrRenameProject?: (projectId: string) => void;
   onTogglePinProject?: (projectId: string) => void;
@@ -123,6 +129,16 @@ export interface ProjectSwitcherPaletteProps {
   /** Pointer-leave callback used to cancel a pending hover prefetch. */
   onHoverProjectEnd?: (pointerType: string) => void;
   onOpenProjectSettings?: () => void;
+  /**
+   * What is executing across every workspace, for the header's one-line answer
+   * to "is it safe to look away?" (#11832).
+   *
+   * Deliberately not derived from `results`, which is filtered and reordered for
+   * presentation — a search for one project would otherwise report the fleet as
+   * quiet. Optional because it is a summary: a caller without the totals shows
+   * no line, which is the same thing an idle fleet shows.
+   */
+  fleetLiveness?: { runningAgentCount: number; workingAssistantCount: number };
   dropdownAlign?: "start" | "center" | "end";
   /**
    * Fired when the dropdown's Popover restores focus to its trigger on close.
@@ -135,11 +151,11 @@ export interface ProjectSwitcherPaletteProps {
   onRemoveConfirmClose?: () => void;
   onConfirmRemove?: () => void;
   isRemovingProject?: boolean;
-  /** Frozen snapshot of the project pending a "Free memory" confirm, or null. */
-  freeMemoryConfirmProject?: SearchableProject | null;
-  onFreeMemoryConfirmClose?: () => void;
-  onConfirmFreeMemory?: () => void;
-  isFreeingMemory?: boolean;
+  /** Frozen snapshot of the project pending a Sleep confirm, or null. */
+  sleepConfirmProject?: SearchableProject | null;
+  onSleepConfirmClose?: () => void;
+  onConfirmSleep?: () => void;
+  isSleepingProject?: boolean;
   /** Scratch (one-off agent workspace) results — rendered in their own collapsible section. */
   /**
    * True while `results` is the ranked list carrying the scratches, so the
@@ -192,10 +208,22 @@ export interface ProjectSwitcherPaletteProps {
 interface ProjectListItemProps {
   project: ProjectSwitcherProjectRow;
   isSelected: boolean;
+  /**
+   * The clock this row renders against, passed rather than read (#11791).
+   *
+   * React Compiler auto-memoizes these rows, so a re-render of the palette root
+   * does not re-run this component's body while its props are referentially
+   * unchanged — an ambient `Date.now()` inside it would simply freeze. Ages and
+   * the recency deadline both derive from this prop instead, so the tick that
+   * changes it is what invalidates the row. `ScratchListItem` threads its clock
+   * the same way, and `rowStatusClock.contract.test.ts` holds both ranked rows
+   * to it — source-level, because vitest cannot see the freeze.
+   */
+  nowMs: number;
   onSelect: (row: ProjectSwitcherProjectRow) => void;
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
-  onFreeMemoryProject?: (projectId: string) => void;
+  onSleepProject?: (projectId: string) => void;
   onLocateProject?: (projectId: string) => void;
   onMoveOrRenameProject?: (projectId: string) => void;
   onTogglePinProject?: (projectId: string) => void;
@@ -206,25 +234,300 @@ interface ProjectListItemProps {
 }
 
 /**
- * The dot repeats the status line's tone rather than encoding anything on its
- * own — status must never be colour-only, and the sentence beside it already
- * carries the meaning for anyone who can't separate these hues.
+ * The row's leading mark: one 8px shape that weighs the row's running agents
+ * against the ones asking for something (#11832).
  *
- * A row with nothing to report draws no dot, only the slot that reserves its
+ * Two colours in one mark, as a pie: green for the runs still
+ * going, the demand hue for the agents stopped on the user. A project that is
+ * half waiting and half working is the state the switcher exists to surface,
+ * and a single-hue dot could only ever report one half of it — which is the
+ * original bug, one carrier for two facts.
+ *
+ * A pie rather than the open arc #11836 tried. That arc failed for a reason
+ * worth recording: it is the app's `working` glyph everywhere else
+ * (`terminalStateConfig`), it was the one place that glyph did not spin, and
+ * hollowing the mark out spread the demand hue over a sub-pixel stroke that
+ * reads grey. This keeps the solid disc — the hue has its full area back — and
+ * puts the second fact in the one channel a disc has left.
+ *
+ * A true pie: the wedge is the counts' own proportion (see `runningShare`),
+ * floored only so a single agent among fifty keeps a wedge rather than a
+ * splinter. Nobody measures an 8px angle, but the mark does not need measuring
+ * to be right — it needs to lean the way the row does, and a snapped angle
+ * leaned a different way from the figures printed beside it.
+ *
+ * A row with nothing to report draws no mark, only the slot that reserves its
  * width (#11692). The slot is what keeps the tiles and names in one column: an
- * omitted dot would pull every quiet row 14px left of the busy ones, and a list
- * that is mostly quiet would read as the ragged edge rather than the tidy one.
+ * omitted mark would pull every quiet row left of the busy ones, and a list that
+ * is mostly quiet would read as the ragged edge rather than the tidy one.
  */
-function StatusDot({ status }: { status: ProjectRowStatus }) {
+function StatusDot({
+  status,
+  showResumeDot = false,
+}: {
+  status: ProjectRowStatus;
+  showResumeDot?: boolean;
+}) {
+  // One slot, one decision. Written as a single choice rather than separate
+  // conditions so the slot cannot hold two marks at once: the resume mark only
+  // reaches here on a status that already agreed to yield, and an auto-parked
+  // row is the case where both would otherwise have drawn (#11822).
+  const dot = showResumeDot ? (
+    <div
+      className="workspace-mark w-2 h-2 rounded-full bg-text-secondary"
+      data-testid="workspace-resume-dot"
+      aria-hidden="true"
+    />
+  ) : status.markTone === null ? null : (
+    <AgentMixDot tone={status.markTone} mix={status.agentMix} />
+  );
+
   return (
-    <div className="w-1.5 shrink-0" data-testid="workspace-status-slot">
-      {!status.isDormantFallback && (
-        <div
-          className={cn("w-1.5 h-1.5 rounded-full", ROW_DOT_CLASS[status.tone])}
-          data-testid="workspace-status-dot"
-        />
-      )}
+    <div
+      className="flex w-2 h-2 shrink-0 items-center justify-center"
+      data-testid="workspace-status-slot"
+    >
+      {dot}
     </div>
+  );
+}
+
+/**
+ * The wedge covering `share` of the mark, swept clockwise from 12 o'clock.
+ *
+ * Drawn over a full-bleed circle rather than as a second slice meeting the
+ * first: two adjacent paths each antialias against whatever is behind them, so
+ * their shared boundary picks up the row underneath and reads as a dark line
+ * ruled through the mark. Laid over an opaque disc the wedge's edge feathers
+ * between the two hues instead, which is the boundary a pie chart actually has.
+ *
+ * An earlier version cut a transparent notch at each boundary to keep the split
+ * legible when the two hues sit close together. At 8px that notch was the most
+ * visible thing about the mark — it read as a seam rather than a division, and
+ * it left a half-and-half mark looking like two leaves rather than one disc.
+ */
+function wedgePath(share: number): string {
+  const angle = share * 2 * Math.PI;
+  const x = (8 + 8 * Math.sin(angle)).toFixed(3);
+  const y = (8 - 8 * Math.cos(angle)).toFixed(3);
+  const largeArc = share > 0.5 ? 1 : 0;
+  return `M 8 8 L 8 0 A 8 8 0 ${largeArc} 1 ${x} ${y} Z`;
+}
+
+/**
+ * The mark itself: a solid disc when the row leans entirely one way, a two-tone
+ * pie when it has both kinds of agent at once.
+ *
+ * Solid is the common case and stays a plain background class, so a row with
+ * only waits or only runs draws exactly what it drew before this existed and
+ * the ring tones keep their borders. The pie is reached only by a row that
+ * genuinely has something to divide.
+ *
+ * The cost of dropping the notch is that two hues sitting close together — as
+ * `review` and `working` do in palettes where both are greens — make a split
+ * mark read as one disc. That is a legible mark stating one of its two facts;
+ * the notch was an illegible mark stating both, and the row's line carries the
+ * counts in words either way.
+ *
+ * `aria-hidden`, like every mark in this list: the row's own line states both
+ * counts in words, and a mark that also announced itself would have a reader
+ * hear the same fact twice.
+ */
+function AgentMixDot({ tone, mix }: { tone: ProjectRowTone; mix: ProjectRowStatus["agentMix"] }) {
+  const share = mix ? runningShare(mix) : 0;
+
+  if (share === 0 || share === 1) {
+    return (
+      <div
+        className={cn("workspace-mark w-2 h-2 rounded-full", ROW_DOT_CLASS[tone])}
+        data-testid="workspace-status-dot"
+        aria-hidden="true"
+      />
+    );
+  }
+
+  // SVG rather than a `conic-gradient` on a rounded div. The gradient version
+  // needed the div's `border-radius` to clip it into a circle, and at 8px that
+  // clip's own antialiasing read as a thin dark rim around the whole mark. Two
+  // filled shapes in one viewBox have no clip and no stroke, so nothing carves
+  // the silhouette out of a square.
+  //
+  // The wedge does repaint the disc's rim along its own arc, and a repainted
+  // antialiased edge composites heavier than a single pass. Measured on this
+  // geometry it comes to about 1% more edge ink on the running side — two
+  // orders below the artefacts this mark has actually been rejected for, and
+  // cheaper than the alternatives, which each trade it for something worse:
+  // adjacent slices let the row bleed through their shared edge, and a clip or
+  // mask puts the silhouette back behind an antialiased cut-out.
+  return (
+    <svg
+      viewBox="0 0 16 16"
+      className="workspace-mark w-2 h-2"
+      data-testid="workspace-status-dot"
+      data-running-share={share}
+      aria-hidden="true"
+    >
+      {/* The demand hue fills the disc; the running share is laid over it from
+          12 o'clock, so the two meet on the wedge's own edge. */}
+      <circle cx="8" cy="8" r="8" fill={ROW_MARK_COLOR[tone]} />
+      <path d={wedgePath(share)} fill={ROW_MARK_COLOR.working} />
+    </svg>
+  );
+}
+
+/**
+ * A row's second line: what is still running, then what it wants, then which
+ * project it is.
+ *
+ * Running leads. It is the figure this surface gets opened for — "are my agents
+ * still going, and how many" — and it used to be the one fact the row could not
+ * state at all, because the sentence after it is chosen by a cascade that only
+ * ever prints its loudest tier. Trailing it instead put it at a different
+ * x-position on every row, behind a sentence whose length changes with the
+ * state, which is the opposite of scannable.
+ *
+ * Two coloured tokens now, and deliberately: a run is green everywhere else in
+ * this app, and greying it here to hold the row to one hue made the number read
+ * as an afterthought rather than as the answer. The two never compete for a
+ * meaning — green is always the work still moving, the demand tone is always
+ * the work stopped on the user.
+ *
+ * Shared by all three row renderers so a fragment cannot appear on one kind of
+ * workspace and not another — the two scratch paths drew a single toned element
+ * before this, which left them structurally unable to carry a second one.
+ */
+function RowStatusLine({ status }: { status: ProjectRowStatus }) {
+  // The dormant fallback is the row saying it has nothing to report, and
+  // #11692 takes it at its word. Everything else earned its line.
+  const sentence = status.isDormantFallback ? null : status.text;
+
+  // The hue follows what this slot is actually reporting, because two different
+  // facts arrive in it. A count of runs the user launched is green, the way a
+  // run is green everywhere else in this app. "Assistant working" is
+  // machine-initiated presence, and reads at settled weight (#11806) — green
+  // there would both claim a run nobody started and paint the same fact a
+  // different colour from the assistant-only row, where it lands in the demand
+  // sentence instead. `withLiveness` only ever reaches the assistant phrase
+  // with no agents running, so the count is the fact itself, not a proxy.
+  const livenessTone =
+    (status.agentMix?.running ?? 0) > 0 ? ROW_TONE_CLASS.working : ROW_TONE_CLASS.assistant;
+
+  const parts = [
+    status.livenessDetail !== undefined && (
+      <span
+        key="running"
+        className={cn("shrink-0", livenessTone)}
+        data-testid="workspace-running-count"
+      >
+        {status.livenessDetail}
+      </span>
+    ),
+    sentence !== null && (
+      <span key="demand" className={cn("shrink-0", ROW_TONE_CLASS[status.tone])}>
+        {sentence}
+      </span>
+    ),
+    status.ageDetail !== undefined && (
+      // Muted, and never in the demand tone. The age is the one fragment here
+      // that asks for nothing, and colouring it made the coloured run long
+      // enough to outweigh the count leading the line.
+      <span key="age" className="truncate text-daintree-text/50">
+        {status.ageDetail}
+      </span>
+    ),
+    status.pathHint !== undefined && (
+      // `shrink` where the count takes `shrink-0`: the hint answers which
+      // project this is, which the name above already mostly does, while the
+      // count is the row's headline figure.
+      <span key="path" className="truncate shrink text-daintree-text/50">
+        {status.pathHint}
+      </span>
+    ),
+  ].filter((part): part is JSX.Element => part !== false);
+
+  if (parts.length === 0) return null;
+
+  return (
+    <div className="flex items-center gap-1 min-w-0 mt-0.5 text-[11px] leading-none">
+      {parts.map((part, index) => (
+        <Fragment key={part.key}>
+          {/*
+           * The separator is its own element rather than a prefix on the token
+           * after it. Folded into a token it would inherit that token's hue,
+           * and it would land inside the text a reader — or a test — matches
+           * the token by.
+           *
+           * The visible dot is hidden from assistive tech and a comma stands in
+           * for it, because the tokens are adjacent inline elements with no
+           * whitespace between them: without this the row's accessible name
+           * runs together as "2 agents running1 needs inputwaiting 10m".
+           */}
+          {index > 0 && (
+            <>
+              <span className="sr-only">, </span>
+              <span className="shrink-0 text-daintree-text/40" aria-hidden="true">
+                ·
+              </span>
+            </>
+          )}
+          {part}
+        </Fragment>
+      ))}
+    </div>
+  );
+}
+
+/**
+ * Whether the row should mark that opening this workspace brings agents back
+ * (#11801, extended to scratches in #11821).
+ *
+ * Gated on the status classifier's own answer because a live status always
+ * outranks the promise: the coloured dot says what the workspace is doing now,
+ * the grey one only says what it would come back with. So the mark lands on the
+ * rows that have stopped — the dormant ones #11692 cleared, and the auto-parked
+ * ones whose settled ring has less to say than the promise (#11822) — and never
+ * displaces a mark that means more. Keyed off the count rather than which band
+ * the row sorts into, so a pinned project keeps it too.
+ *
+ * An absent count means main has not resolved this workspace yet, which is not
+ * the same as resolving it to zero — an unresolved row makes no claim rather
+ * than a wrong one. Zero is an answer and also draws nothing: there is nothing
+ * to come back to.
+ *
+ * The current workspace is excluded outright. Its count is real, but you are
+ * already standing in it — those agents are on screen, not waiting to return.
+ * Without this the row would read ", current, 3 agents will resume".
+ *
+ * Takes the two fields it reads rather than either view-model: projects and
+ * scratches deliberately do not share a shape, and a union parameter would make
+ * every project-only field type-reachable from the two scratch render paths.
+ */
+function showResumableAgentMark(
+  status: ProjectRowStatus,
+  workspace: { isActive: boolean; resumableAgentCount?: number }
+): boolean {
+  if (workspace.isActive) return false;
+  if (status.allowsResumeMark !== true) return false;
+  return workspace.resumableAgentCount !== undefined && workspace.resumableAgentCount > 0;
+}
+
+/**
+ * The grey dot's meaning, said rather than shown (#11801). The dot itself is
+ * `aria-hidden`, so without this the row would carry the fact in colour alone.
+ * Part of the accessible name, not a live region, so a list render doesn't
+ * announce every markable row.
+ *
+ * The count rather than the bare fact: the number is already here, and
+ * "3 agents will resume" answers the question the dot only raises.
+ *
+ * Shared by all three row renderers — the two scratch paths draw the same
+ * sentence the project rows do, so the phrasing cannot drift between them.
+ */
+function ResumableAgentsLabel({ count }: { count: number }) {
+  return (
+    <span className="sr-only">
+      , {count} {count === 1 ? "agent" : "agents"} will resume
+    </span>
   );
 }
 
@@ -252,13 +555,30 @@ function useWaitAgeTick(active: boolean): void {
   }, [active]);
 }
 
+/**
+ * Whether a project row offers "Sleep" — shutting that one project down the way
+ * quitting shuts them all down, then reopening it restored.
+ *
+ * Unlike the "Free memory" action it replaces, this DOES offer itself for the
+ * project on screen: that window drops to the picker and the layout survives.
+ * A missing project has nothing loaded to shut down, and an already-sleeping
+ * one would no-op, so neither is offered it.
+ *
+ * Exported for its own test — the row's context menu is stubbed out in the
+ * palette render suite, so the rule is only reachable in isolation.
+ */
+export function canSleepProject(project: { isMissing: boolean; status?: string }): boolean {
+  return !project.isMissing && project.status !== "closed";
+}
+
 function ProjectListItem({
   project,
   isSelected,
+  nowMs,
   onSelect,
   onStopProject,
   onCloseProject,
-  onFreeMemoryProject,
+  onSleepProject,
   onLocateProject,
   onMoveOrRenameProject,
   onTogglePinProject,
@@ -268,18 +588,15 @@ function ProjectListItem({
   onHoverProjectEnd,
 }: ProjectListItemProps) {
   const showStop = project.processCount > 0 && !project.isMissing;
-  // "Free memory" reclaims a backgrounded project's resident RAM. Only
-  // meaningful for non-active, non-missing projects that still hold resources
-  // (the active project owns the live renderer; a missing one has nothing
-  // loaded; an already-closed one was reclaimed, so the action would no-op).
-  const showFreeMemory = !project.isActive && !project.isMissing && project.status !== "closed";
+  const showSleep = canSleepProject(project);
 
   const notificationOverrides = useProjectSettingsStore(
     (state) => state.notificationOverridesByProjectId[project.id]
   );
   const isProjectNotificationsMuted = areProjectNotificationsMuted(notificationOverrides);
 
-  const status = getProjectRowStatus(project);
+  const status = getProjectRowStatus(project, nowMs);
+  const showResumeDot = showResumableAgentMark(status, project);
 
   const row = (
     <div
@@ -315,7 +632,7 @@ function ProjectListItem({
       onPointerEnter={onHoverProject ? (e) => onHoverProject(project.id, e.pointerType) : undefined}
       onPointerLeave={onHoverProjectEnd ? (e) => onHoverProjectEnd(e.pointerType) : undefined}
     >
-      <StatusDot status={status} />
+      <StatusDot status={status} showResumeDot={showResumeDot} />
 
       <div
         className={cn(
@@ -354,6 +671,8 @@ function ProjectListItem({
            * attach itself to the wrong noun.
            */}
           {project.isActive && <span className="sr-only">, current</span>}
+          {/* Same shape as `, current` above — see `ResumableAgentsLabel`. */}
+          {showResumeDot && <ResumableAgentsLabel count={project.resumableAgentCount ?? 0} />}
           {isProjectNotificationsMuted && (
             <>
               {/*
@@ -378,22 +697,7 @@ function ProjectListItem({
          * same folder name, so it belongs to identity rather than status and
          * survives on its own.
          */}
-        {(!status.isDormantFallback || status.pathHint) && (
-          <div className="flex items-center gap-1 min-w-0 mt-0.5">
-            {!status.isDormantFallback && (
-              <span
-                className={cn("truncate text-[11px] leading-none", ROW_TONE_CLASS[status.tone])}
-              >
-                {status.text}
-              </span>
-            )}
-            {status.pathHint && (
-              <span className="truncate text-[11px] leading-none text-daintree-text/50 shrink">
-                {status.isDormantFallback ? status.pathHint : `· ${status.pathHint}`}
-              </span>
-            )}
-          </div>
-        )}
+        <RowStatusLine status={status} />
       </div>
     </div>
   );
@@ -402,7 +706,7 @@ function ProjectListItem({
     onTogglePinProject ||
     onStopProject ||
     onCloseProject ||
-    onFreeMemoryProject ||
+    onSleepProject ||
     onCopyPath ||
     onSelectNewWindow ||
     onMoveOrRenameProject ||
@@ -447,17 +751,17 @@ function ProjectListItem({
           </ContextMenuItem>
         )}
         {(onTogglePinProject || onCopyPath) &&
-          (onStopProject || onFreeMemoryProject || onCloseProject) && <ContextMenuSeparator />}
+          (onStopProject || onSleepProject || onCloseProject) && <ContextMenuSeparator />}
         {showStop && onStopProject && (
           <ContextMenuItem destructive onSelect={() => onStopProject(project.id)}>
             <Square className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
             Stop all agents
           </ContextMenuItem>
         )}
-        {showFreeMemory && onFreeMemoryProject && (
-          <ContextMenuItem onSelect={() => onFreeMemoryProject(project.id)}>
-            <ArchiveX className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-            Free memory
+        {showSleep && onSleepProject && (
+          <ContextMenuItem onSelect={() => onSleepProject(project.id)}>
+            <Moon className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+            Sleep project
           </ContextMenuItem>
         )}
         {onCloseProject && project.isActive && (
@@ -505,13 +809,17 @@ function ProjectListItem({
 function ScratchListItem({
   scratch,
   isSelected,
+  nowMs,
   onSelect,
 }: {
   scratch: ProjectSwitcherScratchRow;
   isSelected: boolean;
+  /** The clock this row renders against, passed rather than read — see `ProjectListItemProps`. */
+  nowMs: number;
   onSelect: (row: ProjectSwitcherScratchRow) => void;
 }) {
-  const status = getScratchRowStatus(scratch);
+  const status = getScratchRowStatus(scratch, nowMs);
+  const showResumeDot = showResumableAgentMark(status, scratch);
 
   return (
     <div
@@ -531,7 +839,7 @@ function ScratchListItem({
       )}
       onClick={() => onSelect(scratch)}
     >
-      <StatusDot status={status} />
+      <StatusDot status={status} showResumeDot={showResumeDot} />
 
       <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] bg-tint/[0.04] text-muted-foreground shrink-0">
         <FileText className="h-4 w-4" aria-hidden="true" />
@@ -549,14 +857,9 @@ function ScratchListItem({
           <span className="truncate text-sm font-semibold leading-tight">{scratch.name}</span>
           <span className="text-[11px] leading-none text-daintree-text/50 shrink-0">· Scratch</span>
           {scratch.isActive && <span className="sr-only">, current</span>}
+          {showResumeDot && <ResumableAgentsLabel count={scratch.resumableAgentCount ?? 0} />}
         </div>
-        {!status.isDormantFallback && (
-          <div
-            className={cn("truncate text-[11px] leading-none mt-0.5", ROW_TONE_CLASS[status.tone])}
-          >
-            {status.text}
-          </div>
-        )}
+        <RowStatusLine status={status} />
       </div>
     </div>
   );
@@ -709,7 +1012,7 @@ interface ProjectListContentProps {
   canAddProject: boolean;
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
-  onFreeMemoryProject?: (projectId: string) => void;
+  onSleepProject?: (projectId: string) => void;
   onLocateProject?: (projectId: string) => void;
   onMoveOrRenameProject?: (projectId: string) => void;
   onTogglePinProject?: (projectId: string) => void;
@@ -730,7 +1033,7 @@ function ProjectListContent({
   canAddProject,
   onStopProject,
   onCloseProject,
-  onFreeMemoryProject,
+  onSleepProject,
   onLocateProject,
   onMoveOrRenameProject,
   onTogglePinProject,
@@ -743,7 +1046,11 @@ function ProjectListContent({
   const isSearching = query.trim().length > 0;
 
   // Mounted here, once for the whole list, rather than per row: sixty timers in
-  // a hundred-project list would all fire for the same reason.
+  // a hundred-project list would all fire for the same reason. It has to be a
+  // component that renders the rows, too — the clock is state, so a tick re-runs
+  // THIS body and the changed `nowMs` is what invalidates each auto-memoized
+  // row. A tick held at the palette root re-renders the root and stops there.
+  const nowMs = useGlobalMinuteClock();
 
   // Bands are contiguous runs of `results`, never a re-filter of it. The hook
   // has already sorted by section, so walking the array once and cutting where
@@ -787,15 +1094,21 @@ function ProjectListContent({
     return (
       <div key={`${row.kind}-${row.id}`} role="presentation">
         {row.kind === "scratch" ? (
-          <ScratchListItem scratch={row} isSelected={isSelected} onSelect={onSelect} />
+          <ScratchListItem
+            scratch={row}
+            isSelected={isSelected}
+            nowMs={nowMs}
+            onSelect={onSelect}
+          />
         ) : (
           <ProjectListItem
             project={row}
             isSelected={isSelected}
+            nowMs={nowMs}
             onSelect={onSelect}
             onStopProject={onStopProject}
             onCloseProject={onCloseProject}
-            onFreeMemoryProject={onFreeMemoryProject}
+            onSleepProject={onSleepProject}
             onLocateProject={onLocateProject}
             onMoveOrRenameProject={onMoveOrRenameProject}
             onTogglePinProject={onTogglePinProject}
@@ -1151,6 +1464,7 @@ function ScratchSection({
 
                 const countdown = formatScratchCleanupCountdown(scratch.lastOpened, now);
                 const status = getScratchRowStatus(scratch, now);
+                const showResumeDot = showResumableAgentMark(status, scratch);
                 const hasContextActions = Boolean(onRequestDelete || onSaveAsProject || onRename);
                 return (
                   <ContextMenu key={scratch.id}>
@@ -1170,13 +1484,23 @@ function ScratchSection({
                         // would have a reader announce one state as two.
                         aria-selected={scratch.isActive}
                       >
-                        <StatusDot status={status} />
+                        <StatusDot status={status} showResumeDot={showResumeDot} />
                         <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] bg-tint/[0.04] text-muted-foreground shrink-0">
                           <FileText className="h-4 w-4" aria-hidden="true" />
                         </div>
                         <div className="flex-1 min-w-0">
                           <div className="text-sm font-medium truncate leading-tight">
                             {scratch.name}
+                            {/*
+                             * Inside the name element, not after it: this row
+                             * has no `, current` span to follow (the section's
+                             * `aria-selected` carries that), so the phrase
+                             * attaches to the name the way it does on a
+                             * project row.
+                             */}
+                            {showResumeDot && (
+                              <ResumableAgentsLabel count={scratch.resumableAgentCount ?? 0} />
+                            )}
                           </div>
                           {/*
                            * No origin hint here — the section header already
@@ -1189,16 +1513,7 @@ function ScratchSection({
                            * be deleted is exactly the row that has something to
                            * report even when nothing is running.
                            */}
-                          {!status.isDormantFallback && (
-                            <div
-                              className={cn(
-                                "text-[11px] leading-none truncate mt-0.5",
-                                ROW_TONE_CLASS[status.tone]
-                              )}
-                            >
-                              {status.text}
-                            </div>
-                          )}
+                          <RowStatusLine status={status} />
                           {countdown && (
                             <div
                               className="text-[11px] leading-none text-daintree-text/40 mt-0.5 truncate"
@@ -1388,7 +1703,7 @@ interface ProjectPaletteInnerProps {
   onOpenProjectSettings?: () => void;
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
-  onFreeMemoryProject?: (projectId: string) => void;
+  onSleepProject?: (projectId: string) => void;
   onLocateProject?: (projectId: string) => void;
   onMoveOrRenameProject?: (projectId: string) => void;
   onTogglePinProject?: (projectId: string) => void;
@@ -1408,6 +1723,7 @@ interface ProjectPaletteInnerProps {
   onRequestDeleteAllScratches?: () => void;
   onRenameScratch?: (scratchId: string, name: string) => void;
   onSaveAsProject?: (scratchId: string) => void;
+  fleetLiveness?: { runningAgentCount: number; workingAssistantCount: number };
 }
 
 function ProjectPaletteInner({
@@ -1429,7 +1745,7 @@ function ProjectPaletteInner({
   onOpenProjectSettings,
   onStopProject,
   onCloseProject,
-  onFreeMemoryProject,
+  onSleepProject,
   onLocateProject,
   onMoveOrRenameProject,
   onTogglePinProject,
@@ -1444,8 +1760,10 @@ function ProjectPaletteInner({
   onRequestDeleteAllScratches,
   onRenameScratch,
   onSaveAsProject,
+  fleetLiveness,
 }: ProjectPaletteInnerProps) {
   const projectSwitcherShortcut = useEffectiveCombo("project.switcherPalette");
+  const fleetSummary = fleetLiveness ? formatFleetLiveness(fleetLiveness) : null;
 
   useEffect(() => {
     if (listRef.current && selectedIndex >= 0 && selectedIndex < results.length) {
@@ -1540,7 +1858,18 @@ function ProjectPaletteInner({
 
   return (
     <>
-      <AppPaletteDialog.Header label="Switch project" shortcut={projectSwitcherShortcut}>
+      <AppPaletteDialog.Header
+        label="Switch project"
+        shortcut={projectSwitcherShortcut}
+        // Absent, not zeroed, when the fleet is idle: "is anything running?" is
+        // answered by the line being there at all, and a standing "0 running"
+        // would make the reader parse a number to learn nothing.
+        trailing={
+          fleetSummary ? (
+            <span data-testid="fleet-liveness-summary">{fleetSummary}</span>
+          ) : undefined
+        }
+      >
         <AppPaletteDialog.Input
           inputRef={inputRef}
           value={query}
@@ -1571,7 +1900,7 @@ function ProjectPaletteInner({
           canAddProject={Boolean(onAddProject)}
           onStopProject={onStopProject}
           onCloseProject={onCloseProject}
-          onFreeMemoryProject={onFreeMemoryProject}
+          onSleepProject={onSleepProject}
           onLocateProject={onLocateProject}
           onMoveOrRenameProject={onMoveOrRenameProject}
           onTogglePinProject={onTogglePinProject}
@@ -1718,7 +2047,7 @@ function ModalContent({
         onOpenProjectSettings={innerProps.onOpenProjectSettings}
         onStopProject={innerProps.onStopProject}
         onCloseProject={innerProps.onCloseProject}
-        onFreeMemoryProject={innerProps.onFreeMemoryProject}
+        onSleepProject={innerProps.onSleepProject}
         onLocateProject={innerProps.onLocateProject}
         onMoveOrRenameProject={innerProps.onMoveOrRenameProject}
         onTogglePinProject={innerProps.onTogglePinProject}
@@ -1734,6 +2063,7 @@ function ModalContent({
         onRequestDeleteAllScratches={innerProps.onRequestDeleteAllScratches}
         onRenameScratch={innerProps.onRenameScratch}
         onSaveAsProject={innerProps.onSaveAsProject}
+        fleetLiveness={innerProps.fleetLiveness}
       />
     </AppPaletteDialog>
   );
@@ -1837,7 +2167,7 @@ function DropdownContent({
           onOpenProjectSettings={innerProps.onOpenProjectSettings}
           onStopProject={innerProps.onStopProject}
           onCloseProject={innerProps.onCloseProject}
-          onFreeMemoryProject={innerProps.onFreeMemoryProject}
+          onSleepProject={innerProps.onSleepProject}
           onLocateProject={innerProps.onLocateProject}
           onMoveOrRenameProject={innerProps.onMoveOrRenameProject}
           onTogglePinProject={innerProps.onTogglePinProject}
@@ -1853,6 +2183,7 @@ function DropdownContent({
           onRequestDeleteAllScratches={innerProps.onRequestDeleteAllScratches}
           onRenameScratch={innerProps.onRenameScratch}
           onSaveAsProject={innerProps.onSaveAsProject}
+          fleetLiveness={innerProps.fleetLiveness}
         />
       </AppPalettePopover.Content>
     </AppPalettePopover>
@@ -1960,7 +2291,7 @@ export function ProjectSwitcherPalette({
   onCreateFolder,
   onStopProject,
   onCloseProject,
-  onFreeMemoryProject,
+  onSleepProject,
   onLocateProject,
   onMoveOrRenameProject,
   onTogglePinProject,
@@ -1976,10 +2307,10 @@ export function ProjectSwitcherPalette({
   onRemoveConfirmClose,
   onConfirmRemove,
   isRemovingProject = false,
-  freeMemoryConfirmProject,
-  onFreeMemoryConfirmClose,
-  onConfirmFreeMemory,
-  isFreeingMemory = false,
+  sleepConfirmProject,
+  onSleepConfirmClose,
+  onConfirmSleep,
+  isSleepingProject = false,
   rankedSearch,
   scratchResults,
   onCreateScratch,
@@ -2000,6 +2331,7 @@ export function ProjectSwitcherPalette({
   onDismissSaveAsProjectConfirm,
   onConfirmDeleteOriginalScratch,
   isDeletingOriginalScratch = false,
+  fleetLiveness,
 }: ProjectSwitcherPaletteProps) {
   const paletteInputRef = useRef<HTMLInputElement>(null);
 
@@ -2028,7 +2360,7 @@ export function ProjectSwitcherPalette({
         onCreateFolder={onCreateFolder}
         onStopProject={onStopProject}
         onCloseProject={onCloseProject}
-        onFreeMemoryProject={onFreeMemoryProject}
+        onSleepProject={onSleepProject}
         onLocateProject={onLocateProject}
         onMoveOrRenameProject={onMoveOrRenameProject}
         onTogglePinProject={onTogglePinProject}
@@ -2047,6 +2379,7 @@ export function ProjectSwitcherPalette({
         onRequestDeleteAllScratches={onRequestDeleteAllScratches}
         onRenameScratch={onRenameScratch}
         onSaveAsProject={onSaveAsProject}
+        fleetLiveness={fleetLiveness}
       >
         {children}
       </DropdownContent>
@@ -2068,7 +2401,7 @@ export function ProjectSwitcherPalette({
         onCreateFolder={onCreateFolder}
         onStopProject={onStopProject}
         onCloseProject={onCloseProject}
-        onFreeMemoryProject={onFreeMemoryProject}
+        onSleepProject={onSleepProject}
         onLocateProject={onLocateProject}
         onMoveOrRenameProject={onMoveOrRenameProject}
         onTogglePinProject={onTogglePinProject}
@@ -2085,6 +2418,7 @@ export function ProjectSwitcherPalette({
         onRequestDeleteAllScratches={onRequestDeleteAllScratches}
         onRenameScratch={onRenameScratch}
         onSaveAsProject={onSaveAsProject}
+        fleetLiveness={fleetLiveness}
       />
     );
 
@@ -2153,45 +2487,51 @@ export function ProjectSwitcherPalette({
           </div>
         </ConfirmDialog>
       )}
-      {freeMemoryConfirmProject && onFreeMemoryConfirmClose && onConfirmFreeMemory && (
+      {sleepConfirmProject && onSleepConfirmClose && onConfirmSleep && (
         <ConfirmDialog
           isOpen={true}
-          onClose={isFreeingMemory ? undefined : onFreeMemoryConfirmClose}
-          title={`Free memory for '${freeMemoryConfirmProject.name}'?`}
+          onClose={isSleepingProject ? undefined : onSleepConfirmClose}
+          title={`Sleep '${sleepConfirmProject.name}'?`}
           zIndex="nested"
-          confirmLabel="Free memory"
+          confirmLabel="Sleep project"
           cancelLabel="Cancel"
-          onConfirm={onConfirmFreeMemory}
-          isConfirmLoading={isFreeingMemory}
+          onConfirm={onConfirmSleep}
+          isConfirmLoading={isSleepingProject}
           variant="default"
         >
           <div className="space-y-3">
             <div>
-              <div className="font-medium text-sm">{freeMemoryConfirmProject.name}</div>
+              <div className="font-medium text-sm">{sleepConfirmProject.name}</div>
               <div className="text-xs text-daintree-text/50 font-mono mt-1">
-                {freeMemoryConfirmProject.path}
+                {sleepConfirmProject.path}
               </div>
             </div>
-            {(freeMemoryConfirmProject.processCount > 0 ||
-              freeMemoryConfirmProject.activeAgentCount > 0 ||
-              freeMemoryConfirmProject.waitingAgentCount > 0) && (
+            {(sleepConfirmProject.processCount > 0 ||
+              sleepConfirmProject.activeAgentCount > 0 ||
+              sleepConfirmProject.waitingAgentCount > 0) && (
               <div className="rounded-[var(--radius-md)] bg-status-warning/10 border border-status-warning/20 px-3 py-2 text-xs text-status-warning">
                 <div className="font-medium">Running processes will be stopped</div>
                 <div className="mt-1 text-status-warning/80">
-                  {freeMemoryConfirmProject.processCount > 0 && (
-                    <div>• {freeMemoryConfirmProject.processCount} running process(es)</div>
+                  {sleepConfirmProject.processCount > 0 && (
+                    <div>• {sleepConfirmProject.processCount} running process(es)</div>
                   )}
-                  {freeMemoryConfirmProject.activeAgentCount > 0 && (
-                    <div>• {freeMemoryConfirmProject.activeAgentCount} active agent(s)</div>
+                  {sleepConfirmProject.activeAgentCount > 0 && (
+                    <div>• {sleepConfirmProject.activeAgentCount} active agent(s)</div>
                   )}
-                  {freeMemoryConfirmProject.waitingAgentCount > 0 && (
-                    <div>• {freeMemoryConfirmProject.waitingAgentCount} waiting agent(s)</div>
+                  {sleepConfirmProject.waitingAgentCount > 0 && (
+                    <div>• {sleepConfirmProject.waitingAgentCount} waiting agent(s)</div>
                   )}
                 </div>
               </div>
             )}
+            {sleepConfirmProject.isActive && (
+              <div className="text-xs text-daintree-text/60">
+                This window returns to the project picker
+              </div>
+            )}
             <div className="text-xs text-daintree-text/60">
-              Sessions are preserved and restored when you reopen the project.
+              The layout, terminal scrollback, and agent sessions come back when you reopen the
+              project.
             </div>
           </div>
         </ConfirmDialog>

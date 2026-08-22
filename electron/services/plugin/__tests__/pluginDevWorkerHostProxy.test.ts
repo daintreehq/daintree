@@ -309,6 +309,35 @@ describe("PluginDevWorkerHostProxy host.process (#10526)", () => {
     ).toMatchObject({ params: { processId: "p1", cols: 120, rows: 40 } });
   });
 
+  it("builds a duplex handle with write but no resize (#11871)", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.process.spawn("codex", { mode: "duplex" });
+    resolveCall(proxy, sent, "process.spawn", { id: "p1", mode: "duplex" });
+    const handle: any = await promise;
+
+    expect(typeof handle.write).toBe("function");
+    // No terminal behind a duplex child, so no resize to offer.
+    expect(handle.resize).toBeUndefined();
+
+    handle.write('{"jsonrpc":"2.0","method":"initialize"}\n');
+    expect(
+      sent.find((m) => m.type === "host-notify" && m.method === "process.write")
+    ).toMatchObject({
+      params: { processId: "p1", data: '{"jsonrpc":"2.0","method":"initialize"}\n' },
+    });
+  });
+
+  it("falls back to the pipe shape when the host reports no mode at all (#11871)", async () => {
+    const { proxy, sent } = makeProxy();
+    const promise = proxy.host.process.spawn("codex", { mode: "duplex" });
+    // A host that omits the field must yield the LEAST capable shape — a missing
+    // value can never manufacture a write() onto a child with no stdin.
+    resolveCall(proxy, sent, "process.spawn", { id: "p1" });
+    const handle: any = await promise;
+    expect(handle.write).toBeUndefined();
+    expect(handle.resize).toBeUndefined();
+  });
+
   it("trusts the host's reported mode over what the plugin asked for", async () => {
     const { proxy, sent } = makeProxy();
     const promise = proxy.host.process.spawn("flutter", { mode: "pty" });

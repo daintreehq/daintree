@@ -4,6 +4,7 @@ import { events } from "./events.js";
 import { projectStore } from "./ProjectStore.js";
 import { scratchStore } from "./ScratchStore.js";
 import { computeProjectAgentCounts } from "./projectAgentCounts.js";
+import { helpSessionService } from "./HelpSessionService.js";
 import type { PtyClient } from "./PtyClient.js";
 import type { RunAttentionService } from "./RunAttentionService.js";
 import type { ProjectStatusMap } from "../../shared/types/ipc/project.js";
@@ -171,7 +172,15 @@ export class ProjectStatsService {
         ea.latestCompletionAt !== eb.latestCompletionAt ||
         ea.latestWorkingSince !== eb.latestWorkingSince ||
         ea.snoozedAgentCount !== eb.snoozedAgentCount ||
-        ea.nextSnoozeWakeAt !== eb.nextSnoozeWakeAt
+        ea.nextSnoozeWakeAt !== eb.nextSnoozeWakeAt ||
+        // Assistant presence is compared here for the same reason every count
+        // above is: this gate decides whether a broadcast happens at all, so a
+        // field it doesn't know about can change without anyone hearing. An
+        // assistant that started working would sit invisible in an already-open
+        // switcher until some unrelated worker tally moved (#11806).
+        ea.assistantState !== eb.assistantState ||
+        ea.assistantWaitingReason !== eb.assistantWaitingReason ||
+        ea.assistantStateSince !== eb.assistantStateSince
       ) {
         return false;
       }
@@ -230,7 +239,12 @@ export class ProjectStatsService {
         projectIds,
         allTerminals,
         seenMap,
-        activeSnoozes
+        activeSnoozes,
+        // Same visibility gate the pull path applies. Omitting it on either
+        // side is the drift the shared helper exists to prevent: the push
+        // suppresses unchanged payloads, so a row hydrated with a hidden
+        // assistant would keep reporting it until agent state next moved.
+        (id) => helpSessionService.isPanelVisible(id)
       );
 
       const statusMap: ProjectStatusMap = {};
@@ -266,6 +280,16 @@ export class ProjectStatsService {
             snoozedAgentCount: counts.snoozed,
             ...(counts.nextSnoozeWakeAt !== null
               ? { nextSnoozeWakeAt: counts.nextSnoozeWakeAt }
+              : {}),
+            // Presence, carried beside the tallies and never inside them
+            // (#11806). The bulk stats handler projects these identically —
+            // the two paths answering differently is exactly #10989.
+            ...(counts.assistantState !== null ? { assistantState: counts.assistantState } : {}),
+            ...(counts.assistantWaitingReason !== null
+              ? { assistantWaitingReason: counts.assistantWaitingReason }
+              : {}),
+            ...(counts.assistantStateSince !== null
+              ? { assistantStateSince: counts.assistantStateSince }
               : {}),
           };
         }

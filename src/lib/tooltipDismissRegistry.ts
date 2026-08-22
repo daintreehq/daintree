@@ -6,7 +6,11 @@
 // every dialog transition. Radix ships no provider-level "close all" API,
 // so each mounted Tooltip registers a dismiss callback here and the dialog
 // primitives (AppDialog / AppPaletteDialog) invoke `dismissAllTooltips()`
-// on every open and close.
+// on every open and close. Any other surface that restores focus
+// programmatically owes this call or an equivalent local suppression —
+// HelpPanel calls it when the assistant closes and hands focus back to
+// whatever opened it, while AppPalettePopover's consumers suppress their own
+// controlled tooltip instead (#11034 rejected blanket popover wiring).
 //
 // Dismissing alone isn't enough: the focus move the dialog performs AFTER
 // the dismiss re-opens a tooltip through Radix's focus path. Each dismiss

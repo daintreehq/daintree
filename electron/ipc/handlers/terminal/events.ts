@@ -12,6 +12,7 @@ import type {
   TerminalResizeResult,
   BroadcastWriteResultPayload,
   FdLeakWarningPayload,
+  TerminalSubmitStatusPayload,
 } from "../../../../shared/types/pty-host.js";
 import type { HandlerDependencies } from "../../types.js";
 
@@ -50,6 +51,18 @@ export function registerTerminalEventHandlers(deps: HandlerDependencies): () => 
   };
   ptyClient.on("error", handlePtyError);
   handlers.push(() => ptyClient.off("error", handlePtyError));
+
+  // Submit-lane status (#11875). Project-scoped for the same reason as
+  // `terminal:status` below: only views of the owning project host a panel for
+  // this terminal, so don't pay a clone + IPC task per unrelated view.
+  const handleSubmitStatus = (payload: TerminalSubmitStatusPayload) => {
+    broadcastToProjectRenderers(ptyClient.getTerminalProjectId(payload.id), CHANNELS.EVENTS_PUSH, {
+      name: "terminal:submit-status",
+      payload,
+    });
+  };
+  ptyClient.on("submit-status", handleSubmitStatus);
+  handlers.push(() => ptyClient.off("submit-status", handleSubmitStatus));
 
   // Spawn result events (success or failure)
   const handleSpawnResult = (id: string, result: SpawnResult) => {

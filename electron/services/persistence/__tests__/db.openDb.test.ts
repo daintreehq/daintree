@@ -13,6 +13,8 @@ vi.mock("electron", () => ({
 }));
 
 import { openDb } from "../db.js";
+import { eq } from "drizzle-orm";
+import * as schema from "../schema.js";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const migrationsFolder = path.resolve(__dirname, "../migrations");
@@ -459,6 +461,25 @@ describe("openDb (integration)", () => {
     // Everything except the most recent migration is "already applied".
     const applied = journal.slice(0, -1);
 
+    // Read the newest migration's own effect out of its SQL rather than naming
+    // columns here, so this stays a real assertion about migration application
+    // instead of a copy of whichever migration happens to be last today.
+    const finalTag = journal[journal.length - 1].tag;
+    const finalSql = fs.readFileSync(path.join(migrationsFolder, `${finalTag}.sql`), "utf8");
+    // Whichever table the newest migration happens to touch — naming one here
+    // would reintroduce exactly the copy-of-the-last-migration coupling this
+    // extraction exists to avoid.
+    const additions = [...finalSql.matchAll(/ALTER TABLE `([a-z_]+)` ADD `([a-z_]+)`/g)].map(
+      (m) => ({ table: m[1]!, column: m[2]! })
+    );
+    const removals = [...finalSql.matchAll(/ALTER TABLE `([a-z_]+)` DROP COLUMN `([a-z_]+)`/g)].map(
+      (m) => ({ table: m[1]!, column: m[2]! })
+    );
+    const deletedKeys = [
+      ...finalSql.matchAll(/DELETE FROM `app_state` WHERE `key` = '([^']+)'/g),
+    ].map((m) => m[1]!);
+    expect(additions.length).toBeGreaterThan(0);
+
     const Database = (await import("better-sqlite3")).default;
     const seed = new Database(dbPath);
     // Mirror drizzle's own bookkeeping table + a projects table for openDb's backfill.
@@ -486,23 +507,29 @@ describe("openDb (integration)", () => {
         last_opened INTEGER NOT NULL,
         deleted_at INTEGER
       );
+      CREATE TABLE app_state (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
     `);
     const ins = seed.prepare("INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)");
     for (const entry of applied) ins.run(entry.tag, entry.when);
-    seed.close();
 
-    // Read the newest migration's own effect out of its SQL rather than naming
-    // columns here, so this stays a real assertion about migration application
-    // instead of a copy of whichever migration happens to be last today.
-    const finalTag = journal[journal.length - 1].tag;
-    const finalSql = fs.readFileSync(path.join(migrationsFolder, `${finalTag}.sql`), "utf8");
-    // Whichever table the newest migration happens to touch — naming one here
-    // would reintroduce exactly the copy-of-the-last-migration coupling this
-    // extraction exists to avoid.
-    const additions = [...finalSql.matchAll(/ALTER TABLE `([a-z_]+)` ADD `([a-z_]+)`/g)].map(
-      (m) => ({ table: m[1]!, column: m[2]! })
-    );
-    expect(additions.length).toBeGreaterThan(0);
+    // Give any `DELETE FROM app_state` in the newest migration something to
+    // actually delete, plus a neighbour it must leave alone — without rows the
+    // statement could be removed entirely and this test would not notice.
+    const appStateIns = seed.prepare("INSERT INTO app_state (key, value) VALUES (?, ?)");
+    for (const key of deletedKeys) appStateIns.run(key, "seeded");
+    appStateIns.run("currentProjectId", "keep-me");
+
+    // A migration can only drop a column the seeded schema actually has, and
+    // the seed above is a minimal pre-history table. Add each dropped column
+    // back so the DROP has something to act on — derived from the SQL for the
+    // same reason the additions are.
+    for (const { table, column } of removals) {
+      seed.exec(`ALTER TABLE ${table} ADD COLUMN ${column} INTEGER`);
+    }
+    seed.close();
 
     // Those columns must be absent before the upgrade for the test to mean
     // anything — the seed tables were created without them.
@@ -513,6 +540,13 @@ describe("openDb (integration)", () => {
       ).map((c) => c.name);
       expect(seededColumns).not.toContain(column);
     }
+    // And the dropped ones must be present, or the DROP would prove nothing.
+    for (const { table, column } of removals) {
+      const seededColumns = (
+        preCheck.prepare(`PRAGMA table_info(${table})`).all() as ColInfo[]
+      ).map((c) => c.name);
+      expect(seededColumns).toContain(column);
+    }
     preCheck.close();
 
     const { sqlite } = openDb(dbPath, migrationsFolder);
@@ -521,10 +555,150 @@ describe("openDb (integration)", () => {
         const columns = (sqlite.pragma(`table_info(${table})`) as ColInfo[]).map((c) => c.name);
         expect(columns).toContain(column);
       }
+      for (const { table, column } of removals) {
+        const columns = (sqlite.pragma(`table_info(${table})`) as ColInfo[]).map((c) => c.name);
+        expect(columns).not.toContain(column);
+      }
+
+      // Obsolete keys are gone and their neighbours are not — a DELETE without
+      // a WHERE, or one aimed at the wrong key, fails on the second assertion.
+      const remainingKeys = (
+        sqlite.prepare("SELECT key FROM app_state").all() as { key: string }[]
+      ).map((r) => r.key);
+      for (const key of deletedKeys) expect(remainingKeys).not.toContain(key);
+      expect(remainingKeys).toContain("currentProjectId");
 
       // The skipped migration is now recorded — total equals the full journal.
       const migrations = sqlite.prepare("SELECT id FROM __drizzle_migrations").all();
       expect(migrations).toHaveLength(EXPECTED_MIGRATION_COUNT);
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("drops the obsolete session-open checkpoint on upgrade (migration 0012)", async () => {
+    // Names the key on purpose, unlike the generic journal test above: that one
+    // derives its expectations from the migration's own SQL, so deleting the
+    // statement would delete the assertion with it. The checkpoint fed the
+    // switcher's old recency dot (#11794) and nothing reads it after #11801, so
+    // leaving the row behind would strand user state no code can reach.
+    const dbPath = path.join(tmpDir, "checkpoint-cleanup.db");
+
+    const Database = (await import("better-sqlite3")).default;
+    const seed = new Database(dbPath);
+    seed.exec(`
+      CREATE TABLE app_state (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+    `);
+    const ins = seed.prepare("INSERT INTO app_state (key, value) VALUES (?, ?)");
+    ins.run("sessionOpenProjects", '{"v":1,"projectIds":["proj-1"],"atMs":123}');
+    ins.run("currentProjectId", "proj-1");
+    seed.close();
+
+    const { sqlite } = openDb(dbPath, migrationsFolder);
+    try {
+      const rows = sqlite.prepare("SELECT key FROM app_state").all() as { key: string }[];
+      const keys = rows.map((r) => r.key);
+      expect(keys).not.toContain("sessionOpenProjects");
+      // The neighbouring key is what proves the DELETE was scoped rather than
+      // a table-wide wipe that happened to satisfy the first assertion.
+      expect(keys).toContain("currentProjectId");
+    } finally {
+      sqlite.close();
+    }
+  });
+
+  it("gives an existing scratch a column the Drizzle schema can address (migration 0013)", async () => {
+    // Names the column on purpose, for the same reason the 0012 test does: the
+    // generic journal test derives its expectations from the migration's own
+    // SQL, so a column misspelled in BOTH would satisfy it, and every store
+    // suite hand-creates the table rather than migrating into it. This is the
+    // only place the shipped SQL and `schema.ts` have to agree — which matters
+    // because 0013 was hand-trimmed from a generated draft (#11821).
+    const dbPath = path.join(tmpDir, "scratch-resume-count.db");
+
+    const journal = JSON.parse(
+      fs.readFileSync(path.join(migrationsFolder, "meta", "_journal.json"), "utf8")
+    ).entries as Array<{ when: number; tag: string }>;
+
+    const Database = (await import("better-sqlite3")).default;
+    const seed = new Database(dbPath);
+    // Everything up to 0013 already applied, so only the migration under test
+    // runs against a `scratches` table at its pre-0013 shape — holding a scratch
+    // that predates the field, which is the population it exists to backfill.
+    seed.exec(`
+      CREATE TABLE __drizzle_migrations (
+        id SERIAL PRIMARY KEY,
+        hash text NOT NULL,
+        created_at numeric
+      );
+      CREATE TABLE projects (
+        id TEXT PRIMARY KEY,
+        path TEXT NOT NULL,
+        name TEXT NOT NULL,
+        emoji TEXT NOT NULL,
+        last_opened INTEGER NOT NULL,
+        pinned INTEGER NOT NULL DEFAULT 0,
+        frecency_score REAL NOT NULL DEFAULT 3.0,
+        last_accessed_at INTEGER NOT NULL DEFAULT 0
+      );
+      CREATE TABLE scratches (
+        id TEXT PRIMARY KEY,
+        path TEXT NOT NULL,
+        name TEXT NOT NULL,
+        created_at INTEGER NOT NULL,
+        last_opened INTEGER NOT NULL,
+        deleted_at INTEGER,
+        last_completion_seen_at INTEGER
+      );
+      CREATE TABLE app_state (
+        key TEXT PRIMARY KEY,
+        value TEXT NOT NULL
+      );
+    `);
+    const applied = seed.prepare(
+      "INSERT INTO __drizzle_migrations (hash, created_at) VALUES (?, ?)"
+    );
+    for (const entry of journal.slice(0, -1)) applied.run(entry.tag, entry.when);
+    seed
+      .prepare(
+        "INSERT INTO scratches (id, path, name, created_at, last_opened) VALUES (?, ?, ?, ?, ?)"
+      )
+      .run("11111111-2222-4333-8444-555555555555", "/tmp/s", "Spike", 1, 2);
+    seed.close();
+
+    const { sqlite, db } = openDb(dbPath, migrationsFolder);
+    try {
+      // Read before anything writes: pre-existing rows come out of the
+      // migration making no claim, not claiming zero. Asserted rather than
+      // assumed because a `NOT NULL DEFAULT 0` column would satisfy every
+      // other assertion here while handing the sweep a count nobody measured.
+      const backfilled = db
+        .select()
+        .from(schema.scratches)
+        .where(eq(schema.scratches.id, "11111111-2222-4333-8444-555555555555"))
+        .get();
+
+      expect(backfilled?.resumableAgentCount).toBeNull();
+
+      // Round-tripped through the ORM rather than raw SQL: that is what binds
+      // the migration's column name to the one `ScratchStore` actually reads.
+      db.update(schema.scratches)
+        .set({ resumableAgentCount: 3 })
+        .where(eq(schema.scratches.id, "11111111-2222-4333-8444-555555555555"))
+        .run();
+      const row = db
+        .select()
+        .from(schema.scratches)
+        .where(eq(schema.scratches.id, "11111111-2222-4333-8444-555555555555"))
+        .get();
+
+      expect(row?.resumableAgentCount).toBe(3);
+      // The row that predates the column is still the row the write landed on —
+      // the migration added a field to it rather than replacing it.
+      expect(row?.name).toBe("Spike");
     } finally {
       sqlite.close();
     }

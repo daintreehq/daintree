@@ -237,7 +237,7 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     canRestart: false,
     canConvert: false,
     // Explicit opt-out: a live dev-server preview has no meaningful compact
-    // chip-row form (like file-browser, diff and review).
+    // chip-row form (like diff and review).
     dockable: false,
     usesTerminalUi: false,
     keepAliveOnProjectSwitch: true,
@@ -258,7 +258,7 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     canRestart: false,
     canConvert: false,
     // Explicit opt-out: a review surface has no meaningful compact chip-row
-    // form (like file-browser, diff and dev-preview).
+    // form (like diff and dev-preview).
     dockable: false,
     usesTerminalUi: false,
     keepAliveOnProjectSwitch: true,
@@ -299,10 +299,9 @@ const PANEL_KIND_REGISTRY: Record<string, PanelKindConfig> = {
     hasPty: false,
     canRestart: false,
     canConvert: false,
-    // Explicit opt-out: the dock chip row shows one compact title per panel,
-    // and a two-pane browser has no meaningful compact form (review, diff and
-    // dev-preview opt out for the same reason).
-    dockable: false,
+    // Dockable by default (no explicit flag). The chip row is only a label, and
+    // the panel itself is moved — not remounted — into the dock popover, so the
+    // two-pane browser has the same room there as the file viewer (#11917).
     dialogFullHeight: true,
     usesTerminalUi: false,
     keepAliveOnProjectSwitch: true,

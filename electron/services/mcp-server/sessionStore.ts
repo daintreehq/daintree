@@ -1,9 +1,10 @@
 import type { ActionContext } from "../../../shared/types/actions.js";
 import type { McpActiveClientInfo } from "../../../shared/types/ipc/mcpServer.js";
-import type { McpTier, McpSseSession, McpHttpSession } from "./shared.js";
+import type { McpTier, McpSseSession, McpHttpSession, McpSessionOrigin } from "./shared.js";
 import { MCP_SSE_IDLE_TIMEOUT_MS, MCP_TIER_ELEVATION_TTL_MS } from "./shared.js";
 import type { DedupCacheEntry, DedupInFlightEntry } from "./sessionDedup.js";
 import { GrantCache, type GrantLifecycleEmitter } from "./grantCache.js";
+import { ResourceOwnershipLedger } from "./resourceOwnership.js";
 import { getSystemSleepService } from "../SystemSleepService.js";
 
 export interface SessionStoreOptions {
@@ -64,6 +65,23 @@ export class SessionStore {
   // `contextOverride` so a focus shift between the model's tool call and the
   // dispatch can't retarget the action. See #8317.
   readonly sessionContextMap = new Map<string, ActionContext>();
+  // sessionId → how the bearer was authenticated, recorded explicitly at
+  // handshake rather than inferred from `sessionWebContentsMap` membership
+  // (#11789). That inference was safe only while external sessions were never
+  // pinned; a workspace-bound external session has a renderer route and must
+  // still be refused renderer-driven elevation, kept out of the Assistant's
+  // notification surfaces, and kept *in* the external-client inventory. Read
+  // through `getOrigin`, which defaults to `external` so an unknown session is
+  // never mistaken for one of Daintree's own assistant surfaces.
+  readonly sessionOriginMap = new Map<string, McpSessionOrigin>();
+  // sessionId → the workspace id an external session bound to at handshake
+  // (#11789). The routing identity for `origin: "external"` sessions that sent
+  // a workspace selector: the target WebContents is re-resolved from this on
+  // every operation, because a view's id dies with the view while the workspace
+  // id outlives it. Absent for unbound external sessions, which keep the
+  // focused-window fallback, and for help / assistant-pane sessions, which
+  // route through `sessionWebContentsMap` instead.
+  readonly sessionWorkspaceMap = new Map<string, string>();
   // MCP transport sessionId → public help-session id (the one persisted in
   // the renderer's helpPanelStore). Populated only for help-session bearers,
   // in lockstep with sessionWebContentsMap. The transport mints its own
@@ -90,6 +108,15 @@ export class SessionStore {
    * idle-timer firing tears them down in lockstep.
    */
   readonly grantCache: GrantCache;
+  /**
+   * Which resources each session created, recorded from trusted post-dispatch
+   * results (#11909). The authority `terminal.closeOwned` and
+   * `worktree.deleteOwned` check before they delegate. Co-located with the
+   * other session-scoped state so one teardown tears it down too — see
+   * {@link clearSessionBinding}, which revokes the authority without touching
+   * the resources themselves.
+   */
+  readonly resourceOwnership = new ResourceOwnershipLedger();
 
   // Wall-clock timestamps recording when each session's idle timer was armed.
   // Used by recomputeIdleTimers() to calculate awake elapsed time across
@@ -154,6 +181,89 @@ export class SessionStore {
   }
 
   /**
+   * How this session's bearer was authenticated (#11789). Defaults to
+   * `external` — the least-privileged classification — so a session whose
+   * handshake never recorded an origin, or one already half torn down, can
+   * never be mistaken for a renderer-owned Daintree surface.
+   */
+  getOrigin(sessionId: string): McpSessionOrigin {
+    return this.sessionOriginMap.get(sessionId) ?? "external";
+  }
+
+  /**
+   * True for Daintree's own assistant surfaces — the sessions whose events
+   * belong in the HelpPanel and whose renderer may elevate them (#11789).
+   *
+   * This is the predicate that replaced "is present in `sessionWebContentsMap`"
+   * everywhere authorization, notification routing, or inventory was really
+   * asking about ownership rather than routing.
+   */
+  isRendererOwnedOrigin(sessionId: string): boolean {
+    const origin = this.getOrigin(sessionId);
+    return origin === "help" || origin === "assistant-pane";
+  }
+
+  /**
+   * Whether any live session is bound to this workspace (#11790).
+   *
+   * Read by the project-view freeze and eviction policies through the injected
+   * `mcpViewActivity` callback: a bound workspace's view is usually the
+   * background one, and freezing it strands every dispatch (a frozen renderer
+   * cannot run JS) while evicting it breaks the binding outright.
+   *
+   * Two halves, both load-bearing:
+   *
+   * 1. Explicit `external` origin, read straight off `sessionOriginMap` rather
+   *    than through `getOrigin()`. That accessor defaults an *unknown* session
+   *    to `"external"`, so a stale `sessionWorkspaceMap` row whose origin was
+   *    already torn down would read as a live external binding and pin the view
+   *    forever. Presence in the routing map is routing, never ownership
+   *    (#11789) — the two must be asked separately.
+   * 2. Transport liveness. The binding outlives nothing on its own; a session
+   *    that dropped is reaped from `sessions`/`httpSessions` before (or
+   *    alongside) `clearSessionBinding`, so this is what makes protection
+   *    release itself. Transport-agnostic on purpose: only Streamable HTTP can
+   *    bind today, but nothing here should have to change when SSE can.
+   */
+  hasLiveWorkspaceBinding(workspaceId: string): boolean {
+    for (const [sessionId, boundWorkspaceId] of this.sessionWorkspaceMap) {
+      if (boundWorkspaceId !== workspaceId) continue;
+      if (this.sessionOriginMap.get(sessionId) !== "external") continue;
+      if (this.sessions.has(sessionId) || this.httpSessions.has(sessionId)) return true;
+    }
+    return false;
+  }
+
+  /**
+   * Drop every per-session routing/ownership record in one place.
+   *
+   * The maps must die together: a stale origin would let a recycled
+   * session id inherit another session's privileges, a stale route would
+   * dispatch into a view the session no longer owns, and a stale ownership
+   * record would hand a recycled id authority over another session's
+   * terminals. Teardown is duplicated across ~9 call sites (four here, five
+   * inline in `httpLifecycle`), so the lockstep lives in one method rather
+   * than in nine copies that drift.
+   *
+   * Dropping the ownership records revokes *authority*, not the resources
+   * (#11909). A disconnected client's terminals and worktrees stay exactly
+   * where they are: the session ending is not a decision to destroy work the
+   * user can still see. `drain` clears the same ledger inline, alongside the
+   * maps it also clears without going through here.
+   *
+   * Callers must still revoke grants BEFORE calling this — the grant lifecycle
+   * emitter resolves the pinned renderer to push `grant.revoked`, and that
+   * lookup needs the route to still be present.
+   */
+  clearSessionBinding(sessionId: string): void {
+    this.sessionWebContentsMap.delete(sessionId);
+    this.sessionContextMap.delete(sessionId);
+    this.sessionOriginMap.delete(sessionId);
+    this.sessionWorkspaceMap.delete(sessionId);
+    this.resourceOwnership.clearSession(sessionId);
+  }
+
+  /**
    * Record handshake-time connection metadata for a session so the
    * MCP-disable confirmation can name it later (#8779). Called once per
    * session from the SSE and Streamable HTTP handshake paths, after the
@@ -182,20 +292,25 @@ export class SessionStore {
   }
 
   /**
-   * Snapshot the currently-connected external clients — sessions classified
-   * `external` (api-key / unauthenticated loopback) that are NOT pinned to a
-   * renderer WebContents. Renderer-pinned sessions are Daintree's own
-   * help-assistant bearers; naming them in the disable dialog would be
-   * recursive (#8779). Pane-token sessions resolve to a non-`external` tier
-   * and are filtered out by the tier check. Returns one entry per live
-   * session across both transports.
+   * Snapshot the currently-connected external clients — sessions whose bearer
+   * is a genuine third-party one (api-key / unauthenticated loopback).
+   * Daintree's own help-assistant bearers are excluded because naming them in
+   * the disable dialog would be recursive (#8779). Pane-token sessions resolve
+   * to a non-`external` tier and are filtered out by the tier check. Returns one
+   * entry per live session across both transports.
+   *
+   * Classified by `origin`, not by absence from `sessionWebContentsMap`
+   * (#11789). Presence in that map means "routes to a specific renderer", which
+   * is now true of workspace-bound external clients too — the very clients the
+   * user most needs listed here, since a bound background session is the one
+   * they cannot see working. The old test would have hidden every one of them.
    */
   listExternalActiveClients(): McpActiveClientInfo[] {
     const out: McpActiveClientInfo[] = [];
     const sessionIds = new Set<string>([...this.sessions.keys(), ...this.httpSessions.keys()]);
     for (const sessionId of sessionIds) {
       if (this.sessionTierMap.get(sessionId) !== "external") continue;
-      if (this.sessionWebContentsMap.has(sessionId)) continue;
+      if (this.getOrigin(sessionId) !== "external") continue;
       out.push({
         sessionId,
         userAgent: this.sessionUserAgent.get(sessionId) ?? null,
@@ -243,8 +358,7 @@ export class SessionStore {
     // `grant.revoked` event. The audit-record write tolerates a
     // missing pin (it doesn't need one); the targeted `wc.send` does.
     this.grantCache.revokeSession(sessionId, "session-idle");
-    this.sessionWebContentsMap.delete(sessionId);
-    this.sessionContextMap.delete(sessionId);
+    this.clearSessionBinding(sessionId);
     this.clearFigureCounter(sessionId);
     this.sessionHelpIdMap.delete(sessionId);
     this.clearDedupState(sessionId);
@@ -300,8 +414,7 @@ export class SessionStore {
     // Revoke BEFORE deleting the WebContents pin — same reasoning
     // as `expireSseSession` above.
     this.grantCache.revokeSession(sessionId, "session-idle");
-    this.sessionWebContentsMap.delete(sessionId);
-    this.sessionContextMap.delete(sessionId);
+    this.clearSessionBinding(sessionId);
     this.clearFigureCounter(sessionId);
     this.sessionHelpIdMap.delete(sessionId);
     this.clearDedupState(sessionId);
@@ -521,7 +634,31 @@ export class SessionStore {
     this.tierElevationBaseline.delete(sessionId);
   }
 
-  getTier(sessionId: string): McpTier {
+  /**
+   * The tier a *live* session is authorized at, or `null` when no live
+   * transport owns `sessionId` (#11799).
+   *
+   * The liveness check comes first on purpose. `workbench` is not a floor:
+   * `TIER_ALLOWLISTS` gives `external` its own allowlist rather than a subset
+   * of `workbench`, so the two are peers. Returning the `workbench` default for
+   * a session that no longer exists therefore *widens* a revoked external
+   * bearer onto 46 tools its own allowlist withholds — `file.read`,
+   * `files.search`, `copyTree.generate` and `git.getFileDiff` among them —
+   * instead of refusing it. Revocation tears down `sessions`/`httpSessions`
+   * before it deletes the tier row, so transport membership is the signal that
+   * outlives nothing.
+   *
+   * `null` rather than a throw or a sentinel tier: there is no tier value that
+   * means "deny everything", and the nullable return makes the compiler
+   * enumerate every authorization site, so no caller can quietly inherit the
+   * old fail-open default. Callers fail closed — see `SESSION_GONE`.
+   *
+   * The `workbench` fallback survives only for a session that *is* live but has
+   * no tier row, which handshake ordering makes unreachable in production
+   * (every connect path stamps the tier before registering the transport).
+   */
+  getTier(sessionId: string): McpTier | null {
+    if (!this.sessions.has(sessionId) && !this.httpSessions.has(sessionId)) return null;
     return this.sessionTierMap.get(sessionId) ?? "workbench";
   }
 
@@ -568,9 +705,10 @@ export class SessionStore {
       }
       // The tier map can briefly outlive the transport during teardown; require
       // a live transport so a decaying session never reports as connected.
-      if (!this.sessions.has(transportSessionId) && !this.httpSessions.has(transportSessionId)) {
-        continue;
-      }
+      // `getTier` carries that liveness check itself (#11799), so its `null` is
+      // the same "no live transport" signal this scan used to test by hand.
+      const tier = this.getTier(transportSessionId);
+      if (tier === null) continue;
       // getActiveGrants is lazy-eviction only — a grant past expiresAt can
       // linger until the periodic sweep (~5min). Filter those out so the
       // snapshot never reports a logically-expired grant as active; the next
@@ -595,7 +733,7 @@ export class SessionStore {
         remainingUses: g.remainingUses,
       }));
       return {
-        tier: this.getTier(transportSessionId),
+        tier,
         activeGrants: [...activeGrants, ...nativeGrants],
       };
     }
@@ -650,8 +788,7 @@ export class SessionStore {
     // torn down — the renderer would never receive the `revoked`
     // lifecycle event and the grant state would leak (#8467).
     this.grantCache.revokeSession(sessionId, "session-ended");
-    this.sessionWebContentsMap.delete(sessionId);
-    this.sessionContextMap.delete(sessionId);
+    this.clearSessionBinding(sessionId);
     this.clearFigureCounter(sessionId);
     this.sessionHelpIdMap.delete(sessionId);
     this.clearDedupState(sessionId);
@@ -705,6 +842,13 @@ export class SessionStore {
     this.sessionTierMap.clear();
     this.sessionWebContentsMap.clear();
     this.sessionContextMap.clear();
+    this.sessionOriginMap.clear();
+    this.sessionWorkspaceMap.clear();
+    // Authority only — the terminals and worktrees these records named are
+    // deliberately left alone (#11909). See `clearSessionBinding`, which drops
+    // the same ledger per session; `drain` clears the session-scoped maps
+    // inline rather than routing through it, so this line is not redundant.
+    this.resourceOwnership.clear();
     this.sessionHelpIdMap.clear();
     this.figureCounters.clear();
     this.sessionConnectedAtMs.clear();

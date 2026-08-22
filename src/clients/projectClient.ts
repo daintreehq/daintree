@@ -4,7 +4,7 @@ import type {
   ProjectSettings,
   RunCommand,
   ProjectCloseResult,
-  ProjectFreeMemoryResult,
+  ProjectSleepResult,
   ProjectStats,
   BulkProjectStats,
   TerminalRecipe,
@@ -233,9 +233,9 @@ export const projectClient = {
     return window.electron.project.close(projectId, options);
   },
 
-  freeMemory: (projectId: string): Promise<ProjectFreeMemoryResult> => {
+  sleepProject: (projectId: string): Promise<ProjectSleepResult> => {
     invalidateCurrentCache();
-    return window.electron.project.freeMemory(projectId);
+    return window.electron.project.sleepProject(projectId);
   },
 
   reopen: (projectId: string, outgoingState?: ProjectSwitchOutgoingState): Promise<Project> => {

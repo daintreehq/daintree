@@ -61,6 +61,7 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   // out to every window. Classified "external" to drop it from the relay
   // loop — it has no EVENTS_PUSH producer, so no renderer delivery at all.
   "terminal:status": "external",
+  "terminal:submit-status": "external",
 
   // Agent session journaled (relayed from TypedEventBus; emitted by the main
   // close paths and bridged from the pty-host's trash-expiry capture)
@@ -79,6 +80,7 @@ const EVENT_BUS_BRIDGED_MANIFEST = {
   "plugin:keybindings-changed": "external",
   "plugin:context-menu-items-changed": "external",
   "plugin:agents-changed": "external",
+  "plugin:recipes-changed": "external",
   "plugin:decorations-changed": "external",
   "plugin:panel-badges-changed": "external",
   "plugin:panel-badges-cleared": "external",

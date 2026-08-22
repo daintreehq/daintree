@@ -125,4 +125,36 @@ describe("sanitizeRecipeTerminals", () => {
     ]);
     expect(result).toEqual([]);
   });
+
+  describe("additionalAllowedTypes (#11860)", () => {
+    it("admits an extra agent id only when it is passed in", () => {
+      const terminals = [{ type: "acme-agent", initialPrompt: "go" }];
+      expect(sanitizeRecipeTerminals(terminals)).toEqual([]);
+      expect(
+        sanitizeRecipeTerminals(terminals, {
+          additionalAllowedTypes: new Set(["acme-agent"]),
+        })
+      ).toHaveLength(1);
+    });
+
+    it("admits only the listed extras, not every unknown type", () => {
+      const result = sanitizeRecipeTerminals(
+        [
+          { type: "acme-agent", initialPrompt: "go" },
+          { type: "someone-elses-agent", initialPrompt: "go" },
+        ],
+        { additionalAllowedTypes: new Set(["acme-agent"]) }
+      );
+      expect(result.map((t) => t.type)).toEqual(["acme-agent"]);
+    });
+
+    it("still applies content validation to an admitted extra type", () => {
+      // Widening the type allowlist must not widen the control-character gate:
+      // an admitted agent id with an injected newline in its flags is dropped.
+      const result = sanitizeRecipeTerminals([{ type: "acme-agent", args: "--x\nrm -rf /" }], {
+        additionalAllowedTypes: new Set(["acme-agent"]),
+      });
+      expect(result).toEqual([]);
+    });
+  });
 });

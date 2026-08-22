@@ -10,7 +10,6 @@ import { resilientAtomicWriteFile } from "../utils/fs.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { probeMcpServer, probeMcpSseServer } from "./mcp-server/readinessProbe.js";
 import { getAssistantWiredAgentIds } from "../../shared/config/agentRegistry.js";
-import { ASSISTANT_ONLY_AGENT_IDS } from "../../shared/config/agentIds.js";
 import type { HelpAssistantTier } from "../../shared/types/ipc/maps.js";
 import type { ActionContext } from "../../shared/types/actions.js";
 import type { PtyClient } from "./PtyClient.js";
@@ -320,6 +319,13 @@ export class HelpSessionService {
   // multi-window/same-project setup the last reporter wins, which at worst
   // reopens a panel both windows would resume into the same shared session.
   private readonly panelOpenByProjectId = new Map<string, boolean>();
+  /**
+   * Which workspaces have the assistant actually ON SCREEN, as opposed to
+   * merely open. Focus mode slides the panel off-canvas without touching
+   * `isOpen` (`AppLayout`'s `showAssistant`), so the two answers differ and the
+   * tallies want this one.
+   */
+  private readonly panelVisibleByProjectId = new Map<string, boolean>();
   private onMcpSessionRevokedFn: ((token: string) => void) | null = null;
   private disposed = false;
   private sweepTimer: ReturnType<typeof setInterval> | null = null;
@@ -351,14 +357,57 @@ export class HelpSessionService {
    * project, reported by the renderer on every `isOpen` change. Consulted at
    * eviction-capture time to decide whether the cold switch-back should
    * auto-reopen and auto-resume. In-memory only.
+   *
+   * `isVisible` is the same panel's on-screen state, which is a different
+   * question: focus mode parks the panel off-canvas with `isOpen` left true so
+   * exiting focus mode can bring it back. Kept as a second map rather than
+   * folded into the first because the cold-resume decision genuinely wants the
+   * open one — a panel the user parked for a gesture is still a panel they
+   * expect to find when they come back. Defaults to `isOpen` so a caller that
+   * doesn't distinguish them (and every stored report from before this split)
+   * behaves as it always did.
+   *
+   * Returns whether the VISIBLE answer moved, so the caller can push the
+   * tallies that read it instead of waiting out a poll interval.
    */
-  reportPanelOpen(projectId: string, isOpen: boolean): void {
-    if (!projectId) return;
+  reportPanelOpen(projectId: string, isOpen: boolean, isVisible: boolean = isOpen): boolean {
+    if (!projectId) return false;
     if (isOpen) {
       this.panelOpenByProjectId.set(projectId, true);
     } else {
       this.panelOpenByProjectId.delete(projectId);
     }
+
+    const was = this.panelVisibleByProjectId.get(projectId) === true;
+    if (isVisible) {
+      this.panelVisibleByProjectId.set(projectId, true);
+    } else {
+      this.panelVisibleByProjectId.delete(projectId);
+    }
+    return was !== isVisible;
+  }
+
+  /**
+   * Whether this workspace's assistant panel is on screen, as last reported by
+   * its renderer.
+   *
+   * Read by the project tallies to decide whether the assistant has anything to
+   * say about a row. A hidden panel keeps its PTY until the idle-hibernate
+   * timer fires, and a session nobody can see is not a state anyone can act on
+   * — reporting it left projects claiming "Assistant waiting" for a panel the
+   * user had deliberately put away.
+   *
+   * Unreported reads as hidden, which is the conservative answer here: a
+   * project whose view has never mounted the panel this session has no
+   * assistant on screen either. Every way this can go stale — a view evicted
+   * without a parting report, two windows on one project where the last
+   * reporter wins — leaves a `true` behind rather than a `false`, so the
+   * failure mode is a row that keeps reporting an assistant, which is where
+   * this surface stood before the gate existed.
+   */
+  isPanelVisible(projectId: string): boolean {
+    if (!projectId) return false;
+    return this.panelVisibleByProjectId.get(projectId) === true;
   }
 
   validateToken(token: string): HelpAssistantTier | false {
@@ -610,18 +659,15 @@ export class HelpSessionService {
     pathHash: string
   ): Promise<ProvisionResult | null> {
     const settings = this.readSettings();
-    // The Daintree Assistant is the workspace's first-class conductor: when the
-    // user explicitly selects it, it runs at the top `system` tier so the full
-    // action surface — forge writes, git mutations, worktree.delete — is reachable
-    // (still behind the per-action confirm gate; the tier opens the door, it does
-    // not skip confirmation). Other help-overlay agents (Claude/Codex) keep the
-    // deliberate `action` floor from settings, where irreversible mutations need a
-    // human-approved scoped grant. Policy locks live in
-    // `mcp-server/__tests__/tierAuth.test.ts`.
-    const isDaintreeAssistant = (ASSISTANT_ONLY_AGENT_IDS as readonly string[]).includes(
-      input.agentId
-    );
-    const tier: HelpAssistantTier = isDaintreeAssistant ? "system" : settings.tier;
+    // Every help agent — the Daintree Assistant included — provisions at the
+    // tier the user configured. Agent identity never widens the MCP surface,
+    // which restores the #10640/#10647 safety model: `action` is the default
+    // floor, where irreversible mutations (git.push, worktree.delete) sit above
+    // the line and need a human-approved scoped grant, while `workbench` and
+    // `system` stay explicit user choices. An identity override here would make
+    // the Settings tier selector lie about the surface it hands out (#11907).
+    // What each tier permits is locked in `mcp-server/__tests__/tierAuth.test.ts`.
+    const tier: HelpAssistantTier = settings.tier;
     const sessionId = randomUUID();
     const token = randomBytes(SESSION_TOKEN_BYTES).toString("hex");
     const sessionsRoot = this.getSessionsRoot();
@@ -1345,12 +1391,19 @@ export class HelpSessionService {
   }
 
   /**
-   * Idle-background auto-close (#10830): the assistant is tooling-internal,
-   * so its PTY must not keep an idle background project resident — and the
-   * renderer's own hibernate timer can't fire there (parked project views
-   * freeze timers, the #10739 class). The sweep capture-revokes the project's
-   * help sessions before reclaiming — the same conversation-preserving path
-   * as LRU eviction, so the next open resumes where the user left off.
+   * Idle-background auto-close (#10830): the sweep capture-revokes a project's
+   * help sessions before reclaiming it — the same conversation-preserving path
+   * as LRU eviction, so the next open resumes where the user left off. The
+   * renderer's own hibernate timer can't do this itself, because a parked
+   * project view freezes timers (the #10739 class).
+   *
+   * A LIVE assistant no longer reaches here: since #11807 the sweep treats one
+   * as a hard floor and skips the project entirely, because nothing tells main
+   * whether an idle-looking assistant is merely at its prompt or sitting on a
+   * scheduled wakeup. So the records this settles are the non-live ones — a
+   * terminal that exited under its own steam (nothing drops that binding), or
+   * a session provisioned but never bound. Only the former has a conversation
+   * to capture; an unbound record writes no pending-hibernation entry.
    */
   async revokeByProjectId(projectId: string): Promise<void> {
     const targets = [...this.sessionsById.values()].filter(
@@ -1806,10 +1859,11 @@ export class HelpSessionService {
     return {
       permissions: {
         allow: [
+          // `Read(...)` covers every file-reading tool (Glob, Grep, LS).
+          // Separate `Glob(**)`/`Grep(**)`/`LS(**)` entries are never matched
+          // by the file permission checks and make Claude Code print a warning
+          // on every session start.
           "Read(**)",
-          "Glob(**)",
-          "Grep(**)",
-          "LS(**)",
           "WebFetch",
           "mcp__daintree-docs__*",
           "Bash(gh *)",

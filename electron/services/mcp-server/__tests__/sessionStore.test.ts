@@ -627,6 +627,80 @@ describe("SessionStore dropBearerState wiring (#8778)", () => {
   });
 });
 
+describe("SessionStore.getTier liveness gate (#11799)", () => {
+  let store: SessionStore;
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    store = new SessionStore(() => {});
+  });
+
+  afterEach(() => {
+    store.grantCache.dispose();
+    store.drain();
+    vi.useRealTimers();
+  });
+
+  it("resolves the recorded tier while an SSE transport is live", () => {
+    store.sessions.set("s", fakeSseSession());
+    store.sessionTierMap.set("s", "external");
+
+    expect(store.getTier("s")).toBe("external");
+  });
+
+  it("resolves the recorded tier while a Streamable-HTTP transport is live", () => {
+    store.httpSessions.set("h", fakeHttpSession());
+    store.sessionTierMap.set("h", "external");
+
+    expect(store.getTier("h")).toBe("external");
+  });
+
+  it("returns null for a session id no transport map has ever seen", () => {
+    expect(store.getTier("never-connected")).toBeNull();
+  });
+
+  it("returns null when a tier row outlives both transports", () => {
+    // The precise shape of the bug: teardown removes the transport, and until
+    // the tier row goes too, a read would answer from a session that is gone.
+    // `external` makes the stakes explicit — the old default resolved this to
+    // `workbench`, a peer allowlist holding tools `external` withholds.
+    store.sessionTierMap.set("orphan", "external");
+
+    expect(store.getTier("orphan")).toBeNull();
+  });
+
+  it("returns null once revokeSession has torn the session down", () => {
+    store.sessions.set("s", fakeSseSession());
+    store.sessionTierMap.set("s", "external");
+    expect(store.getTier("s")).toBe("external");
+
+    store.revokeSession("s");
+
+    expect(store.getTier("s")).toBeNull();
+  });
+
+  it("returns null for every session after drain()", () => {
+    store.sessions.set("s", fakeSseSession());
+    store.sessionTierMap.set("s", "system");
+    store.httpSessions.set("h", fakeHttpSession());
+    store.sessionTierMap.set("h", "action");
+
+    store.drain();
+
+    expect(store.getTier("s")).toBeNull();
+    expect(store.getTier("h")).toBeNull();
+  });
+
+  it("keeps the workbench fallback for a live session with no tier row", () => {
+    // Liveness and tier are separate signals: a live transport whose tier row
+    // is missing is not the revocation case, and must not be answered with the
+    // refusal reserved for it.
+    store.sessions.set("s", fakeSseSession());
+
+    expect(store.getTier("s")).toBe("workbench");
+  });
+});
+
 describe("SessionStore tier-elevation decay (#8462)", () => {
   let store: SessionStore;
   let decayed: string[];
@@ -902,17 +976,60 @@ describe("SessionStore.listExternalActiveClients (#8779)", () => {
     });
   });
 
-  it("excludes the internal help-assistant (renderer-pinned) session", () => {
+  it("excludes the internal help-assistant session", () => {
     addExternal("ext", "Claude Code", "streamable-http");
-    // A help-session bearer: external-classified at handshake but pinned to a
-    // renderer WebContents — Daintree's own consumer, must not self-name.
+    // Daintree's own consumer, pinned to the renderer that minted it — must
+    // not self-name in the disconnect dialog. Classified by origin rather than
+    // by having a pin (#11789), because a bound external client has a pin too.
     store.httpSessions.set("internal", fakeHttpSession());
     store.sessionTierMap.set("internal", "external");
+    store.sessionOriginMap.set("internal", "help");
     store.sessionWebContentsMap.set("internal", 7);
     store.registerClientMetadata("internal", "node", "streamable-http");
 
     const clients = store.listExternalActiveClients();
     expect(clients.map((c) => c.sessionId)).toEqual(["ext"]);
+  });
+
+  it("excludes an assistant-pane session", () => {
+    addExternal("ext", "Claude Code", "streamable-http");
+    store.httpSessions.set("pane", fakeHttpSession());
+    store.sessionTierMap.set("pane", "external");
+    store.sessionOriginMap.set("pane", "assistant-pane");
+    store.sessionWebContentsMap.set("pane", 8);
+    store.registerClientMetadata("pane", "node", "streamable-http");
+
+    const clients = store.listExternalActiveClients();
+    expect(clients.map((c) => c.sessionId)).toEqual(["ext"]);
+  });
+
+  it("still lists a workspace-bound external client (#11789)", () => {
+    // A real workspace handshake writes `sessionWorkspaceMap` only — the
+    // selector and renderer-pin routes are mutually exclusive by construction,
+    // since a pinned bearer's selector is refused. A background-bound agent is
+    // the one the user most needs to be able to find and disconnect, since
+    // they cannot see it working.
+    store.httpSessions.set("bound", fakeHttpSession());
+    store.sessionTierMap.set("bound", "external");
+    store.sessionOriginMap.set("bound", "external");
+    store.sessionWorkspaceMap.set("bound", "ws-a");
+    store.registerClientMetadata("bound", "Claude Code/1.2", "streamable-http");
+
+    const clients = store.listExternalActiveClients();
+    expect(clients.map((c) => c.sessionId)).toEqual(["bound"]);
+  });
+
+  it("lists an external client even if one somehow also carried a renderer pin", () => {
+    // Defence in depth rather than a reachable state: the point is that
+    // classification reads origin, so no future route can silently hide a
+    // third-party client from the disconnect UI again.
+    store.httpSessions.set("bound", fakeHttpSession());
+    store.sessionTierMap.set("bound", "external");
+    store.sessionOriginMap.set("bound", "external");
+    store.sessionWebContentsMap.set("bound", 42);
+    store.registerClientMetadata("bound", "Claude Code/1.2", "streamable-http");
+
+    expect(store.listExternalActiveClients().map((c) => c.sessionId)).toEqual(["bound"]);
   });
 
   it("excludes non-external (workbench/action/system) sessions", () => {
@@ -1170,5 +1287,331 @@ describe("SessionStore.getLiveStatusForHelpSession (#10032)", () => {
     wireLiveHelpSession({ tier: "system" });
 
     expect(store.getLiveStatusForHelpSession(HELP_ID, WC)?.tier).toBe("system");
+  });
+});
+
+describe("SessionStore session origin and workspace binding (#11789)", () => {
+  let store: SessionStore;
+
+  beforeEach(() => {
+    store = new SessionStore(() => {});
+  });
+
+  afterEach(() => {
+    store.grantCache.dispose();
+  });
+
+  it("classifies an unrecorded session as external", () => {
+    // Fail-closed default: a session whose handshake never recorded an origin
+    // — or one already half torn down — must never be mistaken for one of
+    // Daintree's own surfaces and handed elevation rights.
+    expect(store.getOrigin("never-seen")).toBe("external");
+    expect(store.isRendererOwnedOrigin("never-seen")).toBe(false);
+  });
+
+  it("treats help and assistant-pane as renderer-owned, external as not", () => {
+    store.sessionOriginMap.set("help", "help");
+    store.sessionOriginMap.set("pane", "assistant-pane");
+    store.sessionOriginMap.set("ext", "external");
+
+    expect(store.isRendererOwnedOrigin("help")).toBe(true);
+    expect(store.isRendererOwnedOrigin("pane")).toBe(true);
+    expect(store.isRendererOwnedOrigin("ext")).toBe(false);
+  });
+
+  it("does not treat a workspace-bound external session as renderer-owned", () => {
+    // The whole point of splitting origin from routing: this session HAS a
+    // renderer route, and must still be refused renderer-driven elevation.
+    store.sessionOriginMap.set("bound", "external");
+    store.sessionWorkspaceMap.set("bound", "ws-a");
+    store.sessionWebContentsMap.set("bound", 42);
+
+    expect(store.isRendererOwnedOrigin("bound")).toBe(false);
+  });
+
+  it("clearSessionBinding drops route, context, origin and workspace together", () => {
+    store.sessionWebContentsMap.set("s", 42);
+    store.sessionContextMap.set("s", { worktreeId: "w1" } as never);
+    store.sessionOriginMap.set("s", "help");
+    store.sessionWorkspaceMap.set("s", "ws-a");
+
+    store.clearSessionBinding("s");
+
+    expect(store.sessionWebContentsMap.has("s")).toBe(false);
+    expect(store.sessionContextMap.has("s")).toBe(false);
+    expect(store.sessionOriginMap.has("s")).toBe(false);
+    expect(store.sessionWorkspaceMap.has("s")).toBe(false);
+    // And the accessor reverts to the fail-closed default rather than keeping
+    // a stale privilege a recycled session id could inherit.
+    expect(store.isRendererOwnedOrigin("s")).toBe(false);
+  });
+
+  it("revokeSession clears the binding record", () => {
+    store.httpSessions.set("bound", fakeHttpSession());
+    store.sessionTierMap.set("bound", "external");
+    store.sessionOriginMap.set("bound", "external");
+    store.sessionWorkspaceMap.set("bound", "ws-a");
+    store.sessionWebContentsMap.set("bound", 42);
+
+    expect(store.revokeSession("bound")).toBe(true);
+
+    expect(store.sessionOriginMap.has("bound")).toBe(false);
+    expect(store.sessionWorkspaceMap.has("bound")).toBe(false);
+    expect(store.sessionWebContentsMap.has("bound")).toBe(false);
+  });
+
+  it("drain clears the binding records", () => {
+    store.httpSessions.set("bound", fakeHttpSession());
+    store.sessionOriginMap.set("bound", "external");
+    store.sessionWorkspaceMap.set("bound", "ws-a");
+
+    store.drain();
+
+    expect(store.sessionOriginMap.size).toBe(0);
+    expect(store.sessionWorkspaceMap.size).toBe(0);
+  });
+
+  it("idle expiry clears the binding records", () => {
+    vi.useFakeTimers();
+    try {
+      setAwakeTime(MCP_SSE_IDLE_TIMEOUT_MS + 1);
+      const session = fakeHttpSession();
+      store.httpSessions.set("bound", session);
+      store.sessionOriginMap.set("bound", "external");
+      store.sessionWorkspaceMap.set("bound", "ws-a");
+      session.idleTimer = store.createHttpIdleTimer("bound");
+
+      vi.advanceTimersByTime(MCP_SSE_IDLE_TIMEOUT_MS + 10);
+
+      expect(store.httpSessions.has("bound")).toBe(false);
+      expect(store.sessionOriginMap.has("bound")).toBe(false);
+      expect(store.sessionWorkspaceMap.has("bound")).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+// #11909 — the ownership ledger is per-session authority, so it must die on
+// every path that ends a session. Each teardown route gets its own case because
+// the four are separate code paths (two inline in `sessionStore`, one explicit
+// revoke, one wholesale drain that clears the session maps without routing
+// through `clearSessionBinding`), and a route that forgot the ledger would
+// leave a recycled session id holding authority over another client's panels.
+describe("SessionStore resource-ownership teardown (#11909)", () => {
+  let store: SessionStore;
+
+  beforeEach(() => {
+    setAwakeTime(0);
+    store = new SessionStore(() => {});
+  });
+
+  afterEach(() => {
+    store.grantCache.dispose();
+    vi.useRealTimers();
+  });
+
+  function ownTerminal(sessionId: string, terminalId: string): void {
+    store.resourceOwnership.record(sessionId, [{ kind: "terminal", id: terminalId }]);
+  }
+
+  it("clearSessionBinding drops the ledger alongside route, context, origin and workspace", () => {
+    store.sessionWebContentsMap.set("s", 42);
+    store.sessionOriginMap.set("s", "external");
+    ownTerminal("s", "terminal-1");
+
+    store.clearSessionBinding("s");
+
+    expect(store.resourceOwnership.list("s")).toEqual([]);
+    expect(store.resourceOwnership.owns("s", "terminal", "terminal-1")).toBe(false);
+  });
+
+  it("revokeSession drops the revoked session's ledger and leaves other sessions intact", () => {
+    store.httpSessions.set("revoked", fakeHttpSession());
+    store.sessionTierMap.set("revoked", "external");
+    ownTerminal("revoked", "terminal-revoked");
+    ownTerminal("survivor", "terminal-survivor");
+
+    expect(store.revokeSession("revoked")).toBe(true);
+
+    expect(store.resourceOwnership.list("revoked")).toEqual([]);
+    expect(store.resourceOwnership.owns("survivor", "terminal", "terminal-survivor")).toBe(true);
+  });
+
+  it("drain drops every session's ledger", () => {
+    store.httpSessions.set("a", fakeHttpSession());
+    store.sessions.set("b", fakeSseSession());
+    ownTerminal("a", "terminal-a");
+    store.resourceOwnership.record("b", [{ kind: "worktree", id: "/tmp/wt-b" }]);
+
+    store.drain();
+
+    expect(store.resourceOwnership.list("a")).toEqual([]);
+    expect(store.resourceOwnership.list("b")).toEqual([]);
+  });
+
+  it("SSE idle expiry drops the ledger", () => {
+    vi.useFakeTimers();
+    try {
+      setAwakeTime(MCP_SSE_IDLE_TIMEOUT_MS + 1);
+      const session = fakeSseSession();
+      store.sessions.set("idle", session);
+      ownTerminal("idle", "terminal-idle");
+      session.idleTimer = store.createIdleTimer("idle");
+
+      vi.advanceTimersByTime(MCP_SSE_IDLE_TIMEOUT_MS + 10);
+
+      expect(store.sessions.has("idle")).toBe(false);
+      expect(store.resourceOwnership.list("idle")).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("HTTP idle expiry drops the ledger", () => {
+    vi.useFakeTimers();
+    try {
+      setAwakeTime(MCP_SSE_IDLE_TIMEOUT_MS + 1);
+      const session = fakeHttpSession();
+      store.httpSessions.set("idle", session);
+      ownTerminal("idle", "terminal-idle");
+      session.idleTimer = store.createHttpIdleTimer("idle");
+
+      vi.advanceTimersByTime(MCP_SSE_IDLE_TIMEOUT_MS + 10);
+
+      expect(store.httpSessions.has("idle")).toBe(false);
+      expect(store.resourceOwnership.list("idle")).toEqual([]);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  it("teardown revokes authority without touching the resources themselves", () => {
+    // The whole safety argument: a disconnect is not a decision to destroy the
+    // user's terminals. `SessionStore` owns no close/kill path, so the proof is
+    // that the ledger is the ONLY thing teardown reaches — the session's
+    // resources are never enumerated for disposal.
+    const cleanups: string[] = [];
+    const observed = new SessionStore((sessionId) => cleanups.push(sessionId));
+    observed.httpSessions.set("s", fakeHttpSession());
+    observed.resourceOwnership.record("s", [{ kind: "terminal", id: "terminal-1" }]);
+
+    observed.revokeSession("s");
+
+    // Only the resource-SUBSCRIPTION cleanup fires; nothing consults the
+    // ownership ledger for things to close.
+    expect(cleanups).toEqual(["s"]);
+    expect(observed.resourceOwnership.list("s")).toEqual([]);
+    observed.grantCache.dispose();
+  });
+});
+
+describe("SessionStore.hasLiveWorkspaceBinding (#11790)", () => {
+  let store: SessionStore;
+
+  beforeEach(() => {
+    store = new SessionStore(() => {});
+  });
+
+  afterEach(() => {
+    store.grantCache.dispose();
+  });
+
+  function bindLiveExternal(sessionId: string, workspaceId: string): void {
+    store.httpSessions.set(sessionId, fakeHttpSession());
+    store.sessionOriginMap.set(sessionId, "external");
+    store.sessionWorkspaceMap.set(sessionId, workspaceId);
+  }
+
+  it("reports a live external session bound to the workspace", () => {
+    bindLiveExternal("s1", "ws-a");
+    expect(store.hasLiveWorkspaceBinding("ws-a")).toBe(true);
+  });
+
+  it("scopes the answer to the asked-for workspace", () => {
+    bindLiveExternal("s1", "ws-a");
+    expect(store.hasLiveWorkspaceBinding("ws-b")).toBe(false);
+  });
+
+  it("answers for an SSE-transport session too, not just Streamable HTTP", () => {
+    // Only Streamable HTTP can bind today, but liveness must not be
+    // transport-specific — nothing here should need changing when SSE can.
+    store.sessions.set("s1", fakeSseSession());
+    store.sessionOriginMap.set("s1", "external");
+    store.sessionWorkspaceMap.set("s1", "ws-a");
+
+    expect(store.hasLiveWorkspaceBinding("ws-a")).toBe(true);
+  });
+
+  it("does not report a workspace routing record whose session is no longer live", () => {
+    // Presence in sessionWorkspaceMap is routing, not liveness. Without the
+    // liveness half, a dropped session would pin its view against freeze and
+    // deprioritize it for eviction for the rest of the app's life.
+    store.sessionOriginMap.set("s1", "external");
+    store.sessionWorkspaceMap.set("s1", "ws-a");
+
+    expect(store.hasLiveWorkspaceBinding("ws-a")).toBe(false);
+  });
+
+  it("does not treat a routing record with no recorded origin as external", () => {
+    // getOrigin() defaults an unknown session to "external", so reading through
+    // it would let a half-torn-down record — origin already dropped, workspace
+    // row not yet — read as a live binding. The origin map is read directly for
+    // exactly this case.
+    store.httpSessions.set("s1", fakeHttpSession());
+    store.sessionWorkspaceMap.set("s1", "ws-a");
+
+    expect(store.getOrigin("s1")).toBe("external");
+    expect(store.hasLiveWorkspaceBinding("ws-a")).toBe(false);
+  });
+
+  it("ignores a renderer-owned session that somehow carries a workspace row", () => {
+    store.httpSessions.set("s1", fakeHttpSession());
+    store.sessionOriginMap.set("s1", "help");
+    store.sessionWorkspaceMap.set("s1", "ws-a");
+
+    expect(store.hasLiveWorkspaceBinding("ws-a")).toBe(false);
+  });
+
+  it("still reports the workspace while a second session is bound to it", () => {
+    bindLiveExternal("s1", "ws-a");
+    bindLiveExternal("s2", "ws-a");
+
+    store.revokeSession("s1");
+
+    expect(store.hasLiveWorkspaceBinding("ws-a")).toBe(true);
+  });
+
+  it("releases the workspace once its last session is revoked", () => {
+    bindLiveExternal("s1", "ws-a");
+    bindLiveExternal("s2", "ws-a");
+
+    store.revokeSession("s1");
+    store.revokeSession("s2");
+
+    expect(store.hasLiveWorkspaceBinding("ws-a")).toBe(false);
+  });
+
+  it("releases the workspace on drain", () => {
+    bindLiveExternal("s1", "ws-a");
+
+    store.drain();
+
+    expect(store.hasLiveWorkspaceBinding("ws-a")).toBe(false);
+  });
+
+  it("releases the workspace when the session idles out", () => {
+    vi.useFakeTimers();
+    try {
+      setAwakeTime(MCP_SSE_IDLE_TIMEOUT_MS + 1);
+      bindLiveExternal("s1", "ws-a");
+      store.httpSessions.get("s1")!.idleTimer = store.createHttpIdleTimer("s1");
+
+      vi.advanceTimersByTime(MCP_SSE_IDLE_TIMEOUT_MS + 10);
+
+      expect(store.hasLiveWorkspaceBinding("ws-a")).toBe(false);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 });

@@ -37,7 +37,14 @@ const {
   const projectStatsState = {
     stats: {} as Record<
       string,
-      { activeAgentCount: number; waitingAgentCount: number; processCount: number }
+      {
+        activeAgentCount: number;
+        waitingAgentCount: number;
+        processCount: number;
+        assistantState?: "idle" | "working" | "waiting" | "directing" | "completed" | "exited";
+        assistantWaitingReason?: "prompt" | "question" | "approval" | "error";
+        assistantStateSince?: number;
+      }
     >,
   };
 
@@ -164,6 +171,9 @@ beforeEach(() => {
   vi.clearAllMocks();
   scratchState.scratches = [];
   scratchState.currentScratch = null;
+  // Shared across the whole file, so a spec that seeds stats would otherwise
+  // hand them to every spec that runs after it.
+  projectStatsState.stats = {};
   scratchState.createScratch.mockResolvedValue({ id: "scratch-1" });
   scratchState.switchScratch.mockResolvedValue(undefined);
   scratchState.renameScratch.mockResolvedValue(undefined);
@@ -1159,6 +1169,133 @@ describe("scratches in search results", () => {
  * actually happens, that it re-runs when the map moves, and that the open-time
  * pull (the only guaranteed hydration path) asks for scratch ids too.
  */
+describe("scratch activity in the search freeze — issue #11861", () => {
+  beforeEach(() => {
+    projectStatsState.stats = {};
+  });
+
+  it("still resolves when the palette opened before the scratches loaded", async () => {
+    // Loading the workspace lists is itself async and retried, so a palette
+    // opened during boot captures an EMPTY snapshot. Treating "nothing to ask
+    // about" as a settled answer would fold the scratches that arrive a moment
+    // later in as quiet, with no recapture ever due.
+    scratchState.scratches = [];
+    scratchState.currentScratch = null;
+    projectStatsState.stats = {};
+
+    const { result, rerender } = renderHook(() => useProjectSwitcherPalette());
+    act(() => result.current.open("modal"));
+
+    // The lists land first...
+    act(() => {
+      seedScratches(2);
+      rerender();
+    });
+    // ...and their stats only after.
+    act(() => {
+      projectStatsState.stats = {
+        "scratch-1": { activeAgentCount: 0, waitingAgentCount: 2, processCount: 0 },
+        "scratch-2": { activeAgentCount: 0, waitingAgentCount: 0, processCount: 0 },
+      };
+      rerender();
+    });
+    act(() => result.current.setQuery("Spike"));
+
+    // Recency alone puts the newer scratch-2 first, so only a snapshot that was
+    // still open to a recapture can produce this.
+    await waitFor(() => {
+      expect(result.current.results.map((row) => row.id)).toEqual(["scratch-1", "scratch-2"]);
+    });
+  });
+
+  it("resolves a cold scratch-only session once its stats land", async () => {
+    // With no projects there is nothing for a project-gated hydration check to
+    // ask about, so it reads as hydrated immediately and freezes every scratch
+    // as quiet — for the whole session, since the one recapture never fires.
+    const seeded = seedScratches(2);
+    expect(seeded[1]!.lastOpened).toBeGreaterThan(seeded[0]!.lastOpened);
+    projectStatsState.stats = {};
+    vi.mocked(projectClient.getBulkStats).mockResolvedValue({
+      "scratch-1": {
+        processCount: 0,
+        terminalCount: 0,
+        estimatedMemoryMB: 0,
+        terminalTypes: {},
+        processIds: [],
+        activeAgentCount: 0,
+        waitingAgentCount: 2,
+        blockedAgentCount: 0,
+        completedAgentCount: 0,
+        unacknowledgedCompletedAgentCount: 0,
+        snoozedAgentCount: 0,
+      },
+      "scratch-2": {
+        processCount: 0,
+        terminalCount: 0,
+        estimatedMemoryMB: 0,
+        terminalTypes: {},
+        processIds: [],
+        activeAgentCount: 0,
+        waitingAgentCount: 0,
+        blockedAgentCount: 0,
+        completedAgentCount: 0,
+        unacknowledgedCompletedAgentCount: 0,
+        snoozedAgentCount: 0,
+      },
+    });
+
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+    act(() => result.current.open("modal"));
+    await waitFor(() => expect(projectClient.getBulkStats).toHaveBeenCalled());
+    act(() => result.current.setQuery("Spike"));
+
+    // Recency alone would put the newer scratch-2 first; only a snapshot that
+    // resolved after hydration can see the wait on scratch-1.
+    await waitFor(() => {
+      expect(result.current.results.map((row) => row.id)).toEqual(["scratch-1", "scratch-2"]);
+    });
+  });
+
+  it("ranks scratches on frozen activity, and holds it against a stats push", async () => {
+    // Scratches join the ranked list (#11466) but never a browse band, so
+    // search's freeze is the only one that covers them at all.
+    const seeded = seedScratches(2);
+    // Recency runs the other way, so the wait is the only thing that can put
+    // scratch-1 first.
+    expect(seeded[1]!.lastOpened).toBeGreaterThan(seeded[0]!.lastOpened);
+    projectStatsState.stats = {
+      "scratch-1": { activeAgentCount: 0, waitingAgentCount: 2, processCount: 0 },
+    };
+
+    const { result, rerender } = renderHook(() => useProjectSwitcherPalette());
+    act(() => result.current.open("modal"));
+    act(() => result.current.setQuery("Spike"));
+
+    await waitFor(() => {
+      expect(result.current.results.map((row) => row.id)).toEqual(["scratch-1", "scratch-2"]);
+    });
+
+    // The wait moves to the other scratch mid-read; the order does not.
+    act(() => {
+      projectStatsState.stats = {
+        "scratch-2": { activeAgentCount: 0, waitingAgentCount: 2, processCount: 0 },
+      };
+      rerender();
+    });
+    expect(result.current.results.map((row) => row.id)).toEqual(["scratch-1", "scratch-2"]);
+    // The counts on the rows are still live.
+    expect(result.current.results.find((row) => row.id === "scratch-2")?.waitingAgentCount).toBe(2);
+
+    // Reopening adopts what is true now.
+    act(() => result.current.close());
+    act(() => result.current.open("modal"));
+    act(() => result.current.setQuery("Spike"));
+    await waitFor(() => {
+      expect(result.current.results.map((row) => row.id)).toEqual(["scratch-2", "scratch-1"]);
+    });
+  });
+});
+
 describe("scratch agent-status join", () => {
   // The stats fixture is module-scoped and shared with the suites above, so it
   // has to be cleared per-spec or a seeded map leaks into the next assertion.
@@ -1190,6 +1327,32 @@ describe("scratch agent-status join", () => {
     const row = scratchRow(result, "scratch-1");
     for (const field of STATS_FIELDS) expect(row[field]).toBe(0);
     expect(row.oldestWaitingSince).toBeUndefined();
+  });
+
+  it("carries assistant presence onto the row without touching its counts", async () => {
+    // A help session is provisioned against an opaque workspace id, so a
+    // scratch can host one. Its row projection is hand-written separately from
+    // the project one and would otherwise go unexercised.
+    seedScratches(1);
+    projectStatsState.stats = {
+      "scratch-1": {
+        activeAgentCount: 0,
+        waitingAgentCount: 0,
+        processCount: 0,
+        assistantState: "waiting",
+        assistantWaitingReason: "error",
+        assistantStateSince: 6_000,
+      },
+    };
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    await waitFor(() => expect(result.current.scratchResults).toHaveLength(1));
+
+    const row = scratchRow(result, "scratch-1");
+    expect(row.assistantState).toBe("waiting");
+    expect(row.assistantWaitingReason).toBe("error");
+    expect(row.assistantStateSince).toBe(6_000);
+    for (const field of STATS_FIELDS) expect(row[field]).toBe(0);
   });
 
   it("carries the map's counts onto the row", async () => {
@@ -1353,5 +1516,92 @@ describe("scratch agent-status join", () => {
 
     await waitFor(() => expect(scratchState.loadScratches).toHaveBeenCalled());
     expect(projectClient.getBulkStats).not.toHaveBeenCalled();
+  });
+});
+
+/**
+ * The resume count is main's answer about what a dormant scratch would restore
+ * (#11821). The view-model's only job is to carry it without editing it —
+ * absent, zero and positive are three distinct states downstream, and the
+ * common regression is collapsing the first two with a `?? 0`.
+ */
+describe("resumable agent count passthrough", () => {
+  function seedScratchesWithCounts(counts: (number | undefined)[]): void {
+    scratchState.scratches = counts.map((resumableAgentCount, i) => ({
+      id: `scratch-${i + 1}`,
+      name: `Spike ${i + 1}`,
+      path: `/tmp/scratches/scratch-${i + 1}`,
+      createdAt: 1_000 + i,
+      lastOpened: 1_000 + i,
+      ...(resumableAgentCount !== undefined ? { resumableAgentCount } : {}),
+    }));
+    scratchState.currentScratch = null;
+  }
+
+  it("keeps absent, zero and positive counts distinct", () => {
+    // Sorted by lastOpened desc, so the seeded order comes back reversed.
+    seedScratchesWithCounts([undefined, 0, 3]);
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    const byId = new Map(result.current.scratchResults.map((s) => [s.id, s.resumableAgentCount]));
+    expect(byId.get("scratch-1")).toBeUndefined();
+    expect(byId.get("scratch-2")).toBe(0);
+    expect(byId.get("scratch-3")).toBe(3);
+  });
+
+  it("reads the count off the scratch, not off its live agent stats", () => {
+    // The two answer different questions: the stats say what is running now,
+    // the count says what a closed workspace would bring back. A row with no
+    // live agents at all still carries whatever main last persisted.
+    seedScratchesWithCounts([2]);
+    // A live count deliberately different from the saved one, so a view-model
+    // that sourced the mark from stats would read 5 rather than 2.
+    projectStatsState.stats = {
+      "scratch-1": { activeAgentCount: 5, waitingAgentCount: 0, processCount: 5 },
+    };
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    expect(result.current.scratchResults[0]?.resumableAgentCount).toBe(2);
+    expect(result.current.scratchResults[0]?.activeAgentCount).toBe(5);
+  });
+});
+
+describe("fleetLiveness", () => {
+  it("counts the agents running inside scratches, not only those in projects", () => {
+    // The header answers "is it safe to look away?", and a scratch hosts real
+    // agents — a tally that walked projects alone would call the fleet quiet
+    // while a scratch was mid-run.
+    seedScratches(2);
+    projectStatsState.stats = {
+      "scratch-1": { activeAgentCount: 3, waitingAgentCount: 0, processCount: 3 },
+      "scratch-2": { activeAgentCount: 4, waitingAgentCount: 0, processCount: 4 },
+    };
+
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    // Includes `scratch-1`, which `seedScratches` makes the current workspace:
+    // the work in front of you counts toward "still going" as much as the work
+    // behind you does. That is the deliberate difference from the trigger
+    // badge, which asks the narrower "is somewhere ELSE asking for me?".
+    expect(result.current.fleetLiveness.runningAgentCount).toBe(7);
+  });
+
+  it("tallies a scratch's working assistant apart from its agents", () => {
+    seedScratches(1);
+    projectStatsState.stats = {
+      "scratch-1": {
+        activeAgentCount: 2,
+        waitingAgentCount: 0,
+        processCount: 2,
+        assistantState: "working",
+      },
+    };
+
+    const { result } = renderHook(() => useProjectSwitcherPalette());
+
+    // Never summed into the agent count: the assistant is not a run the user
+    // launched, and folding it in would make the worker tally a lie.
+    expect(result.current.fleetLiveness.runningAgentCount).toBe(2);
+    expect(result.current.fleetLiveness.workingAssistantCount).toBe(1);
   });
 });

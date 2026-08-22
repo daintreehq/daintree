@@ -1,6 +1,7 @@
 import { createStore, type StoreApi } from "zustand/vanilla";
 import type { WorktreeSnapshot, WorktreeEventVersion, AttachIssuePayload } from "@shared/types";
 import { usePanelStore } from "./panelStore";
+import { getWorktreeSelectionSnapshot } from "./storeAccessors";
 import { worktreeClient } from "@/clients";
 import {
   captureWorktreeTerminalSnapshot,
@@ -1645,13 +1646,26 @@ export function cleanupOrphanedTerminals(): void {
     }
   }
 
+  // A deleted worktree whose terminals outlived it is not orphaned — it has a
+  // sidebar row holding exactly these panels, and removing them here would
+  // empty the row and destroy the survivors #11232 exists to keep (#11911).
+  // Read live rather than passed in: this runs after hydration has rebuilt the
+  // rows, and the live path can be holding rows at any time.
+  //
+  // Through the accessor rather than importing the selection store directly:
+  // that store pulls in TerminalInstanceService, and esbuild links every static
+  // import whether or not it is reachable, so a direct import drags the whole
+  // terminal subgraph into the perf bundle that exists to isolate this store.
+  const ghostedWorktreeIds = getWorktreeSelectionSnapshot()?.deletedWorktreeIds;
+
   const terminalStore = usePanelStore.getState();
   const orphanedTerminals = terminalStore.panelIds
     .map((id) => terminalStore.panelsById[id])
     .filter((t): t is NonNullable<typeof t> => {
       if (!t) return false;
       const worktreeId = typeof t.worktreeId === "string" ? t.worktreeId.trim() : "";
-      return Boolean(worktreeId && !worktreeIds.has(worktreeId));
+      if (!worktreeId || worktreeIds.has(worktreeId)) return false;
+      return ghostedWorktreeIds?.has(worktreeId) !== true;
     });
 
   if (orphanedTerminals.length > 0) {
@@ -1816,13 +1830,21 @@ function worktreeChangesEqual(
 ): boolean {
   if (a === b) return true;
   if (a == null || b == null) return false;
-  if (a.lastUpdated !== undefined && a.lastUpdated === b.lastUpdated) return true;
+  // The timestamp shortcut has to yield to `headOid`: two polls landing in the
+  // same millisecond with different HEADs would otherwise keep the stale
+  // identity, and the divergence backstop reads HEAD off this snapshot.
+  if (a.lastUpdated !== undefined && a.lastUpdated === b.lastUpdated && a.headOid === b.headOid) {
+    return true;
+  }
   return (
     a.changedFileCount === b.changedFileCount &&
     a.changes.length === b.changes.length &&
     a.totalInsertions === b.totalInsertions &&
     a.totalDeletions === b.totalDeletions &&
     a.latestFileMtime === b.latestFileMtime &&
+    // The divergence backstop reads `headOid` off this snapshot, so a HEAD that
+    // moves without changing any other field here still has to churn identity.
+    a.headOid === b.headOid &&
     a.lastCommitMessage === b.lastCommitMessage &&
     a.lastCommitTimestampMs === b.lastCommitTimestampMs &&
     a.lastCommitAuthor?.name === b.lastCommitAuthor?.name &&

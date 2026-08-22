@@ -424,6 +424,16 @@ export interface PanelRestorePhaseResult {
    * Empty when every panel restored under its original saved id.
    */
   savedIdToRestoredId: Map<string, string>;
+  /**
+   * Worktree ids that are confirmed gone but still hold a restored panel whose
+   * PTY survived, so each needs a deleted-worktree row to live on (#11911).
+   *
+   * Only surviving PTYs qualify. A cold respawn boots a NEW process and can
+   * pick any live worktree, so it re-homes as before — recording a row for one
+   * would resurrect a dead worktree in the sidebar for a session that never
+   * ran there. Empty when nothing was stranded, which is the common case.
+   */
+  ghostedWorktreeIds: Set<string>;
 }
 
 /**
@@ -544,6 +554,43 @@ export async function restorePanelsPhase(
     // re-homing would be a guess — keep what was saved.
     if (known === null || known.has(worktreeId)) return worktreeId;
     return rehomeTarget ?? worktreeId;
+  };
+
+  // Worktrees proven gone that still hold a surviving PTY (#11911). Reported
+  // out of the phase so hydration can give each one a deleted-worktree row.
+  const ghostedWorktreeIds = new Set<string>();
+
+  /**
+   * Where a panel goes when its PTY outlived the worktree it was launched in.
+   *
+   * Re-homing is wrong for these: the process is still running in the deleted
+   * directory, so moving the panel under a live worktree hides that fact and
+   * throws away the only record of where the run came from. Worse, it erases
+   * the row `deletedWorktreeCleanup` needs in order to ever retire the
+   * survivors — which is how five finished agents can sit in a project for
+   * hours, counted as needing input and reachable from nowhere.
+   *
+   * Keeping the dead id is only safe because a row is recorded for it: without
+   * one, `cleanupOrphanedTerminals` treats the panel as orphaned and removes
+   * it. The two changes are a pair.
+   *
+   * Everything else defers to {@link resolveRestoredWorktreeId}, including the
+   * unknown-list case — a `null` list is "not ready", never proof of absence
+   * (#11235), and ghosting off it would bury every live worktree in the
+   * project behind a deleted row.
+   */
+  const resolveSurvivingPtyWorktreeId = async (
+    worktreeId: string | undefined
+  ): Promise<string | undefined> => {
+    if (!workspaceHasWorktrees || !worktreeId) {
+      return resolveRestoredWorktreeId(worktreeId);
+    }
+    const known = await getKnownWorktreeIds();
+    if (known === null || known.has(worktreeId)) {
+      return resolveRestoredWorktreeId(worktreeId);
+    }
+    ghostedWorktreeIds.add(worktreeId);
+    return worktreeId;
   };
 
   if (savedPanels && savedPanels.length > 0) {
@@ -679,9 +726,10 @@ export async function restorePanelsPhase(
             logHydrationInfo(`Reconnecting to terminal: ${saved.id}`);
 
             const args = buildArgsForBackendTerminal(backendTerminal, saved, projectRoot || "");
-            // Assign to the active worktree when the terminal has no worktree,
-            // or names one that no longer exists.
-            args.worktreeId = await resolveRestoredWorktreeId(args.worktreeId);
+            // Assign to the active worktree when the terminal has no worktree.
+            // A named-but-deleted worktree keeps its id instead: the PTY is
+            // still alive in it, and it earns a deleted-worktree row (#11911).
+            args.worktreeId = await resolveSurvivingPtyWorktreeId(args.worktreeId);
             // A surviving backend PTY reports its live (old-path) cwd; rebase it
             // onto the moved worktree's new root so persisted state and a later
             // respawn don't reference the vanished path (#11388).
@@ -754,10 +802,11 @@ export async function restorePanelsPhase(
                   saved,
                   projectRoot || ""
                 );
-                // Assign to the active worktree when a legacy saved panel has
-                // no worktreeId, or names a deleted one (mirrors the
-                // matched-backend path).
-                reconnectArgs.worktreeId = await resolveRestoredWorktreeId(
+                // Mirrors the matched-backend path: a legacy saved panel with
+                // no worktreeId takes the active worktree, while one naming a
+                // deleted worktree keeps that id and earns a row (#11911) —
+                // the reconnect just proved this PTY outlived it.
+                reconnectArgs.worktreeId = await resolveSurvivingPtyWorktreeId(
                   reconnectArgs.worktreeId
                 );
                 // Rebase the reconnected PTY's live (old-path) cwd onto the
@@ -1079,5 +1128,5 @@ export async function restorePanelsPhase(
     }
   }
 
-  return { restoreTasks, savedIdToRestoredId };
+  return { restoreTasks, savedIdToRestoredId, ghostedWorktreeIds };
 }

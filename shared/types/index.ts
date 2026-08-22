@@ -83,7 +83,7 @@ export type {
 export type { BrowserHistory } from "./browser.js";
 
 // Project types
-export { isGitBackedProject, pickAgentVisibleProjectSettings } from "./project.js";
+export { isGitBackedProject, isPluginRecipe, pickAgentVisibleProjectSettings } from "./project.js";
 export type {
   ProjectStatus,
   Project,
@@ -97,6 +97,10 @@ export type {
   RecipeTerminalType,
   RecipeTerminal,
   TerminalRecipe,
+  RecipeAutoAssign,
+  PluginRecipeOrigin,
+  PluginRecipeMetadata,
+  PluginRecipeMetadataPatch,
   RecipeNameCollision,
   RunCommand,
   ProjectSettings,
@@ -176,10 +180,11 @@ export type {
   IssueNotFoundPayload,
   // Project close IPC types
   ProjectCloseResult,
-  ProjectFreeMemoryResult,
+  ProjectSleepResult,
   ProjectStats,
   BulkProjectStatsEntry,
   BulkProjectStats,
+  AssistantPresenceEntry,
   ProjectStatusEntry,
   ProjectStatusMap,
   ForgeRateLimitKind,
@@ -340,6 +345,7 @@ export {
   buildResumeLatestCommand,
   buildAssignedSessionIdArgs,
   supportsSessionIdAssignment,
+  supportsExactSessionCapture,
   mintAssignedSessionId,
   stripAssignedSessionIdArgs,
   buildLaunchCommandFromFlags,
@@ -473,6 +479,8 @@ export type {
   AgentKilledPayload,
   TerminalFlowStatus,
   TerminalStatusPayload,
+  TerminalSubmitStatusState,
+  TerminalSubmitStatusPayload,
   BroadcastWriteTargetResult,
   BroadcastWriteResultPayload,
   SpawnResult,

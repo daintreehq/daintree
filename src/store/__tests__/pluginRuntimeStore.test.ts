@@ -36,6 +36,7 @@ function makePlugin(opts: {
         fileDecorationProviders: [],
         agents: [],
         processTools: [],
+        recipes: [],
       },
     },
     dir: `/plugins/${opts.id}`,

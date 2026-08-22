@@ -563,6 +563,21 @@ export async function getDockPanelIds(page: Page): Promise<string[]> {
     .evaluateAll((els) => els.map((el) => el.getAttribute("data-panel-id") ?? "").filter(Boolean));
 }
 
+/**
+ * Ids of the chips as painted in the dock rail, left to right.
+ *
+ * `getDockPanelIds` reads the offscreen panel containers, which mirror
+ * `panelIds` directly — they reordered correctly while the visible rail kept
+ * painting the pre-drag order, so they cannot catch #11873. Assert both.
+ */
+export async function getDockChipIds(page: Page): Promise<string[]> {
+  return page
+    .locator(`${SEL.dock.rail} ${SEL.dock.chipId}`)
+    .evaluateAll((els) =>
+      els.map((el) => el.getAttribute("data-dock-item-id") ?? "").filter(Boolean)
+    );
+}
+
 export function getPanelById(page: Page, id: string): Locator {
   return page.locator(`[data-panel-id="${id}"]`);
 }

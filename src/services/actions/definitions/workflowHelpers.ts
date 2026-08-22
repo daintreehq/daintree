@@ -1,8 +1,7 @@
-const PARTIAL_SUCCESS_PREFIX = "PARTIAL_SUCCESS:";
+import { PartialSuccessError } from "@shared/utils/partialSuccess";
 
 export function partialSuccessError(message: string, partial: Record<string, unknown>): Error {
-  const payload = JSON.stringify({ message, partialResult: partial });
-  return new Error(`${PARTIAL_SUCCESS_PREFIX} ${payload}`);
+  return new PartialSuccessError(message, partial);
 }
 
 export function slugifyForBranch(title: string): string {

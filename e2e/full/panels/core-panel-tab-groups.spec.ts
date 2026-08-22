@@ -88,7 +88,7 @@ test.describe.serial("Core: Panel Tab Groups", () => {
       expect(await getGridPanelCount(window)).toBe(1);
     });
 
-    test("duplicated tab inherits cwd and has functional PTY", async () => {
+    test("duplicated tab launches in its worktree directory and has functional PTY", async () => {
       const { window } = ctx;
       const panel = getFirstGridPanel(window);
 
@@ -96,7 +96,7 @@ test.describe.serial("Core: Panel Tab Groups", () => {
       await runTerminalCommand(window, panel, "node -e \"console.log('TAB_DUPLICATE_ALIVE')\"");
       await waitForTerminalText(panel, "TAB_DUPLICATE_ALIVE", T_LONG);
 
-      // Verify working directory is inherited
+      // A duplicate is a new process rooted in the worktree it is filed under (#11854)
       await runTerminalCommand(window, panel, 'node -p "process.cwd()"');
       const dirBasename = path.basename(fixtureDir);
       await waitForTerminalTextIgnoringLineBreaks(panel, dirBasename, T_LONG);

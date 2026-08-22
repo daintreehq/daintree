@@ -45,8 +45,10 @@ vi.mock("@/clients", async (importOriginal) => {
 });
 
 import { registerAgentActions } from "../agentActions";
+import { resolveEffectiveActionDanger } from "../../effectiveDanger";
 
 const agentSessionHistoryMock = {
+  list: vi.fn(),
   prepareBookmark: vi.fn(),
   promoteBookmark: vi.fn(),
   renameBookmark: vi.fn(),
@@ -411,4 +413,127 @@ describe("session bookmark actions", () => {
     expect(result.bookmarks.map((b) => b.sessionId)).toEqual(["s1"]);
     expect(result).toMatchObject({ total: 3, hasMore: false });
   });
+});
+
+/**
+ * #11908 put these four on the assistant's action tier. The tier grant is only
+ * half the contract — the other half is that becoming agent-reachable did not
+ * relax the gate on the two that remove something the user can see.
+ *
+ * Asserting `danger === "confirm"` on its own would be a literal copied from the
+ * definition, so these go through `resolveEffectiveActionDanger` instead: it is
+ * the function BOTH enforcement sites read (`ActionService.dispatch`, which
+ * rejects, and `useMcpBridge`, which decides whether the modal opens), so it is
+ * what actually decides whether an assistant call is gated.
+ */
+describe("bookmark mutations stay gated once agent-reachable (#11908)", () => {
+  function danger(id: string, args: unknown, source: "agent" | "user" = "agent") {
+    const actions = setupActions();
+    const factory = actions.get(id);
+    if (!factory) throw new Error(`missing ${id}`);
+    const def = factory() as AnyActionDefinition;
+    return resolveEffectiveActionDanger(def.danger, source, args);
+  }
+
+  it("gates closing a live pane and deleting a bookmark for an agent caller", () => {
+    expect(danger("session.bookmarkAndClose", { terminalId: "t1", label: "x" })).toBe("confirm");
+    expect(danger("session.bookmark.delete", { sessionId: "s1" })).toBe("confirm");
+  });
+
+  it("gates them for a human caller too — the tier grant is not a bypass", () => {
+    expect(danger("session.bookmarkAndClose", { terminalId: "t1", label: "x" }, "user")).toBe(
+      "confirm"
+    );
+    expect(danger("session.bookmark.delete", { sessionId: "s1" }, "user")).toBe("confirm");
+  });
+
+  it("leaves the two reversible mutations ungated, so routine edits stay cheap", () => {
+    // Over-gating is its own failure: a confirm on every rename trains the user
+    // to click through the ones that matter.
+    expect(danger("session.bookmark.promote", { sessionId: "s1", label: "x" })).toBe("safe");
+    expect(danger("session.bookmark.rename", { sessionId: "s1", label: "x" })).toBe("safe");
+  });
+
+  it("keeps both gated actions out of the palette, where a pick would skip the gate", () => {
+    const actions = setupActions();
+    for (const id of ["session.bookmarkAndClose", "session.bookmark.delete"]) {
+      const def = actions.get(id)!() as AnyActionDefinition;
+      expect(def.palette?.mode, `${id} must stay palette-hidden`).toBe("hidden");
+      // A gated action with no rationale gives the confirm dialog nothing to
+      // show, which the registry-wide quality gate also enforces.
+      expect(def.dangerRationale, `${id} must explain why it is gated`).toBeTruthy();
+    }
+  });
+});
+
+/**
+ * Cross-project isolation for the three id-only mutations (#11908).
+ *
+ * Main matches `sessionId` against the WHOLE journal, so nothing below the
+ * action layer stops a promote/rename/delete aimed at another project's record.
+ * Once the assistant could call these, that mattered: `session.bookmarks.list`
+ * takes an explicit `projectId`, so a model can legitimately enumerate another
+ * project's session ids and then hand one to a mutation.
+ */
+describe("bookmark mutations are project-scoped (#11908)", () => {
+  const OURS = { ...VALID_RECORD, sessionId: "ours", projectId: "p1" };
+
+  beforeEach(() => {
+    agentSessionHistoryMock.list.mockResolvedValue([OURS]);
+    agentSessionHistoryMock.promoteBookmark.mockResolvedValue(OURS);
+    agentSessionHistoryMock.renameBookmark.mockResolvedValue(OURS);
+    agentSessionHistoryMock.deleteBookmark.mockResolvedValue(undefined);
+  });
+
+  const MUTATIONS: Array<[string, Record<string, string>, keyof typeof agentSessionHistoryMock]> = [
+    ["session.bookmark.promote", { sessionId: "theirs", label: "x" }, "promoteBookmark"],
+    ["session.bookmark.rename", { sessionId: "theirs", label: "x" }, "renameBookmark"],
+    ["session.bookmark.delete", { sessionId: "theirs" }, "deleteBookmark"],
+  ];
+
+  it.each(MUTATIONS)("%s refuses a session id from another project", async (id, args, ipc) => {
+    const actions = setupActions();
+
+    await expect(callAction(actions, id, args, { projectId: "p1" })).rejects.toThrow(
+      /No session with that id in this project/i
+    );
+    expect(agentSessionHistoryMock[ipc]).not.toHaveBeenCalled();
+  });
+
+  it.each(MUTATIONS)("%s scopes its check to the caller's own project", async (id, args) => {
+    const actions = setupActions();
+
+    await callAction(actions, id, { ...args, sessionId: "ours" }, { projectId: "p1" });
+    // Scope comes from the dispatch context, never from an argument — an
+    // argument the caller supplies is not a boundary it can be held to.
+    expect(agentSessionHistoryMock.list).toHaveBeenCalledWith(undefined, "p1");
+  });
+
+  it.each(MUTATIONS)(
+    "%s refuses a headless dispatch with no project in scope",
+    async (id, args, ipc) => {
+      const actions = setupActions();
+
+      // Both headless sources, not just agents: a plugin dispatch during a
+      // scope-less renderer state would otherwise reach the global journal.
+      for (const dispatchSource of ["agent", "plugin"] as const) {
+        await expect(
+          callAction(actions, id, { ...args, sessionId: "ours" }, { dispatchSource })
+        ).rejects.toThrow(/No project in scope/i);
+      }
+      expect(agentSessionHistoryMock[ipc]).not.toHaveBeenCalled();
+    }
+  );
+
+  it.each(MUTATIONS)(
+    "%s still works for a human surface with no project",
+    async (id, args, ipc) => {
+      // The guard tightens what a model can reach; it must not break the bookmark
+      // UI, which was already confined to the project the user is looking at.
+      const actions = setupActions();
+
+      await callAction(actions, id, { ...args, sessionId: "ours" }, { dispatchSource: "user" });
+      expect(agentSessionHistoryMock[ipc]).toHaveBeenCalled();
+    }
+  );
 });

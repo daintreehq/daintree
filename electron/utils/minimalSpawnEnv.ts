@@ -1,7 +1,7 @@
 /**
  * The single environment allowlist every process the host spawns on a plugin's
- * behalf is built from (#11300). Three call sites share it — the pipe-mode
- * `child_process.spawn` in {@link import("../services/plugin/PluginProcessManager.js").PluginProcessManager},
+ * behalf is built from (#11300). Three call sites share it — the plain-child
+ * `child_process.spawn` (pipe and duplex modes) in {@link import("../services/plugin/PluginProcessManager.js").PluginProcessManager},
  * the interactive `node-pty` spawn in the pty-host, and the plugin worker's
  * `utilityProcess.fork` — so "what env does a plugin's code see" has exactly
  * one answer and the three can never drift into parallel allowlists.

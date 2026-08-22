@@ -1,5 +1,9 @@
 import { useState, useCallback, useMemo, useEffect, useRef, useDeferredValue } from "react";
-import { rankSwitcherMatches } from "@/lib/projectSwitcherSearch";
+import {
+  computeSearchActivityKey,
+  rankSwitcherMatches,
+  type SearchActivityKey,
+} from "@/lib/projectSwitcherSearch";
 import { buildDisplayPaths } from "@/lib/projectDisplayPath";
 import { useProjectStore } from "@/store/projectStore";
 import { useProjectStatsStore } from "@/store/projectStatsStore";
@@ -14,7 +18,9 @@ import { closeAndAnnounce } from "@/lib/accessibility";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import { logError } from "@/utils/logger";
 import type { Project, Scratch } from "@shared/types";
+import type { AgentState, WaitingReason } from "@shared/types/agent";
 import type { ProjectStatusMap } from "@shared/types/ipc/project";
+import { assistantNeedsAttention, classifyAssistantActivity } from "@/lib/projectAssistantActivity";
 import { decayFrecencyScore, FRECENCY_COLD_START } from "@shared/utils/frecency";
 import { projectClient, scratchClient } from "@/clients";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -58,6 +64,28 @@ export interface WorkspaceRowStatusFields {
    */
   nextSnoozeWakeAt?: number;
   processCount: number;
+  /**
+   * What the live Daintree Assistant is doing, absent when there is no live
+   * assistant here (#11806). Raw state, not a verdict — `classifyAssistantActivity`
+   * is the one place that decides what it means, so the band, the ordering and
+   * the status line cannot disagree about it.
+   *
+   * Never a member of the counts above. The assistant is not a run the user
+   * launched, and folding it in would make every worker tally a lie.
+   */
+  assistantState?: AgentState;
+  /** Why the assistant is waiting; only ever set alongside a `waiting` state. */
+  assistantWaitingReason?: WaitingReason;
+  /** The assistant's transition into its current state, absent when unrecorded. */
+  assistantStateSince?: number;
+  /**
+   * When the user last had this workspace as their current one — stamped both
+   * on arrival and on departure, so it dates the last time they actually had
+   * it on screen. Shared by both kinds because both can host an assistant, and
+   * it is what decides whether a wait has gone unseen.
+   */
+  lastOpened: number;
+  isActive: boolean;
 }
 
 /** Lightweight searchable scratch view-model for the palette section. */
@@ -66,8 +94,13 @@ export interface SearchableScratch extends WorkspaceRowStatusFields {
   name: string;
   path: string;
   createdAt: number;
-  lastOpened: number;
-  isActive: boolean;
+  /**
+   * How many saved agent panels this scratch would restore if opened (#11821).
+   * Main derives it from the persisted state, so the row draws its dot without
+   * reading anything. Absent means not yet computed — distinct from a known 0,
+   * which is an answer.
+   */
+  resumableAgentCount?: number;
 }
 
 /**
@@ -127,7 +160,7 @@ export type ProjectSectionKey = (typeof PROJECT_SECTION_ORDER)[number];
  * completions alike — so any label naming a sort order would be a lie the row
  * contents immediately expose. "Running" requires live agents; projects with
  * only bare processes fall through to Pinned/Other, where their status line
- * still says "Process running".
+ * still reports the processes.
  */
 export const PROJECT_SECTION_LABELS: Record<ProjectSectionKey, string> = {
   current: "Current project",
@@ -157,11 +190,16 @@ export interface SearchableProject extends WorkspaceRowStatusFields {
   path: string;
   emoji: string;
   color?: string;
-  lastOpened: number;
   status: Project["status"];
   /** Set when the project was auto-closed by the background-idle sweep (#10830). */
   autoParkedAt?: number;
-  isActive: boolean;
+  /**
+   * How many saved agent panels this project would restore if opened (#11801).
+   * Main derives it from the persisted state, so the row draws its dot without
+   * reading anything. Absent means not yet computed — distinct from a known 0,
+   * which is an answer.
+   */
+  resumableAgentCount?: number;
   isBackground: boolean;
   isMissing: boolean;
   isPinned: boolean;
@@ -191,7 +229,7 @@ export interface SearchableProject extends WorkspaceRowStatusFields {
  *
  * Scratches are NOT synthesized into a `SearchableProject` with a flag. Sharing
  * the shape would make every project-only path — the status line, "Pin project",
- * "Free memory", ⌘⌫ remove — type-reachable with a scratch id behind it.
+ * Sleep, ⌘⌫ remove — type-reachable with a scratch id behind it.
  */
 export type ProjectSwitcherProjectRow = { kind: "project" } & SearchableProject;
 export type ProjectSwitcherScratchRow = { kind: "scratch" } & SearchableScratch;
@@ -272,7 +310,7 @@ export interface UseProjectSwitcherPaletteReturn {
    * reopen. Shows a confirm dialog when the project has live processes, runs
    * silently otherwise. No-op (with a toast) for the active project.
    */
-  freeMemoryProject: (projectId: string) => Promise<void>;
+  sleepProject: (projectId: string) => Promise<void>;
   /** Missing-project recovery: open the relocation dialog in reattach mode. */
   locateProject: (projectId: string) => void;
   /** Healthy-project "Move or rename": open the relocation dialog in move mode. */
@@ -293,15 +331,15 @@ export interface UseProjectSwitcherPaletteReturn {
   confirmRemoveProject: () => Promise<void>;
   isRemovingProject: boolean;
   /**
-   * Frozen snapshot of the project pending a "Free memory" confirmation —
+   * Frozen snapshot of the project pending a Sleep confirmation —
    * captured at menu-select time so the dialog's process/agent counts don't
    * drift if agents finish while the dialog is open (lesson #8725). Null when
    * no confirm is pending (D0 path runs without it).
    */
-  freeMemoryConfirmProject: SearchableProject | null;
-  setFreeMemoryConfirmProject: (project: SearchableProject | null) => void;
-  confirmFreeMemory: () => Promise<void>;
-  isFreeingMemory: boolean;
+  sleepConfirmProject: SearchableProject | null;
+  setSleepConfirmProject: (project: SearchableProject | null) => void;
+  confirmSleep: () => Promise<void>;
+  isSleepingProject: boolean;
   backgroundWaitingCount: number;
   /**
    * Agent totals across every non-active project, uncapped and independent of
@@ -320,6 +358,17 @@ export interface UseProjectSwitcherPaletteReturn {
      * and nagging the tray for every finished agent would train it away.
      */
     waitingProjectCount: number;
+  };
+  /**
+   * What is still executing across EVERY workspace — projects and scratches,
+   * the current one included — for the palette header's "is it safe to look
+   * away?" line (#11832). Unfiltered by the search query on purpose.
+   */
+  fleetLiveness: {
+    /** Agents the user launched, across all workspaces. Assistants never counted here. */
+    runningAgentCount: number;
+    /** Workspaces whose assistant is mid-task — a separate tally, not an agent. */
+    workingAssistantCount: number;
   };
   /** Scratch (one-off agent workspace) view-models, sorted by lastOpened desc. */
   scratchResults: SearchableScratch[];
@@ -371,6 +420,47 @@ export interface UseProjectSwitcherPaletteReturn {
   isDeletingOriginalScratch: boolean;
 }
 
+/**
+ * Whether this project's BAND is a guess until main reports stats for it.
+ *
+ * The active row is banded `current` and a missing one `unavailable` without
+ * consulting stats, so neither says anything about hydration — they are excluded
+ * from the question, never from the freeze itself.
+ *
+ * Browse only. Search bands nothing and reads an active row's activity like any
+ * other's, so it asks a wider question — see {@link countSearchRowsAwaitingStats}.
+ */
+function isStatsSensitive(project: SearchableProject): boolean {
+  return !project.isActive && !project.isMissing;
+}
+
+/**
+ * How many rows search ranks, and how many of those main has not reported on.
+ *
+ * Wider than {@link isStatsSensitive} on both axes, because search ranks every
+ * row on what it is doing: the active project and the unavailable one included,
+ * and scratches alongside projects (#11466). Gating search on browse's
+ * project-only question would strand a session that has scratches but no
+ * projects — with nothing to ask about it would read as hydrated at once, and
+ * freeze every scratch as quiet for the rest of the session.
+ *
+ * Safe to ask about every row because the bulk pull seeds an entry for each id
+ * it is handed, present or absent, and it is handed both kinds
+ * (`projectAgentCounts`). A row stays unkeyed only if the pull never lands, and
+ * a session that never hydrates simply behaves as it did before any of this —
+ * the same floor browse's regroup has.
+ */
+function countSearchRowsAwaitingStats(
+  projects: SearchableProject[],
+  scratches: SearchableScratch[],
+  stats: ProjectStatusMap
+): { total: number; unkeyed: number } {
+  let unkeyed = 0;
+  for (const project of projects) if (stats[project.id] === undefined) unkeyed += 1;
+  for (const scratch of scratches) if (stats[scratch.id] === undefined) unkeyed += 1;
+  return { total: projects.length + scratches.length, unkeyed };
+}
+
 interface FrozenLayout {
   order: string[];
   sections: Map<string, ProjectSectionKey>;
@@ -378,6 +468,28 @@ interface FrozenLayout {
    * True while this freeze is still a guess: it was taken before any stats
    * reached the view, so every band in it is a placeholder. Cleared by the one
    * regroup that resolves the session.
+   */
+  isProvisional: boolean;
+}
+
+/**
+ * Search's own freeze: what every workspace was asking of the user when the
+ * palette opened, keyed by row id (#11861).
+ *
+ * Separate from {@link FrozenLayout} rather than folded into it, because that
+ * one answers a different question. It holds browse's ORDER and BAND membership
+ * — current/pinned/snoozed policy search has no use for — and it covers projects
+ * only, while search ranks scratches in the same list (#11466).
+ *
+ * What is frozen is the SORT KEY, never the row. The view-models stay live, so a
+ * promoted row's status line keeps counting up while the row itself holds still.
+ */
+interface FrozenSearchActivity {
+  keys: Map<string, SearchActivityKey>;
+  /**
+   * Same meaning as {@link FrozenLayout.isProvisional}, but reached on its own
+   * terms — search asks about a wider set of rows, so a session can be
+   * provisional for one freeze and settled for the other.
    */
   isProvisional: boolean;
 }
@@ -440,22 +552,31 @@ function resortOtherBand(
  *   to the user, which outranks agents that are merely running.
  * - `pinned` sits above `running`: an explicit pin is a stronger signal than
  *   the operational fact that something is executing. A pinned running project
- *   stays in Pinned; its status line still says "Agent running".
+ *   stays in Pinned; its row still prints its running count.
  * - `running` requires live agents. Bare leftover processes are residency, not
  *   intent — those projects fall through to Pinned/Other.
+ *
+ * The assistant joins both ends of that without joining any tally (#11806). A
+ * working assistant is live activity, so it earns Running the same way a
+ * worker does; an assistant that is blocked or has been waiting since before
+ * the user last looked is someone waiting on nobody, so it earns attention. An
+ * assistant merely parked at its prompt earns neither — it still gets a status
+ * line where it lands, exactly as a project with only bare processes does.
  */
 function sectionForProject(project: SearchableProject): ProjectSectionKey {
   if (project.isActive) return "current";
   if (project.isMissing) return "unavailable";
+  const assistant = classifyAssistantActivity(project);
   if (
     project.waitingAgentCount > 0 ||
     project.blockedAgentCount > 0 ||
-    project.unacknowledgedCompletedAgentCount > 0
+    project.unacknowledgedCompletedAgentCount > 0 ||
+    assistantNeedsAttention(assistant)
   ) {
     return "attention";
   }
   if (project.isPinned) return "pinned";
-  if (project.activeAgentCount > 0) return "running";
+  if (project.activeAgentCount > 0 || assistant === "working") return "running";
   // Last stop before the residual band. Below `pinned` and `running` for the
   // same reason a pinned running project stays in Pinned: snooze withdraws a
   // demand, it does not override an explicit pin or the fact that something is
@@ -469,11 +590,58 @@ function sectionForProject(project: SearchableProject): ProjectSectionKey {
  * Severity tier inside the attention band: blocked outranks waiting outranks
  * ready-for-review. Blocked agents may not restart on input; waiting agents
  * are stalled on the user; completed agents are done and can wait their turn.
+ *
+ * An escalated assistant is tiered by the same rule rather than given one of
+ * its own: a blocked assistant is a blocked thing and an unseen wait is a
+ * wait. Without this a project escalated purely by its assistant would fall to
+ * the review tier and sort below completions it has nothing to do with.
+ *
+ * Consulted only once no worker is asking, because the status line resolves
+ * the same contest that way. A row tiered as blocked by its assistant while
+ * its line reads "Agent needs input" would be sorted by a reason it never
+ * states — the row would look mis-ranked, and the explanation would be
+ * invisible.
  */
 function attentionClass(project: SearchableProject): number {
   if (project.blockedAgentCount > 0) return 0;
   if (project.waitingAgentCount > 0) return 1;
+  const assistant = classifyAssistantActivity(project);
+  if (assistant === "blocked") return 0;
+  if (assistant === "waiting-unseen") return 1;
   return 2;
+}
+
+/**
+ * The transition that dates a row's wait, whichever kind of wait it has.
+ *
+ * Assistant-only rows have no `oldestWaitingSince`, so without this they would
+ * all tie at infinity and fall through to an ordering that has nothing to do
+ * with how long anyone has been stuck. A row with both falls to the worker's
+ * clock, matching the tier and the line it will actually show.
+ */
+function waitOrderingSince(project: SearchableProject): number {
+  // Gated on the counts, not on whether a timestamp arrived. A worker wait
+  // whose transition was never recorded is still a worker wait — it is what
+  // the tier and the line both name — so it has to keep the clock even though
+  // it cannot supply one. Reading the timestamp first let such a row borrow the
+  // assistant's, dating it by something it never mentions.
+  if (project.waitingAgentCount > 0 || project.blockedAgentCount > 0) {
+    return project.oldestWaitingSince ?? Number.POSITIVE_INFINITY;
+  }
+  if (!assistantNeedsAttention(classifyAssistantActivity(project))) {
+    return Number.POSITIVE_INFINITY;
+  }
+  return project.assistantStateSince ?? Number.POSITIVE_INFINITY;
+}
+
+/**
+ * The transition that orders a row inside the Running band. Falls back to the
+ * assistant's own so assistant-only rows are ordered by how recently they came
+ * alive, rather than tying at zero and sorting on unrelated recency.
+ */
+function runningOrderingSince(project: SearchableProject): number {
+  if (project.latestWorkingSince !== undefined) return project.latestWorkingSince;
+  return classifyAssistantActivity(project) === "working" ? (project.assistantStateSince ?? 0) : 0;
 }
 
 /**
@@ -514,8 +682,8 @@ function compareWithinSection(
       if (a.blockedAgentCount !== b.blockedAgentCount) {
         return b.blockedAgentCount - a.blockedAgentCount;
       }
-      const aSince = a.oldestWaitingSince ?? Number.POSITIVE_INFINITY;
-      const bSince = b.oldestWaitingSince ?? Number.POSITIVE_INFINITY;
+      const aSince = waitOrderingSince(a);
+      const bSince = waitOrderingSince(b);
       if (aSince !== bSince) return aSince - bSince;
       if (a.waitingAgentCount !== b.waitingAgentCount) {
         return b.waitingAgentCount - a.waitingAgentCount;
@@ -532,8 +700,8 @@ function compareWithinSection(
     if (a.activeAgentCount !== b.activeAgentCount) {
       return b.activeAgentCount - a.activeAgentCount;
     }
-    const aWorking = a.latestWorkingSince ?? 0;
-    const bWorking = b.latestWorkingSince ?? 0;
+    const aWorking = runningOrderingSince(a);
+    const bWorking = runningOrderingSince(b);
     if (aWorking !== bWorking) return bWorking - aWorking;
   } else if (section === "other") {
     // `frecencyScore` is already read-time decayed here (see `searchableProjects`),
@@ -571,16 +739,21 @@ function compareWithinSection(
  * keys off the same signal ({@link UseProjectSwitcherPaletteReturn.isRankedSearch}),
  * so for that frame the scratches are simply still down there — never listed
  * twice, and never briefly absent from both places.
+ *
+ * `activityKeys` is the session's frozen activity snapshot, which search ranks
+ * by within each tier of name-match quality. Browse ignores it: its own freeze
+ * already holds that order.
  */
 function buildResults(
   browseRows: ProjectSwitcherRow[],
   browseOrdered: SearchableProject[],
   scratches: SearchableScratch[],
   rankQuery: string,
-  isSearching: boolean
+  isSearching: boolean,
+  activityKeys: ReadonlyMap<string, SearchActivityKey> | null
 ): ProjectSwitcherRow[] {
   if (isSearching && rankQuery.trim()) {
-    return rankSwitcherMatches(rankQuery, browseOrdered, scratches);
+    return rankSwitcherMatches(rankQuery, browseOrdered, scratches, activityKeys);
   }
   return browseRows;
 }
@@ -618,9 +791,8 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   const [isStoppingProject, setIsStoppingProject] = useState(false);
   const [removeConfirmProject, setRemoveConfirmProject] = useState<SearchableProject | null>(null);
   const [isRemovingProject, setIsRemovingProject] = useState(false);
-  const [freeMemoryConfirmProject, setFreeMemoryConfirmProject] =
-    useState<SearchableProject | null>(null);
-  const [isFreeingMemory, setIsFreeingMemory] = useState(false);
+  const [sleepConfirmProject, setSleepConfirmProject] = useState<SearchableProject | null>(null);
+  const [isSleepingProject, setIsSleepingProject] = useState(false);
   const [saveAsProjectConfirm, setSaveAsProjectConfirm] = useState<{
     scratch: SearchableScratch;
     project: Project;
@@ -648,6 +820,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   const loadProjects = useProjectStore((state) => state.loadProjects);
   const addProjectFn = useProjectStore((state) => state.addProject);
   const closeActiveProject = useProjectStore((state) => state.closeActiveProject);
+  const sleepProjectAction = useProjectStore((state) => state.sleepProject);
   const closeProject = useProjectStore((state) => state.closeProject);
   const removeProject = useProjectStore((state) => state.removeProject);
   const openRelocation = useProjectRelocationStore((state) => state.open);
@@ -726,6 +899,15 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
               ...(entry.nextSnoozeWakeAt !== undefined
                 ? { nextSnoozeWakeAt: entry.nextSnoozeWakeAt }
                 : {}),
+              ...(entry.assistantState !== undefined
+                ? { assistantState: entry.assistantState }
+                : {}),
+              ...(entry.assistantWaitingReason !== undefined
+                ? { assistantWaitingReason: entry.assistantWaitingReason }
+                : {}),
+              ...(entry.assistantStateSince !== undefined
+                ? { assistantStateSince: entry.assistantStateSince }
+                : {}),
               processCount: entry.processCount,
             };
             changed = true;
@@ -772,6 +954,10 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         lastOpened: p.lastOpened ?? 0,
         status: p.status,
         autoParkedAt: p.autoParkedAt,
+        // Passed through as-is. Coercing an absent count to 0 here would turn
+        // "not computed yet" into "restores nothing" — the one distinction the
+        // dot depends on.
+        resumableAgentCount: p.resumableAgentCount,
         isActive,
         isBackground,
         isMissing,
@@ -794,6 +980,9 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         snoozedAgentCount: stats?.snoozedAgentCount ?? 0,
         nextSnoozeWakeAt: stats?.nextSnoozeWakeAt,
         processCount: stats?.processCount ?? 0,
+        assistantState: stats?.assistantState,
+        assistantWaitingReason: stats?.assistantWaitingReason,
+        assistantStateSince: stats?.assistantStateSince,
         displayPath: displayPathById.get(p.id) ?? p.path,
         section: "other",
       };
@@ -873,6 +1062,29 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
       sections: new Map(projects.map((project) => [project.id, project.section])),
       isProvisional,
     }),
+    []
+  );
+
+  // Search's activity keys are frozen for the same reason and over the same
+  // session, but separately: browse's freeze is projects-and-bands, and search
+  // ranks scratches in the same list with no bands at all (#11861).
+  const [frozenSearchActivity, setFrozenSearchActivity] = useState<FrozenSearchActivity | null>(
+    null
+  );
+
+  const captureSearchActivity = useCallback(
+    (
+      projects: SearchableProject[],
+      scratches: SearchableScratch[],
+      isProvisional = false
+    ): FrozenSearchActivity => {
+      const keys = new Map<string, SearchActivityKey>();
+      // Every row, including the active and the missing ones: search has no band
+      // that spares a row from being ranked on what it is doing.
+      for (const project of projects) keys.set(project.id, computeSearchActivityKey(project));
+      for (const scratch of scratches) keys.set(scratch.id, computeSearchActivityKey(scratch));
+      return { keys, isProvisional };
+    },
     []
   );
 
@@ -964,8 +1176,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     // session just behaves as it did before this fix.
     if (frozenLayout.isProvisional) {
       const stillGuessing = liveBrowseOrder.some(
-        (project) =>
-          !project.isActive && !project.isMissing && projectStats[project.id] === undefined
+        (project) => isStatsSensitive(project) && projectStats[project.id] === undefined
       );
       if (!stillGuessing) {
         setFrozenLayout((previous) =>
@@ -1045,6 +1256,9 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         path: s.path,
         createdAt: s.createdAt,
         lastOpened: s.lastOpened,
+        // Passed through as-is, never `?? 0`: coercing an absent count to 0
+        // here would turn "not computed yet" into "restores nothing".
+        resumableAgentCount: s.resumableAgentCount,
         isActive: currentScratch?.id === s.id,
         activeAgentCount: stats?.activeAgentCount ?? 0,
         waitingAgentCount: stats?.waitingAgentCount ?? 0,
@@ -1058,11 +1272,111 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         snoozedAgentCount: stats?.snoozedAgentCount ?? 0,
         nextSnoozeWakeAt: stats?.nextSnoozeWakeAt,
         processCount: stats?.processCount ?? 0,
+        // A scratch can host an assistant too — the session is provisioned
+        // against an opaque workspace id — so it gets the same status line. It
+        // never gets a band: scratches live in the pinned section regardless.
+        assistantState: stats?.assistantState,
+        assistantWaitingReason: stats?.assistantWaitingReason,
+        assistantStateSince: stats?.assistantStateSince,
       };
     });
     list.sort((a, b) => b.lastOpened - a.lastOpened);
     return list;
   }, [scratches, currentScratch?.id, projectStats]);
+
+  // The search freeze's counterpart to the browse regroup above, over search's
+  // own set of rows rather than browse's.
+  //
+  // A provisional snapshot read every row as quiet, which is not an ordering —
+  // it is the absence of one. Once no row search ranks is still a guess it is
+  // recaptured whole, exactly once, and holds from there. A session that opened
+  // before the workspace lists themselves loaded stays provisional through the
+  // arrivals below, so the recapture is still ahead of it: `total === 0` is the
+  // emptiest guess there is, not a settled answer.
+  //
+  // Rows that appear afterwards are folded in at their key of the moment. Until
+  // that lands they rank as quiet rather than as their live counts
+  // (`rankSwitcherMatches`) — so an arrival is seated once at the bottom of its
+  // text tier and once at its real place, and never again. Browse's arrivals
+  // avoid even that because their band-end slot is the same before and after;
+  // search has nowhere equivalent to park one. Reading live counts for the
+  // gap instead would leave that row tracking every push, which is the whole
+  // thing this freeze exists to stop.
+  useEffect(() => {
+    if (!frozenSearchActivity) return;
+
+    if (frozenSearchActivity.isProvisional) {
+      const { total, unkeyed } = countSearchRowsAwaitingStats(
+        searchableProjects,
+        scratchResults,
+        projectStats
+      );
+      // `total > 0` so an empty session waits for its rows instead of resolving
+      // against nothing and locking whatever arrives next in as quiet.
+      if (total > 0 && unkeyed === 0) {
+        setFrozenSearchActivity((previous) =>
+          // Identity, not truthiness: an effect left over from a previous open
+          // session must not recapture this one against stale rows.
+          previous === frozenSearchActivity
+            ? captureSearchActivity(searchableProjects, scratchResults)
+            : previous
+        );
+        return;
+      }
+    }
+
+    const arrivals = [...searchableProjects, ...scratchResults].filter(
+      (row) => !frozenSearchActivity.keys.has(row.id)
+    );
+    if (arrivals.length === 0) return;
+    setFrozenSearchActivity((previous) => {
+      // Identity, for the same reason the recapture above checks it: an updater
+      // queued against a previous open session must not seat its arrivals in
+      // this one. Bailing is free — the snapshot is a dependency, so the effect
+      // fires again against whichever one React actually applied.
+      if (previous !== frozenSearchActivity) return previous;
+      const keys = new Map(previous.keys);
+      let added = false;
+      for (const row of arrivals) {
+        if (keys.has(row.id)) continue;
+        keys.set(row.id, computeSearchActivityKey(row));
+        added = true;
+      }
+      if (!added) return previous;
+      // Spread, so a session still waiting on its first stats stays provisional
+      // and folds this arrival into its pending recapture.
+      return { ...previous, keys };
+    });
+  }, [
+    searchableProjects,
+    scratchResults,
+    projectStats,
+    frozenSearchActivity,
+    captureSearchActivity,
+  ]);
+
+  /**
+   * What is executing across every workspace, for the palette header (#11832).
+   *
+   * Broader than `nonActiveAgentCounts` above in both directions, because the
+   * two answer different questions. That one is the trigger's badge — "is
+   * somewhere else asking for me?" — so it excludes the project on screen. This
+   * one is "is it safe to look away?", which the work in front of you counts
+   * toward as much as the work behind you, and scratches host agents too.
+   *
+   * Assistants are counted, separately. They are not runs the user launched, so
+   * folding them into the agent tally would misreport it — but an assistant
+   * mid-task is a reason the app is not finished with itself.
+   */
+  const fleetLiveness = useMemo(() => {
+    let runningAgentCount = 0;
+    let workingAssistantCount = 0;
+    for (const workspace of [...searchableProjects, ...scratchResults]) {
+      runningAgentCount += workspace.activeAgentCount;
+      if (classifyAssistantActivity(workspace) === "working") workingAssistantCount += 1;
+    }
+    return { runningAgentCount, workingAssistantCount };
+  }, [searchableProjects, scratchResults]);
 
   // Clearing the box reverts to browse immediately rather than holding the
   // deferred ranking for a commit — otherwise browse would flash the stale
@@ -1086,8 +1400,16 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   const isRankedSearch = isSearching && resultsQuery.trim().length > 0;
 
   const results = useMemo<ProjectSwitcherRow[]>(
-    () => buildResults(browseRows, browseOrdered, scratchResults, resultsQuery, isSearching),
-    [browseRows, browseOrdered, scratchResults, resultsQuery, isSearching]
+    () =>
+      buildResults(
+        browseRows,
+        browseOrdered,
+        scratchResults,
+        resultsQuery,
+        isSearching,
+        frozenSearchActivity?.keys ?? null
+      ),
+    [browseRows, browseOrdered, scratchResults, resultsQuery, isSearching, frozenSearchActivity]
   );
 
   // The selected ROW is the state; its index is derived. Tracking an index
@@ -1125,12 +1447,12 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
   }, [removeConfirmProject, searchableProjects]);
 
   useEffect(() => {
-    if (!freeMemoryConfirmProject) return;
-    const stillExists = searchableProjects.some((p) => p.id === freeMemoryConfirmProject.id);
+    if (!sleepConfirmProject) return;
+    const stillExists = searchableProjects.some((p) => p.id === sleepConfirmProject.id);
     if (!stillExists) {
-      setFreeMemoryConfirmProject(null);
+      setSleepConfirmProject(null);
     }
-  }, [freeMemoryConfirmProject, searchableProjects]);
+  }, [sleepConfirmProject, searchableProjects]);
 
   const open = useCallback(
     (nextMode: ProjectSwitcherMode = "modal") => {
@@ -1152,13 +1474,30 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
       // looking at. Active and unavailable rows are banded without stats, so
       // they say nothing about hydration; pinned rows do, since attention
       // outranks a pin.
-      const statsSensitive = liveBrowseOrder.filter(
-        (project) => !project.isActive && !project.isMissing
-      );
+      const statsSensitive = liveBrowseOrder.filter(isStatsSensitive);
       const isProvisional =
         statsSensitive.length > 0 &&
         statsSensitive.every((project) => projectStats[project.id] === undefined);
       setFrozenLayout(captureLayout(liveBrowseOrder, isProvisional));
+      // Its own verdict, over its own rows: search ranks scratches and the
+      // active row too, so browse's answer does not cover the set it froze.
+      const searchRows = countSearchRowsAwaitingStats(
+        searchableProjects,
+        scratchResults,
+        projectStats
+      );
+      setFrozenSearchActivity(
+        captureSearchActivity(
+          searchableProjects,
+          scratchResults,
+          // No rows counts as provisional, unlike browse's check. Loading the
+          // workspace lists is itself async and retried, so a palette opened
+          // during boot can capture nothing at all — and calling that snapshot
+          // settled would let the scratches that arrive a moment later fold in
+          // as quiet with no recapture ever due.
+          searchRows.unkeyed === searchRows.total
+        )
+      );
       // Preselect the first ENABLED row that isn't the project we're already
       // in, so open-then-Enter is a one-two return that never defaults onto an
       // Unavailable row (selecting one opens the relocation dialog — the right
@@ -1174,7 +1513,14 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         liveBrowseOrder[0];
       setSelectedRowId(initial?.id ?? null);
     },
-    [liveBrowseOrder, captureLayout, projectStats]
+    [
+      liveBrowseOrder,
+      captureLayout,
+      projectStats,
+      captureSearchActivity,
+      searchableProjects,
+      scratchResults,
+    ]
   );
 
   const close = useCallback(() => {
@@ -1186,6 +1532,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     setQuery("");
     setSelectedRowId(null);
     setFrozenLayout(null);
+    setFrozenSearchActivity(null);
   }, [mode]);
 
   // Steps the selection by `delta` rows, wrapping. Resolves the current row
@@ -1498,9 +1845,12 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     [searchableProjects, removeConfirmProject]
   );
 
-  const doFreeMemory = useCallback(
+  const doSleepProject = useCallback(
     async (projectId: string) => {
-      const run = () => projectClient.freeMemory(projectId).then(() => loadProjects());
+      // Through the store, not projectClient: sleeping the ACTIVE project also
+      // has to flush pending panel saves before the teardown and drop the window
+      // to the no-project state after it.
+      const run = () => sleepProjectAction(projectId);
       try {
         await run();
       } catch (error) {
@@ -1510,8 +1860,8 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
           } catch (retryError) {
             notify({
               type: "error",
-              title: "Couldn't free memory",
-              message: formatErrorMessage(retryError, "Couldn't free the project's memory"),
+              title: "Couldn't sleep project",
+              message: formatErrorMessage(retryError, "Couldn't put the project to sleep"),
               actions: [{ label: "Try again", variant: "primary", onClick: retry }],
               context: { eventKind: "uiFeedback" },
             });
@@ -1519,60 +1869,57 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
         };
         notify({
           type: "error",
-          title: "Couldn't free memory",
-          message: formatErrorMessage(error, "Couldn't free the project's memory"),
+          title: "Couldn't sleep project",
+          message: formatErrorMessage(error, "Couldn't put the project to sleep"),
           actions: [{ label: "Try again", variant: "primary", onClick: retry }],
           context: { eventKind: "uiFeedback" },
         });
       }
     },
-    [loadProjects]
+    [sleepProjectAction]
   );
 
-  const freeMemoryProject = useCallback(
+  const sleepProject = useCallback(
     async (projectId: string) => {
       const project = searchableProjects.find((p) => p.id === projectId);
       if (!project) return;
-
-      // The active project can't free its own renderer/host — surface the
-      // same guidance the backend guard enforces instead of a silent no-op.
-      if (project.isActive) {
-        notify({
-          type: "info",
-          title: "Switch away first",
-          message: "Switch to another project to free this one's memory.",
-          context: { eventKind: "uiFeedback" },
-        });
-        return;
-      }
 
       close();
 
       const hasProcesses =
         project.processCount > 0 || project.activeAgentCount > 0 || project.waitingAgentCount > 0;
 
-      // D1 (confirm) when live processes would be stopped; D0 (immediate) when
-      // there's nothing running to interrupt. The snapshot freezes the counts.
-      if (hasProcesses) {
-        setFreeMemoryConfirmProject(project);
+      // D1 (confirm) when live processes would be stopped, or when the target is
+      // the project on screen here — that tears down what the user is looking
+      // at. D0 (immediate) for a background project with nothing running to
+      // interrupt. The snapshot freezes the counts the dialog previews.
+      //
+      // `isActive` only covers THIS window, and no cross-window signal is
+      // available here: the persisted `status` is a singleton keyed to the
+      // last-switched project, so "active" doesn't mean "open in some window".
+      // A project open in ANOTHER window can therefore be slept without a
+      // confirm — bounded harm, since nothing is running in that case and the
+      // other window is told what happened (`useSleptProjectTransition`).
+      if (hasProcesses || project.isActive) {
+        setSleepConfirmProject(project);
       } else {
-        await doFreeMemory(projectId);
+        await doSleepProject(projectId);
       }
     },
-    [searchableProjects, close, doFreeMemory]
+    [searchableProjects, close, doSleepProject]
   );
 
-  const confirmFreeMemory = useCallback(async () => {
-    if (!freeMemoryConfirmProject || isFreeingMemory) return;
-    setIsFreeingMemory(true);
-    const capturedId = freeMemoryConfirmProject.id;
+  const confirmSleep = useCallback(async () => {
+    if (!sleepConfirmProject || isSleepingProject) return;
+    setIsSleepingProject(true);
+    const capturedId = sleepConfirmProject.id;
     try {
-      await doFreeMemory(capturedId);
-      setFreeMemoryConfirmProject(null);
+      await doSleepProject(capturedId);
+      setSleepConfirmProject(null);
     } finally {
-      setIsFreeingMemory(false);
+      setIsSleepingProject(false);
     }
-  }, [freeMemoryConfirmProject, isFreeingMemory, doFreeMemory]);
+  }, [sleepConfirmProject, isSleepingProject, doSleepProject]);
 
   const createScratch = useCallback(
     async (name?: string) => {
@@ -1987,7 +2334,7 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     cloneRepo,
     stopProject,
     removeProject: removeProjectFromList,
-    freeMemoryProject,
+    sleepProject,
     locateProject,
     moveOrRenameProject,
     togglePinProject,
@@ -2000,12 +2347,13 @@ export function useProjectSwitcherPalette(): UseProjectSwitcherPaletteReturn {
     setRemoveConfirmProject,
     confirmRemoveProject,
     isRemovingProject,
-    freeMemoryConfirmProject,
-    setFreeMemoryConfirmProject,
-    confirmFreeMemory,
-    isFreeingMemory,
+    sleepConfirmProject,
+    setSleepConfirmProject,
+    confirmSleep,
+    isSleepingProject,
     backgroundWaitingCount,
     nonActiveAgentCounts,
+    fleetLiveness,
     scratchResults,
     createScratch,
     selectScratch,

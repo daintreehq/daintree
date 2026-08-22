@@ -1879,6 +1879,37 @@ body,
   border-bottom-color: var(--border-overlay);
 }
 
+/* Lone-pane focus state (#11837) — a single-pane grid has no sibling to
+   contrast against, so it carries no selection chrome at all and reads the
+   same whether the pane or the Daintree Assistant owns the keystrokes.
+
+   Deliberately NOT built from the same properties as `.terminal-selected`.
+   A pane root's border-color and box-shadow are already spoken for by the
+   agent-state borders, their `.light` overrides further down, and the
+   dictation lock — all single-class rules that land later and replace both
+   outright. `.terminal-selected` survives that because its surface-lift fill
+   remains, but this cue has no fill by design (the fill is what made an
+   always-lit lone pane too heavy when the guard was removed outright in
+   #7544). So the cue is anchored on `outline`, which nothing else on the
+   pane claims: it composes with whatever state owns the border instead of
+   fighting it, and a negative offset keeps it inside the border box so no
+   ancestor's paint containment can clip it. The border ink is still set for
+   the common uncontested case, where the two read as one 2px focus edge.
+   Applied only while the Assistant is open, so a bare lone pane stays the
+   default otherwise. */
+.terminal-selected-quiet {
+  border-color: var(
+    --panel-focus-border,
+    color-mix(in oklab, var(--theme-border-strong) 92%, var(--theme-text-primary))
+  );
+  outline: 1px solid
+    var(
+      --panel-focus-border,
+      color-mix(in oklab, var(--theme-border-strong) 92%, var(--theme-text-primary))
+    );
+  outline-offset: -1px;
+}
+
 /* Daintree Assistant focus state — anchors the active-surface affordance on
    the aside edge (border-left + 1px rings) while the surface-lift fill lives
    on the header only (`HelpPanelHeader` uses `bg-overlay-subtle` when
@@ -1895,6 +1926,54 @@ body,
     inset 0 0 0 1px var(--theme-overlay-soft),
     0 0 0 1px var(--theme-overlay-strong)
   );
+}
+
+/* Third-party brand marks (agent and product logos). These carry vendor hexes
+   from `AgentConfig.color`, not theme tokens, so they sit outside the semantic
+   palette entirely. `BrandMark.tsx` resolves both inks against the backdrop the
+   mark is actually painted on and publishes them here: at rest the brand colour
+   one perceptual step back, and the brand colour itself once the mark is active
+   — hovered, keyboard-focused, in a selected tab, or in a focused panel.
+
+   Unlayered on purpose — a Tailwind `text-*` utility on the same glyph sits in
+   `@layer utilities` and would otherwise win, repainting a mark the resolver
+   just contrast-checked. */
+.brand-mark {
+  color: var(--brand-mark-rest);
+  transition: color var(--duration-150) ease-out;
+}
+
+/* `:focus-visible` is the keyboard equivalent of each hover selector above —
+   restoring on hover alone strands keyboard users at the resting tint with no
+   way to reach the brand colour. `:focus-visible > .brand-mark` covers a mark
+   whose focusable ancestor is not one of these roles, and the selected-option
+   rule covers a listbox row the keyboard has landed on without the row itself
+   taking focus. `label` is here because the onboarding agent rows wrap their
+   checkbox in one, and `:focus-within` is that row's keyboard state: focus
+   lands on the input inside, never on the label.
+
+   Selection is the third way in, and it is not transient: the selected tab and
+   the focused panel's title bar hold the brand colour for as long as they are
+   the ones you are working in. `[data-brand-active]` is what a container sets
+   when its own notion of "active" is neither hover nor a standard ARIA
+   selection — a focused panel header being the case that asked for it. */
+a:hover .brand-mark,
+button:hover .brand-mark,
+label:hover .brand-mark,
+[role="option"]:hover .brand-mark,
+[role="menuitem"]:hover .brand-mark,
+[role="tab"]:hover .brand-mark,
+a:focus-visible .brand-mark,
+button:focus-visible .brand-mark,
+label:focus-within .brand-mark,
+[role="option"]:focus-visible .brand-mark,
+[role="menuitem"]:focus-visible .brand-mark,
+[role="tab"]:focus-visible .brand-mark,
+[role="option"][aria-selected="true"] .brand-mark,
+[role="tab"][aria-selected="true"] .brand-mark,
+[data-brand-active] .brand-mark,
+:focus-visible > .brand-mark {
+  color: var(--brand-mark-active);
 }
 
 /* Panel Agent State Borders — grid panel container state-driven styling */
@@ -2497,6 +2576,8 @@ body[data-performance-mode="true"] .settings-section-header {
 }
 
 /* Disable terminal glow in performance mode */
+/* `.terminal-selected-quiet` is absent on purpose: it carries no box-shadow
+   to simplify, and its outline is a 1px hairline with no glow to strip. */
 body[data-performance-mode="true"] .terminal-selected,
 body[data-performance-mode="true"] .terminal-focused,
 body[data-performance-mode="true"] .assistant-focused {
@@ -2573,6 +2654,19 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     border-color: Highlight;
     outline: 2px solid Highlight;
     outline-offset: -2px;
+  }
+
+  /* Must come after every rule above that also outlines the pane. Forced
+     colors collapses this palette to a handful of system colors, so a lone
+     focused pane that is also locked or waiting would otherwise carry the
+     identical solid Highlight outline as the same pane with the Assistant
+     focused. Stroke style is one of the few things the UA leaves alone, so
+     the focus cue is dashed and the states stay solid — the distinction
+     survives where colour cannot carry it. */
+  .terminal-selected-quiet {
+    outline: 2px dashed Highlight;
+    outline-offset: -2px;
+    border-color: Highlight;
   }
 
   .terminal-pane {
@@ -2660,6 +2754,24 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     background-color: CanvasText !important;
   }
 
+  /* Project-switcher row marks. The solid states are a CSS background, which
+     forced colors pushes toward Canvas, so the whole 8px slot would read as
+     empty. Repaint them as a CanvasText disc: hue is gone here either way, and
+     the row's own line states both counts in words, so all this has to preserve
+     is that the row is marked at all. */
+  div.workspace-mark {
+    background-color: CanvasText !important;
+    border-color: CanvasText;
+  }
+
+  /* The two-tone mark is an SVG, so it needs its fills forced rather than its
+     background. Both shapes collapse to one CanvasText disc: the split cannot
+     survive a palette with no second colour to carry it. */
+  svg.workspace-mark circle,
+  svg.workspace-mark path {
+    fill: CanvasText;
+  }
+
   /* SettingsSwitch (Radix Switch). The track's unchecked border is already
      covered by the global button/[role="button"] rule above. Add the checked
      fill plus thumb contrast so on/off is distinguishable beyond thumb position.
@@ -2732,8 +2844,16 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
  * system-color repaint). */
 @media (prefers-contrast: more) {
   .terminal-selected,
+  .terminal-selected-quiet,
   .terminal-focused {
     border-width: 2px;
+  }
+
+  /* Track the widened border so the cue's hairline stays inside it rather
+     than painting on top of it. */
+  .terminal-selected-quiet {
+    outline-width: 2px;
+    outline-offset: -2px;
   }
 
   .assistant-focused {

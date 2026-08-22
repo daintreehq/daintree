@@ -68,6 +68,21 @@ describe("SortableDockItem", () => {
     expect(getByTestId("child")).toBeTruthy();
   });
 
+  it("tags the listitem with the panel id it sorts on", () => {
+    // The rail's rendered order is only observable through this attribute. The
+    // offscreen `[data-panel-id]` containers mirror `panelIds` directly, so they
+    // stayed correct while the rail painted a stale order — which is how #11873
+    // went unnoticed by the dock-reorder E2E.
+    mockState = { isDragging: false };
+    const { container } = render(
+      <SortableDockItem terminal={terminal} sourceIndex={0}>
+        <div />
+      </SortableDockItem>
+    );
+    const item = container.querySelector('[role="listitem"]');
+    expect(item?.getAttribute("data-dock-item-id")).toBe(terminal.id);
+  });
+
   it("does not render role=button on the outer m.div (stripped from dnd-kit attributes)", () => {
     mockState = { isDragging: false };
     const { container } = render(

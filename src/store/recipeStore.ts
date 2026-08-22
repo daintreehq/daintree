@@ -1,5 +1,7 @@
 import { create, type StateCreator } from "zustand";
 import type { TerminalRecipe, RecipeTerminal, RecipeTerminalType } from "@/types";
+import { isPluginRecipe } from "@shared/types/project";
+import type { PluginRecipeMetadataPatch } from "@shared/types/project";
 import { usePanelStore } from "./panelStore";
 import { preflightSpawnBatchLimit } from "./panelLimitStore";
 import { countPanelsTowardLimit } from "./slices/panelRegistry/panelCount";
@@ -11,7 +13,13 @@ import {
   type DevPreviewPanelData,
   type PtyPanelData,
 } from "@shared/types/panel";
-import { projectClient, agentSettingsClient, systemClient, globalRecipesClient } from "@/clients";
+import {
+  projectClient,
+  agentSettingsClient,
+  systemClient,
+  globalRecipesClient,
+  pluginRecipesClient,
+} from "@/clients";
 import { getAgentConfig, getMergedPreset } from "@/config/agents";
 import {
   generateAgentCommand,
@@ -26,6 +34,7 @@ import {
 import { useCcrPresetsStore } from "@/store/ccrPresetsStore";
 import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { replaceRecipeVariables, type RecipeContext } from "@/utils/recipeVariables";
+import { sanitizeTerminalName } from "@/utils/agentLaunchValidation";
 import { sanitizeRecipeTerminals, MAX_TERMINALS_PER_RECIPE } from "@shared/utils/recipeSanitizer";
 import type { ActionSource } from "@shared/types/actions";
 import type { AgentCliDetail } from "@shared/types/ipc";
@@ -79,6 +88,12 @@ function isAgentRecipeType(type: RecipeTerminalType): boolean {
 // Recipes read from disk may still contain agentModelId/agentLaunchFlags/location
 // if they were written by an older build before those fields were stripped on
 // persist. Treat them as session-only state and drop them at load time.
+//
+// `origin` is dropped for a different reason: this runs over the three
+// USER-OWNED tiers, whose files a user can hand-edit and whose schema is
+// `.passthrough()`. An `origin` present there is a forgery — only the plugin
+// registry stamps real provenance — and honouring it would route that recipe's
+// writes into the plugin sidecar and make it undeletable (#11860).
 function stripSessionOverridesFromRecipe(recipe: TerminalRecipe): TerminalRecipe {
   let changed = false;
   const terminals = recipe.terminals.map((terminal) => {
@@ -93,9 +108,9 @@ function stripSessionOverridesFromRecipe(recipe: TerminalRecipe): TerminalRecipe
     const { agentModelId: _m, agentLaunchFlags: _f, location: _l, ...rest } = terminal;
     return rest;
   });
-  if (recipe.shadowedBy !== undefined) {
-    const { shadowedBy: _s, ...rest } = recipe;
-    return changed ? { ...rest, terminals } : rest;
+  if (recipe.shadowedBy !== undefined || recipe.origin !== undefined) {
+    const { shadowedBy: _s, origin: _o, ...rest } = recipe;
+    return { ...rest, ...(changed ? { terminals } : {}) };
   }
   return changed ? { ...recipe, terminals } : recipe;
 }
@@ -147,7 +162,10 @@ function terminalToRecipeTerminal(terminal: PtyPanelData | DevPreviewPanelData):
 
   return {
     type,
-    title: terminal.title || undefined,
+    // Derived titles are runtime identity, not a name the author chose — capturing
+    // one would pin it on spawn and freeze the pane out of promotion (#11872).
+    title:
+      (terminal.titleMode ?? "default") === "default" ? undefined : terminal.title || undefined,
     command: terminal.command || undefined,
     devCommand: undefined,
     env: {},
@@ -163,10 +181,19 @@ interface RecipeState {
   globalRecipes: TerminalRecipe[];
   projectRecipes: TerminalRecipe[];
   inRepoRecipes: TerminalRecipe[];
+  /**
+   * Plugin-contributed recipes (#11860). Owned entirely by `usePluginRecipes`
+   * (pull-on-mount plus an authoritative push), NOT by {@link loadRecipes}:
+   * they are project-independent, so folding them into the per-project load
+   * would race a broadcast for no benefit and clear them on every switch.
+   */
+  pluginRecipes: TerminalRecipe[];
   isLoading: boolean;
   currentProjectId: string | null;
 
   loadRecipes: (projectId: string) => Promise<void>;
+  /** Replace the plugin tier wholesale from main's authoritative snapshot. */
+  setPluginRecipes: (recipes: TerminalRecipe[]) => void;
   exportRecipeToFile: (id: string) => Promise<boolean>;
   importRecipeFromFile: (projectId: string | undefined) => Promise<boolean>;
   createRecipe: (
@@ -227,10 +254,19 @@ export const MAX_AGENT_RECIPE_TERMINALS = 3;
 
 let loadRecipesRequestId = 0;
 
+/**
+ * Flatten the four recipe tiers into the list the UI renders.
+ *
+ * `pluginRecipes` is REQUIRED and deliberately has no default: a default would
+ * let any one of the dozen mutation sites silently drop every plugin recipe
+ * from the merged view by forgetting to pass it, whereas an omission is now a
+ * compile error (#11860).
+ */
 function mergeRecipes(
   globalRecipes: TerminalRecipe[],
   projectRecipes: TerminalRecipe[],
-  inRepoRecipes: TerminalRecipe[] = []
+  inRepoRecipes: TerminalRecipe[],
+  pluginRecipes: TerminalRecipe[]
 ): TerminalRecipe[] {
   // Project-local recipes that share a name with an in-repo recipe are kept but
   // marked as shadowed so the UI can surface them dimmed instead of hiding them.
@@ -256,7 +292,11 @@ function mergeRecipes(
     const { shadowedBy: _shadowedBy, ...displayRecipe } = mirror;
     return displayRecipe;
   });
-  return [...globalRecipes, ...projectWithMarkers, ...inRepoWithMirrors];
+  // Plugin recipes sit with the other always-available entries and take no part
+  // in name shadowing: their ids are plugin-qualified, so identity is exact and
+  // a user recipe that happens to share a display name is a different recipe,
+  // not an override of one.
+  return [...globalRecipes, ...pluginRecipes, ...projectWithMarkers, ...inRepoWithMirrors];
 }
 
 const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
@@ -264,8 +304,21 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
   globalRecipes: [],
   projectRecipes: [],
   inRepoRecipes: [],
+  pluginRecipes: [],
   isLoading: false,
   currentProjectId: null,
+
+  setPluginRecipes: (pluginRecipes) => {
+    set((state) => ({
+      pluginRecipes,
+      recipes: mergeRecipes(
+        state.globalRecipes,
+        state.projectRecipes,
+        state.inRepoRecipes,
+        pluginRecipes
+      ),
+    }));
+  },
 
   loadRecipes: async (projectId: string) => {
     const requestId = ++loadRecipesRequestId;
@@ -274,8 +327,16 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     set({
       isLoading: true,
       currentProjectId: projectId,
+      // The plugin tier is intentionally absent from this reset: it is global,
+      // owned by the plugin hook, and re-fetching it per project switch would
+      // make every switch flash plugin recipes out of the list (#11860).
       ...(clearRecipes
-        ? { recipes: [], globalRecipes: [], projectRecipes: [], inRepoRecipes: [] }
+        ? {
+            recipes: mergeRecipes([], [], [], get().pluginRecipes),
+            globalRecipes: [],
+            projectRecipes: [],
+            inRepoRecipes: [],
+          }
         : {}),
     });
     try {
@@ -313,7 +374,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         globalRecipes,
         projectRecipes,
         inRepoRecipes,
-        recipes: mergeRecipes(globalRecipes, projectRecipes, inRepoRecipes),
+        recipes: mergeRecipes(globalRecipes, projectRecipes, inRepoRecipes, get().pluginRecipes),
         isLoading: false,
       });
       // A recipe couldn't be promoted to the shared repo because a different
@@ -342,7 +403,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       }
       logError("Failed to load recipes", error);
       set({
-        recipes: [],
+        recipes: mergeRecipes([], [], [], get().pluginRecipes),
         globalRecipes: [],
         projectRecipes: [],
         inRepoRecipes: [],
@@ -388,7 +449,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       globalRecipes: nextGlobal,
       projectRecipes: prevProject,
       inRepoRecipes: nextInRepo,
-      recipes: mergeRecipes(nextGlobal, prevProject, nextInRepo),
+      recipes: mergeRecipes(nextGlobal, prevProject, nextInRepo, get().pluginRecipes),
     });
 
     try {
@@ -403,7 +464,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         globalRecipes: prevGlobal,
         projectRecipes: prevProject,
         inRepoRecipes: prevInRepo,
-        recipes: mergeRecipes(prevGlobal, prevProject, prevInRepo),
+        recipes: mergeRecipes(prevGlobal, prevProject, prevInRepo, get().pluginRecipes),
       });
       throw error;
     }
@@ -426,6 +487,65 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     }
 
     const recipe = recipes[index]!;
+
+    // Provenance is resolved BEFORE the `projectId === undefined` inference
+    // below. A plugin recipe also carries no projectId, so without this it
+    // would read as global and its writes would land in GlobalFileStore's
+    // recipes.json — creating a user-owned ghost of a recipe the plugin still
+    // owns (#11860).
+    if (isPluginRecipe(recipe)) {
+      const patch: PluginRecipeMetadataPatch = {};
+      for (const key of Object.keys(updates)) {
+        // Frecency has its own atomic main-process path (`recordUse`), which
+        // appends against the freshest on-disk history rather than accepting a
+        // whole array a second window may already have superseded. Drop it here
+        // rather than rejecting: `runRecipeWithResults` routes it directly.
+        if (key === "lastUsedAt" || key === "usageHistory") continue;
+        // A key present with an `undefined` value means "clear the override" —
+        // `in`-style key presence, not value truthiness, is what separates that
+        // from "not part of this patch".
+        if (key === "showInEmptyState") {
+          patch.showInEmptyState = updates.showInEmptyState ?? null;
+          continue;
+        }
+        if (key === "autoAssign") {
+          patch.autoAssign = updates.autoAssign ?? null;
+          continue;
+        }
+        throw new Error(
+          `"${recipe.name}" is provided by the ${recipe.origin.pluginId} plugin and can't be edited. Save it to the repo to make an editable copy.`
+        );
+      }
+      if (Object.keys(patch).length === 0) return;
+
+      const applyPatch = (target: TerminalRecipe): TerminalRecipe => {
+        const next = { ...target };
+        if (patch.showInEmptyState !== undefined) {
+          if (patch.showInEmptyState === null) delete next.showInEmptyState;
+          else next.showInEmptyState = patch.showInEmptyState;
+        }
+        if (patch.autoAssign !== undefined) {
+          if (patch.autoAssign === null) delete next.autoAssign;
+          else next.autoAssign = patch.autoAssign;
+        }
+        return next;
+      };
+
+      const prevPlugin = get().pluginRecipes;
+      get().setPluginRecipes(prevPlugin.map((r) => (r.id === id ? applyPatch(r) : r)));
+      try {
+        const persisted = await pluginRecipesClient.updateMetadata(id, patch);
+        get().setPluginRecipes(get().pluginRecipes.map((r) => (r.id === id ? persisted : r)));
+      } catch (error) {
+        // A preference edit is an explicit user action, so it rolls back and
+        // surfaces — unlike a frecency stamp, which fails silently.
+        get().setPluginRecipes(prevPlugin);
+        logError("Failed to persist plugin recipe preference", error);
+        throw error;
+      }
+      return;
+    }
+
     const isInRepo = isInRepoRecipeId(recipe);
     const isGlobal = !isInRepo && recipe.projectId === undefined;
     const sanitizedTerminals = updates.terminals?.map(sanitizeRecipeTerminal);
@@ -465,7 +585,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       globalRecipes: nextGlobal,
       projectRecipes: nextProject,
       inRepoRecipes: nextInRepo,
-      recipes: mergeRecipes(nextGlobal, nextProject, nextInRepo),
+      recipes: mergeRecipes(nextGlobal, nextProject, nextInRepo, get().pluginRecipes),
     });
 
     try {
@@ -510,7 +630,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         globalRecipes: prevGlobal,
         projectRecipes: prevProject,
         inRepoRecipes: prevInRepo,
-        recipes: mergeRecipes(prevGlobal, prevProject, prevInRepo),
+        recipes: mergeRecipes(prevGlobal, prevProject, prevInRepo, get().pluginRecipes),
       });
       if (isInRepo && isClientAppError(error) && error.code === "RECIPE_STALE_CONFLICT") {
         const projectId = get().currentProjectId;
@@ -539,7 +659,12 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
             set({
               inRepoRecipes: refreshedInRepo,
               projectRecipes: refreshedProject,
-              recipes: mergeRecipes(get().globalRecipes, refreshedProject, refreshedInRepo),
+              recipes: mergeRecipes(
+                get().globalRecipes,
+                refreshedProject,
+                refreshedInRepo,
+                get().pluginRecipes
+              ),
             });
             return;
           } catch (retryError) {
@@ -566,6 +691,11 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     if (!recipe) {
       throw new Error(`Recipe ${id} not found`);
     }
+    if (isPluginRecipe(recipe)) {
+      throw new Error(
+        `"${recipe.name}" is provided by the ${recipe.origin.pluginId} plugin. Disable or uninstall the plugin to remove it.`
+      );
+    }
 
     const isInRepo = isInRepoRecipeId(recipe);
     const isGlobal = !isInRepo && recipe.projectId === undefined;
@@ -580,7 +710,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       globalRecipes: nextGlobal,
       projectRecipes: nextProject,
       inRepoRecipes: nextInRepo,
-      recipes: mergeRecipes(nextGlobal, nextProject, nextInRepo),
+      recipes: mergeRecipes(nextGlobal, nextProject, nextInRepo, get().pluginRecipes),
     });
 
     try {
@@ -599,13 +729,13 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         globalRecipes: prevGlobal,
         projectRecipes: prevProject,
         inRepoRecipes: prevInRepo,
-        recipes: mergeRecipes(prevGlobal, prevProject, prevInRepo),
+        recipes: mergeRecipes(prevGlobal, prevProject, prevInRepo, get().pluginRecipes),
       });
       throw error;
     }
   },
 
-  saveToRepo: async (recipeId, deleteOriginal = false) => {
+  saveToRepo: async (recipeId, requestedDeleteOriginal = false) => {
     const recipe = get().recipes.find((r) => r.id === recipeId);
     if (!recipe) throw new Error(`Recipe ${recipeId} not found`);
     if (isInRepoRecipeId(recipe)) throw new Error("Recipe is already in-repo");
@@ -613,8 +743,21 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     const currentProjectId = get().currentProjectId;
     if (!currentProjectId) throw new Error("No current project");
 
-    const isGlobal = recipe.projectId === undefined;
-    const { projectId: _, worktreeId: _w, shadowedBy: _s, ...rest } = recipe;
+    // Promoting a plugin recipe is the sanctioned way to customise one: it
+    // duplicates the content into a user-owned tier. `origin` is dropped so the
+    // copy is genuinely user-owned, and the original is never deleted — the
+    // plugin still owns it (#11860).
+    const fromPlugin = isPluginRecipe(recipe);
+    const isGlobal = !fromPlugin && recipe.projectId === undefined;
+    const {
+      projectId: _,
+      worktreeId: _w,
+      shadowedBy: _s,
+      origin: _o,
+      lastUsedAt: priorLastUsedAt,
+      usageHistory: priorUsageHistory,
+      ...rest
+    } = recipe;
     // Reuse the id of an existing in-repo recipe that maps to the same on-disk
     // filename so a repeat promotion is an idempotent update rather than a
     // duplicate or an on-disk stale conflict. Compare by filename slug, not the
@@ -626,9 +769,18 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     )?.id;
     const promoted: TerminalRecipe = {
       ...rest,
+      // Frecency carries over for a user recipe (same recipe, new home) but not
+      // for a plugin one: the copy is a NEW recipe whose usage history belongs
+      // to the plugin-owned original, which keeps its own in the sidecar.
+      ...(fromPlugin ? {} : { lastUsedAt: priorLastUsedAt, usageHistory: priorUsageHistory }),
       id: existingInRepoId ?? `recipe-${crypto.randomUUID()}`,
       scope: "inrepo",
     };
+
+    // A plugin recipe's "original" lives in the plugin's manifest — there is
+    // nothing here to delete, and honouring the flag would throw from
+    // deleteRecipe after the in-repo write already succeeded.
+    const deleteOriginal = requestedDeleteOriginal && !fromPlugin;
 
     const prevGlobal = get().globalRecipes;
     const prevProject = get().projectRecipes;
@@ -644,7 +796,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       globalRecipes: nextGlobal,
       projectRecipes: nextProject,
       inRepoRecipes: nextInRepo,
-      recipes: mergeRecipes(nextGlobal, nextProject, nextInRepo),
+      recipes: mergeRecipes(nextGlobal, nextProject, nextInRepo, get().pluginRecipes),
     });
 
     try {
@@ -655,7 +807,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         globalRecipes: prevGlobal,
         projectRecipes: prevProject,
         inRepoRecipes: prevInRepo,
-        recipes: mergeRecipes(prevGlobal, prevProject, prevInRepo),
+        recipes: mergeRecipes(prevGlobal, prevProject, prevInRepo, get().pluginRecipes),
       });
       throw error;
     }
@@ -674,7 +826,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
           globalRecipes: prevGlobal,
           projectRecipes: prevProject,
           inRepoRecipes: nextInRepo,
-          recipes: mergeRecipes(prevGlobal, prevProject, nextInRepo),
+          recipes: mergeRecipes(prevGlobal, prevProject, nextInRepo, get().pluginRecipes),
         });
         throw error;
       }
@@ -734,13 +886,22 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         globalRecipes: apply(state.globalRecipes),
         projectRecipes: apply(state.projectRecipes),
         inRepoRecipes: apply(state.inRepoRecipes),
+        pluginRecipes: apply(state.pluginRecipes),
         recipes: apply(state.recipes),
       };
     });
-    // Persist using the freshest snapshot so any racing run's contribution is
-    // preserved in the persisted history rather than clobbered.
+    // Persist against the RESOLVED winner — `getRecipeById` can hand back a
+    // different recipe than the id asked for — and route on its provenance.
     const persistSnapshot = get().recipes.find((r) => r.id === resolvedId);
-    if (persistSnapshot) {
+    if (persistSnapshot && isPluginRecipe(persistSnapshot)) {
+      // A plugin recipe has no writable user-tier file. Send only the timestamp
+      // and let main append it atomically, so two windows running the same
+      // recipe can't overwrite each other with their own stale history array.
+      // Best-effort: a lost frecency stamp must never fail a spawn (#11860).
+      void pluginRecipesClient.recordUse(resolvedId, now).catch((error: unknown) => {
+        logError("Failed to record plugin recipe usage", error);
+      });
+    } else if (persistSnapshot) {
       get()
         .updateRecipe(resolvedId, {
           lastUsedAt: persistSnapshot.lastUsedAt,
@@ -872,6 +1033,25 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
             });
           }
 
+          // A recipe that names its panes owns those names: pin them as
+          // "custom" so agent detection can't rewrite them on promotion or
+          // demote them on exit. Recipes are how a fleet gets launched and
+          // role titles (TEAMLEAD, DEV1...) are how its panes are told apart,
+          // so losing them defeats the point of naming (#11872). Mirrors the
+          // caller-name pin `agent.launch` has had since #10439.
+          //
+          // Sanitizing drives the predicate only — `title:` still passes the
+          // raw string so the pane matches what the recipe editor shows. The
+          // recipe sanitizer keeps titles verbatim (unlike command/args), so
+          // a whitespace- or C0/DEL-only title would pass plain truthiness;
+          // `sanitizeTerminalName` returns "" for those, leaving them
+          // unpinned and eligible for the derived title as before. Derived
+          // per terminal, never hoisted above the map: one pane's title must
+          // not decide another's pin (#10794).
+          const titlePin = sanitizeTerminalName(terminal.title ?? "")
+            ? { titleMode: "custom" as const }
+            : {};
+
           if (isAgentRecipeType(terminal.type)) {
             const agentId = terminal.type as string;
             const agentConfig = getAgentConfig(agentId);
@@ -976,6 +1156,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
               launchAgentId: agentId,
               command,
               title: terminal.title,
+              ...titlePin,
               cwd: worktreePath,
               worktreeId: worktreeId,
               agentLaunchFlags,
@@ -994,6 +1175,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
           return terminalStore.addPanel({
             kind: "terminal",
             title: terminal.title,
+            ...titlePin,
             cwd: worktreePath,
             command: terminal.command?.trim() || "",
             worktreeId: worktreeId,
@@ -1082,15 +1264,22 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     if (!recipe) {
       return null;
     }
-    // Export without projectId and shadowedBy - they are assigned/derived on import
-    const { projectId: _projectId, shadowedBy: _shadowedBy, ...exportableRecipe } = recipe;
+    // Export without projectId, shadowedBy, or origin — the first two are
+    // assigned/derived on import, and re-importing a plugin recipe must produce
+    // a plain user-owned copy rather than a forged plugin recipe (#11860).
+    const {
+      projectId: _projectId,
+      shadowedBy: _shadowedBy,
+      origin: _origin,
+      ...exportableRecipe
+    } = recipe;
     return JSON.stringify(exportableRecipe, null, 2);
   },
 
   exportRecipeToFile: async (id) => {
     const recipe = get().getRecipeById(id);
     if (!recipe) return false;
-    const { projectId: _p, shadowedBy: _s, ...exportable } = recipe;
+    const { projectId: _p, shadowedBy: _s, origin: _o, ...exportable } = recipe;
     const json = JSON.stringify(exportable, null, 2);
     return projectClient.exportRecipeToFile(recipe.name, json);
   },
@@ -1158,7 +1347,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       globalRecipes: nextGlobal,
       projectRecipes: prevProject,
       inRepoRecipes: nextInRepo,
-      recipes: mergeRecipes(nextGlobal, prevProject, nextInRepo),
+      recipes: mergeRecipes(nextGlobal, prevProject, nextInRepo, get().pluginRecipes),
     });
 
     try {
@@ -1173,7 +1362,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
         globalRecipes: prevGlobal,
         projectRecipes: prevProject,
         inRepoRecipes: prevInRepo,
-        recipes: mergeRecipes(prevGlobal, prevProject, prevInRepo),
+        recipes: mergeRecipes(prevGlobal, prevProject, prevInRepo, get().pluginRecipes),
       });
       throw _error;
     }
@@ -1202,6 +1391,7 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
       globalRecipes: [],
       projectRecipes: [],
       inRepoRecipes: [],
+      pluginRecipes: [],
       isLoading: false,
       currentProjectId: null,
     }),

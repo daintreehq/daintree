@@ -16,6 +16,7 @@ function intent(overrides: Partial<PluginArchiveInstallIntent> = {}): PluginArch
       category: "other",
       authors: [],
       capabilities: [],
+      recipes: { count: 0, names: [] },
     },
     ...overrides,
   };

@@ -11,7 +11,7 @@ import type { PluginWorktreeLinked } from "@shared/types/plugin";
 import {
   useWorktreeSelectionStore,
   getDeletedWorktreeTerminalIds,
-  getPinnedDeletedWorktreeAnchorId,
+  createDeletedWorktreeRecord,
 } from "@/store/worktreeStore";
 import { usePanelStore } from "@/store/panelStore";
 import { startDeletedWorktreeCleanup } from "@/store/deletedWorktreeCleanup";
@@ -31,6 +31,21 @@ import { actionService } from "@/services/ActionService";
 // 90s host safety net usually reconciles first; this only fires when recovery
 // genuinely stalls, per the CLAUDE.md runtime-signals promote-trigger.
 const TOPOLOGY_DARK_ESCALATION_MS = 30_000;
+
+// The first worktree fetch is triggered by the worktree port becoming ready,
+// and nothing bounds that wait: when main never brokers a port, `isLoading`
+// stays true and the sidebar renders its skeleton forever with no way to reach
+// the error banner (#11818). Main now reports every no-port outcome it can see,
+// but the report itself can still be lost (app view swapped mid-boot, renderer
+// listener not yet wired), so this is the renderer's own floor under the hang.
+// Longer than the 30s a single workspace-host command may take, so a slow but
+// healthy packaged-Windows cold start is never cut short.
+const INITIAL_PORT_READY_TIMEOUT_MS = 45_000;
+
+// Owned by this file so the ready-after-timeout path can tell its own message
+// apart from a newer one main pushed, and clear only the former.
+const INITIAL_PORT_TIMEOUT_MESSAGE =
+  "The workspace service didn't finish connecting, so worktrees couldn't load.";
 
 export const WorktreeStoreContext = createContext<WorktreeViewStoreApi | null>(null);
 
@@ -437,24 +452,24 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
         // `applyRemove` dropped it from the live map. Both delete entry points
         // (the delete dialog and the `worktree.delete` action) funnel through
         // this event, so they get identical behaviour from this one change.
+        // Ordinarily a no-op by the time it runs: `applyRemove` above fires the
+        // map-diff subscription synchronously, and that backstop has already
+        // recorded this row from the outgoing snapshot. It still matters for
+        // the removals the backstop cannot see — an id already absent from the
+        // map, which is how an externally-removed worktree usually arrives —
+        // and `createDeletedWorktreeRecord` keeps the two records identical, so
+        // `addDeletedWorktree`'s first-write-wins never loses a field (#11911).
         if (willBecomeGhost) {
-          selectionStore.addDeletedWorktree({
-            id: event.worktreeId,
-            // Detached-HEAD worktrees have no branch; fall back to the folder
-            // name so the row always carries a recognisable last-known title.
-            title:
-              worktree.branch ?? worktree.path.split(/[/\\]/).filter(Boolean).pop() ?? "Unknown",
-            path: worktree.path,
-            deletedAt: Date.now(),
-            // Recorded UNARMED on purpose: the sweep arms it on its first tick
-            // with this view awake, and only ever advances it across awake
-            // seconds. Stamping a wall-clock deadline here instead meant a
-            // project cached at deletion time came back with the countdown
-            // already spent and no window to rescue anything (#11259).
-            expiresAt: null,
-            holdReason: null,
-            pinnedBeforeWorktreeId: getPinnedDeletedWorktreeAnchorId(event.worktreeId),
-          });
+          selectionStore.addDeletedWorktree(
+            createDeletedWorktreeRecord(event.worktreeId, {
+              // Detached-HEAD worktrees have no branch; the helper falls back
+              // to the folder name so the row always carries a recognisable
+              // last-known title.
+              title: worktree.branch,
+              path: worktree.path,
+              gitDir: worktree.gitDir,
+            })
+          );
         }
       })
     );
@@ -497,13 +512,86 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
     // already-clean key — so on a normal single removal the `worktree-removed`
     // event path and this subscription each fire it once for the same id
     // (the second call re-publishes correct state, nothing more) (#9536).
+    //
+    // The last topology the host actually reported, held so a not-ready `[]`
+    // can't erase the baseline the removal diff below depends on. Scoped to
+    // this effect, so a remount starts from the store's own state again.
+    let lastReadyWorktrees: ReadonlyMap<string, WorktreeSnapshot> | null = null;
     cleanups.push(
       store.subscribe((state, prevState) => {
         if (state.worktrees === prevState.worktrees) return;
+        // An empty incoming map is never a removal: a successful `git worktree
+        // list` always reports at least the main worktree, so [] only ever
+        // means the host isn't ready (#11235). Pulse invalidation is harmless
+        // either way, but adopting off a not-ready read would ghost every live
+        // worktree in the project at once.
+        const removalsAreAuthoritative = state.worktrees.size > 0;
         for (const id of prevState.worktrees.keys()) {
-          if (!state.worktrees.has(id)) {
-            usePulseStore.getState().invalidate(id);
-          }
+          if (!state.worktrees.has(id)) usePulseStore.getState().invalidate(id);
+        }
+        if (!removalsAreAuthoritative) return;
+
+        // Diff against the last READY topology, not simply the previous state.
+        // A not-ready `[]` still replaces the live map, so comparing with
+        // `prevState` would let a `[a, b] → [] → [a]` sequence lose `b`
+        // entirely: the first step declines to adopt (correctly) and the second
+        // compares against nothing. The removal would then never be observed
+        // again, which is the bug this backstop exists to close.
+        const baseline = lastReadyWorktrees ?? prevState.worktrees;
+        lastReadyWorktrees = state.worktrees;
+
+        // A worktree that merely moved reappears under a new path-derived id
+        // while keeping its `.git/worktrees/<name>` handle (#11388) — and ids
+        // can differ by spelling alone, since creation resolves symlinks and
+        // enumeration does not. Ghosting one of those would hand a LIVE
+        // worktree's agents to the cleanup sweep, which trashes them and lets
+        // the trash TTL kill the PTYs. Absence of an id is not proof of
+        // removal; a handle nothing claims is.
+        const incomingGitDirs = new Set<string>();
+        for (const worktree of state.worktrees.values()) {
+          if (worktree.gitDir) incomingGitDirs.add(worktree.gitDir);
+        }
+
+        for (const id of baseline.keys()) {
+          if (state.worktrees.has(id)) continue;
+
+          // Same backstop, second symptom (#11911). A worktree that leaves the
+          // map without a `worktree-removed` event strands every panel still
+          // pointing at it: the sidebar groups by live worktree, so those
+          // panels render nowhere, while their PTYs stay alive and keep
+          // counting toward the project's attention tally. Adopting them onto
+          // a deleted-worktree row is what gives them a home again — and what
+          // lets `deletedWorktreeCleanup` eventually retire them, which it
+          // could never do for a row that was never recorded.
+          //
+          // Also covers the event path's own blind spot: its ghost branch is
+          // gated on the worktree still being in the live map, so an external
+          // removal that reconciles the map first (topology watcher →
+          // `applySnapshot`) reaches the handler with nothing left to read.
+          //
+          // The main worktree is exempt for the same reason the event handler
+          // blocks it: it cannot legitimately be deleted, so its absence here
+          // is a host restart mid-hydration, not a removal.
+          const removed = baseline.get(id);
+          if (removed?.isMainWorktree) continue;
+          if (removed?.gitDir && incomingGitDirs.has(removed.gitDir)) continue;
+          const selectionStore = useWorktreeSelectionStore.getState();
+          if (selectionStore.deletedWorktrees.has(id)) continue;
+          if (getDeletedWorktreeTerminalIds(id).length === 0) continue;
+          // A deleted id must never survive as the durable restore target —
+          // `deletedWorktrees` is in-memory, so it would resolve to nothing
+          // after a restart. No-ops unless the id IS the target.
+          selectionStore.clearRestoreTarget(id);
+          // Branch and path come off the outgoing snapshot, which still holds
+          // them here — so this record is identical to the one the event
+          // handler would build, and first-write-wins costs nothing.
+          selectionStore.addDeletedWorktree(
+            createDeletedWorktreeRecord(id, {
+              title: removed?.branch,
+              path: removed?.path,
+              gitDir: removed?.gitDir,
+            })
+          );
         }
         // A host restart can re-hydrate a worktree we had already deleted
         // (#11232). The real row wins — its terminals were never detached, so
@@ -511,7 +599,7 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
         if (useWorktreeSelectionStore.getState().deletedWorktrees.size > 0) {
           useWorktreeSelectionStore
             .getState()
-            .pruneDeletedWorktrees(new Set(state.worktrees.keys()));
+            .pruneDeletedWorktrees(new Set(state.worktrees.keys()), incomingGitDirs);
         }
       })
     );
@@ -746,10 +834,87 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
     cleanups.push(clearTopologyEscalation);
 
     // Fetch on initial ready and on every port re-attach (host restart / re-broker)
-    if (worktreePort.isReady()) {
+    let initialPortReady = worktreePort.isReady();
+    let initialPortTimer: ReturnType<typeof setTimeout> | null = null;
+
+    function clearInitialPortTimer() {
+      if (initialPortTimer !== null) {
+        clearTimeout(initialPortTimer);
+        initialPortTimer = null;
+      }
+    }
+
+    // A load status can land before this effect runs at all — the IPC listener
+    // that sets `worktreeLoadError` is installed at module scope, well before
+    // React mounts the provider — and the subscription below only sees
+    // *transitions*. Without settling it here, that pre-existing error would
+    // leave the banner stacked on a skeleton that never ends.
+    function settleForExistingLoadError(): boolean {
+      if (useProjectStore.getState().worktreeLoadError === null) return false;
+      clearInitialPortTimer();
+      store.getState().setLoading(false);
+      return true;
+    }
+
+    function armInitialPortTimer() {
+      if (initialPortTimer !== null || initialPortReady) return;
+      // Only a window bound to a project ever has a port brokered for it — an
+      // unbound picker view legitimately never sees one, so arming there would
+      // raise a banner for working software.
+      if (!useProjectStore.getState().currentProject) return;
+      if (settleForExistingLoadError()) return;
+      initialPortTimer = setTimeout(() => {
+        initialPortTimer = null;
+        if (initialPortReady || worktreePort.isReady()) return;
+        // A report from main describes the failure better than we can, but the
+        // skeleton still has to end.
+        if (settleForExistingLoadError()) return;
+        useProjectStore.getState().setWorktreeLoadError(INITIAL_PORT_TIMEOUT_MESSAGE);
+        // The banner renders *above* the skeleton, so the skeleton has to be
+        // settled too or Retry ends up stacked on a still-spinning sidebar.
+        store.getState().setLoading(false);
+      }, INITIAL_PORT_READY_TIMEOUT_MS);
+    }
+
+    function handleInitialPortReady() {
+      initialPortReady = true;
+      clearInitialPortTimer();
+      // Clear only the message this file owns: a newer error from main
+      // describes something the refetch below won't resolve.
+      if (useProjectStore.getState().worktreeLoadError === INITIAL_PORT_TIMEOUT_MESSAGE) {
+        useProjectStore.getState().setWorktreeLoadError(null);
+      }
       fetchInitialState();
     }
-    cleanups.push(worktreePort.onReady(fetchInitialState));
+
+    if (initialPortReady) {
+      fetchInitialState();
+    } else {
+      armInitialPortTimer();
+    }
+    cleanups.push(worktreePort.onReady(handleInitialPortReady));
+    cleanups.push(clearInitialPortTimer);
+
+    // `currentProject` can hydrate after this effect runs, so the arming
+    // decision is re-taken on change rather than only at mount. Scoped to the
+    // pre-ready window: once a port has arrived, the disconnect/fatal handlers
+    // below own the sidebar's state.
+    cleanups.push(
+      useProjectStore.subscribe((state, prev) => {
+        if (initialPortReady) return;
+        if (
+          state.worktreeLoadError !== prev.worktreeLoadError &&
+          state.worktreeLoadError !== null
+        ) {
+          // Main reported a failed load, so no port is coming for it — settle
+          // the skeleton rather than leaving the banner over a live spinner.
+          clearInitialPortTimer();
+          store.getState().setLoading(false);
+          return;
+        }
+        if (state.currentProject !== prev.currentProject) armInitialPortTimer();
+      })
+    );
 
     // Surface a "Reconnecting…" state the moment the workspace host dies, so
     // the UI doesn't appear frozen while we wait (up to 2–4s) for the
@@ -769,6 +934,10 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
     // fetch rather than a silent wake refresh.
     cleanups.push(
       worktreePort.onFatalDisconnect(() => {
+        // A confirmed fatal disconnect is a better description than the
+        // initial-connection watchdog's, so retire the watchdog rather than
+        // letting it overwrite this later.
+        clearInitialPortTimer();
         store
           .getState()
           .setFatalError(

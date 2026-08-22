@@ -433,6 +433,24 @@ export class WorkspaceHostPool {
   }
 
   /**
+   * Release `windowId`'s reference ONLY if it is still mapped to
+   * `projectPath` — returns whether it was.
+   *
+   * `releaseWindow` drops whatever project the window is currently mapped to,
+   * which is the right behaviour for a window that is closing. A caller
+   * reclaiming ONE project must not use it: during a cold switch this map can
+   * still name the outgoing project while the view already reports the
+   * incoming one as active, so an unguarded release would sever a different
+   * project's still-needed worktree feed.
+   */
+  releaseWindowForProject(windowId: number, projectPath: string): boolean {
+    const normalized = this.normalizeProjectPath(projectPath);
+    if (this.windowToProject.get(windowId) !== normalized) return false;
+    this.releaseWindow(windowId);
+    return true;
+  }
+
+  /**
    * Push updated forge settings (provider override / default / selected
    * remote) to a live workspace host so its `PullRequestService` re-resolves
    * the provider without waiting for a project reload (#8456). No-ops when

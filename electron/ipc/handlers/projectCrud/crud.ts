@@ -8,7 +8,6 @@ import {
   projectViewManagersFrom,
 } from "../../../window/activeProjectIds.js";
 import { broadcastToRenderer, typedHandle, typedHandleWithContext } from "../../utils.js";
-import { projectRelocationCoordinator } from "../../../services/ProjectRelocationCoordinator.js";
 import { resolveScopedProjectForIpcContext } from "../../projectContext.js";
 import { refreshProjectMenuState } from "../../../projectMenuState.js";
 import { notificationService } from "../../../services/NotificationService.js";
@@ -212,6 +211,11 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
     // `gitBacked` joins them: it decides whether the workspace host enumerates
     // worktrees at all, and only `addProject` — which actually looked for a
     // repository — may set it (#11405).
+    // `resumableAgentCount` joins them: it is main-owned derived state,
+    // recomputed from the persisted project state on every write (#11801). A
+    // renderer that could set it would hand a row a resume promise the restore
+    // never intends to keep, and the number is re-derived on the next save
+    // anyway, so accepting it would only ever be a lie.
     const {
       id: _id,
       path: _path,
@@ -219,6 +223,7 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
       frecencyScore: _fs,
       lastAccessedAt: _lat,
       gitBacked: _gitBacked,
+      resumableAgentCount: _rac,
       ...safeUpdates
     } = updates;
     const updated = projectStore.updateProject(projectId, safeUpdates);
@@ -434,6 +439,8 @@ export function registerProjectCrudCoreHandlers(deps: HandlerDependencies): () =
     // reattach delegates to the phase-1/2 path. It broadcasts PROJECT_UPDATED to
     // every cached view by immutable id, so the new path reaches windows other
     // than the one that ran the locate flow (#11282).
+    const { projectRelocationCoordinator } =
+      await import("../../../services/ProjectRelocationCoordinator.js");
     projectRelocationCoordinator.configure(deps);
     return projectRelocationCoordinator.relocate({ projectId, mode: "reattach", newPath });
   };

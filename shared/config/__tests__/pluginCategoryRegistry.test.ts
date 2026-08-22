@@ -25,6 +25,7 @@ function makeManifest(overrides: Partial<PluginManifest> = {}): PluginManifest {
       fileDecorationProviders: [],
       agents: [],
       processTools: [],
+      recipes: [],
       settings: [],
     },
     ...overrides,

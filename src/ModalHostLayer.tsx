@@ -468,12 +468,11 @@ export function ModalHostLayer({
               onSelect={projectSwitcherPalette.selectRow}
               onHoverProject={projectSwitcherPalette.onHoverProject}
               onHoverProjectEnd={projectSwitcherPalette.onHoverProjectEnd}
+              fleetLiveness={projectSwitcherPalette.fleetLiveness}
               onClose={projectSwitcherPalette.close}
               onStopProject={(projectId) => void projectSwitcherPalette.stopProject(projectId)}
               onCloseProject={(projectId) => void projectSwitcherPalette.removeProject(projectId)}
-              onFreeMemoryProject={(projectId) =>
-                void projectSwitcherPalette.freeMemoryProject(projectId)
-              }
+              onSleepProject={(projectId) => void projectSwitcherPalette.sleepProject(projectId)}
               onLocateProject={(projectId) => {
                 projectSwitcherPalette.locateProject(projectId);
               }}
@@ -488,12 +487,10 @@ export function ModalHostLayer({
               onRemoveConfirmClose={() => projectSwitcherPalette.setRemoveConfirmProject(null)}
               onConfirmRemove={projectSwitcherPalette.confirmRemoveProject}
               isRemovingProject={projectSwitcherPalette.isRemovingProject}
-              freeMemoryConfirmProject={projectSwitcherPalette.freeMemoryConfirmProject}
-              onFreeMemoryConfirmClose={() =>
-                projectSwitcherPalette.setFreeMemoryConfirmProject(null)
-              }
-              onConfirmFreeMemory={projectSwitcherPalette.confirmFreeMemory}
-              isFreeingMemory={projectSwitcherPalette.isFreeingMemory}
+              sleepConfirmProject={projectSwitcherPalette.sleepConfirmProject}
+              onSleepConfirmClose={() => projectSwitcherPalette.setSleepConfirmProject(null)}
+              onConfirmSleep={projectSwitcherPalette.confirmSleep}
+              isSleepingProject={projectSwitcherPalette.isSleepingProject}
               onSelectNewWindow={(project) => {
                 projectSwitcherPalette.close();
                 void actionService.dispatch(

@@ -95,6 +95,7 @@ export const soakScenarios: PerfScenario[] = [
     async run() {
       maybeRunGc();
       const baselineMb = memoryUsedMb();
+      const startedAt = performance.now();
       let checksum = 0;
 
       for (let i = 0; i < 120; i += 1) {
@@ -114,6 +115,7 @@ export const soakScenarios: PerfScenario[] = [
         }
       }
 
+      const durationMs = performance.now() - startedAt;
       maybeRunGc();
       const finalMb = memoryUsedMb();
       const memoryGrowthMb = Math.max(0, finalMb - baselineMb);
@@ -121,7 +123,7 @@ export const soakScenarios: PerfScenario[] = [
       const memoryGrowthPct = (memoryGrowthMb / normalizedBaselineMb) * 100;
 
       return {
-        durationMs: 0,
+        durationMs,
         metrics: {
           memoryGrowthPct,
           memoryGrowthMb,
@@ -141,6 +143,7 @@ export const soakScenarios: PerfScenario[] = [
     async run() {
       maybeRunGc();
       const baselineMb = memoryUsedMb();
+      const startedAt = performance.now();
       let checksum = 0;
 
       for (let i = 0; i < 180; i += 1) {
@@ -159,6 +162,7 @@ export const soakScenarios: PerfScenario[] = [
         }
       }
 
+      const durationMs = performance.now() - startedAt;
       maybeRunGc();
       const finalMb = memoryUsedMb();
       const memoryGrowthMb = Math.max(0, finalMb - baselineMb);
@@ -166,7 +170,7 @@ export const soakScenarios: PerfScenario[] = [
       const memoryGrowthPct = (memoryGrowthMb / normalizedBaselineMb) * 100;
 
       return {
-        durationMs: 0,
+        durationMs,
         metrics: {
           memoryGrowthPct,
           memoryGrowthMb,
@@ -186,6 +190,7 @@ export const soakScenarios: PerfScenario[] = [
     async run() {
       maybeRunGc();
       const baselineMb = memoryUsedMb();
+      const startedAt = performance.now();
       let peakMb = baselineMb;
       let checksum = 0;
       const stablePayloads = Array.from({ length: 256 }, (_, index) => `payload-${index}`);
@@ -199,13 +204,13 @@ export const soakScenarios: PerfScenario[] = [
         checksum += transient.length;
 
         if (i % 4 === 0) {
-          maybeRunGc();
           peakMb = Math.max(peakMb, memoryUsedMb());
         }
 
         await spinEventLoop(0.2);
       }
 
+      const durationMs = performance.now() - startedAt;
       maybeRunGc();
       const finalMb = memoryUsedMb();
       peakMb = Math.max(peakMb, finalMb);
@@ -215,7 +220,7 @@ export const soakScenarios: PerfScenario[] = [
       const memoryGrowthPct = (memoryGrowthMb / normalizedBaselineMb) * 100;
 
       return {
-        durationMs: 0,
+        durationMs,
         metrics: {
           memoryGrowthPct,
           memoryGrowthMb,
@@ -237,6 +242,7 @@ export const soakScenarios: PerfScenario[] = [
     warmups: 1,
     async run() {
       maybeRunGc();
+      const startedAt = performance.now();
       // ~2KB single-chunk flushes are the dominant latency-mode case under an
       // agent-output flood. 400k of them (~800MB transient churn) is far more
       // than any realistic inter-flush burst — sized so a pathological future
@@ -247,9 +253,10 @@ export const soakScenarios: PerfScenario[] = [
       const gc = await measureMinorGc(() => {
         checksum = simulatePortBatcherFlushFlood(flushes, chunkBytes);
       });
+      const durationMs = performance.now() - startedAt;
 
       return {
-        durationMs: 0,
+        durationMs,
         metrics: {
           minorGcCount: gc.minorGcCount,
           minorGcPauseMs: gc.minorGcPauseMs,

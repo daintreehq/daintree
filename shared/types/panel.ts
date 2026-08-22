@@ -172,8 +172,17 @@ export type PersistableFlowStatus = Exclude<TerminalFlowStatus, "data-loss" | Fu
  *  `FutureSABFlowStatus` set never appear here. */
 export type TerminalRuntimeStatus = PersistableFlowStatus | "background" | "exited" | "error";
 
-/** Origin that spawned a terminal */
-export type TerminalSpawnSource = "quickrun" | "recipe" | "agent" | "palette" | "mcp";
+/**
+ * Origin that spawned a terminal.
+ *
+ * `assistant` and `mcp` both arrive over the MCP bridge and are split apart by
+ * the session's authenticated origin, not by anything the caller sends (#11808).
+ * `assistant` is one of Daintree's own surfaces — the assistant panel or an
+ * assistant pane — starting work the user did not ask for directly; `mcp` is an
+ * arbitrary external client. Collapsing them left a terminal the user never
+ * started looking identical to one they did.
+ */
+export type TerminalSpawnSource = "quickrun" | "recipe" | "agent" | "palette" | "mcp" | "assistant";
 
 /** Focus policy for newly-created panels — orthogonal to provenance. */
 export type AddPanelFocusPolicy = "auto" | "preserve" | "take";
@@ -212,7 +221,13 @@ export interface TerminalRuntimeIdentity {
  *
  * Absent defaults to `"default"` for hydration compatibility.
  */
-export type PanelTitleMode = "default" | "custom" | "user";
+export const PANEL_TITLE_MODES = ["default", "custom", "user"] as const;
+
+export type PanelTitleMode = (typeof PANEL_TITLE_MODES)[number];
+
+export function isPanelTitleMode(value: unknown): value is PanelTitleMode {
+  return PANEL_TITLE_MODES.includes(value as PanelTitleMode);
+}
 
 /** Structured error state for terminal restart failures */
 export interface TerminalRestartError {
@@ -312,6 +327,32 @@ interface BasePanelData {
   // Note: Tab membership is now stored in TabGroup objects, not on panels
 }
 
+/**
+ * A cross-worktree move that left this panel's live agent running somewhere
+ * else (#11853).
+ *
+ * Relabelling a panel does not relocate its process: the agent keeps working —
+ * and committing — in the directory it launched from. The notice is what offers
+ * the user the one-sentence fix, and it carries the destination *id* rather than
+ * a path so delivery resolves the path fresh (a worktree can be physically moved
+ * between the drop and the click).
+ *
+ * Deliberately transient. It is a prompt to act on now, not durable consent:
+ * `sessionLostOnRestore` is the same shape and the same reasoning — it lives in
+ * `panelsById` so it survives the unmount a worktree switch causes, and it is
+ * never serialized, so it does not come back after a quit.
+ */
+export interface PanelWorktreeMoveNotice {
+  /** Worktree the panel was filed under by the move that raised this notice. */
+  destinationWorktreeId: string;
+  /**
+   * Set when a "Tell the agent" click could not put the instruction into the
+   * terminal (#11867). The bar stays up and says so rather than disappearing
+   * on a delivery that never happened.
+   */
+  deliveryFailed?: boolean;
+}
+
 export interface PtyPanelData extends BasePanelData {
   kind: "terminal";
   /**
@@ -403,6 +444,13 @@ export interface PtyPanelData extends BasePanelData {
   flowStatusTimestamp?: number;
   /** Whether user input is locked (read-only monitor mode) */
   isInputLocked?: boolean;
+  /**
+   * Pending "your agent is still in the old worktree" prompt for this pane
+   * (#11853). Set by a cross-worktree move that left a live agent off its
+   * launch root; cleared by telling the agent or dismissing. Never serialized —
+   * see `serializePtyPanel`.
+   */
+  worktreeMoveNotice?: PanelWorktreeMoveNotice;
   /**
    * Held duration gauge for currently-paused terminals, sampled by the
    * `pause-duration-gauge` reliability metric (2s tick). Distinct from
@@ -988,6 +1036,7 @@ export interface TerminalInstance {
   runtimeStatus?: TerminalRuntimeStatus;
   flowStatusTimestamp?: number;
   isInputLocked?: boolean;
+  worktreeMoveNotice?: PanelWorktreeMoveNotice;
   browserUrl?: string;
   browserHistory?: BrowserHistory;
   browserZoom?: number;

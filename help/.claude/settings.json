@@ -2,9 +2,6 @@
   "permissions": {
     "allow": [
       "Read(**)",
-      "Glob(**)",
-      "Grep(**)",
-      "LS(**)",
       "WebFetch",
       "mcp__daintree-docs__*",
       "Bash(gh *)",

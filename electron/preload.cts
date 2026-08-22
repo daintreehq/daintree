@@ -14,10 +14,12 @@ import { isTrustedRendererUrl, isRecoveryPageUrl } from "../shared/utils/trusted
 import { isIpcEnvelope } from "../shared/types/ipc/errors.js";
 import { deserializeError } from "../shared/utils/ipcErrorSerialization.js";
 import type { AppErrorCode } from "../shared/types/appError.js";
+import type { PanelTitleMode } from "../shared/types/panel.js";
 import type {
   McpRuntimeSnapshot,
   McpGrantLifecyclePayload,
   McpBearerIdentity,
+  McpSessionOrigin,
   McpToolCallStartedPayload,
   McpToolCallSettledPayload,
   McpHelpDisplayImagePayload,
@@ -36,6 +38,7 @@ import { buildClipboardPreloadBindings } from "./ipc/handlers/clipboard.preload.
 import { buildSlashCommandsPreloadBindings } from "./ipc/handlers/slashCommands.preload.js";
 import { buildGlobalEnvPreloadBindings } from "./ipc/handlers/globalEnv.preload.js";
 import { buildAccessibilityPreloadBindings } from "./ipc/handlers/accessibility.preload.js";
+import { buildConfigBundlePreloadBindings } from "./ipc/handlers/configBundle.preload.js";
 import { buildHelpPreloadBindings } from "./ipc/handlers/help.preload.js";
 import { buildEventInspectorPreloadBindings } from "./ipc/handlers/eventInspector.preload.js";
 import { buildCommandsPreloadBindings } from "./ipc/handlers/commands.preload.js";
@@ -146,6 +149,7 @@ import type {
 import type { TerminalActivityPayload } from "../shared/types/terminal.js";
 import type {
   TerminalStatusPayload,
+  TerminalSubmitStatusPayload,
   SpawnResult,
   TerminalResourceBatchPayload,
   BroadcastWriteResultPayload,
@@ -1289,6 +1293,9 @@ function buildElectronApi(): ElectronAPI {
       onStatus: (callback: (data: TerminalStatusPayload) => void) =>
         _typedOn(CHANNELS.TERMINAL_STATUS, callback),
 
+      onSubmitStatus: (callback: (data: TerminalSubmitStatusPayload) => void): (() => void) =>
+        _eventBusOn("terminal:submit-status", callback),
+
       onReliabilityMetric: (
         callback: (data: TerminalReliabilityMetricPayload) => void
       ): (() => void) => _eventBusOn("terminal:reliability-metric", callback),
@@ -1342,6 +1349,9 @@ function buildElectronApi(): ElectronAPI {
 
       updateObservedTitle: (id: string, title: string) =>
         ipcRenderer.send(CHANNELS.TERMINAL_UPDATE_OBSERVED_TITLE, { id, title }),
+
+      updateTitle: (id: string, title: string, titleMode: PanelTitleMode) =>
+        ipcRenderer.send(CHANNELS.TERMINAL_UPDATE_TITLE, { id, title, titleMode }),
 
       onSpawnResult: (callback: (id: string, result: SpawnResultPayload) => void): (() => void) =>
         _eventBusOn("terminal:spawn-result", (payload) => {
@@ -1816,6 +1826,9 @@ function buildElectronApi(): ElectronAPI {
       onUpdated: (callback: (project: Project) => void) =>
         _typedOn(CHANNELS.PROJECT_UPDATED, callback),
 
+      onSlept: (callback: (projectId: string) => void) =>
+        _typedOn(CHANNELS.PROJECT_SLEPT, callback),
+
       onRemoved: (callback: (projectId: string) => void) =>
         _typedOn(CHANNELS.PROJECT_REMOVED, callback),
 
@@ -1833,7 +1846,7 @@ function buildElectronApi(): ElectronAPI {
       close: (projectId: string, options?: { killTerminals?: boolean }) =>
         _unwrappingInvoke(CHANNELS.PROJECT_CLOSE, projectId, options),
 
-      freeMemory: (projectId: string) => _unwrappingInvoke(CHANNELS.PROJECT_FREE_MEMORY, projectId),
+      sleepProject: (projectId: string) => _unwrappingInvoke(CHANNELS.PROJECT_SLEEP, projectId),
 
       reopen: (
         projectId: string,
@@ -2153,6 +2166,13 @@ function buildElectronApi(): ElectronAPI {
       ...buildTerminalConfigPreloadBindings(_unwrappingInvoke),
 
       importColorScheme: () => _unwrappingInvoke(CHANNELS.TERMINAL_CONFIG_IMPORT_COLOR_SCHEME),
+    },
+
+    // Configuration export/import API (#11889)
+    configBundle: {
+      ...buildConfigBundlePreloadBindings(_unwrappingInvoke),
+
+      onImported: (callback: () => void) => _typedOn(CHANNELS.CONFIG_BUNDLE_IMPORTED, callback),
     },
 
     // Accessibility API
@@ -2996,6 +3016,7 @@ function buildElectronApi(): ElectronAPI {
           confirmed?: boolean;
           context?: ActionContext;
           callerInfo?: McpBearerIdentity;
+          sessionOrigin?: McpSessionOrigin;
         }) => void
       ) => _typedOn(CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST, callback),
 
@@ -3123,6 +3144,12 @@ function buildElectronApi(): ElectronAPI {
           complete: boolean;
         }) => void
       ) => _eventBusOn("plugin:agents-changed", callback),
+      onRecipesChanged: (
+        callback: (payload: {
+          recipes: import("../shared/types/project.js").TerminalRecipe[];
+          complete: boolean;
+        }) => void
+      ) => _eventBusOn("plugin:recipes-changed", callback),
       onToolbarButtonsChanged: (
         callback: (payload: { buttons: ToolbarButtonConfig[]; complete: boolean }) => void
       ) => _eventBusOn("plugin:toolbar-buttons-changed", callback),

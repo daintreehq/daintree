@@ -1,5 +1,15 @@
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import {
+  requireExplicitWorktreeForAgentDispatch,
+  requireWorktreeId,
+  withWorktreeLocation,
+} from "./locationArgs";
+import { resumeSessionIntoPanel } from "@/services/agentResume";
+import { resolveResumeLaunchTarget } from "@/utils/resumeLaunch";
+import { inferWorktreeIdFromCwd } from "@/utils/worktreePaths";
+import { isForegroundDispatch } from "./dispatchSource";
+import { getWorktreePathIndex } from "@/store/storeAccessors";
+import {
   AgentIdSchema,
   LaunchLocationSchema,
   TerminalSpawnSourceSchema,
@@ -12,7 +22,7 @@ import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
-import { AGENT_REGISTRY, getAgentDisplayTitle } from "@/config/agents";
+import { AGENT_REGISTRY, getAgentDisplayTitle, getMergedPresetIdentities } from "@/config/agents";
 import { agentCapabilitiesClient, agentSettingsClient, cliAvailabilityClient } from "@/clients";
 import { userAgentRegistryClient } from "@/clients/userAgentRegistryClient";
 import {
@@ -23,6 +33,7 @@ import {
 import { isAgentToolbarVisible } from "@shared/utils/agentPinned";
 import { isAgentInstalled, isAgentLaunchable } from "@shared/utils/agentAvailability";
 import type { ActionContext, ActionId } from "@shared/types/actions";
+import type { AgentPreset } from "@shared/config/agentRegistry";
 import { isPtyPanel, type TerminalSpawnSource } from "@shared/types/panel";
 import type {
   AgentSessionBookmarkMetadata,
@@ -76,6 +87,30 @@ const BookmarkListArgsSchema = z
     offset: SessionListOffsetSchema,
   })
   .optional();
+
+const AgentListPresetsArgsSchema = z.object({
+  agentId: AgentIdSchema,
+  projectId: z
+    .string()
+    .min(1)
+    .optional()
+    .describe(
+      "Which project's repository presets to include. Defaults to the project this call is dispatched in. Naming one that is not the loaded project returns the other layers and reports the result as incomplete rather than answering for the wrong project."
+    ),
+});
+
+// Worktree-scoped so the caller must assert WHERE the session lives, using the
+// shared location vocabulary (#11543) rather than a bespoke `worktreeId` field.
+// The selector scopes the lookup; it never chooses the launch directory, which
+// the record itself owns (#4781).
+const ResumeSessionArgsSchema = withWorktreeLocation({
+  sessionId: z
+    .string()
+    .min(1)
+    .describe(
+      "Exact id of the session to relaunch, copied from a session-history or bookmark listing. Never a title or a prefix."
+    ),
+});
 
 const SessionHistoryListArgsSchema = z
   .object({
@@ -160,6 +195,57 @@ function keepRepresentableRecords(records: AgentSessionRecord[]): AgentSessionRe
   return records.filter((record) => AgentFacingSessionRecordSchema.safeParse(record).success);
 }
 
+/**
+ * Deadline for `agent.listAvailable`'s discovery reads.
+ *
+ * Main abandons an MCP dispatch after `MCP_DISPATCH_TIMEOUT_MS` (30s) without
+ * cancelling the renderer-side action, so an IPC leg that never settles used to
+ * hold its `mcpSpawnFocusGuard` lease indefinitely — long past the 45s TTL, and
+ * observed pending for over 13 hours (#11795). Settling first keeps that lease
+ * bounded and turns a stall into a diagnosable error.
+ *
+ * Sized above the slowest LEGITIMATE cold read, which is ~20s rather than the
+ * 10s it first looks like: before the stores hydrate `readAgentDiscoveryState`
+ * calls `getCliAvailability`, which on an empty cache falls through to
+ * `CliAvailabilityService.checkAvailability()` — and that awaits `refreshPath()`
+ * (its own 10s budget) BEFORE starting its 10s probe timer. Undershooting turns
+ * a slow cold start into a spurious failure. Still clears main's 30s dispatch
+ * timeout and the guard's 45s lease TTL.
+ */
+const AGENT_DISCOVERY_READ_TIMEOUT_MS = 25_000;
+
+/**
+ * Ceiling for one preset-source read.
+ *
+ * Sized well under Main's 30s dispatch timeout so a stalled IPC surfaces as a
+ * named error here rather than leaving the renderer action — and the spawn
+ * guard's lease — pending after Main has already abandoned the request. Much
+ * tighter than `AGENT_DISCOVERY_READ_TIMEOUT_MS` because none of these legs
+ * can fall through to a CLI probe; they read settings that are already loaded
+ * or already failed.
+ */
+const AGENT_PRESET_READ_TIMEOUT_MS = 10_000;
+
+async function withReadDeadline<T>(work: Promise<T>, leg: string): Promise<T> {
+  let timer: ReturnType<typeof setTimeout> | undefined;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    timer = setTimeout(
+      () =>
+        reject(
+          new Error(
+            `Timed out after ${AGENT_PRESET_READ_TIMEOUT_MS}ms reading ${leg} for preset discovery`
+          )
+        ),
+      AGENT_PRESET_READ_TIMEOUT_MS
+    );
+  });
+  try {
+    return await Promise.race([work, deadline]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 export function registerAgentActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   const readAgentDiscoveryState = async () => {
     // These are the same normalized renderer stores the toolbar reads. Fall back to
@@ -185,11 +271,51 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     return { settings, availability, availabilityLive };
   };
 
+  /**
+   * Read the three sources `agent.listAvailable` needs, under a deadline.
+   *
+   * Each leg is tracked by name so a timeout says which one is still
+   * outstanding — the whole difficulty of #11795 was that a bare dispatch
+   * timeout gave no hint which await had stalled. The deadline only stops
+   * waiting; `ipcRenderer.invoke` takes no `AbortSignal`, so an in-flight
+   * invoke keeps running. A late rejection needs no extra guard: `Promise.race`
+   * leaves its handlers attached, so the leg stays handled after the deadline
+   * has already won.
+   */
+  const readAvailableAgentSources = async () => {
+    const pending = new Set(["agentDiscoveryState", "agentRegistry", "userAgentRegistry"]);
+    const track = <T>(leg: string, work: Promise<T>): Promise<T> =>
+      work.finally(() => pending.delete(leg));
+
+    const sources = Promise.all([
+      track("agentDiscoveryState", readAgentDiscoveryState()),
+      track("agentRegistry", agentCapabilitiesClient.getRegistry()),
+      track("userAgentRegistry", userAgentRegistryClient.get()),
+    ]);
+
+    let deadlineTimer: ReturnType<typeof setTimeout> | undefined;
+    const deadline = new Promise<never>((_resolve, reject) => {
+      deadlineTimer = setTimeout(() => {
+        reject(
+          new Error(
+            `Timed out after ${AGENT_DISCOVERY_READ_TIMEOUT_MS}ms reading agent discovery data; still waiting on: ${[...pending].join(", ")}`
+          )
+        );
+      }, AGENT_DISCOVERY_READ_TIMEOUT_MS);
+    });
+
+    try {
+      return await Promise.race([sources, deadline]);
+    } finally {
+      clearTimeout(deadlineTimer);
+    }
+  };
+
   actions.set("agent.launch", () => ({
     id: "agent.launch",
     title: "Launch Agent",
     description:
-      "Start an AI agent in a new terminal and report where it landed, so parallel launches can be told apart without re-resolving the target. Success means the panel was created and its process is starting, not that the agent is ready — poll its state or a terminal status snapshot for that. A failure to launch may mean the agent's CLI is missing, in which case a setup diagnostic panel is opened instead. Launching consumes real resources, so keep concurrent launches modest.",
+      "Start an AI agent in a new terminal and report where it landed, so parallel launches can be told apart without re-resolving the target. Success means the panel was created and its process is starting, not that the agent is ready; poll its state or a terminal status snapshot for that. A missing CLI opens a setup diagnostic panel instead. Keep concurrent launches modest.",
     category: "agent",
     kind: "command",
     danger: "safe",
@@ -250,7 +376,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         .boolean()
         .optional()
         .describe(
-          "Keeps the terminal out of the saved session, so it does not come back after a restart. It also hides the panel from terminal listings, status snapshots and agent-state reads, and spares it from bulk close and kill — so the launching caller cannot find or poll the terminal afterwards. Use for throwaway work the user should not inherit."
+          "Keeps the terminal out of the saved session, so it does not return after a restart. It also hides the panel from listings, status snapshots and agent-state reads, and spares it from bulk close and kill, so the caller cannot find or poll it afterwards. Use for throwaway work."
         ),
       removeOnExit: z
         .boolean()
@@ -283,7 +409,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         .max(200)
         .optional()
         .describe(
-          'Always provide a short, task-descriptive name for the terminal tab (e.g. "Claude: auth refactor") so the user can tell parallel agents apart. Pins the title so agent detection cannot overwrite it. Empty/whitespace falls back to the default title.'
+          'Always provide a short, task-descriptive name for the terminal tab, at most 200 characters (e.g. "Claude: auth refactor"), so the user can tell parallel agents apart. Pins the title so agent detection cannot overwrite it. Empty/whitespace falls back to the default title.'
         ),
     }),
     // Top-level object, never `.nullable()`: `buildToolOutputSchema` (tierAuth)
@@ -729,7 +855,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "agentSessionHistory.list",
     title: "List Resumable Sessions",
     description:
-      "List closed agent sessions that can be relaunched, read from the on-disk journal. This is a faithful record of which sessions exist, not a summary of what happened in them — it carries no transcript text. It must be scoped to a worktree or project and fails rather than listing every project when no scope can be resolved. Old sessions are pruned by the journal's retention policy, so absence does not mean a session never existed.",
+      "List closed agent sessions that can be relaunched, read from the on-disk journal. This is a faithful record of which sessions exist, not a summary of what happened in them: it carries no transcript text. It must be scoped to a worktree or project and fails rather than listing every project when no scope resolves. Old sessions are pruned by retention, so absence does not prove one never existed.",
     category: "agent",
     kind: "query",
     danger: "safe",
@@ -801,11 +927,209 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     },
   }));
 
+  actions.set("agentSessionHistory.resume", () => ({
+    id: "agentSessionHistory.resume",
+    title: "Resume Agent Session",
+    description:
+      "Relaunch one closed agent session by its exact id and hand back the pane carrying it. Resume is directory-coupled: it relaunches in the worktree the session was recorded in, so the worktree you name scopes the lookup and one recorded elsewhere is refused. Calling twice brings the live pane forward rather than a second agent on one transcript. It opens off-screen unless that worktree is active.",
+    category: "agent",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: ResumeSessionArgsSchema,
+    examples: [
+      {
+        args: { worktreeId: "wt-1", sessionId: "sess-abc123" },
+        description: "Resume one journaled session in the worktree it was recorded in",
+      },
+    ],
+    resultSchema: z.object({
+      terminalId: z.string(),
+      sessionId: z.string(),
+      worktreeId: z.string().nullable(),
+      outcome: z.enum(["created", "activatedExisting"]),
+    }),
+    mcpOutputSchema: true,
+    run: async (args: unknown, ctx: ActionContext) => {
+      const parsed = ResumeSessionArgsSchema.parse(args);
+      const { sessionId } = parsed;
+      // Fail closed when a headless caller omits the worktree: the resolver
+      // below falls back to whatever is active, which a person can see and an
+      // agent cannot (#11722). Reads the raw selectors, so it must run before
+      // any resolution.
+      requireExplicitWorktreeForAgentDispatch("agentSessionHistory.resume", parsed, ctx);
+      // Throws for a bare path that matches no open worktree, and for no
+      // selector at all, rather than retargeting the resume at the active one.
+      const requestedWorktreeId = requireWorktreeId(parsed, ctx);
+      // Fail closed rather than degrade: this action decides which DIRECTORY a
+      // process launches in, and without the index there is no way to prove the
+      // asserted worktree is open or where it lives. Other location-taking
+      // actions degrade to the context project on a null index; here that would
+      // mean launching somewhere unverified.
+      const worktreeIndex = getWorktreePathIndex();
+      if (!worktreeIndex) {
+        throw new Error(
+          "No worktree index available — can't verify where this session would resume."
+        );
+      }
+      // An explicit `worktreeId` is passed through unvalidated by the resolver
+      // (only a path is matched against the index), so prove it is open here.
+      // Before the lookup, so naming a worktree that isn't open reports exactly
+      // that instead of the scope mismatch it would otherwise trip on.
+      const requestedWorktreePath = worktreeIndex.get(requestedWorktreeId);
+      if (!requestedWorktreePath) {
+        throw new Error("Unknown worktree — no worktree with that id is open in this project.");
+      }
+
+      // Scope the journal read before searching it. Project scope is the
+      // privacy boundary, so it is preferred; with no project in context fall
+      // back to the worktree the caller asserted. NEVER read unscoped — that
+      // would search every project's history for the id and could resume a
+      // session belonging to a workspace this call has no business touching.
+      const projectScope = ctx.projectId ?? ctx.scratchId;
+      // Deliberately NOT filtered by worktree at the IPC: that filter compares
+      // `record.worktreeId` literally, so it can never match a record journaled
+      // without one. Those records are re-homed by cwd below and would
+      // otherwise be permanently unresumable. Scope is enforced after
+      // resolution instead, which is strictly narrower — it compares the
+      // worktree the session would actually LAUNCH in.
+      const records = projectScope
+        ? await window.electron.agentSessionHistory.list(undefined, projectScope)
+        : await window.electron.agentSessionHistory.list(requestedWorktreeId, undefined);
+
+      const record = records.find((candidate) => candidate.sessionId === sessionId);
+      if (!record) {
+        throw new Error(
+          "No resumable session with that id — it may have aged out of history, or belong to another project."
+        );
+      }
+
+      const worktreeList = [...worktreeIndex].map(([id, path]) => ({ id, path }));
+      // The record's OWN cwd/worktree wins: the CLI locates a conversation from
+      // the launch directory (#4781), so relaunching anywhere else produces a
+      // fresh session wearing a resumed session's id. The requested worktree is
+      // only the fallback for pre-migration records that recorded neither.
+      // Containment, checked on the DIRECTORY rather than the worktree id.
+      // Checking the id alone is not enough: `resolveResumeLaunchTarget` falls
+      // back to the id we pass it when a record carries no resolvable worktree,
+      // so a record whose `cwd` points outside every open worktree would inherit
+      // the asserted id and pass an id-only check while launching somewhere the
+      // caller never named. The cwd is what the CLI actually resolves the
+      // conversation from (#4781), so it is what has to be inside the worktree.
+      // An empty string is not a directory. `resolveResumeLaunchTarget` uses `??`,
+      // so `""` is "present" and survives all the way to the spawn, where main
+      // falls back to the project root or home — a different directory than the
+      // one asserted, arrived at silently.
+      const recordedCwd = record.cwd?.trim() ? record.cwd : undefined;
+      if (recordedCwd) {
+        // `inferWorktreeIdFromCwd` matches lexically, so a path that walks back
+        // out through `..` still carries the worktree root as its prefix and
+        // would be classified as inside it. Journal cwds come from terminals
+        // Daintree itself spawned, so this is belt-and-braces rather than a live
+        // attack path — but the cost of being wrong is launching an agent in a
+        // directory nobody asked for.
+        if (recordedCwd.split(/[\\/]/).includes("..")) {
+          throw new Error(
+            "That session's recorded directory can't be verified — it walks outside the worktree it was journaled under."
+          );
+        }
+        if (inferWorktreeIdFromCwd(recordedCwd, worktreeList) !== requestedWorktreeId) {
+          throw new Error(
+            "That session was recorded in a different directory. Resume it from the worktree it belongs to — relaunching it elsewhere would start a new conversation, not continue this one."
+          );
+        }
+      }
+      const target = resolveResumeLaunchTarget(
+        { worktreeId: record.worktreeId, cwd: recordedCwd },
+        { defaultTerminalCwd: requestedWorktreePath, activeWorktreeId: requestedWorktreeId },
+        worktreeList
+      );
+
+      // Scope isolation. The caller asserted a worktree; if the session would
+      // launch in a different one, refuse rather than silently resuming it
+      // there — the caller's next action would be aimed at the wrong tree.
+      if ((target.worktreeId ?? null) !== requestedWorktreeId) {
+        throw new Error(
+          "That session was recorded in a different worktree. Resume it from the worktree it belongs to — it cannot be relaunched anywhere else."
+        );
+      }
+
+      // Only a FOREGROUND dispatch gets `onBeforeSpawn`. An assistant- or
+      // plugin-driven resume must not yank the user's worktree selection: the
+      // pane opens in its own worktree — backgrounded when that isn't the active
+      // one — and the caller addresses it by the id returned here. A keybinding
+      // or menu pick does switch, matching every other human resume surface: the
+      // person asked for this pane and expects to see it. `isForegroundDispatch`
+      // rather than `!== "agent"`, so `"plugin"` and a missing source fall on the
+      // don't-move-the-view side rather than the other way round.
+      const resumed = await resumeSessionIntoPanel(record, target, {
+        onBeforeSpawn: !isForegroundDispatch(ctx.dispatchSource)
+          ? undefined
+          : () => {
+              const selection = useWorktreeSelectionStore.getState();
+              if (target.worktreeId && target.worktreeId !== selection.activeWorktreeId) {
+                selection.selectWorktree(target.worktreeId, { source: "user" });
+              }
+            },
+      });
+
+      return {
+        terminalId: resumed.terminalId,
+        sessionId: record.sessionId,
+        worktreeId: resumed.worktreeId,
+        outcome: resumed.outcome,
+      };
+    },
+  }));
+
+  /**
+   * Prove a session id belongs to the caller's project before mutating it.
+   *
+   * The bookmark mutations identify a session by `sessionId` alone, and main
+   * matches that id against the WHOLE journal — `promoteBookmark` and friends
+   * scan every record on disk, not just the current project's. That was
+   * tolerable while the only callers were this project's own bookmark UI. Once
+   * #11908 put these on the assistant's action tier it stopped being tolerable:
+   * an id from another project, guessed or carried over from an earlier turn,
+   * would promote, rename, or delete that project's bookmark and hand its
+   * metadata back in the result.
+   *
+   * Scope is taken from the dispatch context, never from an argument — an
+   * argument the caller supplies is not a boundary it can be held to. With no
+   * project in context an agent dispatch is refused outright, while a human
+   * surface keeps working as before: this guard tightens what a model can reach
+   * and must not break the UI it was already safe for (mirrors
+   * `requireExplicitWorktreeForAgentDispatch`).
+   */
+  async function requireSessionInCallerProject(sessionId: string, ctx: ActionContext) {
+    const projectScope = ctx.projectId ?? ctx.scratchId;
+    if (!projectScope) {
+      // Both headless sources are refused, named explicitly rather than via
+      // `!isForegroundDispatch`: that helper treats an ABSENT source as
+      // non-foreground, which would reject the bare `run(args, {})` shape the
+      // action unit tests use throughout. Same reasoning as
+      // `requireExplicitWorktreeForAgentDispatch`.
+      if (ctx.dispatchSource === "agent" || ctx.dispatchSource === "plugin") {
+        throw new Error(
+          "No project in scope — this call can't be checked against a project, so it is refused."
+        );
+      }
+      return;
+    }
+    const records = await window.electron.agentSessionHistory.list(undefined, projectScope);
+    if (!records.some((record) => record.sessionId === sessionId)) {
+      // Deliberately the same wording whether the id is unknown or belongs to
+      // another project: distinguishing them would confirm that a guessed id
+      // exists somewhere, which is the probe this guard exists to stop.
+      throw new Error("No session with that id in this project.");
+    }
+  }
+
   actions.set("session.bookmarkAndClose", () => ({
     id: "session.bookmarkAndClose",
     title: "Bookmark and close",
     description:
-      "Capture a live agent pane's resumable conversation as a durable bookmark, then close the pane once the session is saved. Args: `terminalId` (the target agent pane) and a non-empty `label`. Confirmation is enforced by the dispatch layer, not an argument. Only agents with exact-session resume are eligible, and the target must be a live local pane. Prepare-before-remove: if capture or persistence fails the pane stays open and no bookmark is created. This interrupts a running agent and discards terminal scrollback — the conversation is resumable, the live process is not. Returns { record }.",
+      "Save a live agent pane's conversation as a durable bookmark, then close the pane. For a session that is already closed, promote it instead. Prepare-before-remove: if the capture fails the pane stays open and nothing is bookmarked. It interrupts a running agent and discards its scrollback — the conversation returns on resume, the process does not.",
     category: "agent",
     kind: "command",
     danger: "confirm",
@@ -813,9 +1137,14 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     dangerRationale:
       "Interrupts a running agent and removes its pane. The conversation is bookmarked and resumable, but the live process and terminal scrollback are discarded.",
     // danger:"confirm" gates agent/plugin dispatch through ActionService (the
-    // caller must attest confirmation via the dispatch option) — no confirm
-    // dialog exists in Phase 1; the Phase-2 pane dialog will supply it. Hidden
-    // from the palette so a source:"user" pick can't bypass the D1 guard.
+    // caller must attest confirmation via the dispatch option). Since #11908 put
+    // this on the assistant's action tier, that attestation comes from the
+    // renderer's own MCP confirm modal, which `useMcpBridge` raises for any
+    // dispatch whose effective danger is "confirm" — so an assistant call is
+    // gated by a real human dialog rather than dead-ending. The bound-session
+    // withholding rule that hides confirm-gated tools does not apply: it keys on
+    // the `external` tier, and the first-party assistant is never external.
+    // Hidden from the palette so a source:"user" pick can't bypass the D1 guard.
     palette: { mode: "hidden" },
     argsSchema: BookmarkAndCloseArgsSchema,
     run: async (args: unknown) => {
@@ -857,14 +1186,15 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "session.bookmark.promote",
     title: "Add bookmark to session",
     description:
-      "Pin an existing resumable session (from history) as a durable bookmark, keyed by `sessionId`, without launching it. Args: `sessionId` and a non-empty `label`. Bookmarked sessions are exempt from history retention and the per-worktree cap until deleted. Returns the updated record.",
+      "Pin a session that is already in history as a durable bookmark, without launching it or touching any pane. Use this when the session is closed; the bookmark-and-close capability is the one that retires a still-open pane. Bookmarking exempts a session from retention and from the per-worktree cap, so it stops aging out until the bookmark is deleted. Returns the updated record.",
     category: "agent",
     kind: "command",
     danger: "safe",
     scope: "renderer",
     argsSchema: BookmarkMutateArgsSchema,
-    run: async (args: unknown) => {
+    run: async (args: unknown, ctx: ActionContext) => {
       const { sessionId, label } = BookmarkMutateArgsSchema.parse(args);
+      await requireSessionInCallerProject(sessionId, ctx);
       return window.electron.agentSessionHistory.promoteBookmark({ sessionId, label });
     },
   }));
@@ -873,14 +1203,15 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "session.bookmark.rename",
     title: "Rename bookmark",
     description:
-      "Change a bookmark's label without touching the agent session or its title. Args: `sessionId` and a non-empty `label`. Only an already-bookmarked session can be renamed. Returns the updated record.",
+      "Change the label on an existing bookmark. Only the bookmark's own label moves — the agent session, its recorded title, and any live pane are left alone, so this cannot be used to retitle a terminal. A session that was never bookmarked is rejected rather than bookmarked on the spot; promote it first. Returns the updated record.",
     category: "agent",
     kind: "command",
     danger: "safe",
     scope: "renderer",
     argsSchema: BookmarkMutateArgsSchema,
-    run: async (args: unknown) => {
+    run: async (args: unknown, ctx: ActionContext) => {
       const { sessionId, label } = BookmarkMutateArgsSchema.parse(args);
+      await requireSessionInCallerProject(sessionId, ctx);
       return window.electron.agentSessionHistory.renameBookmark({ sessionId, label });
     },
   }));
@@ -889,7 +1220,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "session.bookmark.delete",
     title: "Delete bookmark",
     description:
-      "Remove a bookmark, demoting the session back to ordinary time-limited history. Args: `sessionId`. Confirmation is enforced by the dispatch layer, not an argument. Does NOT delete the provider's transcript or any open pane. Irreversible for the Daintree bookmark.",
+      "Remove a bookmark, demoting its session back to ordinary time-limited history where retention can eventually age it out. The provider's own transcript and any open pane are untouched, so this deletes the pin rather than the conversation — but the pin itself does not come back, and the session may be gone by the time anyone looks again. Confirmation is enforced by the dispatch layer.",
     category: "agent",
     kind: "command",
     danger: "confirm",
@@ -900,8 +1231,9 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     // ActionService; hidden from the palette so a user pick can't bypass it.
     palette: { mode: "hidden" },
     argsSchema: BookmarkDeleteArgsSchema,
-    run: async (args: unknown) => {
+    run: async (args: unknown, ctx: ActionContext) => {
       const { sessionId } = BookmarkDeleteArgsSchema.parse(args);
+      await requireSessionInCallerProject(sessionId, ctx);
       await window.electron.agentSessionHistory.deleteBookmark({ sessionId });
     },
   }));
@@ -993,7 +1325,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     id: "agent.listAvailable",
     title: "List Available Agents",
     description:
-      "List every registered agent — built-in, user-defined and plugin-contributed — from the authoritative registry, including ones that are not currently launchable. Use this before launching so an id is known to exist, and read each entry's launchability rather than assuming membership implies it. Those fields appear only once a live probe of each CLI finishes, and the result says so while that is incomplete.",
+      "List every registered agent, built-in, user-defined and plugin-contributed, from the authoritative registry, including ones not currently launchable. Use this before launching so an id is known to exist, and read each entry's launchability rather than assuming membership implies it. Those fields appear only once a live probe of each CLI finishes, and the result says so while that is incomplete.",
     category: "agent",
     kind: "query",
     danger: "safe",
@@ -1019,11 +1351,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
     mcpOutputSchema: true,
     run: async () => {
       const [{ settings, availability, availabilityLive }, registry, userRegistry] =
-        await Promise.all([
-          readAgentDiscoveryState(),
-          agentCapabilitiesClient.getRegistry(),
-          userAgentRegistryClient.get(),
-        ]);
+        await readAvailableAgentSources();
       const registryIds = [
         ...LAUNCHABLE_AGENT_IDS.filter((id) => Object.hasOwn(registry, id)),
         ...Object.keys(registry)
@@ -1064,6 +1392,132 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
             ...(builtIn ? { toolbarVisible: isAgentToolbarVisible(entry, rawState) } : {}),
           };
         }),
+      };
+    },
+  }));
+
+  /**
+   * Read the three layers a merged preset list is built from.
+   *
+   * Deliberately reads the same renderer stores the launcher resolves against
+   * rather than re-fetching over IPC. A fresh IPC read could report a preset
+   * the launcher's stores have not installed yet, and an id that cannot be
+   * launched is worse than an id reported a moment late — the whole point of
+   * this listing is that what it returns is what a launch will accept.
+   *
+   * Settings keep the cache-aware client fallback because that layer has one;
+   * the two preset stores do not, so they carry hydration markers instead and
+   * an unproven snapshot is reported as incomplete rather than guessed at.
+   */
+  const readAgentPresetSources = async (
+    agentId: string,
+    projectId: string | undefined,
+    scopeKnown: boolean
+  ) => {
+    const [{ useAgentSettingsStore }, { useCcrPresetsStore }, { useProjectPresetsStore }] =
+      await Promise.all([
+        import("@/store/agentSettingsStore"),
+        import("@/store/ccrPresetsStore"),
+        import("@/store/projectPresetsStore"),
+      ]);
+
+    const storeSettings = useAgentSettingsStore.getState().settings;
+    // Only the store is certifiable. The launcher resolves a preset id against
+    // that store, so a preset that exists solely in a client response is one
+    // this listing would promise and the next launch would fail to find. The
+    // fallback still runs, because naming presets before hydration is useful —
+    // it just cannot be reported as settled.
+    const settings =
+      storeSettings ??
+      (await withReadDeadline(agentSettingsClient.get(), "agentSettings").catch(() => null));
+    const ccrState = useCcrPresetsStore.getState();
+    const projectState = useProjectPresetsStore.getState();
+
+    // `agentId` is caller-supplied and unconstrained, so an inherited key like
+    // `__proto__` would otherwise resolve to `Object.prototype` and throw on
+    // the first array operation. Own-key plus shape checks also keep a
+    // corrupted persisted map from reaching the merge.
+    const ownBucket = (
+      byAgent: Record<string, AgentPreset[]>,
+      id: string
+    ): AgentPreset[] | undefined => {
+      if (!Object.hasOwn(byAgent, id)) return undefined;
+      const bucket = byAgent[id];
+      return Array.isArray(bucket) ? bucket : undefined;
+    };
+
+    // A project in scope contributes presets only when the loaded snapshot
+    // demonstrably belongs to it: the store is reused across project switches,
+    // and serving another project's presets would hand back ids this project
+    // cannot launch.
+    const projectScoped = projectId !== undefined && projectState.hydratedProjectId === projectId;
+    const agents = settings?.agents;
+    const entry = agents && Object.hasOwn(agents, agentId) ? agents[agentId] : undefined;
+
+    return {
+      customPresets: entry?.customPresets,
+      // Passed through exactly as stored: an absent key keeps the built-in
+      // registry presets, while an own array — `[]` included — replaces them.
+      ccrPresets: ownBucket(ccrState.ccrPresetsByAgent, agentId),
+      projectPresets: projectScoped ? ownBucket(projectState.presetsByAgent, agentId) : undefined,
+      presetsComplete:
+        storeSettings != null &&
+        ccrState.isInitialized &&
+        // No project id has two meanings. A scratch workspace genuinely has no
+        // repository presets, so nothing is missing there. A view that has not
+        // resolved its workspace at all is simply unknown, and certifying that
+        // as complete would report a project's presets as absent rather than
+        // unread.
+        (projectId !== undefined ? projectScoped : scopeKnown),
+    };
+  };
+
+  actions.set("agent.listPresets", () => ({
+    id: "agent.listPresets",
+    title: "List Agent Presets",
+    description:
+      "List the launch presets for one agent, merged across user settings, repository preset files and CCR discovery in the precedence the launcher applies, so every id returned is one a launch will accept. Identity only: no environment values or flags. While the completeness flag is false a source is still loading.",
+    category: "agent",
+    kind: "query",
+    danger: "safe",
+    scope: "renderer",
+    argsSchema: AgentListPresetsArgsSchema,
+    examples: [
+      {
+        args: { agentId: "claude" },
+        description: "Discover the preset ids available for Claude Code",
+      },
+    ],
+    resultSchema: z.object({
+      presetsComplete: z.boolean(),
+      presets: z.array(
+        z.object({
+          id: z.string(),
+          name: z.string(),
+          source: z.enum(["custom", "project", "ccr", "registry"]),
+          description: z.string().optional(),
+        })
+      ),
+    }),
+    mcpOutputSchema: true,
+    run: async (args: unknown, ctx: ActionContext) => {
+      const { agentId, projectId: requestedProjectId } = AgentListPresetsArgsSchema.parse(
+        args ?? {}
+      );
+      const projectId = requestedProjectId ?? ctx.projectId;
+      // Either workspace pointer proves the view resolved its own scope; with
+      // neither, "no project presets" is a gap rather than an answer.
+      const scopeKnown = projectId !== undefined || ctx.scratchId !== undefined;
+      const sources = await readAgentPresetSources(agentId, projectId, scopeKnown);
+
+      return {
+        presetsComplete: sources.presetsComplete,
+        presets: getMergedPresetIdentities(
+          agentId,
+          sources.customPresets,
+          sources.ccrPresets,
+          sources.projectPresets
+        ),
       };
     },
   }));

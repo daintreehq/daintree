@@ -12,6 +12,16 @@ import { isProtectedBranch } from "@shared/utils/gitConstants";
 const MAX_SUBJECT_LENGTH = 72;
 const HISTORY_FETCH_POLL_INTERVAL_MS = 10;
 
+// Fading a chromatic CTA to 50% produces a dusty slab of the accent that still
+// dominates the dialog, and drops the label to ~2.1:1 in every light theme.
+// Neutral disabled surface + muted ink instead. Shared by both primary CTAs so
+// the panel shows one disabled treatment regardless of whether the worktree
+// has a remote.
+const DISABLED_CTA_CLASSES = cn(
+  "aria-disabled:bg-surface-inset aria-disabled:text-text-muted",
+  "aria-disabled:shadow-none aria-disabled:cursor-not-allowed"
+);
+
 interface CommitPanelProps {
   stagedCount: number;
   isDetachedHead: boolean;
@@ -548,10 +558,7 @@ export function CommitPanel({
                   size="sm"
                   onClick={handlePrimaryClick}
                   aria-disabled={!canCommit || isBusy || undefined}
-                  className={cn(
-                    "flex-1",
-                    "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
-                  )}
+                  className={cn("flex-1", DISABLED_CTA_CLASSES)}
                 >
                   {isPushing ? (
                     <Spinner size="sm" className="mr-1.5" />
@@ -576,10 +583,7 @@ export function CommitPanel({
                 size="sm"
                 onClick={handlePrimaryClick}
                 aria-disabled={!canCommit || isBusy || undefined}
-                className={cn(
-                  "flex-1",
-                  "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
-                )}
+                className={cn("flex-1", DISABLED_CTA_CLASSES)}
               >
                 {isCommitting ? (
                   <Spinner size="sm" className="mr-1.5" />

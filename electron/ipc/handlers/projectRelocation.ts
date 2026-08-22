@@ -1,5 +1,4 @@
 import path from "path";
-import { projectRelocationCoordinator } from "../../services/ProjectRelocationCoordinator.js";
 import { defineIpcNamespace, op } from "../define.js";
 import { PROJECT_RELOCATION_METHOD_CHANNELS } from "./projectRelocation.preload.js";
 import type { HandlerDependencies } from "../types.js";
@@ -14,6 +13,17 @@ import type {
 // quiesce/rebind an open project — mirroring the inline `configure(deps)` the
 // legacy `project:locate` handler does per call.
 let handlerDeps: HandlerDependencies | undefined;
+let coordinatorPromise:
+  | Promise<
+      typeof import("../../services/ProjectRelocationCoordinator.js").projectRelocationCoordinator
+    >
+  | undefined;
+
+async function getCoordinator() {
+  return (coordinatorPromise ??= import("../../services/ProjectRelocationCoordinator.js").then(
+    ({ projectRelocationCoordinator }) => projectRelocationCoordinator
+  ));
+}
 
 /**
  * Validate an untrusted renderer relocation request into the exact shape the
@@ -53,15 +63,17 @@ export const projectRelocationNamespace = defineIpcNamespace({
     preview: op(
       PROJECT_RELOCATION_METHOD_CHANNELS.preview,
       async (request: RelocationRequest): Promise<RelocationPreview> => {
-        if (handlerDeps) projectRelocationCoordinator.configure(handlerDeps);
-        return projectRelocationCoordinator.previewRelocate(validateRelocationRequest(request));
+        const coordinator = await getCoordinator();
+        if (handlerDeps) coordinator.configure(handlerDeps);
+        return coordinator.previewRelocate(validateRelocationRequest(request));
       }
     ),
     apply: op(
       PROJECT_RELOCATION_METHOD_CHANNELS.apply,
       async (request: RelocationRequest): Promise<Project> => {
-        if (handlerDeps) projectRelocationCoordinator.configure(handlerDeps);
-        return projectRelocationCoordinator.relocate(validateRelocationRequest(request));
+        const coordinator = await getCoordinator();
+        if (handlerDeps) coordinator.configure(handlerDeps);
+        return coordinator.relocate(validateRelocationRequest(request));
       }
     ),
   },

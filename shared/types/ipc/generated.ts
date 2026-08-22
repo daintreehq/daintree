@@ -162,6 +162,18 @@ export interface GeneratedIpcInvokeMap {
     args: [context?: import("../commands.js").CommandContext | undefined];
     result: import("../commands.js").CommandManifestEntry[];
   };
+  "config-bundle:apply-import": {
+    args: [payload: { bundleJson: string }];
+    result: import("../configBundle.js").ConfigImportReport;
+  };
+  "config-bundle:export": {
+    args: [];
+    result: import("../configBundle.js").ConfigExportResult;
+  };
+  "config-bundle:preview-import": {
+    args: [];
+    result: import("../configBundle.js").ConfigBundlePreview;
+  };
   "connectivity:get-state": {
     args: [];
     result: import("./connectivity.js").ServiceConnectivitySnapshot;
@@ -705,7 +717,7 @@ export interface GeneratedIpcInvokeMap {
     } | null;
   };
   "help:report-panel-open": {
-    args: [projectId: string, isOpen: boolean];
+    args: [projectId: string, isOpen: boolean, isVisible?: boolean | undefined];
     result: void;
   };
   "help:restore-pending-hibernation": {
@@ -880,6 +892,10 @@ export interface GeneratedIpcInvokeMap {
   "mcp-server:set-session-tier": {
     args: [payload: { sessionId: string; tier: "action" | "workbench" | "system" }];
     result: { sessionId: string; tier: "action" | "workbench" | "system" };
+  };
+  "menu:show-application": {
+    args: [payload?: import("../menu.js").ShowApplicationMenuPayload | undefined];
+    result: void;
   };
   "menu:show-context": {
     args: [payload: import("../menu.js").ShowContextMenuPayload];
@@ -1130,6 +1146,18 @@ export interface GeneratedIpcInvokeMap {
     args: [pluginId: string, request: import("../plugin.js").PluginPickPathRequest];
     result: string | null;
   };
+  "plugin:recipe-metadata-update": {
+    args: [recipeId: string, updates: import("../project.js").PluginRecipeMetadataPatch];
+    result: import("../project.js").TerminalRecipe;
+  };
+  "plugin:recipe-record-use": {
+    args: [recipeId: string, timestamp: number];
+    result: import("../project.js").TerminalRecipe;
+  };
+  "plugin:recipes-get": {
+    args: [];
+    result: import("../project.js").TerminalRecipe[];
+  };
   "plugin:report-panel-lifecycle": {
     args: [events: import("../plugin.js").PluginPanelLifecycleEvent[]];
     result: void;
@@ -1290,10 +1318,6 @@ export interface GeneratedIpcInvokeMap {
     args: [options: import("./gitClone.js").CloneRepoOptions];
     result: import("./gitClone.js").CloneRepoResult;
   };
-  "project:free-memory": {
-    args: [projectId: string];
-    result: import("./project.js").ProjectFreeMemoryResult;
-  };
   "project:get-draft-inputs": {
     args: [projectId: string];
     result: Record<string, string>;
@@ -1366,6 +1390,10 @@ export interface GeneratedIpcInvokeMap {
       },
     ];
     result: void;
+  };
+  "project:sleep": {
+    args: [projectId: string];
+    result: import("./project.js").ProjectSleepResult;
   };
   "run-history:append": {
     args: [input: import("./runHistory.js").RunHistoryAppendInput];

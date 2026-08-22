@@ -277,6 +277,8 @@ export const createCorePanelActions = (
   },
 
   updateTitle: (id, newTitle, source = "user") => {
+    const before = get().panelsById[id];
+
     set((state) => {
       const terminal = state.panelsById[id];
       if (!terminal) return state;
@@ -303,6 +305,21 @@ export const createCorePanelActions = (
       saveNormalized(newById, state.panelIds);
       return { panelsById: newById };
     });
+
+    // Mirror the rename onto the pty-host record. The renderer store drives the
+    // panel header, but the fleet overview, session journal and shutdown records
+    // read the pty-host copy — leave it stale and every `titleMode === "user"`
+    // branch in main stays unreachable for a hand rename (#11830). Sent from
+    // outside the updater so the reducer stays free of side effects, and only
+    // on a real write: the identity check skips every early-return above, so a
+    // bounced or no-op rename costs no IPC and no fleet recompute.
+    const after = get().panelsById[id];
+    if (!after || after === before || !panelKindHasPty(after.kind)) return;
+    try {
+      terminalClient.updateTitle(id, after.title, after.titleMode ?? "default");
+    } catch (error) {
+      logWarn("[PanelRegistry] Failed to sync renamed title to the pty host", { error });
+    }
   },
 
   updateLastObservedTitle: (id, title) => {

@@ -195,7 +195,64 @@ export interface ProjectViewManagerOptions {
    * eviction protection needs a liveness source that tracks exits.
    */
   isTerminalLive?: (terminalId: string) => boolean;
+  /**
+   * Why MCP needs this view kept running right now (#11790) — a live session
+   * binding, an in-flight dispatch, or neither. Injected from the composition
+   * root for the same reason as `assistantBackendForProject`: electron/window/
+   * stays free of the service, and here it also keeps the MCP module graph off
+   * eager boot, since it is deliberately behind a dynamic import.
+   *
+   * Absent — as in tests that don't exercise MCP — every workspace reads as
+   * unprotected, which is the pre-#11790 behavior.
+   */
+  mcpViewActivity?: (workspaceId: string, webContentsId: number) => McpViewActivity | null;
 }
+
+/**
+ * What MCP is doing with a project view, as read by the freeze and eviction
+ * policies (#11790). The two fields earn different protection — see
+ * `McpServerService.getWorkspaceViewActivity` for why one is an outright
+ * eviction exclusion and the other only a deprioritization.
+ */
+export interface McpViewActivity {
+  /** An MCP request is in flight against this exact view. */
+  dispatchLease: boolean;
+  /** A live MCP session is bound to this workspace, call or no call. */
+  liveBinding: boolean;
+}
+
+/**
+ * What the freeze and eviction policies actually read: the activity, plus
+ * whether the answer could be obtained at all.
+ */
+export interface McpViewActivityReading extends McpViewActivity {
+  /**
+   * The wired callback threw, so protection state is genuinely unavailable.
+   *
+   * Deliberately distinct from the two "definitely not protected" cases — no
+   * callback wired, and a callback returning null because MCP has not loaded —
+   * because the two policies resolve real uncertainty in OPPOSITE directions.
+   * Freezing treats unknown as protected: the cost is one missed optimization
+   * on one cached view, against re-creating the 30s stranded dispatch. Eviction
+   * must not: an unknown that granted the absolute lease exclusion would let a
+   * single broken callback pin every cached view through critical pressure and
+   * turn a wiring bug into an OOM. It deprioritizes instead — reclaimable, just
+   * last.
+   */
+  unknown: boolean;
+}
+
+const NO_MCP_ACTIVITY: McpViewActivityReading = {
+  dispatchLease: false,
+  liveBinding: false,
+  unknown: false,
+};
+
+const UNKNOWN_MCP_ACTIVITY: McpViewActivityReading = {
+  dispatchLease: false,
+  liveBinding: false,
+  unknown: true,
+};
 
 export class ProjectViewManager {
   // The fields below are intentionally not `private`: sibling
@@ -221,6 +278,7 @@ export class ProjectViewManager {
     webContentsId: number;
   } | null;
   isTerminalLive?: (terminalId: string) => boolean;
+  mcpViewActivity?: (workspaceId: string, webContentsId: number) => McpViewActivity | null;
   windowRegistry?: import("./WindowRegistry.js").WindowRegistry;
   private switchChain: Promise<void> = Promise.resolve();
   private resizeHandler: (() => void) | null = null;
@@ -264,6 +322,8 @@ export class ProjectViewManager {
     intent: ProjectFocusOnActivateIntent;
   } | null = null;
   disposed = false;
+  /** One-shot latch so a persistently broken activity callback can't flood the log. */
+  private warnedMcpActivityFailure = false;
   private cachedMemoryTimerCleanup: (() => void) | null = null;
 
   // Agent-state cache for hasActiveAgent(). The main-process getPtyManager()
@@ -286,6 +346,7 @@ export class ProjectViewManager {
     this.onViewCrashed = opts.onViewCrashed;
     this.assistantBackendForProject = opts.assistantBackendForProject;
     this.isTerminalLive = opts.isTerminalLive;
+    this.mcpViewActivity = opts.mcpViewActivity;
     this.windowRegistry = opts.windowRegistry;
     if (opts.cachedProjectViews != null) {
       this.maxCachedViews = opts.cachedProjectViews;
@@ -350,6 +411,12 @@ export class ProjectViewManager {
     win.on("unmaximize", this.resizeHandler);
     win.on("enter-full-screen", this.resizeHandler);
     win.on("leave-full-screen", this.resizeHandler);
+    // `restore` is what replays a notification `notifyBackgroundResize` declined
+    // to send while minimized. Deminiaturizing to the same frame emits no
+    // `resize` — the frame did not change — so without this a cached view keeps
+    // the geometry it had before the minimize until the next real resize or its
+    // own reveal (#11900).
+    win.on("restore", this.resizeHandler);
 
     // Per-instance random phase offset: every window has its own sampler, and
     // app.getAppMetrics() costs 5–50ms of synchronous main-thread work. A
@@ -374,6 +441,13 @@ export class ProjectViewManager {
         } catch (error) {
           logWarn("projectview.pressure-check.error", {
             error: formatErrorMessage(error, "maybeEvictUnderPressure threw"),
+          });
+        }
+        try {
+          this.refreezeUnprotectedCachedViews();
+        } catch (error) {
+          logWarn("projectview.refreeze.error", {
+            error: formatErrorMessage(error, "refreezeUnprotectedCachedViews threw"),
           });
         }
         scheduleSample(CACHED_VIEW_MEMORY_SAMPLE_INTERVAL_MS);
@@ -835,9 +909,52 @@ export class ProjectViewManager {
     }
   }
 
+  /**
+   * What MCP is doing with `workspaceId`'s view right now (#11790).
+   *
+   * Never throws: the callback reaches a service behind a dynamic import, and a
+   * freeze or eviction pass must not be abandoned halfway through the view map
+   * because that service was mid-teardown.
+   *
+   * Three outcomes, not two. No callback wired, a destroyed view, or a null
+   * answer (MCP has not loaded, so there are no sessions) are all *known* to be
+   * unprotected — the pre-#11790 behavior. A callback that throws is not: that
+   * is reported as `unknown` so each policy can resolve it in its own safe
+   * direction, and warned once so a broken composition seam is distinguishable
+   * from "MCP simply isn't running" in the logs.
+   *
+   * Takes a workspace id, not a project id: `views` is keyed by the opaque
+   * workspace identity (a project's 64-hex id or a scratch workspace's UUID),
+   * which is the same vocabulary the MCP session binding stores.
+   */
+  mcpActivityFor(workspaceId: string, wc: Electron.WebContents): McpViewActivityReading {
+    if (!this.mcpViewActivity || wc.isDestroyed()) return NO_MCP_ACTIVITY;
+    try {
+      const activity = this.mcpViewActivity(workspaceId, wc.id);
+      return activity ? { ...activity, unknown: false } : NO_MCP_ACTIVITY;
+    } catch (error) {
+      if (!this.warnedMcpActivityFailure) {
+        this.warnedMcpActivityFailure = true;
+        logWarn("projectview.mcp-activity.error", {
+          error: formatErrorMessage(error, "mcpViewActivity threw"),
+        });
+      }
+      return UNKNOWN_MCP_ACTIVITY;
+    }
+  }
+
   private freezeAllCached(): void {
     for (const [projectId, entry] of this.views) {
       if (projectId === this.activeProjectId) continue;
+      // The outgoing anti-flash bridge is still attached and on-screen even
+      // though `activeProjectId` already names the incoming project, so it is
+      // as un-freezable as the active view (the eviction guard excludes it for
+      // the same reason). This pass is periodic now, not just the profile
+      // transition, so a sampler tick can land inside any switch: freezing
+      // there suspends the renderer painting the frame the user is looking at,
+      // and it would also beat `deactivateEntry` to the view, freezing before
+      // its requestIdleCallback GC is ever scheduled (lesson #4684).
+      if (projectId === this.getOutgoingBridgeProjectId()) continue;
       // Never freeze a view whose project has a live agent. A frozen renderer
       // cannot run JS, so the queued agent:state-changed IPC sits in Mojo and
       // the background dashboard stays stuck on its pre-freeze state (e.g.
@@ -846,8 +963,52 @@ export class ProjectViewManager {
       if (hasActiveAgent(this, projectId)) continue;
       const wc = entry.view.webContents;
       if (wc.isDestroyed()) continue;
+      // A live MCP session binding is the same argument (#11790): the whole
+      // point of binding is to drive this workspace while the user works
+      // elsewhere, so its view is a background one by design, and freezing it
+      // strands every dispatch until the bridge deadline fires. The bridge also
+      // thaws on demand, which covers a session that binds after this pass;
+      // this guard is what stops a later pass from re-freezing underneath a
+      // session that is already using the view.
+      //
+      // Unlike eviction, skipping the freeze needs no bounded lease. It costs
+      // one optimization on one cached view — CPU throttling and the periodic
+      // memory purge still apply — rather than the memory a resident renderer
+      // holds, so a quiet binding can hold it for as long as the session lives.
+      const mcp = this.mcpActivityFor(projectId, wc);
+      if (mcp.liveBinding || mcp.dispatchLease || mcp.unknown) continue;
       void freezeWebContents(wc);
     }
+  }
+
+  /**
+   * Re-freeze cached views that were thawed for MCP but are no longer
+   * protected (#11790).
+   *
+   * The bridge thaws a bound or pinned view on demand, and nothing puts it
+   * back: `freezeAllCached` runs only on the transition INTO the efficiency
+   * profile, and `setEfficiencyFreeze(true)` while already enabled is an early
+   * no-op. Without this, one dispatch into a cached view leaves it running JS
+   * and timers for the rest of the efficiency period, and a session that
+   * disconnects never gives its view back — repeated across workspaces, the
+   * profile quietly stops doing its job.
+   *
+   * Piggybacked on the cached-view memory sampler for the same reason
+   * `maybeEvictUnderPressure` is: it needs a trigger that doesn't depend on the
+   * user switching projects or the profile toggling. Reusing `freezeAllCached`
+   * keeps one copy of the guard set, and re-freezing an already-frozen view is
+   * a harmless no-op, so this converges rather than tracking which views it
+   * personally thawed. A strict no-op outside the efficiency profile.
+   */
+  refreezeUnprotectedCachedViews(): void {
+    if (!this.efficiencyFreezeEnabled) return;
+    // A freeze-entry debounce is still pending — let its trailing edge do the
+    // work. `setEfficiencyFreeze(true)` flips the flag immediately but delays
+    // the sweep, precisely so a profile that flips back inside the window
+    // freezes nothing at all; a sampler tick landing in that window would
+    // freeze early and defeat it.
+    if (this.efficiencyFreezeTimer !== null) return;
+    this.freezeAllCached();
   }
 
   // Wake any cached background view whose project gained a live agent after it
@@ -885,6 +1046,13 @@ export class ProjectViewManager {
   // derives terminal sizes from these bounds instead of from layout.
   private notifyBackgroundResize(): void {
     if (this.disposed || this.win.isDestroyed()) return;
+    // A minimized window's content bounds are platform-dependent and not a
+    // layout the renderer can scale against. Forwarding them shrinks every
+    // cached pane's geometry proportionally, and a pane that lands on the column
+    // floor re-wraps committed scrollback narrow enough to lose it (#11900).
+    // Nothing is dropped by skipping: `restore` is registered above and reruns
+    // this with usable bounds.
+    if (this.win.isMinimized()) return;
     const { width, height } = this.win.getContentBounds();
     for (const [projectId, entry] of this.views) {
       if (projectId === this.activeProjectId) continue;
@@ -937,6 +1105,7 @@ export class ProjectViewManager {
       this.win.removeListener("unmaximize", this.resizeHandler);
       this.win.removeListener("enter-full-screen", this.resizeHandler);
       this.win.removeListener("leave-full-screen", this.resizeHandler);
+      this.win.removeListener("restore", this.resizeHandler);
       this.resizeHandler = null;
     }
 

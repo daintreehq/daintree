@@ -60,6 +60,12 @@ export interface WorktreeChanges {
   latestFileMtime?: number;
   /** Timestamp when changes were last calculated */
   lastUpdated?: number;
+  /**
+   * HEAD object id. Already resolved for the last-commit log cache key, so it
+   * costs nothing extra — it is the drift baseline the "move panel only"
+   * backstop compares against (#11840). Empty on an unborn HEAD, hence omitted.
+   */
+  headOid?: string;
   /** Last commit message (cached to avoid extra git log calls) */
   lastCommitMessage?: string;
   /** Last commit time (ms since epoch, committer date) */

@@ -101,9 +101,9 @@ export function ProjectSwitcher() {
     [projectSwitcher]
   );
 
-  const handleFreeMemoryProject = useCallback(
+  const handleSleepProject = useCallback(
     (projectId: string) => {
-      void projectSwitcher.freeMemoryProject(projectId);
+      void projectSwitcher.sleepProject(projectId);
     },
     [projectSwitcher]
   );
@@ -144,29 +144,45 @@ export function ProjectSwitcher() {
 
   // Reads the totals across every non-active project rather than `results`,
   // which is ordered and filtered for presentation.
+  //
+  // One mark, one axis: the dot's hue says what is being asked of the user. The
+  // fleet's running work is in the label rather than the glyph — a second shape
+  // on this mark could say that something was moving but never how much, which
+  // is the half worth knowing. The switcher's rows split the same way, and get
+  // to draw the proportion because they have one project's counts to weigh; a
+  // fleet-wide badge would be averaging every project into one dot.
   const badgeStatus = useMemo(() => {
     const { activeAgentCount, waitingAgentCount, waitingProjectCount } =
       projectSwitcher.nonActiveAgentCounts;
 
+    if (waitingAgentCount === 0 && activeAgentCount === 0) return null;
+
+    const parts: string[] = [];
     // Waiting counts PROJECTS, not agents: the number answers "how many places
     // need me?", which stays legible when eight agents pile up in one repo. An
     // agent tally there would read as eight separate obligations.
     if (waitingAgentCount > 0) {
-      return {
-        color: "bg-state-waiting",
-        pulse: false,
-        label: `${waitingProjectCount} project${waitingProjectCount === 1 ? "" : "s"} waiting for input`,
-      };
+      parts.push(
+        `${waitingProjectCount} project${waitingProjectCount === 1 ? "" : "s"} waiting for input`
+      );
     }
     // Work in progress isn't an obligation, so it stays an agent count.
     if (activeAgentCount > 0) {
-      return {
-        color: "bg-activity-active",
-        pulse: true,
-        label: `${activeAgentCount} background agent${activeAgentCount === 1 ? "" : "s"} working`,
-      };
+      parts.push(
+        `${activeAgentCount} background agent${activeAgentCount === 1 ? "" : "s"} working`
+      );
     }
-    return null;
+
+    return {
+      // Demand wins the hue outright — the badge's colour has always meant
+      // "this needs you" — and liveness stays in the label rather than
+      // competing for the one mark a fleet-wide badge has.
+      color: waitingAgentCount > 0 ? "bg-state-waiting" : "bg-activity-working",
+      // Both facts, always. The mark carries demand alone, so the label is the
+      // only place either a reader who cannot see it or one who can learns how
+      // much is still running.
+      label: parts.join(", "),
+    };
   }, [projectSwitcher.nonActiveAgentCounts]);
 
   const stopDialog = (
@@ -216,7 +232,7 @@ export function ProjectSwitcher() {
             onCreateFolder={handleCreateFolder}
             onStopProject={handleStopProject}
             onCloseProject={handleCloseProject}
-            onFreeMemoryProject={handleFreeMemoryProject}
+            onSleepProject={handleSleepProject}
             onLocateProject={handleLocateProject}
             onMoveOrRenameProject={handleMoveOrRenameProject}
             onTogglePinProject={handleTogglePinProject}
@@ -224,14 +240,15 @@ export function ProjectSwitcher() {
             onSelectNewWindow={handleSelectNewWindow}
             onHoverProject={projectSwitcher.onHoverProject}
             onHoverProjectEnd={projectSwitcher.onHoverProjectEnd}
+            fleetLiveness={projectSwitcher.fleetLiveness}
             removeConfirmProject={projectSwitcher.removeConfirmProject}
             onRemoveConfirmClose={() => projectSwitcher.setRemoveConfirmProject(null)}
             onConfirmRemove={projectSwitcher.confirmRemoveProject}
             isRemovingProject={projectSwitcher.isRemovingProject}
-            freeMemoryConfirmProject={projectSwitcher.freeMemoryConfirmProject}
-            onFreeMemoryConfirmClose={() => projectSwitcher.setFreeMemoryConfirmProject(null)}
-            onConfirmFreeMemory={projectSwitcher.confirmFreeMemory}
-            isFreeingMemory={projectSwitcher.isFreeingMemory}
+            sleepConfirmProject={projectSwitcher.sleepConfirmProject}
+            onSleepConfirmClose={() => projectSwitcher.setSleepConfirmProject(null)}
+            onConfirmSleep={projectSwitcher.confirmSleep}
+            isSleepingProject={projectSwitcher.isSleepingProject}
             rankedSearch={projectSwitcher.isRankedSearch}
             scratchResults={projectSwitcher.scratchResults}
             onCreateScratch={(name) => void projectSwitcher.createScratch(name)}
@@ -303,7 +320,7 @@ export function ProjectSwitcher() {
         onCreateFolder={handleCreateFolder}
         onStopProject={handleStopProject}
         onCloseProject={handleCloseProject}
-        onFreeMemoryProject={handleFreeMemoryProject}
+        onSleepProject={handleSleepProject}
         onLocateProject={handleLocateProject}
         onMoveOrRenameProject={handleMoveOrRenameProject}
         onTogglePinProject={handleTogglePinProject}
@@ -311,14 +328,15 @@ export function ProjectSwitcher() {
         onCopyPath={projectSwitcher.copyPath}
         onHoverProject={projectSwitcher.onHoverProject}
         onHoverProjectEnd={projectSwitcher.onHoverProjectEnd}
+        fleetLiveness={projectSwitcher.fleetLiveness}
         removeConfirmProject={projectSwitcher.removeConfirmProject}
         onRemoveConfirmClose={() => projectSwitcher.setRemoveConfirmProject(null)}
         onConfirmRemove={projectSwitcher.confirmRemoveProject}
         isRemovingProject={projectSwitcher.isRemovingProject}
-        freeMemoryConfirmProject={projectSwitcher.freeMemoryConfirmProject}
-        onFreeMemoryConfirmClose={() => projectSwitcher.setFreeMemoryConfirmProject(null)}
-        onConfirmFreeMemory={projectSwitcher.confirmFreeMemory}
-        isFreeingMemory={projectSwitcher.isFreeingMemory}
+        sleepConfirmProject={projectSwitcher.sleepConfirmProject}
+        onSleepConfirmClose={() => projectSwitcher.setSleepConfirmProject(null)}
+        onConfirmSleep={projectSwitcher.confirmSleep}
+        isSleepingProject={projectSwitcher.isSleepingProject}
         rankedSearch={projectSwitcher.isRankedSearch}
         scratchResults={projectSwitcher.scratchResults}
         onCreateScratch={(name) => void projectSwitcher.createScratch(name)}
@@ -386,15 +404,21 @@ export function ProjectSwitcher() {
                 <ChevronsUpDown className="shrink-0 text-text-muted transition-colors group-hover:text-text-secondary" />
               )}
               {badgeStatus && (
+                // A fixed box the mark centres in, so a change of hue moves
+                // nothing around it.
                 <span
                   role="status"
                   aria-label={badgeStatus.label}
-                  className={cn(
-                    "absolute top-1 right-1 h-2 w-2 rounded-full ring-2 ring-[var(--color-surface-panel-elevated)]",
-                    badgeStatus.color,
-                    badgeStatus.pulse && "animate-activity-pulse"
-                  )}
-                />
+                  className="absolute top-0.5 right-0.5 flex h-3 w-3 items-center justify-center"
+                >
+                  <span
+                    className={cn(
+                      "h-2 w-2 rounded-full ring-2 ring-[var(--color-surface-panel-elevated)]",
+                      badgeStatus.color
+                    )}
+                    data-testid="project-switcher-badge-dot"
+                  />
+                </span>
               )}
             </Button>
           </TooltipTrigger>

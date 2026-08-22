@@ -9,63 +9,21 @@ import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
 import { saveNormalized, saveTabGroups } from "./persistence";
 import { optimizeForDock } from "./layout";
-import { deriveRuntimeStatus, dissolvePanelFromGroup } from "./helpers";
+import {
+  deriveRuntimeStatus,
+  dissolvePanelFromGroup,
+  recordExplicitWorktreeAttribution,
+} from "./helpers";
 import {
   buildWorktreeIndex,
-  NO_WORKTREE,
+  collectUngroupedCandidateIds,
   panelMatchesWorktreeScope,
   transferBetweenWorktreeIndex,
 } from "./worktreeIndex";
-import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
 import { getWorktreeSelectionSnapshot } from "@/store/storeAccessors";
 
 type Set = PanelRegistryStoreApi["setState"];
 type Get = PanelRegistryStoreApi["getState"];
-
-/**
- * Candidate panel ids for the ungrouped-panel scan in `getTabGroups`.
- *
- * Iterates `panelIds` first (preserving committed order so explicit/virtual
- * group ordering and drag-reorder via `reorderTabGroups` stay correct), then
- * appends any ids present in `panelIdsByWorktreeId` but not yet in `panelIds`.
- *
- * That tail is the fix for #9649: during a `beginSpawnBatch`/`flushSpawnBatch`
- * window, the worktree index is updated eagerly at panel creation while
- * `panelIds` only appends at flush. Reading `panelIds` alone left freshly-
- * batched recipe panels out of every virtual group until a worktree switch
- * forced a re-derive. `gridPanelIds` in `useContentGridContext` already reads
- * the index, so including its pending ids keeps the ungrouped source consistent
- * with the grid's structural dep — the panel paints on first mount.
- *
- * For a concrete `worktreeId`, the tail scans that worktree's bucket plus the
- * `NO_WORKTREE` bucket (dock-global panels are visible in every worktree-scoped
- * dock — the per-panel `panelMatchesWorktreeScope` filter inside the loop keeps
- * them out of grid queries). For `worktreeId === undefined`, it scans every
- * bucket.
- */
-function collectUngroupedCandidateIds(
-  panelIds: string[],
-  panelIdsByWorktreeId: Record<string, string[]>,
-  worktreeId: string | undefined
-): string[] {
-  const seen = new Set(panelIds);
-  const buckets =
-    worktreeId === undefined
-      ? Object.values(panelIdsByWorktreeId)
-      : [panelIdsByWorktreeId[worktreeId], panelIdsByWorktreeId[NO_WORKTREE]];
-
-  let pending: string[] | undefined;
-  for (const bucket of buckets) {
-    if (!bucket) continue;
-    for (const id of bucket) {
-      if (seen.has(id)) continue;
-      seen.add(id);
-      (pending ??= []).push(id);
-    }
-  }
-
-  return pending ? [...panelIds, ...pending] : panelIds;
-}
 
 function getPanelTabGroupLocation(
   panel: PanelInstance | CarrierPanel | undefined
@@ -474,15 +432,7 @@ export const createTabGroupActions = (
     // so later cwd-based inference can never silently re-home the panels.
     if (adoptedWorktreeId !== null) {
       for (const pid of backfilledPanelIds) {
-        const ledgerGeneration = agentLifecycleLedger.currentGeneration(pid);
-        if (ledgerGeneration !== undefined) {
-          agentLifecycleLedger.recordWorktreeAttribution(
-            pid,
-            ledgerGeneration,
-            adoptedWorktreeId,
-            "explicit"
-          );
-        }
+        recordExplicitWorktreeAttribution(pid, adoptedWorktreeId);
       }
     }
 
@@ -560,19 +510,22 @@ export const createTabGroupActions = (
       return { panelsById: newById, panelIdsByWorktreeId: newIndex, tabGroups: newTabGroups };
     });
 
+    // A grouped move is explicit worktree attribution for every member, exactly
+    // as a single-panel move is. `moveTerminalToWorktree` used to hand grouped
+    // panels off to this function and return before writing anything, so one
+    // drag could re-file several agents with no attribution at all (#11840).
+    // Recorded here rather than at that call site so every caller is covered.
     for (const panelId of group.panelIds) {
       const terminal = get().panelsById[panelId];
-      if (
-        terminal &&
-        terminal.location !== "trash" &&
-        !get().trashedTerminals.has(panelId) &&
-        panelKindHasPty(terminal.kind ?? "terminal")
-      ) {
-        if (targetLocation === "dock") {
-          optimizeForDock(panelId);
-        } else {
-          terminalInstanceService.applyRendererPolicy(panelId, TerminalRefreshTier.VISIBLE);
-        }
+      if (!terminal || terminal.location === "trash" || get().trashedTerminals.has(panelId)) {
+        continue;
+      }
+      recordExplicitWorktreeAttribution(panelId, worktreeId);
+      if (!panelKindHasPty(terminal.kind ?? "terminal")) continue;
+      if (targetLocation === "dock") {
+        optimizeForDock(panelId);
+      } else {
+        terminalInstanceService.applyRendererPolicy(panelId, TerminalRefreshTier.VISIBLE);
       }
     }
 
@@ -739,18 +692,53 @@ export const createTabGroupActions = (
       });
 
       const uniquePanelIds = Array.from(new Set(validPanelIds));
-      const finalPanelIds = uniquePanelIds.filter((id) => !panelsAlreadyInGroups.has(id));
+      let finalPanelIds = uniquePanelIds.filter((id) => !panelsAlreadyInGroups.has(id));
 
       if (finalPanelIds.length <= 1) continue;
 
-      const panelWorktrees = new Map<string | undefined, number>();
-      for (const panelId of finalPanelIds) {
-        const terminal = state.panelsById[panelId];
-        if (terminal) {
-          const count = panelWorktrees.get(terminal.worktreeId) || 0;
-          panelWorktrees.set(terminal.worktreeId, count + 1);
+      const countWorktrees = (ids: readonly string[]) => {
+        const counts = new Map<string | undefined, number>();
+        for (const panelId of ids) {
+          const terminal = state.panelsById[panelId];
+          if (terminal) {
+            counts.set(terminal.worktreeId, (counts.get(terminal.worktreeId) || 0) + 1);
+          }
+        }
+        return counts;
+      };
+
+      // A group whose worktree was deleted can restore split: PTYs that
+      // survived keep the deleted worktree, while any whose process died
+      // cold-respawn onto a live one. Repair rewrites EVERY member to a single
+      // worktree, and both answers are wrong for a split like that — electing
+      // the deleted worktree drags a freshly spawned agent onto a row the
+      // cleanup sweep trashes, and electing the live one relabels genuine
+      // survivors as belonging to a worktree they never ran in, which empties
+      // their row and exempts them from the cleanup that should retire them.
+      //
+      // So don't repair across that line at all: drop the survivors out of the
+      // group and leave them on their row. Ungrouped is a real state, and each
+      // panel keeps the worktree it actually restored onto (#11911).
+      const ghosted = getWorktreeSelectionSnapshot()?.deletedWorktreeIds ?? new Set<string>();
+      if (ghosted.size > 0) {
+        const isGhosted = (id: string) => {
+          const wid = state.panelsById[id]?.worktreeId;
+          return wid !== undefined && ghosted.has(wid);
+        };
+        const ghostMembers = finalPanelIds.filter(isGhosted);
+        // Only a MIXED group needs splitting — one whose members all sit on the
+        // same deleted worktree is already coherent, and its row is where they
+        // belong until it is swept.
+        if (ghostMembers.length > 0 && ghostMembers.length < finalPanelIds.length) {
+          finalPanelIds = finalPanelIds.filter((id) => !isGhosted(id));
+          console.warn(
+            `[TabGroup] Hydration: Splitting ${ghostMembers.length} deleted-worktree survivor(s) out of group ${group.id}`
+          );
+          if (finalPanelIds.length <= 1) continue;
         }
       }
+
+      const panelWorktrees = countWorktrees(finalPanelIds);
 
       let repairedWorktreeId = group.worktreeId;
       if (panelWorktrees.size > 1 || !panelWorktrees.has(group.worktreeId)) {

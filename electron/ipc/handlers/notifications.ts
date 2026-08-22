@@ -18,6 +18,7 @@ import { store } from "../../store.js";
 import type { HandlerDependencies } from "../types.js";
 import type { NotificationSettings } from "../../../shared/types/ipc/api.js";
 import { typedHandle } from "../utils.js";
+import { sanitizeNotificationSettingsPatch } from "../../utils/notificationSettingsPatch.js";
 
 type SoundId = keyof typeof SoundServiceModule.SOUND_FILES;
 type AgentNotificationSingleton = typeof AgentNotificationServiceModule.agentNotificationService;
@@ -101,66 +102,7 @@ export function registerNotificationHandlers(deps: HandlerDependencies): () => v
   };
 
   const handleSettingsSet = async (rawSettings: unknown): Promise<void> => {
-    if (!rawSettings || typeof rawSettings !== "object") return;
-
-    const allowed: Partial<NotificationSettings> = {};
-    const s = rawSettings as Record<string, unknown>;
-    const ALLOWED = await allowedSoundFiles();
-
-    if (typeof s.enabled === "boolean") allowed.enabled = s.enabled;
-    if (typeof s.completedEnabled === "boolean") allowed.completedEnabled = s.completedEnabled;
-    if (typeof s.waitingEnabled === "boolean") allowed.waitingEnabled = s.waitingEnabled;
-    if (typeof s.soundEnabled === "boolean") allowed.soundEnabled = s.soundEnabled;
-    if (typeof s.completedSoundFile === "string" && ALLOWED.has(s.completedSoundFile)) {
-      allowed.completedSoundFile = s.completedSoundFile;
-    }
-    if (typeof s.waitingSoundFile === "string" && ALLOWED.has(s.waitingSoundFile)) {
-      allowed.waitingSoundFile = s.waitingSoundFile;
-    }
-    if (typeof s.escalationSoundFile === "string" && ALLOWED.has(s.escalationSoundFile)) {
-      allowed.escalationSoundFile = s.escalationSoundFile;
-    }
-    if (typeof s.waitingEscalationEnabled === "boolean") {
-      allowed.waitingEscalationEnabled = s.waitingEscalationEnabled;
-    }
-    if (
-      typeof s.waitingEscalationDelayMs === "number" &&
-      Number.isFinite(s.waitingEscalationDelayMs)
-    ) {
-      allowed.waitingEscalationDelayMs = Math.max(
-        30_000,
-        Math.min(3_600_000, s.waitingEscalationDelayMs)
-      );
-    }
-    if (typeof s.workingPulseEnabled === "boolean") {
-      allowed.workingPulseEnabled = s.workingPulseEnabled;
-    }
-    if (typeof s.workingPulseSoundFile === "string" && ALLOWED.has(s.workingPulseSoundFile)) {
-      allowed.workingPulseSoundFile = s.workingPulseSoundFile;
-    }
-    if (typeof s.uiFeedbackSoundEnabled === "boolean") {
-      allowed.uiFeedbackSoundEnabled = s.uiFeedbackSoundEnabled;
-    }
-    if (typeof s.quietHoursEnabled === "boolean") {
-      allowed.quietHoursEnabled = s.quietHoursEnabled;
-    }
-    if (typeof s.quietHoursStartMin === "number" && Number.isFinite(s.quietHoursStartMin)) {
-      allowed.quietHoursStartMin = Math.max(0, Math.min(1439, Math.floor(s.quietHoursStartMin)));
-    }
-    if (typeof s.quietHoursEndMin === "number" && Number.isFinite(s.quietHoursEndMin)) {
-      allowed.quietHoursEndMin = Math.max(0, Math.min(1439, Math.floor(s.quietHoursEndMin)));
-    }
-    if (Array.isArray(s.quietHoursWeekdays)) {
-      const days = s.quietHoursWeekdays
-        .filter(
-          (d): d is number => typeof d === "number" && Number.isInteger(d) && d >= 0 && d <= 6
-        )
-        .sort((a, b) => a - b);
-      allowed.quietHoursWeekdays = Array.from(new Set(days));
-    }
-    if (typeof s.groupByContext === "boolean") {
-      allowed.groupByContext = s.groupByContext;
-    }
+    const allowed = sanitizeNotificationSettingsPatch(rawSettings, await allowedSoundFiles());
 
     for (const [field, value] of Object.entries(allowed)) {
       store.set(`notificationSettings.${field}`, value);

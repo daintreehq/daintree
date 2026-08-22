@@ -44,6 +44,12 @@ export interface XtermAdapterProps {
   onExit?: (exitCode: number) => void;
   onInput?: (data: string) => void;
   /**
+   * Selects the panel that owns this terminal after a file drop writes to it.
+   * Omitted by consumers whose xterm is not a selectable panel of its own —
+   * the Assistant overlay and the Dev Preview console (#11809).
+   */
+  onDropSelect?: () => void;
+  /**
    * Fired once per live `attach()`, after the service has been told the
    * terminal is visible. Lets the owning pane re-arm anything that captured an
    * attach generation before this async setup landed (#11445).
@@ -69,6 +75,7 @@ export function XtermAdapter({
   onReady,
   onExit,
   onInput,
+  onDropSelect,
   onAttached,
   className,
   getRefreshTier,
@@ -167,6 +174,7 @@ export function XtermAdapter({
     terminalId,
     isInputLocked,
     onInput: stableOnInput,
+    onDropSelect,
     // The same stable reader the instance service gets, so a drop relativizes
     // its `@file` token against the cwd the terminal is in when it lands.
     cwdProvider: stableCwdProvider,
@@ -174,8 +182,6 @@ export function XtermAdapter({
     detectedAgentId,
     agentState,
   });
-  // The hook already withholds the state while locked; this keeps the render
-  // side honest if that ever changes.
   const showFileDropOverlay = isDragOverFiles && !isInputLocked;
 
   const hasVisibleBufferContent = useCallback(() => {

@@ -3,9 +3,11 @@
  * Synchronous, standalone readers for the last-active project.
  *
  * Called BEFORE app.whenReady() / on the early-renderer boot path. Each uses its
- * own read-only better-sqlite3 connection — they do not depend on getSharedDb()
- * or ProjectStore.initialize() (the shared DB is not open yet at this point in
+ * own better-sqlite3 connection — they do not depend on getSharedDb() or
+ * ProjectStore.initialize() (the shared DB is not open yet at this point in
  * boot, and opening it would run migrations on the loadURL-dispatch path).
+ *
+ * Read-only throughout.
  *
  * Returns null on first launch, corrupt DB, or any error (safe fallback).
  */

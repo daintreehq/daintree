@@ -14,6 +14,7 @@ import {
   McpError,
   ErrorCode,
 } from "@modelcontextprotocol/sdk/types.js";
+import { dispatchCarriesRecipeId } from "../../../shared/utils/dispatchRecipeId.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import { getAgentAvailabilityStore } from "../AgentAvailabilityStore.js";
 import { events } from "../events.js";
@@ -45,17 +46,21 @@ import {
   minimumPermittingTier,
   EXECUTION_ERROR_CODE,
   SESSION_BINDING_GONE,
+  SESSION_GONE,
   INVALID_URL_CODE,
+  RESOURCE_NOT_OWNED_CODE,
   buildToolError,
   buildMcpErrorPayload,
   withResolvedWorkspace,
+  WORKSPACE_BINDING_CAPABILITY_KEY,
   type DispatchedWorkspaceRef,
+  type McpWorkspaceBinding,
 } from "./shared.js";
 import {
   INTERACTIVE_WAIT_UNTIL_IDLE_TIMEOUT_CAP_MS,
   MAX_WAIT_UNTIL_IDLE_TIMEOUT_MS,
 } from "../../../shared/types/terminalWaitUntilIdle.js";
-import { SessionBindingError, RendererBridgeUnavailableError } from "./rendererBridge.js";
+import { McpRouteBindingError, RendererBridgeUnavailableError } from "./rendererBridge.js";
 import {
   buildDedupKey,
   canonicalArgsHash,
@@ -64,6 +69,8 @@ import {
 } from "./sessionDedup.js";
 import {
   shouldExposeTool,
+  isWithheldFromBoundSession,
+  type SessionSurfacePolicy,
   isTierPermitted,
   buildToolInputSchema,
   buildAnnotations,
@@ -71,6 +78,7 @@ import {
   buildStructuredContent,
   parseToolArguments,
   filterIntrospectionResultForSession,
+  type TargetPolicySessionSnapshot,
   getTierPermittedActionIds,
   readSearchLimit,
   readListPaging,
@@ -84,6 +92,7 @@ import {
 } from "./tierAuth.js";
 import { buildToolCallResult } from "./toolCallResult.js";
 import { buildSurfaceManifest, MCP_SURFACE_TOOL_ID } from "./surfaceManifest.js";
+import { extractOwnedResourcesFromDispatch, type OwnedResourceKind } from "./resourceOwnership.js";
 
 /**
  * Backstop on the `actions.list` page walk. The registry is a few hundred
@@ -98,6 +107,74 @@ const BROWSER_CAPTURE_SCREENSHOT_TOOL = "browser.captureScreenshot";
 const SKILLS_SEARCH_TOOL = "skills.search";
 const SKILLS_LOAD_TOOL = "skills.load";
 const PROJECT_RUN_CHECK_TOOL = "project.runCheck";
+/**
+ * The session-scoped cleanup tools (#11909), and the action each one delegates
+ * to once ownership checks out.
+ *
+ * They run here rather than as ordinary renderer actions because the thing they
+ * authorize against — which session created which resource — is main-process
+ * state keyed by the MCP transport session id. The renderer never sees that id
+ * and must not: handing it over would make "am I allowed to close this?" a
+ * question the caller's own dispatch could answer about itself.
+ *
+ * Delegation, not reimplementation. The check happens here; the close and the
+ * delete are the shipped actions, dispatched under their own ids so
+ * `terminal.close`'s trash/recovery behaviour and `worktree.delete`'s D2
+ * confirmation with its real file-count preview
+ * (`resolveMcpConfirmPreviewTarget` in `useMcpBridge`, which matches on the
+ * literal action id) apply unchanged.
+ */
+const OWNED_CLEANUP_TOOLS: Record<
+  string,
+  { resourceKind: OwnedResourceKind; delegateTo: string; idArg: string }
+> = {
+  // `resourceKind`, not `kind`: this repo uses a bare `kind` for panel kinds
+  // and guards comparisons against it with a lint rule, and an ownership
+  // resource kind is a different taxonomy that would otherwise trip it.
+  "terminal.closeOwned": {
+    resourceKind: "terminal",
+    delegateTo: "terminal.close",
+    idArg: "terminalId",
+  },
+  "worktree.deleteOwned": {
+    resourceKind: "worktree",
+    delegateTo: "worktree.delete",
+    idArg: "worktreeId",
+  },
+};
+
+/**
+ * Whether a `terminal.close` result reports the named panel as actually closed.
+ *
+ * Structural rather than trusting the action id: an empty `closedIds` is
+ * `terminal.close`'s documented "nothing closed" answer, and the ownership
+ * release must be able to tell that apart from a real close.
+ */
+function closedIdsInclude(result: unknown, id: string): boolean {
+  if (typeof result !== "object" || result === null || Array.isArray(result)) return false;
+  const closedIds = (result as { closedIds?: unknown }).closedIds;
+  return Array.isArray(closedIds) && closedIds.includes(id);
+}
+
+/**
+ * The resource id an `*Owned` cleanup call names, or `undefined` when the
+ * argument is missing, the wrong type, or blank.
+ *
+ * Read here rather than trusting the renderer's schema validation, because the
+ * ownership check runs before the dispatch that would perform it — and a
+ * whitespace-only id must not reach a Map lookup that could only ever miss.
+ */
+function readOwnedResourceId(args: unknown, key: string): string | undefined {
+  if (typeof args !== "object" || args === null || Array.isArray(args)) return undefined;
+  const value = (args as Record<string, unknown>)[key];
+  if (typeof value !== "string") return undefined;
+  // Blankness is judged on the trimmed form, but the ORIGINAL is returned: the
+  // ledger stores ids exactly as the creating action reported them, and
+  // `agent.launch`'s `requestedId` lets a caller create one with surrounding
+  // whitespace. Handing the trimmed form to the lookup would make that
+  // resource permanently uncleanable.
+  return value.trim().length === 0 ? undefined : value;
+}
 
 /**
  * Narrow a `browser.captureScreenshot` result to its base64-PNG payload so the
@@ -171,6 +248,12 @@ export function validateDisplayImageUrl(
 
 export interface SessionServerDeps {
   sessionStore: SessionStore;
+  /**
+   * The workspace this session was bound to at handshake (#11789), echoed in
+   * the `initialize` result so a client can verify where its calls will land
+   * before issuing a mutation. Absent for unbound sessions.
+   */
+  workspaceBinding?: McpWorkspaceBinding;
   requestManifest: () => Promise<import("../../../shared/types/actions.js").ActionManifestEntry[]>;
   dispatchAction: (
     actionId: string,
@@ -269,6 +352,14 @@ export interface SessionServerDeps {
     denialKind: string;
     /** Saved before revokeSession clears the map, so the callback can route. */
     pinnedWebContentsId?: number;
+    /**
+     * Whether this session is one of Daintree's own assistant surfaces, snapshot
+     * alongside the pin and for the same reason (#11789): `revokeSession` clears
+     * the origin too, so a callback re-reading it afterwards sees the
+     * fail-closed `external` default and drops a notification the renderer needs
+     * to show its recovery UI.
+     */
+    rendererOwned?: boolean;
   }) => void;
   /**
    * Remove a session from the abuse policy state so a reconnected session
@@ -335,6 +426,30 @@ export interface SessionServerDeps {
   }) => void;
 }
 
+/**
+ * Refusal for a request whose session no longer exists (#11799). Static, and
+ * names the only recovery there is: nothing about this session can be retried,
+ * so a client must open a new one.
+ */
+const SESSION_GONE_MESSAGE =
+  "This MCP session is no longer active. Reconnect to start a new session before retrying.";
+
+/**
+ * The `McpError` form of {@link SESSION_GONE_MESSAGE}, for the request paths
+ * that signal failure by throwing (discovery and resources) rather than by
+ * returning an `isError` tool result. `InternalError` matches how the sibling
+ * structural failure `SESSION_BINDING_GONE` is already raised on `tools/list`,
+ * so a client reads one JSON-RPC shape for both — the `data.code` is what
+ * separates them.
+ */
+function sessionGoneError(): McpError {
+  return new McpError(
+    ErrorCode.InternalError,
+    SESSION_GONE_MESSAGE,
+    buildMcpErrorPayload({ code: SESSION_GONE, message: SESSION_GONE_MESSAGE })
+  );
+}
+
 export function createSessionServer(sessionId: string, deps: SessionServerDeps): Server {
   const {
     sessionStore,
@@ -355,7 +470,25 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     notifyToolCallStarted,
     notifyToolCallSettled,
     notifyDisplayImage,
+    workspaceBinding,
   } = deps;
+
+  /**
+   * Whether every call from this session routes to one bound workspace
+   * (#11789).
+   *
+   * Captured from the handshake binding, NOT read live off
+   * `sessionWorkspaceMap`. The binding is immutable for the session's life — it
+   * is written once at handshake and only ever deleted at teardown — so a live
+   * read buys nothing and costs correctness: routing captures the same value
+   * once (`boundWorkspaceId` in `buildSessionServerDeps`), so a live read here
+   * would let teardown strip the confirm-gated ceiling from a call whose
+   * dispatch closure still targets the bound workspace. The two must share one
+   * lifetime, and the handshake value is the one that cannot go stale.
+   */
+  const sessionSurface: SessionSurfacePolicy = {
+    workspaceBound: workspaceBinding !== undefined,
+  };
 
   const server = new Server(
     { name: "Daintree", version: app.getVersion() },
@@ -368,6 +501,20 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         tools: { listChanged: true },
         resources: { subscribe: true, listChanged: false },
         prompts: {},
+        // Echo the resolved workspace binding so a client can verify it before
+        // issuing a mutation (#11789). `experimental` is the SDK's sanctioned
+        // slot for server-defined capabilities and the SDK folds it into the
+        // initialize result verbatim — which is why this is declared here
+        // rather than by registering our own `InitializeRequestSchema` handler,
+        // a second handler would shadow the SDK's `_oninitialize` and lose the
+        // `_clientCapabilities` capture that elicitation negotiation reads.
+        ...(workspaceBinding
+          ? {
+              experimental: {
+                [WORKSPACE_BINDING_CAPABILITY_KEY]: { ...workspaceBinding },
+              },
+            }
+          : {}),
       },
       // The SDK folds this into the `initialize` result on its own, so no
       // handler of ours is involved (#11541). Passed at construction because
@@ -407,6 +554,24 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     try {
       return await requestManifest();
     } catch (err) {
+      // A dead routing target is not a transient fetch failure (#11789). Both
+      // the pinned and workspace-bound routes fail closed on purpose, so
+      // serving a cached manifest here would answer `tools/list` from a view
+      // this session can no longer reach — and report it as an ordinary
+      // "unavailable" rather than the binding failure it is. Surface
+      // SESSION_BINDING_GONE in `data` so a client can tell "reconnect and
+      // rebind" from "retry in a moment".
+      if (err instanceof McpRouteBindingError) {
+        // Same envelope the resource path already puts on `McpError.data`, so a
+        // client reads one shape for a binding failure whichever surface it hit
+        // — including `retriable: false`, which is the field that actually
+        // stops a conductor from hammering a dead binding.
+        throw new McpError(
+          ErrorCode.InternalError,
+          err.message,
+          buildMcpErrorPayload({ code: SESSION_BINDING_GONE, message: err.message })
+        );
+      }
       if (cachedFallback === null) {
         throw new McpError(ErrorCode.InternalError, "Action manifest unavailable");
       }
@@ -416,10 +581,20 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
   };
 
   server.setRequestHandler(ListToolsRequestSchema, async () => {
-    const manifest = await resolveManifest("tools/list");
+    // Resolve the tier before fetching anything (#11799). Two reasons to gate
+    // here rather than after the await: a dead session should not cost a
+    // manifest fetch, and `resolveManifest` can itself throw
+    // SESSION_BINDING_GONE — which would answer "your workspace went away" to a
+    // caller whose actual problem is that its session did.
     const tier = sessionStore.getTier(sessionId);
+    // Throw rather than answer with an empty list: `{ tools: [] }` is a
+    // well-formed, cacheable "you have no tools", indistinguishable from a
+    // legitimately empty surface and carrying no hint that reconnecting is the
+    // fix.
+    if (tier === null) throw sessionGoneError();
+    const manifest = await resolveManifest("tools/list");
     const tools = manifest
-      .filter((entry) => shouldExposeTool(entry, tier))
+      .filter((entry) => shouldExposeTool(entry, tier, sessionSurface))
       .map((entry) => {
         const outputSchema = buildToolOutputSchema(entry);
         const _meta =
@@ -442,6 +617,19 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     const { args, requestKey } = parseToolArguments(request.params.arguments);
     const startedAt = Date.now();
     const tier = sessionStore.getTier(sessionId);
+    // Gate 0 (#11799): no live session, no authorization. The SDK's own
+    // transport await — body parse and JSON-RPC routing — sits between "the
+    // request arrived on a live session" and this handler, so an idle-timer
+    // expiry or an abuse trip on a concurrent call can revoke the session in
+    // between. Refusing here, before the tier gate, keeps a revoked external
+    // bearer off the workbench surface its own allowlist withholds.
+    //
+    // Returns before anything observable happens: no audit record (there is no
+    // honest tier to record it under), no denial counter, no tier-mismatch
+    // banner, no grant lookup, no dedup entry, and no dispatch.
+    if (tier === null) {
+      return buildToolError({ code: SESSION_GONE, message: SESSION_GONE_MESSAGE });
+    }
     // Snapshot the turn id once, at dispatch start, before any guard or await
     // can yield to an active→passive FSM transition that would clear it (#10067).
     // Every consumer below — the started/settled strip events and all audit
@@ -465,18 +653,40 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // would delete expired entries and push spurious `grant.expired` lifecycle
     // events on every discovery call.
     const introspectionSurface = INTROSPECTION_TOOL_IDS.has(actionId)
-      ? {
-          permittedActionIds: new Set<string>([
-            ...getTierPermittedActionIds(tier),
-            ...sessionStore.grantCache.getLiveGrants(sessionId).map((grant) => grant.toolId),
-            ...sessionStore.grantCache
+      ? (() => {
+          // Snapshotted once and reused for both the permitted set and the
+          // policy record (#11910), so the surface a lookup is filtered against
+          // and the authorization it reports can never describe two different
+          // instants.
+          const perToolGrantedActionIds = new Set<string>(
+            sessionStore.grantCache.getLiveGrants(sessionId).map((grant) => grant.toolId)
+          );
+          const nativeGrantedActionIds = new Set<string>(
+            sessionStore.grantCache
               .getLiveNativeGrants(sessionId)
-              .flatMap((grant) => [...grant.allowedTools]),
-          ]),
-          callerLimit: searchLimit ?? ACTIONS_SEARCH_DEFAULT_LIMIT,
-          requestedActionId: readRequestedActionId(args),
-          ...(listPaging ? { listPaging } : {}),
-        }
+              .flatMap((grant) => [...grant.allowedTools])
+          );
+          return {
+            permittedActionIds: new Set<string>([
+              ...getTierPermittedActionIds(tier),
+              ...perToolGrantedActionIds,
+              ...nativeGrantedActionIds,
+            ]),
+            callerLimit: searchLimit ?? ACTIONS_SEARCH_DEFAULT_LIMIT,
+            requestedActionId: readRequestedActionId(args),
+            ...(listPaging ? { listPaging } : {}),
+            policySnapshot: {
+              tier,
+              // Asked of the ORIGIN, never inferred from the tier: an
+              // unrecognised bearer token resolves to `workbench` while its
+              // origin still defaults to `external`, and grant issuance gates
+              // on the origin.
+              rendererOwnedOrigin: sessionStore.isRendererOwnedOrigin(sessionId),
+              perToolGrantedActionIds,
+              nativeGrantedActionIds,
+            } satisfies TargetPolicySessionSnapshot,
+          };
+        })()
       : null;
     // `actions.search` ranks and slices in the renderer, before main can see
     // tier. Over-fetching the schema's maximum page makes that slice the
@@ -492,6 +702,59 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         ? { ...(args as Record<string, unknown>), limit: ACTIONS_SEARCH_MAX_LIMIT }
         : args;
 
+    // Set once the ownership gate inside the IIFE has cleared, and read by the
+    // delegated dispatch and the post-cleanup release. Undefined for every
+    // other tool and for a refused cleanup, so neither of those paths can
+    // accidentally rewrite an action id or drop an ownership record (#11909).
+    const ownedCleanup = OWNED_CLEANUP_TOOLS[actionId];
+    let ownedResourceId: string | undefined;
+
+    /**
+     * Fold a completed dispatch into the session's ownership ledger (#11909):
+     * record what it created, and release what it cleaned up.
+     *
+     * Both halves read the envelope the action returned — never the caller's
+     * arguments — which is what makes the ledger an authorization boundary
+     * rather than a claim the caller writes about itself.
+     *
+     * The release half is deliberately conditional on the resource actually
+     * being gone. `terminal.close` reports an empty `closedIds` when it found
+     * nothing to close, and dropping the record on that would let one no-op
+     * call revoke the session's authority over a panel that is still running.
+     */
+    const recordDispatchOwnership = (envelope: DispatchEnvelope): void => {
+      if (ownedCleanup !== undefined) {
+        if (ownedResourceId === undefined || !envelope.result.ok) return;
+        if (
+          ownedCleanup.resourceKind === "terminal" &&
+          !closedIdsInclude(envelope.result.result, ownedResourceId)
+        ) {
+          return;
+        }
+        sessionStore.resourceOwnership.release(
+          sessionId,
+          ownedCleanup.resourceKind,
+          ownedResourceId
+        );
+        return;
+      }
+      const drafts = extractOwnedResourcesFromDispatch(actionId, envelope.result);
+      if (drafts.length === 0) return;
+      // Liveness guard, mirroring the dedup completion hook below: a creation
+      // admitted before the session was revoked can land after
+      // `clearSessionBinding` already dropped the ledger. Writing then would
+      // resurrect a dead session's authority — and, worse, claim the id away
+      // from whoever legitimately records it next.
+      if (!sessionStore.sessions.has(sessionId) && !sessionStore.httpSessions.has(sessionId)) {
+        return;
+      }
+      sessionStore.resourceOwnership.record(
+        sessionId,
+        drafts,
+        envelope.dispatchedWorkspace?.workspaceId
+      );
+    };
+
     // Layered authorization (#8442):
     //   1. Static tier floor (`TIER_ALLOWLISTS`) — workbench/action/system
     //      membership stays the default. The "Always allow" project setting
@@ -503,40 +766,146 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     //      live grant exists, the dispatch proceeds and the grant's TTL
     //      is refreshed on success.
     //
-    // The order means that a session whose static tier already permits the
-    // action never consults the grant cache — grants are an additive layer,
-    // never required when the floor already grants access.
+    //   3. Native session-scoped automation grants (#10648) — the only layer
+    //      that both widens past the floor AND pre-authorises the
+    //      `danger: "confirm"` modal. Because that second job answers a
+    //      different question from "may this call run at all", the lookup is
+    //      independent of whichever layer admitted the call (#11878).
+    //
+    // The order means a session whose static tier already permits the action
+    // never consults the per-tool grant cache — those grants only widen the
+    // floor and never bypass confirmation, so they have nothing to add once
+    // the floor allows the call. Native grants are not ordered that way: see
+    // the peek below for why nesting them under any one admission source is
+    // what made them unreachable in the first place.
+    const tierPermitted = isTierPermitted(tier, actionId);
     let grantIssuedAt: number | undefined;
     // Set when a native session-scoped automation grant (#10648) authorized
     // this call. Captured here so the post-dispatch path can refresh the
     // grant's TTL window, and so the `danger: "confirm"` modal is bypassed —
     // a native grant is an explicit user approval of the tool's scope.
     let nativeGrantId: string | undefined;
-    if (!isTierPermitted(tier, actionId)) {
+    // True once something OTHER than a native grant has admitted this call —
+    // the static floor, or a per-tool "Approve once" grant. It decides two
+    // things below: whether a missing native grant is fatal, and how a lost
+    // one is handled at the consume site.
+    let authorizedWithoutNativeGrant = tierPermitted;
+    if (!tierPermitted) {
       const grant = sessionStore.grantCache.check(sessionId, actionId);
-      const native = grant.granted
-        ? null
-        : sessionStore.grantCache.peekNativeGrant(sessionId, actionId);
       if (grant.granted) {
         // Grant authorised the call. Capture the `issuedAt` token so the
         // post-dispatch refresh can verify the entry wasn't revoked and
         // re-issued under us (race guard, lesson #2243).
         grantIssuedAt = grant.issuedAt;
-      } else if (native?.granted) {
-        // A native automation grant covers this tool and has a use left. It
-        // overrides the static tier floor only because the user explicitly
-        // approved this tool's scope — the grant's allowlist gates which tools
-        // `peekNativeGrant` authorizes. The use is NOT charged here: it is
-        // consumed only once the call is committed to dispatching (below), so
-        // an unauthorized call can't burn a use.
+        authorizedWithoutNativeGrant = true;
+      }
+    }
+    // A native automation grant does two jobs, and only the first is a floor
+    // concern: it widens past the floor, AND it pre-authorises the
+    // `danger: "confirm"` modal. The second is orthogonal to whatever admitted
+    // the call, so the peek cannot be nested under any one admission source
+    // (#11878). It used to sit inside the tier-denied branch, behind the
+    // per-tool check — which left the grant unreachable both for a tool the
+    // tier already permitted (`worktree.delete` is `danger: "confirm"` but
+    // system-tier permitted) and for one a per-tool grant had just admitted.
+    // Either way the modal still fired on every call despite an explicit
+    // Settings pre-authorisation.
+    //
+    // The one exception: an introspection carrier is never confirm-gated, so
+    // once the call is already admitted a grant buys it nothing — peeking
+    // would only spend a use and evict entries on a discovery call. When the
+    // call is NOT otherwise admitted the peek still runs, because there the
+    // grant is doing its first job and is load-bearing for authorization.
+    if (!authorizedWithoutNativeGrant || !INTROSPECTION_TOOL_IDS.has(actionId)) {
+      // The use is NOT charged here: it is consumed only once the call is
+      // committed to dispatching (below), so an unauthorized call can't burn
+      // a use. The grant's allowlist gates which tools this authorizes.
+      const native = sessionStore.grantCache.peekNativeGrant(sessionId, actionId);
+      if (native.granted) {
         nativeGrantId = native.grantId;
-      } else {
-        // Increment first, then ask the cache whether to suppress. The
-        // post-increment count reflects "this denial counted"; the cache's
-        // threshold compares against that. With threshold=2 the 1st and
-        // 2nd denials fire the banner and the 3rd+ are suppressed.
-        sessionStore.grantCache.incrementDenial(sessionId, actionId);
-        const suppressBanner = sessionStore.grantCache.shouldSuppressBanner(sessionId, actionId);
+      }
+    }
+    if (!authorizedWithoutNativeGrant && nativeGrantId === undefined) {
+      // Increment first, then ask the cache whether to suppress. The
+      // post-increment count reflects "this denial counted"; the cache's
+      // threshold compares against that. With threshold=2 the 1st and
+      // 2nd denials fire the banner and the 3rd+ are suppressed.
+      sessionStore.grantCache.incrementDenial(sessionId, actionId);
+      const suppressBanner = sessionStore.grantCache.shouldSuppressBanner(sessionId, actionId);
+      try {
+        appendAuditRecord({
+          toolId: actionId,
+          sessionId,
+          tier,
+          args,
+          durationMs: Date.now() - startedAt,
+          outcome: { kind: "unauthorized" },
+          bannerSuppressed: suppressBanner ? true : undefined,
+          capturedTurnId,
+        });
+      } catch (err) {
+        console.error("[MCP] Failed to append audit record:", err);
+      }
+      if (notifyTierMismatch && !suppressBanner) {
+        try {
+          notifyTierMismatch({
+            sessionId,
+            toolId: actionId,
+            tier,
+            targetTier: minimumPermittingTier(actionId),
+          });
+        } catch (err) {
+          console.error("[MCP] Failed to notify tier-mismatch:", err);
+        }
+      }
+      if (recordDenial) {
+        const result = recordDenial(sessionId, "tierMismatch");
+        if (result.tripped) {
+          const pinnedId = sessionStore.sessionWebContentsMap.get(sessionId);
+          // Snapshot ownership with the pin, before revocation clears both.
+          const rendererOwned = sessionStore.isRendererOwnedOrigin(sessionId);
+          sessionStore.revokeSession(sessionId);
+          clearDenialState?.(sessionId);
+          if (notifySessionRevoked) {
+            try {
+              notifySessionRevoked({
+                sessionId,
+                denialKind: "tierMismatch",
+                pinnedWebContentsId: pinnedId,
+                rendererOwned,
+              });
+            } catch (err) {
+              console.error("[MCP] Failed to notify session-revoked:", err);
+            }
+          }
+        }
+      }
+      return buildToolError({
+        code: TIER_NOT_PERMITTED_CODE,
+        message: `action '${actionId}' is not permitted for the '${tier}' tier.`,
+      });
+    }
+
+    // Confirm-gated tools are unreachable for a workspace-bound external
+    // session, so refuse them here — after tier/grant admission, but before a
+    // native grant use is charged, before dedup can cache an answer, and long
+    // before anything reaches a renderer (#11789).
+    //
+    // Placed after the tier gate so a tool that is simply outside the surface
+    // still reports TIER_NOT_PERMITTED, which is the truer answer. Placed
+    // before everything else because this is a hard ceiling: a live per-tool or
+    // native grant widens dispatch past the tier floor, and must not widen past
+    // this one — the dialog those grants would bypass is the same dialog nobody
+    // is watching.
+    if (sessionSurface.workspaceBound && tier === "external") {
+      let boundManifest: import("../../../shared/types/actions.js").ActionManifestEntry[];
+      try {
+        boundManifest = getCachedManifest() ?? (await requestManifest());
+      } catch (err) {
+        // Fail closed. Proceeding on an unresolved manifest would erase the
+        // only evidence that this action needs confirmation, turning a refusal
+        // into an unattended dispatch. Audited as a throw, matching how the
+        // post-dispatch binding failure below records the same class of error.
         try {
           appendAuditRecord({
             toolId: actionId,
@@ -544,47 +913,92 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             tier,
             args,
             durationMs: Date.now() - startedAt,
-            outcome: { kind: "unauthorized" },
-            bannerSuppressed: suppressBanner ? true : undefined,
+            outcome: { kind: "throw", error: err },
+            capturedTurnId,
+          });
+        } catch (auditErr) {
+          console.error("[MCP] Failed to append audit record:", auditErr);
+        }
+        if (err instanceof McpRouteBindingError) {
+          return buildToolError({ code: SESSION_BINDING_GONE, message: err.message });
+        }
+        return buildToolError({
+          code: EXECUTION_ERROR_CODE,
+          message: formatErrorMessage(
+            err,
+            `Could not resolve the action surface for workspace-bound tool '${actionId}'`
+          ),
+        });
+      }
+
+      const withheldIds = new Set(
+        boundManifest
+          .filter((entry) => isWithheldFromBoundSession(entry, tier, sessionSurface))
+          .map((entry) => entry.id)
+      );
+
+      // Discovery must mirror dispatch authority (#11525): narrow the
+      // introspection surface by the same ceiling, after the grant union, so a
+      // grant can never make a withheld tool findable.
+      if (introspectionSurface) {
+        for (const withheldId of withheldIds) {
+          introspectionSurface.permittedActionIds.delete(withheldId);
+        }
+      }
+
+      // A dispatch can need confirmation for either of two reasons, and neither
+      // is satisfiable here. The first is the manifest's own `danger:
+      // "confirm"`, collected into `withheldIds` above. The second is
+      // args-conditional (#11860): the host elevates any agent-sourced dispatch
+      // carrying a `recipeId` to `"confirm"`, so a statically-`safe` composite
+      // like `worktree.createWithRecipe` clears the withheld set and would then
+      // raise the very dialog this guard exists to avoid. Read through the same
+      // extraction point the elevation uses, so the refusal and the elevation
+      // can never disagree about what names a recipe.
+      const boundConfirmRefusal = withheldIds.has(actionId)
+        ? `Action '${actionId}' requires confirmation, and this MCP session is bound to workspace ` +
+          `'${workspaceBinding?.workspaceId}', which runs in the background with no one ` +
+          `watching it to approve the dialog. The action was not run. Confirm-gated actions are not part ` +
+          `of a workspace-bound session's tool surface — run this one from Daintree, or connect without a ` +
+          `workspace binding.`
+        : dispatchCarriesRecipeId(args)
+          ? `Action '${actionId}' was called with a 'recipeId', so it would start that recipe's ` +
+            `terminals and requires confirmation. This MCP session is bound to workspace ` +
+            `'${workspaceBinding?.workspaceId}', which runs in the background with no one watching it ` +
+            `to approve the dialog. The action was not run — call it without a 'recipeId', run the ` +
+            `recipe from Daintree, or connect without a workspace binding.`
+          : undefined;
+
+      if (boundConfirmRefusal !== undefined) {
+        const message = boundConfirmRefusal;
+        const value: import("../../../shared/types/actions.js").ActionDispatchResult = {
+          ok: false,
+          error: {
+            code: CONFIRMATION_REQUIRED_CODE,
+            message,
+            // Distinct from the `"unavailable"` a windowless host reports: that
+            // one clears when a window opens, so retrying is sane. This one is
+            // structural for the life of the session, so retrying never is.
+            details: { confirmationChannel: "workspace-bound" },
+          },
+        };
+        try {
+          appendAuditRecord({
+            toolId: actionId,
+            sessionId,
+            tier,
+            args,
+            durationMs: Date.now() - startedAt,
+            outcome: { kind: "result", value },
             capturedTurnId,
           });
         } catch (err) {
           console.error("[MCP] Failed to append audit record:", err);
         }
-        if (notifyTierMismatch && !suppressBanner) {
-          try {
-            notifyTierMismatch({
-              sessionId,
-              toolId: actionId,
-              tier,
-              targetTier: minimumPermittingTier(actionId),
-            });
-          } catch (err) {
-            console.error("[MCP] Failed to notify tier-mismatch:", err);
-          }
-        }
-        if (recordDenial) {
-          const result = recordDenial(sessionId, "tierMismatch");
-          if (result.tripped) {
-            const pinnedId = sessionStore.sessionWebContentsMap.get(sessionId);
-            sessionStore.revokeSession(sessionId);
-            clearDenialState?.(sessionId);
-            if (notifySessionRevoked) {
-              try {
-                notifySessionRevoked({
-                  sessionId,
-                  denialKind: "tierMismatch",
-                  pinnedWebContentsId: pinnedId,
-                });
-              } catch (err) {
-                console.error("[MCP] Failed to notify session-revoked:", err);
-              }
-            }
-          }
-        }
         return buildToolError({
-          code: TIER_NOT_PERMITTED_CODE,
-          message: `action '${actionId}' is not permitted for the '${tier}' tier.`,
+          code: CONFIRMATION_REQUIRED_CODE,
+          message,
+          details: { confirmationChannel: "workspace-bound" },
         });
       }
     }
@@ -592,16 +1006,36 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // Charge the native automation grant's use now that the call has cleared
     // the tier/grant check and is committed to proceeding (#10648). Doing it
     // here — not at the peek above — means an unauthorized call never burns a
-    // use. The peek→consume path is synchronous (no `await`), so the grant
-    // can't be revoked between peek and consume; a `false` return is purely
-    // defensive and fails closed.
+    // use. A `false` return is purely defensive: the grant was live at the
+    // peek, so it can only have aged out or been revoked in between.
+    //
+    // How that failure lands depends on what else admitted the call (#11878).
+    // When the grant WAS the authorization, losing it fails closed. When the
+    // floor or a per-tool grant already admitted it, the grant only bought a
+    // confirmation bypass — so drop the bypass and let the normal modal
+    // decide. Refusing there would answer a `system`-tier `worktree.delete`
+    // with "not permitted for the 'system' tier", which is simply untrue.
+    //
+    // Accounting note: a matching call spends a use even when the tool is not
+    // confirm-gated, so the grant buys it nothing. Charging only where the
+    // bypass is actually needed would mean resolving effective danger — the
+    // async manifest plus args-conditional elevation — before this point,
+    // which is a far larger change than the bug warrants. Two consequences
+    // are worth knowing rather than assuming away: a matching call also
+    // slides the whole grant's TTL, so a harmless tool in a mixed grant can
+    // extend a confirm-gated sibling's bypass window (bounded by the hard
+    // lifetime ceiling), and because this site precedes dedup, a replayed
+    // duplicate spends a use without dispatching.
     if (nativeGrantId !== undefined) {
       const consumed = sessionStore.grantCache.consumeNativeGrantUse(nativeGrantId, actionId);
       if (!consumed) {
-        return buildToolError({
-          code: TIER_NOT_PERMITTED_CODE,
-          message: `action '${actionId}' is not permitted for the '${tier}' tier.`,
-        });
+        if (!authorizedWithoutNativeGrant) {
+          return buildToolError({
+            code: TIER_NOT_PERMITTED_CODE,
+            message: `action '${actionId}' is not permitted for the '${tier}' tier.`,
+          });
+        }
+        nativeGrantId = undefined;
       }
     }
 
@@ -736,6 +1170,57 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     // hook that fires before any other awaiter sees the resolved result.
     const dispatchPromise: Promise<CallToolResultLike> = (async () => {
       try {
+        // Ownership gate for the `*Owned` cleanup tools (#11909). Placed at the
+        // very top of the IIFE: a session that does not own the named resource
+        // is refused here, before the activity strip is told a call started,
+        // before any confirmation is raised, and — the acceptance criterion
+        // that matters — before anything reaches a renderer, so a refused call
+        // cannot have mutated a panel or a worktree.
+        if (ownedCleanup !== undefined) {
+          const resourceId = readOwnedResourceId(args, ownedCleanup.idArg);
+          if (resourceId === undefined) {
+            const message =
+              `Action '${actionId}' requires a non-empty '${ownedCleanup.idArg}' naming a resource ` +
+              `this session created.`;
+            outcome = {
+              kind: "result",
+              value: { ok: false, error: { code: "VALIDATION_ERROR", message } },
+            };
+            return buildToolError({ code: "VALIDATION_ERROR", message });
+          }
+          const record = sessionStore.resourceOwnership.get(
+            sessionId,
+            ownedCleanup.resourceKind,
+            resourceId
+          );
+          // One message for "never existed", "another session's", and "the
+          // user's" — see RESOURCE_NOT_OWNED_CODE for why the three must not be
+          // distinguishable. The bound-workspace comparison below is
+          // defence-in-depth only and fails OPEN when either side is unknown:
+          // panel ids carry a UUID and worktree ids are absolute paths, so a
+          // cross-workspace collision is not a live risk, and a strict check
+          // would strand a caller's own cleanup whenever the creating dispatch
+          // could not resolve its workspace.
+          const boundWorkspaceId = sessionStore.sessionWorkspaceMap.get(sessionId);
+          const workspaceMismatch =
+            record !== undefined &&
+            record.workspaceId !== undefined &&
+            boundWorkspaceId !== undefined &&
+            record.workspaceId !== boundWorkspaceId;
+          if (record === undefined || workspaceMismatch) {
+            const message =
+              `No ${ownedCleanup.resourceKind} with id '${resourceId}' was created by this session, so ` +
+              `'${actionId}' will not act on it. This tool only cleans up resources this ` +
+              `connection created; ids from listings may belong to the user, another client, or a plugin.`;
+            outcome = {
+              kind: "result",
+              value: { ok: false, error: { code: RESOURCE_NOT_OWNED_CODE, message } },
+            };
+            return buildToolError({ code: RESOURCE_NOT_OWNED_CODE, message });
+          }
+          ownedResourceId = resourceId;
+        }
+
         // Short-circuit: terminal.waitUntilIdle runs in the main process. The
         // action manifest entry handles schema, tier, and audit registration; the
         // execution must bypass renderer dispatch because (a) the MCP AbortSignal
@@ -877,17 +1362,23 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
             const manifest = await resolveManifest(MCP_SURFACE_TOOL_ID);
             // Build against the tier captured at dispatch start — the one the
             // permission gate above actually authorized this call at — rather
-            // than re-reading after the await. Re-reading looks fresher but is
-            // not safe: `getTier` falls back to `workbench` once a revoked
-            // session's entry is gone, and workbench is a PEER of `external`,
-            // not a subset, so an external caller whose session was revoked
-            // mid-fetch would be handed a report naming workbench tools its own
-            // allowlist deliberately withholds. Using the gate's tier makes the
-            // report describe exactly what the caller was authorized against,
-            // and keeps it consistent with the audit record, which logs the
-            // same value. A tier that changes mid-call fires
-            // `notifications/tools/list_changed`, so a client re-reads anyway.
-            const result = buildSurfaceManifest(manifest, tier, app.getVersion());
+            // than re-reading after the await. Authorization has one lifetime
+            // per call: revocation stops the *next* request, but does not
+            // rewrite a call already admitted, and an elevation or decay landing
+            // mid-fetch belongs to the next request too. Re-reading would make
+            // the report disagree with both the gate that admitted the call and
+            // the audit record, which logs this same value. A tier that changes
+            // mid-call fires `notifications/tools/list_changed`, so a client
+            // re-reads anyway.
+            const result = buildSurfaceManifest(
+              manifest,
+              tier,
+              app.getVersion(),
+              // Same binding the gate above authorized this call against, and
+              // the same one `tools/list` filters by — so the report can never
+              // advertise a tool the listing withholds (#11789).
+              sessionSurface
+            );
             outcome = { kind: "result", value: { ok: true, result } };
             return buildToolCallResult(result, {
               structuredContent: result as unknown as Record<string, unknown>,
@@ -1034,6 +1525,27 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         }
 
         const entry = await lookupManifestEntry(actionId, getCachedManifest, requestManifest);
+
+        // An action the manifest doesn't describe has unknown danger, and
+        // unknown is not safe: a stale or partial manifest that omits a
+        // newly-registered confirm-gated action would otherwise let exactly the
+        // call the guard above exists to refuse reach a renderer nobody is
+        // watching (#11789). Sited here rather than beside that guard because
+        // every main-process short circuit has already returned by this point,
+        // so whatever is still running is renderer-bound by construction —
+        // which beats maintaining a list of exempt tool ids that would silently
+        // rot the next time a main-process tool is added.
+        if (sessionSurface.workspaceBound && tier === "external" && entry === undefined) {
+          const message =
+            `Action '${actionId}' is not present in workspace '${workspaceBinding?.workspaceId}'s action surface, ` +
+            `so this workspace-bound session cannot establish whether it needs confirmation. The action was not run.`;
+          outcome = {
+            kind: "result",
+            value: { ok: false, error: { code: "NOT_FOUND", message } },
+          };
+          return buildToolError({ code: "NOT_FOUND", message });
+        }
+
         // Announce the in-flight call now that `danger` is known — before the
         // host-side confirmation wait, so the strip can show "awaiting
         // confirmation" while the user decides on a `danger: "confirm"`
@@ -1099,9 +1611,22 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
         };
 
         try {
+          // An `*Owned` cleanup that cleared the gate above delegates to the
+          // real action under its own id, with arguments rebuilt from scratch
+          // rather than forwarded (#11909). Rebuilding is the enforcement: the
+          // renderer validates against `worktree.delete`'s schema, which still
+          // accepts `force`, `deleteBranch` and `closeTerminals`, so anything
+          // the caller sent beyond the id would otherwise pass straight
+          // through the narrower tool that deliberately omits them.
           const envelope = listPaging
             ? await collectListPages()
-            : await dispatchAction(actionId, dispatchArgs, dispatchConfirmed);
+            : ownedCleanup !== undefined && ownedResourceId !== undefined
+              ? await dispatchAction(
+                  ownedCleanup.delegateTo,
+                  { [ownedCleanup.idArg]: ownedResourceId },
+                  dispatchConfirmed
+                )
+              : await dispatchAction(actionId, dispatchArgs, dispatchConfirmed);
           // Narrow registry-enumerating results to this session's effective
           // surface before anything downstream reads them (#11525). Placed
           // ahead of the `outcome` assignment so the text content, the
@@ -1119,11 +1644,19 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
                 )
               : envelope.result,
           };
+          // Ownership bookkeeping, from the envelope the action actually
+          // returned rather than from anything the caller said (#11909).
+          // Reads `envelope.result`, not `outcome.value`: the introspection
+          // filter above rewrites results for the discovery tools, and the
+          // ledger must observe the unnarrowed truth. Recorded for every tier
+          // — "this session created it" is a fact about the session, not about
+          // its privileges.
+          recordDispatchOwnership(envelope);
           confirmationDecision = confirmationDecision ?? envelope.confirmationDecision;
           dispatchedWorkspace = envelope.dispatchedWorkspace;
         } catch (err) {
           outcome = { kind: "throw", error: err };
-          if (err instanceof SessionBindingError) {
+          if (err instanceof McpRouteBindingError) {
             return buildToolError({
               code: SESSION_BINDING_GONE,
               message: err.message,
@@ -1341,22 +1874,31 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
     return await dispatchPromise;
   });
 
+  // Each resource handler resolves the tier once at entry and threads it down
+  // (#11799). One capture per request: the listing helpers await dispatches
+  // mid-enumeration, and re-reading across those awaits would let one response
+  // mix two authorization lifetimes.
   server.setRequestHandler(ListResourcesRequestSchema, async () => {
-    return { resources: await listConcreteResources(sessionId, deps) };
+    const tier = sessionStore.getTier(sessionId);
+    if (tier === null) throw sessionGoneError();
+    return { resources: await listConcreteResources(tier, deps) };
   });
 
   server.setRequestHandler(ListResourceTemplatesRequestSchema, async () => {
-    return { resourceTemplates: listResourceTemplates(sessionId, deps) };
+    const tier = sessionStore.getTier(sessionId);
+    if (tier === null) throw sessionGoneError();
+    return { resourceTemplates: listResourceTemplates(tier) };
   });
 
   server.setRequestHandler(ReadResourceRequestSchema, async (request) => {
+    const tier = sessionStore.getTier(sessionId);
+    if (tier === null) throw sessionGoneError();
     const uri = request.params.uri;
     const parsed = parseResourceUri(uri);
     if (!parsed) {
       throw new McpError(ErrorCode.InvalidRequest, `Unknown resource URI: ${uri}`);
     }
-    if (!isResourcePermitted(sessionId, deps, parsed.kind)) {
-      const tier = sessionStore.getTier(sessionId);
+    if (!isResourcePermitted(tier, parsed.kind)) {
       const message = `Resource '${uri}' is not permitted for the '${tier}' tier.`;
       throw new McpError(
         ErrorCode.InvalidRequest,
@@ -1369,13 +1911,17 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
   });
 
   server.setRequestHandler(SubscribeRequestSchema, async (request) => {
+    // Gated before `subscribeResource` can install an event listener, so a
+    // revoked session never leaves a subscription behind for a transport that
+    // is already gone.
+    const tier = sessionStore.getTier(sessionId);
+    if (tier === null) throw sessionGoneError();
     const uri = request.params.uri;
     const parsed = parseResourceUri(uri);
     if (!parsed) {
       throw new McpError(ErrorCode.InvalidRequest, `Unknown resource URI: ${uri}`);
     }
-    if (!isResourcePermitted(sessionId, deps, parsed.kind)) {
-      const tier = sessionStore.getTier(sessionId);
+    if (!isResourcePermitted(tier, parsed.kind)) {
       const message = `Resource '${uri}' is not permitted for the '${tier}' tier.`;
       throw new McpError(
         ErrorCode.InvalidRequest,
@@ -1393,6 +1939,7 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
   });
 
   server.setRequestHandler(ListPromptsRequestSchema, async () => {
+    if (sessionStore.getTier(sessionId) === null) throw sessionGoneError();
     return {
       prompts: PROMPT_DEFINITIONS.map((def) => ({
         name: def.name,
@@ -1403,6 +1950,13 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
   });
 
   server.setRequestHandler(GetPromptRequestSchema, async (request) => {
+    // Prompts render from live IDE state: `collectPromptContext` dispatches
+    // `worktree.getCurrent`, and `triage_failed_agent` also reads terminal
+    // output. That is a renderer dispatch on behalf of the session, so it
+    // belongs behind the same liveness gate as `tools/call` — otherwise a
+    // revoked bearer still reads worktree and terminal data through the prompt
+    // surface, which is the leak this issue is about wearing a different hat.
+    if (sessionStore.getTier(sessionId) === null) throw sessionGoneError();
     const name = request.params.name;
     const definition = PROMPT_DEFINITIONS.find((def) => def.name === name);
     if (!definition) {
@@ -1455,12 +2009,12 @@ export function createSessionServer(sessionId: string, deps: SessionServerDeps):
 // --- Resource helpers ---
 
 async function listConcreteResources(
-  sessionId: string,
+  tier: McpTier,
   deps: SessionServerDeps
 ): Promise<Array<{ uri: string; name: string; mimeType: string; description?: string }>> {
   const resources: Array<{ uri: string; name: string; mimeType: string; description?: string }> =
     [];
-  if (isResourcePermitted(sessionId, deps, "issues")) {
+  if (isResourcePermitted(tier, "issues")) {
     resources.push({
       uri: "daintree://project/current/issues",
       name: "Current project — open issues",
@@ -1468,7 +2022,7 @@ async function listConcreteResources(
       description: "Open issues for the active project.",
     });
   }
-  if (isResourcePermitted(sessionId, deps, "pulse")) {
+  if (isResourcePermitted(tier, "pulse")) {
     const worktrees = await tryDispatchList("worktree.list", deps.dispatchAction);
     for (const wt of worktrees) {
       const id = readStringField(wt, ["id", "worktreeId"]);
@@ -1482,15 +2036,12 @@ async function listConcreteResources(
       });
     }
   }
-  if (
-    isResourcePermitted(sessionId, deps, "scrollback") ||
-    isResourcePermitted(sessionId, deps, "agentState")
-  ) {
+  if (isResourcePermitted(tier, "scrollback") || isResourcePermitted(tier, "agentState")) {
     const terminals = await tryDispatchList("terminal.list", deps.dispatchAction);
     for (const term of terminals) {
       const id = readStringField(term, ["id", "terminalId"]);
       const label = readStringField(term, ["title", "name"]) ?? id;
-      if (id && isResourcePermitted(sessionId, deps, "scrollback")) {
+      if (id && isResourcePermitted(tier, "scrollback")) {
         resources.push({
           uri: `daintree://terminal/${encodeURIComponent(id)}/scrollback`,
           name: `Terminal scrollback — ${label ?? id}`,
@@ -1499,7 +2050,7 @@ async function listConcreteResources(
         });
       }
       const agentId = readStringField(term, ["agentId"]);
-      if (agentId && isResourcePermitted(sessionId, deps, "agentState")) {
+      if (agentId && isResourcePermitted(tier, "agentState")) {
         resources.push({
           uri: `daintree://agent/${encodeURIComponent(agentId)}/state`,
           name: `Agent state — ${label ?? agentId}`,
@@ -1513,8 +2064,7 @@ async function listConcreteResources(
 }
 
 function listResourceTemplates(
-  sessionId: string,
-  deps: SessionServerDeps
+  tier: McpTier
 ): Array<{ uriTemplate: string; name: string; mimeType: string; description?: string }> {
   const templates: Array<{
     uriTemplate: string;
@@ -1522,7 +2072,7 @@ function listResourceTemplates(
     mimeType: string;
     description?: string;
   }> = [];
-  if (isResourcePermitted(sessionId, deps, "pulse")) {
+  if (isResourcePermitted(tier, "pulse")) {
     templates.push({
       uriTemplate: "daintree://worktree/{id}/pulse",
       name: "Worktree pulse",
@@ -1530,7 +2080,7 @@ function listResourceTemplates(
       description: "Git status summary, recent commits, and pull-request signal.",
     });
   }
-  if (isResourcePermitted(sessionId, deps, "scrollback")) {
+  if (isResourcePermitted(tier, "scrollback")) {
     templates.push({
       uriTemplate: "daintree://terminal/{id}/scrollback",
       name: "Terminal scrollback",
@@ -1538,7 +2088,7 @@ function listResourceTemplates(
       description: `Last ${RESOURCE_SCROLLBACK_TAIL_LINES} lines of terminal output.`,
     });
   }
-  if (isResourcePermitted(sessionId, deps, "agentState")) {
+  if (isResourcePermitted(tier, "agentState")) {
     templates.push({
       uriTemplate: "daintree://agent/{id}/state",
       name: "Agent state",
@@ -1626,8 +2176,14 @@ async function tryDispatchList(
   }
 }
 
-function isResourcePermitted(sessionId: string, deps: SessionServerDeps, kind: string): boolean {
-  const tier = deps.sessionStore.getTier(sessionId);
+/**
+ * Pure tier check — takes the tier its caller already resolved rather than
+ * reading the store again (#11799). The resource handlers resolve liveness once
+ * at entry, so this helper is only ever reached for a live session, and the
+ * twelve call sites across the two listing helpers share that one capture
+ * instead of racing the store twelve separate times.
+ */
+function isResourcePermitted(tier: McpTier, kind: string): boolean {
   return isTierPermitted(tier, (RESOURCE_BACKING_ACTIONS as Record<string, string>)[kind]);
 }
 

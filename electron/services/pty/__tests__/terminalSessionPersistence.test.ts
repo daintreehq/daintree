@@ -827,10 +827,23 @@ describe("terminalSessionPersistence", () => {
       const result = restoreSessionFromFile(headless as never, "term-hib");
 
       expect(result.restored).toBe(true);
-      const bannerCall = headless.write.mock.calls.find(
-        ([arg]: unknown[]) => typeof arg === "string" && arg.includes("hibernated")
-      );
-      expect(bannerCall).toBeDefined();
+
+      // Control: same restore, no marker. Asserting the BRANCH rather than the
+      // wording — matching a substring of the banner couples this test to copy
+      // that is free to change (it has), and a test that must be edited
+      // alongside the string it mirrors proves nothing.
+      await fsp.writeFile(path.join(sessionDir, "term-plain.restore"), "content", "utf8");
+      const plainHeadless = createMockHeadless();
+      restoreSessionFromFile(plainHeadless as never, "term-plain");
+
+      // The banner is the framed line; the frame is structure, not copy.
+      const bannerOf = (h: ReturnType<typeof createMockHeadless>) =>
+        h.write.mock.calls
+          .map(([arg]: unknown[]) => arg)
+          .find((arg): arg is string => typeof arg === "string" && arg.includes("───"));
+
+      expect(bannerOf(headless)).toBeDefined();
+      expect(bannerOf(headless)).not.toBe(bannerOf(plainHeadless));
       // Marker should be cleaned up
       expect(fs.existsSync(path.join(sessionDir, "term-hib.hibernated"))).toBe(false);
     });

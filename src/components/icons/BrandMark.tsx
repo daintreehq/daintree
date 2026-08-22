@@ -1,56 +1,50 @@
-import { cloneElement, type ReactElement } from "react";
+import { cloneElement, type CSSProperties, type ReactElement } from "react";
 import { cn } from "@/lib/utils";
-import { resolveBrandChip } from "@/lib/brandIcon";
+import { resolveBrandMarkInk } from "@/lib/brandIcon";
+import { useBrandSurface } from "./BrandSurface";
 import { useActiveAppScheme } from "@/hooks/useActiveAppScheme";
 
 interface BrandMarkProps {
   brandColor?: string;
-  /** Marks `brandColor` as a deliberate user choice (e.g. a preset color),
-   * which bypasses the dark-theme white-tile fallback. */
-  userChosen?: boolean;
-  size?: number;
   className?: string;
-  children: ReactElement<{ className?: string; brandColor?: string }>;
+  children: ReactElement<{ className?: string; style?: CSSProperties }>;
 }
 
-const SIZE_CLASS_REGEX = /\b(?:size-|w-|h-)/;
-
-// Resolves a brand mark that falls below WCAG 1.4.11 (3:1) against the active
-// theme's panel surface. Chromatic brands (Claude orange, Codex green, etc.)
-// that already clear the floor are returned untouched. On DARK themes, mono
-// brands like Goose and Open Interpreter render their official silhouette
-// against a near-white tile — preserving brand fidelity rather than
-// recoloring the mark. On LIGHT themes the mark itself is darkened to a
-// contrast-clearing tint of the same hue — a dark tile on pale chrome reads
-// as a black box, not a brand.
-export function BrandMark({ brandColor, userChosen, size, className, children }: BrandMarkProps) {
+/**
+ * Owns the colour of a third-party brand mark. The glyph itself stays on
+ * `currentColor` — nothing hands a colour to an SVG — so this is the one place
+ * that decides what a logo is allowed to look like on the active theme.
+ *
+ * Publishes the resting and active inks as custom properties and tags the glyph
+ * with `.brand-mark`; `src/index.css` reads both and owns the swap, which is
+ * what gets keyboard focus, a selected tab and a focused panel the same
+ * treatment as the mouse without every call site wiring up state. Deliberately
+ * no inline `color`: an inline declaration outranks those rules and would
+ * strand the mark at rest.
+ *
+ * The inks answer to the backdrop the mark is painted on, which `BrandSurface`
+ * declares on the container above.
+ */
+export function BrandMark({ brandColor, className, children }: BrandMarkProps) {
   const scheme = useActiveAppScheme();
-  const chip = resolveBrandChip(brandColor, scheme, userChosen);
+  const surface = useBrandSurface();
+  const ink = resolveBrandMarkInk(brandColor, scheme, surface);
+  // `cn` collapses to "" when nothing is supplied; pass className only when it
+  // has content so the untouched path leaves the child's props exactly as they were.
+  const merged = cn(children.props.className, ink && "brand-mark", className);
 
-  if (!chip || chip.tint) {
-    const tintProps = chip?.tint ? { brandColor: chip.tint } : null;
-    if (!className && !tintProps) {
-      return children;
-    }
-    return cloneElement(children, {
-      ...(className ? { className: cn(children.props.className, className) } : null),
-      ...tintProps,
-    });
+  if (!ink) {
+    // No colour to resolve (no brand hex, or a theme missing the tokens the
+    // resolver reads) — the glyph inherits whatever ink its context provides.
+    return merged ? cloneElement(children, { className: merged }) : children;
   }
 
-  const inferSize = size === undefined && !(className && SIZE_CLASS_REGEX.test(className));
-  const fallbackSize = inferSize ? 16 : size;
-
-  return (
-    <span
-      aria-hidden="true"
-      className={cn("inline-flex items-center justify-center rounded-[3px]", className)}
-      style={{
-        ...(fallbackSize !== undefined ? { width: fallbackSize, height: fallbackSize } : null),
-        backgroundColor: chip.background,
-      }}
-    >
-      {children}
-    </span>
-  );
+  return cloneElement(children, {
+    ...(merged ? { className: merged } : null),
+    style: {
+      ...children.props.style,
+      "--brand-mark-rest": ink.rest,
+      "--brand-mark-active": ink.active,
+    } as CSSProperties,
+  });
 }

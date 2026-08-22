@@ -143,10 +143,13 @@ describe("Brand icon a11y", () => {
     expect(svg?.getAttribute("aria-label")).toBe("Brand mark");
   });
 
-  it("ClaudeIcon still honours brandColor after the type widening", () => {
-    const { container } = render(<ClaudeIcon brandColor="#FF0000" />);
-    const path = container.querySelector("svg path");
-    expect(path?.getAttribute("fill")).toBe("#FF0000");
+  it("ClaudeIcon forwards SVG props and keeps its paint on currentColor", () => {
+    // Nothing hands a colour to a glyph any more — `BrandMark` publishes the ink
+    // as custom properties and the paint inherits it.
+    const { container } = render(<ClaudeIcon style={{ opacity: 0.5 }} />);
+    const svg = container.querySelector("svg");
+    expect(svg?.style.opacity).toBe("0.5");
+    expect(container.querySelector("svg path")?.getAttribute("fill")).toBe("currentColor");
   });
 
   it("AiderIcon preserves fill='none' (stroke-only icon)", () => {

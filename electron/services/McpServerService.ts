@@ -33,6 +33,8 @@ import { handleProjectRunCheck } from "./mcp-server/projectCheck.js";
 import { cleanupResourceSubscriptions } from "./mcp-server/sessionServer.js";
 import { HttpLifecycle } from "./mcp-server/httpLifecycle.js";
 import { AbusePolicy } from "./mcp-server/abusePolicy.js";
+import { WorkspaceViewLeaseRegistry } from "./mcp-server/workspaceViewLease.js";
+import { setMcpServerServiceRef } from "../window/serviceRefs.js";
 import type {
   PendingRequest,
   DispatchEnvelope,
@@ -80,6 +82,12 @@ export class McpServerService {
    */
   private readonly persistentListeners: Array<() => void> = [];
   private readonly bridge;
+  /**
+   * Views with an MCP operation in flight (#11790). Instance-owned rather than
+   * module-global so the service-class suites, which construct several
+   * instances, cannot leak leases into one another.
+   */
+  private readonly viewLeases = new WorkspaceViewLeaseRegistry();
   private readonly statusListeners = new Set<(running: boolean) => void>();
   private readonly runtimeStateListeners = new Set<(snapshot: McpRuntimeSnapshot) => void>();
 
@@ -187,7 +195,8 @@ export class McpServerService {
     this.bridge = createRendererBridge(
       this.pendingManifests,
       this.pendingDispatches,
-      () => this._registry
+      () => this._registry,
+      this.viewLeases
     );
 
     this.httpLifecycle = new HttpLifecycle({
@@ -196,11 +205,36 @@ export class McpServerService {
       turnOutcomeService: this.turnOutcomeService,
       abusePolicy,
       requestManifest: () => this.bridge.requestManifest(),
-      dispatchAction: (actionId, args, confirmed, callerInfo) =>
-        this.bridge.dispatchAction(actionId, args, confirmed, callerInfo),
+      dispatchAction: (actionId, args, confirmed, callerInfo, sessionOrigin) =>
+        this.bridge.dispatchAction(actionId, args, confirmed, callerInfo, sessionOrigin),
       requestManifestForWebContents: (id) => this.bridge.requestManifestForWebContents(id),
-      dispatchActionForWebContents: (id, actionId, args, confirmed, contextOverride) =>
-        this.bridge.dispatchActionForWebContents(id, actionId, args, confirmed, contextOverride),
+      dispatchActionForWebContents: (
+        id,
+        actionId,
+        args,
+        confirmed,
+        contextOverride,
+        sessionOrigin
+      ) =>
+        this.bridge.dispatchActionForWebContents(
+          id,
+          actionId,
+          args,
+          confirmed,
+          contextOverride,
+          sessionOrigin
+        ),
+      requestManifestForWorkspace: (workspaceId) =>
+        this.bridge.requestManifestForWorkspace(workspaceId),
+      dispatchActionForWorkspace: (workspaceId, actionId, args, confirmed, sessionOrigin) =>
+        this.bridge.dispatchActionForWorkspace(
+          workspaceId,
+          actionId,
+          args,
+          confirmed,
+          sessionOrigin
+        ),
+      resolveWorkspaceBinding: (workspaceId) => this.bridge.resolveWorkspaceBinding(workspaceId),
       handleWaitUntilIdle: (rawArgs, signal, options) =>
         handleWaitUntilIdle(rawArgs, signal, options),
       handleWaitUntilIdleBatch: (rawArgs, signal, options) =>
@@ -210,6 +244,8 @@ export class McpServerService {
       handleProjectRunCheck: (rawArgs, signal) => handleProjectRunCheck(rawArgs, signal),
       getCachedManifest: () => this.bridge.getCachedManifest(),
       getCachedManifestForWebContents: (id) => this.bridge.getCachedManifestForWebContents(id),
+      getCachedManifestForWorkspace: (workspaceId) =>
+        this.bridge.getCachedManifestForWorkspace(workspaceId),
       clearCachedManifest: () => this.bridge.clearCache(),
       cleanupListeners: this.cleanupListeners,
       pendingManifests: this.pendingManifests,
@@ -354,7 +390,13 @@ export class McpServerService {
     } else if (enabled && !this.isRunning) {
       const registry = getWindowRegistry();
       if (registry) {
-        await this.httpLifecycle.start(registry);
+        // Through `start()`, so the capture lives in exactly one place. Handing
+        // the registry to `httpLifecycle.start()` directly left `this._registry`
+        // null, and that field is what the renderer bridge reads — a null one
+        // silently degrades every registry-aware path, so focus-order routing
+        // and the resolved-workspace stamp both fall back to the process-global
+        // (last-created) view manager.
+        await this.start(registry);
       } else if (wasEnabled !== enabled) {
         this.emitRuntimeStateChange();
       }
@@ -427,6 +469,42 @@ export class McpServerService {
 
   async stop(): Promise<void> {
     await this.httpLifecycle.stop();
+    // The stop rejects every pending request, so the leases those requests own
+    // have no one left to release them. Holding them would pin their views
+    // against eviction for renderers that will never answer (#11790).
+    this.viewLeases.clear();
+  }
+
+  /**
+   * Why a project view must not be frozen or evicted right now, from MCP's side
+   * (#11790). Read synchronously by `ProjectViewManager`'s freeze and eviction
+   * policies through the `mcpViewActivity` callback `main.ts` injects.
+   *
+   * Two answers, deliberately separate because they earn different protection:
+   *
+   * - `dispatchLease` — an MCP request is in flight against this exact view.
+   *   Destroying it strands the request and breaks the session's route, so the
+   *   view is excluded from eviction outright, like a paint-gate bridge. Safe
+   *   as an absolute exclusion only because it is self-expiring: every lease is
+   *   held by a pending request, and those are capped by the bridge deadlines.
+   * - `liveBinding` — a live session is bound to this workspace but is not
+   *   mid-call. Enough to skip the efficiency freeze (a frozen renderer cannot
+   *   answer at all, and skipping costs one optimization on one cached view),
+   *   but NOT enough to survive memory pressure: a quiet bound view stays an
+   *   eviction candidate, just the last one.
+   *
+   * Keyed by workspace id for the binding and WebContents id for the lease —
+   * the workspace id outlives the view, the WebContents id is what identifies
+   * the exact renderer a request is waiting on.
+   */
+  getWorkspaceViewActivity(
+    workspaceId: string,
+    webContentsId: number
+  ): { dispatchLease: boolean; liveBinding: boolean } {
+    return {
+      dispatchLease: this.viewLeases.has(webContentsId),
+      liveBinding: this.sessionStore.hasLiveWorkspaceBinding(workspaceId),
+    };
   }
 
   listActiveClients(): import("../../shared/types/ipc/mcpServer.js").McpActiveClientInfo[] {
@@ -680,6 +758,11 @@ export class McpServerService {
       console.error("[MCP] Failed to append grant audit record:", err);
     }
 
+    // Origin-gated like every other renderer push (#11789). Unreachable in
+    // practice — a third-party session can never hold a grant, since
+    // `issueGrant` refuses it — but stating the rule beats relying on that
+    // inference holding, which is the habit this issue exists to break.
+    if (!this.sessionStore.isRendererOwnedOrigin(sessionId)) return;
     const id = this.sessionStore.sessionWebContentsMap.get(sessionId);
     if (id === undefined) return;
     const wc = webContentsModule.fromId(id);
@@ -749,6 +832,9 @@ export class McpServerService {
   get _bridge() {
     return this.bridge;
   }
+  get _viewLeases() {
+    return this.viewLeases;
+  }
 }
 
 export const mcpServerService = new McpServerService();
@@ -760,3 +846,13 @@ export const mcpServerService = new McpServerService();
 // the server, so the registry's onStatusChange subscription always lands
 // before the first status event.
 wireMcpServerToConnectivityRegistry(mcpServerService);
+
+// Publish the singleton for the project-view freeze/eviction policies (#11790).
+// Same reasoning as the wiring above — at module scope, so every load path
+// covers it — but the direction matters more here: `electron/window/` must
+// never import this module, which sits behind a dynamic import precisely to
+// keep the MCP graph off eager boot. `serviceRefs` is a zero-runtime-import
+// leaf, so publishing into it costs nothing and cannot cycle, and until some
+// path loads this module the getter reads null and both policies fail closed
+// to "not protected" — the pre-#11790 behaviour.
+setMcpServerServiceRef(mcpServerService);

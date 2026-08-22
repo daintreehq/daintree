@@ -5,13 +5,14 @@ import { openAndOnboardProject } from "../../helpers/project";
 import {
   getGridPanelIds,
   getDockPanelIds,
+  getDockChipIds,
   getGridPanelCount,
   getDockPanelCount,
   getPanelById,
   getPanelDragHandle,
   openTerminal,
 } from "../../helpers/panels";
-import { keyboardReorderElement, keyboardReorderDockChip } from "../../helpers/dragDrop";
+import { keyboardReorderElement, pointerReorderDockChip } from "../../helpers/dragDrop";
 import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
 
@@ -137,7 +138,7 @@ test.describe.serial("Core: Panel Drag & Drop", () => {
 
   // ── Dock Chip Reorder ────────────────────────────────────
 
-  test("reorder dock chips with keyboard drag", async () => {
+  test("reorder dock chips with pointer drag", async () => {
     const { window } = ctx;
 
     // Move two grid panels to the dock, leaving one in the grid. Emptying the
@@ -159,27 +160,39 @@ test.describe.serial("Core: Panel Drag & Drop", () => {
       await expect.poll(() => getDockPanelCount(window), { timeout: T_MEDIUM }).toBe(2);
     });
 
-    await test.step("Keyboard-drag the first chip and verify the dock order changes", async () => {
-      const dockIdsBefore = await getDockPanelIds(window);
+    await test.step("Pointer-drag the first chip and verify the dock order changes", async () => {
+      const dockIdsBefore = await getDockChipIds(window);
       expect(dockIdsBefore).toHaveLength(2);
 
       const chips = window.locator(`${SEL.dock.rail} ${SEL.dock.chip}`);
       await expect.poll(() => chips.count(), { timeout: T_MEDIUM }).toBeGreaterThanOrEqual(2);
 
-      let dockIdsAfter = dockIdsBefore;
-      // Try moving right, then fall back to left, mirroring the grid-reorder
-      // test's resilience to dnd-kit's headless collision geometry.
-      for (const direction of ["ArrowRight", "ArrowLeft"] as const) {
-        await keyboardReorderDockChip(window, chips.first(), direction);
-        await window.waitForTimeout(T_SETTLE);
-        dockIdsAfter = await getDockPanelIds(window);
-        if (dockIdsAfter[0] !== dockIdsBefore[0]) break;
-      }
+      // Both panels were docked individually, so no tab group formed and each
+      // one owns a chip. Poll rather than read once — the rail can be a render
+      // behind the offscreen containers the setup above waited on. This also
+      // pins the ungrouped precondition the final assertion depends on: a
+      // multi-panel group would collapse N panels into one chip.
+      await expect.poll(() => getDockChipIds(window), { timeout: T_MEDIUM }).toEqual(dockIdsBefore);
 
+      await pointerReorderDockChip(window, chips.first(), chips.nth(1));
+
+      // Poll for the moved chip rather than reading once: the helper's fixed
+      // settle can land mid-flight, and a single read of a rail still animating
+      // is the flake this test was rewritten to remove.
+      await expect
+        .poll(() => getDockChipIds(window).then((ids) => ids[0]), { timeout: T_MEDIUM })
+        .not.toBe(dockIdsBefore[0]);
+
+      const dockIdsAfter = await getDockChipIds(window);
       expect(dockIdsAfter).toHaveLength(2);
       // Same panels, different order — the chip moved past its neighbour.
       expect([...dockIdsAfter].sort()).toEqual([...dockIdsBefore].sort());
-      expect(dockIdsAfter[0]).not.toBe(dockIdsBefore[0]);
+
+      // The rail must repaint, not just the store. Reordering writes only
+      // `panelIds`, which the offscreen containers above mirror directly — they
+      // stayed green while every chip snapped back to its pre-drag slot
+      // (#11873), so the visible order is the assertion that matters.
+      await expect.poll(() => getDockChipIds(window), { timeout: T_MEDIUM }).toEqual(dockIdsAfter);
     });
   });
 

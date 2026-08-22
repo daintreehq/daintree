@@ -1148,6 +1148,7 @@ export default tseslint.config(
       "packages/*/api-report/**",
       "release/**",
       "node_modules/**",
+      ".tmp/**",
       "*.config.js",
       "*.config.cjs",
       // why: knip.config.ts is a tooling file not covered by any project

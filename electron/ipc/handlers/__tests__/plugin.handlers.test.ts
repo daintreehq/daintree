@@ -34,6 +34,13 @@ vi.mock("../../../window/webContentsRegistry.js", async (importOriginal) => ({
   isCachedViewWebContents: (...args: [number]) => mockIsCachedViewWebContents(...args),
 }));
 
+const { mockGetPluginRecipes, mockRecordPluginRecipeUse, mockUpdatePluginRecipeMetadata } =
+  vi.hoisted(() => ({
+    mockGetPluginRecipes: vi.fn(() => [] as unknown[]),
+    mockRecordPluginRecipeUse: vi.fn(),
+    mockUpdatePluginRecipeMetadata: vi.fn(),
+  }));
+
 vi.mock("../../../services/PluginService.js", () => ({
   pluginService: {
     listPlugins: (...args: unknown[]) => mockListPlugins(...args),
@@ -56,6 +63,11 @@ vi.mock("../../../services/PluginService.js", () => ({
     // settles still gets a populated snapshot — resolved-immediately in tests
     // since we don't exercise the gate here.
     waitForInit: vi.fn().mockResolvedValue(undefined),
+    getPluginRecipes: () => mockGetPluginRecipes(),
+    recordPluginRecipeUse: (recipeId: string, timestamp: number) =>
+      mockRecordPluginRecipeUse(recipeId, timestamp),
+    updatePluginRecipeMetadata: (recipeId: string, updates: unknown) =>
+      mockUpdatePluginRecipeMetadata(recipeId, updates),
   },
 }));
 
@@ -144,8 +156,17 @@ beforeEach(() => {
 describe("registerPluginHandlers", () => {
   it("registers handlers for all plugin channels", () => {
     registerPluginHandlers();
-    expect(mockIpcMainHandle).toHaveBeenCalledTimes(40);
+    expect(mockIpcMainHandle).toHaveBeenCalledTimes(43);
     expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:list", expect.any(Function));
+    expect(mockIpcMainHandle).toHaveBeenCalledWith("plugin:recipes-get", expect.any(Function));
+    expect(mockIpcMainHandle).toHaveBeenCalledWith(
+      "plugin:recipe-record-use",
+      expect.any(Function)
+    );
+    expect(mockIpcMainHandle).toHaveBeenCalledWith(
+      "plugin:recipe-metadata-update",
+      expect.any(Function)
+    );
     expect(mockIpcMainHandle).toHaveBeenCalledWith(
       "plugin:report-panel-lifecycle",
       expect.any(Function)
@@ -2428,5 +2449,85 @@ describe("plugin install jobs (#11302)", () => {
     // rather than see a button that silently no-ops.
     expect(await cancel({}, "00000000-0000-4000-8000-000000000000")).toBe(false);
     expect(await cancel({}, "not a job id")).toBe(false);
+  });
+
+  describe("plugin recipe handlers (#11860)", () => {
+    const registered = {
+      id: "acme.tools.deploy",
+      name: "Deploy",
+      terminals: [{ type: "terminal" as const, command: "ls" }],
+      createdAt: 0,
+      origin: { kind: "plugin" as const, pluginId: "acme.tools", contributionId: "deploy" },
+    };
+
+    it("plugin:recipes-get returns the service snapshot", async () => {
+      const handler = getHandler("plugin:recipes-get");
+      mockGetPluginRecipes.mockReturnValueOnce([registered]);
+      await expect(handler({})).resolves.toEqual([registered]);
+    });
+
+    it("plugin:recipe-record-use forwards a valid id and timestamp", async () => {
+      const handler = getHandler("plugin:recipe-record-use");
+      mockRecordPluginRecipeUse.mockResolvedValueOnce(registered);
+      await expect(handler({}, "acme.tools.deploy", 1234)).resolves.toEqual(registered);
+      expect(mockRecordPluginRecipeUse).toHaveBeenCalledWith("acme.tools.deploy", 1234);
+    });
+
+    it("plugin:recipe-record-use rejects an unusable id or timestamp before reaching the service", async () => {
+      // TS types are not runtime guarantees across contextBridge — a buggy or
+      // hostile renderer can send anything, and a NaN timestamp would otherwise
+      // be persisted as a run that sorts unpredictably forever.
+      const handler = getHandler("plugin:recipe-record-use");
+      for (const args of [
+        ["", 1] as const,
+        [null, 1] as const,
+        ["acme.tools.deploy", Number.NaN] as const,
+        ["acme.tools.deploy", 0] as const,
+        ["acme.tools.deploy", -5] as const,
+        ["acme.tools.deploy", "1234"] as const,
+      ]) {
+        await expect(handler({}, ...args)).rejects.toThrow();
+      }
+      expect(mockRecordPluginRecipeUse).not.toHaveBeenCalled();
+    });
+
+    it("plugin:recipe-metadata-update accepts only the two user-owned fields", async () => {
+      const handler = getHandler("plugin:recipe-metadata-update");
+      mockUpdatePluginRecipeMetadata.mockResolvedValue(registered);
+
+      await handler({}, "acme.tools.deploy", { showInEmptyState: false, autoAssign: null });
+      expect(mockUpdatePluginRecipeMetadata).toHaveBeenCalledWith("acme.tools.deploy", {
+        showInEmptyState: false,
+        autoAssign: null,
+      });
+
+      // Provenance is resolved from the registry, never taken from the caller —
+      // an unknown key is dropped rather than reaching the store.
+      mockUpdatePluginRecipeMetadata.mockClear();
+      await handler({}, "acme.tools.deploy", { pluginId: "evil.plugin", terminals: [] });
+      expect(mockUpdatePluginRecipeMetadata).toHaveBeenCalledWith("acme.tools.deploy", {});
+    });
+
+    it("plugin:recipe-metadata-update rejects malformed patch values", async () => {
+      const handler = getHandler("plugin:recipe-metadata-update");
+      mockUpdatePluginRecipeMetadata.mockResolvedValue(registered);
+      for (const patch of [
+        "not-an-object",
+        null,
+        { showInEmptyState: "yes" },
+        { autoAssign: "sometimes" },
+      ]) {
+        await expect(handler({}, "acme.tools.deploy", patch)).rejects.toThrow();
+      }
+      expect(mockUpdatePluginRecipeMetadata).not.toHaveBeenCalled();
+    });
+
+    it("propagates the service's unknown-recipe rejection", async () => {
+      // The registry is the only authority on which ids exist; the handler must
+      // not invent a record for a plugin that never declared one.
+      const handler = getHandler("plugin:recipe-record-use");
+      mockRecordPluginRecipeUse.mockRejectedValueOnce(new Error("Plugin recipe x not found"));
+      await expect(handler({}, "ghost.plugin.x", 1)).rejects.toThrow(/not found/);
+    });
   });
 });

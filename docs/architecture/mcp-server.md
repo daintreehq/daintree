@@ -75,6 +75,14 @@ Header: Authorization: Bearer <api-key>
 
 Editors such as Cursor and VS Code read their own config files; their exact schemas aren't verified here, so use the values above rather than assuming the Claude Code JSON is portable to them.
 
+### Scoping a client to one project
+
+By default an external client's calls land in whichever Daintree window you focused last, which makes two agents driving two projects unsafe: focusing one retargets the other. **Copy config for this project** in the same tab emits the same config plus a `Daintree-Workspace-Id` header, and a client configured from it stays on that project no matter where focus goes — running in the background, without switching projects or stealing focus.
+
+The plain **Copy MCP config** button is unchanged and still follows focus, so existing configs keep working exactly as before.
+
+Two things to know about a scoped client: the project has to be open in exactly one window when it connects (a closed or duplicated project refuses the connection with a message naming which), and confirm-gated tools such as `recipe.run` are not part of its tool surface — nobody is watching a background project to approve the dialog, so those calls are refused up front rather than hanging until they time out. Run those from Daintree, or connect an unscoped client for them.
+
 ### Keeping a connection working
 
 The copied config embeds the key verbatim, so treat any file holding it as a secret and keep it out of commits. Rotating the key (**Rotate API key** in the same tab) is the revoke-all primitive: it immediately invalidates every client still presenting the old key, and each one has to be re-pasted. Changing the configured port likewise invalidates the URL every client holds.
@@ -110,6 +118,7 @@ Roughly in dependency order rather than by size — per-file line counts are del
 | `skills.ts` | Main-process short-circuit for `skills.search` / `skills.load` against the skill registry. |
 | `abusePolicy.ts` | Per-session sliding-window denial counter (401 + tier-mismatch). Trips → revoke session. |
 | `sessionDedup.ts` | Idempotency keys + canonical args hashing for the creation-tool dedup cache. |
+| `resourceOwnership.ts` | Which session created which terminal/worktree, written only from trusted post-dispatch results. Backs `terminal.closeOwned` / `worktree.deleteOwned`. See [Resource ownership](#resource-ownership-11909). |
 
 Tier tool lists live in `shared/config/helpAssistantTierAllowlists.ts` so the renderer's blast-radius preview can read them without an IPC round-trip.
 
@@ -181,6 +190,31 @@ There is deliberately **no** third state where a tool is withheld from `tools/li
 
 The introspection tools (`actions.list`, `actions.search`, `actions.getSchema`) are narrowed by a third gate, `filterIntrospectionResultForSession`, applied in main to the dispatch result (#11525). It layers `isTierPermitted`'s allowlist — widened by any live per-tool or native automation grant — on top of the `hidden`/`restricted` ceilings, so discovery returns what the session can actually call. Introspection therefore _describes_ the session's surface (argument shapes, enabled state, live grants) rather than reaching past it.
 
+### Session continuity and the human handoff boundary (#11908)
+
+The in-app assistant can carry a session across a close and back, and can draft a recipe for the user. None of the tools below writes a recipe to disk. The split runs along one line: **the assistant proposes, the person commits.**
+
+Reads stay at `workbench` (`agentSessionHistory.list`, `session.bookmarks.list`). Everything that changes something sits at `action`:
+
+| Tool | Why it is where it is |
+| --- | --- |
+| `agentSessionHistory.resume` | Spawns a pane, so it belongs with the other spawn tools rather than with the listings it reads from. |
+| `session.bookmark.promote` / `.rename` | Reversible metadata edits. Scoped in the action: the journal is keyed by `sessionId` alone and main matches it across every project's records, so each mutation first proves the id is in the caller's own project — an id lifted from another project is refused with the same not-found error an unknown id gets. |
+| `session.bookmarkAndClose` / `session.bookmark.delete` | `danger: "confirm"` — each removes something the person can see (a live pane, a durable bookmark), so the renderer's own dialog gates the mutation. The first-party assistant is pinned to a WebContents rather than workspace-bound, so the confirm-withholding rule above (which keys on the `external` tier) never applies and the tools stay listed. Pinning supplies a route, not an audience: if that renderer is gone or nobody is looking, the dispatch times out rather than proceeding. |
+| `recipe.editor.open` / `recipe.editor.openFromLayout` | Handoffs, not writes — see below. |
+
+`terminal.resumeSessions` is deliberately on **no** tier. It opens the human resume palette: no session id in, no terminal id out, nothing an agent can act on. `agentSessionHistory.resume` is the callable form, and it is stricter than the palette in three ways that matter:
+
+- **The record owns the launch directory, not the caller.** Resume is directory-coupled — the CLI locates a conversation from the launch cwd (#4781) — so a `worktreeId` argument scopes the _lookup_ and is never treated as a relocation. A session recorded in another worktree is refused rather than re-homed, because relaunching it elsewhere would silently produce a fresh session wearing a resumed session's id.
+- **It focuses rather than duplicates.** A live pane already carrying that session in that worktree is brought forward and its id returned (`outcome: "activatedExisting"`), and overlapping dispatches collapse onto one spawn. Records are non-destructive, so without this two agents would end up on one provider transcript.
+- **It does not move the user's view.** An agent-sourced dispatch never switches the active worktree, so a pane resumed into a non-active worktree opens off-screen; the caller addresses it by the returned `terminalId`. Foreground dispatches still switch, which is why the shared helper takes the switch as a callback rather than performing it itself.
+
+**The recipe-editor handoff.** `recipe.editor.open` and `recipe.editor.openFromLayout` put a draft on screen and stop there. They return `{ opened, mode, worktreeId, recipeId, terminalCount }` — deliberately nothing that reports a save, because neither performs one. `opened` is earned rather than assumed: the handoff travels as a DOM event, which tells its dispatcher nothing, so the editor's listener acknowledges the request and an unacknowledged dispatch throws instead of claiming a screen that never changed. `recipe.saveToRepo` and `recipe.delete` are on no tier at all, so the write half of recipe authoring has no MCP surface — nothing in this section turns a draft into a tracked file under `.daintree/recipes/`.
+
+One wrinkle worth knowing: `recipe.editor.open` is `danger: "safe"`, but an agent dispatch carrying a `recipeId` is elevated to `"confirm"` by `resolveEffectiveActionDanger`, which keys on the argument rather than the action (#11860). The elevation is deliberate over-gating; the action carries its own `dangerRationale` so the dialog says what this call actually does — open an editor — rather than the generic "spawns the recipe's terminals" text written for the composites that do.
+
+That boundary is a property of the tool surface, not a rule the model is asked to follow — which is the point. But be precise about what it guarantees: **no recipe tool writes a recipe**, not "the assistant cannot write one". The assistant also holds terminal tools, and a recipe file is just JSON on disk, so the editor is the only _exposed_ path, not the only reachable one. Anything that widens the assistant's ability to write tracked recipe files — a new tool, a shell helper, a broader path allowance — is re-opening this decision and belongs in review as such.
+
 ### Risk bands and `danger`
 
 `deriveBand` / `BAND_OVERRIDES` / `RISK_BAND_OPEN_WORLD_CATEGORIES` (`shared/utils/actionRiskBand.ts`) classify each action into a `RiskBand` (`reversible` | `external-effect` | `destructive-local` | `destructive-network`) from its `danger` + `category`, with per-id overrides (`git.push` → `external-effect`, `copyTree.generateAndCopyFile` → `destructive-local`). The band drives the renderer's blast-radius preview and the MCP tool annotations (`buildAnnotations`).
@@ -188,21 +222,82 @@ The introspection tools (`actions.list`, `actions.search`, `actions.getSchema`) 
 How `danger` interacts with tier gating:
 
 - `danger: "restricted"` — never exposed (hard floor in `shouldExposeTool`) and never dispatchable, the latter enforced by `ActionService.dispatch` rather than by the tier gate.
-- `danger: "confirm"` — _exposed and dispatchable_ if the tier permits, but the `CallTool` handler dispatches it **unconfirmed** so the human approves it host-side in the renderer's native `McpConfirmDialog` (via the renderer bridge) before the mutation fires. This is the MCP-side wiring of the same confirm gate documented in [`destructive-action-safeguards.md`](./destructive-action-safeguards.md): `danger:"confirm"` classifies the action; the host `ConfirmDialog` is the user-facing confirm. A client's self-declared `elicitation.form` capability is **never** treated as authorization — a headless/agentic client could otherwise answer its own in-band elicitation `accept` and self-approve a destructive call with no human in the loop (#11342). When no Daintree window is open to surface the dialog the call is refused with `CONFIRMATION_REQUIRED` (`confirmationChannel: "unavailable"`); only a host-issued native automation grant pre-authorizes a dispatch.
+- `danger: "confirm"` — _exposed and dispatchable_ if the tier permits, but the `CallTool` handler dispatches it **unconfirmed** so the human approves it host-side in the renderer's native `McpConfirmDialog` (via the renderer bridge) before the mutation fires. This is the MCP-side wiring of the same confirm gate documented in [`destructive-action-safeguards.md`](./destructive-action-safeguards.md): `danger:"confirm"` classifies the action; the host `ConfirmDialog` is the user-facing confirm. A client's self-declared `elicitation.form` capability is **never** treated as authorization — a headless/agentic client could otherwise answer its own in-band elicitation `accept` and self-approve a destructive call with no human in the loop (#11342). When no Daintree window is open to surface the dialog the call is refused with `CONFIRMATION_REQUIRED` (`confirmationChannel: "unavailable"`); only a host-issued native automation grant pre-authorizes a dispatch — and it does so whether or not the static tier already permitted the action, since pre-authorizing the modal is orthogonal to clearing the floor (#11878).
 
 ## Session lifecycle (`sessionStore.ts`, `httpLifecycle.ts`)
 
 A session is created on transport open: SSE sessions live in `SessionStore.sessions`, Streamable-HTTP in `SessionStore.httpSessions`. At handshake `httpLifecycle`:
 
-1. Resolves and records the tier (`sessionTierMap`).
+1. Resolves and records the tier (`sessionTierMap`) and the **origin** (`sessionOriginMap`).
 2. Registers client metadata + the bearer in `bearerRegister` (`touchBearer`).
-3. Pins the WebContents (`sessionWebContentsMap`) and `ActionContext` (`sessionContextMap`) for help bearers.
+3. Pins the WebContents (`sessionWebContentsMap`) and `ActionContext` (`sessionContextMap`) for help bearers, or records a **workspace binding** (`sessionWorkspaceMap`) for an external bearer that sent a selector.
 4. Builds the per-session `SessionServerDeps` and calls `createSessionServer`.
 5. Arms an idle timer (`MCP_SSE_IDLE_TIMEOUT_MS`, 30 min).
 
 `transport.onclose` tears everything down: clears the idle/elevation timers, deletes the tier, revokes the session's grants (`grantCache.revokeSession(..., "session-ended")` — _before_ dropping the WebContents pin so the lifecycle emitter can still target the pinned renderer), clears dedup + rate-limit + client metadata, drops abuse state, and detaches the bearer.
 
 The **idle reaper** is awake-time corrected (`SystemSleepService.getAwakeTimeSince` / `recomputeIdleTimers` on wake) so suspend time doesn't count against the 30-minute window.
+
+### Session origin vs. routing (#11789)
+
+Every session records an explicit `origin` — `"help" | "assistant-pane" | "external"` — separate from how it routes. Before #11789, "is this one of Daintree's own surfaces" was inferred from presence in `sessionWebContentsMap`, which was safe only while external sessions were never pinned. They can be now, so the two questions are answered by different fields:
+
+- **Routing** reads `sessionWorkspaceMap` first, then `sessionWebContentsMap`, then falls back to focus order.
+- **Authorization** (`issueGrant`, `setSessionTier`), **notifications** (the five `wc.send` closures in `buildSessionServerDeps`, plus the 401-abuse revoke) and **inventory** (`listExternalActiveClients`) read `origin` via `SessionStore.isRendererOwnedOrigin`.
+
+`getOrigin` defaults to `"external"` — the least-privileged answer — so a session whose handshake never recorded one, or one already half torn down, can never be mistaken for an assistant surface. `clearSessionBinding` drops route, context, origin and workspace together; every teardown path calls it rather than deleting maps individually.
+
+Getting this wrong is not theoretical. `issueGrant` has no rank floor (`setSessionTier` is saved by `external` sitting top of the rank order); its only other check is `minimumPermittingTier(toolId) !== null`, and the call gate honours a grant over failed tier membership. A bound external session reaching that surface could hold a grant for a tool outside `MCP_EXTERNAL_TIER_TOOLS` entirely.
+
+### Workspace binding (#11789)
+
+An external session can bind to one workspace at handshake and route there for its whole life, instead of following window focus. The selector is read **only** when creating a new session, on `/mcp`:
+
+- Header `Daintree-Workspace-Id: <opaque workspace id>`, and/or
+- Query param `?workspaceId=<opaque workspace id>`
+
+Both spellings are equal-authority: sending both is fine when they agree and **fails the handshake** when they don't — there is no precedence order, because silently preferring one would let a stale value in a copied config override an explicit one on the URL. The id is the same one `org.daintree/resolved-workspace` already reports (a project id or a scratch id), and stays opaque — it is never parsed as a path.
+
+An empty or whitespace-only selector is **invalid, not absent**: a client that sends the field at all believes it is scoping itself, and reading a blank one as "no selector" would hand it a focus-following session while it thought otherwise. The same reasoning covers the later legs — a selector on an established `/mcp` session must match what that session actually resolved to (it never rebinds; `DELETE` is exempt so a client can always clean up), and a selector on `POST /messages` is refused, because that is precisely where clients are known to attach headers inconsistently.
+
+Resolution goes through `getWebContentsForProject`, a registry read with no attach/thaw/focus/switch side effects. **Exactly one** live view must own the workspace; zero and many both refuse. A refused handshake returns HTTP 400 with a JSON-RPC error body at `MCP_HANDSHAKE_REJECTED_CODE` (`-32002`, distinct from the `-32001` "Session not found"), a stable `error.data.code` (`WORKSPACE_SELECTOR_MISMATCH` / `_INVALID` / `_NOT_ALLOWED`, `WORKSPACE_NOT_FOUND`, `WORKSPACE_AMBIGUOUS`), and **no** `Mcp-Session-Id` — no session state is created at all. Note that SDK 1.29's `StreamableHTTPClientTransport` surfaces a non-2xx handshake as a `StreamableHTTPError` carrying the raw body as text, so a client that wants to branch on `data.code` has to parse that body itself; the codes are a stable contract, not something the stock client destructures for you.
+
+A selector from a help or assistant-pane bearer is refused: those already route through the renderer that minted them, so a selector would name a second plausible target. Binding is likewise `/mcp`-only — a selector on the deprecated `/sse` endpoint is refused rather than ignored, since a silently-ignored routing selector is worse than an unsupported one.
+
+The binding is echoed in the `initialize` result under `capabilities.experimental["org.daintree/workspace-binding"]`, so a client can verify where its calls will land before issuing a mutation. It is declared at `Server` construction, never by registering a second `InitializeRequestSchema` handler — that would shadow the SDK's own `_oninitialize` and lose the `_clientCapabilities` capture the elicitation negotiation depends on.
+
+A bound view that Chromium has **frozen** (`Page.setWebLifecycleState`, applied to cached views under the Efficiency profile) is a known gap, not a handled case: its renderer event loop is suspended, so a dispatch queues rather than running, the caller times out at 30s, and the action executes on reactivation with its response discarded. Freezing is skipped for a project with a live agent, which covers the common orchestration case, but keeping a bound view thawed is #11790's job. Refusing dispatch to any _cached_ view would not be a stand-in — most cached views are merely CPU-throttled and work fine, so that would break the feature's whole point.
+
+**The binding stores the workspace id, not a WebContents id.** A view's id lives and dies with that view: a warm project switch reuses the same view, but LRU eviction destroys it and a later cold start registers a new id under the same workspace. Re-resolving per call lets a session recover once its workspace has a live view again; caching the handshake id would leave it permanently `SESSION_BINDING_GONE`. Dispatching into a _frozen_ view is #11790 — this is correct whenever the bound view is live.
+
+Failures fail closed and never fall back to another window. `tools/list` surfaces `SESSION_BINDING_GONE` in `McpError.data` rather than the generic "Action manifest unavailable", and a bound session never serves a cached manifest after a binding failure — that cache describes a view it can no longer reach.
+
+**Confirm-gated tools are withheld from a bound session.** A `danger: "confirm"` dispatch is only ever approved in the target renderer's native dialog, which gives up at 28s — inside main's 30s dispatch timeout and the client's 60s request timeout. Nobody is watching a background-bound view, and no arrangement holds the call open long enough to find someone. So such tools are dropped from the session's effective surface across `tools/list`, the introspection tools and `mcp.surface`, and a direct call is refused **before dispatch** with `CONFIRMATION_REQUIRED` and `details.confirmationChannel: "workspace-bound"` (distinct from the `"unavailable"` a windowless host reports, which clears when a window opens). The exclusion is derived from the manifest's own `danger` rather than a curated id list, so a future confirm-gated addition to `MCP_EXTERNAL_TIER_TOOLS` is covered the day it lands. It is a hard ceiling: a live per-tool or native grant widens dispatch past the tier floor but not past this. The guard keys on external tier **and** bound, never on "has a renderer route" — the Daintree Assistant is pinned and carries confirm-gated tools in its own allowlist.
+
+Binding is opt-in. An unbound external session keeps the documented focus-following behaviour, `recipe.run` included.
+
+### Resource ownership (#11909)
+
+Routing identity says where a session's calls land. Ownership says which resources it may clean up, and the two stay separate concepts: a session bound to a workspace can reach every panel in it, and owns almost none of them.
+
+`SessionStore.resourceOwnership` (`resourceOwnership.ts`) records which terminals and worktrees each session created. Entries are written **only** from the dispatch envelope a completed action returned — never from `spawnedBy` (caller-supplied and purely descriptive), never from tool arguments, never from a later scan of `terminal.list`. The recording hook sits in `sessionServer`'s dispatch path immediately after the envelope resolves, and covers the four creation tools an external session can reach: `terminal.new`, `agent.launch`, `recipe.run` and `worktree.createWithRecipe`. The last two return `spawnedTerminalIds` precisely so composite child terminals are attributable — a count identifies nothing, and inferring ids from a later listing would attribute the user's panels too. A `worktree.createWithRecipe` that creates the worktree and then fails its recipe still attributes the worktree — the caller has to be able to clean up the mess its own call made. That attribution keys on the `PARTIAL_SUCCESS` **error code**, which `ActionService` stamps only for a thrown `PartialSuccessError` (`shared/utils/partialSuccess.ts`), never on the message shape: the composite calls forge providers and git before the worktree exists, and `forgeAuditService` rethrows a provider's message unchanged, so a provider returning a suitably-shaped string could otherwise mint a record for a worktree nothing created.
+
+`agent.launch` returns a `worktreeId` and it is deliberately **not** recorded: that names the worktree the agent launched _into_, which the session did not create.
+
+Two tools consume the ledger, and neither is the general primitive:
+
+- **`terminal.closeOwned`** (`danger: "safe"`) — checks ownership, then dispatches the real `terminal.close`, so trash/recovery behaviour and the "reports the exact panel closed" contract are the shipped ones.
+- **`worktree.deleteOwned`** (`danger: "confirm"`) — checks ownership, then dispatches the real `worktree.delete`. Delegating under that literal id is what makes the D2 preview work: `resolveMcpConfirmPreviewTarget` in `useMcpBridge` matches on the action id to build the tracked/untracked file-count preview. Its `danger: "confirm"` also feeds `isWithheldFromBoundSession`, so a workspace-bound session — routed at a view nobody is watching — is refused it at discovery and at dispatch alike. `force`, `deleteBranch` and `closeTerminals` are absent from its schema and stripped from the delegated call: owning a worktree is not authority to destroy uncommitted work, delete a branch the session never created, or close every terminal in it (`closeTerminals` is a blunt boolean over all of them, so it cannot be narrowed to the owned ones).
+
+The generic `terminal.close` and `worktree.delete` stay off `MCP_EXTERNAL_TIER_TOOLS`. Both `*Owned` tools execute as main-process short-circuits because the ledger is keyed by MCP session id, which the renderer never sees.
+
+A refusal is `RESOURCE_NOT_OWNED`, and it is deliberately one code for three situations — the id never existed, it belongs to another session, or it belongs to the user, a plugin, or the in-app assistant. Distinguishing them would make the cleanup tools an enumeration oracle. The check runs before the delegated dispatch, so a refused call never reaches a renderer.
+
+**Ownership lasts exactly as long as the session, and disconnect does not clean anything up.** `clearSessionBinding` drops the ledger alongside route, context, origin and workspace, and `drain` clears it wholesale — that revokes _authority_, not the resources. Terminals and worktrees a disconnected client created stay exactly where they are: the session ending is not a decision to destroy work the user can still see, and a reconnecting client gets a new session id with an empty ledger. Cleaning up after a client that went away is the user's call, through the normal UI. Ownership is recorded for every tier rather than only `external`, because "this session created it" is a fact about the session rather than about its privileges.
+
+Re-recording an id moves the record to the newest creator. Ids are reusable — `agent.launch` accepts a `requestedId` that `addPanel` honours without a collision check, and worktree ids are paths that come back after a delete — so an older record for a live id is the stale one. Keeping it would be the dangerous choice: a session holding a record for a panel the user closed could otherwise close whatever replacement now answers to that id. The only way to reach the transfer is to successfully create a resource under the id, which replaces whatever it named before, so authority always follows what actually exists.
+
+Two smaller consequences worth knowing. A creation that lands _after_ its session was torn down records nothing — otherwise a dead session's authority would come back and, worse, claim the id away from whoever records it next. And `worktree.deleteOwned` is deliberately absent from the dedup allowlist that `worktree.delete` sits in: worktree ids are paths, create → delete → recreate is a supported workflow, and a cached delete would report success for a second, genuinely different worktree.
 
 ### Bearer register
 
@@ -219,21 +314,41 @@ Two distinct mechanisms widen what a session can do past its baseline:
 
 ## End-to-end `tools/call` flow (`sessionServer.ts`)
 
-The `CallTool` handler is a fixed-order gate chain. Each gate that denies writes an audit record and returns a structured tool-error (`buildToolError`) — never a silent skip.
+The `CallTool` handler is a fixed-order gate chain. Each gate that denies writes an audit record and returns a structured tool-error (`buildToolError`) — never a silent skip. Gate 0 is the exception: a request whose session is already gone is refused without an audit record, because there is no tier it could honestly be recorded under.
+
+**`getTier` returns `McpTier | null`, and `null` means "no live transport" (#11799).** `workbench` is not a floor — `TIER_ALLOWLISTS` gives `external` its own allowlist rather than a subset of `workbench`, so defaulting a vanished session to `workbench` _widened_ a revoked external bearer onto 46 tools its allowlist withholds. Every authorization path (`tools/list`, `tools/call`, and all four resource handlers) resolves the tier once at entry and fails closed on `null` with `SESSION_GONE`. Discovery throws rather than answering with an empty list, which would read as a legitimate empty surface.
+
+**Authorization has one lifetime per call.** The tier is captured once, at admission, and reused for the rest of the handler — through the manifest fetch, the native-grant charge, and dispatch. Revocation stops the _next_ request; it does not retroactively refuse a call the gate already admitted, and re-reading mid-handler would only make the response disagree with the gate and the audit record.
 
 ```
 tools/call(actionId, args)
   │
-  ├─1 Tier floor: isTierPermitted(tier, actionId)?
-  │      └─ no → grantCache.check(sessionId, actionId)
-  │             ├─ granted → proceed (capture issuedAt for post-dispatch refresh)
-  │             └─ denied  → incrementDenial → maybe notifyTierMismatch (banner,
-  │                          suppressed after MCP_DENIAL_SILENCE_THRESHOLD) →
-  │                          recordDenial(abusePolicy); if tripped → revokeSession →
-  │                          return TIER_NOT_PERMITTED
+  ├─0 Session liveness: sessionStore.getTier(sessionId) → null?
+  │      └─ yes → return SESSION_GONE (business, do not retry) before any audit,
+  │               denial counter, grant lookup, dedup entry or dispatch
   │
-  ├─2 Rate limit: consumeRateLimitToken(sessionId, actionId)
-  │      └─ empty bucket → return MCP_RATE_LIMITED (retryAfter; retriable)
+  ├─1 Admission — did anything OTHER than a native grant let this call in?
+  │      ├─ isTierPermitted(tier, actionId) → yes: admitted by the floor
+  │      └─ no → grantCache.check(sessionId, actionId)
+  │             └─ granted → admitted (capture issuedAt for post-dispatch
+  │                          refresh; widens the floor only, never bypasses
+  │                          confirm)
+  │
+  ├─2 Native grant: peekNativeGrant(sessionId, actionId)  (#11878)
+  │      │  Runs independently of gate 1, because a native grant answers a
+  │      │  different question: it both widens the floor AND pre-authorizes
+  │      │  the confirm modal. Nesting it under either admission source left
+  │      │  it unreachable — worktree.delete is danger:"confirm" but
+  │      │  system-tier permitted, so pre-authorizing it in Settings did
+  │      │  nothing; the same held when a per-tool grant had just admitted it.
+  │      │  Skipped only for an already-admitted introspection carrier, which
+  │      │  can never raise a modal, so a peek would just drain the budget.
+  │      ├─ granted → capture grantId (widens the floor AND pre-authorizes
+  │      │            confirm; the use is charged later, at commit-to-dispatch)
+  │      └─ neither gate 1 nor a grant admitted it → incrementDenial → maybe
+  │                   notifyTierMismatch (banner, suppressed after
+  │                   MCP_DENIAL_SILENCE_THRESHOLD) → recordDenial(abusePolicy);
+  │                   if tripped → revokeSession → return TIER_NOT_PERMITTED
   │
   ├─3 Dedup (creation-tool allowlist only):
   │      ├─ cached result within TTL & same args → return cached (audit: dedup)
@@ -263,11 +378,10 @@ tools/call(actionId, args)
   └─7 Audit: appendAuditRecord({ toolId, tier, args, durationMs, outcome })
 ```
 
-Gate order is load-bearing: rate-limit is charged **after** the tier/grant check (an unauthorized call shouldn't consume tokens) but **before** dedup (dedup is an idempotency guard, not a rate-limit bypass — a tight loop replaying one dedup key must still be bounded).
+Gate order is load-bearing: a native grant's use is charged **after** admission and after the workspace-bound confirm ceiling — an unauthorized or refused call must never burn one — but **before** dedup, so a replayed duplicate spends a use without dispatching. The per-call rate limiter that used to sit between admission and dedup was removed in #10764.
 
-### Rate limits and dedup
+### Dedup
 
-- **Rate limits** (`RATE_LIMIT_TIERS`, `RATE_LIMIT_TOOL_MAP`): per-`(session, toolId)` token bucket. `highFreqRead` (60/min) for cheap polling, `standard` (30/min) default, `mutation` (10/min) for side-effecting tools (commit, push, issue/PR, worktree.delete).
 - **Dedup** (`MCP_DEDUP_ALLOWLIST`): creation tools only, admitted on one of two distinct grounds — either an LLM retry leaves a duplicate artifact (an orphan terminal, a second agent, a duplicate issue/comment/review), or the retry creates nothing and the cached success is preferable to the error a redundant redispatch would raise (`worktree.delete`, `forge.createPR`, `forge.mergePR`, which 422s a duplicate PR and PUTs a merge). Keyed by a caller-supplied `requestKey` (prefixed with `actionId`, capped at `MAX_REQUEST_KEY_LENGTH`) or an auto canonical args hash, with an args-hash collision guard (#8429). TTL `MCP_DEDUP_TTL_MS` (120s), FIFO-capped at `MCP_DEDUP_MAX_ENTRIES_PER_SESSION` (256). Deliberately **out** (#11534): navigation (`forge.open*`) and idempotent state-sets (assign/unassign, close/reopen/edit, labels), which create no duplicate to suppress and whose cached 120s no-op breaks the legitimate repeat — reopening a URL the user closed, or re-assigning after an unassign — plus `git.commit`/`git.push`, whose arguments a legitimate repeat reuses unchanged, so deduping them would report success for a commit or push that never happened.
 
 ## Tool argument and result conventions (#11543)
@@ -343,7 +457,7 @@ All eight are in `WORKBENCH_TIER_TOOLS` (the help-assistant baseline), so they a
 | --- | --- |
 | `forge.getRepoStats` | `bypassCache?`, `cwd?` |
 | `forge.listIssues` | `search?`, `state?`, `perPage?`, `sort?`, `direction?`, `cursor?`, `view?`, `bypassCache?`, `cwd?` |
-| `forge.listPRs` | `state?`, `perPage?`, `sort?`, `direction?`, `cursor?`, `view?`, `bypassCache?`, `cwd?` (no `search`) |
+| `forge.listPRs` | `search?`, `state?`, `perPage?`, `sort?`, `direction?`, `cursor?`, `view?`, `bypassCache?`, `cwd?` |
 | `forge.getIssue` | `issueNumber`, `cwd?` |
 | `forge.listIssueComments` | `issueNumber`, `cursor?`, `perPage?`, `cwd?` |
 | `forge.getPR` | `prNumber`, `cwd?` |
@@ -352,7 +466,7 @@ All eight are in `WORKBENCH_TIER_TOOLS` (the help-assistant baseline), so they a
 
 The two list actions are the only **strict** action schemas in the codebase (#11527): an unrecognized arg is a validation error, not a silently stripped key. That is deliberate — Zod's default strip meant `labels: [...]` or `limit: 10` came back as a confidently _unfiltered_ page, which an agent would then act on.
 
-- **`search` is a provider-native query fragment**, not a plain-text filter. On GitHub it is issue-search syntax, so negation works where the structured `ListOptions` fields cannot express it: `search: "no:assignee -label:human-review"`. The provider trims it and appends it after the repo/type/state/sort qualifiers it generates, truncating to fit GitHub's 256-character query cap — so it is passed through unparsed, but not untouched. It routes through the search API, which has its own depth and rate ceilings. `forge.listPRs` has no `search` at all — the GitHub provider's `pullRequests` connection cannot filter by label or assignee, so accepting the key would return an unfiltered page.
+- **`search` is a provider-native query fragment**, not a plain-text filter. On GitHub it is issue-search syntax, so negation works where the structured `ListOptions` fields cannot express it: `search: "no:assignee -label:human-review"`. The provider trims it and appends it after the repo/type/state/sort qualifiers it generates, truncating to fit GitHub's 256-character query cap — so it is passed through unparsed, but not untouched. It routes through the search API, which has its own depth and rate ceilings, and its results are deliberately kept out of the list cache that plain paging is served from. `forge.listPRs` takes the same key with the PR dialect (#11897): state there is expressed as `is:open`/`is:closed`/`is:merged`, since GitHub's `state:` qualifier only accepts open/closed for pull requests. `is:closed` includes merged PRs on both paths, so adding a search term never changes which PRs a `state: "closed"` request means.
 - **`view` defaults to `summary`**, which drops each row's `body` and `rawData` (the verbatim provider node) and flattens actors and labels to their names, keeping what is needed to choose an item — including `linkedPR`, which answers whether a PR is already working the issue. Pass `view: "full"` for the complete provider object. This is a runtime projection built in `run()`, not a schema effect: `dispatch()` never parses `resultSchema`, so a field stops being sent only when `run()` stops building it. Neither list action sets `mcpOutputSchema`, so their `resultSchema` is declarative metadata for readers of the definition rather than an advertised MCP `outputSchema` — deliberately, since `sessionServer` emits `structuredContent` _alongside_ the serialized text body, which would send every row twice and undo the projection's whole point.
 - **`bypassCache` is the only escape from a warm list cache.** Providers cache list pages, so a change made outside the app — the user running a forge CLI in a terminal, another agent closing an issue — stays invisible until the entry ages out. Pass `bypassCache: true` to re-read; it costs a provider round trip, so leave it off for ordinary paging. Same knob as `forge.getRepoStats`.
 - `perPage` is 1-100 (default 20), `sort` is `created`|`updated`, `direction` is `asc`|`desc`. Structured `labels`/`assignee` filtering is not yet wired provider-side; use `search`.

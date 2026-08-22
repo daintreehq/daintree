@@ -18,6 +18,7 @@ export const E2E_DISABLE_CACHED_VIEW_CPU_THROTTLE_ARG =
   "--daintree-e2e-disable-cached-view-cpu-throttle";
 export const E2E_CRASH_DUMPS_DIR_ARG = "--daintree-e2e-crash-dumps-dir=";
 export const E2E_SIDELOAD_PLUGIN_DIR_ARG = "--daintree-e2e-sideload-plugin-dir=";
+export const FREEZE_HARNESS_ARG = "--daintree-freeze-harness";
 
 function hasArg(flag: string): boolean {
   return process.argv.includes(flag);
@@ -76,6 +77,16 @@ export function getE2ESideloadPluginDir(): string | undefined {
       : undefined;
 }
 
+/**
+ * Freeze harness mode (#11846). Boots the real app, drives one cached project
+ * view through the production freeze/thaw path and measures whether its
+ * renderer actually stopped executing tasks. Never packaged: this is a
+ * developer/CI measurement mode, not a product surface.
+ */
+export function getIsFreezeHarness(): boolean {
+  return !isPackaged && hasArg(FREEZE_HARNESS_ARG);
+}
+
 export const isE2EMode = getIsE2EMode();
 export const isE2ESkipFirstRunDialogs = getIsE2ESkipFirstRunDialogs();
 export const isE2EFaultMode = getIsE2EFaultMode();
@@ -83,4 +94,5 @@ export const isE2EDeferRendererLoad = getIsE2EDeferRendererLoad();
 export const isE2EDisableCachedViewCpuThrottle = getIsE2EDisableCachedViewCpuThrottle();
 export const e2eCrashDumpsDir = getE2ECrashDumpsDir();
 export const e2eSideloadPluginDir = getE2ESideloadPluginDir();
+export const isFreezeHarness = getIsFreezeHarness();
 export const smokeTestStart = isSmokeTest ? Date.now() : 0;

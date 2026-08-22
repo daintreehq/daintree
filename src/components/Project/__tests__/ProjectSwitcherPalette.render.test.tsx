@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeAll, afterAll, afterEach } from "vitest";
-import { render, screen, within, fireEvent, act } from "@testing-library/react";
+import { render, screen, within, fireEvent, act, cleanup } from "@testing-library/react";
 
 const originalScrollIntoView = Element.prototype.scrollIntoView;
 beforeAll(() => {
@@ -50,8 +50,20 @@ vi.mock("@/store/uiStore", () => ({
 }));
 
 vi.mock("@/components/ui/AppPaletteDialog", () => {
-  const Header = ({ children }: { children: React.ReactNode }) => (
-    <div data-testid="palette-header">{children}</div>
+  // `trailing` is rendered, not dropped: it is a slot the palette puts real
+  // content in, and a mock that swallows it would let the header's summary
+  // regress to nothing while this suite stayed green.
+  const Header = ({
+    children,
+    trailing,
+  }: {
+    children: React.ReactNode;
+    trailing?: React.ReactNode;
+  }) => (
+    <div data-testid="palette-header">
+      {trailing}
+      {children}
+    </div>
   );
   const Input = ({
     inputRef,
@@ -216,14 +228,14 @@ describe("ProjectSwitcherPalette secondary text waterfall", () => {
       />
     );
     // A project that needs the user outranks one that is merely busy.
-    expect(screen.getByText("3 agents need input")).toBeTruthy();
+    expect(screen.getByText("3 need input")).toBeTruthy();
   });
 
   it("singularises a lone waiting agent", () => {
     render(
       <ProjectSwitcherPalette {...baseProps} results={[makeProject({ waitingAgentCount: 1 })]} />
     );
-    expect(screen.getByText("Agent needs input")).toBeTruthy();
+    expect(screen.getByText("1 needs input")).toBeTruthy();
   });
 
   it("ages the oldest wait", () => {
@@ -238,7 +250,7 @@ describe("ProjectSwitcherPalette secondary text waterfall", () => {
         ]}
       />
     );
-    expect(screen.getByText("2 agents need input · oldest waiting 42m")).toBeTruthy();
+    expect(screen.getByText("2 need input")).toBeTruthy();
   });
 
   it("reports blocked agents alongside the plain waits, not instead of them", () => {
@@ -250,14 +262,16 @@ describe("ProjectSwitcherPalette secondary text waterfall", () => {
     );
     // An agent stopped on an error is a different ask than one at a prompt, but
     // the two still waiting must not vanish behind it.
-    expect(screen.getByText("2 agents need input · 1 blocked")).toBeTruthy();
+    expect(screen.getByText("2 need input · 1 blocked")).toBeTruthy();
   });
 
-  it("reports running agents when nothing is waiting", () => {
+  it("reports running agents as a count rather than a sentence", () => {
     render(
       <ProjectSwitcherPalette {...baseProps} results={[makeProject({ activeAgentCount: 2 })]} />
     );
-    expect(screen.getByText("2 agents running")).toBeTruthy();
+    // Running is the second axis, not a tier of this waterfall — it draws in
+    // the row's own column so it survives a wait or a snooze winning the line.
+    expect(screen.getByTestId("workspace-running-count").textContent).toBe("2 agents running");
   });
 
   // A row with nothing running has nothing to report, and twenty of those in a
@@ -322,6 +336,33 @@ describe("ProjectSwitcherPalette secondary text waterfall", () => {
     expect(screen.getByTestId("workspace-status-dot")).toBeTruthy();
   });
 
+  it("keeps the auto-park reason while its ring gives way to the resume mark", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        results={[
+          makeProject({
+            name: "Parked",
+            status: "closed",
+            autoParkedAt: Date.now(),
+            lastOpened: Date.now() - 2 * 3600000,
+            resumableAgentCount: 2,
+          }),
+        ]}
+      />
+    );
+
+    // Why it is parked and how much comes back are both facts about this row,
+    // and it only has one dot to spend — so the reason stays in the line while
+    // the dot goes to the promise (#11822).
+    const row = screen.getByRole("option", { name: /Parked, 2 agents will resume/i });
+    expect(within(row).getByText("Suspended to free memory")).toBeTruthy();
+    expect(within(row).getByTestId("workspace-resume-dot")).toBeTruthy();
+    // The slot holds one dot: a fix that left both conditions independent would
+    // stack them here rather than swapping.
+    expect(within(row).queryByTestId("workspace-status-dot")).toBeNull();
+  });
+
   it("says nothing at all for a closed project without the parked marker", () => {
     const twoHoursAgo = Date.now() - 2 * 3600000;
     render(
@@ -338,10 +379,11 @@ describe("ProjectSwitcherPalette secondary text waterfall", () => {
 });
 
 /**
- * The leading dot marks rows that have something to say. It used to sit on
+ * The leading mark flags rows that have something to say. It used to sit on
  * every row as a hollow ring, which made the most common mark in the list the
  * one carrying no information — and left it competing with the filled dots that
- * do (#11692).
+ * do (#11692). Its shape is a second signal now (#11832); these cases cover
+ * only whether a mark is drawn at all.
  */
 describe("ProjectSwitcherPalette status dot", () => {
   it("marks a row with something to report and leaves a quiet one unmarked", () => {
@@ -361,7 +403,8 @@ describe("ProjectSwitcherPalette status dot", () => {
 
   /*
    * Structural only — jsdom does no layout, so this pins that the slot element
-   * survives on a quiet row, not that it still measures 6px. What it rules out
+   * survives on a quiet row, not that it still measures its nominal width. What
+   * it rules out
    * is the tempting simplification: dropping the whole slot instead of just its
    * dot, which would pull every quiet row's tile left of the busy ones.
    */
@@ -387,16 +430,322 @@ describe("ProjectSwitcherPalette status dot", () => {
   });
 });
 
+/**
+ * Two facts, two carriers (#11832). The row's mark weighs its running agents
+ * against the ones asking for something; its line states both counts, running
+ * first. The tests below always compare two rows that differ in exactly one of
+ * those, so a change that collapsed them back onto one carrier fails here
+ * rather than passing by matching a string.
+ */
+describe("ProjectSwitcherPalette liveness axis", () => {
+  const markIn = (row: HTMLElement) => row.querySelector("[data-testid='workspace-status-dot']");
+  const shareOf = (row: HTMLElement) => markIn(row)?.getAttribute("data-running-share") ?? null;
+
+  function renderPair(runningCount: number) {
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        results={[
+          makeProject({ id: "stalled", name: "Stalled", waitingAgentCount: 1 }),
+          makeProject({
+            id: "churning",
+            name: "Churning",
+            waitingAgentCount: 1,
+            activeAgentCount: runningCount,
+          }),
+        ]}
+      />
+    );
+    return {
+      stalled: screen.getByRole("option", { name: /Stalled/ }),
+      churning: screen.getByRole("option", { name: /Churning/ }),
+    };
+  }
+
+  it("splits the mark on the row that has both, and leaves the stalled one solid", () => {
+    const { stalled, churning } = renderPair(3);
+
+    // The original bug in one assertion: these two rows want the same thing and
+    // used to draw the same mark, while only one of them was still moving.
+    expect(shareOf(stalled)).toBeNull();
+    expect(shareOf(churning)).not.toBeNull();
+    // Structurally different marks, not just differently classed ones: the
+    // split one is a wedge over a full disc, while a row leaning entirely one
+    // way stays a plain div. Both shapes are named, and their fills asserted
+    // apart, because the wedge alone still renders as a plausible mark — it
+    // would just be a slice floating on the row, which is the transparent
+    // background the disc underneath exists to prevent.
+    expect(markIn(stalled)?.tagName).toBe("DIV");
+    expect(markIn(churning)?.tagName).toBe("svg");
+    const disc = markIn(churning)?.querySelector("circle");
+    const wedge = markIn(churning)?.querySelector("path");
+    expect(disc).toBeTruthy();
+    expect(wedge).toBeTruthy();
+    expect(disc?.getAttribute("fill")).not.toBe(wedge?.getAttribute("fill"));
+  });
+
+  it("leans the mark toward whichever side has more agents", () => {
+    // Deliberately one agent apart rather than a wide spread. Against one
+    // waiting agent these are 3/4 and 2/3 — two ratios the old quarter-snapped
+    // mark drew identically, so this fails if the component ever goes back to
+    // rendering a pose instead of the counts' own proportion.
+    const mostlyRunning = renderPair(3).churning;
+    cleanup();
+    const nearerEven = renderPair(2).churning;
+
+    expect(Number(shareOf(mostlyRunning))).toBeGreaterThan(Number(shareOf(nearerEven)));
+  });
+
+  it("leaves the demand sentence identical on both", () => {
+    const { stalled, churning } = renderPair(2);
+
+    // Purely additive: the tier that won the line is unchanged, so a row that
+    // gained the count did not lose anything to it.
+    const demand = (row: HTMLElement) => within(row).getByText("1 needs input");
+    expect(demand(churning).textContent).toBe(demand(stalled).textContent);
+    expect(demand(churning).className).toBe(demand(stalled).className);
+  });
+
+  it("draws the count on the churning row only", () => {
+    const { stalled, churning } = renderPair(2);
+
+    expect(within(churning).getByTestId("workspace-running-count").textContent).toBe(
+      "2 agents running"
+    );
+    expect(within(stalled).queryByTestId("workspace-running-count")).toBeNull();
+  });
+
+  it("leads the line with the count and colours it apart from the demand", () => {
+    const { churning } = renderPair(2);
+
+    // Running is the figure the switcher gets opened for, so it comes first —
+    // and it carries its own hue, because greying it made it read as an
+    // afterthought rather than as the answer.
+    const count = within(churning).getByTestId("workspace-running-count");
+    const demand = within(churning).getByText("1 needs input");
+    expect(count.compareDocumentPosition(demand) & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+    expect(count.className).not.toBe(demand.className);
+    expect(count.textContent).not.toContain("need input");
+  });
+
+  it("keeps the assistant's phrase out of the hue a launched run wears", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        results={[
+          makeProject({ id: "solo", name: "Solo", assistantState: "working" }),
+          makeProject({
+            id: "helped",
+            name: "Helped",
+            waitingAgentCount: 1,
+            assistantState: "working",
+          }),
+          makeProject({ id: "worked", name: "Worked", waitingAgentCount: 1, activeAgentCount: 2 }),
+        ]}
+      />
+    );
+
+    const rowOf = (name: RegExp) => screen.getByRole("option", { name });
+    const countIn = (row: HTMLElement) => within(row).getByTestId("workspace-running-count");
+    // The assistant says the same thing on both rows and only its carrier
+    // moves: alone it is the row's sentence, and with a wait beside it the
+    // sentence is taken and it lands in the slot the count uses. Compared to
+    // itself rather than to a named token, so the invariant is "one fact, one
+    // hue" and not whichever class happens to draw it.
+    const spokenAlone = within(rowOf(/Solo/)).getByText("Assistant working");
+    const spokenBeside = countIn(rowOf(/Helped/));
+
+    expect(spokenBeside.textContent).toBe(spokenAlone.textContent);
+    expect(spokenBeside.className).toBe(spokenAlone.className);
+    // And never the weight a run the user launched carries (#11806) — the slot
+    // used to paint everything that reached it in the worker hue.
+    expect(spokenBeside.className).not.toBe(countIn(rowOf(/Worked/)).className);
+  });
+
+  it("reaches assistive tech as words, not as a mark", () => {
+    renderPair(3);
+
+    // Queried by accessible NAME, not by text content: the mark is
+    // `aria-hidden`, so the line is the only carrier left, and a count that was
+    // itself hidden from the accessibility tree would still sit in the DOM for
+    // `textContent` to find while leaving the mark as the sole encoding.
+    const spoken = screen.getByRole("option", { name: /Churning.*3 agents running/s });
+    expect(markIn(spoken)?.getAttribute("aria-hidden")).toBe("true");
+    expect(
+      within(spoken).getByTestId("workspace-running-count").getAttribute("aria-hidden")
+    ).toBeNull();
+  });
+
+  it("states a row's run exactly once", () => {
+    render(
+      <ProjectSwitcherPalette {...baseProps} results={[makeProject({ activeAgentCount: 2 })]} />
+    );
+
+    const row = screen.getByRole("option", { name: /Test Project/ });
+    // A row whose only fact is the run has no demand to state, so the count is
+    // the whole line — "2 agents running · 2 agents running" would say it twice.
+    expect(within(row).getByTestId("workspace-running-count").textContent).toBe("2 agents running");
+    expect(row.textContent?.match(/agents running/g)).toHaveLength(1);
+    // It is still marked, and solid: with nothing waiting there is nothing to
+    // weigh the run against.
+    expect(markIn(row)).toBeTruthy();
+    expect(shareOf(row)).toBeNull();
+  });
+
+  it("marks a running row differently from a waiting one", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        results={[
+          makeProject({ id: "run", name: "Runs", activeAgentCount: 2 }),
+          makeProject({ id: "wait", name: "Waits", waitingAgentCount: 2 }),
+        ]}
+      />
+    );
+
+    // Both are solid discs, so hue is the only thing separating them — compared
+    // rather than named, so renaming a token is not a test edit.
+    const running = markIn(screen.getByRole("option", { name: /Runs/ }));
+    const waiting = markIn(screen.getByRole("option", { name: /Waits/ }));
+    expect(running?.className).not.toBe(waiting?.className);
+  });
+
+  it("keeps the resume promise off a row whose agents never stopped", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        results={[makeProject({ activeAgentCount: 2, resumableAgentCount: 3 })]}
+      />
+    );
+
+    const row = screen.getByRole("option", { name: /Test Project/ });
+    expect(within(row).queryByTestId("workspace-resume-dot")).toBeNull();
+    expect(row.textContent).not.toContain("will resume");
+    expect(within(row).getByTestId("workspace-running-count")).toBeTruthy();
+  });
+
+  it("carries both axes on a scratch row too", () => {
+    // The pinned section is its own render path and used to draw the status
+    // line as a single toned element, which left it structurally unable to hold
+    // a second fragment at all.
+    const busyScratch: SearchableScratch = {
+      id: "s1",
+      name: "Spike",
+      path: "/userData/scratch/s1",
+      createdAt: 0,
+      lastOpened: 0,
+      isActive: false,
+      activeAgentCount: 2,
+      waitingAgentCount: 1,
+      blockedAgentCount: 0,
+      completedAgentCount: 0,
+      unacknowledgedCompletedAgentCount: 0,
+      snoozedAgentCount: 0,
+      processCount: 0,
+    };
+
+    render(<ProjectSwitcherPalette {...baseProps} results={[]} scratchResults={[busyScratch]} />);
+
+    const row = screen.getByRole("option", { name: /Spike.*2 agents running/s });
+    expect(within(row).getByText("1 needs input")).toBeTruthy();
+    expect(shareOf(row)).not.toBeNull();
+  });
+
+  it("carries both axes on a scratch in the ranked list too", () => {
+    // A third renderer: a searched scratch is drawn by `ScratchListItem`, not by
+    // the pinned section above, and the two used to format their status lines
+    // independently of each other and of the project row.
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        query="spike"
+        results={[
+          {
+            kind: "scratch",
+            id: "s2",
+            name: "Spike",
+            path: "/userData/scratch/s2",
+            createdAt: 0,
+            lastOpened: 0,
+            isActive: false,
+            activeAgentCount: 2,
+            waitingAgentCount: 1,
+            blockedAgentCount: 0,
+            completedAgentCount: 0,
+            unacknowledgedCompletedAgentCount: 0,
+            snoozedAgentCount: 0,
+            processCount: 0,
+          },
+        ]}
+      />
+    );
+
+    const row = screen.getByRole("option", { name: /Spike.*2 agents running/s });
+    expect(within(row).getByText("1 needs input")).toBeTruthy();
+    expect(shareOf(row)).not.toBeNull();
+  });
+});
+
+describe("ProjectSwitcherPalette fleet summary", () => {
+  it("reports what is running across every workspace", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        fleetLiveness={{ runningAgentCount: 4, workingAssistantCount: 0 }}
+        results={[makeProject()]}
+      />
+    );
+
+    expect(screen.getByTestId("fleet-liveness-summary").textContent).toContain("4");
+  });
+
+  it("disappears when nothing is executing anywhere", () => {
+    // Its absence is the answer to "is it safe to look away?" — a standing zero
+    // would make the reader parse a number to learn there is nothing to learn.
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        fleetLiveness={{ runningAgentCount: 0, workingAssistantCount: 0 }}
+        results={[makeProject()]}
+      />
+    );
+
+    expect(screen.queryByTestId("fleet-liveness-summary")).toBeNull();
+  });
+
+  it("stays silent for a caller that has no totals to give", () => {
+    render(<ProjectSwitcherPalette {...baseProps} results={[makeProject()]} />);
+
+    expect(screen.queryByTestId("fleet-liveness-summary")).toBeNull();
+  });
+
+  it("reaches the header through the modal path too", () => {
+    // The palette has two hosts and the outer component re-lists every prop by
+    // hand into each. Covering only the dropdown left the modal's chain free to
+    // drop the summary silently — which is exactly how it shipped broken the
+    // first time.
+    render(
+      <ProjectSwitcherPalette
+        {...modalProps}
+        fleetLiveness={{ runningAgentCount: 4, workingAssistantCount: 0 }}
+        results={[makeProject()]}
+      />
+    );
+
+    expect(screen.getByTestId("fleet-liveness-summary").textContent).toContain("4");
+  });
+});
+
 describe("ProjectSwitcherPalette status conveyance", () => {
-  // The dot repeats the status line's tone and nothing else. It carries no
-  // accessible name of its own, so status is never announced twice and never
-  // depends on telling two hues apart.
+  // The mark carries no accessible name of its own, so status is never
+  // announced twice and never depends on telling two hues — or two shapes —
+  // apart. Everything it shows is also stated in the sentence beside it.
   it("conveys status as text rather than a labelled dot", () => {
     render(
       <ProjectSwitcherPalette {...baseProps} results={[makeProject({ waitingAgentCount: 2 })]} />
     );
 
-    expect(screen.getByText("2 agents need input")).toBeTruthy();
+    expect(screen.getByText("2 need input")).toBeTruthy();
     expect(screen.queryByLabelText("Agents waiting")).toBeNull();
     expect(screen.queryByLabelText("Idle")).toBeNull();
   });
@@ -1131,13 +1480,13 @@ describe("ProjectSwitcherPalette scratch status treatment", () => {
   it("states agent activity on a ranked scratch row", () => {
     render(<ProjectSwitcherPalette {...rankedProps({ waitingAgentCount: 2 })} />);
 
-    expect(screen.getByText("2 agents need input")).toBeTruthy();
+    expect(screen.getByText("2 need input")).toBeTruthy();
   });
 
   it("states agent activity on a pinned scratch row", () => {
     render(<ProjectSwitcherPalette {...browseProps({ waitingAgentCount: 2 })} />);
 
-    expect(screen.getByText("2 agents need input")).toBeTruthy();
+    expect(screen.getByText("2 need input")).toBeTruthy();
   });
 
   // In the ranked list a scratch sits among projects with no section header to
@@ -1153,9 +1502,10 @@ describe("ProjectSwitcherPalette scratch status treatment", () => {
       "Spike notes",
       "· Scratch",
     ]);
-    // The status keeps its own line rather than sharing the name's.
-    expect(nameLine.textContent).not.toContain("Agent running");
-    expect(screen.getByText("Agent running")).toBeTruthy();
+    // The running count keeps the row's trailing edge rather than sharing the
+    // name's line.
+    expect(nameLine.textContent).not.toContain("running");
+    expect(screen.getByTestId("workspace-running-count").textContent).toBe("1 agent running");
   });
 
   it("gives a quiet scratch one line without losing what it is", () => {
@@ -1185,7 +1535,7 @@ describe("ProjectSwitcherPalette scratch status treatment", () => {
     const lastOpened = Date.now() - (SCRATCH_CLEANUP_TTL_MS - 2 * 24 * 3600_000);
     render(<ProjectSwitcherPalette {...browseProps({ lastOpened, activeAgentCount: 1 })} />);
 
-    expect(screen.getByText("Agent running")).toBeTruthy();
+    expect(screen.getByTestId("workspace-running-count").textContent).toBe("1 agent running");
     expect(screen.getByTestId("scratch-cleanup-countdown")).toBeTruthy();
   });
 
@@ -1194,7 +1544,7 @@ describe("ProjectSwitcherPalette scratch status treatment", () => {
   it("conveys scratch status as text rather than a labelled dot", () => {
     render(<ProjectSwitcherPalette {...browseProps({ blockedAgentCount: 1 })} />);
 
-    expect(screen.getByText("Agent blocked")).toBeTruthy();
+    expect(screen.getByText("1 blocked")).toBeTruthy();
     expect(screen.queryByLabelText("Agents waiting")).toBeNull();
     expect(screen.queryByLabelText("Idle")).toBeNull();
   });
@@ -1243,13 +1593,13 @@ describe("ProjectSwitcherPalette scratch status treatment", () => {
         />
       );
 
-      expect(screen.getByText("Agent needs input · waiting 1m")).toBeTruthy();
+      expect(screen.getByText("waiting 1m")).toBeTruthy();
 
       await act(async () => {
         await vi.advanceTimersByTimeAsync(60_000);
       });
 
-      expect(screen.getByText("Agent needs input · waiting 2m")).toBeTruthy();
+      expect(screen.getByText("waiting 2m")).toBeTruthy();
     } finally {
       vi.useRealTimers();
     }
@@ -1270,5 +1620,367 @@ describe("ProjectSwitcherPalette scratch status treatment", () => {
     expect(
       projectRow.compareDocumentPosition(scratchList) & Node.DOCUMENT_POSITION_FOLLOWING
     ).toBeTruthy();
+  });
+});
+
+/**
+ * The "resumes with agents" mark (#11801). It gives the Other Projects band a
+ * mark again without reintroducing the permanent ring #11692 removed: it lands
+ * only where the slot was already empty, and it says something the row can act
+ * on — opening this project brings these agents back.
+ */
+describe("ProjectSwitcherPalette resumable-agent dot", () => {
+  const QUIET = { lastOpened: Date.now() - 2 * 3600000 };
+
+  it("marks a quiet row that would bring agents back", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        results={[makeProject({ ...QUIET, resumableAgentCount: 3 })]}
+      />
+    );
+    expect(screen.getByTestId("workspace-resume-dot")).toBeTruthy();
+  });
+
+  it("leaves a row that restores no agents unmarked and unannounced", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        results={[makeProject({ ...QUIET, resumableAgentCount: 0 })]}
+      />
+    );
+    expect(screen.queryByTestId("workspace-resume-dot")).toBeNull();
+    // "0 agents will resume" is a sentence nobody needs to hear.
+    expect(screen.queryByRole("option", { name: /will resume/i })).toBeNull();
+  });
+
+  it("makes no claim for a row main has not counted yet", () => {
+    // Absent is not zero, but it is equally not a promise: a row that predates
+    // the count must stay silent rather than guess in either direction.
+    render(<ProjectSwitcherPalette {...baseProps} results={[makeProject(QUIET)]} />);
+    expect(screen.queryByTestId("workspace-resume-dot")).toBeNull();
+    expect(screen.queryByRole("option", { name: /will resume/i })).toBeNull();
+  });
+
+  it("yields to a row that has a real status to report", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        results={[makeProject({ waitingAgentCount: 1, resumableAgentCount: 2 })]}
+      />
+    );
+    // The status dot says what the project is doing now; the resume dot only
+    // says what it would come back with. Two dots in a one-dot slot would be
+    // the regression.
+    expect(screen.getByTestId("workspace-status-dot")).toBeTruthy();
+    expect(screen.queryByTestId("workspace-resume-dot")).toBeNull();
+  });
+
+  it("does not read an open project's finished agents as a resume promise", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        results={[
+          makeProject({
+            name: "Open elsewhere",
+            status: "background",
+            isBackground: true,
+            completedAgentCount: 1,
+            resumableAgentCount: 2,
+          }),
+        ]}
+      />
+    );
+
+    // "Agent finished" is muted like the parked line, so gating the mark on
+    // tone would light this row up — and its agents finished in a window that
+    // is still open, not on disk waiting to be brought back.
+    const row = screen.getByRole("option", { name: /Open elsewhere/i });
+    expect(within(row).getByText(/1 finished/)).toBeTruthy();
+    expect(within(row).getByTestId("workspace-status-dot")).toBeTruthy();
+    expect(within(row).queryByTestId("workspace-resume-dot")).toBeNull();
+    expect(screen.queryByRole("option", { name: /will resume/i })).toBeNull();
+  });
+
+  it("keys off the count rather than the band, so a pinned row keeps the mark", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        results={[
+          makeProject({ ...QUIET, isPinned: true, section: "pinned", resumableAgentCount: 1 }),
+        ]}
+      />
+    );
+    expect(screen.getByTestId("workspace-resume-dot")).toBeTruthy();
+  });
+
+  it("says how many, in the row's name, rather than in colour alone", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        results={[makeProject({ ...QUIET, name: "Marked", resumableAgentCount: 3 })]}
+      />
+    );
+    // Matched with the name attached, so a missing separator ("Marked3 agents")
+    // fails here rather than passing on the phrase alone.
+    expect(screen.getByRole("option", { name: /Marked, 3 agents will resume/i })).toBeTruthy();
+    expect(screen.getByTestId("workspace-resume-dot").getAttribute("aria-hidden")).toBe("true");
+  });
+
+  it("speaks of one agent in the singular", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        results={[makeProject({ ...QUIET, name: "Solo", resumableAgentCount: 1 })]}
+      />
+    );
+    // Through the accessible name, not textContent: a phrase that became
+    // aria-hidden would still read correctly in the DOM while saying nothing.
+    expect(screen.getByRole("option", { name: /Solo, 1 agent will resume/i })).toBeTruthy();
+    expect(screen.queryByRole("option", { name: /1 agents will resume/i })).toBeNull();
+  });
+
+  it("does not announce itself again on every render", () => {
+    // The mark is part of the row's name, not a live region — otherwise
+    // rendering the list would re-read every markable row aloud.
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        results={[makeProject({ ...QUIET, name: "Quiet dot", resumableAgentCount: 2 })]}
+      />
+    );
+    const row = screen.getByRole("option", { name: /2 agents will resume/i });
+    expect(row.querySelector("[aria-live]")).toBeNull();
+    expect(row.querySelector("[role='status'], [role='alert']")).toBeNull();
+    expect(row.getAttribute("aria-live")).toBeNull();
+  });
+
+  it("does not widen the slot it shares with the status dot", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        results={[
+          makeProject({ ...QUIET, id: "resuming", name: "Resuming", resumableAgentCount: 2 }),
+          makeProject({ ...QUIET, id: "quiet", name: "Quiet" }),
+        ]}
+      />
+    );
+    const slotIn = (row: HTMLElement) => row.querySelector("[data-testid='workspace-status-slot']");
+    const marked = slotIn(screen.getByRole("option", { name: /Resuming/ }));
+    const unmarked = slotIn(screen.getByRole("option", { name: /Quiet/ }));
+
+    // The mark goes inside the reserved slot, not beside it — so the slot has to
+    // both contain the dot and stay the same element it is on an unmarked row.
+    expect(marked?.querySelector("[data-testid='workspace-resume-dot']")).toBeTruthy();
+    expect(unmarked?.querySelector("[data-testid='workspace-resume-dot']")).toBeNull();
+    expect(marked?.className).toBe(unmarked?.className);
+  });
+
+  it("never marks the project you are already in", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...baseProps}
+        results={[
+          makeProject({
+            ...QUIET,
+            name: "Here",
+            isActive: true,
+            status: "active",
+            // A real count — those agents are on screen, not waiting to return.
+            resumableAgentCount: 4,
+          }),
+        ]}
+      />
+    );
+    // The row is otherwise exactly the quiet shape the mark applies to — no
+    // status dot of its own — so the suppression is what this proves, rather
+    // than a real status having displaced the mark.
+    expect(screen.queryByTestId("workspace-status-dot")).toBeNull();
+    expect(screen.queryByTestId("workspace-resume-dot")).toBeNull();
+    // "…, current, 4 agents will resume" would be the nonsense this rules out.
+    expect(screen.queryByRole("option", { name: /will resume/i })).toBeNull();
+  });
+
+  it("holds the mark steady while the ticker it no longer depends on keeps running", async () => {
+    vi.useFakeTimers({ shouldAdvanceTime: true });
+    try {
+      // Two rows, because this has to prove two things at once: the predecessor
+      // mark decayed against the minute ticker, so the resume dot must survive
+      // it — but the ticker itself must still be running, or the test would
+      // also pass with the ticker deleted. The waiting row's age is the witness.
+      const results = [
+        makeProject({ ...QUIET, id: "dot", name: "Dot", resumableAgentCount: 2 }),
+        makeProject({
+          id: "waiting",
+          name: "Waiting",
+          waitingAgentCount: 1,
+          oldestWaitingSince: Date.now() - 60_000,
+        }),
+      ];
+      render(<ProjectSwitcherPalette {...baseProps} results={results} />);
+
+      const dotRow = () => screen.getByRole("option", { name: /Dot/ });
+      expect(dotRow().querySelector("[data-testid='workspace-resume-dot']")).toBeTruthy();
+      const ageBefore = screen.getByRole("option", { name: /Waiting/ }).textContent;
+
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(180_000);
+      });
+
+      // The clock moved — the wait age says so — and the mark did not.
+      expect(screen.getByRole("option", { name: /Waiting/ }).textContent).not.toBe(ageBefore);
+      expect(dotRow().querySelector("[data-testid='workspace-resume-dot']")).toBeTruthy();
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+});
+
+/**
+ * The same mark on scratch rows (#11821). Scratches are dormant far more often
+ * than projects are — they exist to be abandoned and come back to — so the row
+ * that most needs "opening this brings your agents back" was the one that never
+ * said it.
+ *
+ * Both surfaces are covered because they are genuinely separate renderers: the
+ * ranked row in the search listbox, and the pinned browse section's own button.
+ * A fix applied to one and not the other is the shape this bug already took.
+ */
+describe("ProjectSwitcherPalette scratch resumable-agent dot", () => {
+  function scratchRow(
+    overrides: Partial<ProjectSwitcherScratchRow> & { id: string; name: string }
+  ): ProjectSwitcherScratchRow {
+    return {
+      kind: "scratch",
+      path: `/userData/scratch/${overrides.id}`,
+      createdAt: 0,
+      // Long enough ago that the row falls back to dormant with nothing to say,
+      // which is the only state the mark is allowed to occupy.
+      lastOpened: 0,
+      isActive: false,
+      activeAgentCount: 0,
+      waitingAgentCount: 0,
+      blockedAgentCount: 0,
+      completedAgentCount: 0,
+      unacknowledgedCompletedAgentCount: 0,
+      snoozedAgentCount: 0,
+      processCount: 0,
+      ...overrides,
+    };
+  }
+
+  /** The ranked list — a scratch among projects while searching. */
+  function renderRanked(scratch: ProjectSwitcherScratchRow) {
+    return render(
+      <ProjectSwitcherPalette
+        {...dropdownProps}
+        query="spike"
+        results={[scratch]}
+        onCreateScratch={vi.fn()}
+        onSelectScratch={vi.fn()}
+      />
+    );
+  }
+
+  /** The pinned browse section — its own button, its own markup. */
+  function renderBrowse(scratch: ProjectSwitcherScratchRow) {
+    return render(
+      <ProjectSwitcherPalette
+        {...dropdownProps}
+        query=""
+        results={[]}
+        scratchResults={[scratch]}
+        onCreateScratch={vi.fn()}
+        onSelectScratch={vi.fn()}
+      />
+    );
+  }
+
+  describe.each([
+    ["ranked search row", renderRanked],
+    ["pinned browse row", renderBrowse],
+  ])("%s", (_label, renderScratch) => {
+    it("marks a quiet scratch that would bring agents back", () => {
+      renderScratch(scratchRow({ id: "s1", name: "Spike notes", resumableAgentCount: 3 }));
+      expect(screen.getByTestId("workspace-resume-dot")).toBeTruthy();
+    });
+
+    it("says the count rather than leaving it to the colour", () => {
+      // Part of the row's own name — the ranked row's "· Scratch" origin hint
+      // sits between the two, which is why this matches across it rather than
+      // pinning the phrase directly to the name.
+      renderScratch(scratchRow({ id: "s1", name: "Spike notes", resumableAgentCount: 3 }));
+      expect(
+        screen.getByRole("option", { name: /Spike notes.*3 agents will resume/i })
+      ).toBeTruthy();
+      expect(screen.getByTestId("workspace-resume-dot").getAttribute("aria-hidden")).toBe("true");
+    });
+
+    it("counts one agent in the singular", () => {
+      renderScratch(scratchRow({ id: "s1", name: "Solo", resumableAgentCount: 1 }));
+      expect(screen.getByRole("option", { name: /Solo.*1 agent will resume/i })).toBeTruthy();
+      expect(screen.queryByRole("option", { name: /1 agents will resume/i })).toBeNull();
+    });
+
+    it("leaves a scratch that restores no agents unmarked and unannounced", () => {
+      renderScratch(scratchRow({ id: "s1", name: "Spike notes", resumableAgentCount: 0 }));
+      expect(screen.queryByTestId("workspace-resume-dot")).toBeNull();
+      expect(screen.queryByRole("option", { name: /will resume/i })).toBeNull();
+    });
+
+    it("makes no claim for a scratch main has not counted yet", () => {
+      // Absent is not zero, but it is equally not a promise.
+      renderScratch(scratchRow({ id: "s1", name: "Spike notes" }));
+      expect(screen.queryByTestId("workspace-resume-dot")).toBeNull();
+      expect(screen.queryByRole("option", { name: /will resume/i })).toBeNull();
+    });
+
+    it("yields to a scratch that has a real status to report", () => {
+      // One dot in the one-dot slot: what it is doing now outranks what it
+      // would come back with.
+      renderScratch(
+        scratchRow({
+          id: "s1",
+          name: "Spike notes",
+          waitingAgentCount: 1,
+          resumableAgentCount: 2,
+        })
+      );
+      expect(screen.getByTestId("workspace-status-dot")).toBeTruthy();
+      expect(screen.queryByTestId("workspace-resume-dot")).toBeNull();
+      // The phrase has to go with the dot. Suppressing only the dot would leave
+      // a reader hearing a promise the row no longer shows.
+      expect(screen.queryByRole("option", { name: /will resume/i })).toBeNull();
+    });
+
+    it("says nothing on the scratch you are already standing in", () => {
+      // Its agents are on screen, not waiting to return — the row would
+      // otherwise read ", current, 4 agents will resume".
+      renderScratch(
+        scratchRow({ id: "s1", name: "Spike notes", isActive: true, resumableAgentCount: 4 })
+      );
+      expect(screen.queryByTestId("workspace-resume-dot")).toBeNull();
+      expect(screen.queryByRole("option", { name: /will resume/i })).toBeNull();
+    });
+  });
+
+  it("marks only the scratches that carry a count", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...dropdownProps}
+        query=""
+        results={[]}
+        scratchResults={[
+          scratchRow({ id: "s1", name: "Marked", resumableAgentCount: 2 }),
+          scratchRow({ id: "s2", name: "Unmarked", resumableAgentCount: 0 }),
+        ]}
+        onCreateScratch={vi.fn()}
+      />
+    );
+
+    const marked = screen.getByRole("option", { name: /Marked/ });
+    const unmarked = screen.getByRole("option", { name: /Unmarked/ });
+    expect(marked.querySelector("[data-testid='workspace-resume-dot']")).toBeTruthy();
+    expect(unmarked.querySelector("[data-testid='workspace-resume-dot']")).toBeNull();
   });
 });

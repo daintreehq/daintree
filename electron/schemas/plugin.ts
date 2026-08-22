@@ -12,6 +12,7 @@ import {
   PLUGIN_PANEL_BADGE_LABEL_MAX,
 } from "../../shared/types/plugin.js";
 import { isBuiltInAgentId } from "../../shared/config/agentIds.js";
+import { MAX_TERMINALS_PER_RECIPE } from "../../shared/utils/recipeSanitizer.js";
 import { PROCESS_TOOL_ICON_BY_COMMAND } from "../../shared/config/processToolRegistry.js";
 import { AGENT_CLI_NAMES } from "../services/ProcessDetector/registries.js";
 import {
@@ -303,6 +304,54 @@ export const SkillContributionSchema = z
         "path must be a relative plugin asset path (no leading /, backslash, URL scheme, NUL, or .. segments)",
     }),
     triggers: z.array(z.string().min(1)).max(50).optional(),
+  })
+  .strict();
+
+/**
+ * One terminal inside a `contributes.recipes` entry (#11860). Only the
+ * authorable fields — the transient per-launch overrides (`agentModelId`,
+ * `agentLaunchFlags`, `location`) are session state that the recipe editor
+ * already strips on persist, so a manifest declaring them is rejected loudly
+ * rather than having them silently dropped.
+ *
+ * This validates SHAPE only. Content (control characters, an unknown `type`,
+ * a non-string env value) is the sanitizer's job — `sanitizeRecipeTerminals`
+ * runs over every contributed terminal at registration, which is also where a
+ * `type` naming the same plugin's contributed agent is admitted.
+ */
+export const RecipeContributionTerminalSchema = z
+  .object({
+    type: z.string().min(1).max(64),
+    title: z.string().max(200).optional(),
+    command: z.string().max(4096).optional(),
+    env: z.record(z.string(), z.string()).optional(),
+    initialPrompt: z.string().max(8192).optional(),
+    args: z.string().max(4096).optional(),
+    devCommand: z.string().max(4096).optional(),
+    exitBehavior: z.enum(["keep", "trash", "remove"]).optional(),
+  })
+  .strict();
+
+/**
+ * `contributes.recipes` manifest entry (#11860). A recipe is a named
+ * multi-terminal launch layout registered under `{pluginId}.{id}` and merged
+ * into the recipe list as a plugin-owned tier available in every project.
+ *
+ * Terminals are inline rather than a path to a shipped JSON file: the
+ * install-time confirmation reads the manifest WITHOUT extracting the archive,
+ * so an out-of-line file could never be disclosed before the user approves.
+ *
+ * Like {@link SkillContributionSchema}, recipes carry no capability
+ * requirement. `showInEmptyState` / `autoAssign` are defaults the user's
+ * sidecar overrides. Strict so unknown fields fail loudly.
+ */
+export const RecipeContributionSchema = z
+  .object({
+    id: z.string().min(1).max(64).regex(SAFE_ID_PATTERN),
+    name: z.string().min(1).max(200),
+    terminals: z.array(RecipeContributionTerminalSchema).min(1).max(MAX_TERMINALS_PER_RECIPE),
+    showInEmptyState: z.boolean().optional(),
+    autoAssign: z.enum(["always", "never", "prompt"]).optional(),
   })
   .strict();
 
@@ -1046,6 +1095,7 @@ export const MANIFEST_CONTRIBUTION_CAPS = {
   agents: 50,
   processTools: 100,
   settings: 200,
+  recipes: 50,
 } as const;
 
 /**
@@ -1190,6 +1240,10 @@ export function getPluginManifestSchema(isBuiltin: boolean) {
               .array(SettingDefinitionSchema)
               .max(MANIFEST_CONTRIBUTION_CAPS.settings)
               .default([]),
+            recipes: z
+              .array(RecipeContributionSchema)
+              .max(MANIFEST_CONTRIBUTION_CAPS.recipes)
+              .default([]),
           })
           .default({
             panels: [],
@@ -1206,6 +1260,7 @@ export function getPluginManifestSchema(isBuiltin: boolean) {
             agents: [],
             processTools: [],
             settings: [],
+            recipes: [],
           })
       ),
     })
@@ -1389,6 +1444,7 @@ export function getPluginManifestSchema(isBuiltin: boolean) {
       reportDuplicateIds("fileDecorationProviders", manifest.contributes.fileDecorationProviders);
       reportDuplicateIds("agents", manifest.contributes.agents);
       reportDuplicateIds("settings", manifest.contributes.settings);
+      reportDuplicateIds("recipes", manifest.contributes.recipes);
 
       // Cross-reference integrity — a contribution that names another by id must
       // point at one that exists in the same manifest, else the reference dangles

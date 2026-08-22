@@ -223,18 +223,16 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
       terminal.exitCode,
     ]
   );
-  const { color: brandColor, userChosen: brandColorUserChosen } = useMemo(() => {
+  const brandColor = useMemo(() => {
     const fallbackColor = baseChrome.color;
-    if (!terminal.agentPresetId || !terminal.launchAgentId)
-      return { color: fallbackColor, userChosen: false };
+    if (!terminal.agentPresetId || !terminal.launchAgentId) return fallbackColor;
     const preset = getMergedPresets(
       terminal.launchAgentId,
       presetCustomPresets,
       presetCcrPresets,
       presetProjectPresets
     ).find((f) => f.id === terminal.agentPresetId);
-    const presetColor = preset?.color ?? terminal.agentPresetColor;
-    return { color: presetColor ?? fallbackColor, userChosen: !!presetColor };
+    return preset?.color ?? terminal.agentPresetColor ?? fallbackColor;
   }, [
     terminal.launchAgentId,
     terminal.agentPresetId,
@@ -375,12 +373,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
                 aria-label={`${terminal.title}${displayAgentState ? ` — agent ${getEffectiveStateLabel(displayAgentState)}` : plainWorking ? " — command running" : ""} - Click to preview, double-click to move to grid, drag to reorder`}
               >
                 <div className="flex items-center justify-center shrink-0">
-                  <TerminalIcon
-                    kind={terminal.kind}
-                    chrome={chrome}
-                    className="w-3.5 h-3.5"
-                    userChosen={brandColorUserChosen}
-                  />
+                  <TerminalIcon kind={terminal.kind} chrome={chrome} className="w-3.5 h-3.5" />
                 </div>
                 <span className="truncate min-w-[48px] max-w-[140px] font-sans font-medium">
                   {displayTitle}

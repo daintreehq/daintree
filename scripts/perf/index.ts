@@ -75,7 +75,9 @@ function tsxScript(file: string, fixedArgs: string[] = [], env?: Record<string, 
 }
 
 function harness(mode: PerfMode): Runner {
-  return tsxScript("run.ts", ["--mode", mode]);
+  const scriptPath = path.join(perfDir, "run.ts");
+  return (rest) =>
+    spawnNode(["--expose-gc", "--import", "tsx", scriptPath, "--mode", mode, ...rest]);
 }
 
 function viteAnalyze(): Runner {
@@ -83,45 +85,6 @@ function viteAnalyze(): Runner {
     spawnNode([resolveBin(["node_modules/vite/bin/vite.js"], "vite"), "build", ...rest], {
       ANALYZE: "true",
     });
-}
-
-function playwrightMemory(): Runner {
-  return (rest) =>
-    spawnNode(
-      [
-        resolveBin(
-          ["node_modules/@playwright/test/cli.js", "node_modules/playwright/cli.js"],
-          "playwright"
-        ),
-        "test",
-        "--project=full-resilience",
-        "--workers=1",
-        "e2e/full/resilience/memory-kitchen-sink.spec.ts",
-        ...rest,
-      ],
-      { RUN_PERF_MEMORY: "1" }
-    );
-}
-
-function playwrightMemoryGrowth(): Runner {
-  return async (rest) => {
-    const buildExitCode = await npmScript("build:e2e");
-    if (buildExitCode !== 0) return buildExitCode;
-    return spawnNode(
-      [
-        resolveBin(
-          ["node_modules/@playwright/test/cli.js", "node_modules/playwright/cli.js"],
-          "playwright"
-        ),
-        "test",
-        "--project=full-resilience",
-        "--workers=1",
-        "e2e/full/resilience/memory-growth-perf.spec.ts",
-        ...rest,
-      ],
-      { RUN_PERF_MEMORY_GROWTH: "1" }
-    );
-  };
 }
 
 function npmScript(name: string): Promise<number> {
@@ -133,31 +96,27 @@ function npmScript(name: string): Promise<number> {
   return spawnNode([npmCli, "run", name]);
 }
 
-function playwrightRecipeFanout(): Runner {
-  return async (rest) => {
-    const buildExitCode = await npmScript("build:e2e:bench");
-    if (buildExitCode !== 0) return buildExitCode;
-    return spawnNode(
-      [
-        resolveBin(
-          ["node_modules/@playwright/test/cli.js", "node_modules/playwright/cli.js"],
-          "playwright"
-        ),
-        "test",
-        "--project=full-worktree",
-        "--workers=1",
-        "e2e/full/worktree/recipe-fanout-perf.spec.ts",
-        ...rest,
-      ],
-      { RUN_PERF_RECIPE_FANOUT: "1" }
-    );
-  };
+interface PlaywrightBench {
+  /** Playwright project the spec belongs to. */
+  project: string;
+  /** Spec path, repo-relative. */
+  spec: string;
+  /** Env var the spec's opt-in gate reads; always set to "1". */
+  gate: string;
+  /** npm build script to run first, when the spec needs a fresh bundle. */
+  build?: "build:e2e" | "build:e2e:bench";
 }
 
-function playwrightBulkIssueWorktrees(): Runner {
+/**
+ * Every Playwright-hosted benchmark is the same shape: optionally rebuild the
+ * e2e bundle, then run one spec in one worker with its opt-in env gate set.
+ */
+function playwrightBench({ project, spec, gate, build }: PlaywrightBench): Runner {
   return async (rest) => {
-    const buildExitCode = await npmScript("build:e2e:bench");
-    if (buildExitCode !== 0) return buildExitCode;
+    if (build) {
+      const buildExitCode = await npmScript(build);
+      if (buildExitCode !== 0) return buildExitCode;
+    }
     return spawnNode(
       [
         resolveBin(
@@ -165,33 +124,12 @@ function playwrightBulkIssueWorktrees(): Runner {
           "playwright"
         ),
         "test",
-        "--project=full-panels",
+        `--project=${project}`,
         "--workers=1",
-        "e2e/full/panels/bulk-issue-worktree-recipe-perf.spec.ts",
+        spec,
         ...rest,
       ],
-      { RUN_PERF_BULK_ISSUE_WORKTREES: "1" }
-    );
-  };
-}
-
-function playwrightMemoryPressureResponsiveness(): Runner {
-  return async (rest) => {
-    const buildExitCode = await npmScript("build:e2e:bench");
-    if (buildExitCode !== 0) return buildExitCode;
-    return spawnNode(
-      [
-        resolveBin(
-          ["node_modules/@playwright/test/cli.js", "node_modules/playwright/cli.js"],
-          "playwright"
-        ),
-        "test",
-        "--project=full-resilience",
-        "--workers=1",
-        "e2e/full/resilience/memory-pressure-responsiveness-perf.spec.ts",
-        ...rest,
-      ],
-      { RUN_PERF_MEMORY_PRESSURE: "1" }
+      { [gate]: "1" }
     );
   };
 }
@@ -215,19 +153,56 @@ const REGISTRY: Record<string, Command> = {
   },
   "recipe-fanout": {
     summary: "Cold recipe fanout through worktree, PTY host, and xterm",
-    runner: playwrightRecipeFanout(),
+    runner: playwrightBench({
+      project: "full-worktree",
+      spec: "e2e/full/worktree/recipe-fanout-perf.spec.ts",
+      gate: "RUN_PERF_RECIPE_FANOUT",
+      build: "build:e2e:bench",
+    }),
   },
   "bulk-issue-worktrees": {
     summary: "Fake issue selection through bulk worktree recipes and real PTYs",
-    runner: playwrightBulkIssueWorktrees(),
+    runner: playwrightBench({
+      project: "full-panels",
+      spec: "e2e/full/panels/bulk-issue-worktree-recipe-perf.spec.ts",
+      gate: "RUN_PERF_BULK_ISSUE_WORKTREES",
+      build: "build:e2e:bench",
+    }),
+  },
+  interactivity: {
+    summary: "Keystroke-to-paint latency under fleet load (PERF-120..122, opt-in)",
+    runner: playwrightBench({
+      project: "full-terminal",
+      spec: "e2e/full/terminal/interactivity-perf.spec.ts",
+      gate: "RUN_PERF_INTERACTIVITY",
+      build: "build:e2e",
+    }),
+  },
+  scroll: {
+    summary: "Wheel-to-paint latency for mouse-reporting TUIs (PERF-125..127, opt-in)",
+    runner: playwrightBench({
+      project: "full-terminal",
+      spec: "e2e/full/terminal/scroll-perf.spec.ts",
+      gate: "RUN_PERF_SCROLL",
+      build: "build:e2e",
+    }),
   },
   memory: {
     summary: "Memory kitchen-sink soak spec via Playwright",
-    runner: playwrightMemory(),
+    runner: playwrightBench({
+      project: "full-resilience",
+      spec: "e2e/full/resilience/memory-kitchen-sink.spec.ts",
+      gate: "RUN_PERF_MEMORY",
+    }),
   },
   "memory-growth": {
     summary: "Single-session retained-memory growth benchmark via Playwright",
-    runner: playwrightMemoryGrowth(),
+    runner: playwrightBench({
+      project: "full-resilience",
+      spec: "e2e/full/resilience/memory-growth-perf.spec.ts",
+      gate: "RUN_PERF_MEMORY_GROWTH",
+      build: "build:e2e",
+    }),
   },
   "memory-growth-compare": {
     summary: "Compare two long-session memory-growth results",
@@ -239,7 +214,12 @@ const REGISTRY: Record<string, Command> = {
   },
   "memory-pressure": {
     summary: "Renderer responsiveness during sustained synthetic memory pressure",
-    runner: playwrightMemoryPressureResponsiveness(),
+    runner: playwrightBench({
+      project: "full-resilience",
+      spec: "e2e/full/resilience/memory-pressure-responsiveness-perf.spec.ts",
+      gate: "RUN_PERF_MEMORY_PRESSURE",
+      build: "build:e2e:bench",
+    }),
   },
   analyze: {
     summary: "Bundle-size visualizer build (ANALYZE=true vite build)",

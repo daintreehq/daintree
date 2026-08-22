@@ -23,6 +23,19 @@ export interface ProjectStateReadResult {
   quarantinedPath?: string;
 }
 
+/**
+ * Notified after project state is successfully persisted, with exactly what
+ * landed on disk — the post-validation state, or `null` when the state was
+ * cleared away entirely.
+ *
+ * Exists so metadata derived from the terminals array (the resumable-agent
+ * count behind the switcher's dot, #11801) is recomputed by the same write that
+ * changes it, rather than by every would-be reader guessing when to look. It
+ * fires only on success: a failed write leaves the previous derived value
+ * standing, which is still the truth about what is on disk.
+ */
+export type ProjectStatePersistedObserver = (projectId: string, state: ProjectState | null) => void;
+
 export class ProjectStateManager {
   private projectStateCache = new Map<string, ProjectStateCacheEntry>();
   private pendingQuarantines = new Map<string, string>();
@@ -38,6 +51,7 @@ export class ProjectStateManager {
   private unreadableProjectIds = new Set<string>();
   private writeQueues = new Map<string, Promise<void>>();
   private sweepTimer: ReturnType<typeof setInterval> | null = null;
+  private onStatePersisted: ProjectStatePersistedObserver | null = null;
 
   constructor(private projectsConfigDir: string) {
     // Lazy eviction only fires on a re-read of the same projectId, so a
@@ -45,6 +59,32 @@ export class ProjectStateManager {
     // session is retained forever. Sweep expired entries proactively.
     this.sweepTimer = setInterval(() => this.sweepExpiredCache(), PROJECT_STATE_CACHE_SWEEP_MS);
     this.sweepTimer.unref?.();
+  }
+
+  /**
+   * Install the post-write hook. Single-slot rather than a listener list: the
+   * one consumer is the owning {@link ProjectStore}, and a set of subscribers
+   * would invite derived state to be recomputed by several owners at once.
+   */
+  setStatePersistedObserver(observer: ProjectStatePersistedObserver | null): void {
+    this.onStatePersisted = observer;
+  }
+
+  /**
+   * Never lets a derived-metadata failure escape into the write path — the
+   * state file is already committed by the time this runs, and throwing here
+   * would report a successful save as a failure to its caller.
+   */
+  private notifyStatePersisted(projectId: string, state: ProjectState | null): void {
+    if (!this.onStatePersisted) return;
+    try {
+      this.onStatePersisted(projectId, state);
+    } catch (error) {
+      console.error(
+        `[ProjectStateManager] State-persisted observer failed for project ${projectId}:`,
+        error
+      );
+    }
   }
 
   private sweepExpiredCache(): void {
@@ -197,6 +237,9 @@ export class ProjectStateManager {
     // a caller passing a stale embedded id must not get a different answer just
     // because the cache happened to be warm.
     this.setProjectStateCache(projectId, { ...validatedState, projectId });
+    // After the cache, so an observer that reads back through this manager sees
+    // the state it was just handed rather than the previous one.
+    this.notifyStatePersisted(projectId, validatedState);
   }
 
   async getProjectState(projectId: string): Promise<ProjectState | null> {
@@ -382,6 +425,10 @@ export class ProjectStateManager {
       // racing the unlink could have re-read the still-present file and
       // repopulated the cache after our pre-unlink wipe.
       this.invalidateProjectStateCache(projectId);
+      // No state file is an answer, not an absence of one: the project restores
+      // nothing, so anything derived from the terminals array is now a known
+      // zero rather than unknown.
+      this.notifyStatePersisted(projectId, null);
       if (process.env.DAINTREE_VERBOSE) {
         console.log(`[ProjectStateManager] Cleared state for project ${projectId}`);
       }
@@ -391,6 +438,9 @@ export class ProjectStateManager {
           ? (error as NodeJS.ErrnoException).code
           : undefined;
       if (code === "ENOENT") {
+        // Already absent, which is the state the caller asked for — same
+        // authoritative emptiness as a successful unlink.
+        this.notifyStatePersisted(projectId, null);
         return;
       }
       console.error(`[ProjectStateManager] Failed to clear state for ${projectId}:`, error);
