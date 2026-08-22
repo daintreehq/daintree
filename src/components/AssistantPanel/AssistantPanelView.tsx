@@ -9,12 +9,13 @@ import { AssistantToolRow, AssistantToolGroupHeader } from "./AssistantToolRow";
 import { AssistantApprovalCard } from "./AssistantApprovalCard";
 import type {
   AssistantApproval,
+  AssistantToolCall,
   AssistantNotice,
   AssistantSessionState,
   AssistantTurn,
 } from "@/store/assistantStore";
-import { selectTurnToolCalls } from "@/store/assistantStore";
 import { AssistantBootSplash } from "./AssistantBootSplash";
+import { AssistantQuestionCard } from "./AssistantQuestionCard";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import {
   useTerminalColorSchemeStore,
@@ -45,6 +46,7 @@ export interface AssistantPanelViewProps {
   onSubmit: (text: string) => boolean;
   onInterrupt: () => void;
   onDecideApproval: (approvalId: string, decision: "approved" | "rejected") => void;
+  onAnswerQuestion?: (questionId: string, index: number) => void;
   className?: string;
 }
 
@@ -93,6 +95,24 @@ function formatTokens(n: number): string {
  * cost could not be measured — so it is rendered as "≥ $x" rather than as a settled
  * number. Presenting a floor as a receipt would under-report what a session spent.
  */
+/** Matches the cockpit's own stall threshold. */
+const STALL_THRESHOLD_MS = 5000;
+
+/**
+ * How often the live elapsed readout re-renders.
+ *
+ * Twice a second: fast enough that a tenth-of-a-second figure never looks stuck, slow
+ * enough that a running turn is not re-rendering the transcript on every frame.
+ */
+const ELAPSED_TICK_MS = 500;
+
+function formatDuration(ms: number): string {
+  if (ms < 1000) return `${ms}ms`;
+  if (ms < 60_000) return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)}s`;
+  const mins = Math.floor(ms / 60_000);
+  return `${mins}m ${Math.round((ms % 60_000) / 1000)}s`;
+}
+
 function formatCost(total: number, complete: boolean): string {
   const value = total < 0.01 && total > 0 ? total.toFixed(4) : total.toFixed(2);
   return `${complete ? "" : "≥ "}$${value}`;
@@ -115,24 +135,6 @@ function NoticeRow({ notice }: { notice: AssistantNotice }) {
 }
 
 function TurnBlock({ turn, state }: { turn: AssistantTurn; state: AssistantSessionState }) {
-  const calls = selectTurnToolCalls(state, turn);
-  const failed = calls.filter((c) => c.state === "failed").length;
-  // Work that is still LIVE after the turn ends: an accepted async call keeps running
-  // in the background, so the turn completing does not mean the work did.
-  const unsettled = calls.filter(
-    (c) => c.state === "active" || c.state === "queued" || c.state === "waiting"
-  ).length;
-
-  // Actions open while the turn runs (so progress is visible) and collapse once it
-  // settles (so the answer is what remains on screen) — EXCEPT when something failed
-  // or is still going. Collapsing either made it indistinguishable from a clean,
-  // finished run: the header said "1 action" whatever happened, so the two outcomes
-  // most worth noticing were the two that hid.
-  const [open, setOpen] = useState(!turn.complete);
-  useEffect(() => {
-    if (turn.complete && failed === 0 && unsettled === 0) setOpen(false);
-  }, [turn.complete, failed, unsettled]);
-
   if (turn.role === "user") {
     return (
       <div className="flex justify-end">
@@ -153,45 +155,95 @@ function TurnBlock({ turn, state }: { turn: AssistantTurn; state: AssistantSessi
     <div className="flex gap-2.5">
       <DaintreeIcon aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-text-secondary" />
       <div className="min-w-0 flex-1 space-y-2">
-        {calls.length > 0 && (
-          <div>
-            <AssistantToolGroupHeader
-              count={calls.length}
-              failedCount={failed}
-              runningCount={turn.complete ? unsettled : 0}
-              open={open}
-              onToggle={() => setOpen((v) => !v)}
+        {/* Rendered IN ORDER. A turn is a sequence — prose, then the tools it reached
+            for, then prose reacting to the results, with steers where the engine folded
+            them in. Drawing tools first and prose last regardless made a turn that
+            explained itself before acting read as if it had acted in silence. */}
+        {turn.segments.map((segment, i) => {
+          if (segment.kind === "interjection") {
+            return (
+              <div
+                key={`${turn.turnId}-seg-${i}`}
+                className="rounded-md border-l-2 border-border-strong bg-surface-inset/60 px-2 py-1 text-xs text-text-secondary"
+              >
+                <span className="text-text-muted">You added: </span>
+                {segment.text}
+              </div>
+            );
+          }
+          if (segment.kind === "tools") {
+            const segCalls = segment.toolCallIds
+              .map((id) => state.toolCalls[id])
+              .filter((c): c is NonNullable<typeof c> => Boolean(c));
+            if (segCalls.length === 0) return null;
+            return (
+              <ToolSegment
+                key={`${turn.turnId}-seg-${i}`}
+                calls={segCalls}
+                turnComplete={turn.complete}
+              />
+            );
+          }
+          return segment.text ? (
+            <AssistantMessage
+              key={`${turn.turnId}-seg-${i}`}
+              content={segment.text}
+              // Only the LAST segment can still be streaming.
+              streaming={!turn.complete && i === turn.segments.length - 1}
             />
-            {open && (
-              <ul className="mt-1 space-y-1">
-                {calls.map((call) => (
-                  <AssistantToolRow key={call.toolCallId} call={call} />
-                ))}
-              </ul>
-            )}
-          </div>
-        )}
+          ) : null;
+        })}
 
-        {/* Interjections render where the engine FOLDED them in, not where they were
-            typed — that is the point in the turn the model actually saw them. */}
-        {turn.interjections.map((text, i) => (
-          <div
-            key={`${turn.turnId}-int-${i}`}
-            className="rounded-md border-l-2 border-border-strong bg-surface-inset/60 px-2 py-1 text-xs text-text-secondary"
-          >
-            <span className="text-text-muted">You added: </span>
-            {text}
-          </div>
-        ))}
-
-        {/* Render the message when there is text, or when the turn is still open and
-            nothing else is carrying liveness. A bare caret under an active tool group
-            read as a stray artifact: the tool rows already say work is happening, and
-            the approval card says the turn is blocked on the user. */}
-        {(turn.text || (!turn.complete && calls.length === 0)) && (
-          <AssistantMessage content={turn.text} streaming={!turn.complete} />
-        )}
+        {/* A turn that has produced nothing yet still needs to show it is alive — but
+            only when no tool group is already carrying that signal, and never once an
+            approval card has taken over saying the turn is blocked on the user. */}
+        {turn.segments.length === 0 && !turn.complete && <AssistantMessage content="" streaming />}
       </div>
+    </div>
+  );
+}
+
+/** One announced batch, collapsing on the same rules the whole turn used to. */
+function ToolSegment({
+  calls,
+  turnComplete,
+}: {
+  calls: AssistantToolCall[];
+  turnComplete: boolean;
+}) {
+  const failed = calls.filter((c) => c.state === "failed").length;
+  // Work still LIVE after the turn ends: an accepted async call keeps running in the
+  // background, so the turn completing does not mean the work did.
+  const unsettled = calls.filter(
+    (c) => c.state === "active" || c.state === "queued" || c.state === "waiting"
+  ).length;
+
+  // Open while the turn runs (so progress is visible), collapsing once it settles (so
+  // the answer is what remains) — EXCEPT when something failed or is still going.
+  // Collapsing either made it indistinguishable from a clean run: the header said
+  // "1 action" whatever happened, so the two outcomes most worth noticing were the two
+  // that hid.
+  const [open, setOpen] = useState(!turnComplete);
+  useEffect(() => {
+    if (turnComplete && failed === 0 && unsettled === 0) setOpen(false);
+  }, [turnComplete, failed, unsettled]);
+
+  return (
+    <div>
+      <AssistantToolGroupHeader
+        count={calls.length}
+        failedCount={failed}
+        runningCount={turnComplete ? unsettled : 0}
+        open={open}
+        onToggle={() => setOpen((v) => !v)}
+      />
+      {open && (
+        <ul className="mt-1 space-y-1">
+          {calls.map((call) => (
+            <AssistantToolRow key={call.toolCallId} call={call} />
+          ))}
+        </ul>
+      )}
     </div>
   );
 }
@@ -299,6 +351,7 @@ export function AssistantPanelView({
   onSubmit,
   onInterrupt,
   onDecideApproval,
+  onAnswerQuestion,
   className,
 }: AssistantPanelViewProps) {
   const [draft, setDraft] = useState("");
@@ -336,6 +389,28 @@ export function AssistantPanelView({
   }, [draft, onSubmit]);
 
   const phase = phaseLabel(state.phase);
+
+  // A clock, ticking only while a turn is running.
+  //
+  // `now` is real state that the rendered output reads, not a bare counter: under the
+  // React Compiler a `setTick` whose value nothing consumes is optimised away and the
+  // readout silently freezes in production while passing in tests.
+  const [now, setNow] = useState(() => Date.now());
+  const running = state.turnStartedAt !== null && !state.turns.every((t) => t.complete);
+  useEffect(() => {
+    if (!running) return;
+    const id = setInterval(() => setNow(Date.now()), ELAPSED_TICK_MS);
+    return () => clearInterval(id);
+  }, [running]);
+
+  // Cumulative over the TURN, not the current phase, so it does not reset to zero on
+  // every transition. Held back below 300ms to avoid a 0ms flicker.
+  const elapsedMs = running && state.turnStartedAt ? now - state.turnStartedAt : 0;
+  const elapsed = elapsedMs >= 300 ? formatDuration(elapsedMs) : null;
+  // Quiet for a while is normal — a slow model, a long tool — but indistinguishable
+  // from a hang unless the panel says which it thinks it is.
+  const stalled =
+    running && state.lastActivityAt !== null && now - state.lastActivityAt > STALL_THRESHOLD_MS;
   const empty = state.turns.length === 0;
 
   // The splash belongs to a SESSION, not to this component.
@@ -395,6 +470,21 @@ export function AssistantPanelView({
     if ((window.getSelection()?.toString().length ?? 0) > 0) return;
     textareaRef.current?.focus();
   }, []);
+
+  // The slash palette. Open whenever the draft is a bare command word being typed —
+  // it closes the moment an argument is added, because at that point the user has
+  // chosen and is filling in, not still looking.
+  const paletteQuery = /^\/([a-zA-Z]*)$/.exec(draft)?.[1] ?? null;
+  const paletteMatches = useMemo(() => {
+    if (paletteQuery === null) return [];
+    const q = paletteQuery.toLowerCase();
+    return state.commands.filter((c) => c.name.toLowerCase().startsWith(q)).slice(0, 8);
+  }, [paletteQuery, state.commands]);
+  const [paletteIndex, setPaletteIndex] = useState(0);
+  useEffect(() => {
+    setPaletteIndex(0);
+  }, [paletteQuery]);
+  const paletteOpen = paletteMatches.length > 0;
 
   const shellVars = {
     "--ib-bg": term.shellBg,
@@ -479,6 +569,16 @@ export function AssistantPanelView({
           </div>
         )}
 
+        {state.queuedInterjection && (
+          // The cockpit's queued follow-up. It sits after the running turn because it
+          // has not landed anywhere yet — the engine decides whether to fold it into
+          // this turn, and only then does it move into the transcript proper.
+          <div className="mt-3 rounded-md border border-dashed border-border-strong px-2 py-1.5 text-xs opacity-70">
+            <span className="opacity-60">Queued: </span>
+            {state.queuedInterjection}
+          </div>
+        )}
+
         {/* Approvals sit at the bottom of the scroller, next to the composer, because
             they block the turn: they are the next thing to do, not history. */}
         {state.approvals.length > 0 && (
@@ -508,81 +608,136 @@ export function AssistantPanelView({
       </div>
 
       <div className="shrink-0 px-3.5 pb-2.5 pt-2.5">
-        {/* Same shell as the terminal's HybridInputBar: identical radius, padding,
+        {paletteOpen && (
+          // Above the composer, like the cockpit's. Shows what each command DOES, not
+          // just its name: the operations surface — inbox, watchers, timers, workflows,
+          // launches, audit — is reachable only through these, so a list of bare words
+          // would hide the whole thing behind knowing what to type.
+          <div
+            role="listbox"
+            aria-label="Commands"
+            className="mb-1.5 overflow-hidden rounded-md border border-border-default bg-surface-inset"
+          >
+            {paletteMatches.map((cmd, i) => (
+              <button
+                key={cmd.name}
+                type="button"
+                role="option"
+                aria-selected={i === paletteIndex}
+                onMouseEnter={() => setPaletteIndex(i)}
+                onClick={() => {
+                  setDraft("");
+                  onSubmit(`/${cmd.name}`);
+                }}
+                className={cn(
+                  "flex w-full items-baseline gap-2 px-2 py-1 text-left text-xs",
+                  "transition-colors duration-150 ease-out",
+                  i === paletteIndex ? "bg-overlay-subtle" : "hover:bg-overlay-subtle/60"
+                )}
+              >
+                <span className="shrink-0 font-mono">{cmd.syntax}</span>
+                <span className="min-w-0 flex-1 truncate opacity-60">{cmd.palette}</span>
+              </button>
+            ))}
+          </div>
+        )}
+
+        {state.pendingQuestion && onAnswerQuestion ? (
+          // The sheet REPLACES the composer, as the cockpit's did: the engine has
+          // parked the tool dispatch, so there is nothing a typed message could reach.
+          // The status line below stays, because it is still true.
+          <AssistantQuestionCard question={state.pendingQuestion} onAnswer={onAnswerQuestion} />
+        ) : (
+          <>
+            {/* Same shell as the terminal's HybridInputBar: identical radius, padding,
             border and the `--ib-*` variables resolved from the terminal theme above.
             Copied as STRUCTURE rather than imported because that component carries a
             CodeMirror editor, chips, autocomplete and voice — none of which this
             composer has — but the surface a user looks at must not differ between the
             two panes just because one is HTML. */}
-        <div
-          className={cn(
-            "group/shell relative flex w-full items-end gap-1.5 rounded-md border px-2 py-2",
-            "transition-[border-color,background-color,box-shadow] duration-150",
-            "bg-[var(--ib-bg)] border-[var(--ib-border)] shadow-[var(--ib-shadow)]",
-            "hover:border-[var(--ib-border-hover)] hover:bg-[var(--ib-hover-bg)]",
-            "focus-within:border-[var(--ib-border-focus)] focus-within:ring-1",
-            "focus-within:ring-[var(--ib-focus-ring)] focus-within:bg-[var(--ib-focus-bg)]"
-          )}
-        >
-          <textarea
-            ref={textareaRef}
-            value={draft}
-            onChange={(e) => {
-              setDraft(e.target.value);
-              // Auto-grow to the content, bounded by max-h-40. Without this the field
-              // declared a maximum height it could never reach, so a multi-line prompt
-              // scrolled inside a single line — invisible while composing it.
-              const el = e.currentTarget;
-              el.style.height = "auto";
-              el.style.height = `${el.scrollHeight}px`;
-            }}
-            onKeyDown={(e) => {
-              if (e.key === "Enter" && !e.shiftKey) {
-                e.preventDefault();
-                submit();
-              }
-            }}
-            rows={1}
-            // The composer stays live during a turn on purpose: a prompt sent mid-turn
-            // is folded into the RUNNING turn as an interjection, which is how a user
-            // steers work in flight. Disabling it would remove that entirely.
-            placeholder={busy ? "Add to this turn…" : "What needs doing?"}
-            className={cn(
-              "max-h-40 min-h-[1.5rem] flex-1 resize-none bg-transparent",
-              // text-placeholder measured ~2.69:1 in the dark theme — the least legible
-              // text in the panel, and it is the one string that tells a first-time
-              // user what to do.
-              "text-sm text-[var(--ib-fg)] placeholder:text-[var(--ib-placeholder)]",
-              // The composer's focus chrome is drawn by its wrapper, so the textarea
-              // suppresses its own — via outline-hidden, which keeps the outline
-              // present for forced-colors mode rather than removing it outright.
-              "outline-hidden"
-            )}
-          />
-          {busy ? (
-            <Button size="icon-sm" variant="ghost" onClick={onInterrupt} aria-label="Stop">
-              <Square />
-            </Button>
-          ) : (
-            <Button
-              size="icon-sm"
-              onClick={submit}
-              disabled={draft.trim().length === 0 || state.connection !== "ready"}
-              aria-label="Send"
+            <div
+              className={cn(
+                "group/shell relative flex w-full items-end gap-1.5 rounded-md border px-2 py-2",
+                "transition-[border-color,background-color,box-shadow] duration-150",
+                "bg-[var(--ib-bg)] border-[var(--ib-border)] shadow-[var(--ib-shadow)]",
+                "hover:border-[var(--ib-border-hover)] hover:bg-[var(--ib-hover-bg)]",
+                "focus-within:border-[var(--ib-border-focus)] focus-within:ring-1",
+                "focus-within:ring-[var(--ib-focus-ring)] focus-within:bg-[var(--ib-focus-bg)]"
+              )}
             >
-              <ArrowUp />
-            </Button>
-          )}
-        </div>
+              <textarea
+                ref={textareaRef}
+                value={draft}
+                onChange={(e) => {
+                  setDraft(e.target.value);
+                  // Auto-grow to the content, bounded by max-h-40. Without this the field
+                  // declared a maximum height it could never reach, so a multi-line prompt
+                  // scrolled inside a single line — invisible while composing it.
+                  const el = e.currentTarget;
+                  el.style.height = "auto";
+                  el.style.height = `${el.scrollHeight}px`;
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    submit();
+                  }
+                }}
+                rows={1}
+                // The composer stays live during a turn on purpose: a prompt sent mid-turn
+                // is folded into the RUNNING turn as an interjection, which is how a user
+                // steers work in flight. Disabling it would remove that entirely.
+                placeholder={busy ? "Add to this turn…" : "What needs doing?"}
+                className={cn(
+                  "max-h-40 min-h-[1.5rem] flex-1 resize-none bg-transparent",
+                  // text-placeholder measured ~2.69:1 in the dark theme — the least legible
+                  // text in the panel, and it is the one string that tells a first-time
+                  // user what to do.
+                  "text-sm text-[var(--ib-fg)] placeholder:text-[var(--ib-placeholder)]",
+                  // The composer's focus chrome is drawn by its wrapper, so the textarea
+                  // suppresses its own — via outline-hidden, which keeps the outline
+                  // present for forced-colors mode rather than removing it outright.
+                  "outline-hidden"
+                )}
+              />
+              {busy ? (
+                <Button size="icon-sm" variant="ghost" onClick={onInterrupt} aria-label="Stop">
+                  <Square />
+                </Button>
+              ) : (
+                <Button
+                  size="icon-sm"
+                  onClick={submit}
+                  disabled={draft.trim().length === 0 || state.connection !== "ready"}
+                  aria-label="Send"
+                >
+                  <ArrowUp />
+                </Button>
+              )}
+            </div>
+          </>
+        )}
 
         <div className="mt-1.5 flex items-center gap-2 px-0.5 text-[10px] text-text-muted">
           {phase ? (
-            <span className="flex items-center gap-1.5 text-text-secondary">
+            <span
+              className={cn(
+                "flex items-center gap-1.5",
+                stalled ? "text-status-warning" : "text-text-secondary"
+              )}
+            >
               <span
                 aria-hidden="true"
-                className="assistant-pulse size-1.5 rounded-full bg-text-secondary"
+                className={cn(
+                  "assistant-pulse size-1.5 rounded-full",
+                  stalled ? "bg-status-warning" : "bg-text-secondary"
+                )}
               />
               {phase}
+              {/* "still working" in a warning tone, so a slow model reads differently
+                  from a hung one. */}
+              {stalled && " · still working"}
+              {elapsed && ` · ${elapsed}`}
             </span>
           ) : (
             <span>
@@ -611,7 +766,13 @@ export function AssistantPanelView({
                 {formatTokens(state.usage.contextTokens)}/{formatTokens(state.usage.contextWindow)}
               </span>
             )}
-            {state.cost && <span>{formatCost(state.cost.total, state.cost.complete)}</span>}
+            {/* Nothing is a floor of zero. A backend that reports no cost figures at
+                all yields total 0 with complete false, and "≥ $0.00" is clutter that
+                says less than saying nothing — the cockpit stayed silent on unknown
+                cost for the same reason. */}
+            {state.cost && (state.cost.total > 0 || state.cost.complete) && (
+              <span>{formatCost(state.cost.total, state.cost.complete)}</span>
+            )}
           </span>
         </div>
       </div>
