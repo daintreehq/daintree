@@ -68,8 +68,10 @@ perf-metrics.ndjson
 # Demo recording output
 demo-output/
 
-# Demo authoring project (daintreehq/demo-studio clone target)
-demo/
+# Demo authoring project (daintreehq/demo-studio clone target).
+# Anchored: an unanchored `demo/` also swallows e2e/demo/, silently making
+# every new file in the demo e2e suite uncommittable.
+/demo/
 
 # Cache
 .cache/
