@@ -22,7 +22,7 @@ import { getCurrentDiskSpaceStatus } from "../services/DiskSpaceMonitor.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { isCleaningUp } from "../lifecycle/shutdownCoordinator.js";
 import {
-  describeStartupWorktreeLoadOutcome,
+  logStartupWorktreeLoadOutcome,
   runStartupWorktreeLoad,
   selectStatusTarget,
   sendStartupWorktreeLoadFailure,
@@ -746,12 +746,10 @@ export async function setupWindowServices(
     // exactly the packaged builds where an empty sidebar had to be diagnosed
     // (#11922). The mapping itself lives beside the outcome type so all five
     // branches stay covered without importing Electron.
-    const outcomeLog = describeStartupWorktreeLoadOutcome(outcome, projectPathForWorktrees);
-    if (outcomeLog.level === "error") {
-      logError(outcomeLog.message, undefined, outcomeLog.context);
-    } else {
-      logInfo(outcomeLog.message, outcomeLog.context);
-    }
+    logStartupWorktreeLoadOutcome(outcome, projectPathForWorktrees, {
+      info: logInfo,
+      error: logError,
+    });
   }
 
   // Smoke test

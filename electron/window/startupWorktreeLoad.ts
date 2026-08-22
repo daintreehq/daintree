@@ -217,12 +217,24 @@ export interface StartupWorktreeLoadLogLine {
 }
 
 /**
+ * The logger functions {@link logStartupWorktreeLoadOutcome} writes through.
+ *
+ * Injected rather than imported so this module stays Electron-free, and so the
+ * dispatch itself — including `logError`'s `(message, error, context)` arity —
+ * is testable rather than only the mapping that feeds it.
+ */
+export interface StartupWorktreeLoadLogSinks {
+  info(message: string, context: Record<string, unknown>): void;
+  error(message: string, error: undefined, context: Record<string, unknown>): void;
+}
+
+/**
  * Describe a startup outcome for the log.
  *
  * Returned rather than logged so this module stays Electron-free — importing
  * `utils/logger.js` would drag in `ipc/channels.js` and `LogBuffer`, and the
  * suite exists precisely to test these branches without the Electron runtime.
- * The caller in `windowServices.ts` dispatches the returned line.
+ * {@link logStartupWorktreeLoadOutcome} dispatches the returned line.
  *
  * Every outcome gets a line, and every line goes through the logger rather than
  * `console`: production esbuild marks `console.log`/`console.warn` pure, so the
@@ -270,4 +282,24 @@ export function describeStartupWorktreeLoadOutcome(
         },
       };
   }
+}
+
+/**
+ * Write one startup outcome to the app logger.
+ *
+ * The outcome carries no error object of its own — the failure detail is
+ * already flattened into `context` — so the error sink is called with an
+ * explicit `undefined` in `logError`'s error position.
+ */
+export function logStartupWorktreeLoadOutcome(
+  outcome: StartupWorktreeLoadOutcome,
+  projectPath: string,
+  sinks: StartupWorktreeLoadLogSinks
+): void {
+  const line = describeStartupWorktreeLoadOutcome(outcome, projectPath);
+  if (line.level === "error") {
+    sinks.error(line.message, undefined, line.context);
+    return;
+  }
+  sinks.info(line.message, line.context);
 }

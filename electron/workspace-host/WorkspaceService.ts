@@ -195,7 +195,17 @@ class RepositoryProbeError extends Error {
     // Reuses the classifier's own recovery copy rather than a parallel set of
     // strings, so a new `GitOperationReason` gets a usable sentence here for
     // free and there is one place to review git-failure wording.
-    const hint = getGitRecoveryHint(gitReason);
+    //
+    // One exception. simple-git spawns with `{ cwd }` rather than `git -C`, so
+    // an unavailable working directory fails at spawn time with a `spawn git
+    // ENOENT` indistinguishable from a missing binary — and an unhydrated
+    // OneDrive placeholder is the leading suspect for #11922. The generic hint
+    // ("Install Git…") would tell a user with git plainly installed to install
+    // it, so this one path names both possibilities instead.
+    const hint =
+      gitReason === "git-not-installed"
+        ? "Check that the folder is available, and that git is installed and on your PATH."
+        : getGitRecoveryHint(gitReason);
     super(
       `Couldn't check whether this folder is a git repository. ${
         hint ?? "Make sure the folder is available and git can run, then try again."
@@ -821,7 +831,14 @@ export class WorkspaceService {
     // Guarding here rather than only at the callers covers the `sync` host
     // message, which arrives with a caller-supplied worktree list and is
     // fanned out to every live host by `WorkspaceClient.sync` (#11405).
-    if (this.gitBacked === false) return;
+    //
+    // `!== true`, not `=== false`: since #11922 a probe that could not answer
+    // leaves `gitBacked` at `null`, and `WorkspaceClient.sync` iterates the
+    // pool's entries with no readiness gate — so a host whose load failed is
+    // still reachable until the next `loadProject` disposes it. Minting a
+    // monitor for a folder we could not probe arms exactly the hazard this
+    // guard exists for. Unknown withholds; only a proven repository proceeds.
+    if (this.gitBacked !== true) return;
 
     // Derive the repository's main/integration branch from the actual main
     // worktree rather than trusting the caller. The legacy `mainBranch`
@@ -2477,7 +2494,11 @@ export class WorkspaceService {
     // Backstop for the `loadProject` gate: a topology reconcile or an explicit
     // refresh must not be the thing that mints the first monitor for a folder
     // with no repository (#11405).
-    if (!this.git || this.gitBacked === false) {
+    // `!== true` for the same reason as `syncMonitors`: an unanswerable probe
+    // leaves `gitBacked` at `null` with `this.git` already constructed, so a
+    // reconcile would otherwise enumerate a folder whose repository status is
+    // unknown (#11922).
+    if (!this.git || this.gitBacked !== true) {
       return;
     }
 

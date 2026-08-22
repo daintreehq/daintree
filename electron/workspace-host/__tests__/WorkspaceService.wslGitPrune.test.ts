@@ -179,6 +179,10 @@ describe("WorkspaceService WSL git opt-in pruning (#9926)", () => {
 
     service["projectRootPath"] = "/test/root";
     service["git"] = mockSimpleGit as any;
+    // Stands in for the completed `loadProject` these tests skip. Since #11922
+    // only a proven repository gets monitors, so the probe verdict has to be
+    // part of the primed state rather than left at its `null` default.
+    service["gitBacked"] = true;
     service["listService"].setGit(mockSimpleGit as unknown as SimpleGit, "/test/root");
   });
 

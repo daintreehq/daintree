@@ -66,26 +66,57 @@ export function simpleGitStderrError(
 
 /**
  * Git's refusal to touch a repository whose on-disk owner differs from the
- * current user. A *repository is present* here — misreading it as "no
- * repository" is the failure #11922 fixed.
+ * current user, as git actually prints it — the advisory and trailing newline
+ * included, not just the `fatal:` line. A *repository is present* here;
+ * misreading it as "no repository" is the failure #11922 fixed.
  */
 export const GIT_DUBIOUS_OWNERSHIP_STDERR =
-  "fatal: detected dubious ownership in repository at 'C:/Users/greg/OneDrive/Documents/Daintree/daintree'";
+  "fatal: detected dubious ownership in repository at 'C:/Users/greg/OneDrive/Documents/Daintree/daintree'\n" +
+  "To add an exception for this directory, call:\n" +
+  "\n" +
+  "\tgit config --global --add safe.directory C:/Users/greg/OneDrive/Documents/Daintree/daintree\n";
 
 /**
  * The genuine "this folder has no repository" answer. simple-git's own
  * `checkIsRepoTask.onError` resolves this to `false` before it can ever be
- * thrown; the fixture exists to prove the classifier backstop agrees.
+ * thrown, so a test that throws it is exercising the classifier backstop
+ * deliberately, not a shape production produces here.
  */
 export const GIT_NOT_A_REPOSITORY_STDERR =
-  "fatal: not a git repository (or any of the parent directories): .git";
+  "fatal: not a git repository (or any of the parent directories): .git\n";
 
 /**
- * A filesystem/permission fault against the repository path — the shape a
- * OneDrive placeholder stall or an antivirus interposition surfaces as.
+ * What an inaccessible working directory actually produces.
+ *
+ * simple-git spawns with `{ cwd }` rather than `git -C <path>`, so a directory
+ * git cannot enter fails at spawn time — before git runs — and is laundered
+ * through the same stack-trace-as-message path as a missing binary. Git never
+ * gets to print a `fatal:` line at all. An earlier version of this fixture
+ * invented one; that is the #11764 mistake this module exists to prevent.
  */
-export const GIT_SYSTEM_IO_STDERR =
-  "fatal: cannot change to 'C:/Users/greg/OneDrive/Documents/Daintree/daintree': EACCES";
+export const SIMPLE_GIT_CWD_DENIED_MESSAGE =
+  "Error: spawn git EACCES\n" +
+  "    at ChildProcess._handle.onexit (node:internal/child_process:287:19)\n" +
+  "    at onErrorNT (node:internal/child_process:525:16)\n" +
+  "    at process.processTicksAndRejections (node:internal/process/task_queues:90:21)";
 
-/** simple-git's `GitPluginError` message when its block timeout kills the child. */
+/** Build the laundered spawn failure for a working directory git cannot enter. */
+export function simpleGitCwdDeniedError(commands: string[] = REPOSITORY_PROBE_COMMANDS): Error {
+  const error = new Error(SIMPLE_GIT_CWD_DENIED_MESSAGE);
+  Object.assign(error, { task: { commands } });
+  return error;
+}
+
+/** simple-git's message when its block timeout kills the child. */
 export const GIT_BLOCK_TIMEOUT_MESSAGE = "block timeout reached";
+
+/**
+ * The block-timeout rejection is a `GitPluginError`, not a plain `Error`: it
+ * carries `plugin` alongside `task`, and the 30s `GIT_BLOCK_TIMEOUT_MS` this
+ * models is a prime suspect for #11922's OneDrive stalls.
+ */
+export function simpleGitBlockTimeoutError(commands: string[] = REPOSITORY_PROBE_COMMANDS): Error {
+  const error = new Error(GIT_BLOCK_TIMEOUT_MESSAGE);
+  Object.assign(error, { task: { commands }, plugin: "timeout" });
+  return error;
+}
