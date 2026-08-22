@@ -5,6 +5,25 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vite
 import { createHardenedGit } from "../../utils/hardenedGit.js";
 import type { WorkspaceService } from "../WorkspaceService.js";
 import type { WorkspaceHostEvent } from "../../../shared/types/workspace-host.js";
+import { getGitRecoveryHint } from "../../../shared/utils/gitOperationErrors.js";
+import {
+  GIT_BLOCK_TIMEOUT_MESSAGE,
+  GIT_DUBIOUS_OWNERSHIP_STDERR,
+  GIT_NOT_A_REPOSITORY_STDERR,
+  GIT_SYSTEM_IO_STDERR,
+  REPOSITORY_PROBE_COMMANDS,
+  simpleGitMissingBinaryError,
+  simpleGitStderrError,
+} from "../../../shared/testing/simpleGitErrorFixtures.js";
+
+// Spread the original: the module has a wide surface and other modules in this
+// graph import exports beyond `logWarn`. It pulls in no Electron, so importing
+// it here is safe.
+const logWarnMock = vi.hoisted(() => vi.fn());
+vi.mock("../../utils/logger.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils/logger.js")>()),
+  logWarn: logWarnMock,
+}));
 
 const mockSimpleGit = {
   raw: vi.fn(),
@@ -257,19 +276,149 @@ describe("WorkspaceService adversarial", () => {
       expect(monitorCount()).toBe(0);
     });
 
-    it("treats a throwing repository probe as no repository", async () => {
-      // simple-git rejects rather than answering false on permission denials
-      // and other environment faults.
-      mockSimpleGit.checkIsRepo.mockRejectedValue(new Error("EACCES"));
+    it("still takes the non-repository path when git's own answer arrives as a throw", async () => {
+      // simple-git's `checkIsRepoTask.onError` converts exit code 128 plus a
+      // "not a git repository" message into a resolved `false`, so this should
+      // be unreachable — the classifier backstop exists in case it ever stops
+      // doing so. Either way git ran and answered, which is not a failure.
+      mockSimpleGit.checkIsRepo.mockRejectedValue(
+        simpleGitStderrError(GIT_NOT_A_REPOSITORY_STDERR)
+      );
 
-      await service.loadProject("req-denied", "/downloads", "ws-plain");
+      await service.loadProject("req-backstop", "/downloads", "ws-plain");
 
       expect(sentEvents).toContainEqual({
         type: "load-project-result",
-        requestId: "req-denied",
+        requestId: "req-backstop",
         success: true,
       });
       expect(monitorCount()).toBe(0);
+      expect(logWarnMock).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * A probe that could not answer is not an answer of "no".
+   *
+   * The bare `catch { return false }` this replaces was the sole mechanism
+   * turning a transient environment fault — a spawn failure against a cwd
+   * OneDrive had not hydrated, the 30s block timeout, an antivirus
+   * interposition — into "this folder has no repository". The load then
+   * reported `success: true` with zero monitors, so the renderer got an
+   * authoritative empty worktree list, and Retry re-foregrounded the same warm
+   * host instead of reloading it: recovery was impossible without a restart.
+   */
+  describe("a repository probe that cannot answer (#11922)", () => {
+    function monitorCount(): number {
+      return (service["monitors"] as Map<string, unknown>).size;
+    }
+
+    const CANNOT_ANSWER = [
+      {
+        label: "a spawn failure whose provenance simple-git destroyed",
+        error: () => simpleGitMissingBinaryError(REPOSITORY_PROBE_COMMANDS),
+        reason: "git-not-installed",
+      },
+      {
+        label: "a filesystem or permission fault against the repo path",
+        error: () => simpleGitStderrError(GIT_SYSTEM_IO_STDERR),
+        reason: "system-io-error",
+      },
+      {
+        label: "the block timeout killing the child",
+        error: () => new Error(GIT_BLOCK_TIMEOUT_MESSAGE),
+        reason: "unknown",
+      },
+      {
+        label: "git refusing a repository it does not trust",
+        error: () => simpleGitStderrError(GIT_DUBIOUS_OWNERSHIP_STDERR),
+        reason: "dubious-ownership",
+      },
+    ] as const;
+
+    for (const probeCase of CANNOT_ANSWER) {
+      it(`reports the load as failed on ${probeCase.label}`, async () => {
+        mockSimpleGit.checkIsRepo.mockRejectedValue(probeCase.error());
+
+        await service.loadProject("req-probe", "/repo", "ws-probe");
+
+        const result = sentEvents.find((e) => e.type === "load-project-result");
+        expect(result).toMatchObject({ requestId: "req-probe", success: false });
+        // Rejecting the request is what makes `WorkspaceHostPool` dispose the
+        // entry and issue a real reload; a `success: true` here is what left
+        // Retry re-foregrounding an empty host forever.
+        expect(sentEvents.some((e) => e.type === "load-project-result" && e.success)).toBe(false);
+        expect(monitorCount()).toBe(0);
+      });
+
+      it(`logs the classified reason for ${probeCase.label}`, async () => {
+        mockSimpleGit.checkIsRepo.mockRejectedValue(probeCase.error());
+
+        await service.loadProject("req-probe", "/repo", "ws-probe");
+
+        // Through the app logger rather than `console.warn`, which production
+        // esbuild strips — the packaged build is the only one this has been
+        // seen in, and its diagnostics bundle said nothing at all.
+        expect(logWarnMock).toHaveBeenCalledWith(
+          expect.any(String),
+          expect.objectContaining({ projectRootPath: "/repo", gitReason: probeCase.reason })
+        );
+      });
+    }
+
+    it("leaves the folder unclassified rather than calling it non-git", async () => {
+      mockSimpleGit.checkIsRepo.mockRejectedValue(
+        simpleGitMissingBinaryError(REPOSITORY_PROBE_COMMANDS)
+      );
+
+      await service.loadProject("req-probe", "/repo", "ws-probe");
+      sentEvents.length = 0;
+      service.getAllStates("states-probe");
+
+      // `null`, never `false`: `false` is a probed verdict the renderer trusts
+      // enough to strip a real repo's restored worktree state (#11650), and
+      // `syncMonitors`' self-deletion guard keys on it (#11405).
+      const event = sentEvents.find((e) => e.type === "all-states");
+      expect(event).toMatchObject({ states: [], gitBacked: null });
+    });
+
+    it("never puts simple-git's stack trace in the banner message", async () => {
+      // simple-git pushes `String(err.stack)` into the stderr buffer, so the
+      // rethrown GitError's `message` is a whole Node stack trace — and
+      // `loadProject`'s catch forwards its message verbatim to the renderer's
+      // "Couldn't load worktrees" banner.
+      mockSimpleGit.checkIsRepo.mockRejectedValue(
+        simpleGitMissingBinaryError(REPOSITORY_PROBE_COMMANDS)
+      );
+
+      await service.loadProject("req-probe", "/repo", "ws-probe");
+
+      const result = sentEvents.find(
+        (e): e is Extract<WorkspaceHostEvent, { type: "load-project-result" }> =>
+          e.type === "load-project-result"
+      );
+      const message = result && "error" in result ? (result.error ?? "") : "";
+      expect(message).not.toContain("spawn git ENOENT");
+      expect(message).not.toContain("at ChildProcess");
+      expect(message).not.toContain("node:internal");
+      expect(message).toContain("git repository");
+    });
+
+    it("surfaces recovery copy matched to the classified reason", async () => {
+      // Dubious ownership is a repository git found and refused to touch.
+      // Reporting it as "no repository" hid both the cause and its fix.
+      mockSimpleGit.checkIsRepo.mockRejectedValue(
+        simpleGitStderrError(GIT_DUBIOUS_OWNERSHIP_STDERR)
+      );
+
+      await service.loadProject("req-probe", "/repo", "ws-probe");
+
+      const result = sentEvents.find(
+        (e): e is Extract<WorkspaceHostEvent, { type: "load-project-result" }> =>
+          e.type === "load-project-result"
+      );
+      const message = result && "error" in result ? (result.error ?? "") : "";
+      expect(message).toContain(getGitRecoveryHint("dubious-ownership"));
     });
   });
 

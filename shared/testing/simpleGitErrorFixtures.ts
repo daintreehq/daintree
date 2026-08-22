@@ -43,3 +43,49 @@ export function simpleGitMissingBinaryError(
  */
 export const SIMPLE_GIT_MISSING_CWD_MESSAGE =
   "Cannot use simple-git on a directory that does not exist";
+
+/** What `checkIsRepo()` runs — `CheckRepoActions` defaults to the in-tree check. */
+export const REPOSITORY_PROBE_COMMANDS = ["rev-parse", "--is-inside-work-tree"];
+
+/**
+ * Build the value simple-git throws when git itself *ran* and exited nonzero.
+ *
+ * Distinct from {@link simpleGitMissingBinaryError}: nothing is laundered here,
+ * because the child process started. simple-git concats stdout+stderr into
+ * `.message` verbatim, so git's own `fatal:` line is the message and the only
+ * discriminant a classifier ever gets.
+ */
+export function simpleGitStderrError(
+  stderr: string,
+  commands: string[] = REPOSITORY_PROBE_COMMANDS
+): Error {
+  const error = new Error(stderr);
+  Object.assign(error, { task: { commands } });
+  return error;
+}
+
+/**
+ * Git's refusal to touch a repository whose on-disk owner differs from the
+ * current user. A *repository is present* here — misreading it as "no
+ * repository" is the failure #11922 fixed.
+ */
+export const GIT_DUBIOUS_OWNERSHIP_STDERR =
+  "fatal: detected dubious ownership in repository at 'C:/Users/greg/OneDrive/Documents/Daintree/daintree'";
+
+/**
+ * The genuine "this folder has no repository" answer. simple-git's own
+ * `checkIsRepoTask.onError` resolves this to `false` before it can ever be
+ * thrown; the fixture exists to prove the classifier backstop agrees.
+ */
+export const GIT_NOT_A_REPOSITORY_STDERR =
+  "fatal: not a git repository (or any of the parent directories): .git";
+
+/**
+ * A filesystem/permission fault against the repository path — the shape a
+ * OneDrive placeholder stall or an antivirus interposition surfaces as.
+ */
+export const GIT_SYSTEM_IO_STDERR =
+  "fatal: cannot change to 'C:/Users/greg/OneDrive/Documents/Daintree/daintree': EACCES";
+
+/** simple-git's `GitPluginError` message when its block timeout kills the child. */
+export const GIT_BLOCK_TIMEOUT_MESSAGE = "block timeout reached";

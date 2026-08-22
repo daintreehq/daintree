@@ -22,7 +22,7 @@ import nodeV8 from "node:v8";
 nodeV8.setHeapSnapshotNearHeapLimit(2);
 
 import { MessagePort } from "node:worker_threads";
-import { initializeLogger, setLogLevelOverrides } from "./utils/logger.js";
+import { initializeLogger, logInfo, setLogLevelOverrides } from "./utils/logger.js";
 import { copytreeWorkerClient } from "./workspace-host/CopytreeWorkerClient.js";
 import { fileTreeService } from "./services/FileTreeService.js";
 import { projectPulseService } from "./services/ProjectPulseService.js";
@@ -291,7 +291,10 @@ function attachWorktreePort(newPort: MessagePort): void {
     if (idx >= 0) worktreePorts.splice(idx, 1);
   });
 
-  console.log(`[WorkspaceHost] Worktree port attached (${worktreePorts.length} active)`);
+  // `logInfo`, not `console.log`: production esbuild marks `console.log` pure,
+  // so this line never existed in a packaged build — the one place it was
+  // needed to tell a brokered port from a missing one (#11922).
+  logInfo("[WorkspaceHost] Worktree port attached", { activePorts: worktreePorts.length });
 }
 
 // Global error handlers to prevent silent crashes

@@ -22,10 +22,12 @@ import { getCurrentDiskSpaceStatus } from "../services/DiskSpaceMonitor.js";
 import { PERF_MARKS } from "../../shared/perf/marks.js";
 import { isCleaningUp } from "../lifecycle/shutdownCoordinator.js";
 import {
+  describeStartupWorktreeLoadOutcome,
   runStartupWorktreeLoad,
   selectStatusTarget,
   sendStartupWorktreeLoadFailure,
 } from "./startupWorktreeLoad.js";
+import { logError, logInfo, logWarn } from "../utils/logger.js";
 import { extractRestorePanelCwds } from "./restorePanelCwds.js";
 import { mergeProjectEnv } from "./restoreProjectEnv.js";
 import { store } from "../store.js";
@@ -690,7 +692,10 @@ export async function setupWindowServices(
       try {
         statusProjectId = projectStore.resolveProjectIdForPath(projectPathForWorktrees);
       } catch (error) {
-        console.warn("[MAIN] Could not resolve a project id for worktree load status:", error);
+        logWarn("[MAIN] Could not resolve a project id for worktree load status", {
+          projectPath: projectPathForWorktrees,
+          error: error instanceof Error ? error.message : String(error),
+        });
       }
     }
 
@@ -707,7 +712,9 @@ export async function setupWindowServices(
 
     const workspaceClient = capturedWorkspaceClient;
     if (workspaceClient) {
-      console.log("[MAIN] Loading worktrees for project path:", projectPathForWorktrees);
+      logInfo("[MAIN] Loading worktrees for project path", {
+        projectPath: projectPathForWorktrees,
+      });
     }
 
     // Register the renderer in directPortViews so sendToEntryWindows routes
@@ -721,7 +728,9 @@ export async function setupWindowServices(
       getHost: () => workspaceClient?.getHostForProject(projectPathForWorktrees),
       attachDirectPort: (target) => {
         workspaceClient?.attachDirectPort(win.id, target);
-        console.log("[MAIN] Workspace direct port attached");
+        logInfo("[MAIN] Workspace direct port attached", {
+          projectPath: projectPathForWorktrees,
+        });
       },
       getBrokerPort: () => {
         const worktreePortBroker = getWorktreePortBrokerRef();
@@ -732,25 +741,16 @@ export async function setupWindowServices(
       report: reportFailure,
     });
 
-    switch (outcome.status) {
-      case "loaded":
-        console.log("[MAIN] Worktrees loaded; worktree port brokered");
-        break;
-      case "no-client":
-        console.error(
-          "[MAIN] Workspace client unavailable - cannot load worktrees for:",
-          projectPathForWorktrees
-        );
-        break;
-      case "load-failed":
-        console.error("[MAIN] Failed to load worktrees:", outcome.error);
-        break;
-      case "attach-failed":
-        console.error("[MAIN] Failed to attach the worktree port:", outcome.error);
-        break;
-      case "port-failed":
-        console.error("[MAIN] Worktree port not brokered:", outcome.reason);
-        break;
+    // Through the logger, never `console`: production esbuild marks
+    // `console.log`/`console.warn` pure, so this reporting was absent from
+    // exactly the packaged builds where an empty sidebar had to be diagnosed
+    // (#11922). The mapping itself lives beside the outcome type so all five
+    // branches stay covered without importing Electron.
+    const outcomeLog = describeStartupWorktreeLoadOutcome(outcome, projectPathForWorktrees);
+    if (outcomeLog.level === "error") {
+      logError(outcomeLog.message, undefined, outcomeLog.context);
+    } else {
+      logInfo(outcomeLog.message, outcomeLog.context);
     }
   }
 

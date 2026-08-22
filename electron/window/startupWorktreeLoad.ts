@@ -208,3 +208,66 @@ export async function runStartupWorktreeLoad<
   report(new Error(describeStartupPortFailure(attachResult.reason)));
   return { status: "port-failed", reason: attachResult.reason };
 }
+
+/** A log line for a startup worktree-load outcome, ready for the app logger. */
+export interface StartupWorktreeLoadLogLine {
+  level: "info" | "error";
+  message: string;
+  context: Record<string, unknown>;
+}
+
+/**
+ * Describe a startup outcome for the log.
+ *
+ * Returned rather than logged so this module stays Electron-free — importing
+ * `utils/logger.js` would drag in `ipc/channels.js` and `LogBuffer`, and the
+ * suite exists precisely to test these branches without the Electron runtime.
+ * The caller in `windowServices.ts` dispatches the returned line.
+ *
+ * Every outcome gets a line, and every line goes through the logger rather than
+ * `console`: production esbuild marks `console.log`/`console.warn` pure, so the
+ * previous console reporting was stripped from packaged builds — which is why a
+ * diagnostics bundle captured while the sidebar was empty said nothing at all
+ * about worktree loading (#11922).
+ */
+export function describeStartupWorktreeLoadOutcome(
+  outcome: StartupWorktreeLoadOutcome,
+  projectPath: string
+): StartupWorktreeLoadLogLine {
+  switch (outcome.status) {
+    case "loaded":
+      return {
+        level: "info",
+        message: "[MAIN] Worktrees loaded; worktree port brokered",
+        context: { projectPath },
+      };
+    case "no-client":
+      return {
+        level: "error",
+        message: "[MAIN] Workspace client unavailable — cannot load worktrees",
+        context: { projectPath },
+      };
+    case "load-failed":
+      return {
+        level: "error",
+        message: "[MAIN] Failed to load worktrees",
+        context: { projectPath, error: formatErrorMessage(outcome.error, "Unknown error") },
+      };
+    case "attach-failed":
+      return {
+        level: "error",
+        message: "[MAIN] Failed to attach the worktree port",
+        context: { projectPath, error: formatErrorMessage(outcome.error, "Unknown error") },
+      };
+    case "port-failed":
+      return {
+        level: "error",
+        message: "[MAIN] Worktree port not brokered",
+        context: {
+          projectPath,
+          reason: outcome.reason,
+          detail: describeStartupPortFailure(outcome.reason),
+        },
+      };
+  }
+}
