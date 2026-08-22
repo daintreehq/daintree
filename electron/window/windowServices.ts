@@ -28,6 +28,7 @@ import {
   sendStartupWorktreeLoadFailure,
 } from "./startupWorktreeLoad.js";
 import { logError, logInfo, logWarn } from "../utils/logger.js";
+import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
 import { extractRestorePanelCwds } from "./restorePanelCwds.js";
 import { mergeProjectEnv } from "./restoreProjectEnv.js";
 import { store } from "../store.js";
@@ -694,7 +695,7 @@ export async function setupWindowServices(
       } catch (error) {
         logWarn("[MAIN] Could not resolve a project id for worktree load status", {
           projectPath: projectPathForWorktrees,
-          error: error instanceof Error ? error.message : String(error),
+          error: formatErrorMessage(error, "Unknown error"),
         });
       }
     }
