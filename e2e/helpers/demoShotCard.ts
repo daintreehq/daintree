@@ -16,6 +16,12 @@ export interface ShotCardOptions {
   teardownCommand?: string;
   /** Warn when the beats add up past this. Omit to skip the check. */
   targetSeconds?: number;
+  /**
+   * Whether `takeCommand` rebuilds the scene repository as well as restoring
+   * the profile. Changes the advice materially: a take that only restores the
+   * profile inherits every commit and agent edit the last take produced.
+   */
+  resetsRepo?: boolean;
 }
 
 /**
@@ -177,10 +183,18 @@ export function renderShotCard(
     lines.push(`Reset and relaunch:`, "", "```bash", options.takeCommand, "```", "");
   }
   lines.push(
-    "**What a new take resets:** the app profile — panels, layout, active worktree, everything the bake staged in the UI.",
-    "",
-    "**What it does not reset:** the repository. Commits, edits, pushes to the local origin and anything an agent wrote all survive into the next take. If a beat changes the repo — and in an agent demo most of them do — rebuild the scene before the next take, or you are recording against a tree that drifted.",
-    "",
+    options.resetsRepo
+      ? "**What a new take resets:** both halves — the app profile (panels, layout, active worktree) and the repository itself, rebuilt from the scene. Commits, edits and anything an agent wrote during the last take are discarded, so every take starts from the state described above."
+      : "**What a new take resets:** the app profile only — panels, layout, active worktree, everything the bake staged in the UI.",
+    ""
+  );
+  if (!options.resetsRepo) {
+    lines.push(
+      "**What it does not reset:** the repository. Commits, edits, pushes to the local origin and anything an agent wrote all survive into the next take. If a beat changes the repo — and in an agent demo most of them do — rebuild the scene first, or you are recording against a tree that drifted.",
+      ""
+    );
+  }
+  lines.push(
     "Quit the app fully before starting the next take. On macOS closing the window is not quitting; use Cmd+Q and wait for it to disappear from the Dock. A take started while the previous app still holds its profile will usually refuse, but that check is a courtesy rather than a lock — do not race it.",
     ""
   );

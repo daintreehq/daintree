@@ -1,87 +1,89 @@
 ---
 name: demo-video-creator
-description: Record a polished 4K screencast/demo video of Daintree by driving the in-app demo engine (window.electron.demo — animated cursor, spotlight, captions) from a Playwright spec. Use whenever the user wants to make a demo video, screencast, product/marketing clip, or feature walkthrough of Daintree — either from a standard fixture or from a specific existing project folder they point at ("create a video from this folder").
+description: Stage Daintree for a screencast — build a throwaway demo project with worktrees, a remote and dirty state, bake an app profile so it opens straight into that state, and generate a shot card the recordist follows. Use whenever the user wants to make a demo video, screencast, product clip or feature walkthrough of Daintree. The harness does the setup; a human drives the mouse and records with their own screen recorder.
 ---
 
 # Demo Video Creator
 
-This skill produces a real recorded video (`.webm` master + `.mp4`) of Daintree in action. It does NOT mock anything — it launches the actual app with the demo engine enabled and choreographs a fake cursor, spotlight, and captions over a real project while MediaRecorder captures the frame to disk.
+This skill stages Daintree for recording. It does **not** record anything and does not animate a cursor — the person recording drives the mouse themselves and captures with their own tool (Screen Studio, QuickTime, OBS). The harness exists so they never have to build a demo project, wire a remote, dirty a worktree, or click through onboarding before every take.
 
-## How it works (architecture)
+The in-app demo engine (`window.electron.demo`, animated cursor, MediaRecorder capture) is being retired in favour of this. It shipped inside the renderer behind a flag to do a job that turned out to be a filesystem problem. Ignore it — do not drive `window.electron.demo` for new work.
 
-Two halves:
+## The shape of a demo
 
-1. **The in-app demo engine** (already built, demo-mode only):
-   - `src/components/Demo/DemoCursor.tsx` — animated cursor: auto-generated Bézier arcs, Fitts's-law timing, ballistic→settle, click ripples. You give it destinations; the realism is automatic.
-   - `src/components/Demo/DemoOverlay.tsx` — spotlight (blur + dim, masked cutout, 300ms fades) and captions (placement presets, size tiers, 200ms fades).
-   - `src/components/Demo/DemoCaptureBridge.tsx` — `getDisplayMedia` + MediaRecorder → streams chunks to the main process.
-   - `electron/ipc/handlers/demo.ts` + `electron/preload.cts` — the `window.electron.demo` API.
-2. **The Playwright driver** (the "scene"): `e2e/screenshots/demo-reel.spec.ts` is the **canonical template**. It boots a project with `--demo-mode`, then awaits `window.electron.demo.*` calls wrapped in `startCapture`/`stopCapture`.
+**Permanent** (committed, maintained): the machinery — `e2e/helpers/demoScene.ts`, `demoProfile.ts`, `demoTake.ts`, `demoShotCard.ts`, and the `npm run demo` dispatcher in `scripts/demo/`.
 
-Read `e2e/screenshots/demo-reel.spec.ts` first — copy/adapt it for each new video rather than starting from scratch.
-
-## Two modes
-
-**Mode A — standard fixture.** Reuse the marketing fixtures in `e2e/helpers/screenshotFixtures.ts` (`createBrushCmsRepo` = worktree dashboard, `createSurgeCheckoutRepo` = agent at work, `createOrbitalSyncRepo` = multi-agent, etc.). Each returns `{ dir, cleanup }`. This is the default — no setup, deterministic, no API key needed for the non-agent fixtures.
-
-**Mode B — a specific project folder.** The user sets up a real project folder ("I created a whole project, now make a video from this folder") and gives you its absolute path. Open THAT path instead of a fixture: skip `createBrushCmsRepo()` and pass the user's path as the dir to `mockOpenDialog`. First **inspect the folder** (its worktrees, files, what's interesting) and choreograph the scene around its actual content — generic captions on unknown content look hollow.
-
-The boot flow is identical for both; only the folder dir differs.
+**Temporary** (never committed, deleted afterwards): one scene file per video, plus everything under `<demo root>/<slug>*`. Scenes are plain JSON on purpose — the machinery is the code, a specific video is data. Put scene files in `.demo/` (gitignored) or a scratch directory.
 
 ## Workflow
 
-1. **Build** the e2e bundle (demo mode is stripped from prod but present in the test build):
-   `npm run build:e2e`
-2. **Author the scene** — copy `demo-reel.spec.ts` to `e2e/screenshots/<name>.spec.ts` (or edit in place for iteration) and write the beats (see API below). Wrap the visible beats in `startCapture(...)` / `stopCapture()`, inside a `try/finally` so capture always finalizes; make each beat best-effort (`safe()` wrapper) so one missing selector doesn't abort the recording.
-3. **Record:**
-   `npx playwright test e2e/screenshots/<name>.spec.ts --project=screenshots --reporter=line`
-   (The `screenshots` Playwright project has a 30-min timeout. A transient macOS launch flake auto-retries.)
-4. **Post-process** (output lands in `artifacts/demo/`, which is gitignored):
-   - Fix the WebM duration (MediaRecorder omits it during live muxing): `ffmpeg -i in.webm -c copy fixed.webm`
-   - Optional QuickTime-friendly copy: `ffmpeg -i fixed.webm -c:v libx264 -preset slow -crf 18 -pix_fmt yuv420p -movflags +faststart out.mp4`
-5. **Verify before claiming done** — extract frames with `ffmpeg -ss <t> -i out.webm -frames:v 1 frame.png` and actually look at them (a tiled montage `-vf "fps=15,scale=300:-1,tile=7x3"` shows fades ramping). Confirm the feature is on screen, the cursor moves, and captions are legible.
+```bash
+npm run build:e2e                      # required: takes launch the built app
+npm run demo stage .demo/intro.json    # build scene, bake profile, write shot card
+npm run demo take .demo/intro.json     # rebuild the repo, reset the profile, launch
+# ... record ...                       # quit with Cmd+Q when the take is done
+npm run demo take .demo/intro.json     # next take, identical starting state
+npm run demo clean .demo/intro.json    # delete the scene, snapshot and profiles
+```
 
-## The `window.electron.demo` API (call via `page.evaluate`)
+`npm run demo list` shows every command. The shot card is written next to the snapshot and its path is printed by `stage` and `take`.
 
-All calls return promises that resolve when the command's renderer round-trip completes, so `await` them. The cursor/overlay components must be mounted first — gate on `await page.waitForFunction(() => !!window.electron?.demo)`.
+## Authoring a scene
 
-- **Cursor:** `moveTo(xPct, yPct, durationMs?)` (x/y are 0–100 % of viewport), `moveToSelector(selector, durationMs?, offsetX?, offsetY?)`, `click()` (clicks at the cursor's current spot — move first), `drag(fromSel, toSel, durationMs?)`, `scroll(selector)`, `pressKey(key, code?, modifiers?, selector?)`, `type(selector, text, cps?)`.
-- **Terminals:** `typeInTerminal(selector, text, cps?)` types text into an xterm.js terminal panel char-by-char with humanized timing, and `sendKeyToTerminal(selector, key)` sends a named special key. These route through the PTY (`window.electron.terminal.write`), unlike `type`/`pressKey` which target CodeMirror/HTML inputs and do **not** work on terminals. The `selector` resolves to (or to any element inside) a terminal panel's `[data-panel-id]`. Supported keys: `up`, `down`, `left`, `right`, `enter`, `tab`, `escape`, `backspace`, `ctrl-c`, `ctrl-d`, `ctrl-u`, `home`, `end`, `pageup`, `pagedown` (arrow keys auto-honor the terminal's application-cursor mode). Example: `await d.typeInTerminal('[data-panel-id="…"]', 'echo hi'); await d.sendKeyToTerminal('[data-panel-id="…"]', 'enter');`.
-- **Spotlight:** `spotlight(selector, padding?)` (blur + dim everything else, 300ms fade-in), `dismissSpotlight()`.
-- **Captions:** `annotate(selector, text, placement?, size?, id?)` → returns `{ id }`. `dismissAnnotation(id?)` (omit id = clear all; 200ms fades both ways).
-  - **placement:** element-anchored `top|bottom|left|right`; viewport `screen-bottom` (subtitle — the default for narration), `screen-top`, `screen-center`, `lower-third-left|right`, `top-left|top-right|bottom-left|bottom-right`; cursor `above-cursor|below-cursor`. For viewport/cursor placements pass `""` as the selector.
-  - **size:** `sm|md|lg|xl` (resolved as % of frame height so it scales 1080p↔4K). Default `md`; subtitles read well at `lg`.
-- **Timing/util:** `sleep(ms)`, `waitForSelector(selector, timeoutMs?)`, `waitForIdle(settleMs?, timeoutMs?)`, `pause()`/`resume()`, `screenshot()`. `waitForIdle` settles only once **all** activity channels are simultaneously quiet for `settleMs` — CSS/WAAPI animations, DOM mutations, **xterm terminal output** (subscribed via each live terminal's `onWriteParsed`), and **`<video>` playback** (a playing video blocks idle until it pauses/ends). It returns early at `timeoutMs` regardless. Safe to use right after `typeInTerminal` to wait for a command's output to drain. The main-process watchdog is command-aware: it derives its budget from each command's own `durationMs`/`timeoutMs` (or text length for `type`/`typeInTerminal`) plus a buffer, so a long `sleep`, `waitFor*`, or `type` beat above 30s is honored rather than silently timed out. Unbounded commands (`click`, `scroll`, `pressKey`, …) keep a 30s default.
-- **Capture:** `startCapture({ outputPath, fps?, videoBitsPerSecond?, width?, height? })`, `stopCapture()` → `{ outputPath, frameCount }`, `getCaptureStatus()`. `outputPath` is a **main-process** filesystem path; the main process mkdirs its dirname.
+Everything the app opens into comes from this file. Write it, then read the generated shot card back — the card's "Before you roll" section is rendered from the built scene, so if it does not describe what you intended, the scene is wrong, not the card.
 
-## Quality / resolution knobs (env, read by the spec)
+Beats describe what the *recordist* does; they stage nothing. Only write a beat about state the scene actually creates — a beat claiming three working agents against a scene with one worktree and no agents is a card that lies from its first line.
 
-Defaults give a **4K master at the app's true desktop density** (the industry sweet spot — Screen Studio / Stripe / Linear all target logical 1920×1080 @ 2× → 4K). Do NOT zoom the interface by default: zooming reduces the effective layout and hides panels, and `setZoomFactor` literally magnifies fonts so little fits.
+```json
+{
+  "slug": "intro",
+  "remote": true,
+  "files": { "README.md": "# surge-checkout\n", "src/checkout.ts": "export const rate = 0.02;\n" },
+  "worktrees": [
+    {
+      "branch": "feature/refund-retries",
+      "files": { "src/refund.ts": "// baseline\n" },
+      "push": true,
+      "aheadCommits": [{ "message": "wip", "files": { "src/retry.ts": "// retry\n" } }],
+      "uncommittedFiles": { "src/refund.ts": "// edited, ready to review\n" }
+    }
+  ],
+  "beats": [
+    {
+      "name": "Isolation",
+      "given": "One worktree, ahead of origin, with an edit waiting for review",
+      "action": "Hold on the worktree list, then open Review & Commit",
+      "waitFor": "The diff to render",
+      "expect": "src/refund.ts shows as modified",
+      "super": "Every task gets its own git worktree.",
+      "seconds": 12
+    }
+  ]
+}
+```
 
-| Env | Default | Effect |
-| --- | --- | --- |
-| `DAINTREE_DEMO_RESOLUTION` | `4k` | `1080p` / `1440p` / `4k` output |
-| `DAINTREE_DEMO_ZOOM` | `1.0` | UI magnification; >1 fits less, <1 fits more. Leave at 1.0 unless asked. |
-| `DAINTREE_DEMO_FPS` | `60` | frame rate |
-| `DAINTREE_DEMO_BITRATE_MBPS` | `50` (4k) | encode ceiling (VBR — static dark UI stays small) |
+Scene fields worth knowing:
 
-## Scene-authoring lessons (hard-won — follow these)
+- **`remote: true`** creates a local bare repo wired as `origin`. Push, fetch and ahead/behind counts work with no network and no credentials. PR and CI chips do **not** — those come from a forge plugin, and the scene schema has no way to point at a real GitHub repo. A beat that needs a green PR check cannot be staged by this harness at all; record it against a real project by hand.
+- **`uncommittedFiles`** is what Review Hub shows. A scene whose worktrees are all clean gives the review beat nothing to display.
+- **`aheadCommits`** requires `push: true`. Daintree suppresses the ahead count entirely when a branch has no upstream, so ahead-commits without a push produce history the UI never surfaces.
+- **`beats`** are the shot card only — they never affect what gets built. Time all of them or none: an untimed beat counts as zero, so a half-timed list makes every later beat claim an earlier start than it has.
 
-- **Tell one story.** Intro subtitle → 2–4 focused beats → outro subtitle. Don't narrate every pixel.
-- **Captions are optional** and most users want few of them. When used: keep ≤2 lines, sentence case, and hold them long enough to read — ~15–17 characters/second (a 36-char line ≈ 2.2s minimum on screen).
-- **Show the feature within the first ~0.5s** — open on the real UI, not a title card.
-- **Cursor + click reads as intent.** `moveToSelector` then `click()` plays the press/ripple and (for worktree cards etc.) performs the real action — capture the resulting state change.
-- **Spotlight to focus**, then dismiss before moving on. On Daintree's dark theme the blur (not the dim) is what makes the focus read.
-- **Reading-friendly pacing:** `sleep` generously between beats; IPC round-trips already add latency, so the recording runs a touch longer than the sum of sleeps.
+## Staging UI state
 
-## Gotchas / why things are the way they are
+`stage` opens the project and completes onboarding, but panels, layout and active worktree come from a `setup` callback. Today that means editing the `stage` command in `scripts/demo/index.ts` to pass `setup` to `bakeProfile`; it receives the live Playwright `page`, so anything an E2E spec can do, a bake can do.
 
-- **Demo mode must reach the renderer.** It's gated on the renderer's `process.argv`; `--demo-mode` is forwarded into `additionalArguments` in `electron/window/createWindow.ts` and `ProjectViewManager.ts`. Launch via `launchApp({ extraArgs: ["--demo-mode"], windowSize, screenshotScale })`.
-- **`getDisplayMedia` needs a relaxed Permissions-Policy.** `display-capture` is denied by default; `electron/setup/protocols.ts` relaxes it to `(self)` only in demo mode (gated on `!app.isPackaged`).
-- **Page handle goes stale on open.** The project view reloads once during hydration. Re-acquire with `refreshActiveWindow` after opening the folder (the template does this twice) before driving the demo.
-- **Capture file is small even at 4K** — that's efficient VBR on a static dark UI, not low quality. Judge sharpness from a native-res crop, not the byte count.
-- **Animated camera zoom was removed** (`webFrame.setZoomFactor` thrashed xterm's WebGL atlas every frame). Z-axis "camera moves" belong in post (e.g. a CSS transform in Remotion), not at capture time.
+Whatever you stage, verify it survives: the smoke test (`e2e/demo/staging-smoke.spec.ts`) is the template for asserting that a staged panel is still there after restore.
 
-## Output
+## Gotchas, all learned the hard way
 
-Videos go to `artifacts/demo/` (gitignored). Commit only the code (engine + spec changes), never the rendered media.
+- **Takes reset the repo; the snapshot does not.** `take` rebuilds the scene by default precisely because a recording mutates it — an agent writes files, you commit, something gets pushed. Pass `--keep-repo` only when a beat deliberately continues from the previous *repository* state — it still resets the app profile, so panels and layout return to the baked arrangement either way.
+- **Quit with Cmd+Q, not the window close button.** On macOS closing the window does not quit Daintree, and the next take will refuse because the profile is still held.
+- **A killed take leaves a stale marker.** If the app is force-killed it can rebuild its profile during shutdown and leave `running.lock` behind. Every later take then refuses even though nothing is running. `npm run demo take <scene> -- --force` discards that profile; only use it when you are sure no app is up.
+- **No e2e flags reach a take.** A take runs with a sanitised environment and no `--daintree-e2e-*` switches, so it behaves like the build a viewer downloads. That is why onboarding has to be genuinely persisted during the bake rather than suppressed by a flag — the flag makes onboarding *report* itself complete without writing anything.
+- **Editing a scene does not re-bake it.** `take` rebuilds the repository from the current JSON but reuses the profile baked earlier. Change anything that affects the staged UI and you must run `stage` again; nothing currently detects the mismatch for you.
+- **`npm run build:e2e` first.** A take launches the repo root, which Electron resolves through `dist-electron/`. Without a build you are recording a stale app or no app.
+
+## When you are done
+
+`npm run demo clean <scene>` removes the scene, its worktrees, the bare origin, the snapshot and the take profile. Then delete the scene file. Nothing about one video should outlive it — that is the whole reason the scene is data and not code.

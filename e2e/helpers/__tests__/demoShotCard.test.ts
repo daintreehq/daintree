@@ -171,13 +171,21 @@ describe("renderShotCard", () => {
     ).toThrow(/disagree about worktrees/);
   });
 
-  it("is honest that a new take does not reset the repository", () => {
-    // startTake restores the profile only. Commits, edits and agent output all
-    // survive into the next take, and the card used to claim otherwise.
+  it("warns about repository carryover when the take only restores the profile", () => {
+    // startTake on its own restores the profile, not the repo: commits, edits
+    // and agent output all survive into the next take.
     const card = renderShotCard(scene(), built());
     expect(card).toContain("does not reset");
-    expect(card).toContain("rebuild the scene");
+    expect(card).toContain("rebuild the scene first");
     expect(card).not.toContain("nothing carries over");
+  });
+
+  it("drops that warning when the take rebuilds the repository too", () => {
+    // The CLI's `take` rebuilds the scene by default, so repeating the warning
+    // would tell the recordist to guard against something already handled.
+    const card = renderShotCard(scene(), built(), { resetsRepo: true });
+    expect(card).toContain("both halves");
+    expect(card).not.toContain("does not reset");
   });
 
   it("prints the commands it was given for reset and teardown", () => {

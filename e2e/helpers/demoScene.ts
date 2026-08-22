@@ -565,6 +565,51 @@ function configureIdentity(cwd: string): void {
  * ahead of origin; committing first and pushing afterwards produces a branch
  * that is level, and the ahead count silently disappears.
  */
+/**
+ * Where a scene's directories are, without touching the disk.
+ *
+ * `buildScene` deletes and recreates everything it owns, so any caller that
+ * only needs the paths — rendering a shot card, tearing a demo down — must not
+ * reach for it. Doing so destroys whatever the recording session has produced
+ * so far, which is the opposite of what both of those callers want.
+ */
+export function describeScene(scene: unknown): BuiltScene {
+  validateScene(scene);
+
+  const root = path.resolve(getDemoRoot());
+  const dir = path.join(root, scene.slug);
+  const worktreesParent = path.join(root, `${scene.slug}-worktrees`);
+  const originPath = path.join(root, `${scene.slug}-origin.git`);
+
+  return {
+    slug: scene.slug,
+    dir,
+    remotePath: scene.remote ? originPath : null,
+    worktrees: (scene.worktrees ?? []).map((worktree) => ({
+      branch: worktree.branch,
+      path: path.join(worktreesParent, worktreeDirName(worktree.branch)),
+    })),
+    // No buildId: this handle did not create the targets, so it releases
+    // anything this slug owns rather than one particular generation.
+    //
+    // Failures propagate. Swallowing them lets a teardown report success while
+    // the repository, its worktrees and its origin are all still on disk.
+    cleanup: () => {
+      const failed: string[] = [];
+      for (const target of [dir, worktreesParent, originPath]) {
+        try {
+          removeOwnedTarget(target, { slug: scene.slug });
+        } catch {
+          failed.push(target);
+        }
+      }
+      if (failed.length > 0) {
+        throw new Error(`Could not remove scene directories: ${failed.join(", ")}`);
+      }
+    },
+  };
+}
+
 export function buildScene(scene: unknown): BuiltScene {
   validateScene(scene);
 

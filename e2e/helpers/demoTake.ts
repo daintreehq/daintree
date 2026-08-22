@@ -278,6 +278,13 @@ export async function teardownDemo(
       failed.push(dir);
       continue;
     }
+    // A take started from another process cannot be passed in as a handle, so
+    // the marker is the only evidence an app still owns this profile. Deleting
+    // it underneath a live app leaves it writing into a directory that is gone.
+    if (existsSync(path.join(dir, "running.lock"))) {
+      failed.push(dir);
+      continue;
+    }
     try {
       removePathSync(dir);
       removed.push(dir);

@@ -3,7 +3,13 @@ import { execFileSync } from "child_process";
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import path from "path";
-import { buildScene, validateScene, worktreeDirName, type DemoScene } from "../demoScene";
+import {
+  buildScene,
+  describeScene,
+  validateScene,
+  worktreeDirName,
+  type DemoScene,
+} from "../demoScene";
 
 let demoRoot: string;
 let previousRoot: string | undefined;
@@ -344,6 +350,55 @@ describe("buildScene", () => {
       if (previous === undefined) delete process.env.GIT_CONFIG_GLOBAL;
       else process.env.GIT_CONFIG_GLOBAL = previous;
     }
+  });
+});
+
+describe("describeScene", () => {
+  it("reports the same paths buildScene produces", () => {
+    const declared = minimalScene({
+      remote: true,
+      worktrees: [{ branch: "feature/a", push: true }, { branch: "feature/b" }],
+    });
+    const actual = buildScene(declared);
+    const described = describeScene(declared);
+
+    expect(described.dir).toBe(actual.dir);
+    expect(described.remotePath).toBe(actual.remotePath);
+    expect(described.worktrees).toEqual(actual.worktrees);
+  });
+
+  it("leaves the repository untouched, including work done since the build", () => {
+    // This is the whole reason it exists: rendering a shot card or tearing a
+    // demo down must never delete what a recording session has produced.
+    const built = buildScene(minimalScene({ worktrees: [{ branch: "feature/a" }] }));
+    const recorded = path.join(built.worktrees[0]!.path, "recorded-during-a-take.ts");
+    writeFileSync(recorded, "// written mid-session\n");
+    const head = git(["rev-parse", "HEAD"], built.dir);
+
+    describeScene(minimalScene({ worktrees: [{ branch: "feature/a" }] }));
+
+    expect(existsSync(recorded)).toBe(true);
+    expect(git(["rev-parse", "HEAD"], built.dir)).toBe(head);
+  });
+
+  it("refuses to release directories it does not own, and says so", () => {
+    // Reporting the failure matters as much as refusing it: a teardown that
+    // swallowed this would print success while the directory was still there.
+    const victim = path.join(demoRoot, "scene");
+    mkdirSync(victim, { recursive: true });
+    writeFileSync(path.join(victim, "important.txt"), "real work");
+
+    expect(() => describeScene(minimalScene()).cleanup()).toThrow(/Could not remove/);
+    expect(existsSync(path.join(victim, "important.txt"))).toBe(true);
+  });
+
+  it("releases a scene it does own", () => {
+    const built = buildScene(minimalScene({ remote: true, worktrees: [{ branch: "feature/a" }] }));
+
+    describeScene(minimalScene({ remote: true, worktrees: [{ branch: "feature/a" }] })).cleanup();
+
+    expect(existsSync(built.dir)).toBe(false);
+    expect(existsSync(built.remotePath!)).toBe(false);
   });
 });
 
