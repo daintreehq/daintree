@@ -55,6 +55,9 @@ jobs:
         with:
           clean: true
           fetch-depth: 1
+          # The assistant engine is a Go submodule built into the app at package
+          # time. Without it, afterPack's assistant guard fails every clean build.
+          submodules: recursive
 
       - name: Install Linux dependencies
         run: |
@@ -83,6 +86,9 @@ jobs:
         with:
           clean: true
           fetch-depth: 1
+          # The assistant engine is a Go submodule built into the app at package
+          # time. Without it, afterPack's assistant guard fails every clean build.
+          submodules: recursive
 
       - name: Set up Node.js and install dependencies
         uses: ./.github/actions/setup-node-install
@@ -151,6 +157,18 @@ jobs:
         with:
           clean: true
           fetch-depth: 1
+          # The assistant engine is a Go submodule built into the app at package
+          # time. Without it, afterPack's assistant guard fails every clean build.
+          submodules: recursive
+
+      # The assistant engine is CGO-free, so one runner cross-compiles every target
+      # in seconds. `go-version-file` reads the submodule's own go.mod, so the
+      # toolchain cannot drift from what the engine declares.
+      - name: Set up Go (assistant engine)
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: vendor/daintree-assistant/go.mod
+          cache-dependency-path: vendor/daintree-assistant/go.sum
 
       - name: Resolve update metadata prefix
         uses: ./.github/actions/resolve-update-metadata-prefix
@@ -181,6 +199,10 @@ jobs:
           NODE_OPTIONS: "--max-old-space-size=6144"
         run: |
           npm run build
+          # Cross-compile the vendored assistant engine for every target before
+          # packaging; electron-builder's extraResources selects the one for this
+          # platform and arch, and afterPack fails the build if it is missing.
+          npm run build:assistant:all
           npm run check:preload-backdoors
           npx electron-builder --config electron-builder.config.cjs --win appx nsis --x64 --publish never
 
@@ -339,6 +361,9 @@ jobs:
         with:
           clean: true
           fetch-depth: 1
+          # The assistant engine is a Go submodule built into the app at package
+          # time. Without it, afterPack's assistant guard fails every clean build.
+          submodules: recursive
 
       - name: Verify version matches tag
         if: startsWith(github.ref, 'refs/tags/v')
@@ -357,6 +382,14 @@ jobs:
           node_version: ${{ env.NODE_VERSION }}
           msvs_version: "2022"
 
+      # The assistant engine is a CGO-free Go binary; `go-version-file` reads the
+      # submodule's own go.mod so the toolchain cannot drift from what it declares.
+      - name: Set up Go (assistant engine)
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: vendor/daintree-assistant/go.mod
+          cache-dependency-path: vendor/daintree-assistant/go.sum
+
       - name: Build (arm64)
         shell: bash
         env:
@@ -365,6 +398,10 @@ jobs:
           NODE_OPTIONS: "--max-old-space-size=6144"
         run: |
           npm run build
+          # Cross-compile the vendored assistant engine for every target before
+          # packaging; electron-builder's extraResources selects the one for this
+          # platform and arch, and afterPack fails the build if it is missing.
+          npm run build:assistant:all
           npm run check:preload-backdoors
           # arm64 builds NSIS only (no AppX/Store target).
           npx electron-builder --config electron-builder.config.cjs --win nsis --arm64 --publish never
@@ -431,6 +468,9 @@ jobs:
         with:
           clean: true
           fetch-depth: 1
+          # The assistant engine is a Go submodule built into the app at package
+          # time. Without it, afterPack's assistant guard fails every clean build.
+          submodules: recursive
 
       - name: Install Linux dependencies
         run: |
@@ -502,6 +542,9 @@ jobs:
         with:
           clean: true
           fetch-depth: 1
+          # The assistant engine is a Go submodule built into the app at package
+          # time. Without it, afterPack's assistant guard fails every clean build.
+          submodules: recursive
 
       - name: Set up Node.js and install dependencies
         uses: ./.github/actions/setup-node-install
@@ -606,6 +649,9 @@ jobs:
         with:
           clean: true
           fetch-depth: 1
+          # The assistant engine is a Go submodule built into the app at package
+          # time. Without it, afterPack's assistant guard fails every clean build.
+          submodules: recursive
 
       - name: Publish Daintree (Windows)
         uses: ./.github/actions/publish-daintree

@@ -612,6 +612,11 @@ export type TurnOutcomeClass =
   | "tool-error"
   | "reasoning-loop"
   | "hibernate-resume-stale"
+  // The user stopped the turn. Emitted by the assistant engine on every interrupt,
+  // and its absence here was a real defect: the engine's `turn:end` for a cancelled
+  // turn failed schema validation, so the panel never learned the turn had ended and
+  // the next event looked like a lost frame.
+  | "cancelled"
   | "unknown";
 
 /**

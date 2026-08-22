@@ -137,11 +137,13 @@ const config: KnipConfig = {
     // are not wired yet; keep this as deliberate feature scaffolding.
     "src/services/WhenClauseStore.ts",
 
-    // why: native assistant-host process wrapper added with the protocol and
-    // entry resolver, but not wired into a service yet. Keep the wrapper
-    // available while the integration lands without making the repo's knip
-    // gate fail on the scaffold file.
+    // why: the native assistant-host process wrapper and its binary resolver. Both
+    // are exercised by tests (including a conformance test that drives the real
+    // vendored engine) but are not yet reachable from a main-process service, so the
+    // static import graph does not see them. Remove these two once HelpSessionService
+    // spawns the engine.
     "electron/services/assistant-host/AssistantHostProcess.ts",
+    "electron/services/assistant-host/resolveAssistantBinary.ts",
   ],
 
   ignoreBinaries: [

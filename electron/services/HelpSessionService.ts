@@ -341,6 +341,16 @@ export class HelpSessionService {
   // not an orphan.
   private readonly activeHelpTerminalBySlotKey = new Map<string, string>();
   private readonly terminalBySessionId = new Map<string, string>();
+  /**
+   * Sessions held by the NATIVE assistant engine, which has no PTY to bind.
+   *
+   * The orphan sweeper's whole signal is "provisioned but never bound to a terminal",
+   * which for a native session is not a symptom of anything — it is the normal shape.
+   * Without this set every native conversation would have its bearer revoked at the
+   * 30-minute mark, mid-conversation, and present as the assistant abruptly losing
+   * the ability to spawn agents for no reason the user could see.
+   */
+  private readonly engineSessionIds = new Set<string>();
   private mcpRegistry: WindowRegistry | null = null;
   private ptyClient: PtyKillClient | null = null;
   private pendingHibernationStore: PendingHelpHibernationStore | null = null;
@@ -504,6 +514,20 @@ export class HelpSessionService {
    * agent has no such getter, so without this a token minted for one env-only
    * session could bind a terminal running a different one (#12262).
    */
+  /**
+   * Binds a provisioned session to the native engine that owns it.
+   *
+   * The counterpart to `markTerminalForToken` for a surface with no terminal: it
+   * exempts the record from the orphan sweep and nothing else. Returns false for an
+   * unknown or revoked token, so a caller cannot keep a dead session alive.
+   */
+  markEngineSession(sessionId: string): boolean {
+    const record = this.sessionsById.get(sessionId);
+    if (!record || record.revoked) return false;
+    this.engineSessionIds.add(sessionId);
+    return true;
+  }
+
   markTerminalForToken(token: string, terminalId: string, expectedAgentId?: string): boolean {
     if (!token || !terminalId) return false;
     const record = this.sessionsByToken.get(token);
@@ -1276,6 +1300,11 @@ export class HelpSessionService {
     // active-terminal slot before this revoke ran. Skip the hard kill if
     // we already gracefulKilled — same lifecycle endpoint, just avoids the
     // duplicate "kill an unknown terminal" warning in the PTY host log.
+    // Outside the `terminalId` branch on purpose: a native-engine session has no
+    // terminal, so leaving this inside would mean its id is never removed on revoke,
+    // displacement or revokeAll — the set would grow for the life of the process and
+    // keep exempting ids whose sessions are long gone.
+    this.engineSessionIds.delete(sessionId);
     if (terminalId) {
       this.terminalBySessionId.delete(sessionId);
       // If displaced, the new provision already cleared the active slot (and
@@ -1744,6 +1773,9 @@ export class HelpSessionService {
       (record) =>
         !record.revoked &&
         !this.terminalBySessionId.has(record.sessionId) &&
+        // A native-engine session has no terminal by design; its liveness is the
+        // engine process, and `AssistantHostService` revokes it on exit.
+        !this.engineSessionIds.has(record.sessionId) &&
         record.createdAt <= cutoff
     );
     await Promise.all(orphans.map((record) => this.revokeSession(record.sessionId)));

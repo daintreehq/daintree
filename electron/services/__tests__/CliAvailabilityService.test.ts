@@ -6,7 +6,11 @@ import { describe, it, expect, beforeEach, vi, afterEach } from "vitest";
 import { homedir } from "os";
 import { join } from "path";
 import { CliAvailabilityService } from "../CliAvailabilityService.js";
-import { getAgentConfig, getAgentIds } from "../../../shared/config/agentRegistry.js";
+import {
+  DAINTREE_ASSISTANT_AGENT_ID,
+  getAgentConfig,
+  getAgentIds,
+} from "../../../shared/config/agentRegistry.js";
 import { execFile, execFileSync } from "child_process";
 import { refreshPath } from "../../setup/environment.js";
 import { broadcastToRenderer } from "../../ipc/utils.js";
@@ -116,6 +120,16 @@ const cmdOf = (args: unknown): string | undefined => {
   return args[args.length - 1] as string;
 };
 
+/**
+ * Registry entries that actually reach `execFileSync`.
+ *
+ * The Daintree Assistant ships with the app and resolves through
+ * `resolveAssistantBinary`, so it never runs a PATH probe — it is the one entry the
+ * counts below must exclude. Derived rather than hardcoded so adding an agent to the
+ * roster does not quietly invalidate every count in this file.
+ */
+const PATH_PROBED_AGENTS = getAgentIds().filter((id) => id !== DAINTREE_ASSISTANT_AGENT_ID).length;
+
 describe("CliAvailabilityService", () => {
   let service: CliAvailabilityService;
   const mockedExecFileSync = vi.mocked(execFileSync);
@@ -221,7 +235,7 @@ describe("CliAvailabilityService", () => {
       // only fire when the which/where probe returns missing — in this test
       // every agent succeeds on the first probe, so execFileSync count
       // matches the registry size exactly.
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(18);
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(PATH_PROBED_AGENTS);
 
       // The shell probe runs through async execFile — assert the option
       // shape (timeout + windowsHide) on the mock that observes it directly.
@@ -710,11 +724,14 @@ describe("CliAvailabilityService", () => {
       expect(refreshed.codex).toBe("missing");
 
       expect(service.getAvailability()).toEqual(refreshed);
-      // 18 primary calls (one per registry entry) + 17 BusyBox-style bare-`which`
-      // retries (the 17 agents whose mock throws a generic `Error` with no errno
-      // code — which `probeViaShell` retries without `-a` to recover
-      // BusyBox/minimal `which` builds that reject the flag).
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(35);
+      // One primary call per PATH-probed entry, plus a BusyBox-style bare-`which`
+      // retry for each agent whose mock throws a generic `Error` with no errno code —
+      // `probeViaShell` retries those without `-a` to recover BusyBox/minimal `which`
+      // builds that reject the flag. Every agent here throws that way except one, so
+      // the retries are one fewer than the probes.
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(
+        PATH_PROBED_AGENTS + (PATH_PROBED_AGENTS - 1)
+      );
     });
 
     it("works on cold start before initial check", async () => {
@@ -742,7 +759,7 @@ describe("CliAvailabilityService", () => {
 
       await service.checkAvailability();
 
-      expect(executionOrder).toHaveLength(18);
+      expect(executionOrder).toHaveLength(PATH_PROBED_AGENTS);
       expect(executionOrder).toContain("claude");
       expect(executionOrder).toContain("gemini");
       expect(executionOrder).toContain("agy");
@@ -760,7 +777,9 @@ describe("CliAvailabilityService", () => {
       expect(executionOrder).toContain("kimi");
       expect(executionOrder).toContain("amp");
       expect(executionOrder).toContain("aider");
-      expect(executionOrder).toContain("daintree-assistant");
+      // Deliberately absent: `executionOrder` records shell probes, and the bundled
+      // assistant resolves through `resolveAssistantBinary` instead of shelling out.
+      expect(executionOrder).not.toContain(DAINTREE_ASSISTANT_AGENT_ID);
     });
 
     it("deduplicates concurrent checkAvailability calls", async () => {
@@ -774,7 +793,7 @@ describe("CliAvailabilityService", () => {
 
       expect(result1).toEqual(result2);
       expect(result2).toEqual(result3);
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(18);
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(PATH_PROBED_AGENTS);
     });
 
     it("concurrent refresh calls each trigger a new check", async () => {
@@ -783,19 +802,19 @@ describe("CliAvailabilityService", () => {
       const [result1, result2] = await Promise.all([service.refresh(), service.refresh()]);
 
       expect(result1).toEqual(result2);
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(36);
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(PATH_PROBED_AGENTS * 2);
     });
 
     it("allows sequential checks after first completes", async () => {
       mockedExecFileSync.mockImplementation(() => Buffer.from(""));
 
       await service.checkAvailability();
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(18);
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(PATH_PROBED_AGENTS);
 
       vi.clearAllMocks();
 
       await service.refresh();
-      expect(mockedExecFileSync).toHaveBeenCalledTimes(18);
+      expect(mockedExecFileSync).toHaveBeenCalledTimes(PATH_PROBED_AGENTS);
     });
   });
 
@@ -1113,7 +1132,11 @@ describe("CliAvailabilityService", () => {
 
       // Every agent surfaces as blocked — the shell probe couldn't tell
       // them apart, but "blocked" is the common, actionable verdict.
-      for (const state of Object.values(result)) {
+      for (const [id, state] of Object.entries(result)) {
+        // The bundled assistant is exempt: it never shells out to `which`, so security
+        // software intercepting that probe cannot block it. Reporting it as blocked
+        // would blame the wrong thing for a binary that was simply not built.
+        if (id === DAINTREE_ASSISTANT_AGENT_ID) continue;
         expect(state).toBe("blocked");
       }
 
@@ -1131,7 +1154,11 @@ describe("CliAvailabilityService", () => {
 
       const result = await service.checkAvailability();
 
-      for (const state of Object.values(result)) {
+      for (const [id, state] of Object.entries(result)) {
+        // The bundled assistant is exempt: it never shells out to `which`, so security
+        // software intercepting that probe cannot block it. Reporting it as blocked
+        // would blame the wrong thing for a binary that was simply not built.
+        if (id === DAINTREE_ASSISTANT_AGENT_ID) continue;
         expect(state).toBe("blocked");
       }
 

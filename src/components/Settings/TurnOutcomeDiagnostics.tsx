@@ -22,6 +22,7 @@ const OUTCOME_LABEL: Record<TurnOutcomeClass, string> = {
   "tool-error": "Tool error",
   "reasoning-loop": "Reasoning loop",
   "hibernate-resume-stale": "Resume stale",
+  cancelled: "Cancelled",
   unknown: "Unknown",
 };
 
@@ -36,6 +37,7 @@ const OUTCOME_ORDER: TurnOutcomeClass[] = [
   "tool-error",
   "reasoning-loop",
   "hibernate-resume-stale",
+  "cancelled",
   "unknown",
 ];
 
