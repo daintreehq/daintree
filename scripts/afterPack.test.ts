@@ -58,7 +58,9 @@ describe("afterPack", () => {
     // Default: a well-formed app.asar of a plausible size. The guard reads it
     // through statSync (never existsSync), so the call-order chains the tests
     // below drive mockExistsSync with stay aligned.
-    mockStatSync.mockReturnValue({ size: 40 * 1024 * 1024 });
+    // mode is read by the assistant-engine guard (a non-executable binary fails at
+    // spawn with an unhelpful EACCES, so it is checked at pack time instead).
+    mockStatSync.mockReturnValue({ size: 40 * 1024 * 1024, mode: 0o755 });
     mockGetRawHeader.mockReturnValue(asarHeader());
 
     // clearAllMocks only clears call history — implementations and queued
@@ -1006,10 +1008,12 @@ describe("afterPack", () => {
       // rather than restating the number.
       mockExistsSync.mockReturnValue(true);
 
-      mockStatSync.mockReturnValue({ size: MAX_APP_ASAR_BYTES });
+      // mode rides along because the same stat mock also answers the
+      // assistant-engine guard, which checks the executable bit.
+      mockStatSync.mockReturnValue({ size: MAX_APP_ASAR_BYTES, mode: 0o755 });
       await afterPack(createContext("linux", "/build/linux"));
 
-      mockStatSync.mockReturnValue({ size: MAX_APP_ASAR_BYTES + 1 });
+      mockStatSync.mockReturnValue({ size: MAX_APP_ASAR_BYTES + 1, mode: 0o755 });
       await expect(afterPack(createContext("linux", "/build/linux"))).rejects.toThrow(OVER_CEILING);
     });
 
@@ -1116,6 +1120,97 @@ describe("afterPack", () => {
 
       await expect(afterPack(createContext("darwin", "/build/mac"))).rejects.toThrow(
         /onnxruntime-node not found/
+      );
+    });
+  });
+
+  describe("assistant engine guard", () => {
+    // The engine ships as extraResources selected per platform by an `${arch}`
+    // template. These pin the two ways that selection can go wrong, neither of which
+    // is visible in a --dir build: shipping nothing, and shipping everything.
+    const linuxAssistant = "/build/linux/resources/assistant/daintree-assistant";
+
+    it("passes when exactly the platform's own binary is present", async () => {
+      mockExistsSync.mockReturnValue(true);
+      mockReaddirSync.mockImplementation((dir: string) =>
+        String(dir).endsWith("assistant") ? ["daintree-assistant"] : []
+      );
+
+      await expect(afterPack(createContext("linux", "/build/linux"))).resolves.toBeUndefined();
+    });
+
+    it("fails the pack when foreign-platform binaries were copied in", async () => {
+      // The regression this exists for: a widened glob or a directory copy puts all
+      // six targets in the installer. ~75MB of executables the app cannot run, and on
+      // macOS a pile of unsigned foreign-arch Mach-O binaries handed to notarization.
+      mockExistsSync.mockReturnValue(true);
+      mockReaddirSync.mockImplementation((dir: string) =>
+        String(dir).endsWith("assistant")
+          ? [
+              "daintree-assistant",
+              "daintree-assistant-darwin-arm64",
+              "daintree-assistant-win32-x64.exe",
+            ]
+          : []
+      );
+
+      await expect(afterPack(createContext("linux", "/build/linux"))).rejects.toThrow(
+        /foreign assistant binaries/
+      );
+    });
+
+    it("ignores unrelated files sitting beside the binary", async () => {
+      // The guard matches on the assistant name prefix rather than "anything that is
+      // not the expected file", so a future resource layout cannot trip it by accident.
+      mockExistsSync.mockReturnValue(true);
+      mockReaddirSync.mockImplementation((dir: string) =>
+        String(dir).endsWith("assistant") ? ["daintree-assistant", "README.txt"] : []
+      );
+
+      await expect(afterPack(createContext("linux", "/build/linux"))).resolves.toBeUndefined();
+    });
+
+    it("fails the pack when the engine is missing entirely", async () => {
+      mockExistsSync.mockImplementation((p: string) => !String(p).includes("assistant"));
+
+      await expect(afterPack(createContext("linux", "/build/linux"))).rejects.toThrow(
+        /assistant engine/
+      );
+    });
+
+    it("fails the pack on a truncated binary", async () => {
+      // A placeholder or partial file passes the name check and would otherwise fail
+      // at first launch as an opaque spawn error.
+      mockExistsSync.mockReturnValue(true);
+      mockReaddirSync.mockImplementation((dir: string) =>
+        String(dir).endsWith("assistant") ? ["daintree-assistant"] : []
+      );
+      mockStatSync.mockImplementation((p: string) =>
+        String(p) === linuxAssistant
+          ? { size: 1024, mode: 0o755 }
+          : { size: 40 * 1024 * 1024, mode: 0o755 }
+      );
+
+      await expect(afterPack(createContext("linux", "/build/linux"))).rejects.toThrow(
+        /implausibly small/
+      );
+    });
+
+    it("fails the pack when the binary lost its executable bit", async () => {
+      // Symptom at runtime is EACCES on spawn, which names neither the file nor the
+      // cause — so it is worth catching while the packager still has context.
+      mockExistsSync.mockReturnValue(true);
+      mockReaddirSync.mockImplementation((dir: string) =>
+        String(dir).endsWith("assistant") ? ["daintree-assistant"] : []
+      );
+      mockStatSync.mockImplementation((p: string) =>
+        String(p) === linuxAssistant
+          ? { size: 15 * 1024 * 1024, mode: 0o644 }
+          : { size: 40 * 1024 * 1024, mode: 0o755 }
+      );
+
+      await expect(afterPack(createContext("linux", "/build/linux"))).rejects.toThrow(
+        /not executable/
       );
     });
   });

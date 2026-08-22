@@ -45,7 +45,7 @@
     "build:app": "tsc && vite build && npm run build:main",
     "build:e2e": "tsc && vite build && cross-env NODE_ENV=test node scripts/build-main.mjs",
     "build:e2e:bench": "tsc && cross-env DAINTREE_RENDER_PROBE=1 vite build && cross-env NODE_ENV=test node scripts/build-main.mjs",
-    "package": "npm run build && electron-builder",
+    "package": "npm run build && npm run build:assistant:all && electron-builder",
     "package:mac": "npm run build && electron-builder --mac",
     "package:win": "npm run build && electron-builder --win appx nsis",
     "package:win:nsis": "npm run build && electron-builder --win nsis",
@@ -154,7 +154,9 @@
     "codegen:plugin-actions": "tsx scripts/codegen/plugin-actions-doc.ts",
     "check:plugin-actions": "tsx scripts/codegen/plugin-actions-doc.ts --check",
     "check:plugin-schema": "tsx scripts/codegen/plugin-json-schema.ts --check",
-    "check:keybindings": "tsx scripts/codegen/keyboard-shortcuts-doc.ts --check"
+    "check:keybindings": "tsx scripts/codegen/keyboard-shortcuts-doc.ts --check",
+    "build:assistant": "node scripts/build-assistant.mjs",
+    "build:assistant:all": "node scripts/build-assistant.mjs --all"
   },
   "dependencies": {
     "@parcel/watcher": "2.6.0",

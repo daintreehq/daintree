@@ -82,7 +82,11 @@ const {
     width: 380,
     terminalId: null as string | null,
     agentId: null as string | null,
-    preferredAgentId: null as string | null,
+    // "claude" rather than null: these suites exercise the PTY LAUNCH path, and the
+    // Daintree Assistant is now the default surface when no agent is chosen — a null
+    // preference renders the native panel and never launches a terminal at all. Naming
+    // a terminal-backed agent keeps each test about the thing it is testing.
+    preferredAgentId: "claude" as string | null,
     // Consent granted by default (#10699) so the existing auto-launch coverage
     // exercises the downstream launch wiring; the consent gate itself is
     // unit-tested in HelpSessionController.test.ts.
@@ -450,7 +454,9 @@ function resetState() {
   helpPanelState.width = 380;
   helpPanelState.terminalId = null;
   helpPanelState.agentId = null;
-  helpPanelState.preferredAgentId = null;
+  // See the note on the initial state: null now means the NATIVE panel, so the
+  // PTY-launch suites reset to a terminal-backed agent.
+  helpPanelState.preferredAgentId = "claude";
   helpPanelState.autoLaunchEnabled = true;
   helpPanelState.sessionId = null;
   helpPanelState.introDismissed = true;
@@ -576,6 +582,18 @@ beforeEach(() => {
   Object.defineProperty(globalThis, "window", {
     value: {
       electron: {
+        // The native assistant panel mounts whenever no terminal-backed agent is
+        // chosen, so the HelpPanel harness has to model its IPC namespace. Without
+        // it the panel throws on subscribe and every test in the file fails for a
+        // reason that has nothing to do with what it asserts.
+        assistantHost: {
+          start: vi.fn().mockResolvedValue({ sessionId: "assistant-test-session" }),
+          send: vi.fn().mockResolvedValue({ delivered: true }),
+          stop: vi.fn().mockResolvedValue({ stopped: true }),
+          onEvent: vi.fn(() => () => {}),
+          onSequenceGap: vi.fn(() => () => {}),
+          onExit: vi.fn(() => () => {}),
+        },
         help: {
           getFolderPath: mockGetFolderPath,
           markTerminal: mockMarkTerminal,
@@ -636,7 +654,7 @@ beforeEach(() => {
   Object.defineProperty(document, "hidden", { configurable: true, get: () => false });
 });
 
-describe("HelpPanel — single-supported-agent launch (handleSelectAgent)", () => {
+describe("HelpPanel — preferred-agent launch (handleSelectAgent)", () => {
   it("does not auto-launch when document.hidden is true (issue #7201 guard)", async () => {
     Object.defineProperty(document, "hidden", { configurable: true, get: () => true });
     mockGetFolderPath.mockResolvedValue("/help");
@@ -993,7 +1011,7 @@ describe("HelpPanel — intro banner visibility", () => {
     expect(container.querySelector('button[aria-label="Dismiss"]')).toBeNull();
   });
 
-  it("does not render the banner on the picker view (no terminal)", () => {
+  it("does not render the banner on the idle empty state (no terminal)", () => {
     helpPanelState.terminalId = null;
     helpPanelState.introDismissed = false;
 
