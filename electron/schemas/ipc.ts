@@ -1045,7 +1045,15 @@ const TurnOutcomeClassSchema = z.enum([
 const AssistantTurnRoleSchema = z.enum(["user", "assistant"]);
 
 /** Lifecycle of one announced tool call. "waiting" means blocked on the USER. */
-const AssistantToolStateSchema = z.enum(["queued", "active", "waiting", "done", "failed"]);
+const AssistantToolStateSchema = z.enum([
+  "queued",
+  "active",
+  "waiting",
+  "done",
+  "failed",
+  "cancelled",
+  "not-run",
+]);
 
 const AssistantHostShutdownReasonSchema = z.enum(["hibernate", "revoke", "error", "exit"]);
 
@@ -1130,6 +1138,16 @@ export const AssistantHostEventSchema = z.discriminatedUnion("type", [
     backend: z.string().max(2048).optional(),
     routing: z.string().max(500).optional(),
     logFile: z.string().max(4096).optional(),
+    commands: z
+      .array(
+        z.object({
+          name: z.string().max(64),
+          syntax: z.string().max(120),
+          palette: z.string().max(200),
+        })
+      )
+      .max(200)
+      .optional(),
   }),
   z.object({
     ...hostEventBase,
@@ -1220,6 +1238,9 @@ export const AssistantHostEventSchema = z.discriminatedUnion("type", [
     errorCode: z.string().optional(),
     turnId: IdString.optional(),
     asyncId: IdString.optional(),
+    asyncTitle: z.string().max(500).optional(),
+    summary: z.string().max(2000).optional(),
+    errorMessage: z.string().max(2000).optional(),
   }),
   z.object({
     ...hostEventBase,
@@ -1255,6 +1276,47 @@ export const AssistantHostEventSchema = z.discriminatedUnion("type", [
     ...hostEventBase,
     type: z.literal("model:rate-limited"),
     turnId: IdString.optional(),
+  }),
+  z.object({
+    ...hostEventBase,
+    type: z.literal("mcp:status"),
+    connected: z.boolean(),
+    toolCount: z.number().int().min(0).max(10_000).optional(),
+    error: z.string().max(2000).optional(),
+  }),
+  z.object({
+    ...hostEventBase,
+    type: z.literal("command:result"),
+    command: z.string().max(2000),
+    text: z.string().max(200_000),
+    quit: z.boolean().optional(),
+    unknown: z.boolean().optional(),
+    turnId: IdString.optional(),
+  }),
+  z.object({
+    ...hostEventBase,
+    type: z.literal("question:requested"),
+    questionId: IdString,
+    toolCallId: IdString.optional(),
+    turnId: IdString.optional(),
+    question: z.string().max(4000),
+    // 2–26 matches the engine's own bound: labels are single letters A–Z.
+    options: z
+      .array(z.object({ label: z.string().max(4), text: z.string().max(500) }))
+      .min(2)
+      .max(26),
+    default: z.number().int().min(0).max(25),
+    requestedAt: Timestamp,
+  }),
+  z.object({
+    ...hostEventBase,
+    type: z.literal("question:answered"),
+    questionId: IdString,
+    turnId: IdString.optional(),
+    // -1 means dismissed without choosing.
+    index: z.number().int().min(-1).max(25),
+    label: z.string().max(4).optional(),
+    text: z.string().max(500).optional(),
   }),
   z.object({
     ...hostEventBase,
@@ -1304,6 +1366,19 @@ export const AssistantHostCommandSchema = z.discriminatedUnion("type", [
     sessionId: IdString,
     approvalId: IdString,
     decision: McpConfirmationDecisionSchema,
+  }),
+  z.object({
+    type: z.literal("command"),
+    sessionId: IdString,
+    line: z.string().min(1).max(2000),
+  }),
+  z.object({
+    type: z.literal("question:answer"),
+    sessionId: IdString,
+    questionId: IdString,
+    // -1 dismisses. Bounded to the engine's option ceiling so a nonsense index is
+    // refused at the boundary rather than parked against a live dispatch.
+    index: z.number().int().min(-1).max(25),
   }),
   z.object({
     type: z.literal("interrupt"),

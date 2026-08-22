@@ -51,10 +51,28 @@ let sessionId = "";
 let turnCounter = 0;
 /** Approvals this process is parked on: approvalId → resolver. */
 const pending = new Map();
+const pendingQuestions = new Map();
+/** Announced-but-unsettled calls, so an interrupt can terminalize them like the engine. */
+const liveTools = new Map();
+
+/** Parks until the host answers, mirroring the engine's blocking AskChoice hook. */
+function awaitQuestion(questionId) {
+  return new Promise((resolve) => pendingQuestions.set(questionId, resolve));
+}
 let interrupted = false;
 
 /** Writes one NDJSON frame, stamping the next sequence number. */
 function emit(event) {
+  // Mirror the engine's own tracking of announced-but-unsettled calls, so an interrupt
+  // here terminalizes exactly what one would terminalize there.
+  if (event.type === "tool:batch") {
+    for (const c of event.calls ?? []) liveTools.set(c.toolCallId, "queued");
+  } else if (event.type === "tool:state") {
+    if (event.state === "done" || event.state === "failed") liveTools.delete(event.toolCallId);
+    else liveTools.set(event.toolCallId, event.state);
+  } else if (event.type === "tool:settled") {
+    liveTools.delete(event.toolCallId);
+  }
   seq += 1;
   process.stdout.write(`${JSON.stringify({ ...event, sessionId, seq })}\n`);
 }
@@ -238,6 +256,7 @@ const SCENARIOS = {
         toolId: "git.push",
         durationMs: 5,
         result: "error",
+        errorMessage: "You declined the push, so nothing was sent to origin.",
         severity: "warning",
         errorCode: "USER_DECLINED",
         turnId,
@@ -321,6 +340,7 @@ const SCENARIOS = {
       result: "error",
       severity: "error",
       errorCode: "MCP_UNREACHABLE",
+      errorMessage: "The Daintree control plane is not connected, so no agent could be spawned.",
       turnId,
     });
     emit({ type: "tool:state", toolCallId: "c1", state: "failed", turnId });
@@ -328,6 +348,47 @@ const SCENARIOS = {
     const answer = "I couldn't reach the orchestration tools, so this is from memory only.";
     await streamText(turnId, answer);
     emit({ type: "turn:end", turnId, endedAt: now(), outcome: "hedged", content: answer });
+  },
+
+  /**
+   * The model asks the user a multiple-choice question and the turn BLOCKS.
+   *
+   * The engine assigns the letters, so they are sent rather than derived — a surface
+   * that generated its own would disagree with the transcript and the debug log.
+   */
+  async question(turnId) {
+    emit({ type: "turn:phase", turnId, phase: "awaiting-question" });
+    emit({
+      type: "question:requested",
+      questionId: "qst_1",
+      toolCallId: "c1",
+      turnId,
+      question: "Which worktree should the migration run in?",
+      options: [
+        { label: "A", text: "feature/db-migrate" },
+        { label: "B", text: "main" },
+        { label: "C", text: "Create a new worktree" },
+      ],
+      default: 0,
+      requestedAt: now(),
+    });
+
+    const index = await awaitQuestion("qst_1");
+    const options = ["feature/db-migrate", "main", "Create a new worktree"];
+    const chosen = index >= 0 && index < options.length;
+    emit({
+      type: "question:answered",
+      questionId: "qst_1",
+      turnId,
+      index: chosen ? index : -1,
+      ...(chosen ? { label: ["A", "B", "C"][index], text: options[index] } : {}),
+    });
+
+    const answer = chosen
+      ? `Running the migration in ${options[index]}.`
+      : "You closed the question, so I'll leave the migration alone.";
+    await streamText(turnId, answer);
+    emit({ type: "turn:end", turnId, endedAt: now(), outcome: "answered", content: answer });
   },
 
   /** An accepted async call: settled, but the work continues in the background. */
@@ -355,6 +416,7 @@ const SCENARIOS = {
       result: "success",
       severity: "info",
       asyncId: "asy_1",
+      asyncTitle: "migrate the schema in wt_forge",
       turnId,
     });
     // The real engine emits `tool:state(done)` after EVERY successful result, async or
@@ -364,6 +426,7 @@ const SCENARIOS = {
     emit({ type: "tool:state", toolCallId: "c1", state: "done", turnId });
     const answer = "Agent is running in wt_forge. I'll report back when it finishes.";
     await streamText(turnId, answer);
+    emit({ type: "cost", turnId, total: 0.0412, complete: true });
     emit({ type: "turn:end", turnId, endedAt: now(), outcome: "answered", content: answer });
   },
 
@@ -400,11 +463,28 @@ const SCENARIOS = {
    * rejected. Never leave an outcome untested just because it is the sad path.
    */
   async cancellable(turnId) {
+    // Two calls in different states, so an interrupt has one of each to terminalize:
+    // one that WAS running, and one announced but never started. The difference is
+    // what tells a reader what the stop actually interrupted.
+    emit({
+      type: "tool:batch",
+      turnId,
+      calls: [
+        { toolCallId: "c1", toolId: "agent.run", argsSummary: '{"task":"migrate"}', danger: false },
+        { toolCallId: "c2", toolId: "git.status", argsSummary: "{}", danger: false },
+      ],
+    });
+    emit({ type: "tool:state", toolCallId: "c1", state: "active", turnId });
     emit({ type: "turn:phase", turnId, phase: "generating" });
     await streamText(turnId, "This turn is long enough to interrupt. ".repeat(20), {
       chunk: 8,
       delay: 40,
     });
+    // Held open on a timer the SPEED multiplier does not scale. Every other delay here
+    // is scaled so the suite runs fast, but this scenario exists to be interrupted —
+    // at speed 0 it would finish before a test could press Stop, and the interrupt
+    // would land on a turn that had already ended.
+    if (!interrupted) await new Promise((r) => setTimeout(r, 30_000));
     if (!interrupted) {
       emit({ type: "turn:end", turnId, endedAt: now(), outcome: "answered", content: "finished" });
     }
@@ -471,8 +551,53 @@ async function handleCommand(cmd) {
       }
       return;
     }
+    case "command": {
+      // `/scenario <name>` is this fake's OWN command, and it must live on the command
+      // path rather than the prompt path: the panel routes every slash line as a
+      // command now, so a scenario trigger that only worked as a prompt would be
+      // testing a route the product no longer takes.
+      if (cmd.line.startsWith("/scenario")) {
+        if (busy) return;
+        busy = true;
+        await runTurn(cmd.line);
+        busy = false;
+        return;
+      }
+      // Routed, never answered by the "model" — the whole point of the command path.
+      const known = ["/status", "/help", "/clear", "/reconnect", "/backend", "/watchers", "/inbox"];
+      if (!known.includes(cmd.line.split(/\s+/)[0])) {
+        emit({ type: "command:result", command: cmd.line, text: "", unknown: true });
+        return;
+      }
+      emit({
+        type: "command:result",
+        command: cmd.line,
+        text: `backend  local (http://127.0.0.1:8473)\ntier     operator`,
+      });
+      return;
+    }
+    case "question:answer": {
+      const resolve = pendingQuestions.get(cmd.questionId);
+      if (resolve) {
+        pendingQuestions.delete(cmd.questionId);
+        resolve(cmd.index);
+      }
+      return;
+    }
     case "interrupt": {
       interrupted = true;
+      // Terminalize outstanding calls BEFORE closing the turn, exactly as the engine
+      // does: a consumer applying events in order must never see a turn close with
+      // calls still live.
+      for (const [id, state] of liveTools) {
+        emit({
+          type: "tool:state",
+          toolCallId: id,
+          state: state === "active" || state === "waiting" ? "cancelled" : "not-run",
+          turnId: `turn_${turnCounter}`,
+        });
+      }
+      liveTools.clear();
       emit({
         type: "turn:end",
         turnId: `turn_${turnCounter}`,
@@ -539,6 +664,13 @@ rl.on("line", (line) => {
       type: "host:ready",
       protocolVersion: PROTOCOL_VERSION,
       version: "fake-engine-1.0.0",
+      // The catalog the engine sends at ready, so the panel's palette matches the
+      // command set the engine will actually accept.
+      commands: [
+        { name: "status", syntax: "/status", palette: "runtime and connections" },
+        { name: "watchers", syntax: "/watchers", palette: "supervised agents" },
+        { name: "inbox", syntax: "/inbox [sev]", palette: "items requiring attention" },
+      ],
       autoApprove: process.env.FAKE_ENGINE_AUTO_APPROVE === "1",
       ...(msg.resumeSessionId ? { resumedSessionId: msg.resumeSessionId } : {}),
     });

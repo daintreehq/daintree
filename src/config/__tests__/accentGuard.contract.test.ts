@@ -128,6 +128,13 @@ const KNOWN_CLOSED_ISSUES = new Set([
 // Legitimate accent usage that will persist after all cleanup PRs land.
 // Each entry must carry a brief rationale.
 const DURABLE_ALLOWLIST = new Set([
+  // Assistant question sheet title. The sheet REPLACES the composer while a decision
+  // blocks the turn, so the Send button — the region's usual accent anchor — is not on
+  // screen at the same time. The title is then the single load-bearing signal in the
+  // region, and it is the one thing that must read as Daintree asking rather than the
+  // model talking.
+  "src/components/AssistantPanel/AssistantQuestionCard.tsx",
+
   // Theme browser accent display (theme content, not app chrome)
   "src/components/ThemeBrowser/ThemeBrowser.tsx",
 
