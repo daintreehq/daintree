@@ -257,3 +257,132 @@ describe("async tool rows survive the engine's trailing done", () => {
     expect(useAssistantStore.getState().toolCalls["c1"]?.state).toBe("failed");
   });
 });
+
+describe("mid-turn input is moved into the turn, not copied beside it", () => {
+  function startAssistantTurn(store: ReturnType<typeof useAssistantStore.getState>) {
+    store.applyEvent({
+      sessionId: "s1",
+      seq: 1,
+      type: "turn:start",
+      turnId: "t1",
+      role: "assistant",
+      startedAt: 1,
+    } as never);
+  }
+
+  it("queues text typed during a turn and clears it once the engine folds it in", () => {
+    const store = useAssistantStore.getState();
+    store.reset("s1");
+    startAssistantTurn(store);
+
+    expect(store.appendUserTurn("also check the tests")).toBeNull();
+    expect(useAssistantStore.getState().queuedInterjection).toBe("also check the tests");
+    // Critically: NOT a second user turn. Appending one here is what showed the same
+    // message twice, the second time below the answer it was meant to steer.
+    expect(useAssistantStore.getState().turns.filter((t) => t.role === "user")).toHaveLength(0);
+
+    store.applyEvent({
+      sessionId: "s1",
+      seq: 2,
+      type: "turn:interjection",
+      turnId: "t1",
+      text: "also check the tests",
+    } as never);
+
+    const after = useAssistantStore.getState();
+    expect(after.queuedInterjection).toBeNull();
+    expect(after.turns[0]?.interjections).toEqual(["also check the tests"]);
+    expect(after.turns.filter((t) => t.role === "user")).toHaveLength(0);
+  });
+
+  it("promotes text the turn ended without ever folding in", () => {
+    const store = useAssistantStore.getState();
+    store.reset("s1");
+    startAssistantTurn(store);
+    store.appendUserTurn("never folded in");
+
+    store.applyEvent({
+      sessionId: "s1",
+      seq: 2,
+      type: "turn:end",
+      turnId: "t1",
+      endedAt: 2,
+      outcome: "answered",
+    } as never);
+
+    const after = useAssistantStore.getState();
+    expect(after.queuedInterjection).toBeNull();
+    // Shown late rather than lost: dropping something the user typed is worse.
+    expect(after.turns.at(-1)).toMatchObject({ role: "user", text: "never folded in" });
+  });
+
+  it("still appends a normal user turn when nothing is running", () => {
+    const store = useAssistantStore.getState();
+    store.reset("s1");
+    expect(store.appendUserTurn("first message")).toMatch(/^local_/);
+    expect(useAssistantStore.getState().queuedInterjection).toBeNull();
+    expect(useAssistantStore.getState().turns).toHaveLength(1);
+  });
+});
+
+describe("a turn keeps the order it happened in", () => {
+  function ev(store: ReturnType<typeof useAssistantStore.getState>, e: Record<string, unknown>) {
+    store.applyEvent({ sessionId: "s1", seq: 1, ...e } as never);
+  }
+
+  it("preserves prose written BEFORE a tool call", () => {
+    const store = useAssistantStore.getState();
+    store.reset("s1");
+    ev(store, { type: "turn:start", turnId: "t1", role: "assistant", startedAt: 1 });
+    ev(store, { type: "turn:token", turnId: "t1", chunk: "Let me check the worktrees." });
+    ev(store, {
+      type: "tool:batch",
+      turnId: "t1",
+      calls: [{ toolCallId: "c1", toolId: "worktree.list", argsSummary: "{}", danger: false }],
+    });
+    ev(store, { type: "turn:token", turnId: "t1", chunk: "There are three." });
+    // The engine's authoritative content is the FINAL ROUND only — it hands
+    // AssistantEnd `result.Message.Content`, not the whole turn.
+    ev(store, {
+      type: "turn:end",
+      turnId: "t1",
+      endedAt: 2,
+      outcome: "answered",
+      content: "There are three worktrees.",
+    });
+
+    const turn = useAssistantStore.getState().turns[0]!;
+    expect(turn.segments.map((seg) => seg.kind)).toEqual(["text", "tools", "text"]);
+    // The opening line survives. Replacing the whole turn with the final round's
+    // content deleted the part that explained why the tool was called.
+    expect(turn.segments[0]).toEqual({ kind: "text", text: "Let me check the worktrees." });
+    // And the final round is corrected to the authoritative text.
+    expect(turn.segments[2]).toEqual({ kind: "text", text: "There are three worktrees." });
+  });
+
+  it("places an interjection where the engine folded it in", () => {
+    const store = useAssistantStore.getState();
+    store.reset("s1");
+    ev(store, { type: "turn:start", turnId: "t1", role: "assistant", startedAt: 1 });
+    ev(store, { type: "turn:token", turnId: "t1", chunk: "Starting." });
+    ev(store, { type: "turn:interjection", turnId: "t1", text: "use main instead" });
+    ev(store, { type: "turn:token", turnId: "t1", chunk: " Using main." });
+
+    const turn = useAssistantStore.getState().turns[0]!;
+    expect(turn.segments.map((seg) => seg.kind)).toEqual(["text", "interjection", "text"]);
+  });
+
+  it("still exposes the whole answer as joined text", () => {
+    const store = useAssistantStore.getState();
+    store.reset("s1");
+    ev(store, { type: "turn:start", turnId: "t1", role: "assistant", startedAt: 1 });
+    ev(store, { type: "turn:token", turnId: "t1", chunk: "one " });
+    ev(store, {
+      type: "tool:batch",
+      turnId: "t1",
+      calls: [{ toolCallId: "c1", toolId: "x", argsSummary: "{}", danger: false }],
+    });
+    ev(store, { type: "turn:token", turnId: "t1", chunk: "two" });
+    expect(useAssistantStore.getState().turns[0]?.text).toBe("one two");
+  });
+});

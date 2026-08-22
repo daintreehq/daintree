@@ -93,9 +93,15 @@ async function ask(window: AppContext["window"], text: string) {
   // Now it must be live — the draft is non-empty and the session is ready.
   await expect(sendButton(window)).toBeEnabled();
   await sendButton(window).click();
-  // The composer clears only on ACCEPTANCE, so an empty box is the proof the prompt
-  // was taken rather than refused.
-  await expect(input).toHaveValue("", { timeout: T_MEDIUM });
+  // The composer clears only on ACCEPTANCE, so an empty box is proof the prompt was
+  // taken rather than refused. It can also be REPLACED outright: a question sheet
+  // takes the composer's place while the turn is blocked, and a vanished composer is
+  // the same proof — the draft was accepted and the turn moved on.
+  await expect
+    .poll(async () => ((await input.count()) === 0 ? "" : await input.inputValue()), {
+      timeout: T_MEDIUM,
+    })
+    .toBe("");
 }
 
 test.describe.serial("Assistant: native panel", () => {
@@ -204,6 +210,109 @@ test.describe.serial("Assistant: native panel", () => {
     // completed that is still running.
     await expect(window.getByText(/Running in background/)).toBeVisible({ timeout: T_MEDIUM });
     await expect(window.getByText(/still running/)).toBeVisible();
+    // Named, because the completion comes back as its own wake turn and never as a
+    // late result for this row.
+    await expect(window.getByText(/migrate the schema in wt_forge/)).toBeVisible();
+  });
+
+  test("stopping a turn terminalizes its calls instead of leaving them Running", async () => {
+    const { window } = ctx;
+    await openAssistant(window);
+    await ask(window, "/scenario cancellable");
+
+    // Batches collapse by default, so open the group to see the individual rows.
+    const group = window.locator("#daintree-assistant-panel").getByRole("button", {
+      name: /2 actions/,
+    });
+    await expect(group).toBeVisible({ timeout: T_MEDIUM });
+    if ((await group.getAttribute("aria-expanded")) !== "true") await group.click();
+
+    await expect(window.getByText("Running", { exact: true })).toBeVisible({ timeout: T_MEDIUM });
+    await window
+      .locator("#daintree-assistant-panel")
+      .getByRole("button", { name: "Stop", exact: true })
+      .click();
+
+    // The call that WAS running, and the one that never started, settle differently:
+    // that difference is what tells a reader what the stop actually interrupted.
+    await expect(window.getByText("Cancelled", { exact: true })).toBeVisible({ timeout: T_MEDIUM });
+    await expect(window.getByText("Not run", { exact: true })).toBeVisible();
+    // Nothing is left describing work that is not happening.
+    await expect(window.getByText("Running", { exact: true })).toHaveCount(0);
+  });
+
+  test("a failed call says what went wrong, not just a code", async () => {
+    const { window } = ctx;
+    await openAssistant(window);
+    await ask(window, "/scenario degraded");
+
+    // The engine's own sentence. A bare error code tells a reader that something
+    // failed, not what — the cockpit led with the message for exactly that reason.
+    await expect(window.getByText(/control plane is not connected/)).toBeVisible({
+      timeout: T_MEDIUM,
+    });
+  });
+
+  test("a slash command runs instead of becoming a prompt", async () => {
+    const { window } = ctx;
+    await openAssistant(window);
+    await ask(window, "/status");
+
+    // The command's OUTPUT, which only the command path can produce.
+    await expect(window.getByText(/tier\s+operator/)).toBeVisible({ timeout: T_MEDIUM });
+    // And no turn was spent asking the model about the word "status".
+    await expect(window.getByText(/Analyzing request|Writing/)).toHaveCount(0);
+  });
+
+  test("typing a slash offers the engine's own command set", async () => {
+    const { window } = ctx;
+    await openAssistant(window);
+    await composer(window).fill("/");
+
+    const palette = window.getByRole("listbox", { name: "Commands" });
+    await expect(palette).toBeVisible({ timeout: T_MEDIUM });
+    // Each entry says what the command DOES: the operations surface — inbox, watchers,
+    // timers, workflows — is reachable only through these, so bare names would hide it
+    // behind knowing what to type.
+    await expect(palette.getByText("supervised agents")).toBeVisible();
+
+    // Filters as you type, and running one takes the command path.
+    await composer(window).fill("/wat");
+    await expect(palette.getByRole("option")).toHaveCount(1);
+    await palette.getByRole("option").first().click();
+    await expect(window.getByText(/tier\s+operator/)).toBeVisible({ timeout: T_MEDIUM });
+  });
+
+  test("an unknown slash command says so rather than asking the model", async () => {
+    const { window } = ctx;
+    await openAssistant(window);
+    await ask(window, "/nonsense");
+
+    await expect(window.getByText(/isn't a command/)).toBeVisible({ timeout: T_MEDIUM });
+  });
+
+  test("a multiple-choice question blocks the turn until it is answered", async () => {
+    const { window } = ctx;
+    await openAssistant(window);
+    await ask(window, "/scenario question");
+
+    const card = window.getByRole("group", { name: "Question" });
+    await expect(card).toBeVisible({ timeout: T_MEDIUM });
+
+    // The sheet REPLACES the composer while the dispatch is parked. A live composer
+    // beside it would offer a way to type at an assistant that cannot read.
+    await expect(composer(window)).toHaveCount(0);
+
+    // Letters come from the ENGINE. A surface that generated its own would disagree
+    // with the transcript and the debug log about which option "B" was.
+    await expect(card.getByRole("option", { name: /A\s+feature\/db-migrate/ })).toBeVisible();
+    await card.getByRole("option", { name: /B\s+main/ }).click();
+
+    await expect(window.getByText(/Running the migration in main/)).toBeVisible({
+      timeout: T_MEDIUM,
+    });
+    // The composer comes back once the turn is no longer blocked.
+    await expect(composer(window)).toBeVisible();
   });
 
   /**
