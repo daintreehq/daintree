@@ -758,21 +758,52 @@ describe("hydrateTabGroups — repair never elects a deleted worktree (#11911)",
     }));
   });
 
-  it("prefers a live worktree even when the deleted one holds the majority", () => {
+  it("splits survivors out of a mixed group instead of reparenting either side", () => {
+    const survivorA = createMockTerminal("t1", "wt-dead", "grid");
+    const survivorB = createMockTerminal("t2", "wt-dead", "grid");
+    const respawned = createMockTerminal("t3", "wt-live", "grid");
+    const alsoLive = createMockTerminal("t4", "wt-live", "grid");
+    setTerminals([survivorA, survivorB, respawned, alsoLive]);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+
+    usePanelStore
+      .getState()
+      .hydrateTabGroups([createMockTabGroup("g1", "wt-dead", ["t1", "t2", "t3", "t4"])]);
+
+    const state = usePanelStore.getState();
+    // Neither side is relabelled. Electing the deleted worktree would hand the
+    // freshly respawned panels to the sweep; electing the live one would
+    // relabel real survivors, empty their row and exempt them from the
+    // cleanup that is supposed to retire them.
+    expect(state.panelsById["t1"]?.worktreeId).toBe("wt-dead");
+    expect(state.panelsById["t2"]?.worktreeId).toBe("wt-dead");
+    expect(state.panelsById["t3"]?.worktreeId).toBe("wt-live");
+    expect(state.panelsById["t4"]?.worktreeId).toBe("wt-live");
+    // The group keeps only the coherent live half.
+    const group = state.tabGroups.get("g1");
+    expect(group?.worktreeId).toBe("wt-live");
+    expect(group?.panelIds.sort()).toEqual(["t3", "t4"]);
+    warn.mockRestore();
+  });
+
+  it("dissolves the group when the split leaves it with one member", () => {
     const survivorA = createMockTerminal("t1", "wt-dead", "grid");
     const survivorB = createMockTerminal("t2", "wt-dead", "grid");
     const respawned = createMockTerminal("t3", "wt-live", "grid");
     setTerminals([survivorA, survivorB, respawned]);
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
 
     usePanelStore
       .getState()
       .hydrateTabGroups([createMockTabGroup("g1", "wt-dead", ["t1", "t2", "t3"])]);
 
     const state = usePanelStore.getState();
-    // 2-vs-1 in favour of the deleted worktree, and it still loses: the sweep
-    // would otherwise take t3 with it.
-    expect(state.tabGroups.get("g1")?.worktreeId).toBe("wt-live");
+    expect(state.tabGroups.has("g1")).toBe(false);
+    // Every panel still keeps the worktree it restored onto.
+    expect(state.panelsById["t1"]?.worktreeId).toBe("wt-dead");
+    expect(state.panelsById["t2"]?.worktreeId).toBe("wt-dead");
     expect(state.panelsById["t3"]?.worktreeId).toBe("wt-live");
+    warn.mockRestore();
   });
 
   it("leaves an all-survivor group on its deleted worktree", () => {

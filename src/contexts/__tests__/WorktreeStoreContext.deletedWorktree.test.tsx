@@ -660,6 +660,65 @@ describe("WorktreeStoreProvider — worktrees dropped without a removal event (#
     expect(useWorktreeSelectionStore.getState().deletedWorktrees.has("wt-2")).toBe(true);
   });
 
+  it("withdraws the row when a live worktree turns up carrying its handle", async () => {
+    const { store } = await renderProvider();
+    act(() => {
+      store
+        .getState()
+        .applySnapshot(
+          [makeWorktree("wt-main"), makeWorktree("/old/feature", { gitDir: "/repo/.git/wt/f" })],
+          nextV()
+        );
+    });
+    setPanels([{ id: "agent-a", worktreeId: "/old/feature" }]);
+
+    // Production ordering for a `git worktree move`: the host tears the old
+    // monitor down and announces the removal BEFORE the replacement monitor
+    // reports, so the adoption-time handle check has nothing to match against
+    // and a row is recorded.
+    act(() => {
+      store.getState().applyRemove("/old/feature", nextV());
+    });
+    expect(useWorktreeSelectionStore.getState().deletedWorktrees.has("/old/feature")).toBe(true);
+
+    // The replacement arrives a moment later under a new path-derived id but
+    // the same admin-dir handle. The row has to be withdrawn — otherwise it
+    // hands still-live agents to the cleanup sweep 60 seconds on.
+    act(() => {
+      store
+        .getState()
+        .applyUpdate(makeWorktree("/new/feature", { gitDir: "/repo/.git/wt/f" }), nextV());
+    });
+
+    expect(useWorktreeSelectionStore.getState().deletedWorktrees.has("/old/feature")).toBe(false);
+  });
+
+  it("keeps a row whose handle no live worktree claims", async () => {
+    const { store } = await renderProvider();
+    act(() => {
+      store
+        .getState()
+        .applySnapshot(
+          [makeWorktree("wt-main"), makeWorktree("/old/feature", { gitDir: "/repo/.git/wt/f" })],
+          nextV()
+        );
+    });
+    setPanels([{ id: "agent-a", worktreeId: "/old/feature" }]);
+
+    act(() => {
+      store.getState().applyRemove("/old/feature", nextV());
+    });
+    act(() => {
+      store
+        .getState()
+        .applyUpdate(makeWorktree("/other", { gitDir: "/repo/.git/wt/other" }), nextV());
+    });
+
+    // A genuine deletion must survive the handle check, or nothing is ever
+    // cleaned up.
+    expect(useWorktreeSelectionStore.getState().deletedWorktrees.has("/old/feature")).toBe(true);
+  });
+
   it("does not ghost a worktree that only moved", async () => {
     const { store } = await renderProvider();
     act(() => {

@@ -62,6 +62,16 @@ export interface DeletedWorktree {
    */
   title: string;
   path: string;
+  /**
+   * The worktree's `.git/worktrees/<name>` handle, when it was known.
+   *
+   * Kept because the id is a path and paths are re-minted: a `git worktree
+   * move` — or the same worktree spelled through a symlink — produces a "new"
+   * worktree that is really this one. The handle is what identifies it across
+   * that, so a row recorded for a worktree that turns out to be alive can be
+   * withdrawn instead of quietly trashing its agents (#11388, #11911).
+   */
+  gitDir?: string;
   deletedAt: number;
   /**
    * When the row's auto-cleanup fires (terminals move to trash, row goes).
@@ -143,13 +153,14 @@ export function getPinnedDeletedWorktreeAnchorId(worktreeId: string): string | n
  */
 export function createDeletedWorktreeRecord(
   worktreeId: string,
-  metadata?: { title?: string | null; path?: string | null }
+  metadata?: { title?: string | null; path?: string | null; gitDir?: string | null }
 ): DeletedWorktree {
   const path = metadata?.path ?? worktreeId;
   return {
     id: worktreeId,
     title: metadata?.title ?? basenameOf(path) ?? "Unknown",
     path,
+    ...(metadata?.gitDir ? { gitDir: metadata.gitDir } : {}),
     deletedAt: Date.now(),
     // Recorded UNARMED: the sweep arms it on its first tick with the view
     // awake, and only ever advances across awake seconds. A wall-clock
@@ -315,7 +326,15 @@ interface WorktreeSelectionState {
   ) => void;
   clearRestoreTarget: (worktreeId: string) => void;
   retargetParkedFleetSelection: (worktreeId: string) => void;
-  pruneDeletedWorktrees: (liveWorktreeIds: ReadonlySet<string>) => void;
+  /**
+   * Retire rows that are no longer deleted worktrees. `liveGitDirs` catches the
+   * ones whose id was re-minted (a move, or a symlink spelling), which id
+   * comparison alone cannot see.
+   */
+  pruneDeletedWorktrees: (
+    liveWorktreeIds: ReadonlySet<string>,
+    liveGitDirs?: ReadonlySet<string>
+  ) => void;
   toggleDeletedWorktreeGroupExpanded: () => void;
   toggleWorktreeExpanded: (id: string) => void;
   setWorktreeExpanded: (id: string, expanded: boolean) => void;
@@ -985,16 +1004,28 @@ const createWorktreeSelectionStore: StateCreator<WorktreeSelectionState> = (set,
     set({ _previousActiveWorktreeId: worktreeId, _previousRestoreWorktreeId: worktreeId });
   },
 
-  pruneDeletedWorktrees: (liveWorktreeIds) => {
+  pruneDeletedWorktrees: (liveWorktreeIds, liveGitDirs) => {
     set((state) => {
       if (state.deletedWorktrees.size === 0) return state;
       const stale: string[] = [];
-      for (const id of state.deletedWorktrees.keys()) {
+      for (const [id, row] of state.deletedWorktrees) {
         // A row dies when its last terminal leaves (silently — the row
         // simply stops being useful), or when a real worktree reclaims the id,
         // which happens when the workspace host restarts and re-hydrates a
         // worktree we had already deleted.
-        if (liveWorktreeIds.has(id) || getDeletedWorktreeTerminalIds(id).length === 0) {
+        //
+        // A live worktree claiming the row's HANDLE retires it too. The host
+        // tears the old monitor down before standing the new one up, so a
+        // moved worktree is announced as a removal first and only reappears
+        // under its new id a moment later — too late for the adoption-time
+        // check, but well inside the row's countdown. Without this the row
+        // would sit there looking deleted and hand still-live agents to the
+        // cleanup sweep 60 seconds on.
+        if (
+          liveWorktreeIds.has(id) ||
+          (row.gitDir !== undefined && liveGitDirs?.has(row.gitDir) === true) ||
+          getDeletedWorktreeTerminalIds(id).length === 0
+        ) {
           stale.push(id);
         }
       }

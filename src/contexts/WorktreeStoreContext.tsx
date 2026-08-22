@@ -467,6 +467,7 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
               // last-known title.
               title: worktree.branch,
               path: worktree.path,
+              gitDir: worktree.gitDir,
             })
           );
         }
@@ -585,7 +586,11 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
           // them here — so this record is identical to the one the event
           // handler would build, and first-write-wins costs nothing.
           selectionStore.addDeletedWorktree(
-            createDeletedWorktreeRecord(id, { title: removed?.branch, path: removed?.path })
+            createDeletedWorktreeRecord(id, {
+              title: removed?.branch,
+              path: removed?.path,
+              gitDir: removed?.gitDir,
+            })
           );
         }
         // A host restart can re-hydrate a worktree we had already deleted
@@ -594,7 +599,7 @@ export function WorktreeStoreProvider({ children }: { children: ReactNode }) {
         if (useWorktreeSelectionStore.getState().deletedWorktrees.size > 0) {
           useWorktreeSelectionStore
             .getState()
-            .pruneDeletedWorktrees(new Set(state.worktrees.keys()));
+            .pruneDeletedWorktrees(new Set(state.worktrees.keys()), incomingGitDirs);
         }
       })
     );
