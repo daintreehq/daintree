@@ -1,5 +1,90 @@
 # Changelog
 
+## [0.33.0] - 2026-08-22
+
+The project switcher stops answering two questions with one dot: a row now reports what it wants from you and whether anything is still executing, separately. External MCP sessions bind to a workspace for their whole life instead of chasing window focus, so two agents driving two projects can no longer retarget each other. Elsewhere: a new dark theme, refinement passes on both defaults, and a file search that went from 102ms to 9ms on a large repository.
+
+### Features
+
+**Project switcher**
+
+- Every row weighs running agents against waiting ones instead of picking one status out of a priority order, so a project with one agent still working and one waiting on you stops reading like a project where everything has stopped (#11832)
+- The grey dot means the project has saved agent panels that will resume when you open it, and the row announces the count — on dormant, auto-parked and scratch rows alike (#11801, #11821, #11822)
+- Search results break ties on live agent activity, so workspaces sharing a name prefix stop being ordered by frecency alone (#11861)
+
+**MCP & automation**
+
+- An external MCP session binds to one workspace at handshake and routes there for its whole life, or fails closed — no fallback to another window, ever (#11789)
+- A workspace backing a live session is kept thawed and leased against memory-pressure eviction, so a bound session can't have its view frozen or destroyed underneath it (#11790)
+- External sessions get a server-authoritative ownership ledger plus two narrow cleanup tools, so a caller can close what it opened without reaching the user's own panels (#11909)
+- `actions.getSchema` carries session-scoped policy metadata — whether a target is callable, at what tier, whether it confirms, and whether a scoped grant could authorize it (#11910)
+- `agent.listPresets` lets a caller discover preset ids before calling `agent.launch`, instead of reading one off a panel already running (#11859)
+- `agentSessionHistory.resume` resumes an exact session by id, and the recipe-editor handoffs and bookmark mutations move to the Action tier (#11908)
+- A terminal spawned over MCP records which surface asked for it, so a run you didn't start says where it came from (#11808)
+- The tool surface sent to models every turn is smaller per tool: 44.8 KB to 42.5 KB for the 26 external tools, 197 KB to 183.5 KB for the full in-app 152 (#11905)
+
+**Themes**
+
+- Movile, a contrast-budget dark theme built around the sealed sulfur cave (#11874)
+- Daintree, the default dark theme, gets its surface ladder repaired — five planes were made out of two different neutrals, and canvas-to-panel sat under the engine's own JND, so panel cards never lifted off the canvas at all
+- Bondi, the default light theme, is rebuilt as warm cream: it was the least-chromatic light theme in the suite at half the chroma of the next lowest, decaying to pure achromatic white by the top of the ladder
+
+**Elsewhere**
+
+- Sleep shuts down a single project the way quitting shuts down all of them, including the project on screen — a case Free memory refused to touch. Reopening restores the layout and resumes the agents like a relaunch (#11802)
+- Export and Import Configuration in the Help menu move a setup to a second machine as one versioned JSON bundle: custom agents, agent settings, keybindings, theme, notification preferences, the worktree path pattern and global recipes (#11889)
+- The file browser panel is dockable, the last panel kind that wasn't (#11917)
+- `forge.listPRs` takes a `search` option, so finding an old PR stops meaning paging through a listing by hand (#11897)
+- Plugins can contribute recipes through `contributes.recipes`, declared inline in the manifest and disclosed in the install confirmation (#11860)
+- Plugin subprocesses get a `duplex` mode — writable stdin with stdout kept separate from stderr — for the stdio JSON-RPC children that had been pushed toward raw `child_process` (#11871)
+
+### Performance
+
+- File search on a large repository drops from 102ms to 9ms, warm search and review-diff tokenization get the same treatment, and startup defers low-frequency main services, renderer panels and the xterm search, image and Unicode addons until first use
+
+### Bug Fixes
+
+**Terminals & agents**
+
+- A slow submit keeps its exclusive hold on the composer, instead of a timed-out write landing its Enter after the next prompt's body — two prompts merged into one and the agent received neither (#11875)
+- Codex quits on a gated Ctrl-C rather than an injected `/quit`, which mid-turn landed in the transcript and in Codex's own `/resume` picker, burned tokens and captured nothing; measured capture was 38% over 26 teardowns (#11851)
+- A near-zero background resize box is refused instead of adopted at 2×1, which re-wrapped committed scrollback until the cap evicted the top of history for good (#11900)
+- A paused xterm renderer is actually resumed, instead of a repair jittering padding every 3 seconds forever and logging success (#11800)
+- Recipe panes keep the names the recipe gave them, so a ten-pane fleet with role names stops becoming nine identical `Claude` panes (#11872)
+- A manual panel rename reaches the pty-host record, so the fleet overview and the panel header stop showing two names for one run (#11830)
+- A soft-wrapped bare file path links as one path rather than only its continuation fragment, which opened the wrong file (#11865)
+- Dropping a file selects the pane it landed on, so what you type next goes there (#11809)
+- The Codex slash-command catalog matches Codex 0.147.0 exactly — 14 commands added, 8 that never existed dropped (#11843)
+
+**Worktrees & panels**
+
+- A worktree removed outside the app cleans up its agents instead of stranding them alive and invisible while the attention tally kept counting them; one report showed "7 need input" with 2 agents reachable and no way out but quitting (#11911)
+- Dragging a running agent onto another worktree applies immediately, and the pane carries a dismissible banner offering to tell the agent to continue in the new directory — replacing a blocking dialog whose buffer-replay "session transfer" destroyed the live session it was meant to move (#11853, #11867, #11868)
+- Duplicating a panel that had been dragged to another worktree reroots the copy, instead of spawning it in the old worktree while filing it under the new one (#11854)
+- A lone grid pane shows whether it holds keyboard focus, so there's a way to tell where keystrokes will land without typing (#11837)
+- Dock chips reorder for non-PTY panes and stop painting the pre-drag order (#11873)
+- Sweeping the pointer across the launcher no longer drags the keyboard selection through every row it passes (#11919)
+- Grid-bar notifications carrying action buttons get a dismiss control (#11855)
+- The theme browser and portal dock offset below a global banner instead of being clipped by the toolbar it pushes down (#11893)
+
+**Windows & Linux**
+
+- The application menu is reachable from a new toolbar button — the Window Controls Overlay had removed the frame region it renders into, leaving menu-only actions with no route at all on Windows (#11813)
+- The worktree sidebar no longer sticks on its loading skeleton forever on packaged builds, with the file browser reporting no resolved folder and nothing logged (#11818)
+- Single-arch artifacts stop shipping the other arch's better-sqlite3 prebuild, about 2MB of dead weight in every build (#11829)
+
+**MCP & actions**
+
+- A session revoked mid-request fails closed instead of resuming on the `workbench` surface — the two tiers are peers, not rungs, so revocation was widening the surface by 46 tools including `file.read` and `git.getFileDiff` (#11799)
+- `terminal.close` settles before it acks, so an MCP result means the panel is actually gone, and an unknown id reports as such instead of "OK" (#11805)
+- `agent.listAvailable` stops hanging on a registry payload structured clone can't encode (#11795)
+- Enabling the MCP server from Settings captures the window registry, instead of silently degrading every registry-aware path to whichever window was created last (#11842)
+- A native automation grant pre-authorizes a `confirm` action the tier already permits — typing `worktree.delete` into Settings did nothing at all, and the modal still fired on every call (#11878)
+
+**Icons**
+
+- Brand marks resolve against the surface they actually paint on: the vendor's colour drawn one perceptual step away from the backdrop at rest, and the brand colour itself when active, floored at WCAG 3:1 and APCA Lc 35 (#11895, #11903)
+
 ## [0.32.0] - 2026-08-15
 
 A lot of this release went into making Daintree stable on Windows: a new terminal picks up a PATH change without an app restart, the caption strip reads as part of the window instead of painted over it, and a machine without Git says so at startup rather than blaming the folder you opened. Elsewhere, a run can be parked or snoozed so a deliberate wait stops reading as something that needs you, and git stops parsing filenames as pathspecs — the route by which discarding one file's changes could destroy uncommitted work in another.
