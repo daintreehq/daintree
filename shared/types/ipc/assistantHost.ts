@@ -30,9 +30,14 @@
  *    now applies backpressure to stream traffic, and any residual gap is visible in
  *    `seq` instead of invisible. A consumer that sees a gap knows its transcript is
  *    incomplete and can say so rather than presenting corrupted prose as the answer.
- * 2. **`turn:end` carries the authoritative final `content`.** Accumulate
- *    `turn:token` for liveness, then REPLACE the buffer with this. A lost token frame
- *    self-heals instead of leaving mangled text on screen forever.
+ * 2. **`turn:end` carries the authoritative FINAL-ROUND `content`.** Accumulate
+ *    `turn:token` for liveness, then replace the LAST prose segment with this. A lost
+ *    token frame self-heals instead of leaving mangled text on screen forever.
+ *
+ *    It is the final round, not the whole turn: the engine hands `AssistantEnd` the
+ *    last message's content, so any prose the model produced before it called a tool
+ *    is not in here. A consumer that replaces the whole turn with it deletes the part
+ *    that explains why the tool was called.
  * 3. **The event set covers what the runtime actually produces** — phase, reasoning,
  *    interjections, the whole tool batch, tool state and progress, usage, cost and
  *    notices — instead of the subset an activity strip needed.
@@ -134,6 +139,91 @@ export interface AssistantHostReadyEvent extends AssistantHostEventBase {
   /** Absolute path of this session's debug log. The engine picks the filename, so
    *  nothing outside the engine can work it out. */
   logFile?: string;
+  /**
+   * The command set this engine accepts.
+   *
+   * Sent by the engine rather than hardcoded here: a host with its own list drifts the
+   * first time a command is added or renamed, and offers the user something the engine
+   * will refuse.
+   */
+  commands?: AssistantCommandMeta[];
+}
+
+/** One entry in the engine's command catalog. */
+export interface AssistantCommandMeta {
+  name: string;
+  syntax: string;
+  palette: string;
+}
+
+/**
+ * Whether the Daintree control plane is reachable.
+ *
+ * Emitted at boot and again after anything that may reconnect it. The engine being up
+ * says nothing about whether it can act: a session that answers questions but cannot
+ * spawn an agent, under a status line reading "Connected", is the most misleading
+ * state this protocol can produce.
+ */
+export interface AssistantMcpStatusEvent extends AssistantHostEventBase {
+  type: "mcp:status";
+  connected: boolean;
+  /** Absent until the tool catalog has been fetched. */
+  toolCount?: number;
+  /** Why it is not connected, when there is a reason. */
+  error?: string;
+}
+
+/**
+ * The output of a slash command the host routed through the engine.
+ *
+ * Commands are not conversation. `/status` sent as a prompt produces an answer about
+ * the WORD status, spends a turn doing it, and leaves the user believing they ran
+ * something — so recognized slash input goes through `command`, never `prompt`.
+ */
+export interface AssistantCommandResultEvent extends AssistantHostEventBase {
+  type: "command:result";
+  command: string;
+  text: string;
+  /** The command asked the session to end (`/quit`). */
+  quit?: boolean;
+  /** Looked like a command but names none that exists. */
+  unknown?: boolean;
+  turnId?: string;
+}
+
+/** One labelled choice in a question. The label is engine-assigned. */
+export interface AssistantQuestionOption {
+  label: string;
+  text: string;
+}
+
+/**
+ * The model asked the user a multiple-choice question and the turn is BLOCKED until
+ * the host answers with `question:answer` naming this `questionId`.
+ *
+ * Labels (A, B, C…) come from the engine so every surface shows the same letter for
+ * the same option, and so the model never spells them itself.
+ */
+export interface AssistantQuestionRequestedEvent extends AssistantHostEventBase {
+  type: "question:requested";
+  questionId: string;
+  toolCallId?: string;
+  turnId?: string;
+  question: string;
+  options: AssistantQuestionOption[];
+  /** 0-based index highlighted first. */
+  default: number;
+  requestedAt: number;
+}
+
+/** A question settled. `index` is -1 when it was dismissed without choosing. */
+export interface AssistantQuestionAnsweredEvent extends AssistantHostEventBase {
+  type: "question:answered";
+  questionId: string;
+  turnId?: string;
+  index: number;
+  label?: string;
+  text?: string;
 }
 
 /** A new conversation turn began. */
@@ -158,7 +248,8 @@ export interface AssistantTurnTokenEvent extends AssistantHostEventBase {
 /**
  * A conversation turn completed.
  *
- * `content` is AUTHORITATIVE: replace the accumulated token buffer with it. It is
+ * `content` is AUTHORITATIVE for the FINAL ROUND: replace the last prose segment with
+ * it, not the whole turn — see the note at the top of this file. It is
  * absent (not `""`) when the turn produced no visible text at all — a cancel before
  * the first token, or a tool-only round — so "nothing was said" stays distinguishable
  * from "the answer was empty".
@@ -220,7 +311,17 @@ export interface AssistantToolBatchEvent extends AssistantHostEventBase {
 }
 
 /** Lifecycle of one announced call. */
-export type AssistantToolState = "queued" | "active" | "waiting" | "done" | "failed";
+/**
+ * Lifecycle of one announced call.
+ *
+ * "waiting" means blocked on the USER. "cancelled" and "not-run" are the terminal
+ * states an interrupt produces: a call that WAS running versus one announced but never
+ * started. Both exist because a stopped turn must not leave rows describing work that
+ * is not happening, and because the difference tells a reader what the stop actually
+ * interrupted.
+ */
+export type AssistantToolState =
+  "queued" | "active" | "waiting" | "done" | "failed" | "cancelled" | "not-run";
 
 /**
  * Promotes one announced call. `waiting` is the load-bearing value: it means blocked
@@ -273,6 +374,24 @@ export interface AssistantToolSettledEvent extends AssistantHostEventBase {
   errorCode?: string;
   turnId?: string;
   asyncId?: string;
+  /**
+   * The tool's OWN human line for what it did ("Pushed 3 commits to origin/main").
+   *
+   * Engine-authored and redacted on the way out — never raw arguments — and it is what
+   * the terminal cockpit showed in place of a bare tool id. Without it a panel can only
+   * display the identifier and hope the reader knows what it means.
+   */
+  /**
+   * Names the work an accepted async call handed off ("migrate the schema in wt_db").
+   *
+   * Present only alongside `asyncId`. The completion arrives later as its own wake
+   * turn, never as a late result for this call, so this is the only chance to say WHAT
+   * is running rather than only that something is.
+   */
+  asyncTitle?: string;
+  summary?: string;
+  /** The human sentence behind `errorCode`. A code alone says something failed, not what. */
+  errorMessage?: string;
 }
 
 /**
@@ -392,6 +511,10 @@ export type AssistantHostEvent =
   | AssistantUsageEvent
   | AssistantCostEvent
   | AssistantNoticeEvent
+  | AssistantCommandResultEvent
+  | AssistantMcpStatusEvent
+  | AssistantQuestionRequestedEvent
+  | AssistantQuestionAnsweredEvent
   | AssistantModelRateLimitedEvent
   | AssistantApprovalRequestedEvent
   | AssistantApprovalDecidedEvent
@@ -426,6 +549,28 @@ export interface AssistantApprovalDecideCommand {
   decision: McpConfirmationDecision;
 }
 
+/** Run a slash command. The engine answers with `command:result`. */
+export interface AssistantCommandCommand {
+  type: "command";
+  sessionId: string;
+  /** The raw slash line, e.g. "/status". */
+  line: string;
+}
+
+/**
+ * Answer an outstanding `question:requested`.
+ *
+ * `index` is -1 to DISMISS without choosing. There is deliberately no "default"
+ * answer the host can send blind: answering on the user's behalf is the one thing a
+ * question surface must never do.
+ */
+export interface AssistantQuestionAnswerCommand {
+  type: "question:answer";
+  sessionId: string;
+  questionId: string;
+  index: number;
+}
+
 /** Interrupt the in-flight turn (user pressed stop). */
 export interface AssistantInterruptCommand {
   type: "interrupt";
@@ -450,6 +595,8 @@ export interface AssistantShutdownCommand {
 export type AssistantHostCommand =
   | AssistantPromptCommand
   | AssistantApprovalDecideCommand
+  | AssistantQuestionAnswerCommand
+  | AssistantCommandCommand
   | AssistantInterruptCommand
   | AssistantHibernateCommand
   | AssistantShutdownCommand;

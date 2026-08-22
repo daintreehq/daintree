@@ -452,6 +452,15 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
       "The field is the popover's whole top strip, so its indicator is painted once on the wrapping label via focus-within — it has to span the panel's full width and take its rounded top corners, which a ring on the bare input cannot do (that ring is precisely what this component replaced)",
   },
   {
+    file: "src/components/AssistantPanel/AssistantQuestionCard.tsx",
+    fragment: "outline-hidden",
+    reason:
+      "Question sheet root is a tabIndex=-1 keyboard host, focused programmatically so ↑/↓ and " +
+      "letter keys work the moment it appears. It is not tab-reachable and never the focus " +
+      "target a user navigates to; the visible selection is the aria-selected option row, which " +
+      "carries its own highlight",
+  },
+  {
     file: "src/components/HelpPanel/HelpPanel.tsx",
     fragment: "relative shrink-0 flex flex-col h-full overflow-hidden outline-hidden",
     reason:
