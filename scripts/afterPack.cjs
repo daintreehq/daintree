@@ -501,6 +501,93 @@ function getUnpackedResourcesPath(appOutDir, electronPlatformName, appName) {
 }
 
 /**
+ * Resolves the packed Resources directory (where extraResources land), which is a
+ * different shape on macOS than everywhere else.
+ */
+function getResourcesPath(appOutDir, electronPlatformName, appName) {
+  if (electronPlatformName === "darwin") {
+    return path.join(appOutDir, `${appName}.app`, "Contents/Resources");
+  }
+  return path.join(appOutDir, "resources");
+}
+
+/**
+ * The assistant engine ships as exactly ONE binary: the one for the platform and arch
+ * being packed. `scripts/build-assistant.mjs --all` writes six of them into
+ * `resources/assistant/` on the build machine, and the electron-builder config selects
+ * a single one per platform via a `${arch}`-templated `from`.
+ *
+ * This guards that selection. A config edit that widened the glob — or a directory
+ * copy instead of a file copy — would silently add ~75MB of foreign-platform
+ * executables to every installer, and on macOS would hand notarization a pile of
+ * unsigned Mach-O binaries for architectures the app cannot even run. Neither failure
+ * is visible in a `--dir` build, which is why it is asserted here rather than eyeballed.
+ */
+function validateAssistantBinary(appOutDir, electronPlatformName, appName) {
+  const assistantDir = path.join(
+    getResourcesPath(appOutDir, electronPlatformName, appName),
+    "assistant"
+  );
+  if (!fs.existsSync(assistantDir)) {
+    throw new Error(
+      `[afterPack] the assistant engine is missing from the package (${assistantDir}). ` +
+        "Run `npm run build:assistant:all` before packaging, and check that the " +
+        "vendor/daintree-assistant submodule is checked out."
+    );
+  }
+
+  const expected =
+    electronPlatformName === "win32" ? "daintree-assistant.exe" : "daintree-assistant";
+  const binPath = path.join(assistantDir, expected);
+
+  if (!fs.existsSync(binPath)) {
+    throw new Error(
+      `[afterPack] the assistant engine is not at its expected path: ${binPath}. ` +
+        "Run `npm run build:assistant:all` before packaging."
+    );
+  }
+
+  // The point of the guard: no OTHER assistant binary may ship. Match on the name
+  // prefix rather than "anything that is not `expected`" so the check is about
+  // assistant binaries specifically and cannot be tripped by whatever else a future
+  // resource layout puts alongside them.
+  const foreign = fs
+    .readdirSync(assistantDir)
+    .filter((e) => e !== expected && /^daintree-assistant/.test(String(e)));
+  if (foreign.length > 0) {
+    throw new Error(
+      `[afterPack] the package contains foreign assistant binaries: ${foreign.join(", ")}. ` +
+        "Exactly one must ship — the one for this platform and arch — or every installer " +
+        "carries ~75MB of executables it cannot run, and macOS notarization is handed " +
+        "unsigned Mach-O binaries for foreign architectures. Check the `extraResources` " +
+        "entry in electron-builder.config.cjs."
+    );
+  }
+
+  const sizeMb = fs.statSync(binPath).size / 1048576;
+  // A plausibility floor. A truncated or placeholder file would otherwise pass the
+  // name check and fail much later, at first launch, as an unhelpful spawn error.
+  if (sizeMb < 5) {
+    throw new Error(
+      `[afterPack] the packaged assistant engine is implausibly small (${sizeMb.toFixed(1)}MB) ` +
+        `at ${binPath}. Expected roughly 15MB.`
+    );
+  }
+
+  // Non-Windows needs the executable bit; extraResources copies preserve mode, but a
+  // build run through a tool that normalizes permissions would strip it, and the
+  // symptom at runtime is EACCES on spawn rather than anything self-explanatory.
+  if (electronPlatformName !== "win32") {
+    const mode = fs.statSync(binPath).mode;
+    if ((mode & 0o111) === 0) {
+      throw new Error(`[afterPack] the packaged assistant engine is not executable: ${binPath}`);
+    }
+  }
+
+  console.log(`[afterPack] assistant engine verified: ${binPath} (${sizeMb.toFixed(1)}MB)`);
+}
+
+/**
  * electron-builder afterPack hook.
  * Validates that the node-pty native module is properly unpacked.
  * Fuses are configured via the native electronFuses config in package.json.
@@ -722,6 +809,8 @@ exports.default = async function afterPack(context) {
   console.log(`[afterPack] better-sqlite3 verified: ${betterSqlitePath}`);
 
   validateOnnxRuntime(unpackedPath);
+
+  validateAssistantBinary(appOutDir, electronPlatformName, appName);
 
   console.log("[afterPack] Complete - native modules validated");
 };
