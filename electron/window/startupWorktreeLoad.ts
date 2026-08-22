@@ -208,3 +208,98 @@ export async function runStartupWorktreeLoad<
   report(new Error(describeStartupPortFailure(attachResult.reason)));
   return { status: "port-failed", reason: attachResult.reason };
 }
+
+/** A log line for a startup worktree-load outcome, ready for the app logger. */
+export interface StartupWorktreeLoadLogLine {
+  level: "info" | "error";
+  message: string;
+  context: Record<string, unknown>;
+}
+
+/**
+ * The logger functions {@link logStartupWorktreeLoadOutcome} writes through.
+ *
+ * Injected rather than imported so this module stays Electron-free, and so the
+ * dispatch itself — including `logError`'s `(message, error, context)` arity —
+ * is testable rather than only the mapping that feeds it.
+ */
+export interface StartupWorktreeLoadLogSinks {
+  info(message: string, context: Record<string, unknown>): void;
+  error(message: string, error: undefined, context: Record<string, unknown>): void;
+}
+
+/**
+ * Describe a startup outcome for the log.
+ *
+ * Returned rather than logged so this module stays Electron-free — importing
+ * `utils/logger.js` would drag in `ipc/channels.js` and `LogBuffer`, and the
+ * suite exists precisely to test these branches without the Electron runtime.
+ * {@link logStartupWorktreeLoadOutcome} dispatches the returned line.
+ *
+ * Every outcome gets a line, and every line goes through the logger rather than
+ * `console`: production esbuild marks `console.log`/`console.warn` pure, so the
+ * previous console reporting was stripped from packaged builds — which is why a
+ * diagnostics bundle captured while the sidebar was empty said nothing at all
+ * about worktree loading (#11922).
+ */
+export function describeStartupWorktreeLoadOutcome(
+  outcome: StartupWorktreeLoadOutcome,
+  projectPath: string
+): StartupWorktreeLoadLogLine {
+  switch (outcome.status) {
+    case "loaded":
+      return {
+        level: "info",
+        message: "[MAIN] Worktrees loaded; worktree port brokered",
+        context: { projectPath },
+      };
+    case "no-client":
+      return {
+        level: "error",
+        message: "[MAIN] Workspace client unavailable — cannot load worktrees",
+        context: { projectPath },
+      };
+    case "load-failed":
+      return {
+        level: "error",
+        message: "[MAIN] Failed to load worktrees",
+        context: { projectPath, error: formatErrorMessage(outcome.error, "Unknown error") },
+      };
+    case "attach-failed":
+      return {
+        level: "error",
+        message: "[MAIN] Failed to attach the worktree port",
+        context: { projectPath, error: formatErrorMessage(outcome.error, "Unknown error") },
+      };
+    case "port-failed":
+      return {
+        level: "error",
+        message: "[MAIN] Worktree port not brokered",
+        context: {
+          projectPath,
+          reason: outcome.reason,
+          detail: describeStartupPortFailure(outcome.reason),
+        },
+      };
+  }
+}
+
+/**
+ * Write one startup outcome to the app logger.
+ *
+ * The outcome carries no error object of its own — the failure detail is
+ * already flattened into `context` — so the error sink is called with an
+ * explicit `undefined` in `logError`'s error position.
+ */
+export function logStartupWorktreeLoadOutcome(
+  outcome: StartupWorktreeLoadOutcome,
+  projectPath: string,
+  sinks: StartupWorktreeLoadLogSinks
+): void {
+  const line = describeStartupWorktreeLoadOutcome(outcome, projectPath);
+  if (line.level === "error") {
+    sinks.error(line.message, undefined, line.context);
+    return;
+  }
+  sinks.info(line.message, line.context);
+}
