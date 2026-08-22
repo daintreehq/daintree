@@ -1,9 +1,9 @@
 import { describe, it, expect } from "vitest";
 import type {
   BrowserPanelData,
+  DevPreviewPanelData,
   FileBrowserPanelData,
   FilePanelData,
-  PanelInstance,
 } from "@shared/types/panel";
 import { dockChipTitle } from "../dockChipTitle";
 import { composeFileBrowserTitle } from "@/panels/file-browser/title";
@@ -65,7 +65,7 @@ describe("dockChipTitle — file browser (#11917)", () => {
       titleMode: "custom",
       browserRootPath: "src/components",
     });
-    expect(dockChipTitle(named)).toBe("Files — Archive");
+    expect(dockChipTitle(named)).toBe(named.title);
   });
 
   it("still trims the composed title when nothing has claimed ownership of it", () => {
@@ -110,14 +110,16 @@ describe("dockChipTitle — the derivations it dispatches to still hold", () => 
   });
 
   it("falls back to the panel title for a kind with no derivation of its own", () => {
-    // Plugin view panels (#11332) take this branch — the chip must not assume
-    // one of the built-in shapes.
-    const plugin = {
+    // The branch plugin view panels (#11332) land in, exercised through an
+    // in-union kind so the fixture states a real shape rather than asserting
+    // its way past one — the dispatcher reaches it the same way for both.
+    const other = {
       id: "x1",
-      kind: "acme.viewer",
-      title: "Acme Viewer",
+      kind: "dev-preview",
+      title: "Dev Preview",
       location: "dock",
-    } as unknown as PanelInstance;
-    expect(dockChipTitle(plugin)).toBe("Acme Viewer");
+      cwd: "/repo",
+    } as DevPreviewPanelData;
+    expect(dockChipTitle(other)).toBe("Dev Preview");
   });
 });
