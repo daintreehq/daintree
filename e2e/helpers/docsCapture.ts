@@ -38,8 +38,35 @@ export const POLISH_CSS = `
     transition-duration: 0s !important;
     transition-delay: 0s !important;
     caret-color: transparent !important;
+    scroll-behavior: auto !important;
   }
 `;
+
+/**
+ * Block until nothing on the page is still scrolling.
+ *
+ * `scrollIntoViewIfNeeded` returns as soon as it has asked, not once the
+ * scroller has arrived, and a settings pane with sticky section headers
+ * repaints them all the way down. Poll every scroller's offset until two
+ * consecutive reads agree.
+ */
+export async function settleScroll(page: Page, timeoutMs = 4_000): Promise<void> {
+  const read = () =>
+    page.evaluate(() =>
+      [document.scrollingElement, ...document.querySelectorAll("*")]
+        .filter((el): el is Element => !!el)
+        .map((el) => `${el.scrollTop}:${el.scrollLeft}`)
+        .join("|")
+    );
+  const deadline = Date.now() + timeoutMs;
+  let last = await read();
+  while (Date.now() < deadline) {
+    await page.waitForTimeout(150);
+    const now = await read();
+    if (now === last) return;
+    last = now;
+  }
+}
 
 /** Wait out two animation frames so layout and paint have both settled. */
 export async function settleFrame(page: Page): Promise<void> {

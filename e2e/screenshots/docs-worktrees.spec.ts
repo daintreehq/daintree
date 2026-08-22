@@ -86,6 +86,15 @@ test.describe.serial("Documentation Screenshots — Worktrees", () => {
 
       await cap.shot("worktrees/worktrees-cross-worktree-diff", async () => {
         await resetOverlays(page);
+        // The modal is sized from the window, and this diff is short — at the
+        // scene's full height two thirds of the dialog is empty. Shrink for
+        // the shot and restore afterwards.
+        await ctx!.app.evaluate(({ BrowserWindow }) => {
+          const win = BrowserWindow.getAllWindows()[0];
+          win?.setSize(1600, 720);
+          win?.center();
+        });
+        await page.waitForTimeout(T_MEDIUM);
         const card = page.locator(SEL.worktree.card("feature/reconciliation")).first();
         await card.click({ button: "right" });
         await page.getByRole("menuitem", { name: /Compare Worktrees/i }).click();
@@ -116,6 +125,12 @@ test.describe.serial("Documentation Screenshots — Worktrees", () => {
           DIALOG_PAD
         );
         await resetOverlays(page);
+        await ctx!.app.evaluate(({ BrowserWindow }) => {
+          const win = BrowserWindow.getAllWindows()[0];
+          win?.setSize(1600, 1000);
+          win?.center();
+        });
+        await page.waitForTimeout(T_MEDIUM);
       });
 
       await cap.shot("worktrees/overview/worktrees-overview-d3-confirm", async () => {
@@ -169,7 +184,7 @@ test.describe.serial("Documentation Screenshots — Worktrees", () => {
           page,
           bar,
           "worktrees/cards/worktrees-quick-state-filter",
-          14
+          0
         );
         await bar.locator('button[aria-label^="All"]').first().click().catch(() => {});
       });
@@ -236,7 +251,7 @@ test.describe.serial("Documentation Screenshots — Worktrees", () => {
           page,
           rescue,
           "worktrees/delete-and-recover/worktrees-deleted-worktree-card",
-          14
+          0
         );
       });
     } finally {
@@ -538,7 +553,17 @@ test.describe.serial("Documentation Screenshots — Worktrees", () => {
           const shell = await page.locator("div.settings-shell").first().boundingBox();
           if (!secBox || !shell) throw new Error("resource environments have no layout");
           const top = Math.max(secBox.y - 10, shell.y + 4);
-          const bottom = Math.min(secBox.y + secBox.height, shell.y + shell.height - 8);
+          let bottom = Math.min(secBox.y + secBox.height, shell.y + shell.height - 8);
+          // Cutting through a command list reads as a rendering fault rather
+          // than a fold. Pull the bottom edge back to the last "Add command"
+          // that is wholly inside the band — the end of a complete group.
+          const adds = await page.getByRole("button", { name: /Add command/i }).all();
+          let lastWhole = 0;
+          for (const add of adds) {
+            const b = await add.boundingBox();
+            if (b && b.y + b.height + 6 <= bottom) lastWhole = b.y + b.height + 6;
+          }
+          if (lastWhole > top + 200) bottom = lastWhole;
           await cap.snapBand(
             page,
             "worktrees/remote-compute/worktrees-resource-environments-settings",
