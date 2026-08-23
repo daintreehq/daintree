@@ -1,5 +1,6 @@
 // eager-import-allow: reads help-assistant settings via store.get synchronously in the IPC handler
 import { store } from "../../store.js";
+import { defaultDebugLogging } from "../../services/helpAssistantDefaults.js";
 import { z } from "zod";
 import { defineIpcNamespace, op, opValidated } from "../define.js";
 import type { IpcContext } from "../types.js";
@@ -39,6 +40,8 @@ const HELP_ASSISTANT_DEFAULTS: HelpAssistantSettings = {
   modelId: "",
   customArgs: "",
   idleHibernateMinutes: 5,
+  // Filled in at READ time by `helpAssistantDefaults()` — see there. A build-dependent
+  // value cannot live in a module-scope literal.
   debugLogging: false,
 };
 
@@ -130,7 +133,11 @@ function sanitizeStored(stored: unknown): Partial<HelpAssistantSettings> {
 
 export function getHelpAssistantSettings(): HelpAssistantSettings {
   const stored = store.get("helpAssistant");
-  return { ...HELP_ASSISTANT_DEFAULTS, ...sanitizeStored(stored) };
+  return {
+    ...HELP_ASSISTANT_DEFAULTS,
+    debugLogging: defaultDebugLogging(),
+    ...sanitizeStored(stored),
+  };
 }
 
 // Safe "no live session" snapshot returned when the caller has no pinned help

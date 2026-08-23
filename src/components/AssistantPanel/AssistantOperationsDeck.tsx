@@ -28,7 +28,9 @@ export interface AssistantOperationsDeckProps {
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section className="mb-3">
-      <h3 className="mb-1 text-[10px] font-medium tracking-wide opacity-50">{title}</h3>
+      <h3 className="mb-1 text-[0.92em] font-medium tracking-wide text-[var(--assistant-fg-secondary)]">
+        {title}
+      </h3>
       <div className="space-y-1">{children}</div>
     </section>
   );
@@ -38,11 +40,11 @@ function Row({ children, tone }: { children: React.ReactNode; tone?: "warning" |
   return (
     <div
       className={cn(
-        "rounded-sm px-1.5 py-1 text-xs",
+        "rounded-sm px-1.5 py-1 text-[1em]",
         tone === "danger"
-          ? "text-status-danger"
+          ? "text-[var(--assistant-danger)]"
           : tone === "warning"
-            ? "text-status-warning"
+            ? "text-[var(--assistant-warning)]"
             : undefined
       )}
     >
@@ -73,19 +75,19 @@ export function AssistantOperationsDeck({
 
   return (
     <div className="flex h-full min-h-0 flex-col">
-      <div className="flex shrink-0 items-center gap-2 border-b border-border-divider px-3 py-1.5">
-        <span className="text-xs font-medium">Operations</span>
+      <div className="flex shrink-0 items-center gap-2 border-b border-[var(--assistant-border)] px-3 py-1.5">
+        <span className="text-[1em] font-medium">Operations</span>
         <button
           type="button"
           onClick={onRefresh}
-          className="rounded-sm px-1.5 py-0.5 text-[10px] opacity-60 transition-colors duration-150 ease-out hover:bg-overlay-subtle hover:opacity-100"
+          className="rounded-sm px-1.5 py-0.5 text-[0.92em] text-[var(--assistant-fg-secondary)] transition-colors duration-150 ease-out hover:bg-[var(--assistant-hover)] hover:text-[var(--assistant-fg)]"
         >
           Refresh
         </button>
         <button
           type="button"
           onClick={onClose}
-          className="ml-auto rounded-sm px-1.5 py-0.5 text-[10px] opacity-60 transition-colors duration-150 ease-out hover:bg-overlay-subtle hover:opacity-100"
+          className="ml-auto rounded-sm px-1.5 py-0.5 text-[0.92em] text-[var(--assistant-fg-secondary)] transition-colors duration-150 ease-out hover:bg-[var(--assistant-hover)] hover:text-[var(--assistant-fg)]"
         >
           Close
         </button>
@@ -93,7 +95,7 @@ export function AssistantOperationsDeck({
 
       <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2">
         {!ops ? (
-          <p className="text-xs opacity-60">Reading…</p>
+          <p className="text-[1em] text-[var(--assistant-fg-secondary)]">Reading…</p>
         ) : (
           <>
             {/* NOW: the one-line rollup the cockpit led with, so the deck answers
@@ -108,7 +110,9 @@ export function AssistantOperationsDeck({
                     ]
                       .filter(Boolean)
                       .join(" · ")}
-                <span className="ml-2 opacity-40">read {ago(ops.at, now)} ago</span>
+                <span className="ml-2 text-[var(--assistant-fg-secondary)]">
+                  read {ago(ops.at, now)} ago
+                </span>
               </Row>
             </Section>
 
@@ -116,9 +120,11 @@ export function AssistantOperationsDeck({
               <Section title="NEEDS ATTENTION">
                 {ops.inbox.map((row) => (
                   <Row key={row.id} tone={row.severity === "urgent" ? "danger" : "warning"}>
-                    <span className="opacity-60">{row.source} · </span>
+                    <span className="text-[var(--assistant-fg-secondary)]">{row.source} · </span>
                     {row.summary}
-                    <span className="ml-2 opacity-40">{ago(row.at, now)} ago</span>
+                    <span className="ml-2 text-[var(--assistant-fg-secondary)]">
+                      {ago(row.at, now)} ago
+                    </span>
                   </Row>
                 ))}
               </Section>
@@ -129,7 +135,7 @@ export function AssistantOperationsDeck({
                 {ops.workflows.map((row) => (
                   <Row key={row.id} tone={row.blocked ? "warning" : undefined}>
                     <div className="truncate">{row.goal}</div>
-                    <div className="opacity-60">
+                    <div className="text-[var(--assistant-fg-secondary)]">
                       {row.progress}
                       {row.next ? ` · next: ${row.next}` : ""}
                     </div>
@@ -145,15 +151,23 @@ export function AssistantOperationsDeck({
                     <div className="truncate">
                       {row.title || row.id}
                       {row.agentState ? (
-                        <span className="ml-2 opacity-60">{row.agentState}</span>
+                        <span className="ml-2 text-[var(--assistant-fg-secondary)]">
+                          {row.agentState}
+                        </span>
                       ) : null}
-                      <span className="ml-2 opacity-40">{ago(row.startedAt, now)}</span>
+                      <span className="ml-2 text-[var(--assistant-fg-secondary)]">
+                        {ago(row.startedAt, now)}
+                      </span>
                     </div>
-                    {row.goal ? <div className="truncate opacity-60">{row.goal}</div> : null}
+                    {row.goal ? (
+                      <div className="truncate text-[var(--assistant-fg-secondary)]">
+                        {row.goal}
+                      </div>
+                    ) : null}
                     {/* The terminal tail, so a supervisor can see it working rather than
                         take the state label's word for it. */}
                     {row.preview ? (
-                      <div className="mt-0.5 truncate font-mono text-[10px] opacity-50">
+                      <div className="mt-0.5 truncate text-[0.92em] text-[var(--assistant-fg-secondary)]">
                         {row.preview}
                       </div>
                     ) : null}
@@ -167,7 +181,9 @@ export function AssistantOperationsDeck({
                 {ops.async.map((row) => (
                   <Row key={row.id}>
                     <span className="truncate">{row.title || row.tool}</span>
-                    <span className="ml-2 opacity-40">{ago(row.startedAt, now)}</span>
+                    <span className="ml-2 text-[var(--assistant-fg-secondary)]">
+                      {ago(row.startedAt, now)}
+                    </span>
                   </Row>
                 ))}
               </Section>
@@ -180,7 +196,9 @@ export function AssistantOperationsDeck({
                     <span className="truncate">{row.label}</span>
                     {/* "in", not "ago": a timer is the one row on this deck that points
                         forwards. */}
-                    <span className="ml-2 opacity-40">in {ago(row.dueAt, now)}</span>
+                    <span className="ml-2 text-[var(--assistant-fg-secondary)]">
+                      in {ago(row.dueAt, now)}
+                    </span>
                   </Row>
                 ))}
               </Section>
@@ -193,9 +211,9 @@ export function AssistantOperationsDeck({
                     key={`${row.tool}-${row.at}-${i}`}
                     tone={row.outcome !== "ok" && row.outcome !== "grant_ok" ? "danger" : undefined}
                   >
-                    <span className="font-mono">{row.tool}</span>
-                    <span className="ml-2 opacity-60">{row.outcome}</span>
-                    <span className="ml-2 opacity-40">
+                    <span className="text-[var(--assistant-fg)]">{row.tool}</span>
+                    <span className="ml-2 text-[var(--assistant-fg-secondary)]">{row.outcome}</span>
+                    <span className="ml-2 text-[var(--assistant-fg-secondary)]">
                       {row.durationMs}ms · {ago(row.at, now)} ago
                     </span>
                   </Row>

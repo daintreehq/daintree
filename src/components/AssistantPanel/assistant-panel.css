@@ -5,18 +5,66 @@
    style regardless of specificity. Wrapping these in @layer would hand the colours
    back to defaults — which is exactly how dark-on-dark prose shipped once before. */
 
+/* The panel is a terminal's sibling: one typeface, at the terminal's size, across
+   every part of it. Individual elements still set their own size where the hierarchy
+   needs it — this is the ground they sit on. */
+.assistant-panel {
+  /* The LIVE terminal font, pushed in as custom properties by the panel (both are user
+     settings that hydrate after boot). The fallbacks are the shipped defaults, so the
+     first paint before hydration is still terminal-shaped rather than 16px sans.
+
+     Without the size here the root inherits the browser's 16px and every element that
+     does not name a size renders a third larger than the pane beside it. */
+  font-family: var(--assistant-font-family, var(--font-mono));
+  font-size: var(--assistant-font-size, 12px);
+  /* One rhythm for the chrome — masthead, activity rows, approval cards, status line —
+     so the panel does not read as several stacked components each with its own leading.
+     Prose sets its own looser value below, which is the one place a departure earns
+     itself. Deliberately unitless: it scales with whatever font-size an element ends up
+     at, where a `20px` would not. */
+  line-height: 1.45;
+}
+
 .assistant-prose {
-  color: var(--color-text-primary);
-  font-size: 0.8125rem;
-  line-height: 1.65;
+  color: var(--assistant-fg);
+  /* The pane beside this one is an xterm running JetBrains Mono at 12px
+     (src/config/terminalFont.ts, src/config/xtermConfig.ts). `--font-mono` is that
+     exact stack, so the panel reads as a sibling of the terminals rather than as a
+     chat window that wandered into the rail.
+
+     Line height is the one place this deliberately departs from xterm. The grid runs
+     at 1.0 because a fractional height leaves sub-pixel gaps between stacked
+     box-drawing glyphs and breaks the borders agent TUIs draw — a constraint that
+     simply does not exist here, where nothing is drawing a box out of characters.
+     Prose set solid at 1.0 is punishing to read, so this takes the licence the HTML
+     surface actually has. */
+  font-family: inherit;
+  font-size: inherit;
+  line-height: 1.55;
+  letter-spacing: 0;
   /* Long tool ids, URLs and paths are common here and must not force the panel to
      scroll sideways at narrow widths. */
   overflow-wrap: anywhere;
 }
 
-/* A paragraph gap has to beat the leading INSIDE a paragraph or the blocks read as
-   one run of text. At line-height 1.65 the leading is already ~0.65em, so the old
-   0.6em separated two paragraphs by less than the lines within either of them. */
+/* Block flow, owned in ONE place.
+   
+   The reset and the gap are deliberately the same specificity (0,1,0) and in this
+   order, so the gap wins on `margin-top` for every block but the first. Writing the
+   reset per element instead — `.assistant-prose p { margin: 0 }` — is what broke this:
+   that selector is (0,1,1), so it beat the sibling rule and silently zeroed the gap
+   between every paragraph, and the answer rendered as one unbroken slab. Nothing
+   failed and no rule looked wrong on its own; they only disagreed about `p`.
+   
+   So: no element below this may set its own `margin`. Elements that need a DIFFERENT
+   gap raise it here, as the headings do.
+   
+   A paragraph gap has to beat the leading INSIDE a paragraph or the blocks read as one
+   run of text. At line-height 1.55 the leading is already ~0.55em, so anything under
+   about 0.8em separates two paragraphs by less than the lines within either of them. */
+.assistant-prose > * {
+  margin: 0;
+}
 .assistant-prose > * + * {
   margin-top: 0.9em;
 }
@@ -26,12 +74,8 @@
   line-height: inherit;
 }
 
-.assistant-prose p {
-  margin: 0;
-}
-
 .assistant-prose strong {
-  color: var(--color-text-primary);
+  color: var(--assistant-fg);
   font-weight: 600;
 }
 
@@ -39,31 +83,39 @@
   font-style: italic;
 }
 
-.assistant-prose h1,
-.assistant-prose h2,
-.assistant-prose h3,
-.assistant-prose h4 {
-  color: var(--color-text-primary);
+/* A heading introduces what follows, so it takes MORE air above than two paragraphs
+   take between them — and none below, because the gap to its own body would read as
+   the heading floating between two sections. `> *` keeps it at the flow rule's
+   specificity so the two do not start fighting again. */
+.assistant-prose > h1,
+.assistant-prose > h2,
+.assistant-prose > h3,
+.assistant-prose > h4 {
+  color: var(--assistant-fg);
   font-weight: 600;
   line-height: 1.3;
-  margin-top: 1em;
+}
+.assistant-prose > * + h1,
+.assistant-prose > * + h2,
+.assistant-prose > * + h3,
+.assistant-prose > * + h4 {
+  margin-top: 1.4em;
 }
 
 .assistant-prose h1 {
-  font-size: 1.05em;
+  font-size: 1em;
 }
 .assistant-prose h2 {
   font-size: 1em;
 }
 .assistant-prose h3,
 .assistant-prose h4 {
-  font-size: 0.95em;
+  font-size: 1em;
 }
 
 .assistant-prose ul,
 .assistant-prose ol {
   padding-left: 1.15em;
-  margin: 0;
 }
 
 .assistant-prose ul {
@@ -78,21 +130,23 @@
 }
 
 .assistant-prose li::marker {
-  color: var(--color-text-muted);
+  color: var(--assistant-fg-dim);
 }
 
 .assistant-prose code {
-  font-family: var(--font-mono, ui-monospace, monospace);
-  font-size: 0.9em;
-  background: var(--color-surface-inset);
-  color: var(--color-text-primary);
+  /* Already the body font — inherited, not restated. What marks a code span here is
+     the inset ground behind it, the way it is in a terminal where the whole screen is
+     one typeface and meaning comes from colour and weight. */
+  font-size: 1em;
+  background: var(--assistant-inset);
+  color: var(--assistant-fg);
   padding: 0.1em 0.3em;
   border-radius: 3px;
 }
 
 .assistant-prose pre {
-  background: var(--color-surface-inset);
-  border: 1px solid var(--color-border-subtle);
+  background: var(--assistant-inset);
+  border: 1px solid var(--assistant-border);
   border-radius: 6px;
   padding: 0.6rem 0.7rem;
   /* Its own scroll container — the panel body must never scroll horizontally. */
@@ -102,19 +156,19 @@
 .assistant-prose pre code {
   background: transparent;
   padding: 0;
-  font-size: 0.85em;
+  font-size: 1em;
   line-height: 1.55;
 }
 
 .assistant-prose blockquote {
-  border-left: 2px solid var(--color-border-strong);
+  border-left: 2px solid var(--assistant-border-strong);
   padding-left: 0.7em;
-  color: var(--color-text-secondary);
+  color: var(--assistant-fg-secondary);
 }
 
 .assistant-prose hr {
   border: 0;
-  border-top: 1px solid var(--color-border-divider);
+  border-top: 1px solid var(--assistant-border);
 }
 
 .assistant-prose table {
@@ -123,20 +177,20 @@
   max-width: 100%;
   overflow-x: auto;
   border-collapse: collapse;
-  font-size: 0.95em;
+  font-size: 1em;
 }
 
 .assistant-prose th,
 .assistant-prose td {
-  border: 1px solid var(--color-border-subtle);
+  border: 1px solid var(--assistant-border);
   padding: 0.25em 0.5em;
   text-align: left;
 }
 
 .assistant-prose th {
-  color: var(--color-text-primary);
+  color: var(--assistant-fg);
   font-weight: 600;
-  background: var(--color-surface-inset);
+  background: var(--assistant-inset);
 }
 
 /* --- Motion -------------------------------------------------------------- */
@@ -170,7 +224,7 @@
   height: 1em;
   margin-left: 0.15em;
   vertical-align: text-bottom;
-  background: var(--color-text-secondary);
+  background: var(--assistant-fg-secondary);
   animation: assistant-caret-blink 1.1s steps(1, end) infinite;
 }
 

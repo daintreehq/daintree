@@ -18,6 +18,7 @@
  *   node scripts/build-assistant.mjs --all          # every shipped target
  *   node scripts/build-assistant.mjs --platform darwin --arch arm64
  *   node scripts/build-assistant.mjs --check        # report only, build nothing
+ *   node scripts/build-assistant.mjs --dev          # host target, never fatal
  */
 
 import { execFileSync, spawnSync } from "node:child_process";
@@ -58,16 +59,6 @@ function log(msg) {
 function fail(msg) {
   process.stderr.write(`[assistant] ERROR: ${msg}\n`);
   process.exit(1);
-}
-
-/** The submodule is empty until `git submodule update --init`. Say so plainly. */
-function assertSubmodule() {
-  if (!existsSync(path.join(SUBMODULE, "go.mod"))) {
-    fail(
-      `vendor/daintree-assistant is not checked out.\n` +
-        `  Run: git submodule update --init --recursive`
-    );
-  }
 }
 
 function goVersion() {
@@ -114,14 +105,29 @@ function buildTarget({ platform, arch, goos, goarch }, { version }) {
   return outPath;
 }
 
-/** Reads the pinned submodule version so the binary reports something meaningful. */
+/**
+ * The version the binary reports: the pinned submodule SHA, plus `-dirty` when the
+ * submodule has uncommitted changes.
+ *
+ * The suffix matters because this string is what the panel's masthead shows and what a
+ * pasted transcript is read against. Without it, an engine built from edited sources
+ * reports the SHA it was branched from, and two binaries that behave differently claim
+ * to be the same build — which is exactly the confusion this whole vendoring scheme
+ * exists to prevent.
+ */
 function resolveVersion() {
   try {
     const sha = execFileSync("git", ["rev-parse", "--short", "HEAD"], {
       cwd: SUBMODULE,
       encoding: "utf8",
     }).trim();
-    return `daintree-${sha}`;
+    // `--porcelain` is empty exactly when the tree is clean. Untracked files count:
+    // a new `.go` file changes the build.
+    const dirty = execFileSync("git", ["status", "--porcelain"], {
+      cwd: SUBMODULE,
+      encoding: "utf8",
+    }).trim();
+    return dirty ? `daintree-${sha}-dirty` : `daintree-${sha}`;
   } catch {
     return "daintree-dev";
   }
@@ -130,15 +136,45 @@ function resolveVersion() {
 function main() {
   const argv = process.argv.slice(2);
   const checkOnly = argv.includes("--check");
+  // `--dev` is the same host build, wired into `npm run dev` so the engine cannot
+  // silently lag the submodule.
+  //
+  // It exists because it already went wrong: `resources/assistant/` is written only by
+  // an explicit `npm run build:assistant`, so moving the submodule and running the app
+  // ran the PREVIOUS engine — with the previous engine's bugs — and nothing anywhere
+  // said so. The symptom was a fix that had been made, tested and committed still
+  // reproducing.
+  //
+  // Never fatal, because it is now on the path of every `npm run dev`: a contributor
+  // without Go, or one whose submodule is not checked out, gets a warning and the app
+  // they asked for. Only a run with NO usable binary at all is worth stopping.
+  const dev = argv.includes("--dev");
   const all = argv.includes("--all");
   const platformArg = argv[argv.indexOf("--platform") + 1];
   const archArg = argv[argv.indexOf("--arch") + 1];
 
-  assertSubmodule();
+  const hostBinary = path.join(OUT_DIR, assistantBinaryName(process.platform, process.arch));
+  // In dev, a problem we can degrade around is a warning; the same problem with nothing
+  // already built is still fatal, because then the assistant simply will not start and
+  // saying so here beats an inscrutable "binary missing" at first use.
+  const softFail = (msg) => {
+    if (dev && existsSync(hostBinary)) {
+      process.stderr.write(`[assistant] ${msg}\n[assistant] keeping the existing build.\n`);
+      process.exit(0);
+    }
+    fail(msg);
+  };
+
+  if (!existsSync(path.join(SUBMODULE, "go.mod"))) {
+    softFail(
+      `vendor/daintree-assistant is not checked out.\n` +
+        `  Run: git submodule update --init --recursive`
+    );
+  }
 
   const go = goVersion();
   if (!go) {
-    fail(
+    softFail(
       "Go is not on PATH. The assistant engine is a Go binary vendored as a submodule.\n" +
         "  macOS: brew install go   |   Linux: https://go.dev/dl/"
     );
@@ -170,8 +206,16 @@ function main() {
 
   mkdirSync(OUT_DIR, { recursive: true });
   const version = resolveVersion();
-  for (const t of targets) {
-    buildTarget(t, { version });
+  try {
+    for (const t of targets) {
+      buildTarget(t, { version });
+    }
+  } catch (error) {
+    // A compile error in the engine must not take `npm run dev` down with it: the app
+    // is still runnable against the last good binary, and the Go error is already on
+    // stderr above.
+    softFail(`build failed: ${error instanceof Error ? error.message : String(error)}`);
+    throw error;
   }
   log(`done → ${path.relative(ROOT, OUT_DIR)}`);
 }

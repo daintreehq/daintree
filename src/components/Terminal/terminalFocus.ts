@@ -79,9 +79,21 @@ export function resolvePaneFocusAction(options: {
  * that the user is just trying to activate.
  *
  * Intentionally narrow: only applies to the unfocused grid case, only for
- * non-pointer (non-link) cells, and never for shift+click — xterm's
- * SelectionService treats shift as the override gesture to bypass PTY mouse
- * reporting and force native text selection, so the event must reach xterm.
+ * non-pointer (non-link) cells, and never for a MODIFIED press. Both modifiers
+ * are deliberate overrides that only mean anything if xterm sees them:
+ *
+ *   - shift, which xterm's SelectionService treats as "bypass PTY mouse reporting and
+ *     force native text selection";
+ *   - alt, which under `mouseEventsRequireAlt` (see `xtermConfig.ts`) is the opposite
+ *     gesture — "give this press to the application" — and is the ONLY way to reach a
+ *     TUI's own click targets. Swallowing it made that gesture unavailable on any pane
+ *     the user had not already clicked once, which is exactly the pane they are most
+ *     likely to be reaching into.
+ *
+ * A plain first press is still swallowed, and that is on purpose: on a pane the user is
+ * only activating, it must not poke the application's mouse handlers or start a
+ * selection they did not ask for. The second press does both.
+ *
  * The redirect to hybrid input vs xterm is *not* decided here — callers
  * consult `getTerminalFocusTarget` separately.
  */
@@ -90,11 +102,13 @@ export function shouldSuppressUnfocusedClick(options: {
   isFocused: boolean;
   isCursorPointer: boolean;
   isShiftKey: boolean;
+  isAltKey?: boolean;
 }): boolean {
   if (options.location !== "grid") return false;
   if (options.isFocused) return false;
   if (options.isCursorPointer) return false;
   if (options.isShiftKey) return false;
+  if (options.isAltKey === true) return false;
   return true;
 }
 

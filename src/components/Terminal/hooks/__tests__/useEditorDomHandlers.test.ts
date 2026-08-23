@@ -22,8 +22,15 @@ vi.mock("@codemirror/view", () => ({
   },
 }));
 
+// A stable spy, not a fresh `vi.fn()` per `getState()` — the focus handler's whole
+// job here is whether it calls this, and a per-call mock records into an object no
+// test can ever see.
+const { setPreferredTerminalFocusTarget } = vi.hoisted(() => ({
+  setPreferredTerminalFocusTarget: vi.fn(),
+}));
+
 vi.mock("@/store/panelStore", () => ({
-  usePanelStore: { getState: () => ({ setPreferredTerminalFocusTarget: vi.fn() }) },
+  usePanelStore: { getState: () => ({ setPreferredTerminalFocusTarget }) },
 }));
 
 vi.mock("@/store/terminalInputStore", () => ({
@@ -46,6 +53,7 @@ function params(): Params {
     sendFromEditor: vi.fn(),
     rootRef: { current: null },
     setActiveCompletionContext: vi.fn(),
+    participatesInTerminalFocusRef: { current: true },
   };
 }
 
@@ -92,6 +100,7 @@ function claimed(types: readonly string[] | null): boolean {
 
 beforeEach(() => {
   factory.calls = 0;
+  setPreferredTerminalFocusTarget.mockClear();
 });
 
 describe("useEditorDomHandlers drop", () => {
@@ -135,6 +144,48 @@ describe("useEditorDomHandlers drop", () => {
     dropHandlerOf(result.current)(event, {});
 
     expect(stopPropagation).not.toHaveBeenCalled();
+  });
+});
+
+function focusHandlerOf(extension: unknown): () => boolean {
+  if (
+    typeof extension !== "object" ||
+    extension === null ||
+    !("focus" in extension) ||
+    typeof extension.focus !== "function"
+  ) {
+    throw new Error("the hook registered no focus handler");
+  }
+  return extension.focus as () => boolean;
+}
+
+describe("useEditorDomHandlers focus", () => {
+  // `preferredTerminalFocusTarget` is session-wide state that every focused
+  // TerminalPane re-runs its focus effect on. A bar that is not one of a terminal
+  // pane's own surfaces — the assistant panel's composer — writing it turned each
+  // click in that composer into a focus steal by whichever grid terminal still held
+  // store focus.
+  it("records the terminal focus preference only for a bar that is a terminal surface", () => {
+    const attached = renderHook(() => useEditorDomHandlers(params()));
+    focusHandlerOf(attached.result.current)();
+    expect(setPreferredTerminalFocusTarget).toHaveBeenCalledWith("hybridInput");
+
+    setPreferredTerminalFocusTarget.mockClear();
+
+    const detached = renderHook(() =>
+      useEditorDomHandlers({ ...params(), participatesInTerminalFocusRef: { current: false } })
+    );
+    focusHandlerOf(detached.result.current)();
+    expect(setPreferredTerminalFocusTarget).not.toHaveBeenCalled();
+  });
+
+  // The handler is one entry in a map CodeMirror walks; returning true would claim
+  // the event and stop the editor from taking focus at all.
+  it("never claims the focus event either way", () => {
+    const detached = renderHook(() =>
+      useEditorDomHandlers({ ...params(), participatesInTerminalFocusRef: { current: false } })
+    );
+    expect(focusHandlerOf(detached.result.current)()).toBe(false);
   });
 });
 

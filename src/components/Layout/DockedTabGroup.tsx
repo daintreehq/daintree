@@ -125,7 +125,6 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
   const trashPanel = usePanelStore((s) => s.trashPanel);
   const updateTitle = usePanelStore((s) => s.updateTitle);
   const hybridInputEnabled = useTerminalInputStore((s) => s.hybridInputEnabled);
-  const preferredTerminalFocusTarget = usePanelStore((s) => s.preferredTerminalFocusTarget);
   const reorderPanelsInGroup = usePanelStore((s) => s.reorderPanelsInGroup);
   const addPanel = usePanelStore((s) => s.addPanel);
   const addPanelToGroup = usePanelStore((s) => s.addPanelToGroup);
@@ -275,8 +274,20 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     if (!isOpen || !portalContainer || !activePanelId) return;
     if (activeFocusPolicy === "preserve") return;
 
+    // Read, not subscribed. The preference is session-wide state that surfaces all over
+    // the app write — the assistant panel's composer among them — and listing it as a
+    // dependency made every write of it re-run this effect and re-focus an open dock
+    // terminal, taking the caret off whatever the user was actually typing in. It says
+    // WHICH surface a focus lands on, never that one should happen.
+    //
+    // The remaining dependencies are not all focus requests either: agent identity,
+    // backend status and the hybrid-input setting can all change under an open popover,
+    // and a focus-only move does not dismiss one (`dockPopoverGuard`), so this can still
+    // fire while something outside the dock holds the caret. Narrowing that to the open
+    // and tab-navigation transitions is the same work the grid panes' handoff/re-route
+    // split does, and is not done here.
     const focusTarget = getTerminalFocusTarget({
-      preferredTarget: preferredTerminalFocusTarget,
+      preferredTarget: usePanelStore.getState().preferredTerminalFocusTarget,
       hasHybridInputSurface: activeIsAgent,
       isInputDisabled: backendStatus === "disconnected" || backendStatus === "recovering",
       hybridInputEnabled,
@@ -290,7 +301,6 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
     activePanelId,
     activeFocusPolicy,
     activeIsAgent,
-    preferredTerminalFocusTarget,
     backendStatus,
     hybridInputEnabled,
   ]);

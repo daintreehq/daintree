@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { getVisibleTabbableElements } from "@/lib/accessibility";
 
 export type MacroRegion = "grid" | "dock" | "sidebar" | "portal" | "assistant";
 
@@ -17,6 +18,33 @@ interface MacroFocusState {
 
 function getVisibleRegions(visibility: Record<MacroRegion, boolean>): MacroRegion[] {
   return REGION_ORDER.filter((r) => visibility[r]);
+}
+
+/**
+ * Moves DOM focus into a region, whether or not its ROOT can take focus.
+ *
+ * A region root is a landmark, and a landmark does not have to be focusable — the
+ * assistant's deliberately is not, because a permanently focusable container collapses
+ * any selection drag started inside it (see `HelpPanel`). `el.focus()` on such an
+ * element is a silent no-op, and the store would then claim a region the keyboard had
+ * never actually reached: the caret stays in the pane the user cycled AWAY from, so the
+ * next keystroke goes to the wrong surface while the chrome says otherwise.
+ *
+ * So the root is tried first — regions whose root IS focusable keep exactly their old
+ * behaviour — and anything that does not take it falls through to the first thing inside
+ * that will. The separator is skipped: every panel's first tabbable is its resize
+ * handle, and landing there gives the user a drag control rather than the surface they
+ * asked for.
+ */
+function focusRegionRoot(el: HTMLElement | undefined): void {
+  if (!el) return;
+  el.focus({ preventScroll: true });
+  if (el.contains(el.ownerDocument.activeElement)) return;
+  for (const candidate of getVisibleTabbableElements(el)) {
+    if (candidate.getAttribute("role") === "separator") continue;
+    candidate.focus({ preventScroll: true });
+    return;
+  }
 }
 
 export const useMacroFocusStore = create<MacroFocusState>((set, get) => ({
@@ -56,7 +84,7 @@ export const useMacroFocusStore = create<MacroFocusState>((set, get) => ({
     }
 
     set({ focusedRegion: next });
-    refs.get(next)?.focus({ preventScroll: true });
+    focusRegionRoot(refs.get(next));
   },
 
   cyclePrev: () => {
@@ -73,7 +101,7 @@ export const useMacroFocusStore = create<MacroFocusState>((set, get) => ({
     }
 
     set({ focusedRegion: prev });
-    refs.get(prev)?.focus({ preventScroll: true });
+    focusRegionRoot(refs.get(prev));
   },
 
   clearFocus: () => {

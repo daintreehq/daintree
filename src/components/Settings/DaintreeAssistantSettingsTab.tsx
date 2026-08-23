@@ -43,7 +43,7 @@ import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { getAgentConfig, getAssistantSupportedAgentIds } from "@/config/agents";
 import { DEFAULT_DANGEROUS_ARGS } from "@shared/types/agentSettings";
 import { agentCapabilitiesClient } from "@/clients/agentCapabilitiesClient";
-import type { AgentModelConfig } from "@shared/config/agentRegistry";
+import { DAINTREE_ASSISTANT_AGENT_ID, type AgentModelConfig } from "@shared/config/agentRegistry";
 import { useHelpPanelStore, selectActiveSlot } from "@/store/helpPanelStore";
 import type {
   HelpAssistantIdleHibernateMinutes,
@@ -299,6 +299,17 @@ export function DaintreeAssistantSettingsTab() {
   useSettingsTabValidation("assistant", Boolean(error));
 
   const preferredAgentId = useHelpPanelStore((s) => s.preferredAgentId);
+  /**
+   * Whether the assistant surface is Daintree's own engine.
+   *
+   * Resolved the SAME way `HelpPanel` resolves it — an unset preference means the
+   * native assistant, because that is the default surface. Reading the raw preference
+   * instead hid every engine-specific control from exactly the people who get the
+   * engine: someone who has never opened the agent picker has `preferredAgentId ===
+   * null`, gets the native panel, and saw no debug-logging switch anywhere in settings.
+   */
+  const isNativeAssistant =
+    (preferredAgentId ?? DAINTREE_ASSISTANT_AGENT_ID) === DAINTREE_ASSISTANT_AGENT_ID;
   const setPreferredAgent = useHelpPanelStore((s) => s.setPreferredAgent);
   const droppedPreferredAgentId = useHelpPanelStore((s) => s.droppedPreferredAgentId);
   const clearDroppedPreferredAgent = useHelpPanelStore((s) => s.clearDroppedPreferredAgent);
@@ -918,7 +929,7 @@ export function DaintreeAssistantSettingsTab() {
           onChange={handleCustomArgsChange}
           disabled={loading}
         />
-        {preferredAgentId === "daintree-assistant" && (
+        {isNativeAssistant && (
           <SettingsSwitchCard
             variant="compact"
             icon={ScrollText}

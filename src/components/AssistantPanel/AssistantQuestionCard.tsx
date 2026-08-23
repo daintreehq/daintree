@@ -97,17 +97,23 @@ export function AssistantQuestionCard({ question, onAnswer }: AssistantQuestionC
       tabIndex={-1}
       role="group"
       aria-label="Question"
+      // This sheet OWNS Escape — it dismisses the question. Without the marker the
+      // panel's own Esc-to-close fires as well, hiding the panel while the engine stays
+      // parked waiting for an answer that can no longer be given.
+      data-escape-owner="question"
       onKeyDown={onKeyDown}
-      className="rounded-md border border-border-strong bg-surface-inset/60 p-2.5 outline-hidden"
+      className="rounded-md border border-[var(--assistant-border-strong)] bg-[var(--assistant-inset)]/60 p-2.5 outline-hidden"
     >
-      <p className="text-xs font-medium text-accent-primary">Daintree needs a decision</p>
-      <p className="mt-1.5 text-sm">{question.question}</p>
+      <p className="text-[1em] font-medium text-[var(--assistant-accent)]">
+        Daintree needs a decision
+      </p>
+      <p className="mt-1.5 text-[1em]">{question.question}</p>
 
       <div
         role="listbox"
         aria-label="Options"
         aria-activedescendant={`q-${question.questionId}-${cursor}`}
-        className="mt-2 border-y border-border-divider py-1"
+        className="mt-2 border-y border-[var(--assistant-border)] py-1"
       >
         {question.options.map((option, i) => (
           <button
@@ -119,23 +125,23 @@ export function AssistantQuestionCard({ question, onAnswer }: AssistantQuestionC
             onMouseEnter={() => setCursor(i)}
             onClick={() => answer(i)}
             className={cn(
-              "flex w-full items-baseline gap-2 rounded-sm px-1.5 py-1 text-left text-xs",
+              "flex w-full items-baseline gap-2 rounded-sm px-1.5 py-1 text-left text-[1em]",
               "transition-colors duration-150 ease-out",
-              i === cursor ? "bg-overlay-subtle" : "hover:bg-overlay-subtle/60"
+              i === cursor ? "bg-[var(--assistant-hover)]" : "hover:bg-[var(--assistant-hover)]/60"
             )}
           >
-            <span className="shrink-0 font-mono opacity-60">{option.label}</span>
+            <span className="shrink-0 text-[var(--assistant-fg-secondary)]">{option.label}</span>
             <span className="min-w-0 flex-1">{option.text}</span>
           </button>
         ))}
       </div>
 
-      <div className="mt-1.5 flex items-center justify-between gap-2 text-[10px] opacity-50">
+      <div className="mt-1.5 flex items-center justify-between gap-2 text-[0.92em] text-[var(--assistant-fg-secondary)]">
         <span>↑↓ move · letter or Enter to answer</span>
         <button
           type="button"
           onClick={() => answer(-1)}
-          className="rounded-sm px-1.5 py-0.5 transition-colors duration-150 ease-out hover:bg-overlay-subtle"
+          className="rounded-sm px-1.5 py-0.5 transition-colors duration-150 ease-out hover:bg-[var(--assistant-hover)]"
         >
           Dismiss
         </button>

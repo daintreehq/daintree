@@ -121,7 +121,7 @@ export const AssistantMessage = memo(function AssistantMessage({
               href={href}
               target="_blank"
               rel="noopener noreferrer"
-              className="text-text-link underline decoration-text-link/40 underline-offset-2 hover:decoration-text-link"
+              className="text-[var(--assistant-accent)] underline decoration-[var(--assistant-accent)]/40 underline-offset-2 hover:decoration-[var(--assistant-accent)]"
             >
               {children}
             </a>

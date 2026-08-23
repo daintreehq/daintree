@@ -112,6 +112,41 @@ import { DropdownMenuItem } from "@/components/ui/dropdown-menu";
 export type {};
 
 /**
+ * The two elements a pane is actually TYPED into: xterm's helper textarea and the
+ * composer's CodeMirror.
+ *
+ * Named this precisely rather than by their containers. `.xterm` also holds the
+ * accessibility rows xterm focuses in screen-reader mode, and `[data-hybrid-input-root]`
+ * also holds the command-picker, stash and voice buttons — reading terminal output with
+ * a screen reader, or tabbing to a button, is not a claim on the keyboard that a change
+ * to the pane's chrome gets to overrule.
+ */
+const PANE_TYPING_SURFACES = ".xterm-helper-textarea, .cm-editor";
+
+/** Whether the caret is in one of THIS pane's typing surfaces. */
+function paneOwnsTypingFocus(container: HTMLElement | null): boolean {
+  const active = document.activeElement;
+  if (!container || !(active instanceof HTMLElement)) return false;
+  if (!container.contains(active)) return false;
+  return active.closest(PANE_TYPING_SURFACES) !== null;
+}
+
+/**
+ * Whether a re-route between this pane's own surfaces may go ahead.
+ *
+ * Owning the caret is the ordinary case. The other one is nobody owning it: Chromium
+ * drops focus to `<body>` when the focused element is REMOVED, which is exactly what
+ * losing a hybrid input bar under a live caret looks like by the time a passive effect
+ * runs. Requiring ownership there would strand the keyboard nowhere at all, when the
+ * surface that inherits it is sitting in the same pane.
+ */
+function paneMayRerouteFocus(container: HTMLElement | null): boolean {
+  const active = document.activeElement;
+  if (!active || active === document.body) return true;
+  return paneOwnsTypingFocus(container);
+}
+
+/**
  * Live selection/focus state of a pane's xterm, for `resolvePaneFocusAction`.
  * Ownership is measured against `hostElement` — the xterm host specifically,
  * not the pane container, which also holds the input bar and toolbar.
@@ -536,7 +571,9 @@ function TerminalPaneComponent({
   );
 
   const hybridInputEnabled = useTerminalInputStore((state) => state.hybridInputEnabled);
-  const preferredTerminalFocusTarget = usePanelStore((state) => state.preferredTerminalFocusTarget);
+  // Deliberately NOT subscribed — see `applyPaneFocusTarget`. This pane reads
+  // `preferredTerminalFocusTarget` at the moment it is already moving the caret; a
+  // subscription made every write of it, from anywhere in the app, a reason to move.
   const setPreferredTerminalFocusTarget = usePanelStore(
     (state) => state.setPreferredTerminalFocusTarget
   );
@@ -918,6 +955,7 @@ function TerminalPaneComponent({
       isFocused,
       isCursorPointer: xtermElement.classList.contains("xterm-cursor-pointer"),
       isShiftKey: e.shiftKey,
+      isAltKey: e.altKey,
     });
 
     // A physical click that reaches xterm is an explicit "I want the terminal"
@@ -1009,48 +1047,143 @@ function TerminalPaneComponent({
       .finally(() => setRetryingAttachId((current) => (current === id ? null : current)));
   }, [id]);
 
+  // The latest focus request this pane has made. Bumped by every `applyPaneFocusTarget`
+  // call so a frame scheduled by an earlier one stands down instead of landing on a
+  // target that has since changed.
+  const focusRequestRef = useRef(0);
+
+  // The id this pane last held focus FOR. A grid tab group renders its panel component
+  // unkeyed, so switching tabs hands the same live component a different `id` rather
+  // than mounting a new one — and that is a structural swap, not the user navigating
+  // here. See the handoff effect.
+  const focusedForIdRef = useRef<string | null>(null);
+
+  /**
+   * Put the caret on whichever of this pane's surfaces currently applies, and hand back
+   * a canceller for the frame it schedules (or `undefined` when nothing needed doing).
+   *
+   * `preferredTerminalFocusTarget` is READ here rather than subscribed. It is
+   * session-wide state that surfaces all over the app write — including the assistant
+   * panel's composer, which is not a terminal surface at all — and subscribing turned
+   * every write of it into a re-run of the focus effect for whichever pane happened to
+   * hold store focus. That is how clicking the assistant composer pulled the caret back
+   * into a plain grid terminal a frame later. The preference answers WHICH of this
+   * pane's surfaces gets the keyboard, so it is sampled once a move is already
+   * authorized and is never the thing that authorizes one.
+   *
+   * `reason` separates the two callers, which want different things from the frame:
+   *
+   *   "handoff" — the pane became the focused one. Its cleanup means "no longer", so a
+   *   grab already scheduled INSIDE the input bar must be revoked too: the bar defers
+   *   the real `view.focus()` to a frame of its own, which cancelling the frame
+   *   scheduled here does not reach. It does not re-check DOM ownership when it lands,
+   *   because during a handoff the caret is somewhere else by definition.
+   *
+   *   "reroute" — the pane's own surfaces changed under a caret it already holds. The
+   *   opposite on both counts: it must NOT revoke the bar's grab, since that grab is
+   *   usually one a handoff scheduled and killing it strands a freshly focused pane
+   *   with no caret (an agent identity resolving right after launch does exactly this);
+   *   and it re-checks ownership when it lands, because the user can click away inside
+   *   the frame it waited for.
+   *
+   * Both take a generation, so the LATEST request wins. Without it a stale frame could
+   * land after a fresher one: a plain pane resolving to xterm, then growing an input bar
+   * before its frame ran, focused xterm anyway — and xterm's `focusin` writes the
+   * preference back to "xterm", after which the bar's own frame stood itself down and
+   * the stale target won permanently.
+   */
+  const applyPaneFocusTarget = useCallback(
+    (reason: "handoff" | "reroute"): (() => void) | undefined => {
+      const generation = ++focusRequestRef.current;
+      const isCurrent = () => focusRequestRef.current === generation;
+      // Read selection and focus ownership synchronously, before any handoff.
+      // Deciding up front (rather than inside the deferred RAF) also keeps focus
+      // from briefly landing on the ContentPanel container, which made screen
+      // readers announce the container instead of the input bar.
+      const action = resolvePaneFocusAction({
+        focusTarget: getTerminalFocusTarget({
+          preferredTarget: usePanelStore.getState().preferredTerminalFocusTarget,
+          hasHybridInputSurface: showHybridInputBar,
+          isInputDisabled: isHybridInputDisabled,
+          hybridInputEnabled,
+        }),
+        ...readXtermSelectionState(id),
+      });
+
+      if (action === "preserve") return undefined;
+
+      // A RAF defers the handoff until the pane has painted.
+      const stillWanted = () =>
+        isCurrent() && (reason === "handoff" || paneMayRerouteFocus(containerRef.current));
+
+      if (action === "hybridInput") {
+        const rafId = requestAnimationFrame(() => {
+          if (!stillWanted()) return;
+          inputBarRef.current?.focusWithCursorAtEnd();
+        });
+        return () => {
+          cancelAnimationFrame(rafId);
+          if (reason === "handoff") inputBarRef.current?.cancelPendingFocus();
+        };
+      }
+
+      const rafId = requestAnimationFrame(() => {
+        if (!stillWanted()) return;
+        terminalInstanceService.focus(id);
+      });
+      return () => cancelAnimationFrame(rafId);
+    },
+    [id, showHybridInputBar, isHybridInputDisabled, hybridInputEnabled]
+  );
+
+  // Held in a ref so the handoff effect below can call the latest version WITHOUT
+  // taking it as a dependency: that effect must run when this pane becomes the focused
+  // one and at no other time, and listing the callback would also re-run it on every
+  // surface change — which is the second effect's job, under a gate the first must not
+  // have.
+  const applyPaneFocusTargetRef = useRef(applyPaneFocusTarget);
+  useEffect(() => {
+    applyPaneFocusTargetRef.current = applyPaneFocusTarget;
+  }, [applyPaneFocusTarget]);
+
+  // 1. The handoff. This pane became the focused one, so the caret comes here —
+  //    unconditionally, because during a real handoff the caret is somewhere else BY
+  //    DEFINITION and nothing about where it currently sits may veto the move. Being
+  //    unconditional is also what keeps it correct under StrictMode, whose
+  //    mount/cleanup/mount replay cancels the first frame: an "only on the false→true
+  //    edge" rule sees no edge on the replay and leaves a fresh pane with no caret.
+  //
+  //    The one thing that is NOT a handoff is a structural id swap. A grid tab group
+  //    renders its panel unkeyed, so switching tabs — or the focus slice falling back to
+  //    another panel when the focused one is removed, which it does without any user
+  //    navigating anywhere — hands this same live component a new `id` while `isFocused`
+  //    stays true. Treated as a handoff, that is a focus steal wearing a handoff's
+  //    clothes: it fires while the user is typing in the assistant panel and takes the
+  //    caret. Compared against the id we last held focus for rather than an edge flag,
+  //    which is what makes the StrictMode replay (same id, twice) still count as one.
   useEffect(() => {
     terminalInstanceService.setFocused(id, isFocused);
-
+    const previousId = focusedForIdRef.current;
+    focusedForIdRef.current = isFocused ? id : null;
     if (!isFocused) return;
 
-    // Read selection and focus ownership synchronously, before any handoff.
-    // Deciding up front (rather than inside the deferred RAF) also keeps focus
-    // from briefly landing on the ContentPanel container, which made screen
-    // readers announce the container instead of the input bar.
-    const action = resolvePaneFocusAction({
-      focusTarget: getTerminalFocusTarget({
-        preferredTarget: preferredTerminalFocusTarget,
-        hasHybridInputSurface: showHybridInputBar,
-        isInputDisabled: isHybridInputDisabled,
-        hybridInputEnabled,
-      }),
-      ...readXtermSelectionState(id),
-    });
+    const isStructuralSwap = previousId !== null && previousId !== id;
+    if (isStructuralSwap && !paneMayRerouteFocus(containerRef.current)) return;
 
-    if (action === "preserve") return;
+    return applyPaneFocusTargetRef.current("handoff");
+  }, [id, isFocused]);
 
-    if (action === "hybridInput") {
-      // A RAF defers the handoff until the pane has painted.
-      const rafId = requestAnimationFrame(() => {
-        inputBarRef.current?.focusWithCursorAtEnd();
-      });
-      return () => {
-        cancelAnimationFrame(rafId);
-        inputBarRef.current?.cancelPendingFocus();
-      };
-    }
-
-    const rafId = requestAnimationFrame(() => terminalInstanceService.focus(id));
-    return () => cancelAnimationFrame(rafId);
-  }, [
-    id,
-    isFocused,
-    showHybridInputBar,
-    hybridInputEnabled,
-    preferredTerminalFocusTarget,
-    isHybridInputDisabled,
-  ]);
+  // 2. This pane's own surfaces changed under a caret it ALREADY holds — an agent
+  //    identity resolving grows an input bar beneath a live xterm, an input lock takes
+  //    one away — so the caret moves to the surface that now applies. Gated on actually
+  //    holding it: a change to this pane's chrome is no reason to take the keyboard off
+  //    whatever the user is really typing in, which for a pane that stays store-focused
+  //    the whole time the assistant panel is open is very often somewhere else.
+  useEffect(() => {
+    if (!isFocused) return;
+    if (!paneMayRerouteFocus(containerRef.current)) return;
+    return applyPaneFocusTarget("reroute");
+  }, [isFocused, applyPaneFocusTarget]);
 
   useEffect(() => {
     // The registry is invoked on tab switches inside a focused tab group —
