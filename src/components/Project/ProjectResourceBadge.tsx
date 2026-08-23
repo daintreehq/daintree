@@ -368,8 +368,12 @@ export function ProjectResourceBadge() {
 
   useEffect(() => {
     let cancelled = false;
-    let pending = false;
     let interval: ReturnType<typeof setInterval> | null = null;
+    // Suppression starts a new epoch. A request in flight across one is stale by
+    // an unbounded amount, so it must neither be applied on the other side nor
+    // coalesce against the resume refresh.
+    let generation = 0;
+    let inFlightGen: number | null = null;
 
     // Two independent suppressions, AND'd. `document.hidden` catches a
     // minimized/occluded window; it cannot catch a cached project view, which
@@ -384,24 +388,29 @@ export function ProjectResourceBadge() {
       // the resume paths too, and clearing an interval can't retract a callback
       // the event loop has already picked up.
       if (cancelled || !shouldPoll()) return;
-      // Skip if a previous poll is still in flight so a slow IPC round-trip
-      // can't stack overlapping calls or write results out of order.
-      if (pending) return;
-      pending = true;
+      // Skip if a poll from this epoch is still in flight so a slow IPC
+      // round-trip can't stack overlapping calls or write results out of order.
+      // Scoped to the epoch: a request stranded by a pause must not hold the
+      // resume's immediate refresh hostage for a whole interval.
+      if (inFlightGen === generation) return;
+      const gen = generation;
+      inFlightGen = gen;
       try {
         const result = await fetchStats();
-        if (!cancelled && result) {
-          samplesRef.current = result.nextSamples;
-          setSamples(result.nextSamples);
-          setStats({
-            runningProjects: result.runningProjects,
-            totalMemoryMB: result.totalMemoryMB,
-            projects: result.projects,
-          });
-          setIsLoading(false);
-        }
+        // A result that lands after its epoch closed carries a pre-pause
+        // reading, and the resume already cleared the trend window it would
+        // seed — dropping it is the other half of that discard.
+        if (cancelled || gen !== generation || !result) return;
+        samplesRef.current = result.nextSamples;
+        setSamples(result.nextSamples);
+        setStats({
+          runningProjects: result.runningProjects,
+          totalMemoryMB: result.totalMemoryMB,
+          projects: result.projects,
+        });
+        setIsLoading(false);
       } finally {
-        pending = false;
+        if (inFlightGen === gen) inFlightGen = null;
       }
     };
 
@@ -409,6 +418,7 @@ export function ProjectResourceBadge() {
       if (interval === null) return;
       clearInterval(interval);
       interval = null;
+      generation++;
     };
 
     // Single entry point for both gates so a repeated signal — visible while
@@ -452,6 +462,19 @@ export function ProjectResourceBadge() {
       stopInterval();
     };
   }, [fetchStats]);
+
+  // The popover's own 4s poll and 1s freshness tick are gated on `open` alone,
+  // and caching a view is `removeChildView` + `setVisible(false)` — no
+  // interaction inside this document, so Radix never sees a dismiss. Left open,
+  // it would out-poll the badge loop gated above in a view nobody can see.
+  // Closing is also what the switch implies: the user left this project.
+  useEffect(
+    () =>
+      subscribeProjectViewLifecycle((phase) => {
+        if (phase === "cached") setOpen(false);
+      }),
+    []
+  );
 
   // Stale-while-revalidate: keep the last snapshot across closes so reopening
   // shows data instantly; the poll below refreshes it silently.

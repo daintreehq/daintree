@@ -49,6 +49,7 @@ vi.mock("@/components/ui/popover", () => ({
 }));
 
 import { projectClient, systemClient } from "@/clients";
+import { __resetProjectViewCacheStateForTests } from "@/lib/viewCacheState";
 import type { Project } from "@shared/types";
 import type { BulkProjectStatsEntry } from "@shared/types/ipc/project";
 import type {
@@ -147,8 +148,35 @@ async function renderOpenBadge(): Promise<HTMLElement> {
   return container;
 }
 
+// Drives the real `viewCacheState` singleton through its preload boundary, the
+// same way ProjectResourceBadge.test.tsx does.
+let cachedHandlers: Set<() => void>;
+
+function emitCached(): void {
+  Array.from(cachedHandlers).forEach((h) => h());
+}
+
+function findMemoryRow(container: HTMLElement, value: string): HTMLElement | undefined {
+  return Array.from(container.querySelectorAll("div")).find(
+    (el) => el.children.length === 2 && el.children[1].textContent === value
+  );
+}
+
 function setupDefaultMocks(): void {
   vi.useFakeTimers();
+  cachedHandlers = new Set();
+  vi.stubGlobal("electron", {
+    app: {
+      onViewCached: (cb: () => void) => {
+        cachedHandlers.add(cb);
+        return () => cachedHandlers.delete(cb);
+      },
+      onViewWarmActivated: () => () => {},
+      onViewRevealed: () => () => {},
+      isViewCached: () => false,
+    },
+  });
+  __resetProjectViewCacheStateForTests();
   mockGetAll.mockReset().mockResolvedValue([makeProject()]);
   mockGetBulkStats.mockReset().mockResolvedValue({
     p1: makeBulkStatsEntry({
@@ -173,6 +201,9 @@ function setupDefaultMocks(): void {
 }
 
 function restoreTimersAndMocks(): void {
+  // Reset before unstubbing so the singleton still has a bridge to detach from.
+  __resetProjectViewCacheStateForTests();
+  vi.unstubAllGlobals();
   vi.useRealTimers();
   vi.restoreAllMocks();
 }
@@ -185,14 +216,47 @@ describe("ProjectResourceBadge — popover memory honesty", () => {
   it("labels measured app and workload memory from the composite snapshot", async () => {
     const container = await renderOpenBadge();
 
-    expect(container.textContent).toContain("Working set (sums shared pages per process)");
-    expect(container.textContent).toContain("300MB");
+    // Scoped to the row carrying the measured figure, and asserted on meaning
+    // rather than the exact sentence: the row must name what it measures and
+    // disclose the double-count instead of claiming a footprint it isn't.
+    const workingSetRow = findMemoryRow(container, "300MB");
+    expect(workingSetRow).toBeDefined();
+    const workingSetLabel = workingSetRow?.children[0].textContent?.toLowerCase() ?? "";
+    expect(workingSetLabel).toContain("working set");
+    expect(workingSetLabel).toContain("shared pages");
+    expect(workingSetLabel).not.toContain("app memory");
     expect(container.textContent).toContain("Terminal workloads");
     expect(container.textContent).toContain("900MB");
     // Measured per-project value renders without the estimate marker or legend.
     expect(container.textContent).toContain("750MB");
     expect(container.textContent).not.toContain("~");
     expect(container.textContent).not.toContain("estimated from terminal count");
+  });
+
+  it("stops the popover poll when the project view is cached", async () => {
+    await renderOpenBadge();
+    const onOpen = mockGetMemorySnapshot.mock.calls.length;
+    expect(onOpen).toBeGreaterThanOrEqual(1);
+
+    // Positive control: the 4s poll really is running while open.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(12_000);
+    });
+    const whilePolling = mockGetMemorySnapshot.mock.calls.length;
+    expect(whilePolling).toBeGreaterThan(onOpen);
+
+    await act(async () => {
+      emitCached();
+    });
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(12_000);
+    });
+
+    // Caching is `removeChildView` + `setVisible(false)` — no interaction in
+    // this document, so Radix never dismisses on its own and this poll would
+    // otherwise outrun the badge poll in a view nobody can see.
+    expect(mockGetMemorySnapshot.mock.calls.length).toBe(whilePolling);
+    expect(vi.getTimerCount()).toBe(0);
   });
 
   it("shows Unavailable instead of a fake zero when nothing was ever measured", async () => {
