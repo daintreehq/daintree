@@ -448,8 +448,9 @@ describe("ProjectResourceBadge — visibility- and cache-aware polling", () => {
   });
 
   it("refetches on resume and drops a poll left in flight across the pause", async () => {
+    const survivor = makeProject({ id: "a", name: "A" });
     const stalled = [
-      makeProject({ id: "a", name: "A" }),
+      survivor,
       makeProject({ id: "b", name: "B" }),
       makeProject({ id: "c", name: "C" }),
     ];
@@ -463,7 +464,7 @@ describe("ProjectResourceBadge — visibility- and cache-aware polling", () => {
     const stalledFetch = new Promise<Project[]>((resolve) => {
       releaseStalled = resolve;
     });
-    mockGetAll.mockReturnValueOnce(stalledFetch).mockResolvedValue([stalled[0]]);
+    mockGetAll.mockReturnValueOnce(stalledFetch).mockResolvedValue([survivor]);
 
     const { container } = render(<ProjectResourceBadge />);
     await flush();

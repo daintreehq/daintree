@@ -160,7 +160,7 @@ function emitCached(): void {
 
 function findMemoryRow(container: HTMLElement, value: string): HTMLElement | undefined {
   return Array.from(container.querySelectorAll("div")).find(
-    (el) => el.children.length === 2 && el.children[1].textContent === value
+    (el) => el.children.length === 2 && el.children[1]?.textContent === value
   );
 }
 
@@ -234,7 +234,7 @@ describe("ProjectResourceBadge — popover memory honesty", () => {
     // disclose the double-count instead of claiming a footprint it isn't.
     const workingSetRow = findMemoryRow(container, "300MB");
     expect(workingSetRow).toBeDefined();
-    const workingSetLabel = workingSetRow?.children[0].textContent?.toLowerCase() ?? "";
+    const workingSetLabel = workingSetRow?.children[0]?.textContent?.toLowerCase() ?? "";
     expect(workingSetLabel).toContain("working set");
     expect(workingSetLabel).toContain("shared pages");
     expect(workingSetLabel).not.toContain("app memory");
