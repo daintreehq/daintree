@@ -14,8 +14,16 @@
   overflow-wrap: anywhere;
 }
 
+/* A paragraph gap has to beat the leading INSIDE a paragraph or the blocks read as
+   one run of text. At line-height 1.65 the leading is already ~0.65em, so the old
+   0.6em separated two paragraphs by less than the lines within either of them. */
 .assistant-prose > * + * {
-  margin-top: 0.6em;
+  margin-top: 0.9em;
+}
+/* A hard break is the model's own line structure (see remarkSoftBreaks): it must stay
+   visibly tighter than a paragraph gap, or the two stop meaning different things. */
+.assistant-prose br {
+  line-height: inherit;
 }
 
 .assistant-prose p {
@@ -204,6 +212,63 @@
   animation: assistant-pulse 1.6s ease-in-out infinite;
 }
 
+/* The cockpit's braille spinner, frame for frame (internal/ui/theme/glyphs.go:56).
+   It is the "silent work" cue on the live status line — the model is working and
+   nothing is streaming yet.
+
+   Driven by an animated `content` rather than a React tick: the frame rate a spinner
+   needs (~12fps) is far faster than the 500ms elapsed clock, and a second interval
+   re-rendering the whole transcript ten times a second to move one glyph is a real
+   cost for a decorative character. Each frame owns an explicit band so the discrete
+   value holds for its whole slice instead of flipping at the midpoint. */
+@keyframes assistant-spinner-frames {
+  0%,
+  9.99% {
+    content: "\2839";
+  }
+  10%,
+  19.99% {
+    content: "\2819";
+  }
+  20%,
+  29.99% {
+    content: "\2839";
+  }
+  30%,
+  39.99% {
+    content: "\2838";
+  }
+  40%,
+  49.99% {
+    content: "\283c";
+  }
+  50%,
+  59.99% {
+    content: "\2834";
+  }
+  60%,
+  69.99% {
+    content: "\2826";
+  }
+  70%,
+  79.99% {
+    content: "\2827";
+  }
+  80%,
+  89.99% {
+    content: "\2807";
+  }
+  90%,
+  100% {
+    content: "\280f";
+  }
+}
+
+.assistant-spinner::after {
+  content: "\2839";
+  animation: assistant-spinner-frames 0.8s infinite;
+}
+
 /* NOTE: the active-call spinner uses the app's existing global `.animate-spin-slow`
    (src/index.css). Redefining it here would have overridden it for every other
    component that uses it — the panel header, the panel tab, the agent-state chip —
@@ -226,6 +291,11 @@
   .assistant-pulse {
     opacity: 1;
   }
+  /* The spinner holds on its first frame: it still marks the line as live, and the
+     elapsed clock beside it carries the "time is passing" signal on its own. */
+  .assistant-spinner::after {
+    animation: none;
+  }
 }
 
 body[data-reduce-animations="true"] .assistant-prose.is-streaming > *:last-child::after,
@@ -237,4 +307,8 @@ body[data-reduce-animations="true"] .assistant-caret,
 body[data-reduce-animations="true"] .assistant-pulse {
   animation: none;
   opacity: 1;
+}
+
+body[data-reduce-animations="true"] .assistant-spinner::after {
+  animation: none;
 }

@@ -1,4 +1,4 @@
-import { useMemo } from "react";
+import { useCallback, useMemo } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { AssistantPanelView } from "./AssistantPanelView";
 import { useAssistantSession } from "./useAssistantSession";
@@ -34,15 +34,30 @@ export function AssistantPanel({
   restartNonce = 0,
   className,
 }: AssistantPanelProps) {
-  const { submit, interrupt, decideApproval, answerQuestion } = useAssistantSession({
-    projectId,
-    cwd: projectPath,
-    enabled: active,
-    restartNonce,
-  });
+  const { submit, interrupt, decideApproval, answerQuestion, requestOperations } =
+    useAssistantSession({
+      projectId,
+      cwd: projectPath,
+      enabled: active,
+      restartNonce,
+    });
 
   // Select the DATA half of the store. `useShallow` keeps the panel from re-rendering
   // on every action-identity change, and the action functions are stable anyway.
+  // Recorded then decided, in that order: the grant must exist before the approval is
+  // answered, or the next request arrives before there is anything to cover it.
+  const grantTool = useCallback(
+    (approval: { approvalId: string; grantKey: string }, uses: number) => {
+      // The grant covers `uses` calls IN TOTAL, and this approval is the first of
+      // them. Storing the full count here and then approving would authorise one more
+      // than the button offered.
+      const remaining = uses === Number.POSITIVE_INFINITY ? uses : uses - 1;
+      if (remaining > 0) useAssistantStore.getState().grantTool(approval.grantKey, remaining);
+      decideApproval(approval.approvalId, "approved");
+    },
+    [decideApproval]
+  );
+
   const state = useAssistantStore(
     useShallow((s) => ({
       sessionId: s.sessionId,
@@ -56,11 +71,13 @@ export function AssistantPanel({
       mcpUnavailable: s.mcpUnavailable,
       mcpToolCount: s.mcpToolCount,
       commands: s.commands,
-      queuedInterjection: s.queuedInterjection,
+      operations: s.operations,
+      toolGrants: s.toolGrants,
+      queuedInterjections: s.queuedInterjections,
       lastActivityAt: s.lastActivityAt,
       turnStartedAt: s.turnStartedAt,
+      phaseIsWake: s.phaseIsWake,
       pendingQuestion: s.pendingQuestion,
-      answeredQuestions: s.answeredQuestions,
       autoApprove: s.autoApprove,
       stoppedReason: s.stoppedReason,
       error: s.error,
@@ -86,6 +103,8 @@ export function AssistantPanel({
       onInterrupt={interrupt}
       onDecideApproval={decideApproval}
       onAnswerQuestion={answerQuestion}
+      onGrantTool={grantTool}
+      onRequestOperations={requestOperations}
       className={className}
     />
   );

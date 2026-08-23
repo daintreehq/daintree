@@ -1,6 +1,12 @@
 import { create } from "zustand";
 import type {
+  AssistantAgentRow,
+  AssistantAsyncRow,
+  AssistantAuditRow,
   AssistantCommandMeta,
+  AssistantInboxRow,
+  AssistantTimerRow,
+  AssistantWorkflowRow,
   AssistantHostEvent,
   AssistantToolState,
 } from "@shared/types/ipc/assistantHost";
@@ -35,6 +41,14 @@ export interface AssistantToolCall {
   toolId: string;
   argsSummary: string;
   danger: boolean;
+  /**
+   * The engine's human label for this call and its object — what the cockpit drew in
+   * place of the internal tool id. Absent for a tool its presentation table does not
+   * know, which is the signal to show `toolId` rather than invent a verb.
+   */
+  verb?: string;
+  activeVerb?: string;
+  target?: string;
   state: AssistantToolState;
   /** Latest in-tool substep; kept when a progress beat carries only liveness. */
   progress?: string;
@@ -62,6 +76,15 @@ export interface AssistantApproval {
   riskClass?: string;
   /** The safety layer's own verdict. Never re-derive this from riskClass. */
   needsTypedConfirm: boolean;
+  /** May be added to the session "don't ask again" list. Engine's verdict. */
+  rememberable: boolean;
+  /**
+   * The identity the gates were applied to — what a grant is keyed on.
+   *
+   * Falls back to `toolId` only when the engine sent none. Never the display name
+   * when an identity exists: two actions can share a label.
+   */
+  grantKey: string;
   requestedAt: number;
 }
 
@@ -77,7 +100,11 @@ export interface AssistantApproval {
 export type AssistantTurnSegment =
   | { kind: "text"; text: string }
   | { kind: "tools"; toolCallIds: string[] }
-  | { kind: "interjection"; text: string };
+  | { kind: "interjection"; text: string }
+  // What the user chose when the model asked. Part of the turn because the answer is
+  // why the turn went the way it did — a transcript that omits it cannot explain the
+  // decision that followed.
+  | { kind: "answer"; question: string; label: string | null; text: string | null };
 
 export interface AssistantTurn {
   turnId: string;
@@ -108,6 +135,13 @@ export interface AssistantTurn {
   interjections: string[];
   /** True once turn:end arrived — drives the streaming caret. */
   complete: boolean;
+  /**
+   * The assistant started this turn itself, so Stop cannot reach it.
+   *
+   * The engine aborts command turns only; a wake has already claimed its attention
+   * events and aborting would strand them.
+   */
+  wake?: boolean;
 }
 
 export interface AssistantNotice {
@@ -139,15 +173,16 @@ export interface AssistantQuestion {
   requestedAt: number;
 }
 
-/** A settled question, kept so the transcript records what was chosen. */
-export interface AssistantAnsweredQuestion {
-  questionId: string;
-  turnId: string | null;
-  question: string;
-  /** -1 when dismissed without choosing. */
-  index: number;
-  label: string | null;
-  text: string | null;
+/** One reading of the operations deck, with when it was taken. */
+export interface AssistantOperations {
+  inbox: AssistantInboxRow[];
+  workflows: AssistantWorkflowRow[];
+  agents: AssistantAgentRow[];
+  async: AssistantAsyncRow[];
+  timers: AssistantTimerRow[];
+  audit: AssistantAuditRow[];
+  /** When this reading was taken, so the deck can say how stale it is. */
+  at: number;
 }
 
 export interface AssistantUsage {
@@ -194,6 +229,23 @@ export interface AssistantSessionState {
   /** The engine's command catalog, for the composer palette. */
   commands: AssistantCommandMeta[];
   /**
+   * The last operations reading, or null before one is asked for.
+   *
+   * Requested rather than streamed, as the cockpit rebuilt its deck on open: pushing
+   * every store change to a panel that may not be showing the deck is a lot of traffic
+   * for a view nobody is looking at.
+   */
+  operations: AssistantOperations | null;
+  /**
+   * Tools the user has said not to ask about again this session, and how many uses
+   * remain (`Infinity` for "always").
+   *
+   * Session-scoped and in memory only: a standing approval must not outlive the
+   * conversation it was given in, and must never be written anywhere it could be
+   * restored into a session the user did not grant it for.
+   */
+  toolGrants: Record<string, number>;
+  /**
    * The question currently blocking the turn, if any.
    *
    * Singular because the engine blocks the dispatch until it settles — a second
@@ -203,13 +255,17 @@ export interface AssistantSessionState {
   /**
    * Text typed while a turn was running, not yet folded in by the engine.
    *
+   * A QUEUE, not a slot: someone can send two steers before the engine folds either
+   * one in, and a single slot silently discarded the first. They fold in order, so the
+   * first one folded clears the first one queued.
+   *
    * Held separately rather than appended as a user turn, because the engine will fold
    * it into the RUNNING turn as an interjection — appending it here as well showed the
    * same message twice, the second time below the answer it was meant to steer. The
    * cockpit showed it as a queued follow-up for exactly this window, then let the
    * engine move it into place.
    */
-  queuedInterjection: string | null;
+  queuedInterjections: string[];
   /**
    * When the running turn last produced anything, for the stall cue.
    *
@@ -219,9 +275,9 @@ export interface AssistantSessionState {
   lastActivityAt: number | null;
   /** When the running turn started, for the cumulative elapsed readout. */
   turnStartedAt: number | null;
+  /** The current phase belongs to a turn the assistant started itself. */
+  phaseIsWake: boolean;
   pendingQuestion: AssistantQuestion | null;
-  /** Questions that have settled, in order, for the transcript. */
-  answeredQuestions: AssistantAnsweredQuestion[];
   /** True when this session runs mutating tools with NO confirmation prompt. */
   autoApprove: boolean;
   /** Why the engine stopped, when it did. */
@@ -260,10 +316,45 @@ interface AssistantStoreActions {
   appendUserTurn: (text: string) => string | null;
   /** Drops a locally-appended user turn the engine never received. */
   dropLocalTurn: (turnId: string) => void;
+  /**
+   * Drops one queued steer the engine never received.
+   *
+   * The counterpart to `dropLocalTurn` for mid-turn input, which is queued rather
+   * than appended — so a failed delivery had nothing to take back, and the entry was
+   * later promoted into a user turn for a message that never arrived.
+   */
+  /**
+   * Drops text the engine never received, wherever it currently sits.
+   *
+   * A rejection can arrive after the engine exited, by which point `endLiveState` has
+   * already promoted the queued entry to a turn — so searching the queue alone left an
+   * undelivered message sitting in the transcript as though it had been sent.
+   */
+  dropUndeliveredText: (text: string) => void;
+  dropQueuedInterjection: (text: string) => void;
   /** A local, non-protocol notice (a spawn failure, a command that could not send). */
   pushNotice: (level: AssistantNotice["level"], message: string) => void;
   setMcpUnavailable: (reason: string | null) => void;
+  /** Records a session grant. `uses` of Infinity means "always". */
+  grantTool: (toolId: string, uses: number) => void;
+  /** Revokes every standing grant. */
+  clearGrants: () => void;
+  /**
+   * Spends one use of a standing grant, if this approval is covered by one.
+   *
+   * Returns true when the caller should approve WITHOUT showing a card. Refuses — and
+   * spends nothing — for an approval the engine marked non-rememberable or as needing
+   * a typed confirmation, so a grant given for something ordinary can never be spent
+   * on a git push or a system action.
+   */
+  consumeGrant: (approval: {
+    grantKey: string;
+    rememberable: boolean;
+    needsTypedConfirm: boolean;
+  }) => boolean;
   setConnection: (state: AssistantConnectionState, error?: string | null) => void;
+  /** Settles phase, open turns, live calls, approvals and questions after an exit. */
+  endLiveState: () => void;
   /** Wipe the transcript for a new session. */
   reset: (sessionId: string | null) => void;
 }
@@ -282,11 +373,13 @@ const EMPTY: AssistantSessionState = {
   mcpUnavailable: null,
   mcpToolCount: null,
   commands: [],
-  queuedInterjection: null,
+  operations: null,
+  toolGrants: {},
+  queuedInterjections: [],
   lastActivityAt: null,
   turnStartedAt: null,
+  phaseIsWake: false,
   pendingQuestion: null,
-  answeredQuestions: [],
   autoApprove: false,
   stoppedReason: null,
   error: null,
@@ -364,14 +457,18 @@ function applyFinalContent(
   segments: AssistantTurnSegment[],
   content: string
 ): AssistantTurnSegment[] {
-  for (let i = segments.length - 1; i >= 0; i--) {
-    if (segments[i]?.kind === "text") {
-      const next = segments.slice();
-      next[i] = { kind: "text", text: content };
-      return next;
-    }
+  const last = segments[segments.length - 1];
+  // Only the TRAILING text segment is the final round's own prose. Searching backwards
+  // past a tool segment would reach an EARLIER round and overwrite it — so a final
+  // round that streamed nothing (empty content, or every token frame lost) would
+  // delete the prose that explained why a tool was called, which is exactly the bug
+  // whole-turn replacement had.
+  if (last?.kind === "text") {
+    const next = segments.slice();
+    next[next.length - 1] = { kind: "text", text: content };
+    return next;
   }
-  // A tool-only round said nothing until now.
+  // The last thing that happened was a tool call, so this content is a new round.
   return content ? [...segments, { kind: "text", text: content }] : segments;
 }
 
@@ -401,6 +498,76 @@ export const useAssistantStore = create<AssistantStore>((set, get) => ({
   reset: (sessionId) => set({ ...EMPTY, sessionId }),
 
   setMcpUnavailable: (reason) => set({ mcpUnavailable: reason }),
+
+  grantTool: (toolId, uses) => set((s) => ({ toolGrants: { ...s.toolGrants, [toolId]: uses } })),
+
+  clearGrants: () => set({ toolGrants: {} }),
+
+  consumeGrant: ({ grantKey, rememberable, needsTypedConfirm }) => {
+    // Both gates, independently. `rememberable` is the engine's own verdict and is
+    // already false for git/system; the typed-confirm check is belt-and-braces so a
+    // future risk class that is somehow both cannot slip through.
+    if (!rememberable || needsTypedConfirm) return false;
+    const remaining = get().toolGrants[grantKey];
+    if (remaining === undefined || remaining <= 0) return false;
+    if (remaining !== Infinity) {
+      set((s) => {
+        const next = { ...s.toolGrants };
+        const left = (next[grantKey] ?? 0) - 1;
+        if (left > 0) next[grantKey] = left;
+        else delete next[grantKey];
+        return { toolGrants: next };
+      });
+    }
+    return true;
+  },
+
+  /**
+   * Settles everything a dead engine left mid-flight.
+   *
+   * `connection` alone said the session had stopped while the phase line still read
+   * "Working", an approval card still waited for an answer nothing would receive, and
+   * an open turn still streamed a caret. Every one of those describes an engine that
+   * no longer exists.
+   */
+  endLiveState: () =>
+    set((s) => ({
+      phase: null,
+      phaseIsWake: false,
+      turnStartedAt: null,
+      lastActivityAt: null,
+      pendingQuestion: null,
+      // Nothing is queued once the engine is gone. The words are kept — they were
+      // typed — but as ordinary turns rather than as a promise of delivery that will
+      // never be honoured.
+      queuedInterjections: [],
+      // Dropped rather than auto-declined: this surface cannot answer for an engine
+      // that is gone, and leaving a card implies someone still can.
+      approvals: [],
+      turns: [
+        ...s.turns.map((t) =>
+          t.complete ? t : { ...t, complete: true, outcome: t.outcome ?? "unknown" }
+        ),
+        ...s.queuedInterjections.map((text) => localUserTurn(text)),
+      ],
+      toolCalls: Object.fromEntries(
+        Object.entries(s.toolCalls).map(([id, call]) =>
+          call.state === "queued" || call.state === "active" || call.state === "waiting"
+            ? [
+                id,
+                {
+                  ...call,
+                  // FAILED, not "cancelled". Cancelled is worded as the user's own
+                  // deliberate stop; the engine dying is not something they chose, and
+                  // saying so blames them for it.
+                  state: "failed" as AssistantToolState,
+                  errorMessage: "The assistant stopped before this finished.",
+                },
+              ]
+            : [id, call]
+        )
+      ),
+    })),
 
   setConnection: (connection, error) =>
     set((s) => ({ connection, error: error === undefined ? s.error : error })),
@@ -433,7 +600,7 @@ export const useAssistantStore = create<AssistantStore>((set, get) => ({
   appendUserTurn: (text) => {
     // Mid-turn input is an INTERJECTION, and the engine owns where it lands.
     if (get().turns.some((t) => t.role === "assistant" && !t.complete)) {
-      set({ queuedInterjection: text });
+      set((s) => ({ queuedInterjections: [...s.queuedInterjections, text] }));
       return null;
     }
     // Returned so a caller that learns the prompt was never delivered can take it
@@ -444,6 +611,45 @@ export const useAssistantStore = create<AssistantStore>((set, get) => ({
   },
 
   dropLocalTurn: (turnId) => set((s) => ({ turns: s.turns.filter((t) => t.turnId !== turnId) })),
+
+  dropUndeliveredText: (text) =>
+    set((s) => {
+      // The queue first: this is the ordinary case, and one entry only, since two
+      // identical steers are two messages and only one of them failed.
+      const at = s.queuedInterjections.indexOf(text);
+      if (at !== -1) {
+        return {
+          queuedInterjections: [
+            ...s.queuedInterjections.slice(0, at),
+            ...s.queuedInterjections.slice(at + 1),
+          ],
+        };
+      }
+      // Otherwise the engine exited first and `endLiveState` already promoted it to a
+      // turn. The rejection arrives after that, so searching only the queue left an
+      // undelivered message sitting in the transcript as though it had been sent.
+      for (let i = s.turns.length - 1; i >= 0; i--) {
+        const turn = s.turns[i];
+        if (turn?.role === "user" && turn.text === text && turn.turnId.startsWith("local_")) {
+          return { turns: [...s.turns.slice(0, i), ...s.turns.slice(i + 1)] };
+        }
+      }
+      return s;
+    }),
+
+  dropQueuedInterjection: (text) =>
+    set((s) => {
+      // One entry, not all: two identical steers are two messages, and only one of
+      // them failed to arrive.
+      const at = s.queuedInterjections.indexOf(text);
+      if (at === -1) return s;
+      return {
+        queuedInterjections: [
+          ...s.queuedInterjections.slice(0, at),
+          ...s.queuedInterjections.slice(at + 1),
+        ],
+      };
+    }),
 
   applyEvent: (event) => {
     switch (event.type) {
@@ -491,6 +697,7 @@ export const useAssistantStore = create<AssistantStore>((set, get) => ({
               turnId: event.turnId,
               role: "assistant" as const,
               startedAt: event.startedAt,
+              wake: event.wake,
               segments: [],
               text: "",
               toolCallIds: [],
@@ -537,15 +744,17 @@ export const useAssistantStore = create<AssistantStore>((set, get) => ({
           // it. Promote it to a user turn of its own rather than letting the card
           // vanish with the turn it was waiting on: losing something the user typed is
           // worse than showing it a beat later than they expected.
-          if (!s.queuedInterjection) {
+          if (s.queuedInterjections.length === 0) {
             return { phase: null, turns, turnStartedAt: null, lastActivityAt: null };
           }
           return {
             phase: null,
             turnStartedAt: null,
             lastActivityAt: null,
-            queuedInterjection: null,
-            turns: [...turns, localUserTurn(s.queuedInterjection)],
+            queuedInterjections: [],
+            // EVERY stranded message is promoted, in order. Losing something the user
+            // typed is worse than showing it a beat later than they expected.
+            turns: [...turns, ...s.queuedInterjections.map((t) => localUserTurn(t))],
           };
         });
         return;
@@ -553,7 +762,11 @@ export const useAssistantStore = create<AssistantStore>((set, get) => ({
       case "turn:phase":
         // A phase change is activity: the engine moving between stages is exactly the
         // signal that it has not hung, even when no prose is flowing.
-        set({ phase: event.phase, lastActivityAt: Date.now() });
+        //
+        // `phaseIsWake` is tracked separately from the turn because a wake's first
+        // phase arrives BEFORE its turn opens: without it there is a window where the
+        // panel knows work is happening but not that Stop cannot reach it.
+        set({ phase: event.phase, phaseIsWake: event.wake === true, lastActivityAt: Date.now() });
         return;
 
       case "turn:reasoning":
@@ -575,10 +788,15 @@ export const useAssistantStore = create<AssistantStore>((set, get) => ({
             segments: [...target.segments, { kind: "interjection", text: event.text }],
             interjections: [...target.interjections, event.text],
           };
-          // Folded in — the queued card has MOVED into the turn, so clear it rather
-          // than leaving a copy standing beside its own destination.
-          const stillQueued = s.queuedInterjection === event.text ? null : s.queuedInterjection;
-          return { turns, queuedInterjection: stillQueued };
+          // Folded in — that card has MOVED into the turn, so drop ONE matching entry
+          // rather than leaving a copy beside its own destination. One, not all: two
+          // identical steers are two messages, and clearing both would lose one.
+          const at = s.queuedInterjections.indexOf(event.text);
+          const queuedInterjections =
+            at === -1
+              ? s.queuedInterjections
+              : [...s.queuedInterjections.slice(0, at), ...s.queuedInterjections.slice(at + 1)];
+          return { turns, queuedInterjections };
         });
         return;
 
@@ -593,6 +811,9 @@ export const useAssistantStore = create<AssistantStore>((set, get) => ({
               toolId: call.toolId,
               argsSummary: call.argsSummary,
               danger: call.danger,
+              verb: call.verb,
+              activeVerb: call.activeVerb,
+              target: call.target,
               state: "queued",
             };
           }
@@ -645,8 +866,23 @@ export const useAssistantStore = create<AssistantStore>((set, get) => ({
           const target = s.turns[index];
           if (index === -1 || !target) return { toolCalls };
           const turns = s.turns.slice();
+          // A segment too, not just the id list. The panel renders from SEGMENTS, so
+          // an unannounced call that only joined `toolCallIds` ran completely
+          // invisibly — the one case this branch exists to prevent.
+          const lastSeg = target.segments[target.segments.length - 1];
+          const segments =
+            lastSeg?.kind === "tools"
+              ? [
+                  ...target.segments.slice(0, -1),
+                  {
+                    kind: "tools" as const,
+                    toolCallIds: [...lastSeg.toolCallIds, event.toolCallId],
+                  },
+                ]
+              : [...target.segments, { kind: "tools" as const, toolCallIds: [event.toolCallId] }];
           turns[index] = {
             ...target,
+            segments,
             toolCallIds: [...target.toolCallIds, event.toolCallId],
           };
           return { toolCalls, turns };
@@ -733,6 +969,8 @@ export const useAssistantStore = create<AssistantStore>((set, get) => ({
               argsSummary: event.argsSummary,
               riskClass: event.riskClass,
               needsTypedConfirm: event.needsTypedConfirm,
+              rememberable: event.rememberable ?? false,
+              grantKey: event.toolKey ?? event.toolId,
               requestedAt: event.requestedAt,
             },
           ],
@@ -787,6 +1025,20 @@ export const useAssistantStore = create<AssistantStore>((set, get) => ({
         }));
         return;
 
+      case "operations:snapshot":
+        set({
+          operations: {
+            inbox: event.inbox,
+            workflows: event.workflows,
+            agents: event.agents,
+            async: event.async,
+            timers: event.timers,
+            audit: event.audit,
+            at: Date.now(),
+          },
+        });
+        return;
+
       case "mcp:status":
         // The AUTHORITATIVE reading, replacing whatever provisioning reported at
         // start: this one is the engine saying whether it can actually reach Daintree
@@ -833,26 +1085,29 @@ export const useAssistantStore = create<AssistantStore>((set, get) => ({
         return;
 
       case "question:answered":
-        set((s) => ({
-          // Cleared only if it is THIS question: a late `answered` for one already
-          // superseded must not dismiss the sheet the user is currently looking at.
-          pendingQuestion:
-            s.pendingQuestion?.questionId === event.questionId ? null : s.pendingQuestion,
-          answeredQuestions: [
-            ...s.answeredQuestions,
-            {
-              questionId: event.questionId,
-              turnId: event.turnId ?? null,
-              question:
-                s.pendingQuestion?.questionId === event.questionId
-                  ? s.pendingQuestion.question
-                  : "",
-              index: event.index,
-              label: event.label ?? null,
-              text: event.text ?? null,
-            },
-          ],
-        }));
+        set((s) => {
+          const asked =
+            s.pendingQuestion?.questionId === event.questionId ? s.pendingQuestion : null;
+          const answer: AssistantTurnSegment = {
+            kind: "answer",
+            question: asked?.question ?? "",
+            label: event.label ?? null,
+            text: event.text ?? null,
+          };
+          const turnId = event.turnId ?? asked?.turnId ?? null;
+          return {
+            // Cleared only if it is THIS question: a late `answered` for one already
+            // superseded must not dismiss the sheet the user is currently looking at.
+            pendingQuestion: asked ? null : s.pendingQuestion,
+            // Recorded in the TURN, at the point the decision was made.
+            turns: turnId
+              ? patchTurn(s.turns, turnId, (t) => ({
+                  ...t,
+                  segments: [...t.segments, answer],
+                }))
+              : s.turns,
+          };
+        });
         return;
 
       case "model:rate-limited":

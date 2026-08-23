@@ -1,4 +1,5 @@
 import { describe, it, expect } from "vitest";
+import { resolveBackendUrl } from "../AssistantHostService.js";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
@@ -58,11 +59,35 @@ describe("assistant backend pinning", () => {
     expect(code).not.toContain("assistant.daintree.org");
   });
 
-  it("still lets an explicit environment override win", () => {
-    // Pointing at a staging or deployed backend on purpose is legitimate; the rule is
-    // only that it has to be DELIBERATE. A pin with no escape hatch would push people
-    // to edit the constant locally and commit it by accident.
-    expect(source).toMatch(/process\.env\.DAINTREE_BACKEND_URL\s*\?\?/);
+  describe("resolveBackendUrl", () => {
+    it("lets an explicit override win", () => {
+      // Pointing at a staging or deployed backend on purpose is legitimate; the rule is
+      // only that it has to be DELIBERATE. A pin with no escape hatch would push people
+      // to edit the constant locally and commit it by accident.
+      expect(resolveBackendUrl("https://staging.example.test")).toBe(
+        "https://staging.example.test"
+      );
+    });
+
+    it("falls back to loopback when the variable is unset", () => {
+      expect(new URL(resolveBackendUrl(undefined)).hostname).toBe("127.0.0.1");
+    });
+
+    it("treats a blank value as unset rather than forwarding it", () => {
+      // The regression this exists for: `??` guards only null and undefined, so an
+      // empty or whitespace value reached the engine, which reads empty as UNSET and
+      // falls through to the stored preference and then to its deployed default. The
+      // pin came undone on the one input a shell most easily produces.
+      for (const blank of ["", "   ", "\t", "\n"]) {
+        expect(new URL(resolveBackendUrl(blank)).hostname).toBe("127.0.0.1");
+      }
+    });
+
+    it("trims surrounding whitespace off a real override", () => {
+      expect(resolveBackendUrl("  https://staging.example.test  ")).toBe(
+        "https://staging.example.test"
+      );
+    });
   });
 
   it("sends no credential of its own", () => {

@@ -276,7 +276,7 @@ describe("mid-turn input is moved into the turn, not copied beside it", () => {
     startAssistantTurn(store);
 
     expect(store.appendUserTurn("also check the tests")).toBeNull();
-    expect(useAssistantStore.getState().queuedInterjection).toBe("also check the tests");
+    expect(useAssistantStore.getState().queuedInterjections).toEqual(["also check the tests"]);
     // Critically: NOT a second user turn. Appending one here is what showed the same
     // message twice, the second time below the answer it was meant to steer.
     expect(useAssistantStore.getState().turns.filter((t) => t.role === "user")).toHaveLength(0);
@@ -290,7 +290,7 @@ describe("mid-turn input is moved into the turn, not copied beside it", () => {
     } as never);
 
     const after = useAssistantStore.getState();
-    expect(after.queuedInterjection).toBeNull();
+    expect(after.queuedInterjections).toEqual([]);
     expect(after.turns[0]?.interjections).toEqual(["also check the tests"]);
     expect(after.turns.filter((t) => t.role === "user")).toHaveLength(0);
   });
@@ -311,7 +311,7 @@ describe("mid-turn input is moved into the turn, not copied beside it", () => {
     } as never);
 
     const after = useAssistantStore.getState();
-    expect(after.queuedInterjection).toBeNull();
+    expect(after.queuedInterjections).toEqual([]);
     // Shown late rather than lost: dropping something the user typed is worse.
     expect(after.turns.at(-1)).toMatchObject({ role: "user", text: "never folded in" });
   });
@@ -320,7 +320,7 @@ describe("mid-turn input is moved into the turn, not copied beside it", () => {
     const store = useAssistantStore.getState();
     store.reset("s1");
     expect(store.appendUserTurn("first message")).toMatch(/^local_/);
-    expect(useAssistantStore.getState().queuedInterjection).toBeNull();
+    expect(useAssistantStore.getState().queuedInterjections).toEqual([]);
     expect(useAssistantStore.getState().turns).toHaveLength(1);
   });
 });
@@ -384,5 +384,338 @@ describe("a turn keeps the order it happened in", () => {
     });
     ev(store, { type: "turn:token", turnId: "t1", chunk: "two" });
     expect(useAssistantStore.getState().turns[0]?.text).toBe("one two");
+  });
+});
+
+describe("session tool grants never cover what the engine says they cannot", () => {
+  const ordinary = { grantKey: "terminal.sendInput", rememberable: true, needsTypedConfirm: false };
+
+  it("spends a bounded grant exactly N times", () => {
+    const store = useAssistantStore.getState();
+    store.reset("s1");
+    store.grantTool("terminal.sendInput", 2);
+
+    expect(store.consumeGrant(ordinary)).toBe(true);
+    expect(store.consumeGrant(ordinary)).toBe(true);
+    // Spent. The next call asks again.
+    expect(store.consumeGrant(ordinary)).toBe(false);
+  });
+
+  it("never spends an always-grant down", () => {
+    const store = useAssistantStore.getState();
+    store.reset("s1");
+    store.grantTool("terminal.sendInput", Number.POSITIVE_INFINITY);
+    for (let i = 0; i < 50; i++) expect(store.consumeGrant(ordinary)).toBe(true);
+  });
+
+  it("refuses a non-rememberable approval even with a grant on that tool", () => {
+    const store = useAssistantStore.getState();
+    store.reset("s1");
+    store.grantTool("git.push", Number.POSITIVE_INFINITY);
+    // The engine says git is never rememberable. A grant recorded against that id
+    // must not be spendable, or a standing approval for something ordinary could be
+    // turned into one for a push.
+    expect(
+      store.consumeGrant({ grantKey: "git.push", rememberable: false, needsTypedConfirm: false })
+    ).toBe(false);
+  });
+
+  it("refuses anything needing a typed confirmation", () => {
+    const store = useAssistantStore.getState();
+    store.reset("s1");
+    store.grantTool("worktree.delete", Number.POSITIVE_INFINITY);
+    expect(
+      store.consumeGrant({
+        grantKey: "worktree.delete",
+        rememberable: true,
+        needsTypedConfirm: true,
+      })
+    ).toBe(false);
+  });
+
+  it("drops every grant when the session resets", () => {
+    const store = useAssistantStore.getState();
+    store.reset("s1");
+    store.grantTool("terminal.sendInput", Number.POSITIVE_INFINITY);
+    // A standing approval must not outlive the conversation it was given in.
+    useAssistantStore.getState().reset("s2");
+    expect(useAssistantStore.getState().consumeGrant(ordinary)).toBe(false);
+  });
+});
+
+describe("two steers queued before either folds in", () => {
+  it("keeps both, and folding one clears only that one", () => {
+    const store = useAssistantStore.getState();
+    store.reset("s1");
+    store.applyEvent({
+      sessionId: "s1",
+      seq: 1,
+      type: "turn:start",
+      turnId: "t1",
+      role: "assistant",
+      startedAt: 1,
+    } as never);
+
+    store.appendUserTurn("first steer");
+    store.appendUserTurn("second steer");
+    // A single slot silently discarded the first.
+    expect(useAssistantStore.getState().queuedInterjections).toEqual([
+      "first steer",
+      "second steer",
+    ]);
+
+    store.applyEvent({
+      sessionId: "s1",
+      seq: 2,
+      type: "turn:interjection",
+      turnId: "t1",
+      text: "first steer",
+    } as never);
+    expect(useAssistantStore.getState().queuedInterjections).toEqual(["second steer"]);
+
+    // The turn ends without folding the second: promoted, not lost.
+    store.applyEvent({
+      sessionId: "s1",
+      seq: 3,
+      type: "turn:end",
+      turnId: "t1",
+      endedAt: 2,
+      outcome: "answered",
+    } as never);
+    const after = useAssistantStore.getState();
+    expect(after.queuedInterjections).toEqual([]);
+    expect(after.turns.at(-1)).toMatchObject({ role: "user", text: "second steer" });
+  });
+
+  it("drops one entry per fold when two steers are identical", () => {
+    const store = useAssistantStore.getState();
+    store.reset("s1");
+    store.applyEvent({
+      sessionId: "s1",
+      seq: 1,
+      type: "turn:start",
+      turnId: "t1",
+      role: "assistant",
+      startedAt: 1,
+    } as never);
+    store.appendUserTurn("same");
+    store.appendUserTurn("same");
+
+    store.applyEvent({
+      sessionId: "s1",
+      seq: 2,
+      type: "turn:interjection",
+      turnId: "t1",
+      text: "same",
+    } as never);
+    // Two identical steers are two messages; clearing both would lose one.
+    expect(useAssistantStore.getState().queuedInterjections).toEqual(["same"]);
+  });
+});
+
+describe("a grant is keyed on the identity the gates used, not the label", () => {
+  it("does not cover a different action that shares a display name", () => {
+    const store = useAssistantStore.getState();
+    store.reset("s1");
+    // Two dynamic tools can present the same human label while gating on different
+    // composite identities. A grant given for one must not cover the other.
+    store.grantTool("plugin:alpha/run", Number.POSITIVE_INFINITY);
+    expect(
+      store.consumeGrant({
+        grantKey: "plugin:beta/run",
+        rememberable: true,
+        needsTypedConfirm: false,
+      })
+    ).toBe(false);
+    expect(
+      store.consumeGrant({
+        grantKey: "plugin:alpha/run",
+        rememberable: true,
+        needsTypedConfirm: false,
+      })
+    ).toBe(true);
+  });
+});
+
+describe("clearing standing approvals", () => {
+  it("revokes every grant", () => {
+    const store = useAssistantStore.getState();
+    store.reset("s1");
+    store.grantTool("a", Number.POSITIVE_INFINITY);
+    store.grantTool("b", 3);
+    useAssistantStore.getState().clearGrants();
+    expect(
+      store.consumeGrant({ grantKey: "a", rememberable: true, needsTypedConfirm: false })
+    ).toBe(false);
+    expect(
+      store.consumeGrant({ grantKey: "b", rememberable: true, needsTypedConfirm: false })
+    ).toBe(false);
+  });
+});
+
+describe("a mid-turn message the engine never received", () => {
+  it("is taken back out of the queue, not promoted later", () => {
+    const store = useAssistantStore.getState();
+    store.reset("s1");
+    store.applyEvent({
+      sessionId: "s1",
+      seq: 1,
+      type: "turn:start",
+      turnId: "t1",
+      role: "assistant",
+      startedAt: 1,
+    } as never);
+
+    store.appendUserTurn("arrived");
+    store.appendUserTurn("never arrived");
+    // Delivery failed for the second one only.
+    useAssistantStore.getState().dropQueuedInterjection("never arrived");
+    expect(useAssistantStore.getState().queuedInterjections).toEqual(["arrived"]);
+
+    store.applyEvent({
+      sessionId: "s1",
+      seq: 2,
+      type: "turn:end",
+      turnId: "t1",
+      endedAt: 2,
+      outcome: "answered",
+    } as never);
+    // Only the one that actually reached the engine is promoted. Before this, a
+    // failed send stayed queued and became a user turn for a message nothing received.
+    const users = useAssistantStore.getState().turns.filter((t) => t.role === "user");
+    expect(users.map((t) => t.text)).toEqual(["arrived"]);
+  });
+});
+
+describe("a dead engine leaves nothing claiming to be live", () => {
+  it("settles phase, open turns, live calls, approvals and questions", () => {
+    const store = useAssistantStore.getState();
+    store.reset("s1");
+    const ev = (e: Record<string, unknown>) =>
+      store.applyEvent({ sessionId: "s1", seq: 1, ...e } as never);
+
+    ev({ type: "turn:start", turnId: "t1", role: "assistant", startedAt: 1 });
+    ev({ type: "turn:phase", turnId: "t1", phase: "generating" });
+    ev({
+      type: "tool:batch",
+      turnId: "t1",
+      calls: [{ toolCallId: "c1", toolId: "git.status", argsSummary: "{}", danger: false }],
+    });
+    ev({ type: "tool:state", toolCallId: "c1", state: "active", turnId: "t1" });
+    ev({
+      type: "approval:requested",
+      approvalId: "apr_1",
+      toolId: "git.push",
+      summary: "Push",
+      requestedAt: 1,
+      needsTypedConfirm: false,
+      turnId: "t1",
+    });
+
+    useAssistantStore.getState().endLiveState();
+
+    const after = useAssistantStore.getState();
+    // Every one of these described an engine that no longer exists.
+    expect(after.phase).toBeNull();
+    expect(after.turns.every((t) => t.complete)).toBe(true);
+    // FAILED, not cancelled: cancelled is worded as the user's own deliberate stop,
+    // and the engine dying is not something they chose.
+    expect(after.toolCalls["c1"]?.state).toBe("failed");
+    expect(after.toolCalls["c1"]?.errorMessage).toMatch(/stopped before this finished/);
+    expect(after.approvals).toEqual([]);
+    expect(after.pendingQuestion).toBeNull();
+  });
+});
+
+describe("nothing stays queued for an engine that is gone", () => {
+  it("keeps the words as turns rather than as an undeliverable promise", () => {
+    const store = useAssistantStore.getState();
+    store.reset("s1");
+    store.applyEvent({
+      sessionId: "s1",
+      seq: 1,
+      type: "turn:start",
+      turnId: "t1",
+      role: "assistant",
+      startedAt: 1,
+    } as never);
+    store.appendUserTurn("typed while it was running");
+    expect(useAssistantStore.getState().queuedInterjections).toHaveLength(1);
+
+    useAssistantStore.getState().endLiveState();
+
+    const after = useAssistantStore.getState();
+    // Nothing is queued once there is nothing to deliver to...
+    expect(after.queuedInterjections).toEqual([]);
+    // ...but what the user typed is not thrown away.
+    expect(after.turns.at(-1)).toMatchObject({
+      role: "user",
+      text: "typed while it was running",
+    });
+  });
+});
+
+describe("a rejection that arrives after the engine already exited", () => {
+  it("removes the promoted turn, not just the queue", () => {
+    const store = useAssistantStore.getState();
+    store.reset("s1");
+    store.applyEvent({
+      sessionId: "s1",
+      seq: 1,
+      type: "turn:start",
+      turnId: "t1",
+      role: "assistant",
+      startedAt: 1,
+    } as never);
+    store.appendUserTurn("never arrived");
+
+    // The engine exits first, so endLiveState promotes the queued entry to a turn...
+    useAssistantStore.getState().endLiveState();
+    expect(useAssistantStore.getState().turns.some((t) => t.text === "never arrived")).toBe(true);
+
+    // ...and only THEN does main answer delivered:false. Searching the queue alone
+    // left an undelivered message in the transcript as though it had been sent.
+    useAssistantStore.getState().dropUndeliveredText("never arrived");
+    expect(useAssistantStore.getState().turns.some((t) => t.text === "never arrived")).toBe(false);
+  });
+});
+
+describe("the operations deck", () => {
+  it("keeps the reading, with when it was taken", () => {
+    const store = useAssistantStore.getState();
+    store.reset("s1");
+    expect(useAssistantStore.getState().operations).toBeNull();
+
+    store.applyEvent({
+      sessionId: "s1",
+      seq: 1,
+      type: "operations:snapshot",
+      inbox: [
+        { id: "q1", severity: "attention", source: "watcher", summary: "needs input", at: 1 },
+      ],
+      workflows: [],
+      agents: [
+        {
+          id: "w1",
+          title: "migrate schema",
+          goal: "run the migration",
+          badge: "",
+          agentState: "working",
+          preview: "$ npm test",
+          startedAt: 1,
+          needsAttention: false,
+        },
+      ],
+      async: [],
+      timers: [],
+      audit: [{ tool: "git.status", outcome: "ok", durationMs: 12, at: 1 }],
+    } as never);
+
+    const ops = useAssistantStore.getState().operations;
+    expect(ops?.agents[0]?.title).toBe("migrate schema");
+    expect(ops?.inbox).toHaveLength(1);
+    // Stamped so the deck can say how stale the reading is — it is requested, not
+    // streamed, so it is always some age.
+    expect(ops?.at).toBeGreaterThan(0);
   });
 });

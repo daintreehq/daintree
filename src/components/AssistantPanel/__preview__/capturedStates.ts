@@ -18,12 +18,35 @@ export const CAPTURED_STATES = {
     logFile: null,
     mcpUnavailable: null,
     mcpToolCount: null,
-    commands: [],
-    queuedInterjection: null,
+    commands: [
+      {
+        name: "/scenario",
+        syntax: "/scenario <name>",
+        palette: "run a scripted turn",
+      },
+      {
+        name: "/status",
+        syntax: "/status",
+        palette: "runtime and connections",
+      },
+      {
+        name: "/watchers",
+        syntax: "/watchers",
+        palette: "supervised agents",
+      },
+      {
+        name: "/inbox",
+        syntax: "/inbox [sev]",
+        palette: "items requiring attention",
+      },
+    ],
+    operations: null,
+    toolGrants: {},
+    queuedInterjections: [],
     lastActivityAt: null,
     turnStartedAt: null,
+    phaseIsWake: false,
     pendingQuestion: null,
-    answeredQuestions: [],
     stoppedReason: null,
     error: null,
     turns: [],
@@ -48,19 +71,42 @@ export const CAPTURED_STATES = {
     logFile: null,
     mcpUnavailable: null,
     mcpToolCount: null,
-    commands: [],
-    queuedInterjection: null,
-    lastActivityAt: 1787437153711,
-    turnStartedAt: 1787437152822,
+    commands: [
+      {
+        name: "/scenario",
+        syntax: "/scenario <name>",
+        palette: "run a scripted turn",
+      },
+      {
+        name: "/status",
+        syntax: "/status",
+        palette: "runtime and connections",
+      },
+      {
+        name: "/watchers",
+        syntax: "/watchers",
+        palette: "supervised agents",
+      },
+      {
+        name: "/inbox",
+        syntax: "/inbox [sev]",
+        palette: "items requiring attention",
+      },
+    ],
+    operations: null,
+    toolGrants: {},
+    queuedInterjections: [],
+    lastActivityAt: 1787452034111,
+    turnStartedAt: 1787452033212,
+    phaseIsWake: false,
     pendingQuestion: null,
-    answeredQuestions: [],
     stoppedReason: "exit",
     error: null,
     turns: [
       {
-        turnId: "local_17aab4d6-184f-4ad9-a040-6482d86d8e2e",
+        turnId: "local_f4dcd9e7-c08a-472e-82e4-0850e4993f69",
         role: "user",
-        startedAt: 1787437152821,
+        startedAt: 1787452033211,
         segments: [
           {
             kind: "text",
@@ -75,14 +121,14 @@ export const CAPTURED_STATES = {
       {
         turnId: "turn_1",
         role: "assistant",
-        startedAt: 1787437152821,
+        startedAt: 1787452033212,
         segments: [
           {
             kind: "text",
-            text: "1. Step 1 — a line of explanation that wraps at panel width.\n2. Step 2 — a line of explanation that wraps at panel width.\n3. Step 3 — a line of explanation that wraps at panel width.\n4. Step 4 — a line of explanation that wraps at panel width.\n5. Step 5 — a line of explanation that wraps at panel width.\n6. Step 6 — a line of explanation that wraps at panel width.\n7. Step 7 — a line of explanation that wraps at panel width.\n8. Step 8 — a line of explanation that wraps at panel width.\n9. Step 9 — a line of explanation that wraps at panel width.\n10. Step 10 — a line of explanation that wraps at panel width.\n11. Step 11 — a line of explanation that wraps at panel width.\n12. Step 12 — a line of explanation that wraps at panel width.\n13. Step 13 — a line of explanation that wraps at panel width.\n14. Step 14 — a line of explanation that wraps at panel width.\n15. Step 15 — a line of explanation that wraps at panel width.\n16. Step 16 — a line of explanation that wraps at panel width.\n17. Step 17 — a line of explanation that wraps at panel width.\n18. Step 18 — a line of explanation that wraps at panel width.\n19. Step 19 — a line of explanation that wraps at panel width.\n20. Step 20 — a line of explanation that wraps at panel width.\n21. Step 21 — a line of explanation that wraps at panel width.\n22. Step 22 — a line of explanation that wraps at panel width.\n23. Step 23 — a line of explanation that wraps at panel width.\n24. Step ",
+            text: "1. Step 1 — a line of explanation that wraps at panel width.\n2. Step 2 — a line of explanation that wraps at panel width.\n3. Step 3 — a line of explanation that wraps at panel width.\n4. Step 4 — a line of explanation that wraps at panel width.\n5. Step 5 — a line of explanation that wraps at panel width.\n6. Step 6 — a line of explanation that wraps at panel width.\n7. Step 7 — a line of explanation that wraps at panel width.\n8. Step 8 — a line of explanation that wraps at panel width.\n9. Step 9 — a line of explanation that wraps at panel width.\n10. Step 10 — a line of explanation that wraps at panel width.\n11. Step 11 — a line of explanation that wraps at panel width.\n12. Step 12 — a line of explanation that wraps at panel width.\n13. Step 13 — a line of explanation that wraps at panel width.\n14. Step 14 — a line of explanation that wraps at panel width.\n15. Step 15 — a line of explanation that wraps at panel width.\n16. Step 16 — a line of explanation that wraps at panel width.\n17. Step 17 — a line of explanation that wraps at panel width.\n18. Step 18 — a line of explanation that wraps at panel width.\n19. Step 19 — a line of explanation that wraps at panel width.\n20. Step 20 — a line of explanation that wraps at panel width.\n21. Step 21 — a line of explanation that wraps at panel width.\n22. Step 22 — a line of explanation that wraps at panel width.\n23. Step 23 — a line of explanation that wraps at panel width.\n24. Step 24 — a line of explanation that wraps at",
           },
         ],
-        text: "1. Step 1 — a line of explanation that wraps at panel width.\n2. Step 2 — a line of explanation that wraps at panel width.\n3. Step 3 — a line of explanation that wraps at panel width.\n4. Step 4 — a line of explanation that wraps at panel width.\n5. Step 5 — a line of explanation that wraps at panel width.\n6. Step 6 — a line of explanation that wraps at panel width.\n7. Step 7 — a line of explanation that wraps at panel width.\n8. Step 8 — a line of explanation that wraps at panel width.\n9. Step 9 — a line of explanation that wraps at panel width.\n10. Step 10 — a line of explanation that wraps at panel width.\n11. Step 11 — a line of explanation that wraps at panel width.\n12. Step 12 — a line of explanation that wraps at panel width.\n13. Step 13 — a line of explanation that wraps at panel width.\n14. Step 14 — a line of explanation that wraps at panel width.\n15. Step 15 — a line of explanation that wraps at panel width.\n16. Step 16 — a line of explanation that wraps at panel width.\n17. Step 17 — a line of explanation that wraps at panel width.\n18. Step 18 — a line of explanation that wraps at panel width.\n19. Step 19 — a line of explanation that wraps at panel width.\n20. Step 20 — a line of explanation that wraps at panel width.\n21. Step 21 — a line of explanation that wraps at panel width.\n22. Step 22 — a line of explanation that wraps at panel width.\n23. Step 23 — a line of explanation that wraps at panel width.\n24. Step ",
+        text: "1. Step 1 — a line of explanation that wraps at panel width.\n2. Step 2 — a line of explanation that wraps at panel width.\n3. Step 3 — a line of explanation that wraps at panel width.\n4. Step 4 — a line of explanation that wraps at panel width.\n5. Step 5 — a line of explanation that wraps at panel width.\n6. Step 6 — a line of explanation that wraps at panel width.\n7. Step 7 — a line of explanation that wraps at panel width.\n8. Step 8 — a line of explanation that wraps at panel width.\n9. Step 9 — a line of explanation that wraps at panel width.\n10. Step 10 — a line of explanation that wraps at panel width.\n11. Step 11 — a line of explanation that wraps at panel width.\n12. Step 12 — a line of explanation that wraps at panel width.\n13. Step 13 — a line of explanation that wraps at panel width.\n14. Step 14 — a line of explanation that wraps at panel width.\n15. Step 15 — a line of explanation that wraps at panel width.\n16. Step 16 — a line of explanation that wraps at panel width.\n17. Step 17 — a line of explanation that wraps at panel width.\n18. Step 18 — a line of explanation that wraps at panel width.\n19. Step 19 — a line of explanation that wraps at panel width.\n20. Step 20 — a line of explanation that wraps at panel width.\n21. Step 21 — a line of explanation that wraps at panel width.\n22. Step 22 — a line of explanation that wraps at panel width.\n23. Step 23 — a line of explanation that wraps at panel width.\n24. Step 24 — a line of explanation that wraps at",
         toolCallIds: [],
         interjections: [],
         complete: false,
@@ -109,19 +155,42 @@ export const CAPTURED_STATES = {
     logFile: null,
     mcpUnavailable: null,
     mcpToolCount: null,
-    commands: [],
-    queuedInterjection: null,
+    commands: [
+      {
+        name: "/scenario",
+        syntax: "/scenario <name>",
+        palette: "run a scripted turn",
+      },
+      {
+        name: "/status",
+        syntax: "/status",
+        palette: "runtime and connections",
+      },
+      {
+        name: "/watchers",
+        syntax: "/watchers",
+        palette: "supervised agents",
+      },
+      {
+        name: "/inbox",
+        syntax: "/inbox [sev]",
+        palette: "items requiring attention",
+      },
+    ],
+    operations: null,
+    toolGrants: {},
+    queuedInterjections: [],
     lastActivityAt: null,
     turnStartedAt: null,
+    phaseIsWake: false,
     pendingQuestion: null,
-    answeredQuestions: [],
     stoppedReason: "exit",
     error: null,
     turns: [
       {
-        turnId: "local_b1cdedeb-30d1-4957-b872-809cf0502476",
+        turnId: "local_f02d1ca2-b95f-45b2-9c20-5859f0c5175a",
         role: "user",
-        startedAt: 1787437153765,
+        startedAt: 1787452034143,
         segments: [
           {
             kind: "text",
@@ -136,7 +205,7 @@ export const CAPTURED_STATES = {
       {
         turnId: "turn_1",
         role: "assistant",
-        startedAt: 1787437153765,
+        startedAt: 1787452034143,
         segments: [
           {
             kind: "tools",
@@ -151,7 +220,7 @@ export const CAPTURED_STATES = {
         toolCallIds: ["c1", "c2"],
         interjections: [],
         complete: true,
-        endedAt: 1787437153777,
+        endedAt: 1787452034154,
         outcome: "answered",
       },
     ],
@@ -162,7 +231,7 @@ export const CAPTURED_STATES = {
         argsSummary: "{}",
         danger: false,
         state: "done",
-        startedAt: 1787437153766,
+        startedAt: 1787452034144,
         progress: "reading",
         durationMs: 240,
         severity: "info",
@@ -173,7 +242,7 @@ export const CAPTURED_STATES = {
         argsSummary: "{}",
         danger: false,
         state: "done",
-        startedAt: 1787437153768,
+        startedAt: 1787452034146,
         progress: "reading",
         durationMs: 240,
         severity: "info",
@@ -211,19 +280,42 @@ export const CAPTURED_STATES = {
     logFile: null,
     mcpUnavailable: null,
     mcpToolCount: null,
-    commands: [],
-    queuedInterjection: null,
-    lastActivityAt: 1787437153844,
-    turnStartedAt: 1787437153844,
+    commands: [
+      {
+        name: "/scenario",
+        syntax: "/scenario <name>",
+        palette: "run a scripted turn",
+      },
+      {
+        name: "/status",
+        syntax: "/status",
+        palette: "runtime and connections",
+      },
+      {
+        name: "/watchers",
+        syntax: "/watchers",
+        palette: "supervised agents",
+      },
+      {
+        name: "/inbox",
+        syntax: "/inbox [sev]",
+        palette: "items requiring attention",
+      },
+    ],
+    operations: null,
+    toolGrants: {},
+    queuedInterjections: [],
+    lastActivityAt: 1787452034219,
+    turnStartedAt: 1787452034218,
+    phaseIsWake: false,
     pendingQuestion: null,
-    answeredQuestions: [],
     stoppedReason: "exit",
     error: null,
     turns: [
       {
-        turnId: "local_9c70e2d0-9920-4c06-b177-79c3d9ddf2bd",
+        turnId: "local_ae9de8e7-b13f-4355-be3d-f7fa05c2bcfa",
         role: "user",
-        startedAt: 1787437153843,
+        startedAt: 1787452034218,
         segments: [
           {
             kind: "text",
@@ -238,7 +330,7 @@ export const CAPTURED_STATES = {
       {
         turnId: "turn_1",
         role: "assistant",
-        startedAt: 1787437153844,
+        startedAt: 1787452034218,
         segments: [
           {
             kind: "tools",
@@ -269,7 +361,9 @@ export const CAPTURED_STATES = {
         argsSummary: '{"remote":"origin","branch":"feature/forge-counts","force":true}',
         riskClass: "git",
         needsTypedConfirm: true,
-        requestedAt: 1787437153844,
+        rememberable: false,
+        grantKey: "git.push",
+        requestedAt: 1787452034219,
       },
     ],
     notices: [],
@@ -291,19 +385,42 @@ export const CAPTURED_STATES = {
     logFile: null,
     mcpUnavailable: null,
     mcpToolCount: null,
-    commands: [],
-    queuedInterjection: null,
-    lastActivityAt: 1787437153910,
-    turnStartedAt: 1787437153910,
+    commands: [
+      {
+        name: "/scenario",
+        syntax: "/scenario <name>",
+        palette: "run a scripted turn",
+      },
+      {
+        name: "/status",
+        syntax: "/status",
+        palette: "runtime and connections",
+      },
+      {
+        name: "/watchers",
+        syntax: "/watchers",
+        palette: "supervised agents",
+      },
+      {
+        name: "/inbox",
+        syntax: "/inbox [sev]",
+        palette: "items requiring attention",
+      },
+    ],
+    operations: null,
+    toolGrants: {},
+    queuedInterjections: [],
+    lastActivityAt: 1787452034281,
+    turnStartedAt: 1787452034281,
+    phaseIsWake: false,
     pendingQuestion: null,
-    answeredQuestions: [],
     stoppedReason: "exit",
     error: null,
     turns: [
       {
-        turnId: "local_b537ec8d-fb35-455d-b774-bf692413a379",
+        turnId: "local_2c42941e-42ff-47a3-afa7-8106e6b7af05",
         role: "user",
-        startedAt: 1787437153910,
+        startedAt: 1787452034281,
         segments: [
           {
             kind: "text",
@@ -318,7 +435,7 @@ export const CAPTURED_STATES = {
       {
         turnId: "turn_1",
         role: "assistant",
-        startedAt: 1787437153910,
+        startedAt: 1787452034281,
         segments: [],
         text: "",
         toolCallIds: [],
@@ -335,7 +452,9 @@ export const CAPTURED_STATES = {
         argsSummary: '{"command":"npm test"}',
         riskClass: "terminal",
         needsTypedConfirm: false,
-        requestedAt: 1787437153910,
+        rememberable: false,
+        grantKey: "terminal.sendCommand",
+        requestedAt: 1787452034281,
       },
     ],
     notices: [],
@@ -357,19 +476,42 @@ export const CAPTURED_STATES = {
     logFile: null,
     mcpUnavailable: null,
     mcpToolCount: null,
-    commands: [],
-    queuedInterjection: null,
+    commands: [
+      {
+        name: "/scenario",
+        syntax: "/scenario <name>",
+        palette: "run a scripted turn",
+      },
+      {
+        name: "/status",
+        syntax: "/status",
+        palette: "runtime and connections",
+      },
+      {
+        name: "/watchers",
+        syntax: "/watchers",
+        palette: "supervised agents",
+      },
+      {
+        name: "/inbox",
+        syntax: "/inbox [sev]",
+        palette: "items requiring attention",
+      },
+    ],
+    operations: null,
+    toolGrants: {},
+    queuedInterjections: [],
     lastActivityAt: null,
     turnStartedAt: null,
+    phaseIsWake: false,
     pendingQuestion: null,
-    answeredQuestions: [],
     stoppedReason: "exit",
     error: null,
     turns: [
       {
-        turnId: "local_448144a0-99fb-41ea-9669-f9890b984cb1",
+        turnId: "local_b588f4c0-87ab-49c4-9ee9-b3da4cb05774",
         role: "user",
-        startedAt: 1787437153975,
+        startedAt: 1787452034344,
         segments: [
           {
             kind: "text",
@@ -384,7 +526,7 @@ export const CAPTURED_STATES = {
       {
         turnId: "turn_1",
         role: "assistant",
-        startedAt: 1787437153975,
+        startedAt: 1787452034344,
         segments: [
           {
             kind: "tools",
@@ -399,7 +541,7 @@ export const CAPTURED_STATES = {
         toolCallIds: ["c1"],
         interjections: [],
         complete: true,
-        endedAt: 1787437153985,
+        endedAt: 1787452034353,
         outcome: "answered",
       },
     ],
@@ -440,19 +582,42 @@ export const CAPTURED_STATES = {
     logFile: null,
     mcpUnavailable: null,
     mcpToolCount: null,
-    commands: [],
-    queuedInterjection: null,
+    commands: [
+      {
+        name: "/scenario",
+        syntax: "/scenario <name>",
+        palette: "run a scripted turn",
+      },
+      {
+        name: "/status",
+        syntax: "/status",
+        palette: "runtime and connections",
+      },
+      {
+        name: "/watchers",
+        syntax: "/watchers",
+        palette: "supervised agents",
+      },
+      {
+        name: "/inbox",
+        syntax: "/inbox [sev]",
+        palette: "items requiring attention",
+      },
+    ],
+    operations: null,
+    toolGrants: {},
+    queuedInterjections: [],
     lastActivityAt: null,
     turnStartedAt: null,
+    phaseIsWake: false,
     pendingQuestion: null,
-    answeredQuestions: [],
     stoppedReason: "exit",
     error: null,
     turns: [
       {
-        turnId: "local_342b16df-5da4-4737-85a5-d6800494cd86",
+        turnId: "local_64e485cd-ccce-4466-825c-56c668210668",
         role: "user",
-        startedAt: 1787437154048,
+        startedAt: 1787452034417,
         segments: [
           {
             kind: "text",
@@ -467,7 +632,7 @@ export const CAPTURED_STATES = {
       {
         turnId: "turn_1",
         role: "assistant",
-        startedAt: 1787437154048,
+        startedAt: 1787452034418,
         segments: [
           {
             kind: "tools",
@@ -482,7 +647,7 @@ export const CAPTURED_STATES = {
         toolCallIds: ["c1"],
         interjections: [],
         complete: true,
-        endedAt: 1787437154058,
+        endedAt: 1787452034426,
         outcome: "hedged",
       },
     ],
@@ -505,7 +670,7 @@ export const CAPTURED_STATES = {
         id: "n1",
         level: "warning",
         message: "MCP connection degraded — orchestration tools are offline.",
-        at: 1787437154048,
+        at: 1787452034418,
         turnId: "turn_1",
       },
     ],
@@ -530,19 +695,42 @@ export const CAPTURED_STATES = {
     logFile: null,
     mcpUnavailable: null,
     mcpToolCount: null,
-    commands: [],
-    queuedInterjection: null,
+    commands: [
+      {
+        name: "/scenario",
+        syntax: "/scenario <name>",
+        palette: "run a scripted turn",
+      },
+      {
+        name: "/status",
+        syntax: "/status",
+        palette: "runtime and connections",
+      },
+      {
+        name: "/watchers",
+        syntax: "/watchers",
+        palette: "supervised agents",
+      },
+      {
+        name: "/inbox",
+        syntax: "/inbox [sev]",
+        palette: "items requiring attention",
+      },
+    ],
+    operations: null,
+    toolGrants: {},
+    queuedInterjections: [],
     lastActivityAt: null,
     turnStartedAt: null,
+    phaseIsWake: false,
     pendingQuestion: null,
-    answeredQuestions: [],
     stoppedReason: "exit",
     error: null,
     turns: [
       {
-        turnId: "local_e62b22e6-afb7-4bb0-b527-b5c6a64df57c",
+        turnId: "local_52044f9b-ee02-4950-8492-1eb7da94a641",
         role: "user",
-        startedAt: 1787437154122,
+        startedAt: 1787452034491,
         segments: [
           {
             kind: "text",
@@ -557,7 +745,7 @@ export const CAPTURED_STATES = {
       {
         turnId: "turn_1",
         role: "assistant",
-        startedAt: 1787437154122,
+        startedAt: 1787452034491,
         segments: [
           {
             kind: "text",
@@ -568,7 +756,7 @@ export const CAPTURED_STATES = {
         toolCallIds: [],
         interjections: [],
         complete: true,
-        endedAt: 1787437154122,
+        endedAt: 1787452034491,
         outcome: "answered",
       },
     ],
@@ -579,7 +767,7 @@ export const CAPTURED_STATES = {
         id: "n2",
         level: "warning",
         message: "1 update were lost in transit. This part of the conversation may be incomplete.",
-        at: 1787437154123,
+        at: 1787452034491,
         turnId: null,
       },
     ],
@@ -601,19 +789,42 @@ export const CAPTURED_STATES = {
     logFile: null,
     mcpUnavailable: null,
     mcpToolCount: null,
-    commands: [],
-    queuedInterjection: null,
+    commands: [
+      {
+        name: "/scenario",
+        syntax: "/scenario <name>",
+        palette: "run a scripted turn",
+      },
+      {
+        name: "/status",
+        syntax: "/status",
+        palette: "runtime and connections",
+      },
+      {
+        name: "/watchers",
+        syntax: "/watchers",
+        palette: "supervised agents",
+      },
+      {
+        name: "/inbox",
+        syntax: "/inbox [sev]",
+        palette: "items requiring attention",
+      },
+    ],
+    operations: null,
+    toolGrants: {},
+    queuedInterjections: [],
     lastActivityAt: null,
     turnStartedAt: null,
+    phaseIsWake: false,
     pendingQuestion: null,
-    answeredQuestions: [],
     stoppedReason: "exit",
     error: null,
     turns: [
       {
-        turnId: "local_6dd5e1e6-8e6c-4360-a9d6-70cd7568034d",
+        turnId: "local_b73da1ac-34b2-4ea8-ba4c-2f95227b6d8e",
         role: "user",
-        startedAt: 1787437154186,
+        startedAt: 1787452034553,
         segments: [
           {
             kind: "text",
@@ -628,13 +839,13 @@ export const CAPTURED_STATES = {
       {
         turnId: "turn_1",
         role: "assistant",
-        startedAt: 1787437154187,
+        startedAt: 1787452034553,
         segments: [],
         text: "",
         toolCallIds: [],
         interjections: [],
         complete: true,
-        endedAt: 1787437154188,
+        endedAt: 1787452034554,
         outcome: "unknown",
       },
     ],
@@ -645,7 +856,7 @@ export const CAPTURED_STATES = {
         id: "n3",
         level: "error",
         message: "The model provider is unavailable. Try again shortly.",
-        at: 1787437154188,
+        at: 1787452034555,
         turnId: null,
       },
     ],

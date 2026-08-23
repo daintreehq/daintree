@@ -205,13 +205,17 @@ test.describe.serial("Assistant: native panel", () => {
     await openAssistant(window);
     await ask(window, "/scenario asyncWork");
 
-    // The call settled but the work continues. Rendering it as done — or showing the
-    // dispatch duration, which reads as "finished in 1.2s" — would claim work
-    // completed that is still running.
-    await expect(window.getByText(/Running in background/)).toBeVisible({ timeout: T_MEDIUM });
-    await expect(window.getByText(/still running/)).toBeVisible();
-    // Named, because the completion comes back as its own wake turn and never as a
-    // late result for this row.
+    // The call settled but the work was handed off. Rendering it as done — or showing
+    // the dispatch duration, which reads as "finished in 1.2s" — would claim work
+    // completed that had only just started somewhere else.
+    await expect(window.getByText(/Handed off to run in the background/)).toBeVisible({
+      timeout: T_MEDIUM,
+    });
+    // And NOT a present-tense claim about work this panel cannot observe: completion
+    // returns as its own wake turn, never as a late result for this row, so "still
+    // running" would go stale the moment the work finished.
+    await expect(window.getByText(/still running/)).toHaveCount(0);
+    // Named, so the row says WHAT was handed off.
     await expect(window.getByText(/migrate the schema in wt_forge/)).toBeVisible();
   });
 
@@ -262,6 +266,20 @@ test.describe.serial("Assistant: native panel", () => {
     await expect(window.getByText(/tier\s+operator/)).toBeVisible({ timeout: T_MEDIUM });
     // And no turn was spent asking the model about the word "status".
     await expect(window.getByText(/Analyzing request|Writing/)).toHaveCount(0);
+  });
+
+  test("slash-prefixed prose still reaches the model", async () => {
+    const { window } = ctx;
+    await openAssistant(window);
+    // Begins with a slash and a letter, and is plainly not a command. Routing on shape
+    // alone swallowed text like this into an unknown-command reply, losing what the
+    // user actually wrote.
+    await ask(window, "/scenario streaming please");
+
+    await expect(window.getByText(/Three worktrees are ready/)).toBeVisible({
+      timeout: T_MEDIUM,
+    });
+    await expect(window.getByText(/isn't a command/)).toHaveCount(0);
   });
 
   test("typing a slash offers the engine's own command set", async () => {

@@ -1,4 +1,4 @@
-import type { AssistantHostReadyEvent } from "./assistantHost.js";
+import type { AssistantHostEvent, AssistantHostReadyEvent } from "./assistantHost.js";
 
 /**
  * IPC payloads for the native assistant engine.
@@ -53,6 +53,14 @@ export interface AssistantHostStartResult {
    * readiness a fact the engine stated, not one the renderer assumed.
    */
   ready: AssistantHostReadyEvent | null;
+  /**
+   * Events the engine emitted before the renderer could match them to a session.
+   *
+   * The subscriber discards every frame until it knows its own session id, so a boot
+   * event — the control-plane status especially — would otherwise be spoken into an
+   * empty room. Applied in order, after `ready`.
+   */
+  replay: AssistantHostEvent[];
   /**
    * Why this session has no Daintree control plane, or null when it has one.
    *

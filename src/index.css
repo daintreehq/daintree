@@ -2731,6 +2731,13 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     fill: CanvasText;
   }
 
+  /* The assistant's boot mark is the same situation: SVG fills, so a forced colour
+     never reaches it. Its two greens are coverage, not meaning — a block is full or
+     partial — so both collapse to CanvasText and the mark keeps its silhouette. */
+  svg.assistant-boot-mark path {
+    fill: CanvasText;
+  }
+
   /* SettingsSwitch (Radix Switch). The track's unchecked border is already
      covered by the global button/[role="button"] rule above. Add the checked
      fill plus thumb contrast so on/off is distinguishable beyond thumb position.

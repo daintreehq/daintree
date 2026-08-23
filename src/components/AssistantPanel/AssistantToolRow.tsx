@@ -37,7 +37,11 @@ function styleFor(call: AssistantToolCall): StateStyle {
       return {
         Icon: CircleDashed,
         tone: "text-text-secondary",
-        label: call.asyncId ? "Running in background" : "Running",
+        // "Handed off", not "Running": the engine gives the work to its runtime and
+        // reports completion later as its own wake turn, never back to this row. This
+        // panel cannot know whether it is still going, so a present-tense claim goes
+        // stale the moment it finishes and keeps asserting something untrue.
+        label: call.asyncId ? "Handed off to run in the background" : "Running",
         // An accepted ASYNC call does not spin. The engine handed the work to its
         // runtime and delivers completion later as its own wake turn, never as a late
         // result for this call — so nothing will ever settle this row, and a spinner
@@ -86,6 +90,13 @@ export const AssistantToolRow = memo(function AssistantToolRow({ call }: Assista
   // an arbitrary slice of time that means nothing, the second for none at all.
   const duration = settled ? formatDuration(call.durationMs) : null;
 
+  // The in-progress verb while the call has not finished: a past tense on a running row
+  // reads as already done. `activeVerb` is populated only for the tools that visibly
+  // block for many seconds — everything else settles fast enough that the settled label
+  // never reads wrong, so its absence means "keep the settled one".
+  const inProgress = call.state === "queued" || call.state === "active" || call.state === "waiting";
+  const verb = inProgress && call.activeVerb ? call.activeVerb : call.verb;
+
   return (
     <li
       className={cn("flex items-start gap-2 rounded-md px-2 py-1.5 text-xs", "bg-surface-inset/60")}
@@ -97,7 +108,22 @@ export const AssistantToolRow = memo(function AssistantToolRow({ call }: Assista
 
       <div className="min-w-0 flex-1">
         <div className="flex items-baseline gap-1.5">
-          <span className="truncate font-mono text-[11px] text-text-primary">{call.toolId}</span>
+          {/* "Read src/main.go", not "fs.read" — the cockpit's activity tree led with a
+              human verb and its object, and its own comment called that the brand
+              signature. The verb is set in prose type; only the fallback identifier
+              stays monospaced, because only then is a machine name being shown.
+
+              Both come from the ENGINE, which holds the raw arguments the target is
+              lifted from and reports nothing at all for a tool it does not know, rather
+              than guessing a label. */}
+          {verb ? (
+            <span className="min-w-0 truncate text-[11px] text-text-primary">
+              {verb}
+              {call.target && <span className="ml-1 text-text-secondary">{call.target}</span>}
+            </span>
+          ) : (
+            <span className="truncate font-mono text-[11px] text-text-primary">{call.toolId}</span>
+          )}
           {call.danger && (
             <TriangleAlert
               aria-label="Mutating action"
@@ -162,14 +188,22 @@ export function AssistantToolGroupHeader({
   count,
   failedCount = 0,
   runningCount = 0,
+  what,
   open,
   onToggle,
 }: {
   count: number;
   /** Failures must remain visible when the group is collapsed. */
   failedCount?: number;
-  /** Work still running after the turn ended (accepted async calls). */
+  /** Calls left unsettled when the turn ended. Excludes handed-off async work. */
   runningCount?: number;
+  /**
+   * What the batch actually DID, in the engine's verbs — the thing a bare count throws
+   * away. A settled clean turn collapses by default, so without this the cockpit's
+   * "Read src/main.go" became "1 action", which is the count of a fact rather than the
+   * fact. Empty when no call in the batch resolved to a verb.
+   */
+  what?: string;
   open: boolean;
   onToggle: () => void;
 }) {
@@ -189,7 +223,20 @@ export function AssistantToolGroupHeader({
         aria-hidden="true"
         className={cn("size-3 transition-transform duration-150 ease-out", open && "rotate-90")}
       />
-      {count} {count === 1 ? "action" : "actions"}
+      {/* The verbs lead when there are any: they are what happened. The count trails
+          as a bare number, because "3 · Read, Searched" reads better than
+          "3 actions · Read, Searched" and the word "actions" carries nothing the rows
+          below do not. */}
+      {what ? (
+        <>
+          <span className="min-w-0 truncate">{what}</span>
+          {count > 1 && <span className="shrink-0 opacity-60">· {count}</span>}
+        </>
+      ) : (
+        <span>
+          {count} {count === 1 ? "action" : "actions"}
+        </span>
+      )}
       {/* Survives collapse: otherwise a failed run and a clean one render the same
           header, and the outcome most worth noticing is the one that disappears. */}
       {failedCount > 0 && (
