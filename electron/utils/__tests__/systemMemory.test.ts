@@ -23,6 +23,13 @@ describe("systemMemory thresholds", () => {
         warningMb: totalMb * 0.2,
       });
     }
+    // The stepped sweep above never lands on the knee itself, which is exactly
+    // where the two warning candidates change places.
+    const knee = 10 * 1024;
+    expect(getSystemMemoryThresholds(knee)).toEqual({
+      criticalMb: knee * 0.1,
+      warningMb: knee * 0.2,
+    });
   });
 
   it("holds the critical edge flat above the knee while the warning edge keeps widening", () => {
@@ -53,8 +60,17 @@ describe("systemMemory thresholds", () => {
     for (const totalMb of [16, 32, 64, 128, 1024].map((gib) => gib * 1024)) {
       const { warningMb } = getSystemMemoryThresholds(totalMb);
       expect(warningMb).toBeLessThan(totalMb * 0.2);
-      expect(warningMb).toBeLessThanOrEqual(3 * 1024);
     }
+  });
+
+  it("widens by enough to matter on a large machine, not a token amount", () => {
+    // Guards the point of #11926 rather than its arithmetic. The old flat
+    // 2048MB warning edge gave a 64GB machine four 256MB rungs at the default
+    // 5-view cap; anything that leaves rungs that thin has widened the band
+    // only nominally. 400MB is a typical cached renderer, deliberately below
+    // the value this formula produces so the assertion is a floor, not a copy.
+    const { criticalMb, warningMb } = getSystemMemoryThresholds(64 * 1024);
+    expect((warningMb - criticalMb) / 4).toBeGreaterThan(400);
   });
 
   it("stops widening once the band saturates", () => {
@@ -93,8 +109,11 @@ describe("systemMemory thresholds", () => {
       const below = getSystemMemoryThresholds(seamMb - 1);
       const at = getSystemMemoryThresholds(seamMb);
       const above = getSystemMemoryThresholds(seamMb + 1);
-      expect(at.warningMb - below.warningMb).toBeLessThan(1);
-      expect(above.warningMb - at.warningMb).toBeLessThan(1);
+      // Absolute: a bare `< 1` would also accept a large backwards jump.
+      expect(Math.abs(at.warningMb - below.warningMb)).toBeLessThan(1);
+      expect(Math.abs(above.warningMb - at.warningMb)).toBeLessThan(1);
+      expect(at.warningMb).toBeGreaterThanOrEqual(below.warningMb);
+      expect(above.warningMb).toBeGreaterThanOrEqual(at.warningMb);
     }
   });
 

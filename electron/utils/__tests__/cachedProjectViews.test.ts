@@ -254,28 +254,43 @@ describe("memoryPressureTarget", () => {
     // extra room turns into extra rungs. Sweeping the real band proves the
     // ladder still sheds one view at a time rather than collapsing — the
     // #11469 contract — now that the band is no longer a flat 1024MB.
-    for (const totalGib of [4, 8, 16, 32, 64, 128]) {
+    // Swept densely rather than at round tiers: the band widens continuously
+    // while the view cap steps, so the extremes sit just BELOW each boundary
+    // (at 15 GiB the band is already 1184MB wide but the cap is still 2).
+    // Sampling only 4/8/16/32/64/128 GiB walks straight past them.
+    const notSoft: string[] = [];
+    const missingRungs: string[] = [];
+    const thinRungs: string[] = [];
+    for (let totalGib = 4; totalGib <= 130; totalGib += 0.25) {
       const band = getSystemMemoryThresholds(totalGib * 1024);
       const maxViews = computeDefaultCachedViews(totalGib * GIB);
-      const seen = new Set<number>();
       const width = band.warningMb - band.criticalMb;
+      const seen = new Set<number>();
       for (let i = 0; i < 200; i++) {
-        const availableMb = band.criticalMb + (width * i) / 200;
-        const { level, targetMax } = memoryPressureTarget(availableMb, band, maxViews);
-        expect(level).toBe("soft");
+        const { level, targetMax } = memoryPressureTarget(
+          band.criticalMb + (width * i) / 200,
+          band,
+          maxViews
+        );
+        if (level !== "soft") notSoft.push(`${totalGib}GiB: ${level} inside the band`);
         seen.add(targetMax);
       }
       // Every intermediate cap is reachable, and none exceeds the step-down
       // ceiling of `cap - 1` (the configured cap only returns above warning).
       const expected = Array.from({ length: Math.max(maxViews - 1, 1) }, (_, i) => i + 1);
-      expect([...seen].sort((a, b) => a - b)).toEqual(expected);
-
-      // Each rung should be worth roughly one cached renderer (~100-500MB).
-      // A rung far outside that makes a single tick's reclaim either
-      // pointless or a cliff by another name.
+      const walked = [...seen].sort((a, b) => a - b);
+      if (walked.join() !== expected.join()) {
+        missingRungs.push(`${totalGib}GiB: walked ${walked.join("/")} of ${expected.join("/")}`);
+      }
+      // No rung may collapse below one cached renderer (~100-500MB), or a
+      // tick's reclaim buys less than the switch it costs. There is no upper
+      // bound to assert: at cap 2 the single "rung" IS the whole band, which
+      // is the shed point rather than a step size.
       const rungMb = width / Math.max(maxViews - 1, 1);
-      expect(rungMb).toBeGreaterThanOrEqual(256);
-      expect(rungMb).toBeLessThanOrEqual(1024);
+      if (rungMb < 256) thinRungs.push(`${totalGib}GiB: ${Math.round(rungMb)}MB rung`);
     }
+    expect(notSoft.slice(0, 3)).toEqual([]);
+    expect(missingRungs.slice(0, 3)).toEqual([]);
+    expect(thinRungs.slice(0, 3)).toEqual([]);
   });
 });

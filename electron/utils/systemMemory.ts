@@ -5,10 +5,11 @@ const CRITICAL_FRACTION = 0.1;
 const WARNING_FRACTION = 0.2;
 const CRITICAL_MAX_MB = 1024;
 
-/** Substituted for a non-finite or non-positive total so the band stays finite,
- *  positive and strictly ordered rather than propagating NaN into a policy. The
- *  resulting edges (0.1 / 0.2 MB) sit below any reading a live machine can
- *  produce, so a malformed total fails open exactly as the NaN did. */
+/** Floor substituted for any total at or below it — non-finite, non-positive,
+ *  or merely absurd — so the band stays finite, positive and strictly ordered
+ *  rather than propagating NaN into a pushed policy. The resulting edges
+ *  (0.1 / 0.2 MB) sit below any reading a live machine can produce, so a
+ *  malformed total fails open exactly as the NaN did. */
 const MIN_TOTAL_MB = 1;
 
 /** RAM above which CRITICAL_MAX_MB wins over CRITICAL_FRACTION — the point the
