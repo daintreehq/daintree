@@ -85,6 +85,151 @@ function scoreField(query: string, field: string): number {
 }
 
 /**
+ * Shortest query that earns typo tolerance at all (#11924).
+ *
+ * Below four characters the one-edit neighbourhood of a query is most of the
+ * list — "sv" is one edit from every field holding an "s", a "v", or any two
+ * characters at all — which is why every production engine draws the line in
+ * the same place (Algolia `minWordSizefor1Typo`, Typesense `min_len_1typo`,
+ * both 4). The gate is load-bearing rather than decorative: the existing
+ * rejections of "sv" against "fleet snapshot service" and "ru" against a
+ * research title are what it is holding up.
+ */
+const MIN_TYPO_QUERY_LENGTH = 4;
+
+/**
+ * Whether `query` is within ONE edit — substitution, adjacent transposition,
+ * or a single extra character on either side — of a prefix of `field` that
+ * STARTS AT A WORD BOUNDARY (#11924).
+ *
+ * This is the second, deliberately smaller way a query can match, and it exists
+ * because {@link scoreField} does not degrade: a walk that runs out of field
+ * before it runs out of query returns 0, so "webstie" does not rank "Daintree
+ * Website" below "webs" — it deletes it. One fat-fingered character emptying
+ * the list is the worst failure shape a switcher has.
+ *
+ * Three bounds keep it from becoming a second permissive scorer, which is the
+ * failure this module has already been through once (the word-initials fallback
+ * {@link isFilterMatch} rejects, where "test" reached "cut the external tool
+ * surface from 100 to 24" because initials put no bound on the distance between
+ * the words they came from):
+ *
+ * - It is anchored to a {@link isBoundary} position, so the match still has to
+ *   start where a word does. That is the same claim `scoreField`'s boundary
+ *   bonus makes, spent as a hard requirement instead of as points. It costs the
+ *   mid-word case — a typo of "ebsite" is not recovered from inside "Website" —
+ *   which is the trade that keeps the neighbourhood small.
+ * - Exactly one edit, never two. There is no ladder up to two typos at eight
+ *   characters; longer queries buy accuracy, not licence.
+ * - Never the path. Absolute paths are long and share segments, so an edit
+ *   across one is noise; only the name is offered.
+ *
+ * Distance 0 counts as a match rather than being excluded as "not a typo". It
+ * is only reachable when the query IS a boundary-anchored substring that
+ * `scoreField` still scored 0 for — its greedy walk took an earlier character
+ * and the gap penalties drained the substring bonus past zero, the long-field
+ * flaw {@link isFilterMatch} documents. Surfacing that row last beats dropping
+ * it, and requiring distance to EQUAL one would invert the cliff: the literal
+ * substring lost while its one-typo neighbour surfaced.
+ */
+function hasNearMissNameMatch(lowerQuery: string, name: string): boolean {
+  if (lowerQuery.length < MIN_TYPO_QUERY_LENGTH) return false;
+  const lowerName = name.toLowerCase();
+  // One edit moves the window by at most one, so a boundary with fewer than
+  // this many characters left cannot host any alignment. It is also the whole
+  // reason no maximum query length is needed: a pasted query longer than the
+  // name fails here at every boundary, before any comparison runs.
+  const shortestWindow = lowerQuery.length - 1;
+  for (let start = 0; start + shortestWindow <= lowerName.length; start++) {
+    // Read off the original-case name, exactly as `scoreField` reads it, so the
+    // two agree on where a camelCase word begins.
+    if (!isBoundary(name, start)) continue;
+    if (alignsWithinOneEdit(lowerQuery, lowerName, start)) return true;
+  }
+  return false;
+}
+
+/**
+ * The three window lengths a one-edit alignment can have, tried in that order.
+ *
+ * A general edit-distance matrix would answer this too, but at a fixed bound of
+ * one edit it is the wrong tool: the window can only be one shorter, equal, or
+ * one longer than the query, so three linear scans settle it with no allocation
+ * and no traceback — and each case is small enough to read and check by eye.
+ */
+function alignsWithinOneEdit(query: string, field: string, start: number): boolean {
+  const remaining = field.length - start;
+  const length = query.length;
+  if (remaining >= length && alignsExceptOneSwapOrSubstitution(query, field, start)) return true;
+  if (remaining >= length - 1 && alignsWithOneExtraQueryChar(query, field, start)) return true;
+  return remaining >= length + 1 && alignsWithOneExtraFieldChar(query, field, start);
+}
+
+/** Equal-length window: identical, one wrong character, or two swapped ones. */
+function alignsExceptOneSwapOrSubstitution(query: string, field: string, start: number): boolean {
+  const length = query.length;
+  let first = -1;
+  for (let i = 0; i < length; i++) {
+    if (query[i] !== field[start + i]) {
+      first = i;
+      break;
+    }
+  }
+  if (first === -1) return true;
+
+  let substituted = true;
+  for (let i = first + 1; i < length; i++) {
+    if (query[i] !== field[start + i]) {
+      substituted = false;
+      break;
+    }
+  }
+  if (substituted) return true;
+
+  // Adjacent transposition, which is the edit plain Levenshtein charges twice
+  // for and the one people actually make — every case the issue reported
+  // ("webstie", "wesbite", "danitree", "dcoker") is this and nothing else.
+  if (
+    first + 1 >= length ||
+    query[first] !== field[start + first + 1] ||
+    query[first + 1] !== field[start + first]
+  ) {
+    return false;
+  }
+  for (let i = first + 2; i < length; i++) {
+    if (query[i] !== field[start + i]) return false;
+  }
+  return true;
+}
+
+/** One character too many in the query: drop it and the rest must line up. */
+function alignsWithOneExtraQueryChar(query: string, field: string, start: number): boolean {
+  const windowLength = query.length - 1;
+  let i = 0;
+  while (i < windowLength && query[i] === field[start + i]) i++;
+  // Taking the FIRST mismatch is not a guess: everything before it already
+  // matches in place, so no earlier character can be the extra one.
+  for (let j = i; j < windowLength; j++) {
+    if (query[j + 1] !== field[start + j]) return false;
+  }
+  return true;
+}
+
+/** One character too few in the query: skip a field character instead. */
+function alignsWithOneExtraFieldChar(query: string, field: string, start: number): boolean {
+  const length = query.length;
+  let i = 0;
+  while (i < length && query[i] === field[start + i]) i++;
+  // Ran the whole query without a mismatch: the extra field character is
+  // trailing, which the equal-length window already accepted as distance 0.
+  if (i === length) return false;
+  for (let j = i; j < length; j++) {
+    if (query[j] !== field[start + j + 1]) return false;
+  }
+  return true;
+}
+
+/**
  * Whether `field` matches `query` well enough to survive a filter that will not
  * rank the result afterwards.
  *
@@ -196,6 +341,18 @@ const TEXT_CLASS_NAME_PREFIX = 1;
 const TEXT_CLASS_NAME_SUBSTRING = 2;
 const TEXT_CLASS_FUZZY_NAME = 3;
 const TEXT_CLASS_PATH_ONLY = 4;
+/**
+ * A name within one edit of the query ({@link hasNearMissNameMatch}), and the
+ * only tier this function never returns — a row reaches it by having FAILED
+ * every strict test, so {@link rankSwitcherMatches} assigns it rather than
+ * asking here. Keeping it out of the ladder above is what makes it impossible
+ * for a clean match to be classified as a typo by accident.
+ *
+ * Last on purpose, below `path-only`: a path match is still a real match of
+ * something the user typed, and the rule is that a typo never outranks a clean
+ * result — not that it outranks the weakest clean result.
+ */
+const TEXT_CLASS_TYPO_NAME = 5;
 
 /**
  * `hasNameMatch` rather than a name score, because the only thing the last two
@@ -323,6 +480,17 @@ interface RankedEntry {
  * one — including a pair the raw scores could have separated, which is the
  * point: those scores are what a shared parent directory decides.
  *
+ * A row that matched NOTHING strictly is still offered a seat if its name is
+ * within one edit of the query ({@link hasNearMissNameMatch}), in the terminal
+ * {@link TEXT_CLASS_TYPO_NAME} tier (#11924). Those candidates are computed on
+ * every query rather than only once the clean tiers come back empty, which is
+ * what keeps the list from flickering: a fallback that switches on emptiness
+ * reorders the rows under a pointer — and re-aims a pending Enter — at the
+ * keystroke that empties it. Appending below every clean row instead leaves
+ * both the contents and the indices of the strict results untouched, so the
+ * only thing typo tolerance can do to a query that already worked is add rows
+ * beneath it.
+ *
  * `activityKeys` is the palette session's frozen snapshot, keyed by row id.
  * Activity arrives live over IPC and every push re-runs this ranking, so reading
  * the rows' own counts would move a row out from under the pointer between the
@@ -361,7 +529,22 @@ export function rankSwitcherMatches(
 
   for (const project of projects) {
     const score = scoreProjectQuery(trimmed, project.name, project.path);
-    if (score <= 0) continue;
+    if (score <= 0) {
+      if (!hasNearMissNameMatch(lowerQuery, project.name)) continue;
+      scored.push({
+        row: { kind: "project", ...project },
+        textClass: TEXT_CLASS_TYPO_NAME,
+        activity: activityFor(project),
+        // Every row in this tier scores 0, so the comparator's score key ties
+        // for all of them and falls through to activity, kind, recency, name
+        // and id — still total, still transitive. A typo row's score is never
+        // compared against a clean row's, because the tier separates them
+        // first.
+        score: 0,
+        recency: project.frecencyScore,
+      });
+      continue;
+    }
     scored.push({
       row: { kind: "project", ...project },
       // Walks the name a second time rather than taking the term apart out of
@@ -375,7 +558,17 @@ export function rankSwitcherMatches(
   }
   for (const scratch of scratches) {
     const score = scoreScratchQuery(trimmed, scratch.name);
-    if (score <= 0) continue;
+    if (score <= 0) {
+      if (!hasNearMissNameMatch(lowerQuery, scratch.name)) continue;
+      scored.push({
+        row: { kind: "scratch", ...scratch },
+        textClass: TEXT_CLASS_TYPO_NAME,
+        activity: activityFor(scratch),
+        score: 0,
+        recency: scratch.lastOpened,
+      });
+      continue;
+    }
     scored.push({
       row: { kind: "scratch", ...scratch },
       textClass: textQualityClass(lowerQuery, scratch.name, true),

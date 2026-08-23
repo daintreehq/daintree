@@ -745,3 +745,192 @@ describe("rankSwitcherMatches frozen activity", () => {
     ]);
   });
 });
+
+describe("rankSwitcherMatches typo tolerance", () => {
+  const DAINTREE_ROOT = "/Users/gpriday/Projects/Daintree";
+
+  function website(overrides: Partial<SearchableProject> = {}): SearchableProject {
+    return makeProject({
+      id: "website",
+      name: "Daintree Website",
+      path: `${DAINTREE_ROOT}/website`,
+      ...overrides,
+    });
+  }
+
+  /**
+   * Deliberately filed somewhere sharing no letters with the queries below. On
+   * `/repos/docker` a query as short as "dc" matches the PATH strictly, and a
+   * test meant to prove the length gate would be passing on the path instead.
+   */
+  function docker(): SearchableProject {
+    return makeProject({ id: "docker", name: "Docker", path: "/repos/containers" });
+  }
+
+  /**
+   * Every case below has to reach the typo tier by FAILING the strict scorer,
+   * so each fixture asserts its own zero first. Without that a fixture that
+   * quietly still matches as a subsequence would pass the test while proving
+   * nothing about typo tolerance.
+   */
+  function expectsNoStrictMatch(query: string, project: SearchableProject): void {
+    expect(scoreProjectQuery(query, project.name, project.path)).toBe(0);
+  }
+
+  it("surfaces the project a single transposition would otherwise have deleted", () => {
+    const daintree = makeProject({ id: "daintree", name: "Daintree", path: "/repos/daintree" });
+
+    for (const [query, project] of [
+      ["webstie", website()],
+      ["wesbite", website()],
+      ["danitree", daintree],
+      ["dcoker", docker()],
+    ] as const) {
+      expectsNoStrictMatch(query, project);
+      expect(rankSwitcherMatches(query, [project], [], null).map((r) => r.id)).toEqual([
+        project.id,
+      ]);
+    }
+  });
+
+  it("recovers a wrong character and an extra one, not only a swap", () => {
+    // A transposition is the case the issue reported, but the tier is not
+    // shaped around it — a substitution and an insertion cost one edit too.
+    for (const query of ["webxite", "webssite"]) {
+      expectsNoStrictMatch(query, website());
+      expect(rankSwitcherMatches(query, [website()], [], null).map((r) => r.id)).toEqual([
+        "website",
+      ]);
+    }
+  });
+
+  it("leaves a clean query alone", () => {
+    // The prefix the issue contrasts against. It matched before and must still
+    // match on the strength of the strict walk, not the new tier.
+    expect(scoreProjectQuery("webs", website().name, website().path)).toBeGreaterThan(0);
+    expect(rankSwitcherMatches("webs", [website()], [], null).map((r) => r.id)).toEqual([
+      "website",
+    ]);
+  });
+
+  it("gives a query under four characters no tolerance at all", () => {
+    // Three queries that are each within ONE edit of a boundary-anchored
+    // prefix of "Docker" — "cd" by dropping a character, "dco" and "dcok" by
+    // swapping two. Only the one that clears the gate may surface it: below
+    // four characters the edit neighbourhood of a query is most of the list.
+    for (const query of ["cd", "dco"]) {
+      expectsNoStrictMatch(query, docker());
+      expect(rankSwitcherMatches(query, [docker()], [], null)).toEqual([]);
+    }
+    expectsNoStrictMatch("dcok", docker());
+    expect(rankSwitcherMatches("dcok", [docker()], [], null).map((r) => r.id)).toEqual(["docker"]);
+  });
+
+  it("refuses a second edit", () => {
+    expectsNoStrictMatch("webxxte", website());
+    expect(rankSwitcherMatches("webxxte", [website()], [], null)).toEqual([]);
+  });
+
+  it("starts a near miss only where a word does", () => {
+    // "ebstie" is one edit from "ebsite", which sits inside "Website" — and is
+    // exactly the unanchored match that would let the tier drift into a second
+    // permissive scorer. The anchor is what bounds it.
+    expectsNoStrictMatch("ebstie", website());
+    expect(rankSwitcherMatches("ebstie", [website()], [], null)).toEqual([]);
+  });
+
+  it("offers no tolerance to a path", () => {
+    // The name is unrelated and the PATH is one edit away. Paths are long and
+    // share segments, so an edit across one is noise rather than a near miss.
+    const pathTypo = makeProject({ id: "p", name: "unrelated", path: "/repos/webstie" });
+    expectsNoStrictMatch("website", pathTypo);
+    expect(rankSwitcherMatches("website", [pathTypo], [], null)).toEqual([]);
+  });
+
+  it("never lets a typo row outrank a clean one, whatever it is asking", () => {
+    // The #11861 invariant, re-run against the new bottom tier: eighty agents
+    // between them cannot lift either decoy over a prefix match asking for
+    // nothing, and cannot lift the typo over the path-only row either.
+    const clean = makeProject({
+      id: "clean",
+      name: "webstie-scratchpad",
+      path: "/repos/webstie-scratchpad",
+    });
+    const pathOnly = makeProject({
+      id: "path-only",
+      name: "zeta",
+      path: "/repos/webstie/zeta",
+      waitingAgentCount: 40,
+      blockedAgentCount: 40,
+    });
+    const typo = website({ id: "typo", waitingAgentCount: 40, blockedAgentCount: 40 });
+
+    // Both decoys really are in the pool for the reason claimed: one matched
+    // strictly through its path, the other through nothing at all.
+    expect(scoreProjectQuery("webstie", pathOnly.name, pathOnly.path)).toBeGreaterThan(0);
+    expectsNoStrictMatch("webstie", typo);
+
+    expect(
+      rankSwitcherMatches("webstie", [typo, pathOnly, clean], [], null).map((r) => r.id)
+    ).toEqual(["clean", "path-only", "typo"]);
+  });
+
+  it("appends typo rows without disturbing the strict results above them", () => {
+    // The stability requirement, stated as the only thing that may change:
+    // adding a typo candidate to the pool leaves the strict rows in the same
+    // order at the same indices, so nothing moves under the pointer and a
+    // pending Enter still commits the row it was aimed at.
+    const clean = makeProject({
+      id: "clean",
+      name: "webstie-scratchpad",
+      path: "/repos/webstie-scratchpad",
+    });
+    const pathOnly = makeProject({ id: "path-only", name: "zeta", path: "/repos/webstie/zeta" });
+    const typo = website({ id: "typo" });
+
+    const strictOnly = rankSwitcherMatches("webstie", [clean, pathOnly], [], null);
+    const withTypo = rankSwitcherMatches("webstie", [clean, pathOnly, typo], [], null);
+
+    expect(strictOnly.map((r) => r.id)).toEqual(["clean", "path-only"]);
+    // Ranked alongside clean results rather than only once they run out: a
+    // tier that appeared on emptiness would re-seat the list at the keystroke
+    // that emptied it.
+    expect(withTypo.map((r) => r.id)).toEqual(["clean", "path-only", "typo"]);
+  });
+
+  it("surfaces a scratch whose name is one edit away", () => {
+    const scratch = makeScratch({ id: "s", name: "auth-notes" });
+    expect(scoreScratchQuery("auth-ntoes", scratch.name)).toBe(0);
+    expect(rankSwitcherMatches("auth-ntoes", [], [scratch], null).map((r) => r.id)).toEqual(["s"]);
+  });
+
+  it("orders tied typo rows the same way whatever order they arrive in", () => {
+    // Every key above the id ties for these three — same tier, same silence,
+    // the same zero score, the same name — so only a total comparator returns
+    // one order for all of them.
+    const first = website({ id: "t-a", path: "/repos/a" });
+    const second = website({ id: "t-b", path: "/repos/b" });
+    const scratch = makeScratch({ id: "t-s", name: "Daintree Website" });
+
+    const expected = ["t-a", "t-b", "t-s"];
+    expect(
+      rankSwitcherMatches("webstie", [first, second], [scratch], null).map((r) => r.id)
+    ).toEqual(expected);
+    expect(
+      rankSwitcherMatches("webstie", [second, first], [scratch], null).map((r) => r.id)
+    ).toEqual(expected);
+  });
+
+  it("puts no ceiling on how long a query may be", () => {
+    const name = "Daintree Website Redesign Retrospective Working Notes Archive";
+    // The same single transposition, at the tail of a name long enough that any
+    // arbitrary maximum query length would have cut it off first. A cap would
+    // be a second cliff of exactly the kind this tier exists to remove.
+    const query = `${name.slice(0, -2)}ev`.toLowerCase();
+    expect(query.length).toBeGreaterThan(32);
+
+    const project = makeProject({ id: "long", name, path: "/repos/x" });
+    expectsNoStrictMatch(query, project);
+    expect(rankSwitcherMatches(query, [project], [], null).map((r) => r.id)).toEqual(["long"]);
+  });
+});

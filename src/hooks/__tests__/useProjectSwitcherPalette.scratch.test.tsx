@@ -1059,7 +1059,10 @@ describe("scratches in search results", () => {
     act(() => result.current.setQuery("Spike 2"));
 
     await waitFor(() => {
-      expect(result.current.results.map((row) => row.id)).toEqual(["scratch-2"]);
+      // "Spike 1" is one substitution from "Spike 2", so it joins in the
+      // terminal typo tier (#11924) — behind the exact match, never in front
+      // of it, which is what keeps Enter committing the row that was typed.
+      expect(result.current.results.map((row) => row.id)).toEqual(["scratch-2", "scratch-1"]);
     });
     expect(result.current.results[0]!.kind).toBe("scratch");
   });
@@ -1102,7 +1105,11 @@ describe("scratches in search results", () => {
     const { result, rerender } = renderHook(() => useProjectSwitcherPalette());
 
     act(() => result.current.setQuery("Spike 2"));
-    await waitFor(() => expect(result.current.results.map((row) => row.id)).toEqual(["scratch-2"]));
+    await waitFor(() =>
+      // "Spike 1" trails as a one-edit near miss (#11924); the row under test
+      // is the exact match at the head.
+      expect(result.current.results.map((row) => row.id)).toEqual(["scratch-2", "scratch-1"])
+    );
 
     // A `scratch:removed` push under an open, settled query. Without the store
     // feeding the ranked list, the row would linger and Enter would commit a
@@ -1110,7 +1117,7 @@ describe("scratches in search results", () => {
     scratchState.scratches = [seeded[0]!];
     rerender();
 
-    await waitFor(() => expect(result.current.results).toEqual([]));
+    await waitFor(() => expect(result.current.results.map((row) => row.id)).toEqual(["scratch-1"]));
   });
 
   it("holds browse rows steady when only the scratches change", async () => {
@@ -1142,7 +1149,10 @@ describe("scratches in search results", () => {
 
     // "Spike 2" is the inactive one, so a switch is genuinely dispatched.
     act(() => result.current.setQuery("Spike 2"));
-    await waitFor(() => expect(result.current.results).toHaveLength(1));
+    // Settling on the head row rather than on a length: "Spike 1" ranks behind
+    // it as a near miss, and what this spec needs pinned is which row the
+    // selection is sitting on when confirm fires.
+    await waitFor(() => expect(result.current.results[0]?.id).toBe("scratch-2"));
 
     act(() => result.current.confirmSelection());
 
