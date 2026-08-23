@@ -35,6 +35,59 @@ export interface AssistantMessageProps {
 }
 
 /**
+ * A single newline is a LINE BREAK, as it was in the terminal.
+ *
+ * CommonMark folds a lone `\n` into a space, so a model that writes its status as
+ * several one-line statements arrives as one running paragraph. The cockpit did the
+ * opposite — it wrapped each source line independently, "so existing newlines
+ * (paragraphs, list items) are preserved" (internal/ui/markdown/markdown.go:207) — so
+ * a terminal reader saw exactly the line structure the model wrote. Collapsing it here
+ * is not a neutral rendering choice; it destroys information the model sent, and it is
+ * why the transcript reads as slammed together.
+ *
+ * Done as an mdast transform rather than by rewriting the source text, because the
+ * source-level trick (two trailing spaces) would also fire inside fenced code and
+ * indented blocks, where a newline is already literal. Walking the tree touches only
+ * `text` nodes, and `code`/`inlineCode` carry their content as a value with no
+ * children, so they are structurally out of reach.
+ *
+ * Written against the tree directly instead of importing `unist-util-visit`: that
+ * package is present only as a transitive dependency of react-markdown, and this repo's
+ * node_modules is a symlink shared with the main checkout, so declaring a new dependency
+ * for twenty lines is not worth what installing it would touch.
+ */
+interface MdastNode {
+  type: string;
+  value?: string;
+  children?: MdastNode[];
+}
+
+function splitTextNodes(node: MdastNode): void {
+  const children = node.children;
+  if (!children) return;
+  const next: MdastNode[] = [];
+  for (const child of children) {
+    if (child.type === "text" && typeof child.value === "string" && child.value.includes("\n")) {
+      const parts = child.value.split("\n");
+      for (let i = 0; i < parts.length; i++) {
+        if (i > 0) next.push({ type: "break" });
+        // An empty part is the gap between two adjacent newlines; the breaks around it
+        // already carry it, and an empty text node would render as nothing anyway.
+        if (parts[i] !== "") next.push({ type: "text", value: parts[i] });
+      }
+    } else {
+      splitTextNodes(child);
+      next.push(child);
+    }
+  }
+  node.children = next;
+}
+
+function remarkSoftBreaks() {
+  return (tree: MdastNode) => splitTextNodes(tree);
+}
+
+/**
  * Trailing-fence repair.
  *
  * A code fence arrives as ``` then a language then content — so mid-stream there is a
@@ -59,7 +112,7 @@ export const AssistantMessage = memo(function AssistantMessage({
   return (
     <div className={cn("assistant-prose", streaming && "is-streaming", className)}>
       <ReactMarkdown
-        remarkPlugins={[remarkGfm]}
+        remarkPlugins={[remarkGfm, remarkSoftBreaks]}
         components={{
           // Links always leave the app, so they always get the affordances of doing
           // so. `noreferrer` matters because the target is model-authored.

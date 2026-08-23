@@ -1155,6 +1155,7 @@ export const AssistantHostEventSchema = z.discriminatedUnion("type", [
     turnId: IdString,
     role: AssistantTurnRoleSchema,
     startedAt: Timestamp,
+    wake: z.boolean().optional(),
   }),
   z.object({
     ...hostEventBase,
@@ -1175,6 +1176,7 @@ export const AssistantHostEventSchema = z.discriminatedUnion("type", [
   z.object({
     ...hostEventBase,
     type: z.literal("turn:phase"),
+    wake: z.boolean().optional(),
     turnId: IdString.optional(),
     phase: z.string(),
   }),
@@ -1200,6 +1202,10 @@ export const AssistantHostEventSchema = z.discriminatedUnion("type", [
         toolId: IdString,
         argsSummary: z.string(),
         danger: z.boolean(),
+        // Bounded like every other engine-authored string that reaches the renderer.
+        verb: z.string().max(64).optional(),
+        activeVerb: z.string().max(64).optional(),
+        target: z.string().max(256).optional(),
       })
     ),
   }),
@@ -1279,6 +1285,72 @@ export const AssistantHostEventSchema = z.discriminatedUnion("type", [
   }),
   z.object({
     ...hostEventBase,
+    type: z.literal("operations:snapshot"),
+    // Bounded at every level: the deck is drawn from a project store that grows with
+    // use, and an unbounded array here becomes an unbounded render.
+    inbox: z
+      .array(
+        z.object({
+          id: IdString,
+          severity: z.string().max(32),
+          source: z.string().max(64),
+          summary: z.string().max(2000),
+          at: Timestamp,
+        })
+      )
+      .max(200),
+    workflows: z
+      .array(
+        z.object({
+          id: IdString,
+          goal: z.string().max(2000),
+          status: z.string().max(64),
+          progress: z.string().max(200),
+          next: z.string().max(200),
+          blocked: z.boolean(),
+        })
+      )
+      .max(200),
+    agents: z
+      .array(
+        z.object({
+          id: IdString,
+          title: z.string().max(500),
+          goal: z.string().max(2000),
+          badge: z.string().max(64),
+          agentState: z.string().max(64),
+          preview: z.string().max(4000),
+          startedAt: Timestamp,
+          needsAttention: z.boolean(),
+        })
+      )
+      .max(200),
+    async: z
+      .array(
+        z.object({
+          id: IdString,
+          title: z.string().max(500),
+          tool: z.string().max(128),
+          startedAt: Timestamp,
+        })
+      )
+      .max(200),
+    timers: z
+      .array(z.object({ id: IdString, label: z.string().max(500), dueAt: Timestamp }))
+      .max(200),
+    audit: z
+      .array(
+        z.object({
+          tool: z.string().max(128),
+          outcome: z.string().max(32),
+          durationMs: z.number().int().min(0),
+          at: Timestamp,
+        })
+      )
+      .max(200),
+  }),
+  z.object({
+    ...hostEventBase,
     type: z.literal("mcp:status"),
     connected: z.boolean(),
     toolCount: z.number().int().min(0).max(10_000).optional(),
@@ -1333,6 +1405,8 @@ export const AssistantHostEventSchema = z.discriminatedUnion("type", [
     // irreversible; a missing field would silently become "false" and let a click
     // approve a git/system operation that must be typed.
     needsTypedConfirm: z.boolean(),
+    rememberable: z.boolean().optional(),
+    toolKey: z.string().max(200).optional(),
   }),
   z.object({
     ...hostEventBase,
@@ -1371,6 +1445,10 @@ export const AssistantHostCommandSchema = z.discriminatedUnion("type", [
     type: z.literal("command"),
     sessionId: IdString,
     line: z.string().min(1).max(2000),
+  }),
+  z.object({
+    type: z.literal("operations"),
+    sessionId: IdString,
   }),
   z.object({
     type: z.literal("question:answer"),

@@ -62,6 +62,22 @@ interface LiveSession {
  */
 const DEFAULT_BACKEND_URL = "http://127.0.0.1:8473";
 
+/**
+ * The backend endpoint for a spawned engine.
+ *
+ * An explicit override still wins — pointing at staging or the deployed backend on
+ * purpose is legitimate, and a pin with no escape hatch just pushes people to edit the
+ * constant and commit it by accident. The rule is only that it has to be DELIBERATE.
+ *
+ * A blank value is therefore treated as ABSENT rather than passed through. The engine
+ * reads an empty `DAINTREE_BACKEND_URL` as unset and falls through to the stored
+ * `/backend` preference and then to its own deployed default, so forwarding `""` would
+ * quietly undo the pin — and do it on the one input a shell most easily produces.
+ */
+export function resolveBackendUrl(raw: string | undefined): string {
+  return raw?.trim() || DEFAULT_BACKEND_URL;
+}
+
 /** The roster id the MCP tier policy is keyed on for this surface. */
 const ASSISTANT_AGENT_ID = "daintree-assistant";
 
@@ -249,9 +265,7 @@ export class AssistantHostService {
       env: {
         // Inherited MINUS the control variables — see ENGINE_CONTROLLED_ENV.
         ...baseEngineEnv(),
-        // An explicit override still wins, but an absent one lands on localhost rather
-        // than on the engine's deployed default.
-        DAINTREE_BACKEND_URL: process.env.DAINTREE_BACKEND_URL ?? DEFAULT_BACKEND_URL,
+        DAINTREE_BACKEND_URL: resolveBackendUrl(process.env.DAINTREE_BACKEND_URL),
         // Nothing from the renderer reaches here, deliberately: a renderer-supplied
         // bag would let a compromised view repoint the engine or hand itself standing
         // approval. Secrets are provisioned in main, next to the service issuing them.
@@ -335,7 +349,14 @@ export class AssistantHostService {
       throw error;
     }
 
-    return { sessionId, ready: host.getReadyEvent(), mcpUnavailableReason };
+    return {
+      sessionId,
+      ready: host.getReadyEvent(),
+      // Anything the engine said before the renderer could know its session id — the
+      // control-plane status among them. Handed back rather than left in that gap.
+      replay: host.takePreReadyEvents(),
+      mcpUnavailableReason,
+    };
   }
 
   /** Sends a command to a live session. Returns false when the session is gone. */
