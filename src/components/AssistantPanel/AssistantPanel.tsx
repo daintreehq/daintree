@@ -17,8 +17,6 @@ export interface AssistantPanelProps {
   projectId: string | null;
   /** Project root; the engine's working directory. */
   projectPath: string | null;
-  /** Shown in the masthead. */
-  projectName?: string | null;
   /** False while the panel is closed — the engine is not started. */
   active: boolean;
   /** Bump to tear down the current session and start a fresh one. */
@@ -29,18 +27,23 @@ export interface AssistantPanelProps {
 export function AssistantPanel({
   projectId,
   projectPath,
-  projectName,
   active,
   restartNonce = 0,
   className,
 }: AssistantPanelProps) {
-  const { submit, interrupt, decideApproval, answerQuestion, requestOperations } =
-    useAssistantSession({
-      projectId,
-      cwd: projectPath,
-      enabled: active,
-      restartNonce,
-    });
+  const {
+    submit,
+    interrupt,
+    decideApproval,
+    answerQuestion,
+    requestOperations,
+    retractInterjection,
+  } = useAssistantSession({
+    projectId,
+    cwd: projectPath,
+    enabled: active,
+    restartNonce,
+  });
 
   // Select the DATA half of the store. `useShallow` keeps the panel from re-rendering
   // on every action-identity change, and the action functions are stable anyway.
@@ -58,6 +61,12 @@ export function AssistantPanel({
     [decideApproval]
   );
 
+  // Stable identity: the store's actions never change, so this cannot re-trigger the
+  // composer's drain effect.
+  const takeRetractedDraft = useCallback(() => {
+    useAssistantStore.getState().takeRetractedDraft();
+  }, []);
+
   const state = useAssistantStore(
     useShallow((s) => ({
       sessionId: s.sessionId,
@@ -74,6 +83,7 @@ export function AssistantPanel({
       operations: s.operations,
       toolGrants: s.toolGrants,
       queuedInterjections: s.queuedInterjections,
+      retractedDraft: s.retractedDraft,
       lastActivityAt: s.lastActivityAt,
       turnStartedAt: s.turnStartedAt,
       phaseIsWake: s.phaseIsWake,
@@ -98,13 +108,14 @@ export function AssistantPanel({
   return (
     <AssistantPanelView
       state={snapshot}
-      projectName={projectName}
       onSubmit={submit}
       onInterrupt={interrupt}
       onDecideApproval={decideApproval}
       onAnswerQuestion={answerQuestion}
       onGrantTool={grantTool}
       onRequestOperations={requestOperations}
+      onRetractInterjection={retractInterjection}
+      onRetractedDraftConsumed={takeRetractedDraft}
       className={className}
     />
   );

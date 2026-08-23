@@ -49,12 +49,14 @@ import {
 import { useVoiceWaitSubmit } from "./hooks/useVoiceWaitSubmit";
 import { registerInputController, unregisterInputController } from "@/store/terminalInputStore";
 import type { CommandResult } from "@shared/types/commands";
+import type { SlashCommand } from "@shared/types/slashCommands";
 import { AppDialog } from "@/components/ui/AppDialog";
 import {
   useTerminalColorSchemeStore,
   selectEffectiveTheme,
 } from "@/store/terminalColorSchemeStore";
 import { resolveInputBarColors } from "@/utils/terminalTheme";
+import { blend, GRAPHIC_FLOOR, parse, readable, toHex } from "@/utils/colorContrast";
 
 import { useEditorCompartments } from "./hooks/useEditorCompartments";
 import { useAutocompleteItems } from "./hooks/useAutocompleteItems";
@@ -107,22 +109,57 @@ export interface HybridInputBarHandle {
 
 export interface HybridInputBarProps {
   terminalId: string;
+  /**
+   * Deliver the composed text. Returning `false` REFUSES it: the draft is kept and the
+   * composer is not reset, matching what a refused submit already does. A PTY cannot
+   * refuse and returns nothing, which is why the flag is optional rather than required.
+   */
   onSend: (payload: {
     data: string;
     trackerData: string;
     text: string;
     /** The draft's image chips, in order, each also present in `text` (#12792). */
     imagePaths?: string[];
-  }) => void;
+  }) => void | boolean;
   onSendKey?: (key: string) => void;
   onActivate?: () => void;
   cwd: string;
   agentId?: BuiltInAgentId;
+  /**
+   * A command set that REPLACES filesystem discovery for the `/` menu.
+   *
+   * For the native assistant the commands are advertised by its engine over the host
+   * protocol — there is nothing on disk to find, and discovery would fill the menu with
+   * a different agent's commands. Everything else about the bar is unchanged, which is
+   * the point: one input surface, not two that drift.
+   */
+  commands?: SlashCommand[];
   agentHasLifecycleEvent?: boolean;
   agentState?: AgentState;
   restartKey?: number;
   disabled?: boolean;
   className?: string;
+  /**
+   * Whether this bar is one of a terminal pane's two focus surfaces.
+   *
+   * `preferredTerminalFocusTarget` (panelStore) is session-wide state naming which
+   * sub-surface of a TERMINAL PANE the user is currently working in — its xterm or its
+   * input bar — so keyboard navigation between panes keeps landing on the same kind of
+   * surface. Every mounted bar both writes it (on focus) and answers to it (its own
+   * focus grabs stand down when the preference says xterm).
+   *
+   * The assistant panel renders this same component as its composer, and it is not a
+   * terminal pane surface. Left participating, clicking it wrote "hybridInput" into a
+   * preference that a plain, still-store-focused grid terminal is subscribed to;
+   * `TerminalPane`'s focus effect re-ran on the change, resolved to xterm (a plain
+   * terminal has no input bar), and pulled the caret out of the assistant one frame
+   * after the click landed. Nothing about that pane had changed — only a preference it
+   * had no business hearing about.
+   *
+   * `false` detaches this instance from that model in both directions. Defaults to
+   * `true`: every terminal-pane call site is unaffected.
+   */
+  participatesInTerminalFocus?: boolean;
 }
 
 interface LatestState {
@@ -179,14 +216,23 @@ function editorOwnsDomFocus(view: EditorView): boolean {
  * Editor. Shared so the two drop targets cannot drift apart again (#12570).
  */
 function FileDropOverlay({ className }: { className?: string }) {
+  // Both grounds in one component. The compact bar renders inside the subtree that
+  // carries `shellVars`, so it picks up the TERMINAL's palette — which is the whole
+  // point: an app accent drawn on a dark terminal under a light theme measured
+  // 1.41:1. The Expanded Editor is an AppDialog portal, outside that subtree and on
+  // the app's own surface, so `--ib-*` is undefined there and the CSS fallback
+  // supplies the app token that ground actually wants.
   return (
     <div
       className={cn(
-        "absolute inset-0 z-10 flex items-center justify-center bg-surface-canvas/80 pointer-events-none",
+        "absolute inset-0 z-10 flex items-center justify-center pointer-events-none",
+        "bg-[var(--ib-bg,var(--color-surface-canvas))]/80",
         className
       )}
     >
-      <span className="text-xs font-medium text-accent-primary">Drop to attach</span>
+      <span className="text-xs font-medium text-[var(--ib-accent,var(--color-accent-primary))]">
+        Drop to attach
+      </span>
     </div>
   );
 }
@@ -217,10 +263,12 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       onActivate,
       cwd,
       agentId,
+      commands: commandsOverride,
       agentHasLifecycleEvent = false,
       restartKey = 0,
       disabled = false,
       className,
+      participatesInTerminalFocus = true,
     },
     ref
   ) => {
@@ -275,6 +323,27 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     );
     const latestRef = useRef<LatestState | null>(null);
     const applyEditorValueRef = useRef<ApplyEditorValue>(() => {});
+
+    // Read from callbacks that outlive the render that created them (CodeMirror DOM
+    // handlers, focus RAFs), so a ref rather than the prop. Seeded at first render —
+    // the flag is fixed per call site, so unlike the effect-synced refs around it there
+    // is no first-frame window where it reads as the wrong thing.
+    const participatesInTerminalFocusRef = useRef(participatesInTerminalFocus);
+    useEffect(() => {
+      participatesInTerminalFocusRef.current = participatesInTerminalFocus;
+    }, [participatesInTerminalFocus]);
+
+    /**
+     * Whether the session-wide preference permits this bar to take/keep focus.
+     *
+     * A detached bar (see `participatesInTerminalFocus`) is not one of the two surfaces
+     * the preference chooses between, so it is not the preference's to veto: gating it
+     * would leave the assistant composer unfocusable whenever the last terminal surface
+     * the user touched happened to be an xterm.
+     */
+    const preferenceAllowsFocus = (): boolean =>
+      !participatesInTerminalFocusRef.current ||
+      usePanelStore.getState().preferredTerminalFocusTarget === "hybridInput";
 
     const openPicker = useCommandStore((s) => s.openPicker);
     const currentProject = useProjectStore((s) => s.currentProject);
@@ -337,7 +406,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       handleDrop,
       resetDragState,
       isDragOverFiles,
-    } = useDragDrop(editorViewRef, cwd, onActivate);
+    } = useDragDrop(editorViewRef, cwd, onActivate, participatesInTerminalFocusRef);
 
     // The dialog unmounts its body once its exit animation ends, and can close
     // under a hovering file — a slow submission collapses it mid-drag. Chromium
@@ -448,9 +517,14 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
         trigger: triggerChar === "$" ? "$" : "/",
         agentId,
         projectPath: cwd,
+        commands: commandsOverride,
       });
 
-    const { commandMap } = useSlashCommandList({ agentId, projectPath: cwd });
+    const { commandMap } = useSlashCommandList({
+      agentId,
+      projectPath: cwd,
+      commands: commandsOverride,
+    });
 
     const { autocompleteItems, isLoading } = useAutocompleteItems({
       activeCompletionContext,
@@ -637,7 +711,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       requestAnimationFrame(() => {
         if (focusGenerationRef.current !== gen) return;
         if (editorViewRef.current !== view) return;
-        if (usePanelStore.getState().preferredTerminalFocusTarget !== "hybridInput") return;
+        if (!preferenceAllowsFocus()) return;
         view.focus();
       });
     };
@@ -651,7 +725,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     useEffect(() => {
       claimMountFocusRef.current = () => {
         if (!isFocusedTerminal) return;
-        if (usePanelStore.getState().preferredTerminalFocusTarget !== "hybridInput") return;
+        if (!preferenceAllowsFocus()) return;
         focusEditor();
       };
     });
@@ -718,7 +792,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
           requestAnimationFrame(() => {
             if (focusGenerationRef.current !== gen) return;
             if (editorViewRef.current !== view) return;
-            if (usePanelStore.getState().preferredTerminalFocusTarget !== "hybridInput") return;
+            if (!preferenceAllowsFocus()) return;
             // The user can click into the draft between the call and this frame.
             if (editorOwnsDomFocus(view)) return;
             view.dispatch({
@@ -828,6 +902,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       sendFromEditor,
       rootRef,
       setActiveCompletionContext,
+      participatesInTerminalFocusRef,
     });
 
     // Right-click gate for the composer's file-path menu. Read the selection
@@ -918,6 +993,17 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       isExpanded,
     });
 
+    // `shellBg` is a `color-mix()` expression, which the contrast maths cannot read.
+    // Recomputed here as a concrete colour so the accent can be solved against the
+    // ground it is actually drawn on. Same recipe as resolveInputBarColors uses.
+    const shellGround = toHex(
+      blend(
+        parse(inputBarColors.background) ?? [30, 30, 30],
+        [0, 0, 0],
+        inputBarColors.isDark ? 0.02 : 0.015
+      )
+    );
+
     const shellVars = {
       "--ib-bg": inputBarColors.shellBg,
       "--ib-border": inputBarColors.shellBorder,
@@ -927,7 +1013,27 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       "--ib-focus-ring": inputBarColors.shellFocusRing,
       "--ib-hover-bg": inputBarColors.shellHoverBg,
       "--ib-focus-bg": inputBarColors.shellFocusBg,
-      "--ib-accent": inputBarColors.accent,
+      // Corrected to the non-text contrast floor against the shell THE CONTROLS SIT ON,
+      // which is `shellBg` — the bar's own ground — not the terminal background behind
+      // it. Those differ: on a light theme the shell is darkened away from the pane, so
+      // an accent solved to exactly 3:1 against the pane lands under 3:1 where it is
+      // actually drawn.
+      //
+      // The raw terminal cursor is decorative and some themes pick a very low-contrast
+      // one — Rosé Pine Dawn's is 1.48:1 — which is fine for a blinking block and not
+      // fine for a glyph or a focus ring that has to be FOUND.
+      //
+      // The fallback is the terminal's own FOREGROUND rather than a fixed blue: a theme
+      // this parser cannot read (HSL, a named colour) would otherwise paint Daintree
+      // blue into a palette that has nothing to do with it, whereas the foreground is
+      // by definition the one colour that theme means to be legible on this ground.
+      "--ib-accent": toHex(
+        readable(
+          parse(inputBarColors.accent) ?? parse(inputBarColors.foreground) ?? [204, 204, 204],
+          parse(shellGround) ?? parse(inputBarColors.background) ?? [30, 30, 30],
+          GRAPHIC_FLOOR
+        )
+      ),
       "--ib-fg": inputBarColors.foreground,
     } as React.CSSProperties;
 
@@ -1053,10 +1159,10 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
               <div
                 role="status"
                 aria-live="polite"
-                className="absolute inset-0 z-10 flex items-center justify-center gap-2 rounded-md bg-daintree-bg/80 pointer-events-none"
+                className="absolute inset-0 z-10 flex items-center justify-center gap-2 rounded-md bg-[var(--ib-bg)]/90 pointer-events-none"
               >
-                <Loader2 className="h-4 w-4 animate-spin text-accent-primary" />
-                <span className="text-xs text-text-secondary">Finishing dictation…</span>
+                <Loader2 className="h-4 w-4 animate-spin text-[var(--ib-accent)]" />
+                <span className="text-xs text-[var(--ib-fg)]">Finishing dictation…</span>
               </div>
             )}
             <Tooltip>

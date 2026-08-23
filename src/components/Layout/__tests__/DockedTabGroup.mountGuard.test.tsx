@@ -30,23 +30,34 @@ let capturedOnOpenChange: ((open: boolean) => void) | null = null;
 let capturedOnOpenAutoFocus: ((event: { preventDefault: () => void }) => void) | null = null;
 let capturedOnFocusOutside: ((event: { preventDefault: () => void }) => void) | null = null;
 
+function panelStoreState(): Record<string, unknown> {
+  return {
+    activeDockTerminalId: mockActiveDockTerminalId,
+    openDockTerminal: openDockTerminalMock,
+    closeDockTerminal: closeDockTerminalMock,
+    moveTerminalToGrid: moveTerminalToGridMock,
+    backendStatus: "connected",
+    setActiveTab: setActiveTabMock,
+    setFocused: setFocusedMock,
+    trashPanel: trashPanelMock,
+    updateTitle: updateTitleMock,
+    reorderPanelsInGroup: reorderPanelsInGroupMock,
+    addPanel: addPanelMock,
+    addPanelToGroup: addPanelToGroupMock,
+    tabGroups: mockTabGroups,
+  };
+}
+
 vi.mock("@/store", () => ({
-  usePanelStore: (selector: (s: Record<string, unknown>) => unknown) =>
-    selector({
-      activeDockTerminalId: mockActiveDockTerminalId,
-      openDockTerminal: openDockTerminalMock,
-      closeDockTerminal: closeDockTerminalMock,
-      moveTerminalToGrid: moveTerminalToGridMock,
-      backendStatus: "connected",
-      setActiveTab: setActiveTabMock,
-      setFocused: setFocusedMock,
-      trashPanel: trashPanelMock,
-      updateTitle: updateTitleMock,
-      reorderPanelsInGroup: reorderPanelsInGroupMock,
-      addPanel: addPanelMock,
-      addPanelToGroup: addPanelToGroupMock,
-      tabGroups: mockTabGroups,
-    }),
+  // A shared state factory, because the dock's focus effect READS the session-wide
+  // `preferredTerminalFocusTarget` rather than subscribing to it — it needed a
+  // non-reactive accessor as well as a hook. Subscribing turned every write of that
+  // value, the assistant panel's composer among the writers, into a re-focus of an
+  // open dock terminal.
+  usePanelStore: Object.assign(
+    (selector: (s: Record<string, unknown>) => unknown) => selector(panelStoreState()),
+    { getState: panelStoreState }
+  ),
   useTerminalInputStore: (
     selector: (s: { hybridInputEnabled: boolean; hybridInputAutoFocus: boolean }) => unknown
   ) => selector({ hybridInputEnabled: false, hybridInputAutoFocus: false }),

@@ -118,7 +118,7 @@ interface LatestRefShape {
     trackerData: string;
     text: string;
     imagePaths?: string[];
-  }) => void;
+  }) => void | boolean;
   addToHistory: (terminalId: string, command: string, projectId?: string) => void;
   resetHistoryIndex: (terminalId: string, projectId?: string) => void;
   clearDraftInput: (terminalId: string, projectId?: string) => void;
@@ -270,7 +270,7 @@ export function useTokenResolution({
           if (!(await options.submit(outgoing))) return false;
         } else {
           const payload = buildTerminalSendPayload(outgoing);
-          latest.onSend({
+          const accepted = latest.onSend({
             data: payload.data,
             trackerData: payload.trackerData,
             text: outgoing,
@@ -278,6 +278,12 @@ export function useTokenResolution({
               ? { imagePaths: [...options.imagePaths] }
               : {}),
           });
+          // A consumer that can REFUSE says so by returning false, and is then treated
+          // exactly like a refused `submit` above: nothing below this line runs, so the
+          // draft the user can still see is the draft they still have. A PTY cannot
+          // refuse and returns undefined, which keeps every terminal's behaviour as it
+          // was.
+          if (accepted === false) return false;
         }
 
         // Learn dictionary words from manual corrections to dictated text. Uses

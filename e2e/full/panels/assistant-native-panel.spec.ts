@@ -4,7 +4,9 @@ import { fileURLToPath } from "node:url";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
-import { T_LONG, T_MEDIUM } from "../../helpers/timeouts";
+import { T_LONG, T_MEDIUM, T_SETTLE } from "../../helpers/timeouts";
+import { getFirstGridPanel, openSettings, openTerminal } from "../../helpers/panels";
+import { SEL } from "../../helpers/selectors";
 
 /**
  * The native assistant panel, driven end to end against a real engine process.
@@ -61,19 +63,48 @@ async function waitForSession(window: AppContext["window"]) {
   ).toBeVisible({ timeout: T_LONG });
 }
 
-/** The composer — present only when the NATIVE panel rendered, never for an xterm. */
+/**
+ * The composer — present only when the NATIVE panel rendered, never for an xterm.
+ *
+ * It is the terminal's OWN input bar (`HybridInputBar`), not a copy, so it is a
+ * CodeMirror surface rather than a textarea: `.cm-content` is the contenteditable the
+ * user actually types into. The panel deliberately has no Send button — the terminal's
+ * bar does not have one either, and the assistant is not a different kind of input.
+ */
 function composer(window: AppContext["window"]) {
-  return window.locator("#daintree-assistant-panel textarea");
+  return window.locator("#daintree-assistant-panel .cm-content");
 }
 
 /**
- * The panel's own send button, scoped to the panel: the dock's "Send output to Grid"
- * also matches an unscoped accessible name of "Send".
+ * Types into the composer.
+ *
+ * `fill()` does not work on a CodeMirror surface: it is a contenteditable, not a form
+ * control, and CodeMirror rebuilds the DOM from its own document state. Real key input
+ * is what drives that document, so the text has to be typed.
  */
-function sendButton(window: AppContext["window"]) {
-  return window
-    .locator("#daintree-assistant-panel")
-    .getByRole("button", { name: "Send", exact: true });
+async function type(window: AppContext["window"], text: string) {
+  const input = composer(window);
+  await expect(input).toBeVisible({ timeout: T_LONG });
+  await input.click();
+  await window.keyboard.insertText(text);
+}
+
+/**
+ * What is actually in the composer, as the user would say it.
+ *
+ * NOT `innerText`. CodeMirror renders its placeholder as a child of the content
+ * element, so an EMPTY editor reads back as "Ask Daintree Assistant" — which is how a
+ * prompt that sent perfectly well looks like a prompt that was refused. The placeholder
+ * is present only while the document is empty, so its presence is the reliable signal.
+ *
+ * A missing composer is also empty: a question sheet takes its place while a turn is
+ * blocked, and the draft being gone is the same proof it was accepted.
+ */
+async function composerText(window: AppContext["window"]): Promise<string> {
+  const input = composer(window);
+  if ((await input.count()) === 0) return "";
+  if ((await input.locator(".cm-placeholder").count()) > 0) return "";
+  return (await input.innerText()).trim();
 }
 
 async function ask(window: AppContext["window"], text: string) {
@@ -81,27 +112,18 @@ async function ask(window: AppContext["window"], text: string) {
   await expect(input).toBeVisible({ timeout: T_LONG });
   // Wait for the ENGINE, not just the panel. The composer renders as soon as the panel
   // does, but the session is still starting — and a prompt sent before it is ready is
-  // refused (the draft is kept) rather than queued, so asking early would assert
-  // against a turn that never happened.
-  //
-  // The status line is the readiness signal. The send button is not: it is also
-  // disabled on an empty draft, so waiting for it to enable before typing can never
-  // succeed.
+  // refused (the draft is KEPT rather than eaten) instead of queued, so asking early
+  // would assert against a turn that never happened. The status line is the readiness
+  // signal.
   await waitForSession(window);
 
-  await input.fill(text);
-  // Now it must be live — the draft is non-empty and the session is ready.
-  await expect(sendButton(window)).toBeEnabled();
-  await sendButton(window).click();
+  await type(window, text);
+  await window.keyboard.press("Enter");
   // The composer clears only on ACCEPTANCE, so an empty box is proof the prompt was
   // taken rather than refused. It can also be REPLACED outright: a question sheet
   // takes the composer's place while the turn is blocked, and a vanished composer is
   // the same proof — the draft was accepted and the turn moved on.
-  await expect
-    .poll(async () => ((await input.count()) === 0 ? "" : await input.inputValue()), {
-      timeout: T_MEDIUM,
-    })
-    .toBe("");
+  await expect.poll(() => composerText(window), { timeout: T_MEDIUM }).toBe("");
 }
 
 test.describe.serial("Assistant: native panel", () => {
@@ -137,10 +159,11 @@ test.describe.serial("Assistant: native panel", () => {
     const { window } = ctx;
     const panel = await openAssistant(window);
 
-    // The composer is a real textarea. An xterm pane has none — so this single
-    // assertion is what separates "the native panel rendered" from "we are looking at
-    // the old PTY cockpit in a terminal", which is exactly the regression that would
-    // otherwise be invisible in a screenshot.
+    // The pair is the discriminator. The panel hosts an editable composer AND no xterm
+    // — which is exactly what separates "the native panel rendered" from "we are
+    // looking at the old PTY cockpit in a terminal", a regression that would otherwise
+    // be invisible in a screenshot. Neither half alone is enough: an agent terminal
+    // carries the same input bar beneath its xterm.
     await expect(composer(window)).toBeVisible({ timeout: T_LONG });
     await expect(panel.locator(".xterm")).toHaveCount(0);
   });
@@ -151,11 +174,207 @@ test.describe.serial("Assistant: native panel", () => {
     await ask(window, "/scenario streaming");
 
     // The batch is announced as a plan before dispatch, so the group header appears
-    // with both calls counted rather than one row at a time.
-    await expect(window.getByText(/2 actions/)).toBeVisible({ timeout: T_MEDIUM });
+    // with both calls in it rather than one row at a time — and it says what they DID,
+    // in the engine's own verbs, with the count trailing. A bare "2 actions" is the
+    // count of a fact instead of the fact.
+    const group = window.locator("#daintree-assistant-panel").getByRole("button", {
+      name: /Listed worktrees.*Read git state/,
+    });
+    await expect(group).toBeVisible({ timeout: T_MEDIUM });
+    await expect(group).toContainText("· 2");
     await expect(window.getByText(/Three worktrees are ready/)).toBeVisible({
       timeout: T_MEDIUM,
     });
+  });
+
+  test("an answer can be selected with the mouse, and a plain click still focuses the composer", async () => {
+    const { window } = ctx;
+    await openAssistant(window);
+    await ask(window, "/scenario streaming");
+
+    const answer = window
+      .locator("#daintree-assistant-panel")
+      .getByText(/Three worktrees are ready/);
+    await expect(answer).toBeVisible({ timeout: T_MEDIUM });
+
+    // A real press-drag-release, never `selectText()`, because the bugs this pins were
+    // invisible to an API-driven selection — the DOM was always selectable, it was the
+    // POINTER that could not do it:
+    //
+    //   1. the panel focused its composer on mousedown, which moves the document
+    //      selection into the editor and cancels the drag before it starts, and
+    //   2. the panel's own `<aside>` carried a permanent `tabindex`, so Chromium
+    //      focused the region on mousedown and collapsed the selection with it.
+    //
+    // Either one alone reproduces on every attempt: an answer could not be copied.
+    //
+    // Coordinates come from the TEXT's own client rect, not the paragraph's layout box.
+    // A block-level `<p>` is as wide as the panel while a short answer occupies only the
+    // left of it, so the box's midpoint lands on empty ground, the press never anchors
+    // in a text node, and the drag produces nothing for a reason that has nothing to do
+    // with what is under test. The rect is also read TWICE and required to agree: the
+    // composer refocuses itself on its own frames as the panel settles, and each focus
+    // can scroll the transcript out from under a rect measured a moment earlier.
+    const rect = await window.evaluate(async () => {
+      const read = () => {
+        const p = document.querySelector("#daintree-assistant-panel .assistant-prose p");
+        const node = p?.firstChild;
+        if (!node) return null;
+        const r = document.createRange();
+        r.selectNodeContents(node);
+        const box = r.getClientRects()[0];
+        window.getSelection()?.removeAllRanges();
+        if (!box) return null;
+        const x = box.x + 1;
+        const y = box.y + box.height / 2;
+        // The hit test is the point of the whole exercise: it is what proves the press
+        // will land on the paragraph rather than on the scroll container behind it.
+        return document.elementFromPoint(x, y) === p ? { x, y, w: box.width } : null;
+      };
+      for (let i = 0; i < 40; i++) {
+        const a = read();
+        await new Promise((r) => setTimeout(r, 100));
+        const b = read();
+        if (a && b && a.x === b.x && a.y === b.y) return b;
+      }
+      return null;
+    });
+    if (!rect) throw new Error("the answer never settled into a stable, hittable text rect");
+
+    await window.mouse.move(rect.x, rect.y);
+    await window.mouse.down();
+    // Two moves: a press followed by a single jump can be treated as a click, where an
+    // intermediate point makes it unambiguously a drag.
+    await window.mouse.move(rect.x + rect.w / 2, rect.y, { steps: 10 });
+    await window.mouse.move(rect.x + rect.w - 2, rect.y, { steps: 10 });
+    await window.mouse.up();
+
+    const selected = await window.evaluate(() => window.getSelection()?.toString() ?? "");
+    expect(
+      selected.trim().length,
+      `nothing was selected (got ${JSON.stringify(selected)})`
+    ).toBeGreaterThan(0);
+
+    // The other half of the same handler: moving the focus grab to mouseup must not
+    // cost the panel its click-anywhere-to-type affordance, which is why it exists.
+    // Straight onto the live selection, deliberately NOT cleared first. That is the
+    // harder case and the one a reader actually performs: select an answer, then click
+    // to carry on typing. The selection is still non-empty when `mouseup` fires —
+    // Chromium defers collapsing it to resolve click-versus-drag — so a handler that
+    // reads it there declines to focus, the click then collapses it anyway, and the user
+    // is left with neither a selection nor a caret.
+    await window.mouse.click(rect.x + rect.w / 2, rect.y);
+    await expect(composer(window)).toBeFocused();
+  });
+
+  test("clicking the composer keeps the caret, with a plain terminal focused behind it", async () => {
+    const { window } = ctx;
+
+    // A PLAIN terminal, deliberately: one with no agent identity has no input bar of
+    // its own, so the session-wide `preferredTerminalFocusTarget` resolves to xterm for
+    // it. That is what made this pane the thief and an agent terminal not — with only
+    // agent terminals open the preference already reads "hybridInput", the composer's
+    // write is a no-op, and nothing re-runs.
+    await openTerminal(window);
+    const pane = getFirstGridPanel(window);
+    await expect(pane).toBeVisible({ timeout: T_LONG });
+
+    // Twice. The first press on an unfocused grid pane is swallowed to activate it
+    // (`shouldSuppressUnfocusedClick`); only a press that actually reaches xterm fires
+    // the focusin that records "xterm", which is the state this test needs to set up.
+    const screen = pane.locator(".xterm-screen");
+    await screen.click();
+    await screen.click();
+    await expect(pane.locator(".xterm-helper-textarea")).toBeFocused();
+
+    await openAssistant(window);
+    const input = composer(window);
+    await input.click();
+    await expect(input).toBeFocused();
+
+    // And it STAYS. The steal arrived a frame later and from the other side of the app:
+    // the click recorded "hybridInput", the still-store-focused terminal re-ran its own
+    // focus effect on that change, resolved to xterm and took the caret back. An
+    // immediate assertion passes even with the bug present, so the settle is the test.
+    await window.waitForTimeout(T_SETTLE);
+    await expect(input).toBeFocused();
+    await expect(pane.locator(".xterm-helper-textarea")).not.toBeFocused();
+
+    // Typing is the thing the user lost, so assert the thing rather than its proxy.
+    await window.keyboard.insertText("still mine");
+    await expect(input).toContainText("still mine");
+  });
+
+  test("the streaming caret stops when the engine stops writing prose", async () => {
+    const { window } = ctx;
+    await openAssistant(window);
+
+    const panel = window.locator("#daintree-assistant-panel");
+    const streamingProse = panel.locator(".assistant-prose.is-streaming");
+
+    await ask(window, "/scenario proseThenTool");
+
+    // While the prose is arriving the caret is the signal that it is, so it must be
+    // there — a test that only proved it goes away would pass on a caret that never
+    // appeared at all.
+    await expect(streamingProse).toHaveCount(1, { timeout: T_MEDIUM });
+
+    // The engine has now left `generating` to compose a call, and the answer is STILL
+    // the last thing drawn — no tool row is announced yet. The caret used to blink all
+    // the way through this, claiming text was still arriving for as long as the call
+    // took.
+    await expect(streamingProse).toHaveCount(0, { timeout: T_MEDIUM });
+
+    // The turn must still be mid-flight, or the caret going away proves nothing — it
+    // goes away when a turn ENDS too. Read in one page evaluation rather than as two
+    // more Playwright assertions, so both facts describe the same instant: the
+    // scenario's composing window is long, but not a licence to assert across it.
+    const midTurn = await window.evaluate(() => {
+      const text = document.querySelector("#daintree-assistant-panel")?.textContent ?? "";
+      return {
+        proseIsStillLast: text.includes("Checking the worktrees now"),
+        turnHasFinished: text.includes("Three worktrees are ready"),
+      };
+    });
+    expect(midTurn.proseIsStillLast, "the prose the caret was parked on should still show").toBe(
+      true
+    );
+    expect(midTurn.turnHasFinished, "the turn should not have ended yet").toBe(false);
+  });
+
+  test("a long prompt folds to a fixed height and opens on Show more", async () => {
+    const { window } = ctx;
+    await openAssistant(window);
+    await waitForSession(window);
+
+    // ONE long wrapping paragraph, not many short lines. The fold used to count
+    // newlines, which is the wrong question: this prompt is a single line by that
+    // arithmetic and a dozen on screen, so the shape people actually paste was the one
+    // shape that never folded.
+    const prompt = `Please review ${"the performance of every panel in this application and report back ".repeat(12)}when you are done.`;
+    await type(window, prompt);
+    await window.keyboard.press("Enter");
+    await expect.poll(() => composerText(window), { timeout: T_MEDIUM }).toBe("");
+
+    const panel = window.locator("#daintree-assistant-panel");
+    const more = panel.getByRole("button", { name: "Show more" });
+    await expect(more).toBeVisible({ timeout: T_MEDIUM });
+
+    const bubble = panel.locator("div", { hasText: "Please review the performance" }).last();
+    const foldedHeight = (await bubble.boundingBox())?.height ?? 0;
+    expect(foldedHeight, "the folded prompt should be capped").toBeGreaterThan(0);
+
+    await more.click();
+    const less = panel.getByRole("button", { name: "Show less" });
+    await expect(less).toBeVisible();
+    // The control is a TOGGLE, and the height has to actually move — a "Show more" that
+    // relabels itself without revealing anything is the failure worth catching.
+    await expect
+      .poll(async () => (await bubble.boundingBox())?.height ?? 0)
+      .toBeGreaterThan(foldedHeight);
+
+    await less.click();
+    await expect(more).toBeVisible();
   });
 
   test("replaces streamed tokens with the authoritative final content", async () => {
@@ -226,7 +445,10 @@ test.describe.serial("Assistant: native panel", () => {
 
     // Batches collapse by default, so open the group to see the individual rows.
     const group = window.locator("#daintree-assistant-panel").getByRole("button", {
-      name: /2 actions/,
+      // A COUNT, not the word: "More actions" in the panel header matches /actions/.
+      // This batch's tools have no verb in the fake, so the header falls back to the
+      // count — which is the fallback branch, and worth exercising here.
+      name: /\d+ actions?/,
     });
     await expect(group).toBeVisible({ timeout: T_MEDIUM });
     if ((await group.getAttribute("aria-expanded")) !== "true") await group.click();
@@ -260,12 +482,25 @@ test.describe.serial("Assistant: native panel", () => {
   test("a slash command runs instead of becoming a prompt", async () => {
     const { window } = ctx;
     await openAssistant(window);
+    const panel = window.locator("#daintree-assistant-panel");
+    // Count the answers BEFORE, so "no turn ran" is a comparison rather than the
+    // absence of a transient phase label. With the fake at speed zero an accidental
+    // turn completes before any phase could be observed, so checking for phase text
+    // proved nothing at all.
+    const proseBefore = await panel.locator(".assistant-prose").count();
+
     await ask(window, "/status");
 
-    // The command's OUTPUT, which only the command path can produce.
-    await expect(window.getByText(/tier\s+operator/)).toBeVisible({ timeout: T_MEDIUM });
-    // And no turn was spent asking the model about the word "status".
-    await expect(window.getByText(/Analyzing request|Writing/)).toHaveCount(0);
+    // The command's OUTPUT, which only the command path can produce. Scoped past the
+    // masthead, which now legitimately carries the same words.
+    await expect(panel.getByText(/backend\s+local/).last()).toBeVisible({ timeout: T_MEDIUM });
+
+    // And no turn was spent asking the model about the word "status": a command result
+    // is not a prose block, so the count is unchanged.
+    await expect
+      .poll(() => panel.locator(".assistant-prose").count(), { timeout: T_MEDIUM })
+      .toBe(proseBefore);
+    await expect(window.getByText(/Three worktrees are ready/)).toHaveCount(0);
   });
 
   test("slash-prefixed prose still reaches the model", async () => {
@@ -274,31 +509,77 @@ test.describe.serial("Assistant: native panel", () => {
     // Begins with a slash and a letter, and is plainly not a command. Routing on shape
     // alone swallowed text like this into an unknown-command reply, losing what the
     // user actually wrote.
-    await ask(window, "/scenario streaming please");
+    //
+    // The prose must name a command the engine does NOT advertise. Written with
+    // `/scenario …` this proved nothing: `/scenario` IS in the catalog, so the panel
+    // took the command path and the test passed while ordinary prose like
+    // "/review this diff" could still be swallowed. `/review` is not in the fake's
+    // catalog, so this is the routing decision the test claims to be about.
+    await ask(window, "/review this diff and tell me what you think");
+
+    // It reached the MODEL: a turn ran and answered. The default scenario is
+    // `streaming`, which is what a plain prompt produces.
+    await expect(window.getByText(/Three worktrees are ready/)).toBeVisible({
+      timeout: T_MEDIUM,
+    });
+    await expect(window.getByText(/isn't a command/)).toHaveCount(0);
+    // And the prompt survived intact, rather than being trimmed on the way through.
+    await expect(
+      window.locator("#daintree-assistant-panel").getByText(/tell me what you think/)
+    ).toBeVisible();
+  });
+
+  test("an ordinary prompt — no slash anywhere — runs a turn", async () => {
+    const { window } = ctx;
+    await openAssistant(window);
+
+    // The plainest thing a user can do, and until now the one path no CI test walked.
+    // Every other test here selects a scenario with `/scenario …`, which takes the
+    // COMMAND route — so the ordinary `prompt` route could have been entirely broken
+    // and this suite would have stayed green through a release.
+    await ask(window, "which worktrees are ready to review?");
 
     await expect(window.getByText(/Three worktrees are ready/)).toBeVisible({
       timeout: T_MEDIUM,
     });
+    // The user's own words are in the transcript, above the answer.
+    const panel = window.locator("#daintree-assistant-panel");
+    await expect(panel.getByText(/which worktrees are ready to review/)).toBeVisible();
     await expect(window.getByText(/isn't a command/)).toHaveCount(0);
   });
 
   test("typing a slash offers the engine's own command set", async () => {
     const { window } = ctx;
     await openAssistant(window);
-    await composer(window).fill("/");
+    await type(window, "/");
 
-    const palette = window.getByRole("listbox", { name: "Commands" });
+    // The input bar's own palette, named as the bar names it. The commands in it are
+    // the ENGINE's, handed down as an override — the bar's usual filesystem discovery
+    // would offer this project's Claude commands, which the assistant cannot run.
+    const palette = window.getByRole("listbox", { name: "Command autocomplete" });
     await expect(palette).toBeVisible({ timeout: T_MEDIUM });
     // Each entry says what the command DOES: the operations surface — inbox, watchers,
     // timers, workflows — is reachable only through these, so bare names would hide it
     // behind knowing what to type.
     await expect(palette.getByText("supervised agents")).toBeVisible();
 
-    // Filters as you type, and running one takes the command path.
-    await composer(window).fill("/wat");
+    // Filters as you type, and running one takes the command path. Retyped from empty
+    // rather than appended: the composer is a real editor, so typing "/wat" after "/"
+    // would compose "//wat".
+    await window.keyboard.press("ControlOrMeta+a");
+    await window.keyboard.press("Backspace");
+    await type(window, "/wat");
     await expect(palette.getByRole("option")).toHaveCount(1);
-    await palette.getByRole("option").first().click();
-    await expect(window.getByText(/tier\s+operator/)).toBeVisible({ timeout: T_MEDIUM });
+    // Enter RUNS the highlighted command; Tab and a click complete it into the draft.
+    // That split is the input bar's own contract (useAutocompleteApply honours an
+    // item's enterAction only in "enter" mode), and the assistant inherits it rather
+    // than redefining it — so this is the gesture that has to reach the engine.
+    await window.keyboard.press("Enter");
+    // Text unique to `/watchers`. Every command used to answer with the same masthead,
+    // so dispatching the WRONG known command produced identical output and passed.
+    await expect(window.getByText(/WATCHERS/)).toBeVisible({ timeout: T_MEDIUM });
+    await expect(window.getByText(/wt_forge\s+claude/)).toBeVisible();
+    await expect.poll(() => composerText(window), { timeout: T_MEDIUM }).toBe("");
   });
 
   test("an unknown slash command says so rather than asking the model", async () => {
@@ -331,6 +612,546 @@ test.describe.serial("Assistant: native panel", () => {
     });
     // The composer comes back once the turn is no longer blocked.
     await expect(composer(window)).toBeVisible();
+  });
+
+  test("paragraphs are separated, and the separation is visible", async () => {
+    const { window } = ctx;
+    const panel = await openAssistant(window);
+    await ask(window, "/scenario paragraphs");
+
+    const prose = panel.locator(".assistant-prose").last();
+    await expect(prose.getByText(/Third paragraph after the list/)).toBeVisible({
+      timeout: T_MEDIUM,
+    });
+
+    // Measured, not eyeballed. The failure this exists for produced a perfectly
+    // correct DOM — the right number of <p> elements in the right order — that
+    // rendered as one unbroken slab because a per-element `margin: 0` out-specified
+    // the sibling rule meant to separate them. Nothing about the markup was wrong, so
+    // only geometry can catch it.
+    const gaps = await prose.evaluate((root) => {
+      const blocks = [...root.children] as HTMLElement[];
+      const out: { tag: string; gap: number }[] = [];
+      for (let i = 1; i < blocks.length; i++) {
+        const prev = blocks[i - 1]!.getBoundingClientRect();
+        const here = blocks[i]!.getBoundingClientRect();
+        out.push({ tag: blocks[i]!.tagName, gap: Math.round(here.top - prev.bottom) });
+      }
+      return out;
+    });
+    console.log("block gaps:", JSON.stringify(gaps));
+
+    expect(gaps.length, "the answer did not render as separate blocks").toBeGreaterThan(3);
+    // The fenced block is its own scroll container, which is what keeps a long command
+    // from forcing the whole rail sideways.
+    const pre = prose.locator("pre");
+    await expect(pre).toBeVisible();
+    expect(await pre.evaluate((el) => getComputedStyle(el).overflowX)).toBe("auto");
+    // A real gap, not a hairline. At the terminal's 12px this is ~10px, and the check
+    // is deliberately loose: it asserts the blocks are SEPARATED, not by how much.
+    for (const { tag, gap } of gaps) {
+      expect(gap, `${tag} sits flush against the block above it`).toBeGreaterThanOrEqual(4);
+    }
+    // And a heading takes more air than a paragraph does — the hierarchy has to be
+    // legible, not merely present.
+    const heading = gaps.find((g) => g.tag === "H2");
+    const paragraph = gaps.find((g) => g.tag === "P");
+    // Asserted PRESENT, not skipped when missing. `if (heading && paragraph)` passed
+    // happily when the heading rendered as a DIV or vanished entirely — which is the
+    // regression, not the exemption.
+    expect(heading, "the markdown heading did not render as an H2").toBeDefined();
+    expect(paragraph, "no paragraph rendered").toBeDefined();
+    expect(heading!.gap).toBeGreaterThan(paragraph!.gap);
+  });
+
+  test("a standing grant answers the NEXT call without a card", async () => {
+    const { window } = ctx;
+    await openAssistant(window);
+    await ask(window, "/scenario approvalSimple");
+
+    const card = window.getByRole("group", { name: /Approval/ });
+    await expect(card).toBeVisible({ timeout: T_MEDIUM });
+
+    // "Allow 5×" widens authority beyond this one call. Until now nothing clicked it:
+    // the fake's approval omitted `rememberable`, so the two grant buttons the cockpit
+    // drew were not even rendered in any test, let alone exercised.
+    const bounded = card.getByRole("button", { name: /Allow 5/ });
+    await expect(bounded).toBeVisible();
+    await bounded.click();
+    await expect(card).toHaveCount(0, { timeout: T_MEDIUM });
+    // A grant is an APPROVAL of the call in front of you, not merely a promise about
+    // later ones.
+    await expect(window.getByText(/Tests are running/)).toBeVisible({ timeout: T_MEDIUM });
+
+    // The next identical call is answered from the grant, with no card at all. This is
+    // the whole point of the button, and the half most likely to be silently missing:
+    // a grant that only approved once would pass every assertion above.
+    await ask(window, "/scenario approvalSimple");
+    await expect(window.getByText(/Tests are running/).first()).toBeVisible({
+      timeout: T_MEDIUM,
+    });
+    await expect(card, "the grant did not cover the next call").toHaveCount(0);
+  });
+
+  test("a grant is bounded — it does not become permanent", async () => {
+    const { window } = ctx;
+    await openAssistant(window);
+    await ask(window, "/scenario approvalSimple");
+
+    const card = window.getByRole("group", { name: /Approval/ });
+    await expect(card).toBeVisible({ timeout: T_MEDIUM });
+    await card.getByRole("button", { name: /Allow 5/ }).click();
+    await expect(card).toHaveCount(0, { timeout: T_MEDIUM });
+
+    // Five uses: the granting call itself, then four more. The sixth must ask again.
+    // An off-by-one here is invisible in use and is the difference between "allow five
+    // times" and "allow forever", on the control that authorises tool calls.
+    for (let i = 0; i < 4; i++) {
+      await ask(window, "/scenario approvalSimple");
+      await expect(card, `card reappeared on covered call ${i + 1}`).toHaveCount(0);
+    }
+    await ask(window, "/scenario approvalSimple");
+    await expect(card, "the bounded grant never ran out").toBeVisible({ timeout: T_MEDIUM });
+  });
+
+  test("an empty operations deck omits its sections rather than drawing them hollow", async () => {
+    // A second app, told to answer with nothing in any section.
+    await closeApp(ctx.app);
+    ctx = await launchApp({
+      env: {
+        DAINTREE_ASSISTANT_BIN: FAKE_ENGINE,
+        FAKE_ENGINE_SPEED: "0",
+        FAKE_ENGINE_SCENARIO: "streaming",
+        FAKE_ENGINE_OPERATIONS: "empty",
+      },
+    });
+    ctx.window = await openAndOnboardProject(
+      ctx.app,
+      ctx.window,
+      fixtureDir,
+      "Assistant Native Test"
+    );
+    const panel = await openAssistant(ctx.window);
+    await waitForSession(ctx.window);
+    await composer(ctx.window).click();
+    await ctx.window.keyboard.press("Control+o");
+
+    await expect(panel.getByRole("button", { name: "Close" })).toBeVisible({
+      timeout: T_MEDIUM,
+    });
+    // NOW always shows — it is the rollup, and "nothing is happening" is an answer.
+    await expect(panel.getByText("NOW", { exact: true })).toBeVisible();
+    await expect(panel.getByText(/Nothing running, nothing waiting on you/)).toBeVisible();
+    // The other six are omitted. Seven "nothing here" headings buries the one section
+    // that has something in it, which is why the cockpit dropped them too — and with
+    // every section populated in the fake, a deck that drew them hollow passed.
+    for (const section of [
+      "NEEDS ATTENTION",
+      "WORKFLOWS",
+      "AGENTS",
+      "ASYNC",
+      "SCHEDULED",
+      "RECENT",
+    ]) {
+      await expect(
+        panel.getByText(section, { exact: true }),
+        `${section} was drawn with nothing in it`
+      ).toHaveCount(0);
+    }
+  });
+
+  test("^O opens the operations deck, and closes it again", async () => {
+    const { window } = ctx;
+    const panel = await openAssistant(window);
+    await waitForSession(window);
+
+    // Bound on the PANEL, not the composer, so it works with focus anywhere inside —
+    // including inside the editor, which is where focus actually is in practice.
+    await composer(window).click();
+    await window.keyboard.press("Control+o");
+
+    await expect(panel.getByRole("button", { name: "Close" })).toBeVisible({
+      timeout: T_MEDIUM,
+    });
+    // The cockpit's seven sections, in its order — what is wrong, then what is
+    // planned, then what is running, then what already happened.
+    for (const section of [
+      "NOW",
+      "NEEDS ATTENTION",
+      "WORKFLOWS",
+      "AGENTS",
+      "ASYNC",
+      "SCHEDULED",
+      "RECENT",
+    ]) {
+      await expect(panel.getByText(section, { exact: true })).toBeVisible({
+        timeout: T_MEDIUM,
+      });
+    }
+    // Rows, not just headings: a deck of seven empty headings would satisfy the
+    // check above while showing the user nothing.
+    await expect(panel.getByText(/wt_forge is waiting/)).toBeVisible();
+    await expect(panel.getByText(/Ship the migration/)).toBeVisible();
+
+    // The deck replaces the TRANSCRIPT — two scrolling regions in a sidebar's width
+    // makes both unreadable — but NOT the composer. The cockpit's stayed live under
+    // its deck for the same reason: reading what is running is exactly when you think
+    // of the next thing to say, and a deck you have to close to type is a deck you
+    // close before you have finished reading it.
+    await expect(panel.getByText("Put agents to work")).toHaveCount(0);
+    await expect(composer(window)).toBeVisible();
+
+    await window.keyboard.press("Control+o");
+    await expect(panel.getByText("Put agents to work")).toBeVisible({ timeout: T_MEDIUM });
+  });
+
+  test("Escape stops a running turn", async () => {
+    const { window } = ctx;
+    await openAssistant(window);
+    await ask(window, "/scenario cancellable");
+
+    // Wait until it is genuinely running before interrupting — an Escape sent at an
+    // idle panel proves nothing, and would pass whether or not interrupt works.
+    const stop = window.getByRole("button", { name: "Stop" });
+    await expect(stop).toBeVisible({ timeout: T_MEDIUM });
+    await window.keyboard.press("Escape");
+
+    // The turn terminalizes: the Stop affordance goes away because there is no longer
+    // anything to stop.
+    await expect(stop).toHaveCount(0, { timeout: T_MEDIUM });
+  });
+
+  test("/clear leaves a fresh surface, not a notice over old history", async () => {
+    const { window } = ctx;
+    const panel = await openAssistant(window);
+    await ask(window, "/scenario simple");
+    await expect(window.getByText(/Three worktrees are ready/)).toBeVisible({
+      timeout: T_MEDIUM,
+    });
+
+    await ask(window, "/clear");
+
+    // The whole point: the previous conversation is GONE, the way the cockpit's
+    // /clear left a fresh screen. A notice printed under the old transcript would
+    // still show the answer above it.
+    await expect
+      .poll(() => panel.locator(".assistant-prose").count(), { timeout: T_MEDIUM })
+      .toBe(0);
+    await expect(window.getByText(/Three worktrees are ready/)).toHaveCount(0);
+  });
+
+  test("/clear takes the live state with it, not just the transcript", async () => {
+    const { window } = ctx;
+    const panel = await openAssistant(window);
+    // A turn with tool rows and a running clock, cleared while it is still settling —
+    // which is when a user reaches for /clear, because that is when they can see it has
+    // gone wrong.
+    await ask(window, "/scenario streaming");
+    await expect(window.getByText(/Three worktrees are ready/)).toBeVisible({
+      timeout: T_MEDIUM,
+    });
+
+    await ask(window, "/clear");
+    await expect(panel.getByText(/Conversation cleared/)).toBeVisible({ timeout: T_MEDIUM });
+
+    // The transcript goes, and so does everything that described the turn: the activity
+    // rows, and the phase line with its ticking elapsed clock. Leaving those behind left
+    // "Integrating results · 13s" counting up under an empty conversation, describing a
+    // turn that no longer existed anywhere, with no way to dismiss it short of
+    // restarting the session.
+    await expect(panel.locator(".assistant-prose")).toHaveCount(0);
+    await expect(window.getByText(/Three worktrees are ready/)).toHaveCount(0);
+    await expect(panel.getByRole("button", { name: /\d+ actions?|Listed worktrees/ })).toHaveCount(
+      0
+    );
+    await expect(panel.getByText(/Integrating|Analyzing|Writing|Working/)).toHaveCount(0);
+    // Back to the resting state: connected, with nothing in flight.
+    await expect(panel.getByText("Connected", { exact: true })).toBeVisible();
+  });
+
+  test("a REFUSED /clear leaves the conversation exactly where it was", async () => {
+    // The engine refuses `/clear` while a turn is in flight, and that refusal arrives
+    // as an ordinary command result. The panel used to match on the command TEXT, so it
+    // wiped the transcript, the activity rows and every live readout while the engine
+    // kept the conversation and carried on working in it — leaving the user talking to
+    // a model whose context they could no longer see.
+    await closeApp(ctx.app);
+    ctx = await launchApp({
+      env: {
+        DAINTREE_ASSISTANT_BIN: FAKE_ENGINE,
+        FAKE_ENGINE_SPEED: "0",
+        FAKE_ENGINE_SCENARIO: "streaming",
+        FAKE_ENGINE_CLEAR: "refuse",
+      },
+    });
+    ctx.window = await openAndOnboardProject(
+      ctx.app,
+      ctx.window,
+      fixtureDir,
+      "Assistant Native Test"
+    );
+    const panel = await openAssistant(ctx.window);
+
+    await ask(ctx.window, "/scenario streaming");
+    await expect(ctx.window.getByText(/Three worktrees are ready/)).toBeVisible({
+      timeout: T_MEDIUM,
+    });
+    const proseBefore = await panel.locator(".assistant-prose").count();
+    expect(proseBefore).toBeGreaterThan(0);
+
+    await ask(ctx.window, "/clear");
+    await expect(panel.getByText(/Can't clear while a turn is in progress/)).toBeVisible({
+      timeout: T_MEDIUM,
+    });
+
+    // The refusal is REPORTED and nothing is destroyed.
+    await expect(ctx.window.getByText(/Three worktrees are ready/)).toBeVisible();
+    expect(await panel.locator(".assistant-prose").count()).toBe(proseBefore);
+  });
+
+  test("declining is the weighted default on an approval", async () => {
+    const { window } = ctx;
+    await openAssistant(window);
+    await ask(window, "/scenario approvalSimple");
+
+    const decline = window.getByRole("button", { name: "Decline", exact: true });
+    await expect(decline).toBeVisible({ timeout: T_MEDIUM });
+
+    // The cockpit drew DECLINE in inverse video (render_approval.go) — fail-closed by
+    // default. Asserted as a RELATIONSHIP rather than a class name: whatever the
+    // theme, the button that authorises the action must not be the one that looks
+    // like the one you are meant to press.
+    const weight = (name: string) =>
+      window
+        .getByRole("button", { name, exact: true })
+        .evaluate((el) => getComputedStyle(el).backgroundColor);
+    const declineBg = await weight("Decline");
+    const approveBg = await window
+      .getByRole("button", { name: "Run command", exact: true })
+      .first()
+      .evaluate((el) => getComputedStyle(el).backgroundColor);
+    const alpha = (c: string) => {
+      const m = /rgba?\(([^)]+)\)/.exec(c);
+      if (!m) return 0;
+      const parts = m[1]!.split(",").map((n) => Number(n.trim()));
+      return parts.length === 4 ? parts[3]! : 1;
+    };
+    expect(alpha(declineBg), "Decline is not the filled button").toBeGreaterThan(alpha(approveBg));
+  });
+
+  test("N declines from the keyboard without touching the mouse", async () => {
+    const { window } = ctx;
+    await openAssistant(window);
+    await ask(window, "/scenario approvalSimple");
+
+    const card = window.getByRole("group", { name: /Approval/ });
+    await expect(card).toBeVisible({ timeout: T_MEDIUM });
+    await card.press("n");
+
+    await expect(card).toHaveCount(0, { timeout: T_MEDIUM });
+  });
+
+  test("the whole panel scales with the terminal font size", async () => {
+    const { window } = ctx;
+    const panel = await openAssistant(window);
+    await waitForSession(window);
+
+    // `.assistant-panel` is the SURFACE, inside the region that carries the id. The
+    // region is app chrome and inherits the app's own 16px, so measuring it would read
+    // 16 whatever the terminal is set to — passing before this feature existed and
+    // failing after it worked.
+    const surface = panel.locator(".assistant-panel");
+    const rootSize = () =>
+      surface.evaluate((el) => Number.parseFloat(getComputedStyle(el).fontSize));
+    const before = await rootSize();
+
+    // The user's own setting, changed the way a user changes it. This is the failure
+    // the panel shipped with: it painted at a hardcoded 12px while xterm hydrated the
+    // configured size, so anyone who had ever touched this setting saw two panes in
+    // two different sizes with no way to reconcile them.
+    await openSettings(window);
+    await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "Appearance" }).click();
+    await window
+      .locator(`${SEL.settings.subtabNav} button[role="tab"]`, { hasText: "Terminal" })
+      .click();
+    const fontSizeInput = window.locator(SEL.settings.fontSizeInput);
+    await expect(fontSizeInput).toBeVisible({ timeout: T_MEDIUM });
+    const target = (await fontSizeInput.inputValue()) === "18" ? "13" : "18";
+    await fontSizeInput.fill(target);
+    await fontSizeInput.blur();
+    await expect(window.locator(`text=Current: ${target}px`)).toBeVisible({
+      timeout: T_MEDIUM,
+    });
+    await window.keyboard.press("Escape");
+
+    await expect.poll(rootSize, { timeout: T_MEDIUM }).toBe(Number(target));
+    expect(await rootSize()).not.toBe(before);
+
+    // And it moves the whole surface, not only the elements that named a size. The
+    // status line is chrome, sized in `em` off the root, so it has to follow.
+    const statusSize = await surface
+      .getByText("Connected", { exact: true })
+      .evaluate((el) => Number.parseFloat(getComputedStyle(el).fontSize));
+    expect(statusSize).toBeGreaterThan(0);
+    expect(statusSize).toBeLessThanOrEqual(Number(target));
+    expect(statusSize).toBeGreaterThan(Number(target) * 0.8);
+  });
+
+  test("nothing forces the panel to scroll sideways at a narrow width", async () => {
+    const { window } = ctx;
+    const panel = await openAssistant(window);
+    await ask(window, "/scenario degraded");
+    // Anchored on the failure PROSE rather than a tool id: ids are rendered through the
+    // engine's human-verb table now, so `git.push` reads as "Push" whenever the table
+    // knows it — which is exactly the improvement, and exactly what a locator written
+    // against the raw id would keep failing on.
+    await expect(window.getByText(/orchestration tools are offline/i).first()).toBeVisible({
+      timeout: T_MEDIUM,
+    });
+
+    // Long tool ids, paths and URLs are the norm on this surface, and the panel is a
+    // sidebar. A body that scrolls horizontally hides content behind a gesture nobody
+    // makes in a rail.
+    const overflow = await panel.evaluate((el) => {
+      const rows = el.querySelectorAll<HTMLElement>("*");
+      let worst = 0;
+      for (const row of rows) {
+        if (row.scrollWidth > row.clientWidth + 1 && getComputedStyle(row).overflowX !== "auto") {
+          worst = Math.max(worst, row.scrollWidth - row.clientWidth);
+        }
+      }
+      return worst;
+    });
+    expect(overflow, "something in the panel overflows its width").toBeLessThanOrEqual(1);
+  });
+
+  test("an engine crash settles the turn instead of leaving it running forever", async () => {
+    const { window } = ctx;
+    const panel = await openAssistant(window);
+    await ask(window, "/scenario crash");
+
+    // The engine dies mid-turn with a live tool call and no terminal frames. Everything
+    // it left in flight has to be settled by the PANEL, because nothing is left to
+    // settle it: a phase line reading "Working" over a dead process, and a call stuck
+    // on Running, describe work that is not happening and never will.
+    await expect(panel.getByText(/stopped unexpectedly/)).toBeVisible({ timeout: T_LONG });
+    await expect(panel.getByRole("button", { name: "Stop", exact: true })).toHaveCount(0);
+    await expect(window.getByText("Running", { exact: true })).toHaveCount(0);
+
+    // And the prose that DID arrive is kept. Losing it would be the wrong repair — the
+    // engine crashed, the conversation did not.
+    await expect(panel.getByText(/Starting the migration/)).toBeVisible();
+  });
+
+  test("a session can be restarted after a crash", async () => {
+    const { window } = ctx;
+    const panel = await openAssistant(window);
+    await ask(window, "/scenario crash");
+    await expect(panel.getByText(/stopped unexpectedly/)).toBeVisible({ timeout: T_LONG });
+
+    // "+ New session" is the way back. A panel that reports a crash and cannot restart
+    // is a dead pane with an explanation in it.
+    await panel.getByRole("button", { name: "Start new session" }).click();
+    await waitForSession(window);
+    await ask(window, "which worktrees are ready?");
+    await expect(window.getByText(/Three worktrees are ready/)).toBeVisible({
+      timeout: T_MEDIUM,
+    });
+  });
+
+  test("an autonomous wake turn offers no Stop", async () => {
+    const { window } = ctx;
+    const panel = await openAssistant(window);
+    await ask(window, "/scenario wake");
+
+    await expect(panel.getByText(/CI went red on wt_forge/)).toBeVisible({ timeout: T_MEDIUM });
+    // A wake turn is work the ASSISTANT started. There is nothing of the user's to
+    // cancel, and a Stop that cannot stop anything is a button that lies.
+    const stop = panel.getByRole("button", { name: "Stop", exact: true });
+    if ((await stop.count()) > 0) await expect(stop).toBeDisabled();
+  });
+
+  test("Refresh re-reads the operations deck instead of showing the first answer", async () => {
+    const { window } = ctx;
+    const panel = await openAssistant(window);
+    await waitForSession(window);
+    await composer(window).click();
+    await window.keyboard.press("Control+o");
+
+    const row = panel.getByText(/wt_forge is waiting on a confirmation/);
+    await expect(row).toBeVisible({ timeout: T_MEDIUM });
+    const first = await row.innerText();
+
+    // The fake numbers each reading, so a Refresh that re-requested and a Refresh that
+    // did nothing are distinguishable. With a fixed snapshot they were not, and the
+    // button could have been wired to nothing.
+    await panel.getByRole("button", { name: "Refresh" }).click();
+    await expect.poll(() => row.innerText(), { timeout: T_MEDIUM }).not.toBe(first);
+  });
+
+  test("a question can be dismissed as well as answered", async () => {
+    const { window } = ctx;
+    await openAssistant(window);
+    await ask(window, "/scenario question");
+
+    const card = window.getByRole("group", { name: "Question" });
+    await expect(card).toBeVisible({ timeout: T_MEDIUM });
+    // Escape dismisses — the turn continues without a choice, which is a different
+    // answer from picking an option and the only one that was never exercised.
+    await card.focus();
+    await window.keyboard.press("Escape");
+
+    await expect(card).toHaveCount(0, { timeout: T_MEDIUM });
+    // The composer comes back either way: the turn is no longer blocked on the user.
+    await expect(composer(window)).toBeVisible({ timeout: T_MEDIUM });
+    // And the PANEL is still open. Escape used to be swallowed in the capture phase by
+    // the global keybinding handler, which closed the whole assistant instead — hiding
+    // the panel while the engine stayed parked on a question nobody could now answer.
+    await expect(
+      window
+        .getByRole("toolbar", { name: "Main toolbar" })
+        .getByRole("button", { name: "Daintree Assistant", exact: true })
+    ).toHaveAttribute("aria-pressed", "true");
+  });
+
+  test("Escape DECLINES an approval, and leaves the panel open", async () => {
+    const { window } = ctx;
+    await openAssistant(window);
+    await ask(window, "/scenario approvalSimple");
+
+    const card = window.getByRole("group", { name: /Approval/ });
+    await expect(card).toBeVisible({ timeout: T_MEDIUM });
+    await card.focus();
+    await window.keyboard.press("Escape");
+
+    // Fail-CLOSED, as render_approval.go bound it: there is nothing to dismiss — the
+    // engine has parked a dispatch and is waiting — so the only honest reading of "get
+    // this off my screen" is the one that refuses the tool.
+    await expect(card).toHaveCount(0, { timeout: T_MEDIUM });
+    await expect(window.getByText(/Skipped/)).toBeVisible({ timeout: T_MEDIUM });
+    await expect(window.getByText(/Tests are running/)).toHaveCount(0);
+    // The panel stays. Escape declining the tool AND hiding the panel in one keystroke
+    // is what this used to do.
+    await expect(
+      window
+        .getByRole("toolbar", { name: "Main toolbar" })
+        .getByRole("button", { name: "Daintree Assistant", exact: true })
+    ).toHaveAttribute("aria-pressed", "true");
+  });
+
+  test("usage and cost read out of the engine's own numbers", async () => {
+    const { window } = ctx;
+    const panel = await openAssistant(window);
+    await ask(window, "/scenario streaming");
+
+    // Context is shown as used/window, formatted — the raw counts would be unreadable
+    // and the ratio is what a reader is actually judging.
+    await expect(panel.getByTitle("Context used")).toBeVisible({ timeout: T_MEDIUM });
+    await expect(panel.getByTitle("Context used")).toContainText("/");
+    // Cost appears only once there is a figure to show. `≥` when the accounting is
+    // incomplete: claiming an exact bill from a partial sample is the one thing a spend
+    // readout must not do.
+    await expect(panel.getByText(/\$\d/)).toBeVisible({ timeout: T_MEDIUM });
   });
 
   /**

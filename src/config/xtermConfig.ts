@@ -46,6 +46,27 @@ export const BASE_TERMINAL_OPTIONS = {
   fontWeightBold: "700" as const,
   allowProposedApi: true,
   macOptionIsMeta: true,
+  // Selection wins over the application's mouse, and Alt hands the mouse back.
+  //
+  // A TUI that turns on mouse tracking (every agent CLI that draws a full-screen
+  // interface does) takes the pointer away from xterm entirely: press-and-drag becomes
+  // a mouse report sent to the agent, and there is no selection to copy. Reading and
+  // quoting what an agent just printed is the single most common thing anyone does with
+  // these panes, and it silently stopped working the moment the agent painted its UI —
+  // with no affordance saying so and no way to discover the modifier that restores it.
+  //
+  // With this on, a plain drag always selects and `Alt`/`Option` + drag sends the mouse
+  // report instead, which is the inverse of `macOptionClickForcesSelection` below and
+  // takes precedence over it. WHEEL events are explicitly unaffected by the option, so
+  // scroll-in-TUI — and the paced wheel forwarding built on top of it in
+  // `TerminalListenerInstaller` — behaves exactly as before.
+  //
+  // The trade is that clicking a TUI's own buttons now needs Alt held. That is the
+  // cheaper half: those are a convenience in a keyboard-driven interface, where
+  // selecting output is not.
+  mouseEventsRequireAlt: true,
+  // Kept as the fallback for the same job. Superseded while the option above is on,
+  // and the thing that answers if it is ever turned off.
   macOptionClickForcesSelection: true,
   scrollOnUserInput: false,
   fastScrollSensitivity: 5,
