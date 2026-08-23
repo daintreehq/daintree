@@ -181,14 +181,19 @@ function hasNearMissNameMatch(lowerQuery: string, name: string): boolean {
   // off the word it was meant to start at.
   const boundarySource = lowerName.length === name.length ? name : lowerName;
   const shortestWindow = lowerQuery.length - 1;
+  // Only a query that starts on a word can afford to skip anchors that do not
+  // (see the loop). One that starts with separators has to be offered them,
+  // or "--webstie" never reaches "--website".
+  const skipSeparatorAnchors = isWordCharacter(lowerQuery[0]);
   let anchors = 0;
 
   for (let start = 0; start + shortestWindow <= lowerName.length; start++) {
-    // A word does not begin on a separator. Skipping those costs nothing — the
-    // first real character after a run of them is a boundary in its own right,
-    // because the character before it is a delimiter — and it stops " - " from
-    // spending three of the budget below on one gap.
-    if (WORD_DELIMITER.test(lowerName[start]!)) continue;
+    // A word does not begin on a separator, so for a query that starts on one
+    // of its own these positions cost nothing to skip: the first real character
+    // after a run of separators is a boundary in its own right, because the
+    // character before it is a separator. Skipping them stops " - " from
+    // spending three of the budget below on a single gap.
+    if (skipSeparatorAnchors && WORD_DELIMITER.test(lowerName[start]!)) continue;
     if (!isBoundary(boundarySource, start)) continue;
     if (++anchors > MAX_TYPO_ANCHORS) return false;
     const edit = alignsWithinOneEdit(lowerQuery, lowerName, start);

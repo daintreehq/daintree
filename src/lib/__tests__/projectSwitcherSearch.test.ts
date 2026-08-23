@@ -996,6 +996,15 @@ describe("rankSwitcherMatches typo tolerance", () => {
     ]);
   });
 
+  it("still anchors a query that starts on a separator", () => {
+    // Word starts are the only anchors worth spending on — unless the query
+    // opens with separators too, in which case the word it is aiming at starts
+    // with them and skipping those positions would lose the match outright.
+    const project = makeProject({ id: "p", name: "--website", path: "/repos/p" });
+    expectsNoStrictMatch("--webstie", project);
+    expect(rankSwitcherMatches("--webstie", [project], [], null).map((r) => r.id)).toEqual(["p"]);
+  });
+
   it("refuses a swap that moves a character between two words", () => {
     // "abcdx-y" is one transposition from "abcd-xy", but the pair swapped is a
     // letter and the separator itself. The index names the long word on the
