@@ -538,10 +538,13 @@ export function startAppMetricsMonitor(actions?: MemoryPressureActions): () => v
         hasPressure = true;
       }
 
-      // System-wide signal uses a RAM-relative floor capped at 1 GB. The cap
-      // avoids treating the large natural file-cache footprint of 64–128 GB
-      // macOS machines as critical pressure while retaining proportional
-      // thresholds on constrained machines.
+      // System-wide signal uses the reclaim band's critical edge: RAM-relative
+      // below ~10 GB, flat at 1 GB above it. Only the band's *warning* edge
+      // widens with RAM (#11926) — this one stays capped, because `availableMb`
+      // is `free + purgeable` and omits Darwin's `fileBacked` file cache, so a
+      // 64–128 GB machine reports far less "available" than it has headroom
+      // for. Raising this edge against that scale would read healthy file-cache
+      // occupancy as critical and hand tier 2 a machine that is fine.
       const availableMb = readAvailableSystemMemoryMb();
       const systemPressureActive = availableMb !== null && availableMb < systemLowMemoryThresholdMb;
       if (systemPressureActive) {

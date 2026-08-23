@@ -34,7 +34,7 @@ The profile is intentionally **coarse**. There are only three states, so every c
 
 ## Signal inputs
 
-`computeTargetProfile()` (`ResourceProfileService.ts:601`) sums a `pressureScore` from these signals. App, terminal-workload, and fleet thresholds scale with physical RAM. System-available memory uses RAM-relative thresholds capped at 1 GB critical / 2 GB warning so a high-memory macOS machine's normal file-cache occupancy cannot manufacture a multi-gigabyte "critical" floor.
+`computeTargetProfile()` (`ResourceProfileService.ts:601`) sums a `pressureScore` from these signals. App, terminal-workload, and fleet thresholds scale with physical RAM. System-available memory uses RAM-relative thresholds whose two edges are bounded differently (#11926): the critical edge stays capped at 1 GB so a high-memory macOS machine's normal file-cache occupancy cannot manufacture a multi-gigabyte "critical" floor, while the warning edge keeps widening with RAM to a 3 GB bound so proactive reclaim is not an emergency-only path on a large machine.
 
 | Signal | Source | Contribution to `pressureScore` |
 | --- | --- | --- |
@@ -43,7 +43,7 @@ The profile is intentionally **coarse**. There are only three states, so every c
 | Thermal (macOS only) | `powerMonitor` `thermal-state-change` + `getCurrentThermalState()` | `+2` critical, `+1` serious |
 | CPU speed limit (macOS & Windows) | `powerMonitor` `speed-limit-change` | `+2` below 50, `+1` below 100 |
 | Active-agent fleet size | cached count from `PtyClient.getAllTerminalsAsync()`, filtered | `+3` ≥ 24, `+2` ≥ 16, `+1` ≥ 8 |
-| System-available memory | `process.getSystemMemoryInfo()` (free + purgeable on macOS, free elsewhere) | `+3` below `min(0.1 × RAM, 1024 MB)`, `+1` below `min(0.2 × RAM, 2048 MB)` |
+| System-available memory | `process.getSystemMemoryInfo()` (free + purgeable on macOS, free elsewhere) | `+3` below `min(0.1 × RAM, 1024 MB)`, `+1` below the warning edge — `0.2 × RAM` up to a 10 GB knee, then widening from 2048 MB to a 3072 MB bound reached at 42 GB (`getSystemMemoryThresholds`) |
 | Terminal-workload memory | cached `PtyClient.getMemoryRollup()` (descendant RSS from the pty-host `ProcessTreeCache`, PID-deduplicated, via `electron/services/memoryAccounting.ts`) | `+2` above 0.4 × RAM, `+1` above 0.25 × RAM — only from a fresh (≤ 60 s), successful process-table sweep; stale/unavailable data contributes 0. Per-tier 10% exit band. Bounded at +2 so terminal workloads alone can never latch `efficiency`. |
 
 Mapping (`ResourceProfileService.ts:669`): `score >= 3 → efficiency`, `score === 0 → performance`, otherwise `balanced`.
@@ -172,7 +172,7 @@ Two consumers: `DiagnosticsCollector`'s `workerGovernance` section (support bund
 - `setMemoryPressurePolicy({ criticalMb, warningMb })` — the cached-view reclaim band, pushed **once per PVM** at `start()` / `applyCurrentProfileTo()` and deliberately **not** on transitions. Both edges come from `getSystemMemoryThresholds(totalRamMb)`, the same thresholds that promote the profile on the memory signal, so a promotion and the reclaim it implies arm at the same reading. Keeping it off the transition path is what stops the interactive `efficiency → balanced` clamp from loosening the floor at the exact moment memory is lowest (#11469). Inside `evictStaleViews` the band is a per-pass target that **never mutates** the user's `maxCachedViews`:
   - **above `warningMb`** — no override; the user's cap stands.
   - **`[criticalMb, warningMb)`** — soft band. The settled cap steps down one view per equal slice of the band, and the pass destroys **at most one view**, so reclaim starts a full band-width earlier and degrades warm switching gradually. Soft contraction runs **only** from the periodic sweep (`maybeEvictUnderPressure`, gated at the _warning_ edge), making the 30 s sampler cadence the settling interval between steps; `"lru"` and `"limit-change"` passes stay deterministic at the configured cap.
-  - **below `criticalMb`** — critical. `effectiveMax` clamps to 1 in a single pass, exactly as it did before #11469, and only here (or under the forced tier-2 reclaim) do assistant-protected views rejoin the candidate pool.
+  - **below `criticalMb`** — critical. The settled target is 1, but the periodic sweep still sheds only one view per tick: a one-pass clamp to `effectiveMax = 1` belongs exclusively to `ProcessMemoryMonitor`'s forced tier-2 reclaim (`forcePressure`), because an instantaneous per-window reading has no consecutive-poll count, cooldown, or view of an in-flight mitigation (#11477). Assistant-protected views are never admitted to the candidate pool, at any band.
 
   Eviction order is **pure LRU** — memory size is logged but never drives eviction order, because the largest renderer is usually the project the user is actively working in (#8602). The outgoing view of an open paint gate is treated as non-evictable so a mid-gate `setCachedViewLimit(1)` can't expose an unpainted frame. Re-entering an evicted project cold-starts a fresh view; `evictionTimestamps` records when each projectId was last evicted for revival-timing telemetry (`:335`). `setLowMemoryFreeThresholdMb(mb | null)` is retained as the E2E escape hatch: `null` disables reclaim entirely, and a positive value collapses the band to a single cliff.
 
