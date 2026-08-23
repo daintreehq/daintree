@@ -50,7 +50,8 @@ export interface SystemMemoryThresholds {
  * The two edges answer different questions, so #11926 moves only one of them.
  *
  * `criticalMb` is the emergency edge: crossing it makes tier-2 escalation
- * eligible (a forced one-pass collapse of every cached view in every window),
+ * eligible (a forced one-pass collapse of every eligible cached view in every
+ * window — assistant-backed views stay protected at any band),
  * scores `+3` on the profile — enough to latch efficiency alone — and lets a
  * contemporaneous renderer `crashed`/`killed` be classified as probable OOM.
  * It is capped flat above the knee and stays that way. `availableMb` is

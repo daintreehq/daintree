@@ -249,7 +249,7 @@ describe("memoryPressureTarget", () => {
     }
   });
 
-  it("walks every rung between the edges on every RAM tier", () => {
+  it("walks every rung between the edges on every machine from 4 GiB up", () => {
     // Widening the warning edge with RAM (#11926) is only worth anything if the
     // extra room turns into extra rungs. Sweeping the real band proves the
     // ladder still sheds one view at a time rather than collapsing — the
@@ -261,6 +261,7 @@ describe("memoryPressureTarget", () => {
     const notSoft: string[] = [];
     const missingRungs: string[] = [];
     const thinRungs: string[] = [];
+    const wideRungs: string[] = [];
     for (let totalGib = 4; totalGib <= 130; totalGib += 0.25) {
       const band = getSystemMemoryThresholds(totalGib * 1024);
       const maxViews = computeDefaultCachedViews(totalGib * GIB);
@@ -283,14 +284,23 @@ describe("memoryPressureTarget", () => {
         missingRungs.push(`${totalGib}GiB: walked ${walked.join("/")} of ${expected.join("/")}`);
       }
       // No rung may collapse below one cached renderer (~100-500MB), or a
-      // tick's reclaim buys less than the switch it costs. There is no upper
-      // bound to assert: at cap 2 the single "rung" IS the whole band, which
-      // is the shed point rather than a step size.
+      // tick's reclaim buys less than the switch it costs. The floor holds
+      // from 4 GiB up; below the knee the band is still the untouched 0.1×RAM
+      // fraction, so a 2 GiB machine's 205MB rung is legacy behavior this
+      // change deliberately leaves alone.
       const rungMb = width / Math.max(maxViews - 1, 1);
       if (rungMb < 256) thinRungs.push(`${totalGib}GiB: ${Math.round(rungMb)}MB rung`);
+      // Only meaningful where there is more than one background view to shed:
+      // at cap 2 the single "rung" IS the whole band, a shed point rather than
+      // a step size. Where the ladder really steps, no step may swallow the
+      // band — that would be the pre-#11469 cliff wearing a graduated coat.
+      if (maxViews > 2 && rungMb > 1024) {
+        wideRungs.push(`${totalGib}GiB: ${Math.round(rungMb)}MB rung on cap ${maxViews}`);
+      }
     }
     expect(notSoft.slice(0, 3)).toEqual([]);
     expect(missingRungs.slice(0, 3)).toEqual([]);
     expect(thinRungs.slice(0, 3)).toEqual([]);
+    expect(wideRungs.slice(0, 3)).toEqual([]);
   });
 });

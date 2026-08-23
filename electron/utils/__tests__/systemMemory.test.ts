@@ -73,6 +73,17 @@ describe("systemMemory thresholds", () => {
     expect((warningMb - criticalMb) / 4).toBeGreaterThan(400);
   });
 
+  it("widens at a steady rate rather than an arbitrary curve", () => {
+    // Pins the ramp's shape, not its constants: equal steps of RAM between the
+    // knee and saturation must buy equal amounts of band. A quadratic or
+    // otherwise curved ramp with the same endpoints would pass every other
+    // test here while making the band grow unevenly across the machines that
+    // sit in the middle of the range.
+    const [a, b, c] = [20, 25, 30].map((gib) => getSystemMemoryThresholds(gib * 1024).warningMb);
+    expect(b - a).toBeCloseTo(c - b, 6);
+    expect(b - a).toBeGreaterThan(0);
+  });
+
   it("stops widening once the band saturates", () => {
     const saturated = getSystemMemoryThresholds(64 * 1024);
     expect(getSystemMemoryThresholds(128 * 1024)).toEqual(saturated);
