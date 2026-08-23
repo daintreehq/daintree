@@ -983,6 +983,40 @@ describe("rankSwitcherMatches typo tolerance", () => {
     ]);
   });
 
+  it("recovers a character dropped off the end of a word, not off the separator", () => {
+    // The one shape that reaches the missing-character branch at all: the query
+    // is otherwise a subsequence of the name, so only a name long enough for
+    // the greedy walk's gap penalties to clamp its score to zero gets here.
+    // The "s" that went missing closed out "reviews" — attributing it to the
+    // "-" that follows would weigh a separator instead of a word and drop it.
+    const scratch = makeScratch({ id: "s", name: `r${"z".repeat(120)}-reviews-notes` });
+    expect(scoreScratchQuery("review-notes", scratch.name)).toBe(0);
+    expect(rankSwitcherMatches("review-notes", [], [scratch], null).map((r) => r.id)).toEqual([
+      "s",
+    ]);
+  });
+
+  it("refuses a swap that moves a character between two words", () => {
+    // "abcdx-y" is one transposition from "abcd-xy", but the pair swapped is a
+    // letter and the separator itself. The index names the long word on the
+    // query side, so weighing only that side would let this through.
+    const project = makeProject({ id: "p", name: "abcd-xy", path: "/repos/p" });
+    expectsNoStrictMatch("abcdx-y", project);
+    expect(rankSwitcherMatches("abcdx-y", [project], [], null)).toEqual([]);
+  });
+
+  it("refuses a letter standing where a separator belongs", () => {
+    // Substitution against a separator on the FIELD side. The query word is
+    // five characters, so a query-side-only check would pass it.
+    //
+    // The trailing "d" is what makes this test the substitution path and only
+    // that path: without it, dropping the "x" would leave a clean prefix of the
+    // name and the extra-character route would match on its own merits.
+    const project = makeProject({ id: "p", name: "abc-d", path: "/repos/p" });
+    expectsNoStrictMatch("abcxd", project);
+    expect(rankSwitcherMatches("abcxd", [project], [], null)).toEqual([]);
+  });
+
   it("reads a typo row the snapshot never saw as quiet, not as whatever it is doing now", () => {
     // The freeze has to reach the new tier too: a row that arrived mid-session
     // must not jump a row the snapshot already holds just because it is busy.

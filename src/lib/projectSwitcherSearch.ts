@@ -184,6 +184,11 @@ function hasNearMissNameMatch(lowerQuery: string, name: string): boolean {
   let anchors = 0;
 
   for (let start = 0; start + shortestWindow <= lowerName.length; start++) {
+    // A word does not begin on a separator. Skipping those costs nothing — the
+    // first real character after a run of them is a boundary in its own right,
+    // because the character before it is a delimiter — and it stops " - " from
+    // spending three of the budget below on one gap.
+    if (WORD_DELIMITER.test(lowerName[start]!)) continue;
     if (!isBoundary(boundarySource, start)) continue;
     if (++anchors > MAX_TYPO_ANCHORS) return false;
     const edit = alignsWithinOneEdit(lowerQuery, lowerName, start);
@@ -213,9 +218,12 @@ function isEditWorthCorrecting(query: string, index: number): boolean {
   let characters = 0;
   for (let i = from; i < to; i++) {
     const unit = query.charCodeAt(i);
+    const next = i + 1 < to ? query.charCodeAt(i + 1) : 0;
     // A surrogate pair is one character to whoever typed it, and two to
-    // `length` — which is the whole reason this is not a `to - from` subtraction.
-    if (unit >= 0xd800 && unit <= 0xdbff && i + 1 < to) i++;
+    // `length` — which is the whole reason this is not a `to - from`
+    // subtraction. An UNPAIRED high surrogate is left to count as one, so a
+    // lone one cannot swallow the character after it.
+    if (unit >= 0xd800 && unit <= 0xdbff && next >= 0xdc00 && next <= 0xdfff) i++;
     if (++characters >= MIN_TYPO_TOKEN_LENGTH) return true;
   }
   return false;
@@ -264,7 +272,15 @@ function alignExceptOneSwapOrSubstitution(query: string, field: string, start: n
       break;
     }
   }
-  if (substituted) return first;
+  // An edit is only a typo if it happened INSIDE a word. A letter standing
+  // where a separator belongs is a differently-shaped name, not a slip, and
+  // admitting it would let the short-word rule be walked around from the field
+  // side ("abcdx" reaching "abcd-").
+  if (substituted) {
+    return isWordCharacter(query[first]) && isWordCharacter(field[start + first])
+      ? first
+      : NO_ALIGNMENT;
+  }
 
   // Adjacent transposition, which is the edit plain Levenshtein charges twice
   // for and the one people actually make — every case the issue reported
@@ -279,7 +295,15 @@ function alignExceptOneSwapOrSubstitution(query: string, field: string, start: n
   for (let i = first + 2; i < length; i++) {
     if (query[i] !== field[start + i]) return NO_ALIGNMENT;
   }
-  return first;
+  // Both halves of the swap are checked, not just the one the index names: a
+  // swap across a separator ("abcdx-y" against "abcd-xy") moves a character
+  // between two words rather than within one.
+  return isWordCharacter(query[first]) && isWordCharacter(query[first + 1]) ? first : NO_ALIGNMENT;
+}
+
+/** Whether `unit` is a character a word is made of, rather than what separates two. */
+function isWordCharacter(unit: string | undefined): boolean {
+  return unit !== undefined && unit !== "" && !WORD_DELIMITER.test(unit);
 }
 
 /** One character too many in the query: drop it and the rest must line up. */
@@ -294,7 +318,7 @@ function alignWithOneExtraQueryChar(query: string, field: string, start: number)
   for (let j = i; j < windowLength; j++) {
     if (query[j + 1] !== field[start + j]) return NO_ALIGNMENT;
   }
-  return i;
+  return isWordCharacter(query[i]) ? i : NO_ALIGNMENT;
 }
 
 /**
@@ -316,7 +340,13 @@ function alignWithOneExtraFieldChar(query: string, field: string, start: number)
   for (let j = i; j < length; j++) {
     if (query[j] !== field[start + j + 1]) return NO_ALIGNMENT;
   }
-  return i;
+  // The character that went missing is the FIELD's, so the word it belongs to
+  // is read off the field too. When the query holds a separator at that point
+  // the missing character closed out the PRECEDING word — "review-notes"
+  // against "reviews-notes" dropped the "s" off "review", not off "-".
+  if (!isWordCharacter(field[start + i])) return NO_ALIGNMENT;
+  if (isWordCharacter(query[i])) return i;
+  return i > 0 && isWordCharacter(query[i - 1]) ? i - 1 : NO_ALIGNMENT;
 }
 
 /**
@@ -609,6 +639,12 @@ export function rankSwitcherMatches(
   const trimmed = query.trim();
   if (!trimmed) return [];
   const lowerQuery = trimmed.toLowerCase();
+  // Case folding is length-preserving for every character anyone types a
+  // workspace name with, but not for all of them ("\u0130" folds to two units).
+  // When it is not, a folded offset no longer points at the character that was
+  // typed, so the word the typo gate measures would be the wrong one — and the
+  // tier stands down rather than measuring it anyway.
+  const typoTolerant = lowerQuery.length === trimmed.length;
 
   const activityFor = (workspace: WorkspaceRowStatusFields & { id: string }): SearchActivityKey =>
     activityKeys === null
@@ -620,7 +656,7 @@ export function rankSwitcherMatches(
   for (const project of projects) {
     const score = scoreProjectQuery(trimmed, project.name, project.path);
     if (score <= 0) {
-      if (!hasNearMissNameMatch(lowerQuery, project.name)) continue;
+      if (!typoTolerant || !hasNearMissNameMatch(lowerQuery, project.name)) continue;
       scored.push({
         row: { kind: "project", ...project },
         textClass: TEXT_CLASS_TYPO_NAME,
@@ -649,7 +685,7 @@ export function rankSwitcherMatches(
   for (const scratch of scratches) {
     const score = scoreScratchQuery(trimmed, scratch.name);
     if (score <= 0) {
-      if (!hasNearMissNameMatch(lowerQuery, scratch.name)) continue;
+      if (!typoTolerant || !hasNearMissNameMatch(lowerQuery, scratch.name)) continue;
       scored.push({
         row: { kind: "scratch", ...scratch },
         textClass: TEXT_CLASS_TYPO_NAME,
