@@ -185,7 +185,7 @@ describe("ProjectResourceBadge — popover memory honesty", () => {
   it("labels measured app and workload memory from the composite snapshot", async () => {
     const container = await renderOpenBadge();
 
-    expect(container.textContent).toContain("Daintree app memory");
+    expect(container.textContent).toContain("Working set (sums shared pages per process)");
     expect(container.textContent).toContain("300MB");
     expect(container.textContent).toContain("Terminal workloads");
     expect(container.textContent).toContain("900MB");
