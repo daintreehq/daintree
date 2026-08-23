@@ -1,0 +1,210 @@
+import { cn } from "@/lib/utils";
+import type { AssistantOperations } from "@/store/assistantStore";
+
+/**
+ * The operations deck, ported from the cockpit's own (internal/ui/render_operations.go).
+ *
+ * Same seven sections in the same order — NOW, NEEDS ATTENTION, WORKFLOWS, AGENTS,
+ * ASYNC, SCHEDULED, RECENT — because they answer different questions and the order is
+ * the priority: what is wrong, then what is planned, then what is running, then what
+ * already happened.
+ *
+ * This is the surface the panel's own copy promises. It says the assistant "keeps watch
+ * on the runs", and without a deck that claim had nothing behind it: the watchers,
+ * timers, async work and audit trail all existed and none of them were visible.
+ *
+ * Empty sections are OMITTED rather than shown empty. A deck of seven "nothing here"
+ * headings buries the one section that has something in it, and the cockpit dropped
+ * them for the same reason.
+ */
+
+export interface AssistantOperationsDeckProps {
+  operations: AssistantOperations | null;
+  /** Ask the engine for a fresh reading. */
+  onRefresh: () => void;
+  onClose: () => void;
+}
+
+function Section({ title, children }: { title: string; children: React.ReactNode }) {
+  return (
+    <section className="mb-3">
+      <h3 className="mb-1 text-[10px] font-medium tracking-wide opacity-50">{title}</h3>
+      <div className="space-y-1">{children}</div>
+    </section>
+  );
+}
+
+function Row({ children, tone }: { children: React.ReactNode; tone?: "warning" | "danger" }) {
+  return (
+    <div
+      className={cn(
+        "rounded-sm px-1.5 py-1 text-xs",
+        tone === "danger"
+          ? "text-status-danger"
+          : tone === "warning"
+            ? "text-status-warning"
+            : undefined
+      )}
+    >
+      {children}
+    </div>
+  );
+}
+
+/** Relative time, since every row on this deck is "how long ago" or "how long until". */
+function ago(at: number, now: number): string {
+  const ms = Math.abs(now - at);
+  if (ms < 60_000) return `${Math.round(ms / 1000)}s`;
+  if (ms < 3_600_000) return `${Math.round(ms / 60_000)}m`;
+  if (ms < 86_400_000) return `${Math.round(ms / 3_600_000)}h`;
+  return `${Math.round(ms / 86_400_000)}d`;
+}
+
+export function AssistantOperationsDeck({
+  operations,
+  onRefresh,
+  onClose,
+}: AssistantOperationsDeckProps) {
+  const now = Date.now();
+  const ops = operations;
+
+  const running = ops ? ops.agents.length + ops.async.length : 0;
+  const attention = ops ? ops.inbox.length : 0;
+
+  return (
+    <div className="flex h-full min-h-0 flex-col">
+      <div className="flex shrink-0 items-center gap-2 border-b border-border-divider px-3 py-1.5">
+        <span className="text-xs font-medium">Operations</span>
+        <button
+          type="button"
+          onClick={onRefresh}
+          className="rounded-sm px-1.5 py-0.5 text-[10px] opacity-60 transition-colors duration-150 ease-out hover:bg-overlay-subtle hover:opacity-100"
+        >
+          Refresh
+        </button>
+        <button
+          type="button"
+          onClick={onClose}
+          className="ml-auto rounded-sm px-1.5 py-0.5 text-[10px] opacity-60 transition-colors duration-150 ease-out hover:bg-overlay-subtle hover:opacity-100"
+        >
+          Close
+        </button>
+      </div>
+
+      <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2">
+        {!ops ? (
+          <p className="text-xs opacity-60">Reading…</p>
+        ) : (
+          <>
+            {/* NOW: the one-line rollup the cockpit led with, so the deck answers
+                "is anything happening" before it answers "what". */}
+            <Section title="NOW">
+              <Row tone={attention > 0 ? "warning" : undefined}>
+                {running === 0 && attention === 0
+                  ? "Nothing running, nothing waiting on you."
+                  : [
+                      running > 0 ? `${running} running` : null,
+                      attention > 0 ? `${attention} needing you` : null,
+                    ]
+                      .filter(Boolean)
+                      .join(" · ")}
+                <span className="ml-2 opacity-40">read {ago(ops.at, now)} ago</span>
+              </Row>
+            </Section>
+
+            {ops.inbox.length > 0 && (
+              <Section title="NEEDS ATTENTION">
+                {ops.inbox.map((row) => (
+                  <Row key={row.id} tone={row.severity === "urgent" ? "danger" : "warning"}>
+                    <span className="opacity-60">{row.source} · </span>
+                    {row.summary}
+                    <span className="ml-2 opacity-40">{ago(row.at, now)} ago</span>
+                  </Row>
+                ))}
+              </Section>
+            )}
+
+            {ops.workflows.length > 0 && (
+              <Section title="WORKFLOWS">
+                {ops.workflows.map((row) => (
+                  <Row key={row.id} tone={row.blocked ? "warning" : undefined}>
+                    <div className="truncate">{row.goal}</div>
+                    <div className="opacity-60">
+                      {row.progress}
+                      {row.next ? ` · next: ${row.next}` : ""}
+                    </div>
+                  </Row>
+                ))}
+              </Section>
+            )}
+
+            {ops.agents.length > 0 && (
+              <Section title="AGENTS">
+                {ops.agents.map((row) => (
+                  <Row key={row.id} tone={row.needsAttention ? "warning" : undefined}>
+                    <div className="truncate">
+                      {row.title || row.id}
+                      {row.agentState ? (
+                        <span className="ml-2 opacity-60">{row.agentState}</span>
+                      ) : null}
+                      <span className="ml-2 opacity-40">{ago(row.startedAt, now)}</span>
+                    </div>
+                    {row.goal ? <div className="truncate opacity-60">{row.goal}</div> : null}
+                    {/* The terminal tail, so a supervisor can see it working rather than
+                        take the state label's word for it. */}
+                    {row.preview ? (
+                      <div className="mt-0.5 truncate font-mono text-[10px] opacity-50">
+                        {row.preview}
+                      </div>
+                    ) : null}
+                  </Row>
+                ))}
+              </Section>
+            )}
+
+            {ops.async.length > 0 && (
+              <Section title="ASYNC">
+                {ops.async.map((row) => (
+                  <Row key={row.id}>
+                    <span className="truncate">{row.title || row.tool}</span>
+                    <span className="ml-2 opacity-40">{ago(row.startedAt, now)}</span>
+                  </Row>
+                ))}
+              </Section>
+            )}
+
+            {ops.timers.length > 0 && (
+              <Section title="SCHEDULED">
+                {ops.timers.map((row) => (
+                  <Row key={row.id}>
+                    <span className="truncate">{row.label}</span>
+                    {/* "in", not "ago": a timer is the one row on this deck that points
+                        forwards. */}
+                    <span className="ml-2 opacity-40">in {ago(row.dueAt, now)}</span>
+                  </Row>
+                ))}
+              </Section>
+            )}
+
+            {ops.audit.length > 0 && (
+              <Section title="RECENT">
+                {ops.audit.map((row, i) => (
+                  <Row
+                    key={`${row.tool}-${row.at}-${i}`}
+                    tone={row.outcome !== "ok" && row.outcome !== "grant_ok" ? "danger" : undefined}
+                  >
+                    <span className="font-mono">{row.tool}</span>
+                    <span className="ml-2 opacity-60">{row.outcome}</span>
+                    <span className="ml-2 opacity-40">
+                      {row.durationMs}ms · {ago(row.at, now)} ago
+                    </span>
+                  </Row>
+                ))}
+              </Section>
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
