@@ -741,8 +741,11 @@ describe("HelpPanel — empty state hero (Daintree-relevant entry points)", () =
       screen.queryByText(/Configure an assistant agent in settings to get started/i)
     ).toBeNull();
     expect(screen.queryByTestId("help-start-assistant")).toBeNull();
-    // The native composer, which no terminal-backed surface has.
-    expect(screen.getByPlaceholderText(/What needs doing\?/i)).toBeTruthy();
+    // The native panel is mounted. Asserted on the panel's own root rather than on the
+    // composer's placeholder: the composer is now the terminal's own HybridInputBar, so
+    // its wording belongs to that component and would drag this test along every time
+    // it changed. What this case is actually about is which SURFACE appears.
+    expect(document.querySelector(".assistant-panel")).toBeTruthy();
   });
 
   it("dispatches app.settings.openTab with tab='assistant' when the empty-state settings link is clicked", async () => {

@@ -113,6 +113,7 @@ vi.mock("../AssistantContentMirror.js", () => ({
 }));
 
 import { HelpSessionService } from "../HelpSessionService.js";
+import { defaultDebugLogging } from "../helpAssistantDefaults.js";
 
 async function makeBundledHelpFolder(root: string): Promise<string> {
   const helpDir = path.join(root, "help");
@@ -588,10 +589,22 @@ describe("HelpSessionService", () => {
     expect(service.getDebugLogging(result.token)).toBe(false);
   });
 
-  it("getDebugLogging defaults to false when settings have not been touched", async () => {
-    const result = await service.provisionSession(provisionInput());
-    if (!result) throw new Error("expected result");
-    expect(service.getDebugLogging(result.token)).toBe(false);
+  it("an untouched setting follows the build default, and a stored one overrides it", async () => {
+    // Not asserted against a literal: the default is deliberately build-dependent (on
+    // in development, off when packaged), so a literal here would just restate
+    // `helpAssistantDefaults.ts` and would have to be edited in lockstep with it. What
+    // matters is that an ABSENT preference defers to that default and a PRESENT one
+    // wins over it — including when the stored value agrees with neither.
+    const untouched = await service.provisionSession(provisionInput());
+    if (!untouched) throw new Error("expected result");
+    expect(service.getDebugLogging(untouched.token)).toBe(defaultDebugLogging());
+
+    for (const stored of [true, false]) {
+      mockStoreGet.mockReturnValue({ tier: "action", debugLogging: stored });
+      const result = await service.provisionSession(provisionInput());
+      if (!result) throw new Error("expected result");
+      expect(service.getDebugLogging(result.token)).toBe(stored);
+    }
   });
 
   it("omits the daintree MCP server when daintreeControl is false", async () => {

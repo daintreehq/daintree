@@ -86,7 +86,12 @@ async function runPipeline(opts: RunOptions) {
           decision: opts.approve,
         });
       }
-      if (event.type === "turn:end") {
+      // Only the ASSISTANT's turn ends the exchange. A prompt produces TWO brackets: the
+      // user's own, which opens and closes in the same millisecond carrying no outcome,
+      // and then the assistant's. Counting both settled the pipeline the instant the
+      // prompt was echoed — before a single token had streamed — and every assertion
+      // downstream then ran against an empty transcript.
+      if (event.type === "turn:end" && event.outcome !== undefined) {
         turnsEnded += 1;
         if (turnsEnded === 1 && opts.then) {
           useAssistantStore.getState().appendUserTurn(opts.then);

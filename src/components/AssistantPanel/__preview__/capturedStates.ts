@@ -43,6 +43,7 @@ export const CAPTURED_STATES = {
     operations: null,
     toolGrants: {},
     queuedInterjections: [],
+    retractedDraft: null,
     lastActivityAt: null,
     turnStartedAt: null,
     phaseIsWake: false,
@@ -96,17 +97,18 @@ export const CAPTURED_STATES = {
     operations: null,
     toolGrants: {},
     queuedInterjections: [],
-    lastActivityAt: 1787452034111,
-    turnStartedAt: 1787452033212,
+    retractedDraft: null,
+    lastActivityAt: 1787461269905,
+    turnStartedAt: 1787461269006,
     phaseIsWake: false,
     pendingQuestion: null,
     stoppedReason: "exit",
     error: null,
     turns: [
       {
-        turnId: "local_f4dcd9e7-c08a-472e-82e4-0850e4993f69",
+        turnId: "local_223f0af7-f1c8-4ab0-9e53-a53ca63c29dd",
         role: "user",
-        startedAt: 1787452033211,
+        startedAt: 1787461269005,
         segments: [
           {
             kind: "text",
@@ -121,7 +123,7 @@ export const CAPTURED_STATES = {
       {
         turnId: "turn_1",
         role: "assistant",
-        startedAt: 1787452033212,
+        startedAt: 1787461269005,
         segments: [
           {
             kind: "text",
@@ -180,6 +182,7 @@ export const CAPTURED_STATES = {
     operations: null,
     toolGrants: {},
     queuedInterjections: [],
+    retractedDraft: null,
     lastActivityAt: null,
     turnStartedAt: null,
     phaseIsWake: false,
@@ -188,9 +191,9 @@ export const CAPTURED_STATES = {
     error: null,
     turns: [
       {
-        turnId: "local_f02d1ca2-b95f-45b2-9c20-5859f0c5175a",
+        turnId: "local_a7dc9be9-fb09-4bf6-a215-023e6736a4a0",
         role: "user",
-        startedAt: 1787452034143,
+        startedAt: 1787461269939,
         segments: [
           {
             kind: "text",
@@ -205,7 +208,7 @@ export const CAPTURED_STATES = {
       {
         turnId: "turn_1",
         role: "assistant",
-        startedAt: 1787452034143,
+        startedAt: 1787461269939,
         segments: [
           {
             kind: "tools",
@@ -220,7 +223,7 @@ export const CAPTURED_STATES = {
         toolCallIds: ["c1", "c2"],
         interjections: [],
         complete: true,
-        endedAt: 1787452034154,
+        endedAt: 1787461269951,
         outcome: "answered",
       },
     ],
@@ -231,7 +234,7 @@ export const CAPTURED_STATES = {
         argsSummary: "{}",
         danger: false,
         state: "done",
-        startedAt: 1787452034144,
+        startedAt: 1787461269941,
         progress: "reading",
         durationMs: 240,
         severity: "info",
@@ -242,7 +245,7 @@ export const CAPTURED_STATES = {
         argsSummary: "{}",
         danger: false,
         state: "done",
-        startedAt: 1787452034146,
+        startedAt: 1787461269942,
         progress: "reading",
         durationMs: 240,
         severity: "info",
@@ -305,17 +308,18 @@ export const CAPTURED_STATES = {
     operations: null,
     toolGrants: {},
     queuedInterjections: [],
-    lastActivityAt: 1787452034219,
-    turnStartedAt: 1787452034218,
+    retractedDraft: null,
+    lastActivityAt: 1787461270015,
+    turnStartedAt: 1787461270014,
     phaseIsWake: false,
     pendingQuestion: null,
     stoppedReason: "exit",
     error: null,
     turns: [
       {
-        turnId: "local_ae9de8e7-b13f-4355-be3d-f7fa05c2bcfa",
+        turnId: "local_bf9b5f99-6749-48f8-99a3-755e6346d928",
         role: "user",
-        startedAt: 1787452034218,
+        startedAt: 1787461270014,
         segments: [
           {
             kind: "text",
@@ -330,7 +334,7 @@ export const CAPTURED_STATES = {
       {
         turnId: "turn_1",
         role: "assistant",
-        startedAt: 1787452034218,
+        startedAt: 1787461270014,
         segments: [
           {
             kind: "tools",
@@ -363,7 +367,7 @@ export const CAPTURED_STATES = {
         needsTypedConfirm: true,
         rememberable: false,
         grantKey: "git.push",
-        requestedAt: 1787452034219,
+        requestedAt: 1787461270015,
       },
     ],
     notices: [],
@@ -410,17 +414,18 @@ export const CAPTURED_STATES = {
     operations: null,
     toolGrants: {},
     queuedInterjections: [],
-    lastActivityAt: 1787452034281,
-    turnStartedAt: 1787452034281,
+    retractedDraft: null,
+    lastActivityAt: 1787461270075,
+    turnStartedAt: 1787461270075,
     phaseIsWake: false,
     pendingQuestion: null,
     stoppedReason: "exit",
     error: null,
     turns: [
       {
-        turnId: "local_2c42941e-42ff-47a3-afa7-8106e6b7af05",
+        turnId: "local_9b1d54dc-d099-4389-a13c-164016f3211b",
         role: "user",
-        startedAt: 1787452034281,
+        startedAt: 1787461270075,
         segments: [
           {
             kind: "text",
@@ -435,7 +440,7 @@ export const CAPTURED_STATES = {
       {
         turnId: "turn_1",
         role: "assistant",
-        startedAt: 1787452034281,
+        startedAt: 1787461270075,
         segments: [],
         text: "",
         toolCallIds: [],
@@ -454,7 +459,7 @@ export const CAPTURED_STATES = {
         needsTypedConfirm: false,
         rememberable: false,
         grantKey: "terminal.sendCommand",
-        requestedAt: 1787452034281,
+        requestedAt: 1787461270075,
       },
     ],
     notices: [],
@@ -501,6 +506,7 @@ export const CAPTURED_STATES = {
     operations: null,
     toolGrants: {},
     queuedInterjections: [],
+    retractedDraft: null,
     lastActivityAt: null,
     turnStartedAt: null,
     phaseIsWake: false,
@@ -509,9 +515,9 @@ export const CAPTURED_STATES = {
     error: null,
     turns: [
       {
-        turnId: "local_b588f4c0-87ab-49c4-9ee9-b3da4cb05774",
+        turnId: "local_271e7032-e520-415f-be1e-cf557546a177",
         role: "user",
-        startedAt: 1787452034344,
+        startedAt: 1787461270136,
         segments: [
           {
             kind: "text",
@@ -526,7 +532,7 @@ export const CAPTURED_STATES = {
       {
         turnId: "turn_1",
         role: "assistant",
-        startedAt: 1787452034344,
+        startedAt: 1787461270136,
         segments: [
           {
             kind: "tools",
@@ -541,7 +547,7 @@ export const CAPTURED_STATES = {
         toolCallIds: ["c1"],
         interjections: [],
         complete: true,
-        endedAt: 1787452034353,
+        endedAt: 1787461270144,
         outcome: "answered",
       },
     ],
@@ -607,6 +613,7 @@ export const CAPTURED_STATES = {
     operations: null,
     toolGrants: {},
     queuedInterjections: [],
+    retractedDraft: null,
     lastActivityAt: null,
     turnStartedAt: null,
     phaseIsWake: false,
@@ -615,9 +622,9 @@ export const CAPTURED_STATES = {
     error: null,
     turns: [
       {
-        turnId: "local_64e485cd-ccce-4466-825c-56c668210668",
+        turnId: "local_2d0389bf-1dcc-406d-b6dc-9f1c21c408af",
         role: "user",
-        startedAt: 1787452034417,
+        startedAt: 1787461270204,
         segments: [
           {
             kind: "text",
@@ -632,7 +639,7 @@ export const CAPTURED_STATES = {
       {
         turnId: "turn_1",
         role: "assistant",
-        startedAt: 1787452034418,
+        startedAt: 1787461270204,
         segments: [
           {
             kind: "tools",
@@ -647,7 +654,7 @@ export const CAPTURED_STATES = {
         toolCallIds: ["c1"],
         interjections: [],
         complete: true,
-        endedAt: 1787452034426,
+        endedAt: 1787461270213,
         outcome: "hedged",
       },
     ],
@@ -670,7 +677,7 @@ export const CAPTURED_STATES = {
         id: "n1",
         level: "warning",
         message: "MCP connection degraded — orchestration tools are offline.",
-        at: 1787452034418,
+        at: 1787461270205,
         turnId: "turn_1",
       },
     ],
@@ -720,6 +727,7 @@ export const CAPTURED_STATES = {
     operations: null,
     toolGrants: {},
     queuedInterjections: [],
+    retractedDraft: null,
     lastActivityAt: null,
     turnStartedAt: null,
     phaseIsWake: false,
@@ -728,9 +736,9 @@ export const CAPTURED_STATES = {
     error: null,
     turns: [
       {
-        turnId: "local_52044f9b-ee02-4950-8492-1eb7da94a641",
+        turnId: "local_ca461728-b784-4074-8d16-066ffedb84b0",
         role: "user",
-        startedAt: 1787452034491,
+        startedAt: 1787461270274,
         segments: [
           {
             kind: "text",
@@ -745,7 +753,7 @@ export const CAPTURED_STATES = {
       {
         turnId: "turn_1",
         role: "assistant",
-        startedAt: 1787452034491,
+        startedAt: 1787461270274,
         segments: [
           {
             kind: "text",
@@ -756,7 +764,7 @@ export const CAPTURED_STATES = {
         toolCallIds: [],
         interjections: [],
         complete: true,
-        endedAt: 1787452034491,
+        endedAt: 1787461270274,
         outcome: "answered",
       },
     ],
@@ -767,7 +775,7 @@ export const CAPTURED_STATES = {
         id: "n2",
         level: "warning",
         message: "1 update were lost in transit. This part of the conversation may be incomplete.",
-        at: 1787452034491,
+        at: 1787461270274,
         turnId: null,
       },
     ],
@@ -814,6 +822,7 @@ export const CAPTURED_STATES = {
     operations: null,
     toolGrants: {},
     queuedInterjections: [],
+    retractedDraft: null,
     lastActivityAt: null,
     turnStartedAt: null,
     phaseIsWake: false,
@@ -822,9 +831,9 @@ export const CAPTURED_STATES = {
     error: null,
     turns: [
       {
-        turnId: "local_b73da1ac-34b2-4ea8-ba4c-2f95227b6d8e",
+        turnId: "local_345c88ed-ebbe-4908-9b2f-70075bb14bef",
         role: "user",
-        startedAt: 1787452034553,
+        startedAt: 1787461270337,
         segments: [
           {
             kind: "text",
@@ -839,13 +848,13 @@ export const CAPTURED_STATES = {
       {
         turnId: "turn_1",
         role: "assistant",
-        startedAt: 1787452034553,
+        startedAt: 1787461270338,
         segments: [],
         text: "",
         toolCallIds: [],
         interjections: [],
         complete: true,
-        endedAt: 1787452034554,
+        endedAt: 1787461270339,
         outcome: "unknown",
       },
     ],
@@ -856,7 +865,7 @@ export const CAPTURED_STATES = {
         id: "n3",
         level: "error",
         message: "The model provider is unavailable. Try again shortly.",
-        at: 1787452034555,
+        at: 1787461270339,
         turnId: null,
       },
     ],

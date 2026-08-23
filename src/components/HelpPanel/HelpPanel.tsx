@@ -759,6 +759,32 @@ export function HelpPanel({
   // Move keyboard focus into the panel on open and restore it on close.
   // focusRequest re-triggers this effect so repeated Cmd+L presses can
   // re-focus a blurred panel without closing it.
+  /**
+   * Focuses the panel container itself — the last resort when it holds nothing tabbable.
+   *
+   * The `tabindex` is applied HERE rather than in the markup, and taken away again on
+   * blur, because a permanently focusable region cannot be selected with the mouse:
+   * Chromium focuses the nearest focusable ancestor on mousedown and collapses the
+   * selection that press was beginning. Making it focusable only for the instant it is
+   * actually the focus target keeps the keyboard path intact and gives the pointer the
+   * region back.
+   */
+  /**
+   * True for the duration of a mouse press that started inside the panel.
+   *
+   * A press on non-focusable panel chrome blurs whatever child held focus, and that blur
+   * is shaped exactly like focus leaving for another pane. This is how `onBlur` tells
+   * the two apart.
+   */
+  const pressInsidePanelRef = useRef(false);
+
+  const focusPanelContainer = useCallback(() => {
+    const el = panelRef.current;
+    if (!el) return;
+    el.tabIndex = -1;
+    el.focus();
+  }, []);
+
   useEffect(() => {
     const focusTrigger = { isOpen, isVisible, focusRequest };
     const lastCompleted = lastCompletedFocusTriggerRef.current;
@@ -906,7 +932,7 @@ export function HelpPanel({
         if (first) {
           first.focus();
         } else {
-          panelRef.current?.focus();
+          focusPanelContainer();
         }
         completeFocusTrigger();
       });
@@ -964,6 +990,7 @@ export function HelpPanel({
     terminalExists,
     terminalSpawnStatus,
     showHybridInputBar,
+    focusPanelContainer,
   ]);
 
   // Pin the WebGL context to the assistant terminal while it owns focus (#10672).
@@ -1446,6 +1473,19 @@ export function HelpPanel({
     if (active && panelRef.current?.contains(active)) {
       if (active.closest(".xterm-helper-textarea")) return;
       if (active.closest(".cm-editor")) return;
+      // A sheet that binds Escape ITSELF answers it, and the panel must not also act.
+      //
+      // The native assistant's approval and question sheets both take focus and both
+      // bind Escape — decline, and dismiss — because the cockpit did ("Esc decline" on
+      // every approval it drew). Without this guard, Escape on an approval declined the
+      // tool AND hid the panel in the same keystroke, and on a question it hid the panel
+      // while leaving the engine parked waiting for an answer nobody could now give.
+      //
+      // Marked with a data attribute rather than inferred from the event, because these
+      // are React synthetic handlers and the escape stack is a document-level listener:
+      // whether one sees the key before the other is an ordering detail, and a
+      // correctness rule should not rest on one.
+      if (active.closest("[data-escape-owner]")) return;
     }
     handleClose();
   }, [handleClose]);
@@ -1466,7 +1506,21 @@ export function HelpPanel({
       ref={panelRef}
       id="daintree-assistant-panel"
       role="region"
-      tabIndex={-1}
+      // NO permanent `tabindex`. It is added only while this element is itself the
+      // focus target (`focusPanelContainer`) and removed the moment it is not.
+      //
+      // A `tabindex` that stays put makes the whole region focusable, and Chromium
+      // focuses the nearest focusable ANCESTOR on mousedown — which collapses the
+      // selection the press was starting. The effect is that no text anywhere inside
+      // the assistant could be selected with the mouse: press, drag, release, nothing.
+      // Not the transcript, not an answer worth quoting, not an error message someone
+      // wanted to paste into an issue. Proved by removing the attribute at runtime and
+      // watching the same drag select normally (`assistant-native-panel.spec.ts`).
+      //
+      // Nothing is lost by leaving it off at rest. The `onFocus` below is a bubbling
+      // `focusin`, so a descendant taking focus still promotes the macro region, and
+      // the container itself is only ever a focus target in the fallback case where the
+      // panel has no tabbable child at all.
       aria-label="Daintree Assistant"
       // `inert` removes descendants from focus / a11y tree while the aside
       // is collapsed. Chromium 146 supports it natively, so we don't need a
@@ -1474,6 +1528,30 @@ export function HelpPanel({
       // element per ARIA 1.2 and trips axe's `aria-hidden-focus` rule).
       inert={!isVisible || undefined}
       data-macro-focus={isHighlighted ? "true" : undefined}
+      // A press anywhere in the panel claims the macro region, without taking DOM focus.
+      //
+      // The permanent `tabindex` above used to do this as a side effect: a click on inert
+      // panel chrome focused the region, which fired `onFocus`, which claimed it. Dropping
+      // the attribute is what made the transcript selectable, and it would have quietly
+      // taken the claim with it — a press on a message or the masthead would leave the
+      // grid's `terminal-selected` chrome lit while the user was plainly working in here.
+      //
+      // Claiming it directly is the better version of that anyway: the region is about
+      // which surface the user is ATTENDING to, and a press says that without a focus
+      // ring landing on a container nobody meant to focus.
+      onMouseDown={() => {
+        // Held across the blur this very press is about to cause — see `onBlur`.
+        pressInsidePanelRef.current = true;
+        // The default action (the focus change) runs after this dispatch completes but
+        // in the same task, so a task-boundary reset is enough and does not depend on a
+        // timing guess.
+        setTimeout(() => {
+          pressInsidePanelRef.current = false;
+        }, 0);
+        if (useMacroFocusStore.getState().focusedRegion !== "assistant") {
+          useMacroFocusStore.setState({ focusedRegion: "assistant" });
+        }
+      }}
       onFocus={() => {
         setHasDomFocus(true);
         // Promote the assistant to the active macro region whenever DOM focus
@@ -1490,10 +1568,24 @@ export function HelpPanel({
         // aside (xterm textarea ↔ header buttons). `contains(null)` is false,
         // so window/page blur correctly clears it.
         if (!e.currentTarget.contains(e.relatedTarget)) {
+          // The container is focusable only while it holds focus — see the comment on
+          // the missing `tabindex` above.
+          e.currentTarget.removeAttribute("tabindex");
           setHasDomFocus(false);
           // Release the macro region only if we still own it — another region
           // may have already claimed focus by the time blur runs.
-          if (useMacroFocusStore.getState().focusedRegion === "assistant") {
+          //
+          // And never when the blur was caused by a press INSIDE this panel. Selecting
+          // transcript text starts by pressing on something unfocusable, which blurs the
+          // composer with a null `relatedTarget` — indistinguishable here from focus
+          // leaving for another pane. Without the guard the panel claimed the region on
+          // mousedown and dropped it again microseconds later, so every drag-to-select
+          // ended with the grid's "selected" chrome lit over a pane the user was not
+          // working in.
+          if (
+            !pressInsidePanelRef.current &&
+            useMacroFocusStore.getState().focusedRegion === "assistant"
+          ) {
             useMacroFocusStore.setState({ focusedRegion: null });
           }
         }
@@ -1622,7 +1714,6 @@ export function HelpPanel({
             <AssistantPanel
               projectId={activeWorkspaceId}
               projectPath={activeWorkspacePath}
-              projectName={currentProject?.name ?? currentScratch?.name ?? null}
               // Latched, not `isOpen`. The engine must not start for a panel the user
               // never opened — hiding slides it off-canvas rather than unmounting, so
               // every project view would otherwise spin one up unprompted. But it must

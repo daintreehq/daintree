@@ -162,6 +162,7 @@ async function capture(spec: Capture): Promise<AssistantSessionState> {
     operations: s.operations,
     toolGrants: s.toolGrants,
     queuedInterjections: s.queuedInterjections,
+    retractedDraft: s.retractedDraft,
     lastActivityAt: s.lastActivityAt,
     turnStartedAt: s.turnStartedAt,
     phaseIsWake: s.phaseIsWake,
