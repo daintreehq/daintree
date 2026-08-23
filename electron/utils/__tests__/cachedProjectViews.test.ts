@@ -248,4 +248,34 @@ describe("memoryPressureTarget", () => {
       expect(justUnderWarning.targetMax).toBe(Math.max(maxViews - 1, 1));
     }
   });
+
+  it("walks every rung between the edges on every RAM tier", () => {
+    // Widening the warning edge with RAM (#11926) is only worth anything if the
+    // extra room turns into extra rungs. Sweeping the real band proves the
+    // ladder still sheds one view at a time rather than collapsing — the
+    // #11469 contract — now that the band is no longer a flat 1024MB.
+    for (const totalGib of [4, 8, 16, 32, 64, 128]) {
+      const band = getSystemMemoryThresholds(totalGib * 1024);
+      const maxViews = computeDefaultCachedViews(totalGib * GIB);
+      const seen = new Set<number>();
+      const width = band.warningMb - band.criticalMb;
+      for (let i = 0; i < 200; i++) {
+        const availableMb = band.criticalMb + (width * i) / 200;
+        const { level, targetMax } = memoryPressureTarget(availableMb, band, maxViews);
+        expect(level).toBe("soft");
+        seen.add(targetMax);
+      }
+      // Every intermediate cap is reachable, and none exceeds the step-down
+      // ceiling of `cap - 1` (the configured cap only returns above warning).
+      const expected = Array.from({ length: Math.max(maxViews - 1, 1) }, (_, i) => i + 1);
+      expect([...seen].sort((a, b) => a - b)).toEqual(expected);
+
+      // Each rung should be worth roughly one cached renderer (~100-500MB).
+      // A rung far outside that makes a single tick's reclaim either
+      // pointless or a cliff by another name.
+      const rungMb = width / Math.max(maxViews - 1, 1);
+      expect(rungMb).toBeGreaterThanOrEqual(256);
+      expect(rungMb).toBeLessThanOrEqual(1024);
+    }
+  });
 });

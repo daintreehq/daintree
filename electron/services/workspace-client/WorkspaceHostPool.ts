@@ -4,7 +4,7 @@ import { type WebContents } from "electron";
 import path from "path";
 import { WorkspaceHostProcess } from "../WorkspaceHostProcess.js";
 import { store } from "../../store.js";
-import { computeDefaultCachedViews } from "../../utils/cachedProjectViews.js";
+import { computeDefaultWarmWorkspaceHosts } from "../../utils/warmWorkspaceHosts.js";
 import { CHANNELS } from "../../ipc/channels.js";
 import { isValidLogOverrideLevel } from "../../utils/logger.js";
 import { type ProcessEntry, sendToEntryWindows } from "./types.js";
@@ -15,20 +15,24 @@ import { normalizeProviderId } from "../../../shared/utils/forgeProviderIds.js";
 
 const CLEANUP_GRACE_MS = 180_000;
 
-// Dormant workspace-host warm pool, RAM-scaled to match the project-view cache
-// default (computeDefaultCachedViews: 2/3/4/5 across <16/16/32/64 GiB). The old
-// fixed 3 meant cycling 5+ projects evicted/respawned a host on nearly every
-// switch (utility-process fork + a full git rescan each time) — churn that
-// shows up as workspace-host spawn storms. Switch-away hosts are paused
-// (background: polling/PR/fetch timers stopped) and every dormant host still
-// expires after CLEANUP_GRACE_MS, so a larger pool mainly avoids respawns on
-// switch-back. The cost is bounded-resident (a few more paused utility
-// processes + their health checks), not steady-state polling.
+// Dormant workspace-host warm pool, RAM-scaled (2/3/4/5 across <16/16/32/64
+// GiB). The old fixed 3 meant cycling 5+ projects evicted/respawned a host on
+// nearly every switch (utility-process fork + a full git rescan each time) —
+// churn that shows up as workspace-host spawn storms. Switch-away hosts are
+// paused (background: polling/PR/fetch timers stopped) and every dormant host
+// still expires after CLEANUP_GRACE_MS, so a larger pool mainly avoids
+// respawns on switch-back. The cost is bounded-resident (a few more paused
+// utility processes + their health checks), not steady-state polling.
+//
+// The ladder lives in computeDefaultWarmWorkspaceHosts rather than being
+// borrowed from computeDefaultCachedViews, which it used to call: see that
+// function for why a paused utility process and a cached renderer must be
+// sized apart (#11926).
 const DEFAULT_CONFIG: Required<WorkspaceClientConfig> = {
   maxRestartAttempts: 3,
   healthCheckIntervalMs: 10000,
   showCrashDialog: true,
-  maxWarmEntries: computeDefaultCachedViews(os.totalmem()),
+  maxWarmEntries: computeDefaultWarmWorkspaceHosts(os.totalmem()),
 };
 
 async function readForgeSettingsForProject(projectPath: string): Promise<{
