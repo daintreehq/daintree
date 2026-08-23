@@ -151,6 +151,8 @@ async function renderOpenBadge(): Promise<HTMLElement> {
 // Drives the real `viewCacheState` singleton through its preload boundary, the
 // same way ProjectResourceBadge.test.tsx does.
 let cachedHandlers: Set<() => void>;
+let documentHidden = false;
+let originalHidden: boolean;
 
 function emitCached(): void {
   Array.from(cachedHandlers).forEach((h) => h());
@@ -165,6 +167,12 @@ function findMemoryRow(container: HTMLElement, value: string): HTMLElement | und
 function setupDefaultMocks(): void {
   vi.useFakeTimers();
   cachedHandlers = new Set();
+  documentHidden = false;
+  originalHidden = document.hidden;
+  Object.defineProperty(document, "hidden", {
+    get: () => documentHidden,
+    configurable: true,
+  });
   vi.stubGlobal("electron", {
     app: {
       onViewCached: (cb: () => void) => {
@@ -201,6 +209,11 @@ function setupDefaultMocks(): void {
 }
 
 function restoreTimersAndMocks(): void {
+  Object.defineProperty(document, "hidden", {
+    value: originalHidden,
+    configurable: true,
+    writable: true,
+  });
   // Reset before unstubbing so the singleton still has a bridge to detach from.
   __resetProjectViewCacheStateForTests();
   vi.unstubAllGlobals();
@@ -257,6 +270,31 @@ describe("ProjectResourceBadge — popover memory honesty", () => {
     // otherwise outrun the badge poll in a view nobody can see.
     expect(mockGetMemorySnapshot.mock.calls.length).toBe(whilePolling);
     expect(vi.getTimerCount()).toBe(0);
+  });
+
+  it("skips the popover poll while the window is hidden, and resumes after", async () => {
+    await renderOpenBadge();
+    const onOpen = mockGetMemorySnapshot.mock.calls.length;
+
+    // Positive control: the 4s poll is running.
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(12_000);
+    });
+    const whileVisible = mockGetMemorySnapshot.mock.calls.length;
+    expect(whileVisible).toBeGreaterThan(onOpen);
+
+    documentHidden = true;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(12_000);
+    });
+    expect(mockGetMemorySnapshot.mock.calls.length).toBe(whileVisible);
+
+    // Nothing was torn down, so it picks back up without a reopen.
+    documentHidden = false;
+    await act(async () => {
+      await vi.advanceTimersByTimeAsync(12_000);
+    });
+    expect(mockGetMemorySnapshot.mock.calls.length).toBeGreaterThan(whileVisible);
   });
 
   it("shows Unavailable instead of a fake zero when nothing was ever measured", async () => {

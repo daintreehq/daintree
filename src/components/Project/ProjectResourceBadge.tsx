@@ -484,6 +484,11 @@ export function ProjectResourceBadge() {
     let cancelled = false;
 
     const fetchPopoverData = async () => {
+      // Guarded in the body, not only by the `open` teardown: closing on the
+      // cached phase costs a render pass, so a tick already queued when the
+      // view cached would still fire, and a hidden window suppresses nothing
+      // here at all — Radix keeps the popover open across both.
+      if (document.hidden || isProjectViewCached()) return;
       try {
         const [processMetrics, heapStats, diagnosticsInfo, snapshot] = await Promise.all([
           systemClient.getProcessMetrics(),

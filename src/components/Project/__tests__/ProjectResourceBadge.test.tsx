@@ -418,6 +418,10 @@ describe("ProjectResourceBadge — visibility- and cache-aware polling", () => {
     const armed = setIntervalSpy.mock.calls.find((call) => call[1] === 10_000);
     expect(armed).toBeDefined();
     const tick = armed![0] as () => void;
+    // Released here, not in teardown: `restoreAllMocks` runs after
+    // `useRealTimers`, so it would put this spy's original — an uninstalled
+    // fake `setInterval` — back on the global.
+    setIntervalSpy.mockRestore();
 
     // Positive control: this really is the live poll callback.
     mockGetAll.mockClear();
