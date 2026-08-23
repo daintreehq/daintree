@@ -156,6 +156,84 @@ export interface AssistantCommandMeta {
   palette: string;
 }
 
+/** One item needing attention. */
+export interface AssistantInboxRow {
+  id: string;
+  severity: string;
+  source: string;
+  summary: string;
+  at: number;
+}
+
+/** One open workflow execution graph, in the deck's two-line form. */
+export interface AssistantWorkflowRow {
+  id: string;
+  goal: string;
+  status: string;
+  /** Reads like "3/5 done · current: Run tests". */
+  progress: string;
+  next: string;
+  blocked: boolean;
+}
+
+/** One supervised agent. */
+export interface AssistantAgentRow {
+  id: string;
+  title: string;
+  goal: string;
+  badge: string;
+  agentState: string;
+  preview: string;
+  startedAt: number;
+  needsAttention: boolean;
+}
+
+/** One accepted-but-still-running async operation. */
+export interface AssistantAsyncRow {
+  id: string;
+  title: string;
+  tool: string;
+  startedAt: number;
+}
+
+/** One scheduled operation. */
+export interface AssistantTimerRow {
+  id: string;
+  label: string;
+  dueAt: number;
+}
+
+/** One recent tool call. */
+export interface AssistantAuditRow {
+  tool: string;
+  outcome: string;
+  durationMs: number;
+  at: number;
+}
+
+/**
+ * The operations deck: what the assistant is watching, running and has recently done.
+ *
+ * Answers an `operations` command rather than streaming, as the cockpit rebuilt its
+ * deck when the user opened it. Without this a panel can say it "keeps watch on the
+ * runs" while being structurally unable to show what it is watching.
+ */
+export interface AssistantOperationsEvent extends AssistantHostEventBase {
+  type: "operations:snapshot";
+  inbox: AssistantInboxRow[];
+  workflows: AssistantWorkflowRow[];
+  agents: AssistantAgentRow[];
+  async: AssistantAsyncRow[];
+  timers: AssistantTimerRow[];
+  audit: AssistantAuditRow[];
+}
+
+/** Ask for a fresh operations reading. */
+export interface AssistantOperationsCommand {
+  type: "operations";
+  sessionId: string;
+}
+
 /**
  * Whether the Daintree control plane is reachable.
  *
@@ -232,6 +310,15 @@ export interface AssistantTurnStartEvent extends AssistantHostEventBase {
   turnId: string;
   role: AssistantTurnRole;
   startedAt: number;
+  /**
+   * The assistant started this turn ITSELF, from an attention burst rather than from
+   * something the user sent.
+   *
+   * Such a turn is NOT interruptible: `interrupt` aborts command turns only, since a
+   * wake has already claimed its attention events and aborting would strand them.
+   * Without this a host offers a Stop control that cannot do anything.
+   */
+  wake?: boolean;
 }
 
 /**
@@ -270,6 +357,14 @@ export interface AssistantTurnPhaseEvent extends AssistantHostEventBase {
   type: "turn:phase";
   turnId?: string;
   phase: string;
+  /**
+   * This phase belongs to a turn the assistant started ITSELF.
+   *
+   * Carried here as well as on `turn:start` because a wake emits its first phase
+   * BEFORE the turn opens, so a host learning it only from `turn:start` had a window
+   * where it knew work was happening but not that Stop could not reach it.
+   */
+  wake?: boolean;
 }
 
 /** The model's reasoning for the round, delivered whole just before `turn:end`. */
@@ -297,6 +392,19 @@ export interface AssistantBatchedCall {
   toolId: string;
   argsSummary: string;
   danger: boolean;
+  /**
+   * The human verb the cockpit drew instead of the internal tool id — "Read",
+   * "Delegated" — with `activeVerb` its in-progress form for the tools that visibly
+   * block, and `target` the verb's object lifted from the raw arguments and redacted.
+   *
+   * All three are absent for a tool the engine's presentation table does not know.
+   * That absence is the signal to fall back to the raw `toolId`: the engine deliberately
+   * reports "no label" rather than a guess, because a wrong verb is worse than a
+   * machine-readable name.
+   */
+  verb?: string;
+  activeVerb?: string;
+  target?: string;
 }
 
 /**
@@ -464,6 +572,24 @@ export interface AssistantApprovalRequestedEvent extends AssistantHostEventBase 
   consequence?: string;
   argsSummary?: string;
   needsTypedConfirm: boolean;
+  /**
+   * The engine's verdict that this risk class MAY be added to a session
+   * "don't ask again" list. The highest classes (git, system) never can.
+   *
+   * Carried rather than re-derived here for the same reason `needsTypedConfirm` is: a
+   * host that reimplements which risks are safe to remember has forked a security rule
+   * into a second codebase, where it drifts silently and in the permissive direction.
+   */
+  rememberable?: boolean;
+  /**
+   * The effective identity the tier and risk gates were applied to.
+   *
+   * Distinct from `toolId`, which is the human-facing label a person is asked to
+   * reason about: for a dynamic tool two different underlying actions can present the
+   * same label. A surface remembering "don't ask again" must key on THIS, or a
+   * standing approval given for one action silently covers another.
+   */
+  toolKey?: string;
 }
 
 /** A previously requested approval resolved (by user or timeout). */
@@ -513,6 +639,7 @@ export type AssistantHostEvent =
   | AssistantNoticeEvent
   | AssistantCommandResultEvent
   | AssistantMcpStatusEvent
+  | AssistantOperationsEvent
   | AssistantQuestionRequestedEvent
   | AssistantQuestionAnsweredEvent
   | AssistantModelRateLimitedEvent
@@ -597,6 +724,7 @@ export type AssistantHostCommand =
   | AssistantApprovalDecideCommand
   | AssistantQuestionAnswerCommand
   | AssistantCommandCommand
+  | AssistantOperationsCommand
   | AssistantInterruptCommand
   | AssistantHibernateCommand
   | AssistantShutdownCommand;

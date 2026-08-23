@@ -89,6 +89,17 @@ export class AssistantHostProcess {
   private child: ChildProcessWithoutNullStreams | null = null;
   private readonly readyPromise: Promise<void>;
   private readyEvent: AssistantHostReadyEvent | null = null;
+  /**
+   * Events the engine emitted BEFORE the renderer could know its session id.
+   *
+   * The renderer discards every frame until `start()` resolves and tells it which
+   * session it owns, so anything the engine says during boot lands in that gap. The
+   * ready frame is already handed back through the start result; these are the others,
+   * replayed the same way rather than lost.
+   */
+  private preReadyEvents: AssistantHostEvent[] = [];
+  /** Flips once the start result has been handed back, after which nothing buffers. */
+  private readyReported = false;
   private readyResolve: (() => void) | null = null;
   private readyReject: ((error: Error) => void) | null = null;
   private readyTimer: ReturnType<typeof setTimeout> | null = null;
@@ -183,6 +194,14 @@ export class AssistantHostProcess {
   /** The `host:ready` frame this engine announced itself with, once ready. */
   getReadyEvent(): AssistantHostReadyEvent | null {
     return this.readyEvent;
+  }
+
+  /** Events emitted before readiness, for the caller to replay. Drained by this call. */
+  takePreReadyEvents(): AssistantHostEvent[] {
+    this.readyReported = true;
+    const events = this.preReadyEvents;
+    this.preReadyEvents = [];
+    return events;
   }
 
   /**
@@ -357,6 +376,11 @@ export class AssistantHostProcess {
       this.resolveReady();
     }
 
+    // Buffered until readiness has been reported: everything after that reaches the
+    // renderer normally, because by then it has been told its session id.
+    if (!this.readyReported && event.type !== "host:ready") {
+      this.preReadyEvents.push(event);
+    }
     this.opts.onEvent(event);
   }
 
