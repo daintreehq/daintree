@@ -128,6 +128,13 @@ const KNOWN_CLOSED_ISSUES = new Set([
 // Legitimate accent usage that will persist after all cleanup PRs land.
 // Each entry must carry a brief rationale.
 const DURABLE_ALLOWLIST = new Set([
+  // Assistant composer prompt glyph. The panel sits in the same rail as a terminal and
+  // is meant to read as one, so its composer copies the terminal input bar's own
+  // affordance verbatim — a muted accent "❯" and no send button. It is the single
+  // load-bearing accent in that focus region: the accent-filled Send button that used
+  // to sit opposite it was removed precisely because the terminal has none.
+  "src/components/AssistantPanel/AssistantPanelView.tsx",
+
   // Assistant question sheet title. The sheet REPLACES the composer while a decision
   // blocks the turn, so the Send button — the region's usual accent anchor — is not on
   // screen at the same time. The title is then the single load-bearing signal in the

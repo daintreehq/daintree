@@ -667,9 +667,12 @@ rl.on("line", (line) => {
       // The catalog the engine sends at ready, so the panel's palette matches the
       // command set the engine will actually accept.
       commands: [
-        { name: "status", syntax: "/status", palette: "runtime and connections" },
-        { name: "watchers", syntax: "/watchers", palette: "supervised agents" },
-        { name: "inbox", syntax: "/inbox [sev]", palette: "items requiring attention" },
+        // Advertised because this fake ACCEPTS it. The panel routes on the catalog, so
+        // a command the engine serves but does not advertise would be sent as a prompt.
+        { name: "/scenario", syntax: "/scenario <name>", palette: "run a scripted turn" },
+        { name: "/status", syntax: "/status", palette: "runtime and connections" },
+        { name: "/watchers", syntax: "/watchers", palette: "supervised agents" },
+        { name: "/inbox", syntax: "/inbox [sev]", palette: "items requiring attention" },
       ],
       autoApprove: process.env.FAKE_ENGINE_AUTO_APPROVE === "1",
       ...(msg.resumeSessionId ? { resumedSessionId: msg.resumeSessionId } : {}),
