@@ -52,6 +52,8 @@ let turnCounter = 0;
 /** Approvals this process is parked on: approvalId → resolver. */
 const pending = new Map();
 const pendingQuestions = new Map();
+/** Counts operations requests, so each reading is DISTINGUISHABLE from the last. */
+let operationsReads = 0;
 /** Announced-but-unsettled calls, so an interrupt can terminalize them like the engine. */
 const liveTools = new Map();
 
@@ -88,12 +90,27 @@ function dropFrame() {
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms * SPEED));
 
-/** Streams a string as token frames, in believable chunks rather than per character. */
-async function streamText(turnId, text, { chunk = 12, delay = 18 } = {}) {
+/**
+ * A pause a TEST needs to observe, as opposed to one that only makes a stream look
+ * believable. Deliberately NOT scaled by `FAKE_ENGINE_SPEED`: the suite runs at speed 0
+ * so nothing waits on animation, and a hold that collapsed along with it would close
+ * the very window an assertion is about.
+ */
+const hold = (ms) => new Promise((r) => setTimeout(r, ms));
+
+/**
+ * Streams a string as token frames, in believable chunks rather than per character.
+ *
+ * `paced: true` makes the gaps real ones — `hold` rather than `sleep` — for a scenario
+ * whose point is that a test can OBSERVE the stream in flight. At the suite's speed 0
+ * every scaled gap collapses, so the whole answer lands between two Playwright polls
+ * and a state that exists only while text is arriving is never seen.
+ */
+async function streamText(turnId, text, { chunk = 12, delay = 18, paced = false } = {}) {
   for (let i = 0; i < text.length; i += chunk) {
     if (interrupted) return;
     emit({ type: "turn:token", turnId, chunk: text.slice(i, i + chunk) });
-    await sleep(delay);
+    await (paced ? hold(delay) : sleep(delay));
   }
 }
 
@@ -137,16 +154,28 @@ const SCENARIOS = {
       type: "tool:batch",
       turnId,
       calls: [
+        // Verb/target as the real engine computes them (internal/host/presentation.go).
+        // Omitting them made every CI run assert the raw-id fallback — the branch that
+        // fires only for a tool the engine does NOT know — while the branch every real
+        // call takes went untested.
         {
           toolCallId: "c1",
           toolId: "worktree.list",
           argsSummary: '{"status":"ready"}',
           danger: false,
+          verb: "Listed worktrees",
         },
-        { toolCallId: "c2", toolId: "git.getProjectPulse", argsSummary: "{}", danger: false },
+        {
+          toolCallId: "c2",
+          toolId: "git.getProjectPulse",
+          argsSummary: "{}",
+          danger: false,
+          verb: "Read git state",
+          target: "wt_forge",
+        },
       ],
     });
-    emit({ type: "turn:phase", turnId, phase: "tool-running" });
+    emit({ type: "turn:phase", turnId, phase: "tool_running" });
 
     for (const [id, tool] of [
       ["c1", "worktree.list"],
@@ -201,7 +230,7 @@ const SCENARIOS = {
    * flow rather than a screenshot of a card.
    */
   async approval(turnId) {
-    emit({ type: "turn:phase", turnId, phase: "tool-running" });
+    emit({ type: "turn:phase", turnId, phase: "tool_running" });
     emit({
       type: "tool:batch",
       turnId,
@@ -215,7 +244,7 @@ const SCENARIOS = {
       ],
     });
     emit({ type: "tool:state", toolCallId: "c1", state: "waiting", turnId });
-    emit({ type: "turn:phase", turnId, phase: "awaiting-approval" });
+    emit({ type: "turn:phase", turnId, phase: "awaiting_approval" });
     emit({
       type: "approval:requested",
       approvalId: "apr_1",
@@ -274,10 +303,16 @@ const SCENARIOS = {
       type: "approval:requested",
       approvalId: "apr_2",
       toolId: "terminal.sendCommand",
+      toolKey: "terminal.sendCommand",
       summary: "Run `npm test` in wt_forge",
       argsSummary: '{"command":"npm test"}',
       riskClass: "terminal",
       needsTypedConfirm: false,
+      // The real engine marks a terminal-risk dispatch rememberable and always supplies
+      // the effective key (internal/host/bridge.go). Without it the card renders no
+      // grant buttons, so "Allow 5×" and "Always allow" — the two controls that widen
+      // authority beyond a single call — were unreachable from every test.
+      rememberable: true,
       requestedAt: now(),
       turnId,
     });
@@ -294,6 +329,29 @@ const SCENARIOS = {
    * version. A consumer that trusts the token stream shows the broken one — which is
    * exactly the bug protocol v3 exists to make impossible.
    */
+  /**
+   * Multi-block prose: paragraphs, a heading, a list, a fenced block.
+   *
+   * Exists because "the answer arrived" and "the answer is READABLE" are separate
+   * claims, and only the first was ever asserted. A CSS specificity slip once zeroed
+   * the gap between every paragraph — `.assistant-prose p { margin: 0 }` at (0,1,1)
+   * beating the sibling rule at (0,1,0) — and the whole answer rendered as one slab
+   * with nothing failing anywhere.
+   */
+  async paragraphs(turnId) {
+    emit({ type: "turn:phase", turnId, phase: "generating" });
+    const answer = [
+      "First paragraph, which is separated from the next by a blank line.",
+      "Second paragraph, which must sit visibly apart from the first.",
+      "## A heading",
+      "- one\n- two",
+      "```sh\nnpm run build\n```",
+      "Third paragraph after the list.",
+    ].join("\n\n");
+    await streamText(turnId, answer);
+    emit({ type: "turn:end", turnId, endedAt: now(), outcome: "answered", content: answer });
+  },
+
   async authoritativeContent(turnId) {
     emit({ type: "turn:phase", turnId, phase: "generating" });
     await streamText(turnId, "PARTIAL-STREAM-SHOULD-BE-REPLACED");
@@ -357,7 +415,7 @@ const SCENARIOS = {
    * that generated its own would disagree with the transcript and the debug log.
    */
   async question(turnId) {
-    emit({ type: "turn:phase", turnId, phase: "awaiting-question" });
+    emit({ type: "turn:phase", turnId, phase: "awaiting_question" });
     emit({
       type: "question:requested",
       questionId: "qst_1",
@@ -430,6 +488,63 @@ const SCENARIOS = {
     emit({ type: "turn:end", turnId, endedAt: now(), outcome: "answered", content: answer });
   },
 
+  /**
+   * Prose, then a call the model composes only after finishing it.
+   *
+   * The window this exists for is the one between the two: the engine has left
+   * `generating`, but the answer is still the last thing on screen because no tool row
+   * has been announced yet. A streaming caret keyed on "the turn is unfinished and this
+   * is the last segment" blinks all the way through it, parked at the end of a
+   * paragraph the engine is done with.
+   */
+  async proseThenTool(turnId) {
+    emit({ type: "turn:phase", turnId, phase: "generating" });
+    await streamText(turnId, "Checking the worktrees now.", { chunk: 6, delay: 220, paced: true });
+    emit({ type: "turn:phase", turnId, phase: "tool_queued" });
+    await hold(2500);
+
+    emit({
+      type: "tool:batch",
+      turnId,
+      calls: [
+        {
+          toolCallId: "c1",
+          toolId: "worktree.list",
+          argsSummary: '{"status":"ready"}',
+          danger: false,
+          verb: "Listed worktrees",
+        },
+      ],
+    });
+    emit({ type: "turn:phase", turnId, phase: "tool_running" });
+    emit({ type: "tool:state", toolCallId: "c1", state: "active", turnId });
+    emit({
+      type: "tool:started",
+      toolCallId: "c1",
+      toolId: "worktree.list",
+      argsSummary: "{}",
+      startedAt: now(),
+      turnId,
+      danger: false,
+    });
+    await sleep(40);
+    emit({
+      type: "tool:settled",
+      toolCallId: "c1",
+      toolId: "worktree.list",
+      durationMs: 120,
+      result: "success",
+      severity: "info",
+      turnId,
+    });
+    emit({ type: "tool:state", toolCallId: "c1", state: "done", turnId });
+
+    emit({ type: "turn:phase", turnId, phase: "generating" });
+    const answer = "Three worktrees are ready.";
+    await streamText(turnId, answer);
+    emit({ type: "turn:end", turnId, endedAt: now(), outcome: "answered", content: answer });
+  },
+
   /** Reasoning is delivered whole, just before the turn ends. */
   async reasoning(turnId) {
     emit({ type: "turn:phase", turnId, phase: "thinking" });
@@ -462,6 +577,45 @@ const SCENARIOS = {
    * from Daintree's schema entirely, so every cancellation had its `turn:end`
    * rejected. Never leave an outcome untested just because it is the sad path.
    */
+  /** Dies mid-turn with a non-zero code — the failure the panel must settle from. */
+  async crash(turnId) {
+    emit({ type: "turn:phase", turnId, phase: "generating" });
+    await streamText(turnId, "Starting the migration…");
+    emit({
+      type: "tool:batch",
+      turnId,
+      calls: [
+        {
+          toolCallId: "c1",
+          toolId: "agent.run",
+          argsSummary: '{"task":"migrate"}',
+          danger: false,
+          verb: "Delegated",
+          target: "migrate",
+        },
+      ],
+    });
+    emit({ type: "tool:state", toolCallId: "c1", state: "active", turnId });
+    emit({ type: "turn:phase", turnId, phase: "tool_running" });
+    // No turn:end, no shutdown frame, no terminal tool state: the process simply stops,
+    // which is what a crash looks like from the host's side.
+    await sleep(40);
+    process.exit(9);
+  },
+
+  /** An autonomous WAKE turn — work the assistant started, which a user cannot stop. */
+  async wake(turnId) {
+    emit({ type: "turn:phase", turnId, phase: "generating" });
+    await streamText(turnId, "I noticed CI went red on wt_forge and looked into it.");
+    emit({
+      type: "turn:end",
+      turnId,
+      endedAt: now(),
+      outcome: "answered",
+      content: "I noticed CI went red on wt_forge and looked into it.",
+    });
+  },
+
   async cancellable(turnId) {
     // Two calls in different states, so an interrupt has one of each to terminalize:
     // one that WAS running, and one announced but never started. The difference is
@@ -480,11 +634,14 @@ const SCENARIOS = {
       chunk: 8,
       delay: 40,
     });
-    // Held open on a timer the SPEED multiplier does not scale. Every other delay here
-    // is scaled so the suite runs fast, but this scenario exists to be interrupted —
-    // at speed 0 it would finish before a test could press Stop, and the interrupt
-    // would land on a turn that had already ended.
-    if (!interrupted) await new Promise((r) => setTimeout(r, 30_000));
+    // Held open until something INTERRUPTS it — not for a wall-clock 30 seconds.
+    //
+    // This scenario exists to be stopped, so it must not be able to end on its own. A
+    // timed hold made the Stop and Escape tests race that timer on a loaded machine,
+    // and it let them pass for the wrong reason when they lost: natural completion
+    // removes the Stop button exactly as an interrupt does, so the assertion could not
+    // tell "the interrupt worked" from "the turn finished by itself".
+    while (!interrupted) await new Promise((r) => setTimeout(r, 50));
     if (!interrupted) {
       emit({ type: "turn:end", turnId, endedAt: now(), outcome: "answered", content: "finished" });
     }
@@ -511,7 +668,26 @@ async function runTurn(text) {
   const turnId = `turn_${turnCounter}`;
   interrupted = false;
 
-  emit({ type: "turn:start", turnId, role: "assistant", startedAt: now() });
+  // The USER's own turn first — opened and closed in the same millisecond, carrying no
+  // outcome. The real engine brackets every prompt this way (internal/host/bridge.go),
+  // and a consumer that treats any `turn:end` as the end of the exchange settles on
+  // this one. A fake that skipped it could never surface that class of bug.
+  const userTurnId = `turn_${turnCounter}_user`;
+  const at = now();
+  emit({ type: "turn:start", turnId: userTurnId, role: "user", startedAt: at });
+  emit({ type: "turn:end", turnId: userTurnId, endedAt: at });
+
+  const wantsWake = /^\/scenario\s+wake\b/.test(text.trim());
+  emit({
+    type: "turn:start",
+    turnId,
+    role: "assistant",
+    startedAt: now(),
+    // `wake` marks a turn the ASSISTANT started. The panel disables Stop for these —
+    // there is nothing of the user's to cancel — and that branch was unreachable from
+    // any test because no scenario ever set the flag.
+    ...(wantsWake ? { wake: true } : {}),
+  });
 
   // A prompt may name a scenario inline (`/scenario approval`), so one session can
   // exercise several without respawning the process.
@@ -564,15 +740,35 @@ async function handleCommand(cmd) {
         return;
       }
       // Routed, never answered by the "model" — the whole point of the command path.
-      const known = ["/status", "/help", "/clear", "/reconnect", "/backend", "/watchers", "/inbox"];
-      if (!known.includes(cmd.line.split(/\s+/)[0])) {
+      //
+      // Each answers with text unique to ITSELF. They all returned the same masthead
+      // before, which made "the palette ran the command I picked" unprovable:
+      // dispatching the wrong known command produced identical output and passed.
+      const KNOWN = {
+        "/status": `backend  local (http://127.0.0.1:8473)\ntier     operator`,
+        "/help": "COMMANDS\n  /status   runtime and connections",
+        "/clear":
+          process.env.FAKE_ENGINE_CLEAR === "refuse"
+            ? "Can't clear while a turn is in progress."
+            : "Conversation cleared.",
+        "/reconnect": "Reconnected to Daintree.",
+        "/backend": "backend  local (http://127.0.0.1:8473)",
+        "/watchers": "WATCHERS\n  wt_forge  claude  tier operator",
+        "/inbox": "INBOX\n  nothing needs you right now",
+      };
+      const verb = cmd.line.split(/\s+/)[0];
+      if (!(verb in KNOWN)) {
         emit({ type: "command:result", command: cmd.line, text: "", unknown: true });
         return;
       }
       emit({
         type: "command:result",
         command: cmd.line,
-        text: `backend  local (http://127.0.0.1:8473)\ntier     operator`,
+        text: KNOWN[verb],
+        // Always present, as the real engine sends it. A host must not infer the clear
+        // from the command text: the engine refuses `/clear` mid-turn, and the refusal
+        // looks like any other result. FAKE_ENGINE_CLEAR=refuse exercises that half.
+        conversationCleared: verb === "/clear" && process.env.FAKE_ENGINE_CLEAR !== "refuse",
       });
       return;
     }
@@ -603,6 +799,71 @@ async function handleCommand(cmd) {
         turnId: `turn_${turnCounter}`,
         endedAt: now(),
         outcome: "cancelled",
+      });
+      return;
+    }
+    case "operations": {
+      // FAKE_ENGINE_OPERATIONS=empty answers with nothing in any section, which is what
+      // makes the panel's omit-when-empty rule testable. With every section populated,
+      // a deck that rendered seven empty headings satisfied every assertion.
+      if (process.env.FAKE_ENGINE_OPERATIONS === "empty") {
+        emit({
+          type: "operations:snapshot",
+          inbox: [],
+          workflows: [],
+          agents: [],
+          async: [],
+          timers: [],
+          audit: [],
+        });
+        return;
+      }
+      // The deck is answered ON REQUEST, not streamed — the engine rebuilds it when
+      // a host asks, because pushing every store change to a host that may not be
+      // showing the deck is a great deal of traffic for a view nobody is looking at.
+      //
+      // One row in every section, so the panel's section ordering and its
+      // omit-when-empty rule are both exercised by a single reading.
+      operationsReads += 1;
+      const at = now();
+      emit({
+        type: "operations:snapshot",
+        inbox: [
+          {
+            id: "ib_1",
+            severity: "attention",
+            source: "watcher",
+            summary: `wt_forge is waiting on a confirmation (reading ${operationsReads})`,
+            at: at - 45_000,
+          },
+        ],
+        workflows: [
+          {
+            id: "wf_1",
+            goal: "Ship the migration",
+            status: "running",
+            progress: "3/5 done · current: Run tests",
+            next: "Open the PR",
+            blocked: false,
+          },
+        ],
+        agents: [
+          {
+            id: "ag_1",
+            title: "claude · wt_forge",
+            goal: "Port the schema",
+            badge: "",
+            agentState: "working",
+            preview: "$ npm test",
+            startedAt: at - 300_000,
+            needsAttention: false,
+          },
+        ],
+        async: [
+          { id: "as_1", title: "npm test", tool: "terminal.run.async", startedAt: at - 60_000 },
+        ],
+        timers: [{ id: "tm_1", label: "Re-check CI", dueAt: at + 900_000 }],
+        audit: [{ tool: "fs.read", outcome: "ok", durationMs: 12, at: at - 5_000 }],
       });
       return;
     }
@@ -675,7 +936,26 @@ rl.on("line", (line) => {
         { name: "/inbox", syntax: "/inbox [sev]", palette: "items requiring attention" },
       ],
       autoApprove: process.env.FAKE_ENGINE_AUTO_APPROVE === "1",
+      // The session facts the masthead is drawn from. The real engine fills all of
+      // these (internal/host/host.go); a fake that left them out meant every masthead
+      // assertion was made against a session with no tier, no backend and no routing,
+      // which is a state the product never reaches.
+      tier: process.env.FAKE_ENGINE_TIER ?? "operator",
+      tierGloss: "terminals, projects, external",
+      backend: "local (http://127.0.0.1:8473)",
+      routing: "daintree-fake",
       ...(msg.resumeSessionId ? { resumedSessionId: msg.resumeSessionId } : {}),
+    });
+
+    // AFTER host:ready, exactly as the engine posts it — a host cannot match events to
+    // a session until it has been told the session id, so a status emitted before ready
+    // is dropped. The panel's "Connected · no Daintree tools" branch reads this.
+    emit({
+      type: "mcp:status",
+      connected: process.env.FAKE_ENGINE_MCP === "off" ? false : true,
+      ...(process.env.FAKE_ENGINE_MCP === "off"
+        ? { error: "DAINTREE_MCP_URL / DAINTREE_MCP_TOKEN not set" }
+        : { toolCount: 42 }),
     });
     return;
   }

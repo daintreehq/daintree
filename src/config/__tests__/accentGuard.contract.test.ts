@@ -128,19 +128,12 @@ const KNOWN_CLOSED_ISSUES = new Set([
 // Legitimate accent usage that will persist after all cleanup PRs land.
 // Each entry must carry a brief rationale.
 const DURABLE_ALLOWLIST = new Set([
-  // Assistant composer prompt glyph. The panel sits in the same rail as a terminal and
-  // is meant to read as one, so its composer copies the terminal input bar's own
-  // affordance verbatim — a muted accent "❯" and no send button. It is the single
-  // load-bearing accent in that focus region: the accent-filled Send button that used
-  // to sit opposite it was removed precisely because the terminal has none.
-  "src/components/AssistantPanel/AssistantPanelView.tsx",
-
-  // Assistant question sheet title. The sheet REPLACES the composer while a decision
-  // blocks the turn, so the Send button — the region's usual accent anchor — is not on
-  // screen at the same time. The title is then the single load-bearing signal in the
-  // region, and it is the one thing that must read as Daintree asking rather than the
-  // model talking.
-  "src/components/AssistantPanel/AssistantQuestionCard.tsx",
+  // The assistant panel is no longer listed here, and not because its restraint
+  // lapsed. It draws from the TERMINAL's palette now — `var(--assistant-accent)` is the
+  // terminal's cursor colour, not `--color-accent-primary` — so none of this guard's
+  // utilities appear in it to allow. Its own restraint is pinned by
+  // src/components/AssistantPanel/__tests__/accentRestraint.contract.test.ts, which
+  // knows about the variable this guard cannot see.
 
   // Theme browser accent display (theme content, not app chrome)
   "src/components/ThemeBrowser/ThemeBrowser.tsx",
@@ -228,7 +221,11 @@ const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
     "src/components/Settings/WorktreeSettingsTab.tsx",
     "src/components/Terminal/ContentGridDefault.tsx",
     "src/components/Terminal/ContentGridTwoPaneSplit.tsx",
-    "src/components/Terminal/HybridInputBar.tsx",
+    // HybridInputBar is no longer listed. Its accent uses were the prompt glyph, the
+    // drag and dictation overlays and the stash button, and every one of them now draws
+    // from the TERMINAL's palette (`--ib-accent`) rather than the app's — which is what
+    // they should always have done, since the bar sits on the terminal's ground. On a
+    // light app theme with a dark terminal the glyph measured 1.41:1.
     "src/components/Terminal/RecipeRunner/RecipeRunnerGrid.tsx",
     "src/components/Terminal/RecipeRunner/RecipeRunnerItem.tsx",
     "src/components/Terminal/RecipeRunner/RecipeRunnerList.tsx",

@@ -55,27 +55,94 @@ interface LiveSession {
  * decision this file makes visibly, not an accident of whatever is exported in the
  * shell that happened to launch Electron.
  *
- * `DAINTREE_BACKEND_URL` still overrides it, because a developer pointing at a staging
- * or deployed backend on purpose is a legitimate thing to do — it just has to be
- * deliberate. Change this constant when the native panel is ready to face the deployed
- * backend by default.
+ * `DAINTREE_BACKEND_URL` moves it, but only within loopback — see `resolveBackendUrl`.
+ * Change this constant when the native panel is ready to face the deployed backend by
+ * default.
  */
 const DEFAULT_BACKEND_URL = "http://127.0.0.1:8473";
 
+/** Hostnames that mean "this machine". `[::1]` arrives bracketed from a URL. */
+const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
+
 /**
- * The backend endpoint for a spawned engine.
+ * Whether a URL hostname names this machine.
  *
- * An explicit override still wins — pointing at staging or the deployed backend on
- * purpose is legitimate, and a pin with no escape hatch just pushes people to edit the
- * constant and commit it by accident. The rule is only that it has to be DELIBERATE.
+ * Read AFTER the URL parser, which is what makes this safe to do by name: WHATWG
+ * normalises the IPv4 shorthands an allowlist would otherwise have to know about
+ * (`http://2130706433/` and `http://0x7f000001/` both arrive here as `127.0.0.1`), and
+ * it puts userinfo where it belongs — `http://127.0.0.1@evil.test/` has hostname
+ * `evil.test`, so the oldest trick in this family is answered by asking the parser
+ * rather than by matching the string.
  *
- * A blank value is therefore treated as ABSENT rather than passed through. The engine
- * reads an empty `DAINTREE_BACKEND_URL` as unset and falls through to the stored
- * `/backend` preference and then to its own deployed default, so forwarding `""` would
- * quietly undo the pin — and do it on the one input a shell most easily produces.
+ * The whole 127.0.0.0/8 block counts, not just `.1`: binding a second local backend on
+ * `127.0.0.2` is an ordinary thing to do and there is no reason to refuse it. Anything
+ * this does not recognise — a trailing-dot FQDN, an IPv4-mapped IPv6 literal — is
+ * REFUSED rather than guessed at. Refusing is a fallback to the default, so the cost of
+ * being wrong in that direction is an inconvenience, and in the other it is a prompt
+ * leaving the machine.
+ */
+function isLoopbackHost(hostname: string): boolean {
+  const host = hostname.toLowerCase();
+  if (LOOPBACK_HOSTS.has(host)) return true;
+  // A trailing dot is the same name, absolutely qualified.
+  if (host.endsWith(".") && LOOPBACK_HOSTS.has(host.slice(0, -1))) return true;
+  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
+  if (!v4) return false;
+  const octets = v4.slice(1).map(Number);
+  if (octets.some((n) => n > 255)) return false;
+  return octets[0] === 127;
+}
+
+/**
+ * The backend endpoint for a spawned engine — LOOPBACK ONLY.
+ *
+ * An override still wins for the parts that are a developer's business: the port, the
+ * scheme, a path prefix. What it cannot do is leave the machine. The native panel is
+ * pre-release and unauthenticated, and every prompt, file path and command it carries
+ * goes to whatever this names — so a stray `DAINTREE_BACKEND_URL` exported in a shell
+ * months ago, or inherited from a parent process, must not be able to silently route
+ * that off-box. Loopback is the pin; the override moves it around inside the pin.
+ *
+ * A rejected value falls back to the default rather than failing the launch. The
+ * assistant still works, on the backend it was always supposed to use, and the reason
+ * is on the console — which is the right trade for a setting nobody deliberately aimed
+ * off-box in the first place.
+ *
+ * A blank value is treated as ABSENT rather than passed through. The engine reads an
+ * empty `DAINTREE_BACKEND_URL` as unset and falls through to the stored `/backend`
+ * preference and then to its own deployed default, so forwarding `""` would quietly
+ * undo the pin — and do it on the one input a shell most easily produces.
  */
 export function resolveBackendUrl(raw: string | undefined): string {
-  return raw?.trim() || DEFAULT_BACKEND_URL;
+  const trimmed = raw?.trim();
+  if (!trimmed) return DEFAULT_BACKEND_URL;
+  let parsed: URL;
+  try {
+    parsed = new URL(trimmed);
+  } catch {
+    // Unparseable is not a deliberate override — it is a typo, and passing it through
+    // lands the engine on its deployed default, which is the one outcome to avoid.
+    console.warn(
+      `[assistant-host] Ignoring unparseable DAINTREE_BACKEND_URL ${JSON.stringify(trimmed)}; using ${DEFAULT_BACKEND_URL}.`
+    );
+    return DEFAULT_BACKEND_URL;
+  }
+  if (!isLoopbackHost(parsed.hostname)) {
+    console.warn(
+      `[assistant-host] DAINTREE_BACKEND_URL points off-box (${parsed.hostname}); the assistant is loopback-only while it is unauthenticated. Using ${DEFAULT_BACKEND_URL}.`
+    );
+    return DEFAULT_BACKEND_URL;
+  }
+  // The NORMALISED serialisation, not the string we were handed.
+  //
+  // Two runtimes read this value and they do not agree on the exotic spellings.
+  // `http://2130706433/` is loopback to the WHATWG parser used above, which resolves it
+  // to 127.0.0.1 — but Go's `net.ParseIP` does not recognise the decimal form at all, so
+  // the engine's own "is this loopback?" check says no and its client is free to send
+  // the request through an inherited `HTTP_PROXY`. Validated here, refused off-box, and
+  // then quietly proxied off-box anyway. Handing on the canonical form closes that gap:
+  // both parsers see the same address.
+  return parsed.href;
 }
 
 /** The roster id the MCP tier policy is keyed on for this surface. */
@@ -122,11 +189,46 @@ const ENGINE_CONTROLLED_ENV = [
   "DAINTREE_ASSISTANT_LOG_DIR",
   "DAINTREE_PROJECT_ID",
   "DAINTREE_WINDOW_ID",
+  // The engine's UPSTREAM credential (internal/config/config.go), sent as the backend
+  // bearer. There is no sign-in here and Daintree mints nothing, so the only way this
+  // can be set is by inheritance — and an inherited key does not fail, it succeeds:
+  // turns go through, billed to whoever the key belongs to, with nothing on screen to
+  // say the session stopped being anonymous. Stripped and never re-set, which is what
+  // "zero authentication" has to mean if it is to mean anything.
+  "DAINTREE_API_KEY",
+  // The endpoint. Not inherited raw — `resolveBackendUrl` decides it below, and letting
+  // the parent's value through would sit in the environment beside the resolved one.
+  "DAINTREE_BACKEND_URL",
 ] as const;
 
-/** Where native-engine debug logs are written. Daintree-owned, beside its other data. */
+/**
+ * Names to strip, upper-cased once.
+ *
+ * Windows environment variables are case-INSENSITIVE: a parent that exported
+ * `daintree_assistant_auto_approve=1` reaches `process.env` under that spelling, an
+ * exact-match filter keeps it, and the child then reads it under any casing. The one
+ * variable where that matters most is the one that turns off every confirmation.
+ */
+const ENGINE_CONTROLLED_ENV_UPPER = new Set<string>(
+  ENGINE_CONTROLLED_ENV.map((name) => name.toUpperCase())
+);
+
+/**
+ * Where native-engine debug logs are written: `~/.daintree/logs`.
+ *
+ * The ENGINE's own default, restated here rather than left unset, so the value is
+ * visible from the host side and the same on every platform.
+ *
+ * It used to be `userData/assistant-logs` — Daintree-owned, beside the app's other
+ * data, which sounds tidier and was wrong for the one thing a debug log is for. There
+ * were then three answers to "where is the trace?": the CLI wrote one place, the app
+ * wrote another, and the settings switch described a third. Someone reproducing a bad
+ * turn in the terminal and then in the panel got two files in two trees, and `ls -lt`
+ * on the directory they knew about showed neither. One directory, shared with the CLI,
+ * is worth more than tidiness.
+ */
 function assistantLogDir(): string {
-  return path.join(app.getPath("userData"), "assistant-logs");
+  return path.join(app.getPath("home"), ".daintree", "logs");
 }
 
 /**
@@ -156,7 +258,7 @@ function baseEngineEnv(): Record<string, string> {
   const env: Record<string, string> = {};
   for (const [key, value] of Object.entries(process.env)) {
     if (value === undefined) continue;
-    if ((ENGINE_CONTROLLED_ENV as readonly string[]).includes(key)) continue;
+    if (ENGINE_CONTROLLED_ENV_UPPER.has(key.toUpperCase())) continue;
     env[key] = value;
   }
   return env;
@@ -221,7 +323,15 @@ export class AssistantHostService {
     // for the PTY path. The reason is carried back to the renderer, which says so.
     let mcp: { url: string | null; token: string; tier: string } | null = null;
     let mcpUnavailableReason: string | null = null;
-    let debugLogging = false;
+    // Resolved BEFORE provisioning, from the stored preference, so a launch that fails
+    // to provision still writes a trace. Overwritten below with the session's own
+    // snapshot on the happy path, which is the same value unless the setting changed in
+    // between.
+    let debugLogging = helpSessionService.getDebugLoggingPreference();
+    // The user's "auto-approve assistant actions" preference. Read from the SAME
+    // provisioned session the PTY path reads it from (terminal/lifecycle.ts), so the
+    // native panel and a terminal-hosted assistant honour one setting rather than two.
+    let autoApprove = false;
     try {
       const provisioned = await helpSessionService.provisionSession({
         projectId: opts.projectId,
@@ -236,6 +346,7 @@ export class AssistantHostService {
         helpSessionService.markEngineSession(provisioned.sessionId);
         mcp = { url: provisioned.mcpUrl, token: provisioned.token, tier: provisioned.tier };
         debugLogging = helpSessionService.getDebugLogging(provisioned.token);
+        autoApprove = helpSessionService.getBypassPermissions(provisioned.token);
         helpSessionIdBySession.set(sessionId, provisioned.sessionId);
         if (!provisioned.mcpUrl) {
           mcpUnavailableReason = "Daintree control is switched off in assistant settings.";
@@ -274,12 +385,18 @@ export class AssistantHostService {
         // The tier the SETTINGS decided, mapped into the engine's vocabulary — not the
         // renderer's requested tier, which only ever reaches the descriptor.
         DAINTREE_ASSISTANT_TIER: engineTierFor(mcp?.tier ?? "workbench"),
+        // The assistant has no --dangerously-skip-permissions flag; the preference maps
+        // to skipping its own confirm sheet, which the engine reads from here at
+        // startup. Set only when ON: the variable is stripped from inherited env
+        // above, so leaving it unset is what "ask me" means.
+        //
+        // Without this the toggle did nothing on the native panel — the sheet appeared
+        // for a user who had switched it off, which reads as the setting being broken.
+        ...(autoApprove ? { DAINTREE_ASSISTANT_AUTO_APPROVE: "1" } : {}),
         // Debug logging, from the same assistant setting the PTY path reads. Both
         // halves are required — the engine writes nothing unless it has a flag AND a
         // directory — which is why the native path produced no log at all until now,
-        // and why a session that misbehaves had no trace to read afterwards. The
-        // directory is Daintree-owned so the logs sit with the rest of the app's data
-        // rather than in the engine's own home.
+        // and why a session that misbehaves had no trace to read afterwards.
         ...(debugLogging
           ? {
               DAINTREE_ASSISTANT_DEBUG_LOG: "1",

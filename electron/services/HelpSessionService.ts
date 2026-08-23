@@ -5,6 +5,7 @@ import path from "node:path";
 import { app } from "electron";
 import type { WindowRegistry } from "../window/WindowRegistry.js";
 import { store } from "../store.js";
+import { defaultDebugLogging } from "./helpAssistantDefaults.js";
 import { getHelpFolderPath } from "./HelpService.js";
 import { resilientAtomicWriteFile } from "../utils/fs.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
@@ -76,7 +77,6 @@ const DEFAULT_TIER: HelpAssistantTier = "action";
 const DEFAULT_DAINTREE_CONTROL = true;
 const DEFAULT_DOC_SEARCH = true;
 const DEFAULT_BYPASS_PERMISSIONS = false;
-const DEFAULT_DEBUG_LOGGING = false;
 
 // Belt-and-suspenders bound for orphaned provisional bearers (#10698). A
 // session record is minted at provision time, then bound to a PTY terminal once
@@ -1930,7 +1930,7 @@ export class HelpSessionService {
       tier,
       bypassPermissions,
       debugLogging:
-        typeof stored.debugLogging === "boolean" ? stored.debugLogging : DEFAULT_DEBUG_LOGGING,
+        typeof stored.debugLogging === "boolean" ? stored.debugLogging : defaultDebugLogging(),
     };
   }
 
@@ -1974,6 +1974,23 @@ export class HelpSessionService {
     const record = this.sessionsByToken.get(token);
     if (!record || record.revoked) return false;
     return record.debugLogging;
+  }
+
+  /**
+   * The debug-logging preference read LIVE, with no session behind it.
+   *
+   * For the launch that could not provision one. `getDebugLogging` answers from a
+   * snapshot taken at provision time, which is the right shape for a running session and
+   * the wrong shape for a failed start: an engine launched degraded — MCP unreachable,
+   * the help folder unavailable — got no trace at all, because the only thing that could
+   * turn logging on had already thrown. That is precisely the launch worth having a
+   * trace of, and precisely the one that never had one.
+   *
+   * Not a replacement for the snapshot. A live read mid-session would let a settings
+   * change reach an engine that was started under the old value.
+   */
+  getDebugLoggingPreference(): boolean {
+    return this.readSettings().debugLogging;
   }
 
   private getSessionsRoot(): string {

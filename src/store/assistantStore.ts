@@ -267,6 +267,12 @@ export interface AssistantSessionState {
    */
   queuedInterjections: string[];
   /**
+   * A follow-up the engine just handed back, waiting for the composer to pick it up.
+   * Cleared by `takeRetractedDraft` so it is delivered exactly once — leaving it set
+   * would re-fill the composer on every later render.
+   */
+  retractedDraft: string | null;
+  /**
    * When the running turn last produced anything, for the stall cue.
    *
    * The engine going quiet for a while is normal — a slow model, a long tool — but it
@@ -331,6 +337,8 @@ interface AssistantStoreActions {
    * undelivered message sitting in the transcript as though it had been sent.
    */
   dropUndeliveredText: (text: string) => void;
+  /** Take the handed-back follow-up, clearing it so it is consumed once. */
+  takeRetractedDraft: () => string | null;
   dropQueuedInterjection: (text: string) => void;
   /** A local, non-protocol notice (a spawn failure, a command that could not send). */
   pushNotice: (level: AssistantNotice["level"], message: string) => void;
@@ -376,6 +384,7 @@ const EMPTY: AssistantSessionState = {
   operations: null,
   toolGrants: {},
   queuedInterjections: [],
+  retractedDraft: null,
   lastActivityAt: null,
   turnStartedAt: null,
   phaseIsWake: false,
@@ -612,6 +621,12 @@ export const useAssistantStore = create<AssistantStore>((set, get) => ({
 
   dropLocalTurn: (turnId) => set((s) => ({ turns: s.turns.filter((t) => t.turnId !== turnId) })),
 
+  takeRetractedDraft: () => {
+    const text = get().retractedDraft;
+    if (text !== null) set({ retractedDraft: null });
+    return text;
+  },
+
   dropUndeliveredText: (text) =>
     set((s) => {
       // The queue first: this is the ordinary case, and one entry only, since two
@@ -769,6 +784,18 @@ export const useAssistantStore = create<AssistantStore>((set, get) => ({
         set({ phase: event.phase, phaseIsWake: event.wake === true, lastActivityAt: Date.now() });
         return;
 
+      case "interject:retracted": {
+        // The engine took the message back out of its buffer, so the transcript's copy
+        // has to go too — the panel appended it optimistically when it was typed. A
+        // failed retract removes nothing: the message is still queued and still true.
+        if (!event.retracted || !event.text) return;
+        get().dropUndeliveredText(event.text);
+        // Handed to the composer rather than dropped. Escape here means "let me edit
+        // that", not "delete it", and a retract that vanished the text would be a
+        // worse outcome than never offering one.
+        set({ retractedDraft: event.text });
+        return;
+      }
       case "turn:reasoning":
         set((s) => ({
           turns: patchTurn(s.turns, event.turnId, (t) => ({ ...t, reasoning: event.text })),
@@ -959,8 +986,14 @@ export const useAssistantStore = create<AssistantStore>((set, get) => ({
 
       case "approval:requested":
         set((s) => ({
+          // UPSERT by id, not append. A re-request for an id already on screen is the
+          // engine restating a dispatch that is still parked, and appending it drew a
+          // SECOND card with the same React key: duplicate keys, and — worse on this
+          // surface — a freshly mounted card carrying a fresh one-shot guard, so the
+          // pair could send two contradicting answers for one dispatch. Replacing the
+          // row keeps one card, one guard, one answer.
           approvals: [
-            ...s.approvals,
+            ...s.approvals.filter((a) => a.approvalId !== event.approvalId),
             {
               approvalId: event.approvalId,
               toolId: event.toolId,
@@ -1052,6 +1085,65 @@ export const useAssistantStore = create<AssistantStore>((set, get) => ({
         return;
 
       case "command:result":
+        // /clear wipes the engine's conversation, so the transcript above it is no
+        // longer the history of anything — the model cannot see it, and leaving it on
+        // screen invites a follow-up ("as you said earlier") that will not land. The
+        // cockpit cleared the screen for exactly this reason; here the panel drops the
+        // turns and keeps only the result line, so what remains is the fresh start.
+        // The ENGINE's verdict, not the command's spelling.
+        //
+        // `/clear` is refused while a turn is in flight, and that refusal arrives as an
+        // ordinary command result. Matching on the text wiped the transcript, the
+        // activity rows and every live readout while the engine kept the conversation
+        // and carried on working in it — leaving the user talking to a model whose
+        // context they could no longer see, with the two disagreeing about what had
+        // been said. A destructive reset needs an authoritative answer, and this is it.
+        if (event.conversationCleared === true) {
+          set((s) => ({
+            turns: [],
+            toolCalls: {},
+            approvals: [],
+            queuedInterjections: [],
+            // The LIVE state goes too. The transcript was the only thing being cleared,
+            // so a `/clear` issued while a turn was still settling left "Integrating
+            // results · 13s" and its ticking clock under an empty conversation —
+            // describing work belonging to a turn that no longer exists anywhere, with
+            // no way to make it go away short of restarting the session.
+            phase: null,
+            phaseIsWake: false,
+            turnStartedAt: null,
+            lastActivityAt: null,
+            pendingQuestion: null,
+            // A gap belongs to a transcript. Cleared with it, or the panel keeps
+            // reporting frames missing from a conversation nobody can read.
+            droppedFrames: 0,
+            // STANDING GRANTS go too. "Always allow this" was answered about a specific
+            // conversation — this tool, in this piece of work, for these reasons. Once
+            // that conversation is gone the grant is authority with nothing left to
+            // justify it, silently approving calls in a fresh context the user never
+            // saw when they gave it. Permission does not outlive the thing it was
+            // granted for.
+            toolGrants: {},
+            // The deck describes what the ENGINE is watching, and /clear tells the
+            // engine to drop its watchers, async operations and inbox (its own result
+            // line says so). Keeping the last reading would show work that has just
+            // been deleted, as though it were still running.
+            operations: null,
+            notices: [
+              {
+                id: noticeId(),
+                level: "info" as const,
+                message: `${event.command}\n${event.text}`.trimEnd(),
+                at: Date.now(),
+                turnId: null,
+              },
+            ],
+            // The spend so far is still true and still the user's money; only the
+            // conversation was cleared.
+            usage: s.usage,
+          }));
+          return;
+        }
         set((s) => ({
           notices: [
             ...s.notices,

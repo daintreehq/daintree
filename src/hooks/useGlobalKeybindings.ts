@@ -62,6 +62,25 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
 
       const isInTerminal = target.closest(".xterm") !== null;
 
+      /**
+       * An element that declares it OWNS Escape, and must be allowed to receive it.
+       *
+       * This listener runs in the CAPTURE phase, so when it handles Escape it does so
+       * before React sees the event at all — `stopPropagation` there means a focused
+       * component's own `onKeyDown` never runs. That is right for the general case
+       * (Escape should close the topmost thing, not whatever happens to be focused) and
+       * wrong for a sheet whose entire purpose is to answer Escape itself.
+       *
+       * The assistant's approval and question sheets are exactly that: Escape DECLINES
+       * a tool call and DISMISSES a question, as the cockpit bound them. Without this,
+       * Escape on an approval sheet closed the assistant panel and left the engine
+       * parked on a dispatch nobody had answered.
+       *
+       * Same shape as the `isEditable` and `isInTerminal` exemptions above, and marked
+       * declaratively so the rule is visible on the component that relies on it.
+       */
+      const ownsEscape = target.closest("[data-escape-owner]") !== null;
+
       // Get the normalized key to check if it's a modifier-only keypress
       const normalizedKey = normalizeKeyForBinding(e);
       const isModifierOnly = ["Meta", "Control", "Alt", "Shift"].includes(normalizedKey);
@@ -128,6 +147,12 @@ export function useGlobalKeybindings(enabled: boolean = true): void {
         keybindingService.clearPendingChord();
         return;
       }
+
+      // A sheet that OWNS Escape gets it before anything here consumes it — before the
+      // chord machine, before the escape stack. The alternative is that the first
+      // Escape only cancels a pending chord, and the approval sheet behind it stays
+      // unanswered with the engine parked on the dispatch it is waiting for.
+      if (e.key === "Escape" && ownsEscape) return;
 
       if (e.key === "Escape" && pendingChord) {
         keybindingService.clearPendingChord();

@@ -235,6 +235,19 @@ export interface AssistantOperationsCommand {
 }
 
 /**
+ * Take back the most recently buffered follow-up (LIFO).
+ *
+ * A prompt typed while a turn runs is BUFFERED by the engine, not sent, until the turn
+ * folds it in at its next tool boundary — so there is a real window in which it can be
+ * pulled back. The engine answers with `interject:retracted`, and answers even when
+ * there was nothing to take.
+ */
+export interface AssistantInterjectRetractCommand {
+  type: "interject:retract";
+  sessionId: string;
+}
+
+/**
  * Whether the Daintree control plane is reachable.
  *
  * Emitted at boot and again after anything that may reconnect it. The engine being up
@@ -266,6 +279,20 @@ export interface AssistantCommandResultEvent extends AssistantHostEventBase {
   quit?: boolean;
   /** Looked like a command but names none that exists. */
   unknown?: boolean;
+  /**
+   * Whether `/clear` actually cleared the conversation.
+   *
+   * The engine REFUSES `/clear` while a turn is in flight, and the refusal reads like
+   * any other command result. Inferring the outcome from the command TEXT — as this
+   * panel and the engine's own REPL both once did — wipes the transcript while the
+   * engine keeps the conversation, leaving the user talking to a model whose context
+   * they can no longer see.
+   *
+   * The engine always sends it. Optional only for an engine older than this contract,
+   * where absent must read as "did not clear": a destructive reset may not happen on an
+   * assumption.
+   */
+  conversationCleared?: boolean;
   turnId?: string;
 }
 
@@ -365,6 +392,20 @@ export interface AssistantTurnPhaseEvent extends AssistantHostEventBase {
    * where it knew work was happening but not that Stop could not reach it.
    */
   wake?: boolean;
+}
+
+/**
+ * The answer to `interject:retract`.
+ *
+ * `retracted` is false when the window had closed — already folded into the turn, or
+ * nothing was buffered — and `text` is then absent. A host must not treat that as a
+ * success: blanking the composer over a retract that did not happen eats what the user
+ * typed and leaves the message still queued.
+ */
+export interface AssistantInterjectRetractedEvent extends AssistantHostEventBase {
+  type: "interject:retracted";
+  retracted: boolean;
+  text?: string;
 }
 
 /** The model's reasoning for the round, delivered whole just before `turn:end`. */
@@ -628,6 +669,7 @@ export type AssistantHostEvent =
   | AssistantTurnEndEvent
   | AssistantTurnPhaseEvent
   | AssistantTurnReasoningEvent
+  | AssistantInterjectRetractedEvent
   | AssistantTurnInterjectionEvent
   | AssistantToolBatchEvent
   | AssistantToolStateEvent
@@ -725,6 +767,7 @@ export type AssistantHostCommand =
   | AssistantQuestionAnswerCommand
   | AssistantCommandCommand
   | AssistantOperationsCommand
+  | AssistantInterjectRetractCommand
   | AssistantInterruptCommand
   | AssistantHibernateCommand
   | AssistantShutdownCommand;

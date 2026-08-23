@@ -1,14 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { useShouldSkipMotion } from "@/hooks/useShouldSkipMotion";
 import { PANEL_RESTORE_DURATION } from "@/lib/animationUtils";
-import {
-  SPLASH_COLOR_FULL,
-  SPLASH_COLOR_PARTIAL,
-  SPLASH_FPS,
-  SPLASH_FRAMES,
-  SPLASH_LINGER_MS,
-  type SplashRow,
-} from "./splashFrames";
+import { SPLASH_FPS, SPLASH_FRAMES, SPLASH_LINGER_MS, type SplashRow } from "./splashFrames";
 
 /**
  * The Daintree boot mark, drawing itself in while the engine starts.
@@ -279,8 +272,10 @@ export function AssistantBootSplash({ onDone, className }: AssistantBootSplashPr
         className="assistant-boot-mark mx-auto block h-auto w-full"
         style={{ maxWidth: MAX_MARK_WIDTH }}
       >
-        {geometry?.full ? <path d={geometry.full} fill={SPLASH_COLOR_FULL} /> : null}
-        {geometry?.partial ? <path d={geometry.partial} fill={SPLASH_COLOR_PARTIAL} /> : null}
+        {geometry?.full ? <path d={geometry.full} fill="var(--assistant-mark, #36ce94)" /> : null}
+        {geometry?.partial ? (
+          <path d={geometry.partial} fill="var(--assistant-mark-partial, #29996e)" />
+        ) : null}
       </svg>
     </div>
   );

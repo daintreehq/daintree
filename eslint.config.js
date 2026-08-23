@@ -1160,11 +1160,19 @@ export default tseslint.config(
   prettier,
 
   {
-    // The fake assistant engine is a standalone Node script (spawned as a process,
-    // exactly like the real Go binary), so it legitimately uses Node globals.
-    files: ["e2e/helpers/fake-assistant-engine.mjs"],
+    // Standalone Node scripts, spawned as processes exactly like the real Go binary,
+    // so they legitimately use Node globals:
+    //   fake-assistant-engine.mjs — the scripted engine the E2E suite drives
+    //   assistant-turn.mjs        — the local stdio harness that answers "engine or
+    //                               renderer?" without an Electron window
+    files: ["e2e/helpers/fake-assistant-engine.mjs", "e2e/local/assistant-turn.mjs"],
     languageOptions: {
-      globals: { process: "readonly", setTimeout: "readonly", console: "readonly" },
+      globals: {
+        process: "readonly",
+        setTimeout: "readonly",
+        clearTimeout: "readonly",
+        console: "readonly",
+      },
     },
   },
 

@@ -23,8 +23,18 @@ import type { AssistantToolCall } from "@/store/assistantStore";
 
 interface StateStyle {
   Icon: typeof Check;
-  /** Icon colour token. Semantic status colours, never the accent. */
-  tone: string;
+  /**
+   * The GLYPH's colour. Semantic status colours, never the accent.
+   *
+   * Split from the label's because the two answer to different contrast floors: an icon
+   * has to be recognisable (WCAG's 3:1 for non-text), a label has to be readable (4.5:1).
+   * Holding them to the same figure means one of them is wrong — either the glyph is
+   * pushed so far toward black or white that it stops being the theme's own red, or the
+   * label is left at a ratio nobody can read. See `palette.ts`.
+   */
+  glyph: string;
+  /** The LABEL's colour. Always a text tier. */
+  ink: string;
   label: string;
   spin?: boolean;
 }
@@ -32,11 +42,19 @@ interface StateStyle {
 function styleFor(call: AssistantToolCall): StateStyle {
   switch (call.state) {
     case "queued":
-      return { Icon: CircleDashed, tone: "text-text-muted", label: "Queued" };
+      return {
+        Icon: CircleDashed,
+        glyph: "text-[var(--assistant-fg-dim)]",
+        // Not the dim tier: "Queued" is a word someone reads, and dim is the
+        // decoration tier that only answers to the 3:1 graphical floor.
+        ink: "text-[var(--assistant-fg-secondary)]",
+        label: "Queued",
+      };
     case "active":
       return {
         Icon: CircleDashed,
-        tone: "text-text-secondary",
+        glyph: "text-[var(--assistant-fg-secondary)]",
+        ink: "text-[var(--assistant-fg-secondary)]",
         // "Handed off", not "Running": the engine gives the work to its runtime and
         // reports completion later as its own wake turn, never back to this row. This
         // panel cannot know whether it is still going, so a present-tense claim goes
@@ -52,20 +70,45 @@ function styleFor(call: AssistantToolCall): StateStyle {
     case "waiting":
       // Amber, and worded from the user's side: the system is not busy, it is waiting
       // for them.
-      return { Icon: Hourglass, tone: "text-status-warning", label: "Needs your approval" };
+      return {
+        Icon: Hourglass,
+        glyph: "text-[var(--assistant-warning-graphic)]",
+        ink: "text-[var(--assistant-warning)]",
+        label: "Needs your approval",
+      };
     case "failed":
-      return { Icon: X, tone: "text-status-danger", label: "Failed" };
+      return {
+        Icon: X,
+        glyph: "text-[var(--assistant-danger-graphic)]",
+        ink: "text-[var(--assistant-danger)]",
+        label: "Failed",
+      };
     case "cancelled":
       // Neutral, not danger: the user stopped it deliberately. Colouring their own
       // decision as an error reads as something having gone wrong.
-      return { Icon: X, tone: "text-text-muted", label: "Cancelled" };
+      return {
+        Icon: X,
+        glyph: "text-[var(--assistant-fg-dim)]",
+        ink: "text-[var(--assistant-fg-secondary)]",
+        label: "Cancelled",
+      };
     case "not-run":
       // Announced but never started, so nothing happened at all — worth saying,
       // because "the model planned this" and "the model did this" are different facts.
-      return { Icon: CircleDashed, tone: "text-text-muted", label: "Not run" };
+      return {
+        Icon: CircleDashed,
+        glyph: "text-[var(--assistant-fg-dim)]",
+        ink: "text-[var(--assistant-fg-secondary)]",
+        label: "Not run",
+      };
     case "done":
     default:
-      return { Icon: Check, tone: "text-status-success", label: "Done" };
+      return {
+        Icon: Check,
+        glyph: "text-[var(--assistant-success-graphic)]",
+        ink: "text-[var(--assistant-success)]",
+        label: "Done",
+      };
   }
 }
 
@@ -80,7 +123,7 @@ export interface AssistantToolRowProps {
 }
 
 export const AssistantToolRow = memo(function AssistantToolRow({ call }: AssistantToolRowProps) {
-  const { Icon, tone, label, spin } = styleFor(call);
+  const { Icon, glyph, ink, label, spin } = styleFor(call);
   // A duration is only meaningful for a call that has actually FINISHED. An accepted
   // async call reports how long the dispatch took while the work carries on in the
   // background, so showing "1.2s" there reads as "done in 1.2s" — the precise
@@ -99,11 +142,14 @@ export const AssistantToolRow = memo(function AssistantToolRow({ call }: Assista
 
   return (
     <li
-      className={cn("flex items-start gap-2 rounded-md px-2 py-1.5 text-xs", "bg-surface-inset/60")}
+      className={cn(
+        "flex items-start gap-2 rounded-md px-2 py-1.5 text-[1em]",
+        "bg-[var(--assistant-inset)]/60"
+      )}
     >
       <Icon
         aria-hidden="true"
-        className={cn("mt-px size-3.5 shrink-0", tone, spin && "animate-spin-slow")}
+        className={cn("mt-px size-3.5 shrink-0", glyph, spin && "animate-spin-slow")}
       />
 
       <div className="min-w-0 flex-1">
@@ -117,17 +163,19 @@ export const AssistantToolRow = memo(function AssistantToolRow({ call }: Assista
               lifted from and reports nothing at all for a tool it does not know, rather
               than guessing a label. */}
           {verb ? (
-            <span className="min-w-0 truncate text-[11px] text-text-primary">
+            <span className="min-w-0 truncate text-[0.92em] text-[var(--assistant-fg)]">
               {verb}
-              {call.target && <span className="ml-1 text-text-secondary">{call.target}</span>}
+              {call.target && (
+                <span className="ml-1 text-[var(--assistant-fg-secondary)]">{call.target}</span>
+              )}
             </span>
           ) : (
-            <span className="truncate font-mono text-[11px] text-text-primary">{call.toolId}</span>
+            <span className="truncate text-[0.92em] text-[var(--assistant-fg)]">{call.toolId}</span>
           )}
           {call.danger && (
             <TriangleAlert
               aria-label="Mutating action"
-              className="size-3 shrink-0 text-status-warning"
+              className="size-3 shrink-0 text-[var(--assistant-warning-graphic)]"
             />
           )}
           {/* One slot renders either a duration (metadata) or a STATE (meaning), so
@@ -136,8 +184,8 @@ export const AssistantToolRow = memo(function AssistantToolRow({ call }: Assista
               the assistant is blocked on your approval. */}
           <span
             className={cn(
-              "ml-auto shrink-0 tabular-nums text-[10px]",
-              duration ? "text-text-muted" : cn(tone, "font-medium")
+              "ml-auto shrink-0 tabular-nums text-[0.92em]",
+              duration ? "text-[var(--assistant-fg-secondary)]" : cn(ink, "font-medium")
             )}
           >
             {duration ?? label}
@@ -146,7 +194,9 @@ export const AssistantToolRow = memo(function AssistantToolRow({ call }: Assista
 
         {/* The in-tool substep, when there is one — so a long call never looks frozen. */}
         {call.state === "active" && call.progress && (
-          <p className="mt-0.5 truncate text-[11px] text-text-secondary">{call.progress}</p>
+          <p className="mt-0.5 truncate text-[0.92em] text-[var(--assistant-fg-secondary)]">
+            {call.progress}
+          </p>
         )}
 
         {/* What the tool says it DID, in its own words. The cockpit led with this
@@ -157,24 +207,28 @@ export const AssistantToolRow = memo(function AssistantToolRow({ call }: Assista
             completion never comes back to this row, so this is the only chance to say
             what was handed off. */}
         {call.asyncId && call.asyncTitle && (
-          <p className="mt-0.5 text-[11px] text-text-secondary">{call.asyncTitle}</p>
+          <p className="mt-0.5 text-[0.92em] text-[var(--assistant-fg-secondary)]">
+            {call.asyncTitle}
+          </p>
         )}
 
-        {call.summary && <p className="mt-0.5 text-[11px]">{call.summary}</p>}
+        {call.summary && <p className="mt-0.5 text-[0.92em]">{call.summary}</p>}
 
         {call.argsSummary && (
-          <p className="mt-0.5 truncate font-mono text-[10px] text-text-secondary">
+          <p className="mt-0.5 truncate text-[0.92em] text-[var(--assistant-fg-secondary)]">
             {call.argsSummary}
           </p>
         )}
 
         {call.state === "failed" && (call.errorMessage ?? call.errorCode) && (
-          <p className="mt-0.5 text-[11px] text-status-danger">
+          <p className="mt-0.5 text-[0.92em] text-[var(--assistant-danger)]">
             {/* The sentence when there is one, the code only as a fallback: a bare
                 code tells a reader that something failed, not what. */}
             {call.errorMessage ?? call.errorCode}
             {call.errorMessage && call.errorCode && (
-              <span className="ml-1 font-mono text-[10px] opacity-60">({call.errorCode})</span>
+              <span className="ml-1 text-[0.92em] text-[var(--assistant-fg-secondary)]">
+                ({call.errorCode})
+              </span>
             )}
           </p>
         )}
@@ -214,9 +268,9 @@ export function AssistantToolGroupHeader({
       aria-expanded={open}
       className={cn(
         "flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left",
-        "text-[11px] text-text-secondary",
-        "transition-colors duration-150 ease-out hover:bg-surface-hover",
-        "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-focus-ring"
+        "text-[0.92em] text-[var(--assistant-fg-secondary)]",
+        "transition-colors duration-150 ease-out hover:bg-[var(--assistant-hover)]",
+        "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--assistant-focus)]"
       )}
     >
       <ChevronRight
@@ -230,7 +284,9 @@ export function AssistantToolGroupHeader({
       {what ? (
         <>
           <span className="min-w-0 truncate">{what}</span>
-          {count > 1 && <span className="shrink-0 opacity-60">· {count}</span>}
+          {count > 1 && (
+            <span className="shrink-0 text-[var(--assistant-fg-secondary)]">· {count}</span>
+          )}
         </>
       ) : (
         <span>
@@ -240,13 +296,15 @@ export function AssistantToolGroupHeader({
       {/* Survives collapse: otherwise a failed run and a clean one render the same
           header, and the outcome most worth noticing is the one that disappears. */}
       {failedCount > 0 && (
-        <span className="font-medium text-status-danger">· {failedCount} failed</span>
+        <span className="font-medium text-[var(--assistant-danger)]">· {failedCount} failed</span>
       )}
       {/* An accepted async call keeps running after the turn ends, so "the turn
           finished" is not "the work finished". Saying so in the collapsed header is
           what stops a background agent from vanishing off the transcript. */}
       {runningCount > 0 && (
-        <span className="font-medium text-text-secondary">· {runningCount} still running</span>
+        <span className="font-medium text-[var(--assistant-fg-secondary)]">
+          · {runningCount} still running
+        </span>
       )}
     </button>
   );

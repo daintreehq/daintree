@@ -44,6 +44,12 @@ export interface AssistantSessionActions {
   answerQuestion: (questionId: string, index: number) => void;
   /** Ask the engine for a fresh operations reading. */
   requestOperations: () => void;
+  /**
+   * Take back the newest buffered follow-up. The engine answers with
+   * `interject:retracted`, which is the only side that knows whether the window to do
+   * so was still open.
+   */
+  retractInterjection: () => void;
 }
 
 /**
@@ -210,7 +216,15 @@ export function useAssistantSession(opts: AssistantSessionOptions): AssistantSes
       offEvent();
       offGap();
       offExit();
+      // Cancel the frame, then FLUSH what it was going to write. A bare cancel drops
+      // the buffered tail of whatever was streaming — the last words of an answer, lost
+      // to a re-subscribe. `flushTokens` also nulls `frameRef`, which matters as much:
+      // this effect can re-run on the same instance (a dependency moving, StrictMode's
+      // double-invoke), and a stale non-null id makes `scheduleFlush` believe a frame is
+      // already pending, so nothing is ever scheduled again and the panel stops
+      // streaming for the rest of the session.
       if (frameRef.current !== null) cancelAnimationFrame(frameRef.current);
+      flushTokens();
     };
   }, [flushTokens, scheduleFlush, send]);
 
@@ -422,5 +436,25 @@ export function useAssistantSession(opts: AssistantSessionOptions): AssistantSes
     if (sessionId) send({ type: "operations", sessionId });
   }, [send]);
 
-  return { submit, interrupt, decideApproval, answerQuestion, requestOperations };
+  /**
+   * Ask the engine to hand back the most recently buffered follow-up.
+   *
+   * Fire-and-forget: the answer arrives as `interject:retracted`, which is also the
+   * only thing that knows whether there WAS anything to take. Deciding here would mean
+   * guessing, and guessing wrong clears a composer over a message the model already has.
+   */
+  const retractInterjection = useCallback(() => {
+    const sessionId = sessionIdRef.current;
+    if (!sessionId) return;
+    send({ type: "interject:retract", sessionId });
+  }, [send]);
+
+  return {
+    submit,
+    interrupt,
+    decideApproval,
+    answerQuestion,
+    requestOperations,
+    retractInterjection,
+  };
 }

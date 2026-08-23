@@ -17,7 +17,14 @@ export const SPLASH_HEIGHT = 18;
 /** 40 frames at 80fps ≈ 500ms of reveal, then LINGER_MS holding the finished mark. */
 export const SPLASH_FPS = 80;
 export const SPLASH_LINGER_MS = 240;
-/** Full-coverage cells. */
+/**
+ * The CLI's splash colours, kept as the RECORD of what the terminal drew.
+ *
+ * The panel does not paint from these directly. It derives `--assistant-mark` from the
+ * same hue, corrected against whatever terminal ground it lands on (see `palette.ts`):
+ * `#36CE94` is 1.93:1 on a light terminal, and a mark nobody can see is not branding,
+ * it is a blank pane while the engine connects.
+ */
 export const SPLASH_COLOR_FULL = "#36CE94";
 /** Partial cells: lerp(#07100D, #36CE94, 0.72), as the terminal rendered them. */
 export const SPLASH_COLOR_PARTIAL = "#29996E";

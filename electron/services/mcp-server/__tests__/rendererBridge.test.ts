@@ -502,6 +502,65 @@ describe("rendererBridge — per-WebContents manifest cache (#9887)", () => {
     expect(wc.destroyedListenerCount()).toBe(1);
   });
 
+  it("keeps one 'destroyed' listener however many dispatches are in flight at once", async () => {
+    const wc = makeWebContents(172);
+    mockWebContentsRegistry.set(172, wc);
+
+    // Well past Node's 10-listener warning threshold. A single assistant turn
+    // that fans out to several agents clears it easily, and the per-request
+    // listener that used to be wired here made every such turn print a
+    // MaxListenersExceededWarning naming a leak that did not exist.
+    const inflight = Array.from({ length: 25 }, () =>
+      bridge.dispatchActionForWebContents(172, "actions.list", {}, false)
+    );
+    await Promise.resolve();
+    expect(wc.destroyedListenerCount()).toBe(1);
+
+    // Teardown still reaches every one of them — sharing the listener must not
+    // cost a subscriber its rejection.
+    wc.triggerDestroyed();
+    const outcomes = await Promise.allSettled(inflight);
+    expect(outcomes.every((o) => o.status === "rejected")).toBe(true);
+    expect(wc.destroyedListenerCount()).toBe(0);
+  });
+
+  it("drops the shared 'destroyed' listener once the last in-flight request settles", async () => {
+    const wc = makeWebContents(173);
+    mockWebContentsRegistry.set(173, wc);
+
+    const requestIds: string[] = [];
+    wc.send.mockImplementation((channel: string, payload: { requestId: string }) => {
+      if (channel === CHANNELS.MCP_SERVER_DISPATCH_ACTION_REQUEST)
+        requestIds.push(payload.requestId);
+    });
+
+    const first = bridge.dispatchActionForWebContents(173, "actions.list", {}, false);
+    const second = bridge.dispatchActionForWebContents(173, "actions.list", {}, false);
+    // Past the routed thaw, so both sends have landed and both requestIds exist.
+    await flushThaw();
+    expect(requestIds).toHaveLength(2);
+    expect(wc.destroyedListenerCount()).toBe(1);
+
+    // One of the two answers. The listener is shared, so it must survive until
+    // the other is done — releasing it on the first settle would leave the
+    // remaining request unable to hear its own view die.
+    mockIpcMain.emit(
+      CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE,
+      { sender: { id: 173 } },
+      { requestId: requestIds[0], result: { ok: true, result: "ok" } }
+    );
+    await first;
+    expect(wc.destroyedListenerCount()).toBe(1);
+
+    mockIpcMain.emit(
+      CHANNELS.MCP_SERVER_DISPATCH_ACTION_RESPONSE,
+      { sender: { id: 173 } },
+      { requestId: requestIds[1], result: { ok: true, result: "ok" } }
+    );
+    await second;
+    expect(wc.destroyedListenerCount()).toBe(0);
+  });
+
   it("rejects and caches nothing when the pinned view is destroyed mid-flight", async () => {
     const wc = makeWebContents(181);
     mockWebContentsRegistry.set(181, wc);

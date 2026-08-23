@@ -22,12 +22,20 @@ const RUNPHASE = path.resolve(
   "../../../../vendor/daintree-assistant/internal/domain/runphase.go"
 );
 
-/** The `phaseNames` map's values — the exact strings the engine puts on the wire. */
+/**
+ * The `phaseNames` map's values — the exact strings the engine puts on the wire.
+ *
+ * Tolerant about the DECLARATION (Go permits `var (` grouping, and gofmt is free to
+ * space a map literal differently) and strict about the VALUES, because a value this
+ * misses is a phase the panel silently has no label for. `[a-z0-9_]` rather than
+ * `[a-z_]`: a phase named `retry_v2` is a perfectly ordinary thing to add, and the
+ * narrower class would skip it while every check below still passed.
+ */
 function enginePhaseNames(): string[] {
   const source = readFileSync(RUNPHASE, "utf8");
-  const block = /var phaseNames = map\[RunPhase\]string\{([\s\S]*?)\n\}/.exec(source);
+  const block = /phaseNames\s*=\s*map\[RunPhase\]string\{([\s\S]*?)\n\s*\}/.exec(source);
   if (!block) throw new Error("phaseNames map not found in runphase.go");
-  return [...block[1]!.matchAll(/"([a-z_]+)"/g)].map((m) => m[1]!);
+  return [...block[1]!.matchAll(/"([a-z0-9_]+)"/g)].map((m) => m[1]!);
 }
 
 /**
@@ -55,6 +63,22 @@ describe("phase label contract", () => {
     expect(phases.length).toBeGreaterThanOrEqual(10);
     expect(phases).toContain("tool_running");
     expect(phases).toContain("awaiting_approval");
+    // Every name is unique and non-empty — a regex that started matching comment text
+    // or struct tags would show up here rather than as a passing suite with junk in it.
+    expect(new Set(phases).size).toBe(phases.length);
+  });
+
+  it("exempts only phases the engine actually has", () => {
+    // The half Codex found missing. Both exemption sets are hand-written, so a phase
+    // RENAMED or REMOVED in the engine leaves its old name sitting in them — and a
+    // stale exemption is invisible: it excuses a phase that no longer exists while the
+    // real one goes unlabelled through the very check the exemption was meant to skip.
+    const known = new Set(phases);
+    const stale = [...NO_LIVE_LABEL, ...NO_STAGE_LABEL].filter((p) => !known.has(p));
+    expect(
+      [...new Set(stale)],
+      `exemptions for phases the engine no longer has: ${stale.join(", ")}`
+    ).toEqual([]);
   });
 
   it("gives every non-terminal phase a composer stage label", () => {
