@@ -24,7 +24,11 @@ let stop: ReturnType<typeof vi.fn>;
 let send: ReturnType<typeof vi.fn>;
 
 /** Resolves the pending `start()` by hand, so "still starting" is a state we can hold. */
-let releaseStart: (result: { sessionId: string; ready: null }) => void;
+let releaseStart: (result: {
+  sessionId: string;
+  ready: null;
+  replay?: Record<string, unknown>[];
+}) => void;
 
 beforeEach(() => {
   eventCbs = [];
@@ -168,3 +172,64 @@ describe("useAssistantSession — a dead session refuses work", () => {
 // it does not belong to. The tag, and the buffer clear in cleanup, are defence in
 // depth for a future in which turn ids are reused across a resume; today every test
 // written against them passes with or without the guard in place.
+
+describe("useAssistantSession — what the engine said before anyone could hear it", () => {
+  it("applies events the engine emitted before the session id was known", async () => {
+    renderHook(() => useAssistantSession(OPTS));
+    await waitFor(() => expect(start).toHaveBeenCalledTimes(1));
+
+    await act(async () => {
+      releaseStart({
+        sessionId: "ses_r",
+        ready: null,
+        // The engine reports its control plane at boot, before this renderer can match
+        // any frame to a session. Without the replay it lands in that gap and the
+        // panel says "Connected" for a session that cannot reach Daintree at all.
+        replay: [
+          {
+            type: "mcp:status",
+            sessionId: "ses_r",
+            seq: 2,
+            connected: false,
+            error: "DAINTREE_MCP_URL / DAINTREE_MCP_TOKEN not set",
+          },
+        ],
+      });
+    });
+
+    expect(useAssistantStore.getState().mcpUnavailable).toBe(
+      "DAINTREE_MCP_URL / DAINTREE_MCP_TOKEN not set"
+    );
+  });
+});
+
+describe("useAssistantSession — a mid-turn message main refuses", () => {
+  it("takes the queued entry back instead of leaving it to be promoted", async () => {
+    send.mockResolvedValue({ delivered: false });
+    const { result } = renderHook(() => useAssistantSession(OPTS));
+    await waitFor(() => expect(start).toHaveBeenCalledTimes(1));
+    await act(async () => {
+      releaseStart({ sessionId: "ses_q", ready: null });
+    });
+
+    // A running turn: input is QUEUED rather than appended, so there is no local turn
+    // id to take back — which is exactly how a refused send used to survive.
+    act(() => {
+      useAssistantStore.getState().applyEvent({
+        sessionId: "ses_q",
+        seq: 2,
+        type: "turn:start",
+        turnId: "t1",
+        role: "assistant",
+        startedAt: 1,
+      } as never);
+    });
+
+    await act(async () => {
+      result.current.submit("never arrives");
+      await Promise.resolve();
+    });
+
+    expect(useAssistantStore.getState().queuedInterjections).toEqual([]);
+  });
+});
