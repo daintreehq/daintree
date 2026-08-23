@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { spawn } from "node:child_process";
 import path from "node:path";
+import { readFileSync } from "node:fs";
 import {
   AssistantHostEventSchema,
   ASSISTANT_HOST_PROTOCOL_VERSION,
@@ -22,6 +23,15 @@ import {
 
 const ENGINE = path.resolve(__dirname, "../fake-assistant-engine.mjs");
 
+/**
+ * Every scenario the fake can run.
+ *
+ * Kept complete deliberately, and checked against the fake's own table below: a
+ * scenario that is not driven here is a scenario whose frames nobody validates, which
+ * is precisely where drift hides. `question` and `cancellable` were missing for exactly
+ * that reason and are the two that park waiting for input, so they are the likeliest to
+ * emit something odd.
+ */
 const SCENARIOS = [
   "simple",
   "streaming",
@@ -34,7 +44,19 @@ const SCENARIOS = [
   "reasoning",
   "error",
   "long",
+  "paragraphs",
+  "question",
+  "cancellable",
+  "wake",
+  "proseThenTool",
 ] as const;
+
+/**
+ * Scenarios that deliberately END BADLY, and so cannot be driven by the clean-exit case
+ * above. Listed rather than omitted: the completeness guard counts both lists, so a
+ * scenario cannot escape validation simply by being awkward.
+ */
+const DYING_SCENARIOS = ["crash"] as const;
 
 interface Run {
   frames: Array<Record<string, unknown>>;
@@ -108,7 +130,53 @@ function drive(scenario: string, decision: "approved" | "rejected" = "approved")
   });
 }
 
+const ENGINE_SOURCE = readFileSync(ENGINE, "utf8");
+const RUNPHASE_GO = path.resolve(
+  __dirname,
+  "../../../vendor/daintree-assistant/internal/domain/runphase.go"
+);
+
 describe("fake assistant engine", () => {
+  it("drives every scenario it defines", () => {
+    // A scenario the fake can run but this file never drives is a scenario whose frames
+    // are validated by nothing. The list above is hand-written, so it has to be checked
+    // against the fake rather than trusted.
+    const defined = [
+      ...ENGINE_SOURCE.slice(
+        ENGINE_SOURCE.indexOf("const SCENARIOS = {"),
+        ENGINE_SOURCE.indexOf("\n};", ENGINE_SOURCE.indexOf("const SCENARIOS = {"))
+      ).matchAll(/^ {2}(?:async )?([a-zA-Z][a-zA-Z0-9]*)\(/gm),
+    ].map((m) => m[1]!);
+    expect(defined.length, "the scenario table could not be read").toBeGreaterThan(5);
+    const driven = new Set<string>([...SCENARIOS, ...DYING_SCENARIOS]);
+    const undriven = defined.filter((name) => !driven.has(name));
+    expect(undriven, `scenarios nothing validates: ${undriven.join(", ")}`).toEqual([]);
+  });
+
+  it("uses only phase names the real engine can emit", () => {
+    // The exact drift this file exists to catch, and it had happened: the fake emitted
+    // `tool-running`, `awaiting-approval` and `awaiting-question`, which the Go engine
+    // spells `tool_running`, `awaiting_approval` and `awaiting_question`. The Zod schema
+    // accepts any string for `phase` — it has to, since a future engine may add one — so
+    // nothing rejected them, and the panel's phase labels were being exercised against
+    // three names the product never sends.
+    //
+    // Read from the Go source rather than restated, so an engine-side rename fails here.
+    const go = readFileSync(RUNPHASE_GO, "utf8");
+    const block = /phaseNames\s*=\s*map\[RunPhase\]string\{([\s\S]*?)\n\s*\}/.exec(go);
+    expect(block, "phaseNames not found in runphase.go").not.toBeNull();
+    const real = new Set([...block![1]!.matchAll(/"([a-z0-9_]+)"/g)].map((m) => m[1]!));
+    expect(real.size).toBeGreaterThanOrEqual(10);
+
+    const used = [...ENGINE_SOURCE.matchAll(/phase:\s*"([^"]+)"/g)].map((m) => m[1]!);
+    expect(used.length, "no phases found in the fake").toBeGreaterThan(5);
+    const impossible = [...new Set(used)].filter((p) => !real.has(p));
+    expect(
+      impossible,
+      `the fake emits phases the real engine never sends: ${impossible.join(", ")}`
+    ).toEqual([]);
+  });
+
   it.each(SCENARIOS)(
     "scenario %s emits only frames Daintree can parse",
     async (scenario) => {
@@ -127,6 +195,30 @@ describe("fake assistant engine", () => {
       }
 
       expect(exitCode).toBe(0);
+    },
+    15_000
+  );
+
+  it.each(DYING_SCENARIOS)(
+    "scenario %s emits parseable frames right up to the moment it dies",
+    async (scenario) => {
+      // A crash is the failure the panel has to SETTLE from, and the frames it emits on
+      // the way down are the last thing the panel sees. If they were malformed, the
+      // panel would be reconciling a corrupt state on top of an unexpected exit — two
+      // failures at once, with only one of them visible.
+      const { frames, exitCode } = await drive(scenario);
+      expect(frames.length, `scenario ${scenario} emitted nothing`).toBeGreaterThan(0);
+      for (const frame of frames) {
+        const parsed = AssistantHostEventSchema.safeParse(frame);
+        expect(parsed.success, `unparseable frame before the crash: ${JSON.stringify(frame)}`).toBe(
+          true
+        );
+      }
+      // And it really did die badly — a scenario that exited 0 would not be testing the
+      // path this exists for.
+      expect(exitCode, "the crash scenario exited cleanly").not.toBe(0);
+      // With no shutdown frame: the process simply stops, which is what a crash is.
+      expect(frames.some((f) => f.type === "host:shutdown")).toBe(false);
     },
     15_000
   );
@@ -159,7 +251,11 @@ describe("fake assistant engine", () => {
       .filter((f) => f.type === "turn:token")
       .map((f) => f.chunk as string)
       .join("");
-    const end = frames.find((f) => f.type === "turn:end") as { content?: string } | undefined;
+    // The ASSISTANT's end, not the user-turn bracket that precedes every prompt. The
+    // user's opens and closes in the same millisecond and carries neither outcome nor
+    // content, so `find` on the bare type picks the wrong one.
+    const end = frames.find((f) => f.type === "turn:end" && f.outcome !== undefined) as
+      { content?: string } | undefined;
 
     expect(end?.content).toBeTruthy();
     expect(streamed).not.toBe(end?.content);

@@ -1188,6 +1188,13 @@ export const AssistantHostEventSchema = z.discriminatedUnion("type", [
   }),
   z.object({
     ...hostEventBase,
+    type: z.literal("interject:retracted"),
+    retracted: z.boolean(),
+    // Bounded to the composer's own limit: it is a prompt coming back.
+    text: z.string().max(100_000).optional(),
+  }),
+  z.object({
+    ...hostEventBase,
     type: z.literal("turn:interjection"),
     turnId: IdString.optional(),
     text: z.string(),
@@ -1363,6 +1370,10 @@ export const AssistantHostEventSchema = z.discriminatedUnion("type", [
     text: z.string().max(200_000),
     quit: z.boolean().optional(),
     unknown: z.boolean().optional(),
+    // Whether `/clear` ACTUALLY cleared. Optional here and only here because an engine
+    // older than this contract omits it; the panel treats absent as false, so a
+    // destructive reset never happens on an assumption. See the store's handling.
+    conversationCleared: z.boolean().optional(),
     turnId: IdString.optional(),
   }),
   z.object({
@@ -1448,6 +1459,10 @@ export const AssistantHostCommandSchema = z.discriminatedUnion("type", [
   }),
   z.object({
     type: z.literal("operations"),
+    sessionId: IdString,
+  }),
+  z.object({
+    type: z.literal("interject:retract"),
     sessionId: IdString,
   }),
   z.object({

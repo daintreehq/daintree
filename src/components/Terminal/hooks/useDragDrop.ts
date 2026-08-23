@@ -31,11 +31,19 @@ interface DroppedEntry {
  *   Assistant's input bar has one without being a selectable panel at all. So
  *   panel selection is delegated to the caller and simply absent where there is
  *   no panel to select.
+ * @param participatesInTerminalFocusRef Whether the input this hook is wired to is one
+ *   of a terminal pane's focus surfaces, and so may record the session-wide
+ *   `preferredTerminalFocusTarget` when a drop parks the caret in it. The Assistant's
+ *   composer is not, for the same reason it has no panel to select above: writing the
+ *   preference from there re-runs the focus effect of whichever grid terminal holds
+ *   store focus, which takes the caret straight back out of the drop that just landed.
+ *   Absent means participating, so every terminal call site is unchanged.
  */
 export function useDragDrop(
   editorViewRef: React.RefObject<EditorView | null>,
   cwd: string,
-  onDropSelect?: () => void
+  onDropSelect?: () => void,
+  participatesInTerminalFocusRef?: React.RefObject<boolean>
 ) {
   const dragDepthRef = useRef(0);
   const [isDragOverFiles, setIsDragOverFiles] = useState(false);
@@ -132,7 +140,9 @@ export function useDragDrop(
       // caret the insertion below parks after the chip. Focusing directly keeps
       // it, and makes the pane effect's own later call a no-op, since it
       // preserves an editor that already owns DOM focus.
-      usePanelStore.getState().setPreferredTerminalFocusTarget("hybridInput");
+      if (participatesInTerminalFocusRef?.current !== false) {
+        usePanelStore.getState().setPreferredTerminalFocusTarget("hybridInput");
+      }
       onDropSelect?.();
       view.focus();
 
@@ -222,7 +232,7 @@ export function useDragDrop(
         // Editor may have been destroyed
       }
     },
-    [editorViewRef, cwd, onDropSelect]
+    [editorViewRef, cwd, onDropSelect, participatesInTerminalFocusRef]
   );
 
   return { handleDragEnter, handleDragOver, handleDragLeave, handleDrop, isDragOverFiles };

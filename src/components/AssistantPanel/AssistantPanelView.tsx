@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type React from "react";
-import { Info, TriangleAlert, ZapOff } from "lucide-react";
+import { ChevronDown, Info, MoreHorizontal, TriangleAlert, ZapOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DaintreeIcon } from "@/components/icons/DaintreeIcon";
 import { AssistantMessage } from "./AssistantMessage";
@@ -13,7 +13,9 @@ import type {
   AssistantSessionState,
   AssistantTurn,
 } from "@/store/assistantStore";
-import type { AssistantCommandMeta } from "@shared/types/ipc/assistantHost";
+import { HybridInputBar, type HybridInputBarHandle } from "@/components/Terminal/HybridInputBar";
+import { useTerminalInputStore } from "@/store/terminalInputStore";
+import { useTerminalFontStore } from "@/store/terminalFontStore";
 import { AssistantBootSplash } from "./AssistantBootSplash";
 import { AssistantQuestionCard } from "./AssistantQuestionCard";
 import { AssistantOperationsDeck } from "./AssistantOperationsDeck";
@@ -24,6 +26,7 @@ import {
 } from "@/store/terminalColorSchemeStore";
 import { resolveInputBarColors } from "@/utils/terminalTheme";
 import "./assistant-panel.css";
+import { buildAssistantPalette } from "./palette";
 
 /**
  * The native assistant surface.
@@ -35,8 +38,6 @@ import "./assistant-panel.css";
  */
 
 export interface AssistantPanelViewProps {
-  /** Shown in the masthead, exactly as the cockpit showed the bound project. */
-  projectName?: string | null;
   state: AssistantSessionState;
   /**
    * Returns whether the prompt was ACCEPTED. The composer keeps the draft when it was
@@ -50,6 +51,24 @@ export interface AssistantPanelViewProps {
   onAnswerQuestion?: (questionId: string, index: number) => void;
   onGrantTool?: (approval: AssistantApproval, uses: number) => void;
   onRequestOperations?: () => void;
+  /**
+   * Take back the newest buffered follow-up (LIFO), the cockpit's Esc-retract.
+   *
+   * Fired from the input bar's `onSendKey("escape")`, which is what the bar forwards
+   * once its own Escape meanings (close the completion menu, collapse the editor) are
+   * exhausted.
+   */
+  onRetractInterjection?: () => void;
+  /** Clear `state.retractedDraft` once the composer has taken it. */
+  onRetractedDraftConsumed?: () => void;
+  /**
+   * Identity for the input bar's per-surface state — its draft, its prompt history.
+   * Not a terminal id: the bar keys that state by a string, and the assistant needs its
+   * own bucket so its draft is not confused with any terminal's.
+   */
+  composerId?: string;
+  /** Project root, for the bar's `@` file completion. */
+  cwd?: string | null;
   className?: string;
 }
 
@@ -155,64 +174,126 @@ function NoticeRow({ notice }: { notice: AssistantNotice }) {
   const Icon = notice.level === "info" ? Info : notice.level === "warning" ? TriangleAlert : ZapOff;
   const tone =
     notice.level === "info"
-      ? "text-text-secondary"
+      ? "text-[var(--assistant-fg-secondary)]"
       : notice.level === "warning"
-        ? "text-status-warning"
-        : "text-status-danger";
+        ? "text-[var(--assistant-warning)]"
+        : "text-[var(--assistant-danger)]";
   return (
-    <div className="flex items-start gap-2 px-1 py-1 text-xs">
+    <div className="flex items-start gap-2 px-1 py-1 text-[1em]">
       <Icon aria-hidden="true" className={cn("mt-px size-3.5 shrink-0", tone)} />
-      <p className="min-w-0 flex-1 text-text-secondary">{notice.message}</p>
+      <p className="min-w-0 flex-1 text-[var(--assistant-fg-secondary)]">{notice.message}</p>
     </div>
   );
 }
 
 /**
- * Lines a long paste shows before and after the fold.
+ * How tall a user's own message is allowed to be before it folds.
  *
- * The tail is the larger share, as the cockpit had it: a pasted log or stack trace
- * usually carries its payoff at the bottom, while the head only has to be enough to
- * recognise what was pasted.
+ * In `em`, so it tracks the terminal font size the whole panel is sized from — the cap
+ * is "about nine lines", not "about 160 pixels", and it stays about nine lines when
+ * someone changes their terminal type size.
  */
-const USER_MSG_HEAD_LINES = 8;
-const USER_MSG_TAIL_LINES = 12;
+const USER_MSG_MAX_HEIGHT = "13em";
 
+/**
+ * One turn the user typed.
+ *
+ * Folded by MEASURED HEIGHT rather than by counting newlines. The count is what this
+ * used to do, and it was wrong for the shape people actually paste: two long prose
+ * paragraphs are two lines by that arithmetic and a dozen on screen, so the thing most
+ * worth folding was the one thing that never folded, while a short block of code with
+ * many hard breaks folded when it did not need to. A cap on the rendered box asks the
+ * question the reader is actually asking — is this taller than I want to scroll past —
+ * and wrapping is part of the answer.
+ */
 function UserTurn({ text }: { text: string }) {
   const [expanded, setExpanded] = useState(false);
-  // Trailing newlines are noise: they inflate the count, so a paste ending in "\n"
-  // would fold one line sooner than the same paste without it.
-  const lines = text.replace(/\n+$/, "").split("\n");
-  // Fold only when it hides at least two lines — replacing one hidden line with a
-  // one-row control saves nothing.
-  const folded = !expanded && lines.length > USER_MSG_HEAD_LINES + USER_MSG_TAIL_LINES + 1;
-  const hidden = lines.length - USER_MSG_HEAD_LINES - USER_MSG_TAIL_LINES;
+  const bodyRef = useRef<HTMLDivElement>(null);
+  // Latched, never cleared. Expanding removes the cap, so the same measurement then
+  // says the content fits — and reading it again would delete the control that got the
+  // reader here, leaving no way back. It only ever needs answering while folded.
+  const [foldable, setFoldable] = useState(false);
+
+  useLayoutEffect(() => {
+    if (expanded) return undefined;
+    const el = bodyRef.current;
+    if (!el) return undefined;
+    // 2px of slack: sub-pixel line heights make `scrollHeight` exceed `clientHeight` by
+    // a fraction on content that visibly fits, which would offer "Show more" on a
+    // message with nothing more to show.
+    const measure = () => setFoldable(el.scrollHeight - el.clientHeight > 2);
+    measure();
+    // The panel is resizable, so the same text folds at one width and not at another.
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => observer.disconnect();
+  }, [text, expanded]);
 
   return (
     <div className="flex justify-end">
       <div
         className={cn(
-          "max-w-[85%] rounded-lg rounded-br-sm px-3 py-2",
-          "bg-surface-panel-elevated text-sm text-text-primary",
-          "whitespace-pre-wrap break-words"
+          // Narrower than the answer it asks for, and that asymmetry is the point: the
+          // agent gets the full rail, the prompt gets what it needs. A prompt is
+          // already known to whoever typed it.
+          "max-w-[85%] overflow-hidden rounded-lg rounded-br-sm",
+          "bg-[var(--assistant-raised)] text-[1em] text-[var(--assistant-fg)]"
         )}
       >
-        {folded ? (
-          <>
-            {lines.slice(0, USER_MSG_HEAD_LINES).join("\n")}
-            {"\n"}
-            {/* Expandable, which the terminal could not be: a long paste must not bury
-                the conversation, but nothing is actually lost here. */}
-            <button
-              type="button"
-              onClick={() => setExpanded(true)}
-              className="my-1 w-full rounded-sm border-y border-border-divider py-0.5 text-center text-[10px] text-text-secondary transition-colors duration-150 ease-out hover:bg-overlay-subtle"
-            >
-              {hidden} lines hidden — show all
-            </button>
-            {lines.slice(-USER_MSG_TAIL_LINES).join("\n")}
-          </>
-        ) : (
-          text
+        <div className="relative">
+          <div
+            ref={bodyRef}
+            className={cn(
+              "px-3 py-2 whitespace-pre-wrap break-words",
+              // Capped even when EXPANDED, just far more generously. "Show more" on a
+              // thousand-line paste otherwise pushes the conversation off screen and
+              // hands back no way to bring it into view — the fold stops a long paste
+              // burying the transcript, and this stops expanding it doing the same.
+              expanded ? "overflow-y-auto overscroll-contain" : "overflow-hidden"
+            )}
+            // `max()` because the two caps are in different units and can cross. The
+            // collapsed cap is ~9 lines of the TERMINAL font and the expanded one is
+            // half the viewport: at a 24px terminal size in a 600px-tall window that is
+            // 312px against 300px, so "Show more" made the message SHORTER. Whatever
+            // else expanding does, it may not shrink the thing being expanded.
+            style={{
+              maxHeight: expanded ? `max(50vh, ${USER_MSG_MAX_HEIGHT})` : USER_MSG_MAX_HEIGHT,
+            }}
+          >
+            {text}
+          </div>
+          {/* The fade is the signal that there IS more, and it does the job the old
+              "N lines hidden" label did — without claiming a number that was only ever
+              true for unwrapped text. Sits INSIDE the padding so the last visible line
+              dissolves rather than ending on a hard edge. */}
+          {!expanded && foldable && (
+            <div
+              aria-hidden="true"
+              className="pointer-events-none absolute inset-x-0 bottom-0 h-10 bg-gradient-to-b from-transparent to-[var(--assistant-raised)]"
+            />
+          )}
+        </div>
+        {foldable && (
+          <button
+            type="button"
+            onClick={() => setExpanded((open) => !open)}
+            aria-expanded={expanded}
+            className={cn(
+              "flex w-full items-center gap-1 px-3 pt-0.5 pb-2 text-left",
+              "text-[0.92em] text-[var(--assistant-fg-secondary)]",
+              "transition-colors duration-150 ease-out hover:text-[var(--assistant-fg)]",
+              "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--assistant-focus)]"
+            )}
+          >
+            {expanded ? "Show less" : "Show more"}
+            <ChevronDown
+              aria-hidden="true"
+              className={cn(
+                "size-3.5 transition-transform duration-150 ease-out",
+                expanded && "rotate-180"
+              )}
+            />
+          </button>
         )}
       </div>
     </div>
@@ -225,9 +306,15 @@ function TurnBlock({ turn, state }: { turn: AssistantTurn; state: AssistantSessi
   }
 
   return (
-    <div className="flex gap-2.5">
-      <DaintreeIcon aria-hidden="true" className="mt-0.5 size-4 shrink-0 text-text-secondary" />
-      <div className="min-w-0 flex-1 space-y-2">
+    // FULL WIDTH, deliberately. The cockpit gave the agent the whole terminal, and this
+    // panel is a sidebar — an avatar column costs ~26px of every line of an answer, and
+    // in a rail that is the difference between a path wrapping and not.
+    //
+    // Nothing is lost by dropping it: the user's own turns are right-aligned bubbles at
+    // 85% width, so which side of the conversation a block belongs to is legible from
+    // its shape alone, without spending horizontal space per line to say so.
+    <div className="w-full">
+      <div className="min-w-0 space-y-2">
         {/* Rendered IN ORDER. A turn is a sequence — prose, then the tools it reached
             for, then prose reacting to the results, with steers where the engine folded
             them in. Drawing tools first and prose last regardless made a turn that
@@ -237,9 +324,9 @@ function TurnBlock({ turn, state }: { turn: AssistantTurn; state: AssistantSessi
             return (
               <div
                 key={`${turn.turnId}-seg-${i}`}
-                className="rounded-md border-l-2 border-border-strong bg-surface-inset/60 px-2 py-1 text-xs text-text-secondary"
+                className="rounded-md border-l-2 border-[var(--assistant-border-strong)] bg-[var(--assistant-inset)]/60 px-2 py-1 text-[1em] text-[var(--assistant-fg-secondary)]"
               >
-                <span className="text-text-muted">You added: </span>
+                <span className="text-[var(--assistant-fg-secondary)]">You added: </span>
                 {segment.text}
               </div>
             );
@@ -248,9 +335,9 @@ function TurnBlock({ turn, state }: { turn: AssistantTurn; state: AssistantSessi
             return (
               <div
                 key={`${turn.turnId}-seg-${i}`}
-                className="rounded-md border-l-2 border-border-strong bg-surface-inset/60 px-2 py-1 text-xs text-text-secondary"
+                className="rounded-md border-l-2 border-[var(--assistant-border-strong)] bg-[var(--assistant-inset)]/60 px-2 py-1 text-[1em] text-[var(--assistant-fg-secondary)]"
               >
-                <span className="text-text-muted">
+                <span className="text-[var(--assistant-fg-secondary)]">
                   {segment.text ? "You chose: " : "You dismissed: "}
                 </span>
                 {segment.text
@@ -276,8 +363,17 @@ function TurnBlock({ turn, state }: { turn: AssistantTurn; state: AssistantSessi
             <AssistantMessage
               key={`${turn.turnId}-seg-${i}`}
               content={segment.text}
-              // Only the LAST segment can still be streaming.
-              streaming={!turn.complete && i === turn.segments.length - 1}
+              // Only the LAST segment can still be streaming — AND only while the engine
+              // is actually producing prose. An unfinished turn is not the same thing:
+              // the engine leaves `generating` the moment the model stops emitting text
+              // and starts composing a tool call (`tool_queued`), reasoning
+              // (`thinking`), or folding results back in (`integrating`). Blinking
+              // through all of that left a caret parked at the end of a paragraph the
+              // engine had finished with, claiming text was still arriving for as long
+              // as a tool took to run.
+              streaming={
+                !turn.complete && i === turn.segments.length - 1 && state.phase === "generating"
+              }
             />
           ) : null;
         })}
@@ -328,15 +424,34 @@ function ToolSegment({
     return verbs.slice(0, 3).join(", ") + (verbs.length > 3 ? "…" : "");
   }, [calls]);
 
+  // Interrupted work. A stop is a question the user just asked — "what did I catch?" —
+  // and the answer is which calls were cancelled and which never started.
+  const interrupted = calls.filter((c) => c.state === "cancelled" || c.state === "not-run").length;
+
+  // Work HANDED OFF. The call settled, so it does not count as unsettled — but the work
+  // it started is still going somewhere else, and the row saying so is the only place
+  // that is written down. Collapsing folded that away behind a header reading "1
+  // action", which is exactly as true of a batch that finished and says nothing about
+  // the agent still running in another worktree.
+  const handedOff = calls.filter((c) => c.asyncId).length;
+
   // Open while the turn runs (so progress is visible), collapsing once it settles (so
-  // the answer is what remains) — EXCEPT when something failed or is still going.
-  // Collapsing either made it indistinguishable from a clean run: the header said
-  // "1 action" whatever happened, so the two outcomes most worth noticing were the two
-  // that hid.
+  // the answer is what remains) — EXCEPT when something failed, was interrupted, or is
+  // still going. Collapsing any of those made it indistinguishable from a clean run:
+  // the header said "1 action" whatever happened, so the outcomes most worth noticing
+  // were the ones that hid.
+  //
+  // Interrupted and handed-off are the two cases that had to be added. Pressing Stop
+  // collapsed the group in the same beat, folding away the rows that said what the stop
+  // actually interrupted — in answer to a gesture that was ASKING. And a batch that
+  // spawned a background agent collapsed to a header indistinguishable from one where
+  // everything had finished.
   const [open, setOpen] = useState(!turnComplete);
   useEffect(() => {
-    if (turnComplete && failed === 0 && unsettled === 0) setOpen(false);
-  }, [turnComplete, failed, unsettled]);
+    if (turnComplete && failed === 0 && unsettled === 0 && interrupted === 0 && handedOff === 0) {
+      setOpen(false);
+    }
+  }, [turnComplete, failed, unsettled, interrupted, handedOff]);
 
   return (
     <div>
@@ -372,69 +487,75 @@ function ToolSegment({
  * Every value is resolved by the ENGINE and arrives on `host:ready`, so this component
  * decides layout only and cannot disagree with the engine about what is default.
  */
-function Masthead({
-  state,
-  projectName,
-  live,
-}: {
-  state: AssistantSessionState;
-  projectName: string | null;
-  live: boolean;
-}) {
+function Masthead({ state, live }: { state: AssistantSessionState; live: boolean }) {
   // An approval is outstanding exactly when a mutating call has been parked for an
   // answer — the engine only raises one for the always-confirm risk classes.
   const destructive = state.approvals.length > 0;
-  const hasAny = state.engineVersion || projectName || state.tier || state.backend || state.routing;
+  const hasAny = state.engineVersion || state.tier || state.backend || state.routing;
   if (!hasAny) return null;
 
+  // The cockpit drew every line but the identity in Dim(). `text-[var(--assistant-fg-secondary)]` is
+  // that: the theme's own second tier, with a contrast floor behind it. The panel used
+  // `opacity-50` over the primary colour instead, which is not a token, drifts with
+  // whatever it sits on, and lands under the floor in the darker themes.
+  const dim = "truncate text-[var(--assistant-fg-secondary)]";
+
   return (
-    <div className="mb-3 select-text text-xs leading-relaxed">
-      <div className="truncate">
-        <span className="font-semibold">Daintree Assistant</span>
-        {state.engineVersion ? (
-          // The "v" prefix only when the build string does not already carry its own
-          // identity. The engine reports things like "daintree-2eadd58", and "vdaintree-…"
-          // reads as a typo rather than a version.
-          <span className="opacity-50">
-            {" "}
-            {/^\d/.test(state.engineVersion) ? `v${state.engineVersion}` : state.engineVersion}
-          </span>
-        ) : null}
-      </div>
-      {projectName ? <div className="truncate opacity-50">{projectName}</div> : null}
+    <div className="mb-3 select-text text-[1em]">
+      {/* No "Daintree Assistant" line, and no project name: the panel's own header bar
+          already carries both, directly above this. The cockpit needed the identity
+          line because it was drawing into a bare terminal with no chrome of its own —
+          here it is the same words twice in the space of two rows, and what a masthead
+          is FOR is the facts you cannot get anywhere else. Those are the three below:
+          what this session may do, which backend answers it, and under what routing. */}
       {state.tier ? (
         // Quiet at rest for every tier, and DANGEROUS only while a destructive action
         // waits on an answer — the cockpit's own rule (render_chrome.go:66). The tier
         // names what this session is allowed to do; the one moment that matters is when
-        // it is about to be exercised. The gloss stays dim throughout: it is a
-        // description of the tier, not a live state.
+        // it is about to be exercised. The gloss stays dim throughout: it describes the
+        // tier, it is not a live state.
         <div className="truncate">
-          <span className={destructive ? "text-status-danger" : "opacity-50"}>
+          <span
+            className={
+              destructive
+                ? "font-medium text-[var(--assistant-danger)]"
+                : "text-[var(--assistant-fg-secondary)]"
+            }
+          >
             tier {state.tier}
           </span>
-          {state.tierGloss ? <span className="opacity-50"> · {state.tierGloss}</span> : null}
+          {state.tierGloss ? (
+            <span className="text-[var(--assistant-fg-secondary)]"> · {state.tierGloss}</span>
+          ) : null}
         </div>
       ) : null}
-      {state.backend ? <div className="truncate opacity-50">backend {state.backend}</div> : null}
-      {state.routing ? <div className="truncate opacity-50">routing {state.routing}</div> : null}
+      {state.backend ? <div className={dim}>backend {state.backend}</div> : null}
+      {state.routing ? <div className={dim}>routing {state.routing}</div> : null}
+      {/* The build, last and quietest: it matters when reading a pasted transcript, not
+          while working. */}
+      {state.engineVersion ? (
+        <div className={dim}>
+          {/^\d/.test(state.engineVersion) ? `v${state.engineVersion}` : state.engineVersion}
+        </div>
+      ) : null}
       {state.autoApprove ? (
-        <div className="text-status-error">
+        <div className="text-[var(--assistant-danger)]">
           {/* Its own row, carrying the full sentence, left-anchored so it is the last
               thing a narrow panel cuts.
-              
+
               Deliberately NOT cleared when the session stops, unlike the footer's live
               indicator. The masthead is the permanent record of how this session ran,
               and a transcript that stops saying it was unattended the moment the
-              engine exits is a transcript that hides the fact. */}
-          {/* Past tense once the session has stopped: the row is the record of how it
-              ran, and "will not ask first" over a dead engine states a capability that
-              no longer exists. */}
+              engine exits is a transcript that hides the fact.
+
+              Past tense once stopped: "will not ask first" over a dead engine states a
+              capability that no longer exists. */}
           {live
             ? "⚠ AUTO-APPROVE — mutating actions will not ask first"
             : "⚠ AUTO-APPROVE — this session ran without confirmations"}
         </div>
       ) : null}
-      <div aria-hidden="true" className="my-1.5 border-t border-current opacity-15" />
+      <div aria-hidden="true" className="my-1.5 border-t border-[var(--assistant-border)]" />
       {state.logFile ? <LogBadge path={state.logFile} /> : null}
     </div>
   );
@@ -447,6 +568,13 @@ function Masthead({
  * useful tail — the session id and `.log` — and the whole point of showing it is that
  * someone can find and open that file. `break-all` is the CSS equivalent of the CLI's
  * hard cell-wrap: paths have no spaces, so a word wrapper would refuse to break at all.
+ *
+ * And it is a BUTTON, because showing someone a path they then have to retype into a
+ * terminal is not telling them where the trace is. Clicking reveals the file in the OS
+ * file manager — the reveal, not the open, so the rest of the session's logs are right
+ * there beside it, which is what you want when you are comparing a good run to a bad
+ * one. The unconfined reveal op is the correct one: this path is `~/.daintree/logs`,
+ * deliberately outside any project root.
  */
 function LogBadge({ path }: { path: string }) {
   // `process.env.HOME` is not available here — the renderer runs sandboxed with node
@@ -471,126 +599,48 @@ function LogBadge({ path }: { path: string }) {
       ? `~${path.slice(home.length)}`
       : path;
   return (
-    <div className="break-all">
-      <span className="text-status-warning">◌ logging</span>
-      <span className="opacity-50"> · {shown}</span>
-    </div>
+    <button
+      type="button"
+      onClick={() => {
+        // Best-effort: a log the engine has not written a line to yet does not exist on
+        // disk, and the reveal op reports that as a rejected path. Nothing useful can be
+        // said about it in a masthead badge, and a toast for "the file is not there yet"
+        // would fire on exactly the clicks that need no explanation.
+        safeFireAndForget(
+          window.electron.system.showItemInFolderUnconfined(path).catch((error: unknown) => {
+            console.warn("[assistant] could not reveal the debug log", error);
+          })
+        );
+      }}
+      title={`Reveal ${path}`}
+      className={cn(
+        "-mx-1 block break-all rounded-sm px-1 text-left",
+        "transition-colors duration-150 ease-out hover:bg-[var(--assistant-hover)]",
+        "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--assistant-focus)]"
+      )}
+    >
+      <span className="text-[var(--assistant-warning)]">◌ logging</span>
+      <span className="text-[var(--assistant-fg-secondary)]"> · {shown}</span>
+    </button>
   );
-}
-
-/**
- * The slash palette, ported from the cockpit's own (internal/ui/composer/palette.go).
- *
- * Five rows are RENDERED, but the full ranked list stays navigable — the window follows
- * the highlight (`paletteWindow`). Capping the list itself instead, as this panel first
- * did, makes a matched command unreachable by keyboard for no reason a user can see.
- */
-const PALETTE_CAP = 5;
-
-/** q's characters appear in s in order, not necessarily adjacent — "tgl" matches "toggle". */
-function isSubsequence(s: string, q: string): boolean {
-  let si = 0;
-  for (const qc of q) {
-    while (si < s.length && s[si] !== qc) si++;
-    if (si === s.length) return false;
-    si++;
-  }
-  return true;
-}
-
-/** exact name (1000) > name prefix (500) > name subsequence (200) > description substring (50). */
-function fuzzyScore(name: string, q: string, desc: string): number {
-  if (name === q) return 1000;
-  if (name.startsWith(q)) return 500;
-  if (isSubsequence(name, q)) return 200;
-  if (desc.includes(q)) return 50;
-  return 0;
-}
-
-function bareName(name: string): string {
-  return name.replace(/^\//, "").toLowerCase();
-}
-
-/**
- * Filter + rank the command list for a draft.
- *
- * The space that ends the command token is a SEMANTIC boundary, not just a split point.
- * While the token is open the draft is a discovery QUERY, so the loose tiers earn their
- * keep — "/back" should surface a command whose description mentions the backend. Once a
- * separator closes an EXACT command name the user has committed, and a command that
- * merely names it in prose becomes noise. A closed token naming nothing is still a
- * search, so Enter can complete "/inb urgent" to "/inbox urgent".
- *
- * Arguments deliberately do NOT close the palette: it stays up, with its usage hint, as
- * you type "/audit 5".
- */
-function suggestionsFor(
-  commands: readonly AssistantCommandMeta[],
-  value: string
-): AssistantCommandMeta[] {
-  if (!value.startsWith("/")) return [];
-  let q = value.slice(1).toLowerCase();
-  let closed = false;
-  const sep = q.search(/[ \t]/);
-  if (sep >= 0) {
-    q = q.slice(0, sep);
-    closed = true;
-  }
-  // "/" — and "/ ", which is closed but names nothing — is still "show me everything".
-  if (q === "") return [...commands];
-
-  if (closed) {
-    // Gated on the separator rather than on exactness alone: "/workflow" can be a live
-    // command AND a strict prefix of "/workflows", so collapsing an OPEN token would
-    // yank a reachable command away mid-keystroke.
-    const exact = commands.find((c) => bareName(c.name) === q);
-    if (exact) return [exact];
-  }
-
-  return commands
-    .map((c, idx) => ({
-      c,
-      idx,
-      score: fuzzyScore(bareName(c.name), q, (c.palette ?? "").toLowerCase()),
-    }))
-    .filter((m) => m.score > 0)
-    .sort((a, b) => b.score - a.score || a.idx - b.idx)
-    .map((m) => m.c);
-}
-
-/** The at-most-five rows to render, plus the selection's index within that slice. */
-function paletteWindow(
-  suggestions: readonly AssistantCommandMeta[],
-  selected: number
-): { rows: AssistantCommandMeta[]; local: number } {
-  if (suggestions.length === 0) return { rows: [], local: 0 };
-  const sel = Math.min(Math.max(selected, 0), suggestions.length - 1);
-  if (suggestions.length <= PALETTE_CAP) return { rows: [...suggestions], local: sel };
-  const maxStart = suggestions.length - PALETTE_CAP;
-  const start = Math.min(Math.max(sel - PALETTE_CAP + 1, 0), maxStart);
-  return { rows: suggestions.slice(start, start + PALETTE_CAP), local: sel - start };
-}
-
-/** Wrap into [0, n) so navigation never gets stuck at either end. */
-function paletteWrap(i: number, n: number): number {
-  if (n <= 0) return 0;
-  return ((i % n) + n) % n;
 }
 
 export function AssistantPanelView({
   state,
-  projectName,
   onSubmit,
   onInterrupt,
   onDecideApproval,
   onAnswerQuestion,
   onGrantTool,
   onRequestOperations,
+  onRetractInterjection,
+  onRetractedDraftConsumed,
+  composerId = "daintree-assistant",
+  cwd,
   className,
 }: AssistantPanelViewProps) {
-  const [draft, setDraft] = useState("");
   const scrollRef = useRef<HTMLDivElement>(null);
-  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const composerRef = useRef<HybridInputBarHandle>(null);
   const pinnedRef = useRef(true);
 
   const openTurn = state.turns.find((t) => t.role === "assistant" && !t.complete);
@@ -617,27 +667,49 @@ export function AssistantPanelView({
     // reader who is pinned to the bottom and expects to stay there.
   }, [state.turns, state.approvals, state.notices, state.toolCalls]);
 
-  const submit = useCallback(() => {
-    const text = draft.trim();
-    if (!text) return;
-    if (!onSubmit(text)) return; // keep the draft; the session could not take it
-    // Recorded only on ACCEPTANCE, so a refused prompt never lands in history — and
-    // never as a consecutive duplicate, which is what makes ↑↑ walk distinct prompts
-    // rather than the same one twice.
-    if (historyRef.current[historyRef.current.length - 1] !== text) {
-      historyRef.current.push(text);
-    }
-    setHistoryIndex(null);
-    stashRef.current = "";
-    setDraft("");
-    // Collapse back to one row; the height was set imperatively as it grew.
-    if (textareaRef.current) textareaRef.current.style.height = "auto";
-  }, [draft, onSubmit]);
+  // A follow-up the engine handed back lands in the composer for editing. Taken once
+  // and cleared at the source, so a later render cannot re-fill the box over whatever
+  // the user has started typing since.
+  useEffect(() => {
+    if (state.retractedDraft === null) return;
+    // Written into the input bar's own draft store rather than to local state: the bar
+    // owns the editor now, and its draft for this surface is keyed by `composerId`.
+    useTerminalInputStore.getState().setDraftInput(composerId, state.retractedDraft);
+    composerRef.current?.focus();
+    onRetractedDraftConsumed?.();
+  }, [state.retractedDraft, onRetractedDraftConsumed, composerId]);
 
   // The deck replaces the transcript rather than sitting beside it: the panel is a
   // sidebar, and two scrolling regions in that width makes both unreadable. The cockpit
   // did the same — its deck took the screen.
   const [deckOpen, setDeckOpen] = useState(false);
+
+  /**
+   * ^O opens the operations deck, as it did in the cockpit.
+   *
+   * Bound on the PANEL rather than inside the composer. The deck is a panel surface,
+   * not an editing command, and the composer is the terminal's own input bar — reaching
+   * into it to add a binding only this one host wants is how the copy started last time.
+   * Panel-level also means it works from the transcript, the deck itself and the input
+   * alike, which is what a chord that toggles a whole surface has to do.
+   *
+   * `metaKey` is deliberately NOT accepted: ⌘O is Open on macOS and belongs to the app.
+   */
+  const onPanelKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (!(e.ctrlKey && !e.metaKey && !e.altKey && e.key.toLowerCase() === "o")) return;
+      if (!onRequestOperations) return;
+      e.preventDefault();
+      e.stopPropagation();
+      setDeckOpen((open) => {
+        // Ask for a fresh reading on the way IN only. The deck is answered on request,
+        // so re-requesting as it closes spends a round trip on a view being dismissed.
+        if (!open) onRequestOperations();
+        return !open;
+      });
+    },
+    [onRequestOperations]
+  );
 
   // A live session is one that can still act. Several readouts describe the session
   // rather than the transcript, and none of them is true once it has stopped.
@@ -720,251 +792,112 @@ export function AssistantPanelView({
   const termTheme = useTerminalColorSchemeStore(selectEffectiveTheme);
   const term = useMemo(() => resolveInputBarColors(termTheme), [termTheme]);
 
-  // Clicking anywhere that is not itself interactive puts the caret in the composer —
-  // the same affordance a terminal has, where the whole pane is the typing surface.
-  // Guarded so it never steals a click meant for a button, a link, or a text selection.
-  const focusComposer = useCallback((e: React.MouseEvent) => {
-    const el = e.target instanceof HTMLElement ? e.target : null;
-    if (el?.closest("button, a, input, textarea, [role='button'], [contenteditable]")) return;
-    if ((window.getSelection()?.toString().length ?? 0) > 0) return;
-    textareaRef.current?.focus();
+  /**
+   * The terminal's LIVE typography, not a copy of its defaults.
+   *
+   * Both are user settings that hydrate after boot (useTerminalConfig reads them from
+   * disk and pushes them into this store). Hardcoding 12px and the default stack made
+   * the panel correct only for someone who had never opened terminal settings — anyone
+   * who had changed the size saw a pane a third larger or smaller than the ones beside
+   * it, with no way to bring them into line.
+   */
+  const termFontSize = useTerminalFontStore((s) => s.fontSize);
+  const termFontFamily = useTerminalFontStore((s) => s.fontFamily);
+
+  /**
+   * Clicking anywhere that is not itself interactive puts the caret in the composer —
+   * the same affordance a terminal has, where the whole pane is the typing surface.
+   *
+   * Bound to MOUSEUP, never mousedown, and that is the whole reason the transcript can
+   * be selected at all. Focusing another element during `mousedown` moves the document
+   * selection into that element, which cancels the drag the browser was about to start:
+   * every attempt to sweep across an answer collapsed the instant the button went down,
+   * so the panel read as though selection had been switched off. The guard below could
+   * not save it either — at mousedown the NEW selection does not exist yet, so it
+   * always measured empty and always focused.
+   *
+   * At mouseup the drag has finished and `getSelection()` holds the real answer, so a
+   * click that selected nothing focuses the composer and a drag that selected something
+   * is left alone.
+   */
+  const pressOriginRef = useRef<{ x: number; y: number } | null>(null);
+  const notePress = useCallback((e: React.MouseEvent) => {
+    pressOriginRef.current = e.button === 0 ? { x: e.clientX, y: e.clientY } : null;
   }, []);
 
-  // The slash palette, ranked as the cockpit ranked it. Arguments no longer close it:
-  // it stays up with its usage hint while "/audit 5" is typed, which is exactly when
-  // the hint is worth reading.
-  const paletteMatches = useMemo(
-    () => suggestionsFor(state.commands, draft),
-    [draft, state.commands]
-  );
-  const [paletteIndex, setPaletteIndex] = useState(0);
-  // Escape dismisses the palette without clearing the draft. Reset on any edit, so the
-  // next keystroke brings it back rather than leaving it hidden for the rest of the line.
-  const [paletteDismissed, setPaletteDismissed] = useState(false);
-  useEffect(() => {
-    setPaletteIndex(0);
-  }, [draft]);
+  const focusComposer = useCallback((e: React.MouseEvent) => {
+    // Secondary buttons never focus: a right-click opens the context menu on the text
+    // under the pointer, and moving the caret out from under it first is how a
+    // right-click on a selection loses the selection it was aimed at.
+    if (e.button !== 0) return;
+    const el = e.target instanceof HTMLElement ? e.target : null;
+    if (el?.closest("button, a, input, textarea, [role='button'], [contenteditable]")) return;
+
+    // A press that MOVED was a drag, and a drag is never a request to start typing —
+    // decided from the pointer rather than from the selection, because the two disagree
+    // in both directions. A drag over blank transcript selects nothing and would
+    // otherwise steal the caret at the end of it; a click that lands on an existing
+    // selection still reads as selected at this instant, because Chromium defers
+    // collapsing it to resolve click-versus-drag.
+    const origin = pressOriginRef.current;
+    pressOriginRef.current = null;
+    if (!origin) return;
+    // 3px, the usual drag slop: a hand holding a mouse still moves a pixel or two, and
+    // treating that as a drag would make click-to-type fail intermittently.
+    if (Math.abs(e.clientX - origin.x) > 3 || Math.abs(e.clientY - origin.y) > 3) return;
+    // A multi-click selects a word or a line and means to keep it.
+    if (e.detail > 1) return;
+    // Shift-click extends an existing selection rather than starting a new one.
+    if (e.shiftKey) return;
+
+    // Asked one task later, once the click's own default action has collapsed whatever
+    // was selected. Reading it here would still see the OLD selection and decline to
+    // focus, which is why clicking a selection used to leave the caret nowhere at all.
+    setTimeout(() => {
+      if ((window.getSelection()?.toString().length ?? 0) > 0) return;
+      // The composer is the input bar's editor now; the old textarea ref was left
+      // dangling by the swap, so clicking the pane focused nothing.
+      composerRef.current?.focus();
+    }, 0);
+  }, []);
+
   // Closed once nothing can be sent. Leaving it live let a click erase the draft and
   // report a command run against an engine that had stopped.
-  const paletteOpen = paletteMatches.length > 0 && live && !paletteDismissed;
-  const { rows: paletteRows, local: paletteLocal } = paletteWindow(paletteMatches, paletteIndex);
-  const paletteOffset = paletteIndex - paletteLocal;
-
   /**
-   * Escape's action, derived rather than fixed, so the hint can never advertise
-   * something Escape will not do (hints.go escapeState).
-   */
-  const escapeHint = useMemo(() => {
-    // Both sheets take the keys while they are open, and Escape means something
-    // different inside each (decline the tool / dismiss the question). Advertising a
-    // composer Escape beside a live approval would be the most expensive wrong label
-    // in the panel.
-    if (state.pendingQuestion || state.approvals.length > 0) return null;
-    if (paletteOpen) return "dismiss";
-    if (draft !== "") return "clear draft";
-    if (busy && interruptible !== false) return "cancel turn";
-    return null;
-  }, [busy, draft, interruptible, paletteOpen, state.approvals.length, state.pendingQuestion]);
-
-  /**
-   * One pass, in keymap.go hintRow's order: Escape, then the submit pair, then ^O when
-   * it leads, then the discovery hints, then ^O when it does not.
+   * The engine's advertised commands, in the input bar's own shape.
    *
-   * ^O is emitted EXACTLY ONCE and its position is the only thing that adapts —
-   * promotion, not new chrome. Branching out of the function early (as the palette
-   * case did) breaks that rule twice over: the control disappears entirely, and when
-   * it comes back it can no longer be promoted.
+   * `scope: "built-in"` because that is what they are from the bar's point of view —
+   * they ship with the engine, there is no file behind them and nothing to discover.
    */
-  const composerHints = useMemo(() => {
-    const hints: { key: string; action: string }[] = [];
-    const ops = { key: "^O", action: "inspect ops" };
-    // Cancel takes precedence over attention: if a turn can still be stopped, that is
-    // the more urgent thing to know about.
-    const leadWithOps = state.operations !== null && !busy;
-
-    if (escapeHint) hints.push({ key: "Esc", action: escapeHint });
-
-    if (paletteOpen) {
-      // The palette owns Enter while it is open, so the submit pair would be a lie.
-      hints.push({ key: "↑↓", action: "select" }, { key: "Tab", action: "complete" });
-    } else if (draft !== "") {
-      // "add" mid-turn, because that is what the engine does with it: the prompt is
-      // folded into the turn already running rather than starting a new one.
-      hints.push({ key: "Enter", action: busy ? "add" : "send" });
-      hints.push({ key: "⇧Enter", action: "newline" });
-    }
-
-    if (leadWithOps) hints.push(ops);
-    // Discovery is suppressed while drafting: a mid-word "/" types a literal slash, and
-    // ↑ walks the draft's own rows long before it reaches history.
-    if (draft === "" && !paletteOpen) {
-      hints.push({ key: "/", action: "commands" }, { key: "↑", action: "history" });
-    }
-    if (!leadWithOps) hints.push(ops);
-    return hints;
-  }, [busy, draft, escapeHint, paletteOpen, state.operations]);
-
-  /**
-   * Completion writes exactly "<name> " and PRESERVES the arguments already typed, so
-   * "/inb urgent" completes to "/inbox urgent" rather than throwing the argument away
-   * (internal/ui/composer/palette.go acceptSuggestion).
-   */
-  const acceptSuggestion = useCallback(
-    (cmd: AssistantCommandMeta) => {
-      const name = cmd.name.startsWith("/") ? cmd.name : `/${cmd.name}`;
-      const rest = draft.replace(/^\/[^\s]*/, "").replace(/^[ \t]+/, "");
-      setDraft(rest ? `${name} ${rest}` : `${name} `);
-      setPaletteDismissed(true);
-      textareaRef.current?.focus();
-    },
-    [draft]
+  const slashCommands = useMemo(
+    () =>
+      state.commands.map((c) => ({
+        id: c.name,
+        label: c.name.startsWith("/") ? c.name : `/${c.name}`,
+        description: c.palette,
+        scope: "built-in" as const,
+        agentId: "daintree-assistant" as const,
+        trigger: "/" as const,
+      })),
+    [state.commands]
   );
 
   /**
-   * Composer history, the cockpit's ↑ binding.
+   * The panel's whole palette, derived from the TERMINAL theme with contrast floors.
    *
-   * Entered only when the caret sits at the very start of the draft: inside a multi-line
-   * draft ↑ has to walk the draft's own rows first, or a two-line prompt becomes
-   * uneditable. `stash` holds what was being typed so ↓ off the end restores it rather
-   * than discarding it.
-   */
-  const historyRef = useRef<string[]>([]);
-  const [historyIndex, setHistoryIndex] = useState<number | null>(null);
-  const stashRef = useRef("");
-
-  const recallHistory = useCallback(
-    (direction: -1 | 1) => {
-      const items = historyRef.current;
-      if (items.length === 0) return false;
-      if (historyIndex === null) {
-        if (direction === 1) return false; // nothing newer than the live draft
-        stashRef.current = draft;
-        const idx = items.length - 1;
-        setHistoryIndex(idx);
-        setDraft(items[idx] ?? "");
-        return true;
-      }
-      const next = historyIndex + direction;
-      if (next < 0) return true; // hold at the oldest rather than wrapping
-      if (next >= items.length) {
-        setHistoryIndex(null);
-        setDraft(stashRef.current);
-        return true;
-      }
-      setHistoryIndex(next);
-      setDraft(items[next] ?? "");
-      return true;
-    },
-    [draft, historyIndex]
-  );
-
-  /**
-   * The composer key map, ported from internal/ui/composer/keymap.go + hints.go.
+   * The derivation — and the reasoning behind every floor — lives in `./palette.ts`,
+   * beside the contract test that walks every shipped terminal scheme and checks it.
+   * Two things it fixes are worth naming here, because both shipped:
    *
-   * Order matters and mirrors the cockpit's own branch order: the palette owns its keys
-   * while it is open, then Escape resolves against the draft, then history, then submit.
+   *   - The panel painted its ground from the terminal theme and its ink from the APP's
+   *     tokens. Those are chosen independently, so a light app theme with a dark
+   *     terminal put dark ink on a dark ground: 1.03:1, invisible.
+   *   - Replacing those tokens with fixed percentage mixes of the terminal foreground
+   *     looked right and still failed, because a percentage cannot know what it is
+   *     standing on. Solarized Light's own foreground is 4.13:1 before anything is
+   *     derived from it; ANSI yellow on Ayu Light is 1.84:1.
    */
-  const onComposerKeyDown = useCallback(
-    (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
-      // ^O inspects operations from the keyboard, not only from the toolbar button.
-      if (e.key.toLowerCase() === "o" && (e.ctrlKey || e.metaKey)) {
-        e.preventDefault();
-        setDeckOpen((open) => {
-          if (!open) onRequestOperations?.();
-          return !open;
-        });
-        return;
-      }
-
-      if (paletteOpen) {
-        const n = paletteMatches.length;
-        if (e.key === "ArrowDown") {
-          e.preventDefault();
-          setPaletteIndex((i) => paletteWrap(i + 1, n));
-          return;
-        }
-        if (e.key === "ArrowUp") {
-          e.preventDefault();
-          setPaletteIndex((i) => paletteWrap(i - 1, n));
-          return;
-        }
-        if (e.key === "Tab" || (e.key === "Enter" && !e.shiftKey)) {
-          // Both COMPLETE rather than send. Enter used to submit the raw draft straight
-          // past the highlighted row, which made the selection decorative — the palette
-          // looked navigable and answered to nothing.
-          const cmd = paletteMatches[paletteIndex];
-          if (cmd) {
-            e.preventDefault();
-            acceptSuggestion(cmd);
-            return;
-          }
-        }
-        if (e.key === "Escape") {
-          e.preventDefault();
-          setPaletteDismissed(true);
-          return;
-        }
-      }
-
-      if (e.key === "Escape") {
-        e.preventDefault();
-        // The cockpit's Escape matrix (hints.go escapeHintMode), in its branch order: a
-        // non-empty draft is cleared first, and only an EMPTY draft during a live turn
-        // reaches the turn itself.
-        //
-        // The cockpit had two states between those — Escape retracted a buffered
-        // follow-up (LIFO) before it would cancel. They are deliberately absent: it
-        // buffered follow-ups client-side, while this panel hands each one to the engine
-        // the moment it is typed, so by the time Escape arrives there is nothing local
-        // left to take back. Offering a retract that silently failed would be worse than
-        // not offering one.
-        if (draft !== "") {
-          setDraft("");
-          setHistoryIndex(null);
-          if (textareaRef.current) textareaRef.current.style.height = "auto";
-          return;
-        }
-        if (busy && interruptible !== false) onInterrupt();
-        return;
-      }
-
-      // History walks the draft's own rows first: only a caret at the very start means
-      // "there is nothing above this line", which is when ↑ belongs to history.
-      const el = e.currentTarget;
-      const atStart = el.selectionStart === 0 && el.selectionEnd === 0;
-      if (e.key === "ArrowUp" && atStart && !e.shiftKey) {
-        if (recallHistory(-1)) {
-          e.preventDefault();
-          return;
-        }
-      }
-      if (e.key === "ArrowDown" && historyIndex !== null && !e.shiftKey) {
-        if (recallHistory(1)) {
-          e.preventDefault();
-          return;
-        }
-      }
-
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        submit();
-      }
-    },
-    [
-      acceptSuggestion,
-      busy,
-      draft,
-      historyIndex,
-      interruptible,
-      onInterrupt,
-      onRequestOperations,
-      paletteIndex,
-      paletteMatches,
-      paletteOpen,
-      recallHistory,
-      submit,
-    ]
-  );
+  const paletteVars = useMemo(() => buildAssistantPalette(term), [term]);
 
   const shellVars = {
     "--ib-bg": term.shellBg,
@@ -985,17 +918,35 @@ export function AssistantPanelView({
 
   return (
     <div
-      className={cn("flex h-full min-h-0 cursor-text flex-col", className)}
+      // `assistant-panel` sets the terminal typeface across the whole surface — the
+      // masthead, the activity rows, the notices — not just the prose. A pane that is
+      // mono in its message body and sans in its chrome reads as two things stitched
+      // together; the terminal beside it is one typeface throughout.
+      className={cn("assistant-panel flex h-full min-h-0 cursor-text flex-col", className)}
       // Custom properties are not part of `CSSProperties`, so the cast is at the point
       // of USE and covers only this object rather than widening the declaration above.
       style={
         {
-          backgroundColor: term.background,
-          color: term.foreground,
+          backgroundColor: paletteVars["--assistant-surface"],
+          // The CORRECTED foreground, not the terminal's raw one.
+          //
+          // This is what every unstyled element in the panel inherits, so setting the
+          // raw value here quietly exempted them all from the correction the palette
+          // exists to apply: on a theme whose own foreground is under the floor
+          // (Solarized Light is 4.13:1), each tier was corrected and then any text that
+          // simply did not name a colour inherited the uncorrected one anyway.
+          color: paletteVars["--assistant-fg"],
+          // Everything in the panel sizes off this, so one setting moves the whole
+          // surface together instead of only the parts that named a size.
+          "--assistant-font-family": termFontFamily,
+          "--assistant-font-size": `${termFontSize}px`,
+          ...paletteVars,
           ...shellVars,
         } as React.CSSProperties
       }
-      onMouseDown={focusComposer}
+      onMouseDown={notePress}
+      onMouseUp={focusComposer}
+      onKeyDown={onPanelKeyDown}
     >
       {deckOpen && onRequestOperations ? (
         <AssistantOperationsDeck
@@ -1009,7 +960,7 @@ export function AssistantPanelView({
           onScroll={onScroll}
           className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-3"
         >
-          <Masthead state={state} projectName={projectName ?? null} live={live} />
+          <Masthead state={state} live={live} />
           {booting ? (
             // The boot state, matching the cockpit: the mark draws itself while the
             // engine connects. The composer below stays live throughout — the cockpit's
@@ -1026,15 +977,15 @@ export function AssistantPanelView({
             </div>
           ) : empty ? (
             <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
-              <DaintreeIcon aria-hidden="true" className="size-6 text-text-muted" />
+              <DaintreeIcon aria-hidden="true" className="size-6 text-[var(--assistant-fg-dim)]" />
               {/* Names what the assistant DOES. "Ask about this project" framed it as a
                 question box, which is the one thing it is not: it plans work, spawns
                 visible agents in worktrees and supervises them. It never edits files
                 itself, and it can run several at once. Written as plain sentences with
                 no dash: the em dash read as an aside, and driving OTHER agents rather
                 than editing anything is the whole point, not a footnote. */}
-              <p className="text-sm opacity-80">Put agents to work</p>
-              <p className="max-w-[26rem] text-xs opacity-60">
+              <p className="text-[1em] text-[var(--assistant-fg)]">Put agents to work</p>
+              <p className="max-w-[26rem] text-[1em] text-[var(--assistant-fg-secondary)]">
                 Plan a change and it spawns agents across your worktrees, as many as the job needs,
                 then keeps watch on the runs. It doesn&rsquo;t edit files itself. Every agent it
                 starts is one you can see and take over.
@@ -1071,12 +1022,12 @@ export function AssistantPanelView({
               // because it must never cut across the prose being streamed above it.
               aria-live="polite"
               className={cn(
-                "mt-3 flex items-baseline gap-1.5 text-xs tabular-nums",
+                "mt-3 flex items-baseline gap-1.5 text-[1em] tabular-nums",
                 // A slow model and a hung one look identical without this.
-                stalled ? "text-status-warning" : "text-text-secondary"
+                stalled ? "text-[var(--assistant-warning)]" : "text-[var(--assistant-fg-secondary)]"
               )}
             >
-              <span aria-hidden="true" className="assistant-spinner font-mono" />
+              <span aria-hidden="true" className="assistant-spinner" />
               <span>
                 {liveLabel}
                 {stalled && " · still working"}
@@ -1091,9 +1042,9 @@ export function AssistantPanelView({
             // into this turn, and only then does it move into the transcript proper.
             <div
               key={`queued-${i}`}
-              className="mt-3 rounded-md border border-dashed border-border-strong px-2 py-1.5 text-xs opacity-70"
+              className="mt-3 rounded-md border border-dashed border-[var(--assistant-border-strong)] px-2 py-1.5 text-[1em] text-[var(--assistant-fg-secondary)]"
             >
-              <span className="opacity-60">Queued: </span>
+              <span className="text-[var(--assistant-fg-secondary)]">Queued: </span>
               {queued}
             </div>
           ))}
@@ -1128,41 +1079,10 @@ export function AssistantPanelView({
         </div>
       )}
 
-      <div className="shrink-0 px-3.5 pb-2.5 pt-2.5">
-        {paletteOpen && (
-          // Above the composer, like the cockpit's. Shows what each command DOES, not
-          // just its name: the operations surface — inbox, watchers, timers, workflows,
-          // launches, audit — is reachable only through these, so a list of bare words
-          // would hide the whole thing behind knowing what to type.
-          <div
-            role="listbox"
-            aria-label="Commands"
-            className="mb-1.5 overflow-hidden rounded-md border border-border-default bg-surface-inset"
-          >
-            {paletteRows.map((cmd, i) => (
-              <button
-                key={cmd.name}
-                type="button"
-                role="option"
-                aria-selected={i === paletteLocal}
-                onMouseEnter={() => setPaletteIndex(paletteOffset + i)}
-                // Completes into the composer exactly as Enter and Tab do. Submitting
-                // the bare name on click threw away any argument already typed and gave
-                // the mouse a different meaning from the keyboard for the same row.
-                onClick={() => acceptSuggestion(cmd)}
-                className={cn(
-                  "flex w-full items-baseline gap-2 px-2 py-1 text-left text-xs",
-                  "transition-colors duration-150 ease-out",
-                  i === paletteLocal ? "bg-overlay-subtle" : "hover:bg-overlay-subtle/60"
-                )}
-              >
-                <span className="shrink-0 font-mono">{cmd.syntax}</span>
-                <span className="min-w-0 flex-1 truncate opacity-60">{cmd.palette}</span>
-              </button>
-            ))}
-          </div>
-        )}
-
+      {/* No horizontal padding here: HybridInputBar carries its own, and doubling it
+          is what made the assistant's input sit visibly further inset than the one in
+          every terminal pane. */}
+      <div className="shrink-0 pb-2.5 pt-2.5">
         {state.pendingQuestion && onAnswerQuestion ? (
           // The sheet REPLACES the composer, as the cockpit's did: the engine has
           // parked the tool dispatch, so there is nothing a typed message could reach.
@@ -1170,73 +1090,58 @@ export function AssistantPanelView({
           <AssistantQuestionCard question={state.pendingQuestion} onAnswer={onAnswerQuestion} />
         ) : (
           <>
-            {/* Same shell as the terminal's HybridInputBar: identical radius, padding,
-            border and the `--ib-*` variables resolved from the terminal theme above.
-            Copied as STRUCTURE rather than imported because that component carries a
-            CodeMirror editor, chips, autocomplete and voice — none of which this
-            composer has — but the surface a user looks at must not differ between the
-            two panes just because one is HTML. */}
-            <div
-              className={cn(
-                "group/shell relative flex w-full items-baseline gap-1.5 rounded-md border py-2 pr-2",
-                "transition-[border-color,background-color,box-shadow] duration-150",
-                "bg-[var(--ib-bg)] border-[var(--ib-border)] shadow-[var(--ib-shadow)]",
-                "hover:border-[var(--ib-border-hover)] hover:bg-[var(--ib-hover-bg)]",
-                "focus-within:border-[var(--ib-border-focus)] focus-within:ring-1",
-                "focus-within:ring-[var(--ib-focus-ring)] focus-within:bg-[var(--ib-focus-bg)]"
-              )}
-            >
-              {/* The terminal's own affordance: a muted prompt glyph on the LEFT, no
-                  background. It is what makes the box read as a prompt rather than as
-                  a chat field. */}
-              <span
-                aria-hidden="true"
-                className="select-none pl-2 pr-1 font-mono text-xs font-semibold leading-5 text-daintree-accent/65"
-              >
-                ❯
-              </span>
-              <textarea
-                ref={textareaRef}
-                value={draft}
-                onChange={(e) => {
-                  setDraft(e.target.value);
-                  // Auto-grow to the content, bounded by max-h-40. Without this the field
-                  // declared a maximum height it could never reach, so a multi-line prompt
-                  // scrolled inside a single line — invisible while composing it.
-                  const el = e.currentTarget;
-                  el.style.height = "auto";
-                  el.style.height = `${el.scrollHeight}px`;
-                }}
-                onKeyDown={onComposerKeyDown}
-                rows={1}
-                // The composer stays live during a turn on purpose: a prompt sent mid-turn
-                // is folded into the RUNNING turn as an interjection, which is how a user
-                // steers work in flight. Disabling it would remove that entirely.
-                placeholder={busy ? "Add to this turn…" : "What needs doing?"}
-                className={cn(
-                  "max-h-40 min-h-[1.5rem] flex-1 resize-none bg-transparent",
-                  // text-placeholder measured ~2.69:1 in the dark theme — the least legible
-                  // text in the panel, and it is the one string that tells a first-time
-                  // user what to do.
-                  "text-sm text-[var(--ib-fg)] placeholder:text-[var(--ib-placeholder)]",
-                  // The composer's focus chrome is drawn by its wrapper, so the textarea
-                  // suppresses its own — via outline-hidden, which keeps the outline
-                  // present for forced-colors mode rather than removing it outright.
-                  "outline-hidden"
-                )}
-              />
-              {/* NO send button. The terminal's input bar has none — Enter sends, the
-                  way it does at any prompt — so an accent-filled arrow here was a
-                  control this surface invented and the pane beside it does not have.
-                  Stop is the exception: a turn in flight needs an out, and there is no
-                  Ctrl-C to reach for. Worded and weighted like the prompt glyph rather
-                  than like a button. */}
-              {busy && (
+            {/* The terminal's OWN input bar, not a copy of it.
+                This was a copy: the same border, radius and `--ib-*` variables, hand
+                rebuilt around a plain textarea. It drifted immediately — different font,
+                different size, a different command menu — which is what a copy always
+                does. Now it is the component, so the two panes cannot look different
+                without someone changing the thing both of them render.
+
+                What the assistant supplies is the one thing that genuinely differs: its
+                commands come from the engine over the host protocol, not from disk. */}
+            <HybridInputBar
+              ref={composerRef}
+              terminalId={composerId}
+              // Not a terminal pane surface, so it neither records nor obeys the
+              // session-wide xterm-vs-input-bar preference. Writing it from here made
+              // every click in this composer re-run the focus effect of whatever grid
+              // terminal still held store focus, which took the caret back.
+              participatesInTerminalFocus={false}
+              cwd={cwd ?? ""}
+              agentId="daintree-assistant"
+              commands={slashCommands}
+              disabled={!live}
+              // The bar resolves Escape's local meanings first — close the completion
+              // menu, collapse the expanded editor — and forwards what is left. For a
+              // terminal that goes to the PTY; here it lands on the cockpit's Escape
+              // matrix (internal/ui/composer/hints.go), minus the draft-clearing branch
+              // the editor already owns.
+              onSendKey={(key) => {
+                if (key !== "escape") return;
+                // Retract before cancel, as the cockpit ordered it: a follow-up typed
+                // mid-turn is buffered by the engine until the turn folds it in, so
+                // Escape can still pull it back. Cancelling instead would abandon the
+                // work when the user only asked to take back a message.
+                if (state.queuedInterjections.length > 0 && onRetractInterjection) {
+                  onRetractInterjection();
+                  return;
+                }
+                if (busy && interruptible !== false) onInterrupt();
+              }}
+              // The bar hands back a PTY payload as well; the engine takes prose. The
+              // acceptance flag has to be RETURNED, not dropped: the shared send path
+              // clears the draft on a truthy result, so swallowing a refusal is what
+              // makes a prompt vanish when the session was not ready to take it.
+              onSend={({ text }) => (text.trim() ? onSubmit(text) : false)}
+            />
+            {busy && (
+              // Stop lives outside the bar because the bar has no concept of a turn in
+              // flight — it drives a PTY, where Ctrl-C is the out. Worded and weighted
+              // like the prompt glyph rather than like a button.
+              <div className="mt-1 flex justify-end">
                 <button
                   type="button"
                   onClick={onInterrupt}
-                  // A wake turn is not interruptible — the engine aborts command turns
-                  // only — so an enabled Stop over one is a control that does nothing.
                   disabled={interruptible === false}
                   aria-label="Stop"
                   title={
@@ -1245,51 +1150,52 @@ export function AssistantPanelView({
                       : undefined
                   }
                   className={cn(
-                    "shrink-0 select-none px-1 font-mono text-[11px] leading-5",
-                    "opacity-60 transition-opacity duration-150 ease-out",
-                    "hover:opacity-100 disabled:opacity-30"
+                    // `leading-5` is not a stray literal: 20px is the composer's own
+                    // line box (inputEditorExtensions/base.ts), and this sits on that
+                    // line. It is fixed for the same reason the editor's is.
+                    "select-none px-1 text-[0.92em] leading-5",
+                    // Colour, not transparency. `opacity` scales the element toward
+                    // whatever is behind it and drags its contrast floor down with it —
+                    // and "stop" is a control someone reaches for mid-turn, when they
+                    // are least inclined to hunt for it.
+                    "text-[var(--assistant-fg-secondary)] transition-colors duration-150 ease-out",
+                    "hover:text-[var(--assistant-fg)] disabled:opacity-40"
                   )}
                 >
                   stop
                 </button>
-              )}
-            </div>
+              </div>
+            )}
           </>
         )}
 
-        {/* The adaptive hint row (internal/ui/composer/keymap.go hintRow).
+        {/* The status row under the composer.
 
-          The SET is stable and the ORDER adapts — promotion, not new chrome — so the
-          row never becomes a place where controls appear and disappear. Escape leads
-          because its meaning changes with state and is the one binding a user cannot
-          guess; discovery hints are suppressed while a draft is in progress, since a
-          mid-word "/" types a literal slash and ↑ walks the draft's own rows before it
-          ever reaches history. ^O is emitted exactly once, promoted to the front only
-          when something is actually waiting. */}
-        {composerHints.length > 0 && (
-          <div className="mt-1.5 flex flex-wrap items-center gap-x-2.5 gap-y-1 px-0.5 text-[10px] text-text-secondary">
-            {composerHints.map((hint) => (
-              <span key={hint.key} className="flex items-baseline gap-1">
-                <kbd className="font-mono opacity-80">{hint.key}</kbd>
-                <span className="opacity-60">{hint.action}</span>
-              </span>
-            ))}
-          </div>
-        )}
+          The cockpit put its adaptive key hints here (internal/ui/composer/keymap.go
+          hintRow). Those hints now belong to the input bar, which owns the editor and
+          teaches its own bindings — duplicating them here would state the composer's
+          contract in a second place, free to drift from it.
 
-        <div className="mt-1.5 flex items-center gap-2 px-0.5 text-[10px] text-text-secondary">
+          What is left is what only the PANEL knows: the phase and its clock on the
+          left, and the session readouts on the right — the deck, rate limiting,
+          standing approval, context and cost. Each is suppressed when it is not true
+          of a live session rather than shown as an empty slot. */}
+
+        <div className="mt-1.5 flex items-center gap-2 px-3.5 text-[0.92em] text-[var(--assistant-fg-secondary)]">
           {phase ? (
             <span
               className={cn(
                 "flex items-center gap-1.5",
-                stalled ? "text-status-warning" : "text-text-secondary"
+                stalled ? "text-[var(--assistant-warning)]" : "text-[var(--assistant-fg-secondary)]"
               )}
             >
               <span
                 aria-hidden="true"
                 className={cn(
                   "assistant-pulse size-1.5 rounded-full",
-                  stalled ? "bg-status-warning" : "bg-text-secondary"
+                  stalled
+                    ? "bg-[var(--assistant-warning-graphic)]"
+                    : "bg-[var(--assistant-fg-secondary)]"
                 )}
               />
               {phase}
@@ -1302,7 +1208,23 @@ export function AssistantPanelView({
               {!liveLabel && elapsed && ` · ${elapsed}`}
             </span>
           ) : (
-            <span>
+            // A DOT, then the word, as the cockpit drew it (render_chrome.go). The word
+            // alone made the one line that is true for the whole session read as body
+            // text; a lit dot is what says "live" at a glance, and it is the same
+            // vocabulary the phase row above uses while a turn runs — that one pulses
+            // because it is transient, this one is steady because the connection is not.
+            <span className="flex items-center gap-1.5">
+              <span
+                aria-hidden="true"
+                className={cn(
+                  "size-1.5 shrink-0 rounded-full",
+                  state.connection !== "ready"
+                    ? "bg-[var(--assistant-fg-secondary)]"
+                    : state.mcpUnavailable
+                      ? "bg-[var(--assistant-warning-graphic)]"
+                      : "bg-[var(--assistant-success-graphic)]"
+                )}
+              />
               {state.connection === "ready"
                 ? state.mcpUnavailable
                   ? // Qualified deliberately. The engine is up, but it cannot reach
@@ -1315,32 +1237,23 @@ export function AssistantPanelView({
           )}
 
           <span className="ml-auto flex items-center gap-2 tabular-nums">
-            {/* The way into the deck. Placed with the status readouts because that is
-                where "what is going on" already lives. */}
-            {onRequestOperations && (
-              <button
-                type="button"
-                onClick={() => {
-                  setDeckOpen((v) => !v);
-                  if (!deckOpen) onRequestOperations();
-                }}
-                aria-pressed={deckOpen}
-                className="rounded-sm px-1 transition-colors duration-150 ease-out hover:bg-overlay-subtle"
-              >
-                Operations
-              </button>
-            )}
             {/* Both describe a LIVE session, so neither survives it stopping:
                 "Auto-approve on" over a dead engine states a standing permission that
                 no longer applies to anything, and "Rate limited" a condition nothing
                 is subject to. */}
-            {live && state.rateLimited && <span className="text-status-warning">Rate limited</span>}
+            {live && state.rateLimited && (
+              <span className="text-[var(--assistant-warning)]">Rate limited</span>
+            )}
             {/* Auto-approve is a standing state, not an event — if confirmations are
                 off that must stay visible for the whole session. Worded as what is
                 switched ON, because "approvals off" reads ambiguously as "approving is
                 unavailable" rather than "nothing will ask you". */}
+            {/* "on" is carried by the fact that it is drawn at all — the row shows
+                nothing when the setting is off — so the word was spending width in the
+                one place there is least of it to say what its presence already says.
+                The full sentence still lives in the masthead. */}
             {live && state.autoApprove && (
-              <span className="font-medium text-status-danger">Auto-approve on</span>
+              <span className="font-medium text-[var(--assistant-danger)]">Auto-approve</span>
             )}
             {state.usage && state.usage.contextWindow > 0 && (
               <span title="Context used">
@@ -1353,6 +1266,39 @@ export function AssistantPanelView({
                 cost for the same reason. */}
             {state.cost && (state.cost.total > 0 || state.cost.complete) && (
               <span>{formatCost(state.cost.total, state.cost.complete)}</span>
+            )}
+            {/* The way into the operations deck, as an overflow control rather than the
+                word "Operations" spelled out. This row is the narrowest space in the
+                panel and everything else on it is a READING — connection, context,
+                cost — so a labelled verb sitting among them both cost width and read as
+                one more readout. It stays a direct toggle rather than a menu of one:
+                a dropdown whose only entry is the thing the button already does is a
+                second click for nothing. */}
+            {onRequestOperations && (
+              <button
+                type="button"
+                onClick={() => {
+                  setDeckOpen((v) => !v);
+                  if (!deckOpen) onRequestOperations();
+                }}
+                aria-pressed={deckOpen}
+                // Constant in both states, with `aria-pressed` carrying open-vs-closed.
+                // A toggle whose NAME changes is a control that reads as two different
+                // ones to anyone who cannot see it change, and it is what made this
+                // button collide with the deck's own Close button by name.
+                aria-label="Operations"
+                // The chord lives in the tooltip, not beside the control: a shortcut
+                // printed next to every button is the clutter the cockpit's adaptive
+                // hint row existed to avoid.
+                title="Operations (^O)"
+                className={cn(
+                  "rounded-sm p-0.5 transition-colors duration-150 ease-out",
+                  "hover:bg-[var(--assistant-hover)]",
+                  deckOpen && "bg-[var(--assistant-hover)]"
+                )}
+              >
+                <MoreHorizontal aria-hidden="true" className="size-3.5" />
+              </button>
             )}
           </span>
         </div>
