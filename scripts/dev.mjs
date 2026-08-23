@@ -2,6 +2,8 @@ import net from "node:net";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { spawnSync } from "node:child_process";
+import { fileURLToPath } from "node:url";
 import concurrently from "concurrently";
 
 const DEFAULT_PORT = 5173;
@@ -46,7 +48,31 @@ async function findAvailablePort(host, startPort) {
   );
 }
 
+/**
+ * Rebuilds the vendored assistant engine before the app starts.
+ *
+ * `resources/assistant/` is written only by an explicit `npm run build:assistant`, so
+ * before this the engine could sit several submodule commits behind the code that
+ * embeds it — and the app ran the old one without a word. A fix could be made, tested,
+ * committed and pinned, and still reproduce, because the binary being launched predated
+ * it. The Go build is incremental and takes a few hundred milliseconds when nothing has
+ * changed, which is a fair price for never debugging the wrong engine again.
+ *
+ * `--dev` makes it non-fatal: no Go, no submodule, or a compile error leaves whatever
+ * was built before in place and prints why.
+ */
+function buildAssistantEngine() {
+  const script = path.join(path.dirname(fileURLToPath(import.meta.url)), "build-assistant.mjs");
+  const result = spawnSync(process.execPath, [script, "--dev"], { stdio: "inherit" });
+  if (result.status !== 0) {
+    // Already reported by the script itself, and already decided to be survivable
+    // there — a second opinion here would only be noise.
+    console.warn("[dev] continuing without a fresh assistant engine build");
+  }
+}
+
 async function main() {
+  buildAssistantEngine();
   const host = process.env.DAINTREE_DEV_SERVER_HOST?.trim() || DEFAULT_HOST;
   const requestedPort = parsePort(process.env.DAINTREE_DEV_SERVER_PORT) ?? DEFAULT_PORT;
   const port = await findAvailablePort(host, requestedPort);

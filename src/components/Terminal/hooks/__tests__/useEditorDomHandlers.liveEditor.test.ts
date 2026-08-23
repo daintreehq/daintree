@@ -48,6 +48,7 @@ function params(): Params {
     sendFromEditor: vi.fn(),
     rootRef: { current: null },
     setActiveCompletionContext: vi.fn(),
+    participatesInTerminalFocusRef: { current: true },
   };
 }
 
