@@ -1050,4 +1050,67 @@ describe("rankSwitcherMatches typo tolerance", () => {
       "keyed",
     ]);
   });
+
+  it("measures the word carrying an edit in characters, not in UTF-16 units", () => {
+    // "\u{1F600}" is two units to `length` and one character to whoever typed
+    // it. The four-character floor is held against characters, so these two
+    // names fall on opposite sides of it — the longer one clears it, the
+    // shorter one does not. Counting units would admit both.
+    const emojiLong = makeProject({ id: "long", name: "a\u{1F600}cd", path: "/repos/long" });
+    const emojiShort = makeProject({ id: "short", name: "a\u{1F600}c", path: "/repos/short" });
+
+    expectsNoStrictMatch("a\u{1F600}cx", emojiLong);
+    expect(rankSwitcherMatches("a\u{1F600}cx", [emojiLong], [], null).map((r) => r.id)).toEqual([
+      "long",
+    ]);
+
+    expectsNoStrictMatch("a\u{1F600}x", emojiShort);
+    expect(rankSwitcherMatches("a\u{1F600}x", [emojiShort], [], null)).toEqual([]);
+  });
+
+  it("stands the tier down for a query whose case fold changes its length", () => {
+    // "\u0130" folds to TWO UTF-16 units, so an offset into the folded query no
+    // longer names the character that was typed and the word the length gate
+    // measures is not the word anyone wrote. The tier declines the query rather
+    // than measure it with them — "a\u0130cx" is four characters and one
+    // substitution from "a\u0130cd", clears every other rule, and is still refused.
+    const dotted = makeProject({ id: "dotted", name: "a\u0130cd", path: "/repos/dotted" });
+    expectsNoStrictMatch("a\u0130cx", dotted);
+    expect(rankSwitcherMatches("a\u0130cx", [dotted], [], null)).toEqual([]);
+
+    // The same shape spelled with characters that fold in place does surface,
+    // so it is the fold being refused and not the query.
+    const plain = makeProject({ id: "plain", name: "aicd", path: "/repos/plain" });
+    expectsNoStrictMatch("aicx", plain);
+    expect(rankSwitcherMatches("aicx", [plain], [], null).map((r) => r.id)).toEqual(["plain"]);
+
+    // And the shape a person would actually type it in.
+    expectsNoStrictMatch("webst\u0130e", website());
+    expect(rankSwitcherMatches("webst\u0130e", [website()], [], null)).toEqual([]);
+  });
+
+  it("gives up on a name carrying more word starts than one scan will spend", () => {
+    // The same typo against the same trailing word, twice, differing only in
+    // how many words precede it. Past the anchor budget the scan aborts instead
+    // of going quadratic on a pasted name, so the row is dropped — a real
+    // degradation, and one the reachable copy has to prove is degradation
+    // rather than the query simply not matching.
+    const reachable = makeProject({
+      id: "reachable",
+      name: `${"a-".repeat(10)}website`,
+      path: "/repos/reachable",
+    });
+    const pathological = makeProject({
+      id: "pathological",
+      name: `${"a-".repeat(100)}website`,
+      path: "/repos/pathological",
+    });
+
+    expectsNoStrictMatch("webstie", reachable);
+    expectsNoStrictMatch("webstie", pathological);
+    expect(rankSwitcherMatches("webstie", [reachable], [], null).map((r) => r.id)).toEqual([
+      "reachable",
+    ]);
+    expect(rankSwitcherMatches("webstie", [pathological], [], null)).toEqual([]);
+  });
 });
