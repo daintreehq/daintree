@@ -19,11 +19,14 @@ const NAME_WEIGHT = 4;
  */
 const MIN_FILTER_MATCH_SCORE = 100;
 
+/** What separates one word from the next, shared so the two matchers cannot disagree about it. */
+const WORD_DELIMITER = /[/\\\-._\s]/;
+
 function isBoundary(str: string, index: number): boolean {
   if (index === 0) return true;
   const prev = str[index - 1] ?? "";
   const curr = str[index] ?? "";
-  return /[/\\\-._\s]/.test(prev) || (/[a-z]/.test(prev) && /[A-Z]/.test(curr));
+  return WORD_DELIMITER.test(prev) || (/[a-z]/.test(prev) && /[A-Z]/.test(curr));
 }
 
 function scoreField(query: string, field: string): number {
@@ -85,22 +88,47 @@ function scoreField(query: string, field: string): number {
 }
 
 /**
- * Shortest query that earns typo tolerance at all (#11924).
+ * Shortest WORD a typo may be made in (#11924).
  *
- * Below four characters the one-edit neighbourhood of a query is most of the
- * list — "sv" is one edit from every field holding an "s", a "v", or any two
- * characters at all — which is why every production engine draws the line in
- * the same place (Algolia `minWordSizefor1Typo`, Typesense `min_len_1typo`,
- * both 4). The gate is load-bearing rather than decorative: the existing
- * rejections of "sv" against "fleet snapshot service" and "ru" against a
- * research title are what it is holding up.
+ * The threshold belongs to the token carrying the edit rather than to the whole
+ * query, which is where the hosted engines put it too (Algolia
+ * `minWordSizefor1Typo`, Typesense `min_len_1typo`, both 4). Measuring the
+ * whole query instead is not a smaller version of the same rule, it is a
+ * different and much worse one: "project-17" is ten characters, so a
+ * query-length gate lets its one-character edit roam, and typing it in full
+ * pulls in "project-1", "project-7" and every "project-1x" — eleven neighbours
+ * for one exact match. Numbered and versioned siblings are the common case in a
+ * workspace list, so this is the difference between typo tolerance and a
+ * cluttered list on every clean query.
+ *
+ * Under it, a short token has to be typed exactly. That is the intent: there is
+ * nothing to recover in a "2", and no way to tell a typo of it from a different
+ * workspace.
  */
-const MIN_TYPO_QUERY_LENGTH = 4;
+const MIN_TYPO_TOKEN_LENGTH = 4;
+
+/**
+ * How many word boundaries in one name will be tried as an alignment start.
+ *
+ * Purely a work bound, not a rule about matching: every alignment is O(query),
+ * so an unbounded anchor count makes the matcher O(name x query) on a name with
+ * a boundary every other character — quadratic where everything else this
+ * module does is linear, and names are user-supplied and uncapped. Sixty-four
+ * words is past any name anyone types, so it degrades a pathological paste
+ * instead of the feature.
+ */
+const MAX_TYPO_ANCHORS = 64;
+
+/** No alignment at this anchor. */
+const NO_ALIGNMENT = -2;
+/** Aligned with nothing to spend — the query IS a prefix of this word. */
+const ALIGNED_EXACTLY = -1;
 
 /**
  * Whether `query` is within ONE edit — substitution, adjacent transposition,
- * or a single extra character on either side — of a prefix of `field` that
- * STARTS AT A WORD BOUNDARY (#11924).
+ * or a single extra character on either side — of a prefix of `name` that
+ * STARTS AT A WORD BOUNDARY, with the edit falling in a word long enough to be
+ * worth correcting (#11924).
  *
  * This is the second, deliberately smaller way a query can match, and it exists
  * because {@link scoreField} does not degrade: a walk that runs out of field
@@ -108,7 +136,7 @@ const MIN_TYPO_QUERY_LENGTH = 4;
  * Website" below "webs" — it deletes it. One fat-fingered character emptying
  * the list is the worst failure shape a switcher has.
  *
- * Three bounds keep it from becoming a second permissive scorer, which is the
+ * Four bounds keep it from becoming a second permissive scorer, which is the
  * failure this module has already been through once (the word-initials fallback
  * {@link isFilterMatch} rejects, where "test" reached "cut the external tool
  * surface from 100 to 24" because initials put no bound on the distance between
@@ -121,6 +149,8 @@ const MIN_TYPO_QUERY_LENGTH = 4;
  *   which is the trade that keeps the neighbourhood small.
  * - Exactly one edit, never two. There is no ladder up to two typos at eight
  *   characters; longer queries buy accuracy, not licence.
+ * - The edit has to land inside a word of at least {@link MIN_TYPO_TOKEN_LENGTH}
+ *   characters, and never on the whitespace or punctuation between two.
  * - Never the path. Absolute paths are long and share segments, so an edit
  *   across one is noise; only the name is offered.
  *
@@ -131,42 +161,92 @@ const MIN_TYPO_QUERY_LENGTH = 4;
  * flaw {@link isFilterMatch} documents. Surfacing that row last beats dropping
  * it, and requiring distance to EQUAL one would invert the cliff: the literal
  * substring lost while its one-typo neighbour surfaced.
+ *
+ * Counted in UTF-16 units, exactly as `scoreField` counts them, so the two
+ * agree on what a character is. The token length is the one measurement taken
+ * in real characters instead, because it is the one a person is being held to.
  */
 function hasNearMissNameMatch(lowerQuery: string, name: string): boolean {
-  if (lowerQuery.length < MIN_TYPO_QUERY_LENGTH) return false;
+  // Derived rather than a second policy: a query shorter than the shortest
+  // correctable word cannot contain one, so there is nothing to find. UTF-16
+  // units over-count characters, so this can only ever admit work, never skip
+  // work that would have matched.
+  if (lowerQuery.length < MIN_TYPO_TOKEN_LENGTH) return false;
+
   const lowerName = name.toLowerCase();
-  // One edit moves the window by at most one, so a boundary with fewer than
-  // this many characters left cannot host any alignment. It is also the whole
-  // reason no maximum query length is needed: a pasted query longer than the
-  // name fails here at every boundary, before any comparison runs.
+  // Case folding preserves length for every character anyone names a workspace
+  // after, but not for all of them ("\u0130" folds to two units). When it does not,
+  // a folded offset can no longer index the original, so the camelCase half of
+  // the boundary test is given up rather than anchoring a window one character
+  // off the word it was meant to start at.
+  const boundarySource = lowerName.length === name.length ? name : lowerName;
   const shortestWindow = lowerQuery.length - 1;
+  let anchors = 0;
+
   for (let start = 0; start + shortestWindow <= lowerName.length; start++) {
-    // Read off the original-case name, exactly as `scoreField` reads it, so the
-    // two agree on where a camelCase word begins.
-    if (!isBoundary(name, start)) continue;
-    if (alignsWithinOneEdit(lowerQuery, lowerName, start)) return true;
+    if (!isBoundary(boundarySource, start)) continue;
+    if (++anchors > MAX_TYPO_ANCHORS) return false;
+    const edit = alignsWithinOneEdit(lowerQuery, lowerName, start);
+    if (edit === NO_ALIGNMENT) continue;
+    if (edit === ALIGNED_EXACTLY || isEditWorthCorrecting(lowerQuery, edit)) return true;
   }
   return false;
 }
 
 /**
- * The three window lengths a one-edit alignment can have, tried in that order.
+ * Whether the character at `index` sits inside a query word long enough that a
+ * typo in it is recoverable.
+ *
+ * An edit on the whitespace or punctuation BETWEEN two words is rejected
+ * outright: it belongs to no word, and letting it through would readmit exactly
+ * the short-token noise the length rule exists to stop.
+ */
+function isEditWorthCorrecting(query: string, index: number): boolean {
+  const edited = query[index] ?? "";
+  if (!edited || WORD_DELIMITER.test(edited)) return false;
+
+  let from = index;
+  while (from > 0 && !WORD_DELIMITER.test(query[from - 1]!)) from--;
+  let to = index + 1;
+  while (to < query.length && !WORD_DELIMITER.test(query[to]!)) to++;
+
+  let characters = 0;
+  for (let i = from; i < to; i++) {
+    const unit = query.charCodeAt(i);
+    // A surrogate pair is one character to whoever typed it, and two to
+    // `length` — which is the whole reason this is not a `to - from` subtraction.
+    if (unit >= 0xd800 && unit <= 0xdbff && i + 1 < to) i++;
+    if (++characters >= MIN_TYPO_TOKEN_LENGTH) return true;
+  }
+  return false;
+}
+
+/**
+ * The three window lengths a one-edit alignment can have, tried in that order,
+ * returning WHERE in the query the edit fell so the caller can weigh it.
  *
  * A general edit-distance matrix would answer this too, but at a fixed bound of
  * one edit it is the wrong tool: the window can only be one shorter, equal, or
  * one longer than the query, so three linear scans settle it with no allocation
  * and no traceback — and each case is small enough to read and check by eye.
  */
-function alignsWithinOneEdit(query: string, field: string, start: number): boolean {
+function alignsWithinOneEdit(query: string, field: string, start: number): number {
   const remaining = field.length - start;
   const length = query.length;
-  if (remaining >= length && alignsExceptOneSwapOrSubstitution(query, field, start)) return true;
-  if (remaining >= length - 1 && alignsWithOneExtraQueryChar(query, field, start)) return true;
-  return remaining >= length + 1 && alignsWithOneExtraFieldChar(query, field, start);
+  if (remaining >= length) {
+    const edit = alignExceptOneSwapOrSubstitution(query, field, start);
+    if (edit !== NO_ALIGNMENT) return edit;
+  }
+  if (remaining >= length - 1) {
+    const edit = alignWithOneExtraQueryChar(query, field, start);
+    if (edit !== NO_ALIGNMENT) return edit;
+  }
+  if (remaining >= length + 1) return alignWithOneExtraFieldChar(query, field, start);
+  return NO_ALIGNMENT;
 }
 
 /** Equal-length window: identical, one wrong character, or two swapped ones. */
-function alignsExceptOneSwapOrSubstitution(query: string, field: string, start: number): boolean {
+function alignExceptOneSwapOrSubstitution(query: string, field: string, start: number): number {
   const length = query.length;
   let first = -1;
   for (let i = 0; i < length; i++) {
@@ -175,7 +255,7 @@ function alignsExceptOneSwapOrSubstitution(query: string, field: string, start: 
       break;
     }
   }
-  if (first === -1) return true;
+  if (first === -1) return ALIGNED_EXACTLY;
 
   let substituted = true;
   for (let i = first + 1; i < length; i++) {
@@ -184,7 +264,7 @@ function alignsExceptOneSwapOrSubstitution(query: string, field: string, start: 
       break;
     }
   }
-  if (substituted) return true;
+  if (substituted) return first;
 
   // Adjacent transposition, which is the edit plain Levenshtein charges twice
   // for and the one people actually make — every case the issue reported
@@ -194,39 +274,49 @@ function alignsExceptOneSwapOrSubstitution(query: string, field: string, start: 
     query[first] !== field[start + first + 1] ||
     query[first + 1] !== field[start + first]
   ) {
-    return false;
+    return NO_ALIGNMENT;
   }
   for (let i = first + 2; i < length; i++) {
-    if (query[i] !== field[start + i]) return false;
+    if (query[i] !== field[start + i]) return NO_ALIGNMENT;
   }
-  return true;
+  return first;
 }
 
 /** One character too many in the query: drop it and the rest must line up. */
-function alignsWithOneExtraQueryChar(query: string, field: string, start: number): boolean {
+function alignWithOneExtraQueryChar(query: string, field: string, start: number): number {
   const windowLength = query.length - 1;
   let i = 0;
   while (i < windowLength && query[i] === field[start + i]) i++;
-  // Taking the FIRST mismatch is not a guess: everything before it already
-  // matches in place, so no earlier character can be the extra one.
+  // Dropping the character at the FIRST disagreement loses no alignment: a
+  // repeated run makes several positions equally droppable ("aab" against "ab"
+  // can lose either "a"), but any such edit slides across the equal run to this
+  // one, so if a one-edit alignment exists at all, this finds it.
   for (let j = i; j < windowLength; j++) {
-    if (query[j + 1] !== field[start + j]) return false;
+    if (query[j + 1] !== field[start + j]) return NO_ALIGNMENT;
   }
-  return true;
+  return i;
 }
 
-/** One character too few in the query: skip a field character instead. */
-function alignsWithOneExtraFieldChar(query: string, field: string, start: number): boolean {
+/**
+ * One character too few in the query: skip a field character instead.
+ *
+ * Reachable only when {@link scoreField} clamped a real match to zero, since a
+ * query missing one of a name's characters is otherwise still a subsequence of
+ * it and would have scored. Kept because that clamp is real on a long name, and
+ * because a matcher that tolerated an extra character but not a missing one
+ * would be arbitrary.
+ */
+function alignWithOneExtraFieldChar(query: string, field: string, start: number): number {
   const length = query.length;
   let i = 0;
   while (i < length && query[i] === field[start + i]) i++;
   // Ran the whole query without a mismatch: the extra field character is
   // trailing, which the equal-length window already accepted as distance 0.
-  if (i === length) return false;
+  if (i === length) return NO_ALIGNMENT;
   for (let j = i; j < length; j++) {
-    if (query[j] !== field[start + j + 1]) return false;
+    if (query[j] !== field[start + j + 1]) return NO_ALIGNMENT;
   }
-  return true;
+  return i;
 }
 
 /**
