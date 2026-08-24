@@ -6,7 +6,6 @@ import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip
 import { usePanelStore } from "@/store";
 import { isPtyPanel } from "@shared/types/panel";
 import { useShallow } from "zustand/react/shallow";
-import { formatTokenCount } from "@/utils/formatTokenCount";
 import { useResourceMonitoringStore } from "@/store/resourceMonitoringStore";
 import { TerminalResourceSparkline } from "./TerminalResourceSparkline";
 import { SubagentChip } from "./SubagentChip";
@@ -119,14 +118,13 @@ export function TerminalHeaderContent({
     });
   }, [resourceState, showResource]);
 
-  const { isInputLocked, sessionCost, sessionTokens } = usePanelStore(
+  const { isInputLocked, sessionCost } = usePanelStore(
     useShallow((state) => {
       const t = state.panelsById[id];
       const pty = t && isPtyPanel(t) ? t : undefined;
       return {
         isInputLocked: pty?.isInputLocked ?? false,
         sessionCost: pty?.sessionCost,
-        sessionTokens: pty?.sessionTokens,
       };
     })
   );
@@ -150,7 +148,6 @@ export function TerminalHeaderContent({
           style={{ fontVariantNumeric: "tabular-nums" }}
         >
           ${sessionCost.toFixed(2)}
-          {sessionTokens != null && ` · ${formatTokenCount(sessionTokens)}`}
         </span>
       );
     }
