@@ -10,6 +10,7 @@ import {
   setPluginProcessToolRegistry,
 } from "../../../shared/config/pluginProcessToolRegistry.js";
 import { AGENT_CLI_NAMES } from "../ProcessDetector/registries.js";
+import { AGENT_REGISTRY } from "../../../shared/config/agentRegistry.js";
 import { buildDetectedCandidate } from "../ProcessDetector/candidateHelpers.js";
 import {
   executablePositionLimit,
@@ -32,7 +33,7 @@ function agentCommitLogs(): string[] {
     .filter((message) => message.includes("agent identity committed"));
 }
 
-type ProcessNode = { pid: number; comm: string; command?: string };
+type ProcessNode = { pid: number; comm: string; command: string };
 
 function createCacheMock() {
   const listeners = new Set<() => void>();
@@ -1804,6 +1805,12 @@ describe("ProcessDetector", () => {
       cache.emitRefresh();
       cache.emitRefresh();
 
+      // Witness that the walk actually ran, so the absence below is a verdict
+      // rather than a detector that never started.
+      expect(callback).toHaveBeenCalledWith(
+        expect.objectContaining({ isBusy: true }),
+        expect.any(Number)
+      );
       expect(detector.getLastDetected()).toBeNull();
       for (const [result] of callback.mock.calls) {
         expect(result.agentType).toBeUndefined();
@@ -1848,9 +1855,11 @@ describe("ProcessDetector", () => {
       cache.setChildren(400, [
         {
           pid: 500,
-          comm: "Daintree Helper",
+          // `ProcessTreeCache.parseUnixLine` captures comm as `\S+`, so a real
+          // helper's comm arrives without the spaces its bundle path has.
+          comm: "Electron",
           command:
-            '"/Applications/Daintree.app/Contents/Frameworks/Daintree Helper.app/Contents/MacOS/Daintree Helper" --type=utility --utility-sub-type=node.mojom.NodeService',
+            "/repo/node_modules/electron/dist/Electron.app/Contents/Frameworks/Electron Helper.app/Contents/MacOS/Electron Helper --type=utility --utility-sub-type=node.mojom.NodeService",
         },
       ]);
       cache.setChildren(500, [{ pid: 600, comm: "zsh", command: "/bin/zsh -l" }]);
@@ -1873,11 +1882,17 @@ describe("ProcessDetector", () => {
       cache.emitRefresh();
       cache.emitRefresh();
 
+      // The walk ran and descended: it reached the boundary node's parent.
+      expect(cache.getChildren).toHaveBeenCalledWith(400);
+      expect(callback).toHaveBeenCalledWith(
+        expect.objectContaining({ isBusy: true }),
+        expect.any(Number)
+      );
       expect(detector.getLastDetected()).toBeNull();
       for (const [result] of callback.mock.calls) {
         expect(result.agentType).toBeUndefined();
       }
-      // The boundary node's subtree is never even fetched.
+      // ...and stopped there: the boundary node's subtree is never fetched.
       expect(cache.getChildren).not.toHaveBeenCalledWith(500);
     });
 
@@ -1909,8 +1924,9 @@ describe("ProcessDetector", () => {
       cache.setChildren(100, [
         {
           pid: 200,
-          comm: "Daintree Helper",
-          command: "Daintree Helper --type=utility --utility-sub-type=node.mojom.NodeService",
+          comm: "Electron",
+          command:
+            "/repo/node_modules/electron/dist/Electron Helper --type=utility --utility-sub-type=node.mojom.NodeService",
         },
       ]);
       cache.setChildren(200, [{ pid: 300, comm: "opencode", command: "opencode" }]);
@@ -1935,6 +1951,11 @@ describe("ProcessDetector", () => {
       cache.emitRefresh();
       cache.emitRefresh();
 
+      // A pruned child is still a running process: the terminal stays busy.
+      expect(callback).toHaveBeenCalledWith(
+        expect.objectContaining({ isBusy: true }),
+        expect.any(Number)
+      );
       expect(detector.getLastDetected()).toBeNull();
       expect(imagePathProbe.readBasename).not.toHaveBeenCalledWith(200);
       expect(cache.getChildren).not.toHaveBeenCalledWith(200);
@@ -2049,6 +2070,97 @@ describe("ProcessDetector", () => {
       expect(line).toContain("pid=<none>");
       expect(line).toContain("depth=<none>");
       expect(line).not.toContain("pid=200");
+    });
+
+    it("keeps tree provenance when both signals agree", () => {
+      const cache = createCacheMock();
+      // The wrapper must not name the agent itself, or it wins at depth 1 and
+      // the walk never reaches the process this test is about.
+      cache.setChildren(100, [{ pid: 200, comm: "sh", command: "sh -c launch" }]);
+      cache.setChildren(200, [{ pid: 300, comm: "node", command: "node /opt/bin/opencode" }]);
+      const callback = vi.fn();
+
+      const detector = new ProcessDetector(
+        "terminal-commit-both",
+        Date.now(),
+        100,
+        callback,
+        cache as never,
+        false
+      );
+      detector.injectShellCommandEvidence(
+        { agentType: "opencode", processIconId: "opencode", processName: "opencode" },
+        "opencode"
+      );
+      detector.start();
+      cache.emitRefresh();
+
+      const [line] = agentCommitLogs();
+      expect(line).toContain("evidence=both");
+      expect(line).toContain("pid=300");
+      expect(line).toContain("depth=2");
+    });
+
+    it("names the image path when that is what identified the process", () => {
+      // The #8790 shape: the CLI rewrote comm and argv, and only the on-disk
+      // binary still says what it is.
+      const cache = createCacheMock();
+      cache.setChildren(100, [{ pid: 200, comm: "Ask anything", command: "Ask anything" }]);
+      const imagePathProbe = {
+        readBasename: vi.fn((pid: number) => (pid === 200 ? "opencode" : null)),
+        evict: vi.fn(),
+        dispose: vi.fn(),
+      };
+      const callback = vi.fn();
+
+      const detector = new ProcessDetector(
+        "terminal-commit-image",
+        Date.now(),
+        100,
+        callback,
+        cache as never,
+        true,
+        imagePathProbe as never
+      );
+      detector.start();
+      cache.emitRefresh();
+      cache.emitRefresh();
+
+      const [line] = agentCommitLogs();
+      expect(line).toContain("agent=opencode");
+      expect(line).toContain("match=image_path");
+      expect(line).toContain("pid=200");
+    });
+
+    it("does not leak a Windows path through the redacted argv0", () => {
+      // `splitShellLikeCommand` eats backslashes as escapes, which would flatten
+      // the path into one separator-less token and persist the whole thing —
+      // home directory and project name included — to the log file.
+      const cache = createCacheMock();
+      cache.setChildren(100, [
+        {
+          pid: 200,
+          comm: "opencode.cmd",
+          command: '"C:\\Users\\alice\\secret-project\\opencode.cmd" --resume',
+        },
+      ]);
+      const callback = vi.fn();
+
+      const detector = new ProcessDetector(
+        "terminal-commit-winpath",
+        Date.now(),
+        100,
+        callback,
+        cache as never
+      );
+      detector.start();
+      cache.emitRefresh();
+      cache.emitRefresh();
+
+      const [line] = agentCommitLogs();
+      expect(line).toContain('argv0="opencode.cmd"');
+      expect(line).not.toContain("alice");
+      expect(line).not.toContain("secret-project");
     });
 
     it("does not log an agent commit for a non-agent icon", () => {
@@ -2423,14 +2535,16 @@ describe("executable position bounds (#11931)", () => {
   });
 
   it("stops detectCommandIdentity promoting an agent named by an argument", () => {
-    for (const command of [
-      `cat ${agentPath}`,
-      `git log -- ${agentPath}`,
-      `nvim ${agentPath}`,
-      "npm run opencode",
-      "uv run opencode",
+    // Compared against the same command over a neutral file: naming an agent
+    // in an operand must change nothing about how the command resolves.
+    for (const [agentArg, neutralArg] of [
+      [`cat ${agentPath}`, "cat /repo/README.md"],
+      [`git log -- ${agentPath}`, "git log -- /repo/README.md"],
+      [`nvim ${agentPath}`, "nvim /repo/README.md"],
+      ["npm run opencode", "npm run build"],
+      ["uv run opencode", "uv run build"],
     ]) {
-      expect(detectCommandIdentity(command)?.agentType, command).toBeUndefined();
+      expect(detectCommandIdentity(agentArg), agentArg).toEqual(detectCommandIdentity(neutralArg));
     }
   });
 
@@ -2453,10 +2567,18 @@ describe("executable position bounds (#11931)", () => {
 
   it("stops buildDetectedCandidate branding a file-reading process", () => {
     expect(buildDetectedCandidate("cat", `cat ${agentPath}`, 0)).toBeNull();
-    // Neovim keeps its own icon; it just does not become the agent.
-    const editor = buildDetectedCandidate("nvim", `nvim ${agentPath}`, 0);
-    expect(editor?.agentType).toBeUndefined();
-    expect(editor?.processIconId).toBe("neovim");
+    // Neovim keeps whatever identity it has over any other file; opening an
+    // agent-named one just does not change it.
+    const identityOf = (command: string) => {
+      const candidate = buildDetectedCandidate("nvim", command, 0);
+      expect(candidate, command).not.toBeNull();
+      return {
+        agentType: candidate?.agentType,
+        processIconId: candidate?.processIconId,
+        processName: candidate?.processName,
+      };
+    };
+    expect(identityOf(`nvim ${agentPath}`)).toEqual(identityOf("nvim /repo/README.md"));
   });
 
   it("records where the winning name was read from", () => {
@@ -2475,24 +2597,47 @@ describe("executable position bounds (#11931)", () => {
   });
 
   it("omits provenance when no origin is supplied", () => {
-    expect(buildDetectedCandidate("opencode", "opencode", 0)?.provenance).toBeUndefined();
+    const candidate = buildDetectedCandidate("opencode", "opencode", 0);
+    expect(candidate).not.toBeNull();
+    expect(candidate?.provenance).toBeUndefined();
   });
 });
 
 describe("agent CLI name aliases", () => {
-  it("does not register a generic package tail as an agent name", () => {
-    // `@ampcode/cli` would otherwise make every `node …/cli.js` an Amp
-    // terminal — `npx electron .` launches exactly that. #11931
-    for (const generic of ["cli", "code", "agent", "app", "bin", "core", "main"]) {
-      expect(AGENT_CLI_NAMES[generic], generic).toBeUndefined();
+  it("registers no alias that does not name its own agent", () => {
+    // The invariant, not a copy of any list: every registered name must carry
+    // its agent's id or command as a token. `@ampcode/cli` yielded the bare
+    // alias `cli`, which made every Node CLI launched as `node …/cli.js` — the
+    // Electron launcher `npx electron .` runs included — an Amp terminal. #11931
+    for (const [alias, agentId] of Object.entries(AGENT_CLI_NAMES)) {
+      const command = AGENT_REGISTRY[agentId].command.toLowerCase();
+      const lowerAlias = alias.toLowerCase();
+      const lowerId = agentId.toLowerCase();
+      const tokens = lowerAlias.split(/[^a-z0-9]+/);
+      const namesItsAgent =
+        lowerAlias === lowerId ||
+        lowerAlias === command ||
+        tokens.includes(lowerId) ||
+        tokens.includes(command);
+      expect(namesItsAgent, `${alias} -> ${agentId}`).toBe(true);
     }
   });
 
-  it("still registers each agent's own command and id", () => {
-    expect(AGENT_CLI_NAMES["amp"]).toBe("amp");
-    expect(AGENT_CLI_NAMES["opencode"]).toBe("opencode");
-    // A distinctive tail is still a useful alias.
-    expect(AGENT_CLI_NAMES["claude-code"]).toBe("claude");
+  it("keeps every agent reachable by its own command and id", () => {
+    for (const [agentId, config] of Object.entries(AGENT_REGISTRY)) {
+      expect(AGENT_CLI_NAMES[config.command], config.command).toBe(agentId);
+      expect(AGENT_CLI_NAMES[agentId], agentId).toBe(agentId);
+    }
+  });
+
+  it("does not resolve an agent from a generic Node CLI entry point", () => {
+    // The end-to-end shape of the `cli` regression, through the real registry.
+    expect(detectCommandIdentity("node /repo/node_modules/electron/cli.js .")).toEqual(
+      detectCommandIdentity("node /repo/node_modules/electron/launcher.js .")
+    );
+    expect(detectCommandIdentity("node /repo/node_modules/electron/cli.js .")?.agentType).toBe(
+      undefined
+    );
   });
 });
 
@@ -2508,6 +2653,13 @@ describe("isChromiumChildProcess", () => {
     ]) {
       expect(isChromiumChildProcess(command), command).toBe(true);
     }
+  });
+
+  it("treats the switch alone as sufficient, by design", () => {
+    // A non-Chromium process taking an exact `--type=utility` loses its
+    // subtree. That is the accepted cost of never missing a real boundary —
+    // a false negative here is the nested-instance bug returning. #11931
+    expect(isChromiumChildProcess("node orchestrator.js --type=utility")).toBe(true);
   });
 
   it("ignores unrelated, partial or operand `--type=` text", () => {

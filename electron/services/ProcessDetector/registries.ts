@@ -4,19 +4,24 @@ import { getPluginProcessToolRegistry } from "../../../shared/config/pluginProce
 import { PROCESS_TOOL_ICON_BY_COMMAND } from "../../../shared/config/processToolRegistry.js";
 
 /**
- * Package tails too generic to identify an agent. `@ampcode/cli` would
- * otherwise register the bare name `cli`, and every Node CLI launched as
- * `node …/cli.js` — `npx electron .` among them — would resolve to that
- * agent. The tail is a convenience alias, so dropping an ambiguous one costs
- * nothing: the agent's own command and id still register. #11931
+ * Is this package tail specific enough to stand alone as an agent name?
+ *
+ * The tail is a convenience alias, so it only earns registration when it
+ * actually names its agent: one of its `-`/`_`-separated tokens must be the
+ * agent's id or command. `@anthropic-ai/claude-code` → `claude-code` keeps its
+ * alias; `@ampcode/cli` → `cli` loses it, because nothing about `cli` says
+ * Amp, and registering it made every Node CLI launched as `node …/cli.js` —
+ * `npx electron .` among them — resolve to that agent. #11931
  */
-const GENERIC_PACKAGE_TAILS = new Set(["cli", "code", "agent", "app", "bin", "core", "main"]);
+function isAgentSpecificTail(tail: string, id: string, command: string): boolean {
+  const tokens = tail.toLowerCase().split(/[^a-z0-9]+/);
+  return tokens.includes(id.toLowerCase()) || tokens.includes(command.toLowerCase());
+}
 
 function packageTail(pkg: string | undefined): string | undefined {
   if (!pkg) return undefined;
   const tail = pkg.split("/").pop();
-  if (!tail || tail.length === 0) return undefined;
-  return GENERIC_PACKAGE_TAILS.has(tail.toLowerCase()) ? undefined : tail;
+  return tail && tail.length > 0 ? tail : undefined;
 }
 
 /** Reads `packages.npm` first; falls back to deprecated top-level `npmGlobalPackage`. */
@@ -42,7 +47,12 @@ export const AGENT_CLI_NAMES: Record<string, BuiltInAgentId> = Object.assign(
         entries.push([id, id as BuiltInAgentId]);
       }
       const tail = packageTail(effectiveNpmPackage(config));
-      if (tail && tail !== config.command && tail !== id) {
+      if (
+        tail &&
+        tail !== config.command &&
+        tail !== id &&
+        isAgentSpecificTail(tail, id, config.command)
+      ) {
         entries.push([tail, id as BuiltInAgentId]);
       }
       return entries;
@@ -58,7 +68,12 @@ const AGENT_ICON_BY_COMMAND: Record<string, string> = Object.fromEntries(
       entries.push([config.command, config.iconId]);
     }
     const tail = packageTail(effectiveNpmPackage(config));
-    if (tail && tail !== config.command && tail !== id) {
+    if (
+      tail &&
+      tail !== config.command &&
+      tail !== id &&
+      isAgentSpecificTail(tail, id, config.command)
+    ) {
       entries.push([tail, config.iconId]);
     }
     return entries;

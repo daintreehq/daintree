@@ -109,9 +109,28 @@ export function extractScriptBasenameFromCommand(command: string | undefined): s
 // secrets inline (e.g. `claude --api-key=…`, `gh auth --token …`). Keep only
 // argv[0]'s basename so log noise still identifies the runtime without
 // leaking credentials into console or into window.__daintreeIdentityEvents().
+/**
+ * argv[0] as written — quotes removed, path separators intact.
+ *
+ * Deliberately not `splitShellLikeCommand`, which treats `\` as an escape.
+ * That flattens a Windows path (`"C:\Users\me\proj\claude.cmd"` becomes
+ * `C:Usersmeprojclaude.cmd`), so the basename split below finds no separator
+ * and the whole path — home directory and project name included — survives
+ * into a log that is persisted to disk.
+ */
+function firstCommandToken(command: string): string {
+  const trimmed = command.trim();
+  const quote = trimmed[0];
+  if (quote === '"' || quote === "'") {
+    const end = trimmed.indexOf(quote, 1);
+    return end === -1 ? trimmed.slice(1) : trimmed.slice(1, end);
+  }
+  return trimmed.split(/\s+/)[0] ?? "";
+}
+
 export function redactArgv(command: string | undefined): string {
   if (!command) return "";
-  const first = splitShellLikeCommand(command)[0];
+  const first = firstCommandToken(command);
   if (!first) return "";
   const basename = first.split(/[\\/]/).pop() ?? first;
   return JSON.stringify(basename);
@@ -158,7 +177,6 @@ const SHELL_AND_PREFIX_EXECUTORS = new Set([
   "setsid",
   "command",
   "exec",
-  "script",
   "mise",
   "asdf",
   "rtx",
@@ -234,6 +252,11 @@ const CHROMIUM_CHILD_PROCESS_TYPES = new Set([
  *
  * Matched on an exact argv token so an unrelated `--type=json` flag, a path
  * containing the string, or an operand after `--` cannot trip it.
+ *
+ * The switch alone is the signal — no corroborating Chromium flag is required.
+ * That accepts a rare false positive (a non-Chromium process that happens to
+ * take `--type=utility` loses its subtree) to avoid a false negative, which
+ * would let the nested-instance bleed-through straight back in.
  */
 export function isChromiumChildProcess(command: string | undefined): boolean {
   if (!command || !command.includes("--type=")) return false;
