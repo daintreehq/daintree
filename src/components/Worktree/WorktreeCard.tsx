@@ -29,7 +29,7 @@ import { actionService } from "@/services/ActionService";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { cn } from "../../lib/utils";
-import { isExternalWorktree } from "@/lib/worktreeFilters";
+import { copyableBranchName, isExternalWorktree } from "@/lib/worktreeFilters";
 import { getAgentConfig, getAgentIds } from "@/config/agents";
 import { isAssistantOnlyAgentId } from "@shared/config/agentIds";
 import { getAgentSettingsEntry } from "@/types";
@@ -496,10 +496,8 @@ export function WorktreeCard({
 
   const { copy: copyBranchName } = useCopyWithFeedback({ announcement: "Branch name copied" });
   const handleCopyBranchName = () => {
-    const branch = worktree.branch;
-    // The menu already hides the item in both cases; re-checking keeps a stale
-    // callback from copying the branch a detached worktree has left behind.
-    if (!branch || worktree.isDetached) return;
+    const branch = copyableBranchName(worktree);
+    if (!branch) return;
     void copyBranchName(branch);
   };
 

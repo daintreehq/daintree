@@ -81,10 +81,6 @@ describe("WorktreeMenuItems — Copy branch name (#11930)", () => {
   });
 
   it("withholds the item on a detached HEAD still carrying its pre-detach branch", () => {
-    // The status pass only overwrites `branch` when it reads a *new* one, so a
-    // worktree that detaches keeps the old name beside `isDetached: true`. The
-    // branch is no longer checked out — offering to copy it would hand back a
-    // name that doesn't describe this worktree any more.
     renderMenu(makeWorktree({ isDetached: true }));
 
     expect(screen.queryByText("Copy branch name")).toBeNull();
@@ -102,11 +98,12 @@ describe("WorktreeMenuItems — Copy branch name (#11930)", () => {
   it("places the item directly under Copy Path, so the two copy targets read together", () => {
     renderMenu(makeWorktree());
 
-    const labels = screen.getAllByRole("button").map((el) => el.textContent);
-    const copyPathAt = labels.findIndex((t) => t?.includes("Copy Path"));
-    const copyBranchAt = labels.findIndex((t) => t?.includes("Copy branch name"));
+    // Sibling order, not button indices: an index comparison stays green if a
+    // separator or label gets inserted between the two, since neither renders
+    // as a button.
+    const copyPath = screen.getByText("Copy Path");
+    const copyBranch = screen.getByText("Copy branch name");
 
-    expect(copyPathAt).toBeGreaterThanOrEqual(0);
-    expect(copyBranchAt).toBe(copyPathAt + 1);
+    expect(copyPath.nextElementSibling).toBe(copyBranch);
   });
 });
