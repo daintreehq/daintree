@@ -42,7 +42,11 @@ const GRAPHIC = 3;
  * why this runs under the jsdom environment the suite already uses.
  */
 function paletteFor(scheme: (typeof BUILT_IN_SCHEMES)[number]) {
-  return buildAssistantPalette(resolveInputBarColors(scheme.colors));
+  // The raw ANSI slots go in ALONGSIDE the narrowed colours: fenced-code syntax is
+  // coloured from the 16-colour half that `resolveInputBarColors` throws away, and
+  // omitting it here would exercise only the fallbacks — asserting floors on colours
+  // no user ever sees.
+  return buildAssistantPalette(resolveInputBarColors(scheme.colors), scheme.colors);
 }
 
 /** Every ink that must be READ, and the ground it is read against. */
@@ -53,6 +57,16 @@ const TEXT_TIERS = [
   "--assistant-warning",
   "--assistant-success",
   "--assistant-accent",
+  // Inline code, and the five roles a fenced block is painted with. All READ, all
+  // therefore on the text floor — including comments, which is the tempting exception
+  // and the wrong one: a comment is prose, and often the line in a snippet that most
+  // needs reading.
+  "--assistant-code",
+  "--assistant-syntax-comment",
+  "--assistant-syntax-keyword",
+  "--assistant-syntax-string",
+  "--assistant-syntax-number",
+  "--assistant-syntax-function",
 ] as const;
 
 /** Icons, focus rings, state dots — recognisable rather than readable. */
@@ -202,7 +216,7 @@ const ADVERSARIAL: { name: string; colors: ITheme }[] = [
 describe("adversarial themes", () => {
   for (const theme of ADVERSARIAL) {
     it(`stays legible: ${theme.name}`, () => {
-      const palette = buildAssistantPalette(resolveInputBarColors(theme.colors));
+      const palette = buildAssistantPalette(resolveInputBarColors(theme.colors), theme.colors);
       const failures: string[] = [];
       for (const tier of TEXT_TIERS) {
         for (const ground of GROUNDS) {
@@ -234,7 +248,7 @@ describe("adversarial themes", () => {
     });
 
     it(`emits only well-formed colours: ${theme.name}`, () => {
-      const palette = buildAssistantPalette(resolveInputBarColors(theme.colors));
+      const palette = buildAssistantPalette(resolveInputBarColors(theme.colors), theme.colors);
       for (const [name, value] of Object.entries(palette)) {
         expect(value, `${name} is not a hex colour`).toMatch(/^#[0-9a-f]{6}$/);
       }
@@ -303,5 +317,96 @@ describe("the panel takes its colour only from the palette", () => {
       }
     }
     expect(offenders, `opacity on panel text:\n  ${offenders.join("\n  ")}`).toEqual([]);
+  });
+});
+
+/**
+ * The floors prove every ink is LEGIBLE. They cannot prove any ink came from the theme.
+ *
+ * A palette that ignored the ANSI slots entirely — mapping all five syntax roles to one
+ * readable grey — would pass every assertion above, on every scheme. So would one that
+ * swapped keyword and string. These test the WIRING: change one slot in the terminal
+ * theme, and exactly the token that reads it must move.
+ *
+ * Written differentially rather than by asserting hex values, which would just copy the
+ * implementation into the test and have to be re-copied whenever it changed.
+ */
+describe("syntax inks are derived from the terminal's own ANSI slots", () => {
+  // A dark ground with a light foreground and generous headroom, so every slot below
+  // clears the floor untouched and any difference in the output is the mapping rather
+  // than a correction.
+  const BASE: ITheme = {
+    background: "#101010",
+    foreground: "#e0e0e0",
+    cursor: "#ffffff",
+    brightBlack: "#8a8a8a",
+    green: "#7fd68a",
+    blue: "#7fb0ff",
+    magenta: "#d79cff",
+    cyan: "#7fe0e0",
+  };
+
+  const SLOT_TO_TOKEN = [
+    ["brightBlack", "--assistant-syntax-comment"],
+    ["green", "--assistant-syntax-string"],
+    ["blue", "--assistant-syntax-function"],
+    ["magenta", "--assistant-syntax-keyword"],
+    ["cyan", "--assistant-syntax-number"],
+  ] as const;
+
+  for (const [slot, token] of SLOT_TO_TOKEN) {
+    it(`routes ANSI ${slot} to ${token}, and nothing else`, () => {
+      const before = buildAssistantPalette(resolveInputBarColors(BASE), BASE);
+      // A different hue, still with plenty of headroom on this ground, so the change
+      // cannot be swallowed by a contrast correction.
+      const changed: ITheme = { ...BASE, [slot]: "#ff9d5c" };
+      const after = buildAssistantPalette(resolveInputBarColors(changed), changed);
+
+      expect(after[token], `${token} ignored ANSI ${slot}`).not.toBe(before[token]);
+
+      for (const [, other] of SLOT_TO_TOKEN) {
+        if (other === token) continue;
+        expect(after[other], `${other} moved when only ANSI ${slot} changed`).toBe(before[other]);
+      }
+    });
+  }
+
+  it("keeps every syntax role DISTINCT when the theme gives distinct slots", () => {
+    // Five roles collapsing to one value is the failure the floors cannot see: it is
+    // perfectly legible and carries no information.
+    const palette = buildAssistantPalette(resolveInputBarColors(BASE), BASE);
+    const inks = SLOT_TO_TOKEN.map(([, token]) => palette[token]);
+    expect(new Set(inks).size).toBe(SLOT_TO_TOKEN.length);
+  });
+
+  it("still clears the text floor when a slot is POISONED to the ground", () => {
+    // A custom scheme whose green equals its background. The correction has to rescue
+    // it, because a comment painted in the background colour is an invisible line of
+    // source that the reader has no way to know is there.
+    const poisoned: ITheme = { ...BASE, green: BASE.background, brightBlack: BASE.background };
+    const palette = buildAssistantPalette(resolveInputBarColors(poisoned), poisoned);
+    for (const token of ["--assistant-syntax-string", "--assistant-syntax-comment"] as const) {
+      for (const ground of GROUNDS) {
+        expect(
+          contrast(parse(palette[token]!), parse(palette[ground]!)),
+          `${token} on ${ground}`
+        ).toBeGreaterThanOrEqual(TEXT - 1e-9);
+      }
+    }
+  });
+
+  it("emits a complete, legible palette when the ANSI half is omitted entirely", () => {
+    // `ansi` is optional, so this path is reachable by construction. It must degrade to
+    // the panel's own derived colours rather than to `undefined` reaching the CSS.
+    const palette = buildAssistantPalette(resolveInputBarColors(BASE));
+    for (const tier of TEXT_TIERS) {
+      expect(palette[tier], `${tier} missing without ANSI`).toMatch(/^#[0-9a-f]{6}$/);
+      for (const ground of GROUNDS) {
+        expect(
+          contrast(parse(palette[tier]!), parse(palette[ground]!)),
+          `${tier} on ${ground}`
+        ).toBeGreaterThanOrEqual(TEXT - 1e-9);
+      }
+    }
   });
 });

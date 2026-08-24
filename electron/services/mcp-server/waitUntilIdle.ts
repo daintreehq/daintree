@@ -235,12 +235,13 @@ async function waitForTerminalIdle(
 
   let unsubscribe: (() => void) | undefined;
   let unsubscribeKilled: (() => void) | undefined;
+  let unsubscribeTrash: (() => void) | undefined;
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   let abortListener: (() => void) | undefined;
   let settled = false;
 
   const cleanup = () => {
-    for (const off of [unsubscribe, unsubscribeKilled]) {
+    for (const off of [unsubscribe, unsubscribeKilled, unsubscribeTrash]) {
       if (!off) continue;
       try {
         off();
@@ -250,6 +251,7 @@ async function waitForTerminalIdle(
     }
     unsubscribe = undefined;
     unsubscribeKilled = undefined;
+    unsubscribeTrash = undefined;
     if (timeoutHandle !== undefined) {
       clearTimeout(timeoutHandle);
       timeoutHandle = undefined;
@@ -272,6 +274,11 @@ async function waitForTerminalIdle(
       }
     | { kind: "already-idle"; snapshot: Readonly<TerminalAgentSnapshot> }
     | { kind: "killed" }
+    // The user closed the terminal. Settled the moment the trash starts, not
+    // `TRASH_TTL_MS` later when the underlying process is actually killed and
+    // reports a normal exit — a wait is answering "should I still expect this
+    // terminal to do anything", and the user's own close already answered that.
+    | { kind: "closed"; timestamp: number }
     | { kind: "timeout" }
     | { kind: "abort" };
 
@@ -332,6 +339,26 @@ async function waitForTerminalIdle(
         if (payload.terminalId !== terminalId) return;
         settle({ kind: "killed" });
       });
+
+      unsubscribeTrash = events.on("terminal:trashed", (payload) => {
+        if (payload.id !== terminalId) return;
+        // Read the store's own timestamp rather than stamping "now": both fire in
+        // the same tick as the real event, but going through one source of truth
+        // means this and the already-trashed check below can never disagree.
+        settle({ kind: "closed", timestamp: store.getTrashedAt(terminalId) ?? Date.now() });
+      });
+
+      // Ahead of the snapshot re-read below, both branches of which would speak for
+      // this terminal in the wrong terms: a trashed terminal still holds a working
+      // snapshot until its TTL expires, and once released it has none at all, so
+      // without this a user's own close reports `unknown` rather than `closed`.
+      if (store.isTrashed(terminalId)) {
+        // Trashed before this call even started. The moment matters: a caller
+        // that re-polls during the same trash TTL must see the SAME transition
+        // timestamp each time, not a fresh "now" per call.
+        settle({ kind: "closed", timestamp: store.getTrashedAt(terminalId) ?? Date.now() });
+        return;
+      }
 
       // Re-read now that the listeners are live, and keep the whole snapshot:
       // the result is built after the await, by which point the terminal may
@@ -398,6 +425,23 @@ async function waitForTerminalIdle(
         previousBusyState: mapAgentStateToBusyState(settlement.previousState),
         lastTransitionAt: settlement.timestamp,
         ...exitFields(settlement.state, settlement.exitCode, settlement.exitSignal),
+        timedOut: false,
+      };
+    }
+
+    if (settlement.kind === "closed") {
+      // No exit code: the process is still tearing down through its trash TTL,
+      // not settled yet. Reporting one here would mean either lying (there is
+      // none) or blocking on it anyway, which is exactly what this branch
+      // exists to avoid.
+      return {
+        terminalId,
+        agentId,
+        busyState: "idle",
+        idleReason: "closed",
+        trackingState: currentTrackingState(),
+        previousBusyState: mapAgentStateToBusyState(previousState),
+        lastTransitionAt: settlement.timestamp,
         timedOut: false,
       };
     }
@@ -646,6 +690,27 @@ async function waitForBatchIdle(
       });
       continue;
     }
+    if (store.isTrashed(terminalId)) {
+      // Closed before this call even started — settle it the same way a live
+      // close does, rather than falling through to the "working" seed below and
+      // waiting out the rest of its trash TTL for nothing. previousBusyState is
+      // the agent's actual last-known state, not assumed "working": the agent
+      // could have gone idle, or finished, before the user closed it. Read off
+      // this terminal's own snapshot, which answers for it alone — a sibling
+      // running the same agent type cannot speak for it (#12494).
+      tracks.set(terminalId, {
+        terminalId,
+        agentId: snapshot.agentId,
+        settled: true,
+        busyState: "idle",
+        idleReason: "closed",
+        previousBusyState: mapAgentStateToBusyState(snapshot.state),
+        // Read the store's own timestamp, not "now": a caller that re-polls
+        // during the same trash TTL must see the same transition each time.
+        lastTransitionAt: store.getTrashedAt(terminalId) ?? Date.now(),
+      });
+      continue;
+    }
     tracks.set(terminalId, {
       terminalId,
       agentId: snapshot.agentId,
@@ -670,12 +735,13 @@ async function waitForBatchIdle(
 
   let unsubscribe: (() => void) | undefined;
   let unsubscribeKilled: (() => void) | undefined;
+  let unsubscribeTrash: (() => void) | undefined;
   let timeoutHandle: ReturnType<typeof setTimeout> | undefined;
   let abortListener: (() => void) | undefined;
   let settled = false;
 
   const cleanup = () => {
-    for (const off of [unsubscribe, unsubscribeKilled]) {
+    for (const off of [unsubscribe, unsubscribeKilled, unsubscribeTrash]) {
       if (!off) continue;
       try {
         off();
@@ -685,6 +751,7 @@ async function waitForBatchIdle(
     }
     unsubscribe = undefined;
     unsubscribeKilled = undefined;
+    unsubscribeTrash = undefined;
     if (timeoutHandle !== undefined) {
       clearTimeout(timeoutHandle);
       timeoutHandle = undefined;
@@ -733,6 +800,22 @@ async function waitForBatchIdle(
         const track = tracks.get(payload.terminalId);
         if (!track || track.settled) return;
         settleTrackAsKilled(track);
+        if (predicateMet()) finish("settled");
+      });
+
+      // A closed terminal settles on its own signal, immediately — not
+      // `TRASH_TTL_MS` later when the underlying process is actually killed and
+      // reports a normal exit. Same reasoning as the single-terminal handler.
+      unsubscribeTrash = events.on("terminal:trashed", (payload) => {
+        const track = tracks.get(payload.id);
+        if (!track || track.settled) return;
+        // previousBusyState is already "working" from the seed — every track
+        // that reaches here (unsettled) was seeded that way and nothing since
+        // has overwritten it.
+        track.settled = true;
+        track.busyState = "idle";
+        track.idleReason = "closed";
+        track.lastTransitionAt = store.getTrashedAt(payload.id) ?? Date.now();
         if (predicateMet()) finish("settled");
       });
 

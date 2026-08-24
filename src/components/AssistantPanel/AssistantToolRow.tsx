@@ -172,7 +172,12 @@ export const AssistantToolRow = memo(function AssistantToolRow({ call }: Assista
           ) : (
             <span className="truncate text-[0.92em] text-[var(--assistant-fg)]">{call.toolId}</span>
           )}
-          {call.danger && (
+          {/* Only while the call is actually BLOCKED on the user. The engine tags every
+              mutating call this way regardless of outcome, so showing it on a settled
+              row — after the user already approved it, or auto-approve did — repeats
+              amber alarm colour on a decision that is no longer live. Five agents
+              spawned and checked off is not five things needing attention. */}
+          {call.danger && call.state === "waiting" && (
             <TriangleAlert
               aria-label="Mutating action"
               className="size-3 shrink-0 text-[var(--assistant-warning-graphic)]"
