@@ -531,9 +531,10 @@ export class ProjectStore {
    * permissions, anything unrecognized) throws its own code instead, because
    * callers use a negative answer to withdraw a project's git identity and must
    * never do that off a transient failure. `WorkspaceService.isGitRepository`
-   * deliberately makes the opposite trade (any failure means "no repository")
-   * and is correct for withholding features, but must not drive a stored
-   * classification.
+   * once made the opposite trade — any failure meant "no repository" — which is
+   * what let a transient spawn failure empty a real repo's worktree sidebar
+   * behind a `success: true` load (#11922). It now draws the same line this
+   * does, so the two agree on what counts as a negative answer.
    */
   async classifyGitBacking(
     projectPath: string

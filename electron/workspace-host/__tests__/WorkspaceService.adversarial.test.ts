@@ -5,6 +5,26 @@ import { afterEach, beforeEach, describe, expect, it, vi, type Mock } from "vite
 import { createHardenedGit } from "../../utils/hardenedGit.js";
 import type { WorkspaceService } from "../WorkspaceService.js";
 import type { WorkspaceHostEvent } from "../../../shared/types/workspace-host.js";
+import { getGitRecoveryHint } from "../../../shared/utils/gitOperationErrors.js";
+import {
+  GIT_DUBIOUS_OWNERSHIP_STDERR,
+  GIT_NOT_A_REPOSITORY_STDERR,
+  REPOSITORY_PROBE_COMMANDS,
+  SIMPLE_GIT_MISSING_BINARY_MESSAGE,
+  simpleGitBlockTimeoutError,
+  simpleGitCwdDeniedError,
+  simpleGitMissingBinaryError,
+  simpleGitStderrError,
+} from "../../../shared/testing/simpleGitErrorFixtures.js";
+
+// Spread the original: the module has a wide surface and other modules in this
+// graph import exports beyond `logWarn`. It pulls in no Electron, so importing
+// it here is safe.
+const logWarnMock = vi.hoisted(() => vi.fn());
+vi.mock("../../utils/logger.js", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("../../utils/logger.js")>()),
+  logWarn: logWarnMock,
+}));
 
 const mockSimpleGit = {
   raw: vi.fn(),
@@ -257,19 +277,269 @@ describe("WorkspaceService adversarial", () => {
       expect(monitorCount()).toBe(0);
     });
 
-    it("treats a throwing repository probe as no repository", async () => {
-      // simple-git rejects rather than answering false on permission denials
-      // and other environment faults.
-      mockSimpleGit.checkIsRepo.mockRejectedValue(new Error("EACCES"));
+    it("still takes the non-repository path when git's own answer arrives as a throw", async () => {
+      // simple-git's `checkIsRepoTask.onError` converts exit code 128 plus a
+      // "not a git repository" message into a resolved `false`, so this should
+      // be unreachable — the classifier backstop exists in case it ever stops
+      // doing so. Either way git ran and answered, which is not a failure.
+      mockSimpleGit.checkIsRepo.mockRejectedValue(
+        simpleGitStderrError(GIT_NOT_A_REPOSITORY_STDERR)
+      );
 
-      await service.loadProject("req-denied", "/downloads", "ws-plain");
+      await service.loadProject("req-backstop", "/downloads", "ws-plain");
 
       expect(sentEvents).toContainEqual({
         type: "load-project-result",
-        requestId: "req-denied",
+        requestId: "req-backstop",
         success: true,
       });
       expect(monitorCount()).toBe(0);
+      expect(logWarnMock).not.toHaveBeenCalled();
+    });
+  });
+
+  /**
+   * A probe that could not answer is not an answer of "no".
+   *
+   * The bare `catch { return false }` this replaces was the sole mechanism
+   * turning a transient environment fault — a spawn failure against a cwd
+   * OneDrive had not hydrated, the 30s block timeout, an antivirus
+   * interposition — into "this folder has no repository". The load then
+   * reported `success: true` with zero monitors, so the renderer got an
+   * authoritative empty worktree list, and Retry re-foregrounded the same warm
+   * host instead of reloading it: recovery was impossible without a restart.
+   */
+  describe("a repository probe that cannot answer (#11922)", () => {
+    function monitorCount(): number {
+      return (service["monitors"] as Map<string, unknown>).size;
+    }
+
+    const CANNOT_ANSWER = [
+      {
+        label: "a spawn failure whose provenance simple-git destroyed",
+        error: () => simpleGitMissingBinaryError(REPOSITORY_PROBE_COMMANDS),
+        reason: "git-not-installed",
+      },
+      {
+        // simple-git spawns with `{ cwd }`, so a directory git cannot enter
+        // fails before git runs and is laundered the same way a missing binary
+        // is — git never prints a `fatal:` line for this at all.
+        label: "a working directory git cannot enter",
+        error: () => simpleGitCwdDeniedError(),
+        reason: "system-io-error",
+      },
+      {
+        label: "the block timeout killing the child",
+        error: () => simpleGitBlockTimeoutError(),
+        reason: "unknown",
+      },
+      {
+        label: "git refusing a repository it does not trust",
+        error: () => simpleGitStderrError(GIT_DUBIOUS_OWNERSHIP_STDERR),
+        reason: "dubious-ownership",
+      },
+    ] as const;
+
+    for (const probeCase of CANNOT_ANSWER) {
+      it(`reports the load as failed on ${probeCase.label}`, async () => {
+        mockSimpleGit.checkIsRepo.mockRejectedValue(probeCase.error());
+
+        await service.loadProject("req-probe", "/repo", "ws-probe");
+
+        const result = sentEvents.find((e) => e.type === "load-project-result");
+        expect(result).toMatchObject({ requestId: "req-probe", success: false });
+        // Rejecting the request is what makes `WorkspaceHostPool` dispose the
+        // entry and issue a real reload; a `success: true` here is what left
+        // Retry re-foregrounding an empty host forever.
+        expect(sentEvents.some((e) => e.type === "load-project-result" && e.success)).toBe(false);
+        expect(monitorCount()).toBe(0);
+      });
+
+      it(`logs the classified reason for ${probeCase.label}`, async () => {
+        mockSimpleGit.checkIsRepo.mockRejectedValue(probeCase.error());
+
+        await service.loadProject("req-probe", "/repo", "ws-probe");
+
+        // Through the app logger rather than `console.warn`, which production
+        // esbuild strips — the packaged build is the only one this has been
+        // seen in, and its diagnostics bundle said nothing at all.
+        expect(logWarnMock).toHaveBeenCalledWith(
+          expect.any(String),
+          expect.objectContaining({ projectRootPath: "/repo", gitReason: probeCase.reason })
+        );
+      });
+    }
+
+    it("leaves the folder unclassified rather than calling it non-git", async () => {
+      mockSimpleGit.checkIsRepo.mockRejectedValue(
+        simpleGitMissingBinaryError(REPOSITORY_PROBE_COMMANDS)
+      );
+
+      await service.loadProject("req-probe", "/repo", "ws-probe");
+      sentEvents.length = 0;
+      service.getAllStates("states-probe");
+
+      // `null`, never `false`: `false` is a probed verdict the renderer trusts
+      // enough to strip a real repo's restored worktree state (#11650), and
+      // `syncMonitors`' self-deletion guard keys on it (#11405).
+      const event = sentEvents.find((e) => e.type === "all-states");
+      expect(event).toMatchObject({ states: [], gitBacked: null });
+    });
+
+    it("never puts simple-git's stack trace in the banner message", async () => {
+      // simple-git pushes `String(err.stack)` into the stderr buffer, so the
+      // rethrown GitError's `message` is a whole Node stack trace — and
+      // `loadProject`'s catch forwards its message verbatim to the renderer's
+      // "Couldn't load worktrees" banner.
+      mockSimpleGit.checkIsRepo.mockRejectedValue(
+        simpleGitMissingBinaryError(REPOSITORY_PROBE_COMMANDS)
+      );
+
+      await service.loadProject("req-probe", "/repo", "ws-probe");
+
+      const result = sentEvents.find(
+        (e): e is Extract<WorkspaceHostEvent, { type: "load-project-result" }> =>
+          e.type === "load-project-result"
+      );
+      const message = result && "error" in result ? (result.error ?? "") : "";
+      // Non-empty first, so the three negative assertions below cannot pass
+      // vacuously against an implementation that reports no error at all.
+      expect(message).not.toBe("");
+      expect(message).not.toContain(SIMPLE_GIT_MISSING_BINARY_MESSAGE);
+      expect(message).not.toContain("spawn git ENOENT");
+      expect(message).not.toContain("at ChildProcess");
+      expect(message).not.toContain("node:internal");
+    });
+
+    it("does not tell a user with git installed to install git", async () => {
+      // An unhydrated OneDrive placeholder makes the spawn cwd unavailable, and
+      // Node reports that as the same `spawn git ENOENT` a missing binary
+      // produces — simple-git strips every field that could tell them apart. The
+      // reporter of #11922 had git 2.55.0 on PATH, so the classifier's generic
+      // "Install Git" copy would have been actively misleading.
+      mockSimpleGit.checkIsRepo.mockRejectedValue(
+        simpleGitMissingBinaryError(REPOSITORY_PROBE_COMMANDS)
+      );
+
+      await service.loadProject("req-probe", "/repo", "ws-probe");
+
+      const result = sentEvents.find(
+        (e): e is Extract<WorkspaceHostEvent, { type: "load-project-result" }> =>
+          e.type === "load-project-result"
+      );
+      const message = result && "error" in result ? (result.error ?? "") : "";
+      expect(message).not.toContain("Install Git");
+      expect(message).toContain("folder is available");
+    });
+
+    it("touches nothing downstream of the gate", async () => {
+      const listService = service["listService"] as unknown as {
+        list: Mock;
+        setGit: Mock;
+        mapToWorktrees: Mock;
+      };
+      listService.list = vi.fn();
+      listService.setGit = vi.fn();
+      listService.mapToWorktrees = vi.fn();
+      const startWatcher = vi.spyOn(
+        service["topologyWatcher"] as unknown as { startWatcher: () => Promise<void> },
+        "startWatcher"
+      );
+      mockSimpleGit.checkIsRepo.mockRejectedValue(simpleGitCwdDeniedError());
+
+      await service.loadProject("req-probe", "/repo", "ws-probe");
+
+      // Everything the gate stands in front of. `worktree prune` in particular
+      // WRITES into `.git`, and this is a folder we could not even probe.
+      expect(listService.setGit).not.toHaveBeenCalled();
+      expect(listService.list).not.toHaveBeenCalled();
+      expect(listService.mapToWorktrees).not.toHaveBeenCalled();
+      expect(mockSimpleGit.raw).not.toHaveBeenCalled();
+      expect(startWatcher).not.toHaveBeenCalled();
+    });
+
+    it("ignores a sync carrying worktrees from main after a failed probe", async () => {
+      // `WorkspaceClient.sync` fans out to every pool entry with no readiness
+      // gate, and a failed-load host stays in the pool until the next
+      // `loadProject` disposes it. A monitor minted here would raise
+      // `WorktreeRemovedError` on its first poll and delete the workspace — the
+      // #11405 hazard, reachable through the new `gitBacked: null` state.
+      mockSimpleGit.checkIsRepo.mockRejectedValue(simpleGitCwdDeniedError());
+      await service.loadProject("req-probe", "/repo", "ws-probe");
+
+      await service.syncMonitors(
+        [
+          {
+            id: "wt-1",
+            path: "/repo",
+            branch: "main",
+            isMainWorktree: true,
+          } as unknown as Parameters<typeof service.syncMonitors>[0][number],
+        ],
+        "wt-1",
+        "main"
+      );
+
+      expect(monitorCount()).toBe(0);
+    });
+
+    it("re-probes and re-classifies on a retry after the probe recovers", async () => {
+      // The whole point of failing the load: the rejected result is what makes
+      // the pool dispose the host and issue a real reload. The verdict has to
+      // come from that second probe — residual state from the failed attempt
+      // must neither survive as `null` nor short-circuit the re-classification.
+      mockSimpleGit.checkIsRepo.mockRejectedValueOnce(simpleGitCwdDeniedError());
+
+      await service.loadProject("req-probe", "/repo", "ws-probe");
+
+      expect(sentEvents.some((e) => e.type === "load-project-result" && !e.success)).toBe(true);
+      service.getAllStates("states-failed");
+      expect(sentEvents.find((e) => e.type === "all-states")).toMatchObject({ gitBacked: null });
+
+      sentEvents.length = 0;
+      mockSimpleGit.checkIsRepo.mockResolvedValue(true);
+
+      await service.loadProject("req-retry", "/repo", "ws-probe");
+      sentEvents.length = 0;
+      service.getAllStates("states-retry");
+
+      expect(mockSimpleGit.checkIsRepo).toHaveBeenCalledTimes(2);
+      expect(sentEvents.find((e) => e.type === "all-states")).toMatchObject({ gitBacked: true });
+    });
+
+    it("reports a non-Error throw without putting 'undefined' in the banner", async () => {
+      // `loadProject`'s catch used `(error as Error).message`, which is
+      // `undefined` for an opaque throw — and the banner renders it verbatim.
+      const listService = service["listService"] as unknown as { list: Mock };
+      listService.list = vi.fn().mockRejectedValue("git exploded, no Error involved");
+
+      await service.loadProject("req-opaque", "/repo", "ws-probe");
+
+      expect(sentEvents).toContainEqual(
+        expect.objectContaining({
+          type: "load-project-result",
+          requestId: "req-opaque",
+          success: false,
+          error: "git exploded, no Error involved",
+        })
+      );
+    });
+
+    it("surfaces recovery copy matched to the classified reason", async () => {
+      // Dubious ownership is a repository git found and refused to touch.
+      // Reporting it as "no repository" hid both the cause and its fix.
+      mockSimpleGit.checkIsRepo.mockRejectedValue(
+        simpleGitStderrError(GIT_DUBIOUS_OWNERSHIP_STDERR)
+      );
+
+      await service.loadProject("req-probe", "/repo", "ws-probe");
+
+      const result = sentEvents.find(
+        (e): e is Extract<WorkspaceHostEvent, { type: "load-project-result" }> =>
+          e.type === "load-project-result"
+      );
+      const message = result && "error" in result ? (result.error ?? "") : "";
+      expect(message).toContain(getGitRecoveryHint("dubious-ownership"));
     });
   });
 
@@ -350,6 +620,10 @@ describe("WorkspaceService adversarial", () => {
     // callers pass the stale field straight back. syncMonitors must instead
     // read the actual main worktree's branch (e.g. "develop" in a gitflow
     // repo) so non-PR worktrees diff against the real integration branch.
+    //
+    // Primed rather than loaded: since #11922 `syncMonitors` mints monitors only
+    // for a proven repository, and this test drives it directly.
+    service["gitBacked"] = true;
     const mainWorktree = {
       id: "/repo",
       path: "/repo",

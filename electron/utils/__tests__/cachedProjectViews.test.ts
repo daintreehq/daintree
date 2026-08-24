@@ -248,4 +248,59 @@ describe("memoryPressureTarget", () => {
       expect(justUnderWarning.targetMax).toBe(Math.max(maxViews - 1, 1));
     }
   });
+
+  it("walks every rung between the edges on every machine from 4 GiB up", () => {
+    // Widening the warning edge with RAM (#11926) is only worth anything if the
+    // extra room turns into extra rungs. Sweeping the real band proves the
+    // ladder still sheds one view at a time rather than collapsing — the
+    // #11469 contract — now that the band is no longer a flat 1024MB.
+    // Swept densely rather than at round tiers: the band widens continuously
+    // while the view cap steps, so the extremes sit just BELOW each boundary
+    // (at 15 GiB the band is already 1184MB wide but the cap is still 2).
+    // Sampling only 4/8/16/32/64/128 GiB walks straight past them.
+    const notSoft: string[] = [];
+    const missingRungs: string[] = [];
+    const thinRungs: string[] = [];
+    const wideRungs: string[] = [];
+    for (let totalGib = 4; totalGib <= 130; totalGib += 0.25) {
+      const band = getSystemMemoryThresholds(totalGib * 1024);
+      const maxViews = computeDefaultCachedViews(totalGib * GIB);
+      const width = band.warningMb - band.criticalMb;
+      const seen = new Set<number>();
+      for (let i = 0; i < 200; i++) {
+        const { level, targetMax } = memoryPressureTarget(
+          band.criticalMb + (width * i) / 200,
+          band,
+          maxViews
+        );
+        if (level !== "soft") notSoft.push(`${totalGib}GiB: ${level} inside the band`);
+        seen.add(targetMax);
+      }
+      // Every intermediate cap is reachable, and none exceeds the step-down
+      // ceiling of `cap - 1` (the configured cap only returns above warning).
+      const expected = Array.from({ length: Math.max(maxViews - 1, 1) }, (_, i) => i + 1);
+      const walked = [...seen].sort((a, b) => a - b);
+      if (walked.join() !== expected.join()) {
+        missingRungs.push(`${totalGib}GiB: walked ${walked.join("/")} of ${expected.join("/")}`);
+      }
+      // No rung may collapse below one cached renderer (~100-500MB), or a
+      // tick's reclaim buys less than the switch it costs. The floor holds
+      // from 4 GiB up; below the knee the band is still the untouched 0.1×RAM
+      // fraction, so a 2 GiB machine's 205MB rung is legacy behavior this
+      // change deliberately leaves alone.
+      const rungMb = width / Math.max(maxViews - 1, 1);
+      if (rungMb < 256) thinRungs.push(`${totalGib}GiB: ${Math.round(rungMb)}MB rung`);
+      // Only meaningful where there is more than one background view to shed:
+      // at cap 2 the single "rung" IS the whole band, a shed point rather than
+      // a step size. Where the ladder really steps, no step may swallow the
+      // band — that would be the pre-#11469 cliff wearing a graduated coat.
+      if (maxViews > 2 && rungMb > 1024) {
+        wideRungs.push(`${totalGib}GiB: ${Math.round(rungMb)}MB rung on cap ${maxViews}`);
+      }
+    }
+    expect(notSoft.slice(0, 3)).toEqual([]);
+    expect(missingRungs.slice(0, 3)).toEqual([]);
+    expect(thinRungs.slice(0, 3)).toEqual([]);
+    expect(wideRungs.slice(0, 3)).toEqual([]);
+  });
 });

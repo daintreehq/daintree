@@ -4,6 +4,7 @@ import { useProjectStatsStore } from "@/store/projectStatsStore";
 import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { logError } from "@/utils/logger";
+import { isProjectViewCached, subscribeProjectViewLifecycle } from "@/lib/viewCacheState";
 import type { ProcessMetricEntry, HeapStats, DiagnosticsInfo } from "@shared/types/ipc/system";
 import type { BulkProjectStatsEntry } from "@shared/types/ipc/project";
 import type {
@@ -41,18 +42,6 @@ const STATE_DOT_CLASSES: Record<MemoryState, string> = {
   normal: "bg-daintree-text/25",
   elevated: "bg-daintree-text/25",
   critical: "bg-daintree-text/25",
-};
-
-const STATE_TEXT_CLASSES: Record<MemoryState, string> = {
-  normal: "text-daintree-text/30",
-  elevated: "text-daintree-text/30",
-  critical: "text-daintree-text/30",
-};
-
-const TREND_ARROWS: Record<TrendDirection, string> = {
-  up: "\u2191",
-  down: "\u2193",
-  stable: "",
 };
 
 interface AggregateStats {
@@ -101,9 +90,9 @@ function HeapBar({ heapStats }: { heapStats: HeapStats }) {
 
 function MemoryRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex items-center justify-between text-[10px]">
-      <span className="text-daintree-text/50">{label}</span>
-      <span className="font-mono tabular-nums text-daintree-text/40">{value}</span>
+    <div className="flex items-center justify-between gap-2 text-[10px]">
+      <span className="text-daintree-text/50 leading-tight">{label}</span>
+      <span className="font-mono tabular-nums text-daintree-text/40 shrink-0">{value}</span>
     </div>
   );
 }
@@ -144,7 +133,10 @@ function MemorySummary({
 
   return (
     <div className="space-y-1">
-      <MemoryRow label="Daintree app memory" value={formatMemory(appMemoryMB)} />
+      <MemoryRow
+        label="Working set (sums shared pages per process)"
+        value={formatMemory(appMemoryMB)}
+      />
       {(workloads !== null || shown !== null) && (
         <MemoryRow
           label="Terminal workloads"
@@ -376,68 +368,113 @@ export function ProjectResourceBadge() {
 
   useEffect(() => {
     let cancelled = false;
-    let pending = false;
     let interval: ReturnType<typeof setInterval> | null = null;
+    // Suppression starts a new epoch. A request in flight across one is stale by
+    // an unbounded amount, so it must neither be applied on the other side nor
+    // coalesce against the resume refresh.
+    let generation = 0;
+    let inFlightGen: number | null = null;
+
+    // Two independent suppressions, AND'd. `document.hidden` catches a
+    // minimized/occluded window; it cannot catch a cached project view, which
+    // keeps reporting "visible" because caching is `removeChildView` +
+    // `setVisible(false)` and Chromium tracks occlusion per BrowserWindow
+    // (#11212). Polling a cached view charges main a full process-table walk
+    // per interval for a readout nobody can see.
+    const shouldPoll = () => !document.hidden && !isProjectViewCached();
 
     const runFetch = async () => {
-      // Skip if a previous poll is still in flight so a slow IPC round-trip
-      // can't stack overlapping calls or write results out of order.
-      if (pending) return;
-      pending = true;
+      // Re-checked here, not just where the interval is cleared: this runs from
+      // the resume paths too, and clearing an interval can't retract a callback
+      // the event loop has already picked up.
+      if (cancelled || !shouldPoll()) return;
+      // Skip if a poll from this epoch is still in flight so a slow IPC
+      // round-trip can't stack overlapping calls or write results out of order.
+      // Scoped to the epoch: a request stranded by a pause must not hold the
+      // resume's immediate refresh hostage for a whole interval.
+      if (inFlightGen === generation) return;
+      const gen = generation;
+      inFlightGen = gen;
       try {
         const result = await fetchStats();
-        if (!cancelled && result) {
-          samplesRef.current = result.nextSamples;
-          setSamples(result.nextSamples);
-          setStats({
-            runningProjects: result.runningProjects,
-            totalMemoryMB: result.totalMemoryMB,
-            projects: result.projects,
-          });
-          setIsLoading(false);
-        }
+        // A result that lands after its epoch closed carries a pre-pause
+        // reading, and the resume already cleared the trend window it would
+        // seed — dropping it is the other half of that discard.
+        if (cancelled || gen !== generation || !result) return;
+        samplesRef.current = result.nextSamples;
+        setSamples(result.nextSamples);
+        setStats({
+          runningProjects: result.runningProjects,
+          totalMemoryMB: result.totalMemoryMB,
+          projects: result.projects,
+        });
+        setIsLoading(false);
       } finally {
-        pending = false;
+        if (inFlightGen === gen) inFlightGen = null;
       }
-    };
-
-    const startInterval = () => {
-      if (interval !== null) return;
-      interval = setInterval(() => void runFetch(), BADGE_POLL_MS);
     };
 
     const stopInterval = () => {
       if (interval === null) return;
       clearInterval(interval);
       interval = null;
+      generation++;
     };
 
-    const handleVisibility = () => {
-      if (document.hidden) {
+    // Single entry point for both gates so a repeated signal — visible while
+    // already visible, `revealed` right after `active` — can't stack intervals
+    // or double-fetch. The interval handle is the polling-state sentinel.
+    const syncPolling = () => {
+      if (!shouldPoll()) {
         stopInterval();
-      } else {
-        // The poll pauses while hidden, so pre-hide samples are arbitrarily old
-        // relative to the resumed cadence — drop them so the trend slope isn't
-        // computed across the gap.
+        return;
+      }
+      if (interval !== null) return;
+
+      // The poll pauses while suppressed, so pre-pause samples are arbitrarily
+      // old relative to the resumed cadence — drop them so the trend slope
+      // isn't computed across the gap.
+      if (samplesRef.current.length > 0) {
         samplesRef.current = [];
         setSamples([]);
-        void runFetch();
-        startInterval();
       }
+      // Arm the sentinel before the immediate fetch so a signal arriving during
+      // that round-trip sees polling as already started.
+      interval = setInterval(() => void runFetch(), BADGE_POLL_MS);
+      void runFetch();
     };
 
+    const handleVisibility = () => syncPolling();
+    // Resume on any non-cached phase, not just `revealed`: a switch superseded
+    // mid-flight only ever reaches `active`, and keying resume on `revealed`
+    // would leave a reactivated view demoted forever.
+    const offViewLifecycle = subscribeProjectViewLifecycle(() => syncPolling());
+
     document.addEventListener("visibilitychange", handleVisibility);
-    if (!document.hidden) {
-      void runFetch();
-      startInterval();
-    }
+    // Not an early return when already cached — that would skip the
+    // subscription above and strand the badge. `syncPolling` declines instead.
+    syncPolling();
 
     return () => {
       cancelled = true;
       document.removeEventListener("visibilitychange", handleVisibility);
+      offViewLifecycle();
       stopInterval();
     };
   }, [fetchStats]);
+
+  // The popover's own 4s poll and 1s freshness tick are gated on `open` alone,
+  // and caching a view is `removeChildView` + `setVisible(false)` — no
+  // interaction inside this document, so Radix never sees a dismiss. Left open,
+  // it would out-poll the badge loop gated above in a view nobody can see.
+  // Closing is also what the switch implies: the user left this project.
+  useEffect(
+    () =>
+      subscribeProjectViewLifecycle((phase) => {
+        if (phase === "cached") setOpen(false);
+      }),
+    []
+  );
 
   // Stale-while-revalidate: keep the last snapshot across closes so reopening
   // shows data instantly; the poll below refreshes it silently.
@@ -447,6 +484,11 @@ export function ProjectResourceBadge() {
     let cancelled = false;
 
     const fetchPopoverData = async () => {
+      // Guarded in the body, not only by the `open` teardown: closing on the
+      // cached phase costs a render pass, so a tick already queued when the
+      // view cached would still fire, and a hidden window suppresses nothing
+      // here at all — Radix keeps the popover open across both.
+      if (document.hidden || isProjectViewCached()) return;
       try {
         const [processMetrics, heapStats, diagnosticsInfo, snapshot] = await Promise.all([
           systemClient.getProcessMetrics(),
@@ -502,7 +544,7 @@ export function ProjectResourceBadge() {
   return (
     <Popover open={open} onOpenChange={setOpen}>
       <PopoverTrigger asChild>
-        <button className="px-4 py-2 border-t border-divider surface-chrome flex items-center justify-between shrink-0 w-full hover:bg-daintree-text/[0.02] transition-colors cursor-pointer">
+        <button className="px-4 py-2 border-t border-divider surface-chrome flex items-center shrink-0 w-full hover:bg-daintree-text/[0.02] transition-colors cursor-pointer">
           <div className="flex items-center gap-2 min-w-0">
             <span
               key={memoryState}
@@ -511,12 +553,6 @@ export function ProjectResourceBadge() {
             <span className="text-[10px] tabular-nums text-daintree-text/40 font-medium truncate">
               {stats.runningProjects} project{stats.runningProjects !== 1 ? "s" : ""} active
             </span>
-          </div>
-          <div
-            className={`text-[10px] font-mono tabular-nums tracking-tight shrink-0 ${STATE_TEXT_CLASSES[memoryState]}`}
-          >
-            {trend !== "stable" && <span className="mr-0.5">{TREND_ARROWS[trend]}</span>}
-            {formatMemory(stats.totalMemoryMB)}
           </div>
         </button>
       </PopoverTrigger>

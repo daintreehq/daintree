@@ -2,10 +2,13 @@ import { describe, expect, it, vi } from "vitest";
 import {
   attachStartupWorktreePort,
   describeStartupPortFailure,
+  describeStartupWorktreeLoadOutcome,
+  logStartupWorktreeLoadOutcome,
   runStartupWorktreeLoad,
   selectStatusTarget,
   sendStartupWorktreeLoadFailure,
   STARTUP_NO_WORKSPACE_CLIENT_MESSAGE,
+  type StartupWorktreeLoadOutcome,
 } from "../startupWorktreeLoad.js";
 
 /**
@@ -443,5 +446,108 @@ describe("startup worktree load orchestration (#11818)", () => {
 
     expect(outcome).toEqual({ status: "loaded" });
     expect(report).not.toHaveBeenCalled();
+  });
+
+  /**
+   * Every outcome has to leave a line in `daintree.log`.
+   *
+   * This reporting used to go through `console.log`/`console.error` at the call
+   * site. Production esbuild marks `console.log`/`console.warn` pure
+   * (`scripts/build-main.mjs`) and the logger never hooks `console`, so a
+   * diagnostics bundle captured from a packaged build while the worktree
+   * sidebar sat empty contained nothing about worktree loading at all (#11922).
+   */
+  describe("startup outcome logging", () => {
+    // Keyed by status so a newly added outcome is a compile error here, not a
+    // silently unexercised branch.
+    const OUTCOMES: Record<
+      StartupWorktreeLoadOutcome["status"],
+      { outcome: StartupWorktreeLoadOutcome; level: "info" | "error" }
+    > = {
+      loaded: { outcome: { status: "loaded" }, level: "info" },
+      "no-client": { outcome: { status: "no-client" }, level: "error" },
+      "load-failed": {
+        outcome: { status: "load-failed", error: new Error("probe exploded") },
+        level: "error",
+      },
+      "attach-failed": {
+        outcome: { status: "attach-failed", error: new Error("attach exploded") },
+        level: "error",
+      },
+      "port-failed": { outcome: { status: "port-failed", reason: "no-host" }, level: "error" },
+    };
+
+    const cases = Object.entries(OUTCOMES);
+
+    it("describes every outcome, naming the project each time", () => {
+      for (const [status, { outcome }] of cases) {
+        const line = describeStartupWorktreeLoadOutcome(outcome, "/repo");
+        expect(line.message, status).not.toBe("");
+        expect(line.context, status).toMatchObject({ projectPath: "/repo" });
+      }
+    });
+
+    it("treats anything that left the renderer without a port as an error", () => {
+      // The sidebar is broken from the user's side in every one of those cases.
+      for (const [status, { outcome, level }] of cases) {
+        expect(describeStartupWorktreeLoadOutcome(outcome, "/repo").level, status).toBe(level);
+      }
+    });
+
+    it("routes each outcome to the matching logger sink", () => {
+      // Pins the wiring, not just the mapping: reverting the call site to
+      // `console` has to fail something.
+      for (const [status, { outcome, level }] of cases) {
+        const sinks = { info: vi.fn(), error: vi.fn() };
+        logStartupWorktreeLoadOutcome(outcome, "/repo", sinks);
+
+        const used = level === "error" ? sinks.error : sinks.info;
+        const unused = level === "error" ? sinks.info : sinks.error;
+        expect(used, status).toHaveBeenCalledOnce();
+        expect(unused, status).not.toHaveBeenCalled();
+      }
+    });
+
+    it("calls the error sink with logError's (message, error, context) arity", () => {
+      // The outcome carries no error object — the detail is already flattened
+      // into the context — so the error slot must be an explicit undefined.
+      // Passing the context positionally where `logError` expects the error
+      // would silently drop it from the log.
+      const sinks = { info: vi.fn(), error: vi.fn() };
+      logStartupWorktreeLoadOutcome({ status: "port-failed", reason: "no-host" }, "/repo", sinks);
+
+      expect(sinks.error).toHaveBeenCalledWith(
+        expect.any(String),
+        undefined,
+        expect.objectContaining({ projectPath: "/repo", reason: "no-host" })
+      );
+    });
+
+    it("carries the failure detail, not just the status name", () => {
+      const loadFailed = describeStartupWorktreeLoadOutcome(
+        { status: "load-failed", error: new Error("probe exploded") },
+        "/repo"
+      );
+      expect(loadFailed.context).toMatchObject({ error: "probe exploded" });
+
+      // The reason alone is an internal token; the log carries the sentence the
+      // user was shown so the two can be matched up afterwards.
+      const portFailed = describeStartupWorktreeLoadOutcome(
+        { status: "port-failed", reason: "no-host" },
+        "/repo"
+      );
+      expect(portFailed.context).toMatchObject({
+        reason: "no-host",
+        detail: describeStartupPortFailure("no-host"),
+      });
+    });
+
+    it("survives a non-Error load failure without logging 'undefined'", () => {
+      const line = describeStartupWorktreeLoadOutcome(
+        { status: "load-failed", error: "just a string" },
+        "/repo"
+      );
+      expect(line.context).toMatchObject({ error: "just a string" });
+    });
   });
 });

@@ -13,7 +13,13 @@ import {
 import { settingsFilePath } from "../services/projectStorePaths.js";
 import { SimpleGit, BranchSummary } from "simple-git";
 import { createHardenedGit, createAuthenticatedGit } from "../utils/hardenedGit.js";
-import { classifyGitError, getGitRecoveryAction } from "../../shared/utils/gitOperationErrors.js";
+import {
+  classifyGitError,
+  extractGitErrorMessage,
+  getGitRecoveryAction,
+  getGitRecoveryHint,
+} from "../../shared/utils/gitOperationErrors.js";
+import { logWarn } from "../utils/logger.js";
 import { isBinaryDiffOutput } from "../../shared/utils/gitDiffParsing.js";
 import type { Worktree, WslGitEligibility } from "../../shared/types/worktree.js";
 import type {
@@ -28,6 +34,7 @@ import type {
   PluginWorktreeLinkedIssue,
   PluginWorktreeLinkedPR,
 } from "../../shared/types/plugin.js";
+import type { GitOperationReason } from "../../shared/types/ipc/errors.js";
 import type { CIStatus, NormalizedPRState } from "../../shared/types/forge.js";
 import type { WorktreeChanges } from "../../shared/types/git.js";
 import { invalidateGitStatusCache } from "../utils/git.js";
@@ -168,6 +175,47 @@ const FORGE_CONFIG_POLL_INTERVAL_MS = 5 * 60 * 1000;
 // UUIDs (not path-keyed), so size-capping is the only viable pruning strategy;
 // a session sees well under 100 deletes, so 500 never evicts a live id.
 export const MAX_ACKNOWLEDGED_MUTATIONS = 500;
+
+/**
+ * A repository probe that could not answer, as distinct from one that answered
+ * "no".
+ *
+ * Carries user-facing copy only. simple-git's child-process error handler
+ * pushes `String(err.stack)` into the stderr buffer, so the `GitError` it
+ * rethrows has the whole Node stack trace as its `message` and no `code`,
+ * `syscall` or `cause` to discriminate on. `loadProject` forwards its caught
+ * message straight to the "Couldn't load worktrees" banner, so that stack would
+ * be what the user reads. The original is kept as `cause` for diagnostics and
+ * never reaches the renderer.
+ */
+class RepositoryProbeError extends Error {
+  readonly gitReason: GitOperationReason;
+
+  constructor(gitReason: GitOperationReason, cause?: unknown) {
+    // Reuses the classifier's own recovery copy rather than a parallel set of
+    // strings, so a new `GitOperationReason` gets a usable sentence here for
+    // free and there is one place to review git-failure wording.
+    //
+    // One exception. simple-git spawns with `{ cwd }` rather than `git -C`, so
+    // an unavailable working directory fails at spawn time with a `spawn git
+    // ENOENT` indistinguishable from a missing binary — and an unhydrated
+    // OneDrive placeholder is the leading suspect for #11922. The generic hint
+    // ("Install Git…") would tell a user with git plainly installed to install
+    // it, so this one path names both possibilities instead.
+    const hint =
+      gitReason === "git-not-installed"
+        ? "Check that the folder is available, and that git is installed and on your PATH."
+        : getGitRecoveryHint(gitReason);
+    super(
+      `Couldn't check whether this folder is a git repository. ${
+        hint ?? "Make sure the folder is available and git can run, then try again."
+      }`,
+      cause === undefined ? undefined : { cause }
+    );
+    this.name = "RepositoryProbeError";
+    this.gitReason = gitReason;
+  }
+}
 
 export class WorkspaceService {
   private monitors = new Map<string, WorktreeMonitor>();
@@ -687,6 +735,13 @@ export class WorkspaceService {
       // registered as a repository whose `.git` was since deleted reaches this
       // same branch and is spared the self-deletion too, which trusting a
       // persisted flag would not do.
+      //
+      // Only a *resolved* `false` takes this branch. A probe that could not run
+      // throws out to the catch below and reports the load as failed, so an
+      // environment fault can no longer masquerade as a folder without a
+      // repository (#11922). For the same reason there is no persisted-row
+      // sanity check here: a row saying "git-backed" must not override a live
+      // `false`, which is exactly the deleted-`.git` case above.
       if (!(await this.isGitRepository())) {
         this.gitBacked = false;
         this.sendEvent({ type: "load-project-result", requestId, success: true });
@@ -749,11 +804,15 @@ export class WorkspaceService {
         }
       });
     } catch (error) {
+      // `formatErrorMessage`, not `(error as Error).message`: a non-Error throw
+      // put a literal `undefined` in the "Couldn't load worktrees" banner. A
+      // `RepositoryProbeError` arrives here already carrying safe copy — its
+      // `cause` (simple-git's stack-trace-as-message) stays out of the payload.
       this.sendEvent({
         type: "load-project-result",
         requestId,
         success: false,
-        error: (error as Error).message,
+        error: formatErrorMessage(error, "Failed to load worktrees"),
       });
     }
   }
@@ -772,7 +831,14 @@ export class WorkspaceService {
     // Guarding here rather than only at the callers covers the `sync` host
     // message, which arrives with a caller-supplied worktree list and is
     // fanned out to every live host by `WorkspaceClient.sync` (#11405).
-    if (this.gitBacked === false) return;
+    //
+    // `!== true`, not `=== false`: since #11922 a probe that could not answer
+    // leaves `gitBacked` at `null`, and `WorkspaceClient.sync` iterates the
+    // pool's entries with no readiness gate — so a host whose load failed is
+    // still reachable until the next `loadProject` disposes it. Minting a
+    // monitor for a folder we could not probe arms exactly the hazard this
+    // guard exists for. Unknown withholds; only a proven repository proceeds.
+    if (this.gitBacked !== true) return;
 
     // Derive the repository's main/integration branch from the actual main
     // worktree rather than trusting the caller. The legacy `mainBranch`
@@ -2372,18 +2438,56 @@ export class WorkspaceService {
   /**
    * Whether the loaded folder is a git repository.
    *
-   * `checkIsRepo` rejects rather than returning false for permission denials,
-   * a missing git binary and other environment faults, so every failure is
-   * treated as "no repository" — the conservative answer, since it only ever
-   * withholds git features rather than pointing the status poller at a path
-   * that cannot serve it.
+   * Three outcomes, not two. `checkIsRepo()` resolves `false` only when git ran
+   * and answered no: simple-git's `checkIsRepoTask.onError` turns exit code 128
+   * plus a "not a git repository" message into a resolved `false` and *throws*
+   * everything else — a spawn failure against an unavailable cwd, the 30s
+   * `GIT_BLOCK_TIMEOUT_MS` abort, a OneDrive placeholder stall, an antivirus
+   * interposition. So a thrown probe means "couldn't answer", never "no
+   * repository", and the bare `catch { return false }` that used to conflate
+   * them was the sole route to reporting a healthy repo as unbacked (#11922).
+   *
+   * Failing here propagates to `loadProject`'s catch, which reports
+   * `load-project-result: success: false`. That is load-bearing twice: it drives
+   * the "Couldn't load worktrees" banner instead of an authoritative-looking
+   * empty list, and it rejects the pool entry's ready promise so Retry disposes
+   * the host and issues a genuine reload rather than re-foregrounding one whose
+   * `monitors` map is empty (`WorkspaceHostPool.loadProject`).
+   *
+   * `gitBacked` is deliberately left untouched on the throw path: its `null`
+   * default already means "not classified" to every consumer (#11650). The
+   * monitor-minting guards were tightened to `!== true` to match, so an unknown
+   * verdict withholds exactly like a proven non-repository and can never arm
+   * the hazard #11405 closed.
    */
   private async isGitRepository(): Promise<boolean> {
-    if (!this.git) return false;
+    if (!this.git) {
+      // Unreachable from `loadProject`, which assigns `this.git` immediately
+      // above the call and throws out of `createHardenedGit` otherwise. A throw
+      // rather than a `false` so an impossible state can never be the thing
+      // that reports a repository as unbacked.
+      throw new RepositoryProbeError("unknown");
+    }
     try {
       return await this.git.checkIsRepo();
-    } catch {
-      return false;
+    } catch (error) {
+      const reason = classifyGitError(error);
+      // Defense in depth: simple-git's own `onError` should already have turned
+      // a genuine "fatal: not a git repository" into a resolved `false` before
+      // it could reach here. If it ever stops doing so, this is still a real
+      // answer from git and has to stay on the non-repository path.
+      if (reason === "not-a-repository") return false;
+      // `logWarn`, not `console.warn`: production esbuild marks `console.warn`
+      // pure (`scripts/build-main.mjs`), so a console call is stripped from the
+      // packaged build — the only build this failure has ever been seen in. The
+      // whole point of capturing it is that the next repro says which branch
+      // fired and why.
+      logWarn("Repository probe failed; folder left unclassified", {
+        projectRootPath: this.projectRootPath,
+        gitReason: reason,
+        probeError: extractGitErrorMessage(error),
+      });
+      throw new RepositoryProbeError(reason, error);
     }
   }
 
@@ -2391,7 +2495,11 @@ export class WorkspaceService {
     // Backstop for the `loadProject` gate: a topology reconcile or an explicit
     // refresh must not be the thing that mints the first monitor for a folder
     // with no repository (#11405).
-    if (!this.git || this.gitBacked === false) {
+    // `!== true` for the same reason as `syncMonitors`: an unanswerable probe
+    // leaves `gitBacked` at `null` with `this.git` already constructed, so a
+    // reconcile would otherwise enumerate a folder whose repository status is
+    // unknown (#11922).
+    if (!this.git || this.gitBacked !== true) {
       return;
     }
 
@@ -3613,6 +3721,11 @@ ${lines.map((l) => "+" + l).join("\n")}`;
     // `forgeProbeCwd` falls back to the project root — so without this the
     // matcher relay would spawn `git remote -v` there and, on its bounded
     // re-arm, up to three more times per registry change (#11405 × #11408).
+    // Left at `=== false` where the monitor-minting guards moved to `!== true`:
+    // a matcher push reaching a host whose probe failed can still spawn one
+    // bounded, read-only `git remote -v` against that path. It fails fast and
+    // harmlessly, and tightening it here would block the legitimate cold-start
+    // reselect that lands before a load completes.
     if (this.gitBacked === false) return;
     if (this._shutdownController.signal.aborted) return;
     if (this.forgeReselectTimer) return;
