@@ -1,5 +1,24 @@
 # Changelog
 
+## [0.33.1] - 2026-08-24
+
+A correctness patch on 0.33.0, mostly about surfaces that reported the wrong thing. A failed git probe stopped being read as "this folder has no repository" — the fault that left the worktree sidebar permanently empty on packaged Windows — and both memory-facing surfaces were recalibrated: the sidebar badge drops a figure that counted shared pages once per process, and cached-view reclaim starts scaling with installed RAM instead of flat-capping.
+
+### Features
+
+- Project switcher search survives one mistyped character: a typo is recovered at a word boundary and the row seated strictly below every clean match, so nothing you already had moves under the pointer (#11924)
+
+### Bug Fixes
+
+- A failed git probe no longer reports a real repository as non-git — on packaged Windows with a OneDrive-backed repo this left the worktree sidebar permanently empty, with Retry unable to recover it short of an app restart (#11922)
+- Worktree-load diagnostics go through the app logger, so they survive the production build that was eliminating them from exactly the packaged builds where this failure appears (#11922)
+- The sidebar memory badge stops showing an absolute figure that summed shared framework pages once per process; the reading still drives the state dot and the popover breakdown (#11925)
+- The memory badge stops polling every 10 seconds in cached project views, where the visibility gate it relied on never flips (#11925)
+
+### Performance
+
+- Cached-view reclaim scales with installed RAM instead of flat-capping, so it stops being an emergency-only path on a large machine: on 64 GB it begins a full gigabyte earlier, in four 512 MB steps. Machines below the 10 GB knee are unchanged, and the critical edge that arms forced collapse doesn't move (#11926)
+
 ## [0.33.0] - 2026-08-22
 
 The project switcher stops answering two questions with one dot: a row now reports what it wants from you and whether anything is still executing, separately. External MCP sessions bind to a workspace for their whole life instead of chasing window focus, so two agents driving two projects can no longer retarget each other. Elsewhere: a new dark theme, refinement passes on both defaults, and a file search that went from 102ms to 9ms on a large repository.
