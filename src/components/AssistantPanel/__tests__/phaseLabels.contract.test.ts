@@ -1,17 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { LIVE_STATUS_LABEL, STAGE_LABEL } from "../AssistantPanelView";
+import { LIVE_STATUS_LABEL } from "../AssistantPanelView";
 
 /**
  * The phase labels, against the engine's own list of phase names.
  *
  * These two sources drift silently. The engine's canonical wire names are snake_case
  * (`tool_running`, `awaiting_approval`); the panel once keyed its labels on hyphenated
- * spellings, so four phases quietly missed every lookup — the composer showed the
- * generic "Processing…" while a turn sat waiting on an approval, and the inline status
- * line showed nothing at all. Nothing failed; the label was just wrong, which is the
- * kind of bug a type cannot catch because the phase crosses the wire as a free string.
+ * spellings, so four phases quietly missed every lookup — the status line showed
+ * nothing at all while a turn sat waiting on an approval. Nothing failed; the label was
+ * just wrong, which is the kind of bug a type cannot catch because the phase crosses
+ * the wire as a free string.
  *
  * Read from the Go source rather than restated here, so adding a phase to the engine
  * fails this test instead of silently landing without a label.
@@ -53,7 +53,6 @@ const NO_LIVE_LABEL = new Set([
   "failed",
   "cancelled",
 ]);
-const NO_STAGE_LABEL = new Set(["tool_queued", "complete", "failed", "cancelled"]);
 
 describe("phase label contract", () => {
   const phases = enginePhaseNames();
@@ -74,16 +73,11 @@ describe("phase label contract", () => {
     // stale exemption is invisible: it excuses a phase that no longer exists while the
     // real one goes unlabelled through the very check the exemption was meant to skip.
     const known = new Set(phases);
-    const stale = [...NO_LIVE_LABEL, ...NO_STAGE_LABEL].filter((p) => !known.has(p));
+    const stale = [...NO_LIVE_LABEL].filter((p) => !known.has(p));
     expect(
       [...new Set(stale)],
       `exemptions for phases the engine no longer has: ${stale.join(", ")}`
     ).toEqual([]);
-  });
-
-  it("gives every non-terminal phase a composer stage label", () => {
-    const missing = phases.filter((p) => !NO_STAGE_LABEL.has(p) && !STAGE_LABEL[p]);
-    expect(missing, `phases with no stage label: ${missing.join(", ")}`).toEqual([]);
   });
 
   it("gives every silent-work phase an inline live label", () => {
@@ -93,19 +87,7 @@ describe("phase label contract", () => {
 
   it("labels nothing the engine cannot emit", () => {
     const known = new Set(phases);
-    const strays = [...Object.keys(STAGE_LABEL), ...Object.keys(LIVE_STATUS_LABEL)].filter(
-      (k) => !known.has(k)
-    );
+    const strays = Object.keys(LIVE_STATUS_LABEL).filter((k) => !known.has(k));
     expect(strays, `labels for phases the engine never sends: ${strays.join(", ")}`).toEqual([]);
-  });
-
-  it("agrees with itself on the verb wherever both maps name a phase", () => {
-    // The cockpit deliberately paired them ("Writing" / "Writing…") so the inline line
-    // and the composer cue could never describe the same turn differently.
-    for (const [phase, live] of Object.entries(LIVE_STATUS_LABEL)) {
-      const stage = STAGE_LABEL[phase];
-      if (!stage) continue;
-      expect(stage, `"${phase}" disagrees between the two rows`).toBe(`${live}…`);
-    }
   });
 });

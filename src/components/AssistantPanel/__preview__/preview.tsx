@@ -5,6 +5,7 @@ import { applyAppThemeToRoot } from "@/theme/applyAppTheme";
 import { AssistantPanelView } from "../AssistantPanelView";
 import type { AssistantSessionState } from "@/store/assistantStore";
 import { CAPTURED_STATES, type CapturedStateName } from "./capturedStates";
+import { PROSE_SPECIMEN } from "./proseSpecimen";
 import "@/index.css";
 
 /**
@@ -13,8 +14,19 @@ import "@/index.css";
  * validation and the real reducer. Reviewing hand-written fixtures would review a
  * designer's belief about what the panel receives; these are what it receives.
  */
-const STATES: Record<CapturedStateName, AssistantSessionState> = CAPTURED_STATES;
-type StateName = CapturedStateName;
+/**
+ * The captured states, plus one HAND-WRITTEN prose specimen.
+ *
+ * The specimen is kept separate and named as such (see `proseSpecimen.ts`): the
+ * captured states are valuable precisely because nobody wrote them, and the specimen is
+ * valuable precisely because someone did — it contains one of every element the
+ * transcript styles, which no scripted lifecycle turn does.
+ */
+const STATES = {
+  ...CAPTURED_STATES,
+  prose: PROSE_SPECIMEN,
+} satisfies Record<string, AssistantSessionState>;
+type StateName = CapturedStateName | "prose";
 
 /**
  * A type PREDICATE, not an assertion. `Object.keys` widens to `string[]` and a query
@@ -22,10 +34,10 @@ type StateName = CapturedStateName;
  * rather than rendered as `undefined` and crashed on.
  */
 function isStateName(value: string): value is StateName {
-  return Object.prototype.hasOwnProperty.call(CAPTURED_STATES, value);
+  return Object.prototype.hasOwnProperty.call(STATES, value);
 }
 
-const STATE_NAMES = Object.keys(CAPTURED_STATES).filter(isStateName);
+const STATE_NAMES = Object.keys(STATES).filter(isStateName);
 
 /**
  * Standalone visual-review harness for the assistant panel.
@@ -50,6 +62,16 @@ const themeId = params.get("theme") ?? "daintree";
 const fixtureParam = params.get("fixture");
 const single: StateName | null = fixtureParam && isStateName(fixtureParam) ? fixtureParam : null;
 
+/**
+ * Stable no-op route for the specimen's references.
+ *
+ * Declared at module scope rather than inline: `onActivateReference` reaches a memoized
+ * component, and a fresh closure per render is exactly the mistake the prop's own
+ * documentation warns about. A harness that models the prop wrongly would review a
+ * rendering the product never produces.
+ */
+const noopRoute = () => {};
+
 function Panel({ name }: { name: StateName }) {
   const state = STATES[name]!;
   return (
@@ -58,6 +80,12 @@ function Panel({ name }: { name: StateName }) {
       onSubmit={() => true}
       onInterrupt={() => {}}
       onDecideApproval={() => {}}
+      // Both are needed for a reference to render as a link at all — recognition is
+      // gated on the capability and rendering on the handler. Without them the
+      // specimen's `PR #11250` shows as plain text and the affordance under review is
+      // simply absent from the picture.
+      forgeAvailable
+      onActivateReference={noopRoute}
     />
   );
 }
