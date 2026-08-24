@@ -3,10 +3,20 @@ import { AGENT_REGISTRY } from "../../../shared/config/agentRegistry.js";
 import { getPluginProcessToolRegistry } from "../../../shared/config/pluginProcessToolRegistry.js";
 import { PROCESS_TOOL_ICON_BY_COMMAND } from "../../../shared/config/processToolRegistry.js";
 
+/**
+ * Package tails too generic to identify an agent. `@ampcode/cli` would
+ * otherwise register the bare name `cli`, and every Node CLI launched as
+ * `node …/cli.js` — `npx electron .` among them — would resolve to that
+ * agent. The tail is a convenience alias, so dropping an ambiguous one costs
+ * nothing: the agent's own command and id still register. #11931
+ */
+const GENERIC_PACKAGE_TAILS = new Set(["cli", "code", "agent", "app", "bin", "core", "main"]);
+
 function packageTail(pkg: string | undefined): string | undefined {
   if (!pkg) return undefined;
   const tail = pkg.split("/").pop();
-  return tail && tail.length > 0 ? tail : undefined;
+  if (!tail || tail.length === 0) return undefined;
+  return GENERIC_PACKAGE_TAILS.has(tail.toLowerCase()) ? undefined : tail;
 }
 
 /** Reads `packages.npm` first; falls back to deprecated top-level `npmGlobalPackage`. */
