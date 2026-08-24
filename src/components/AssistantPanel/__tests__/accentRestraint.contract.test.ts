@@ -33,10 +33,13 @@ const INK_ALLOWED = new Map([
       "at the same time. The title is then the single load-bearing signal in the region.",
   ],
   [
-    "AssistantMessage.tsx",
-    "Link colour in rendered markdown. Not an emphasis signal: it is the convention " +
-      "every renderer and every terminal uses for a hyperlink, and it appears only " +
-      "where the model actually wrote one.",
+    "AssistantLink.tsx",
+    "Navigable text in rendered markdown, declared ONCE for both destinations. Not an " +
+      "emphasis signal: it is the convention every renderer and every terminal uses " +
+      "for a hyperlink, and it appears only where the model actually wrote a reference. " +
+      "The external and internal forms are different elements — an anchor and a button " +
+      "— but one signal, so they share a single accent declaration rather than each " +
+      "painting their own. That is what keeps this at one entry instead of two.",
   ],
 ]);
 

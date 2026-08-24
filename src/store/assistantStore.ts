@@ -1186,7 +1186,12 @@ export const useAssistantStore = create<AssistantStore>((set, get) => ({
             label: event.label ?? null,
             text: event.text ?? null,
           };
-          const turnId = event.turnId ?? asked?.turnId ?? null;
+          // The engine stopped carrying `turnId` on this frame when the question
+          // channel was hardened: the questionId is the key, and the turn is whichever
+          // one asked. Falling back to the ASKED question's turn is not a degradation —
+          // it is the same turn the frame used to name, read from the record of the
+          // question rather than from the answer.
+          const turnId = asked?.turnId ?? null;
           return {
             // Cleared only if it is THIS question: a late `answered` for one already
             // superseded must not dismiss the sheet the user is currently looking at.

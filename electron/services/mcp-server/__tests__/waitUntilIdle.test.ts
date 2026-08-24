@@ -265,6 +265,59 @@ describe("handleWaitUntilIdle stale-state crash race (#10816)", () => {
   });
 });
 
+describe("handleWaitUntilIdle terminal closed by the user", () => {
+  it("settles as closed the moment a watched terminal is trashed, not after its TTL", async () => {
+    const { terminalId, agentId } = nextIds();
+    seedWorkingAgent(terminalId, agentId);
+
+    const p = handleWaitUntilIdle({ terminalId, timeoutMs: 10_000 }, new AbortController().signal, {
+      maxTimeoutMs: 5_000,
+    });
+    await new Promise((r) => setTimeout(r, 10));
+    events.emit("terminal:trashed", { id: terminalId, expiresAt: Date.now() + 20_000 });
+
+    const result = await p;
+    expect(result.timedOut).toBe(false);
+    expect(result.busyState).toBe("idle");
+    expect(result.idleReason).toBe("closed");
+    expect(result).not.toHaveProperty("exitCode");
+  });
+
+  it("settles as closed immediately when the terminal was already trashed before the call", async () => {
+    const { terminalId, agentId } = nextIds();
+    seedWorkingAgent(terminalId, agentId);
+    events.emit("terminal:trashed", { id: terminalId, expiresAt: Date.now() + 20_000 });
+
+    const started = Date.now();
+    const result = await handleWaitUntilIdle(
+      { terminalId, timeoutMs: 10_000 },
+      new AbortController().signal,
+      { maxTimeoutMs: 5_000 }
+    );
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(result.timedOut).toBe(false);
+    expect(result.busyState).toBe("idle");
+    expect(result.idleReason).toBe("closed");
+  });
+
+  it("reports the same lastTransitionAt across repeated calls during one trash TTL", async () => {
+    const { terminalId, agentId } = nextIds();
+    seedWorkingAgent(terminalId, agentId);
+    events.emit("terminal:trashed", { id: terminalId, expiresAt: Date.now() + 20_000 });
+
+    const first = await handleWaitUntilIdle({ terminalId }, new AbortController().signal, {
+      maxTimeoutMs: 5_000,
+    });
+    await new Promise((r) => setTimeout(r, 15));
+    const second = await handleWaitUntilIdle({ terminalId }, new AbortController().signal, {
+      maxTimeoutMs: 5_000,
+    });
+
+    expect(first.lastTransitionAt).toBeDefined();
+    expect(second.lastTransitionAt).toBe(first.lastTransitionAt);
+  });
+});
+
 describe("handleWaitUntilIdleBatch", () => {
   it("mode 'first' resolves as soon as any terminal leaves working", async () => {
     const a = nextIds();
@@ -324,6 +377,55 @@ describe("handleWaitUntilIdleBatch", () => {
     expect(res.timedOut).toBe(false);
     expect(res.settledTerminalIds).toHaveLength(2);
     expect(res.results.every((e) => e.settled)).toBe(true);
+  });
+
+  it("settles a terminal the user closes mid-wait as closed, without blocking the rest of the batch", async () => {
+    const a = nextIds();
+    const b = nextIds();
+    seedWorkingAgent(a.terminalId, a.agentId);
+    seedWorkingAgent(b.terminalId, b.agentId);
+
+    const p = handleWaitUntilIdleBatch(
+      { terminalIds: [a.terminalId, b.terminalId], mode: "all", timeoutMs: 10_000 },
+      new AbortController().signal,
+      { maxTimeoutMs: 5_000 }
+    );
+    await new Promise((r) => setTimeout(r, 10));
+    // The user closes terminal A — must NOT wait out its trash TTL to notice.
+    events.emit("terminal:trashed", { id: a.terminalId, expiresAt: Date.now() + 20_000 });
+
+    const stillPending = await Promise.race([
+      p.then(() => "resolved" as const),
+      new Promise<"pending">((r) => setTimeout(() => r("pending"), 60)),
+    ]);
+    expect(stillPending).toBe("pending");
+
+    emitIdle(b.terminalId, b.agentId);
+    const res = await p;
+    expect(res.timedOut).toBe(false);
+    expect(res.settledTerminalIds).toHaveLength(2);
+    const aEntry = res.results.find((e) => e.terminalId === a.terminalId)!;
+    expect(aEntry.settled).toBe(true);
+    expect(aEntry.busyState).toBe("idle");
+    expect(aEntry.idleReason).toBe("closed");
+    expect(aEntry.previousBusyState).toBe("working");
+  });
+
+  it("seeds an already-trashed terminal as closed at call start", async () => {
+    const a = nextIds();
+    seedWorkingAgent(a.terminalId, a.agentId);
+    events.emit("terminal:trashed", { id: a.terminalId, expiresAt: Date.now() + 20_000 });
+
+    const started = Date.now();
+    const res = await handleWaitUntilIdleBatch(
+      { terminalIds: [a.terminalId], mode: "all" },
+      new AbortController().signal,
+      { maxTimeoutMs: 5_000 }
+    );
+    expect(Date.now() - started).toBeLessThan(1_000);
+    expect(res.timedOut).toBe(false);
+    expect(res.results[0]!.idleReason).toBe("closed");
+    expect(res.results[0]!.settled).toBe(true);
   });
 
   it("mode 'all' times out with the partial settled set when not all finish", async () => {

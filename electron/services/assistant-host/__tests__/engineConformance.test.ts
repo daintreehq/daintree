@@ -1,7 +1,7 @@
 import { describe, it, expect } from "vitest";
 import { spawn } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, open, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -42,6 +42,12 @@ function enginePath(): string | null {
   return existsSync(candidate) ? candidate : null;
 }
 
+/**
+ * The project this harness claims to be, in BOTH the descriptor and the environment.
+ * The engine treats a disagreement between the two as a fatal binding mismatch.
+ */
+const CONFORMANCE_PROJECT_ID = "p_conformance";
+
 interface DriveResult {
   frames: unknown[];
   stderr: string;
@@ -49,16 +55,30 @@ interface DriveResult {
 }
 
 /** Boots the engine, sends a descriptor then a shutdown, and collects stdout frames. */
-async function driveEngine(binary: string, sessionId: string): Promise<DriveResult> {
+async function driveEngine(
+  binary: string,
+  sessionId: string,
+  /** Reuse a state dir across boots, so a second boot sees the first one's database. */
+  stateDirOverride?: string
+): Promise<DriveResult> {
   const dir = await mkdtemp(path.join(tmpdir(), "daintree-engine-conformance-"));
   const projectDir = path.join(dir, "project");
+  const stateDir = stateDirOverride ?? path.join(dir, "state");
   try {
     const child = spawn(binary, ["host", "--stdio"], {
       cwd: REPO_ROOT,
       env: {
         ...process.env,
-        DAINTREE_ASSISTANT_STATE_DIR: path.join(dir, "state"),
+        DAINTREE_ASSISTANT_STATE_DIR: stateDir,
         DAINTREE_ASSISTANT_LOG_DIR: path.join(dir, "logs"),
+        // The SAME id the descriptor below carries, because that is what
+        // `AssistantHostService` does (`DAINTREE_PROJECT_ID: opts.projectId`). The
+        // engine binds its runtime to this variable and refuses a descriptor that
+        // disagrees — "the host and the runtime disagree about which session this is,
+        // so neither can be trusted to act on it". Leaving it inherited meant the
+        // engine bound to whatever project the developer's own shell was in and
+        // rejected the handshake before it ever reached ready.
+        DAINTREE_PROJECT_ID: CONFORMANCE_PROJECT_ID,
         // Deliberately unreachable. The handshake must not depend on a backend, and
         // pointing at a real one would make this test do billable work.
         DAINTREE_BACKEND_URL: "http://127.0.0.1:59999",
@@ -94,7 +114,7 @@ async function driveEngine(binary: string, sessionId: string): Promise<DriveResu
       `${JSON.stringify({
         sessionId,
         windowId: 1,
-        projectId: "p_conformance",
+        projectId: CONFORMANCE_PROJECT_ID,
         cwd: REPO_ROOT,
         tier: "system",
         protocolVersion: ASSISTANT_HOST_PROTOCOL_VERSION,
@@ -189,6 +209,58 @@ describe.skipIf(!binary)("assistant engine wire conformance", () => {
       expect(seqs[i]).toBeGreaterThan(seqs[i - 1]);
     }
   }, 40_000);
+
+  it("boots against a state database from an older schema", async () => {
+    // The upgrade path for anyone who has used the assistant before, and it was fatal.
+    // The engine hard-resets its SQLite baseline rather than migrating, and the host was
+    // the one surface with no recovery wired: it answered `host:error` — "database
+    // schema is stale … run 'make db-reset'" — and exited 0, which this side reports as
+    // "The assistant engine exited before it was ready". `make` is a developer target no
+    // install ships, so there was no way forward from inside the app.
+    //
+    // Asserted HERE rather than only in the engine's own suite because this is the seam
+    // that broke: the reset machinery worked throughout, and what was missing was the
+    // host passing the hooks. Only booting the real binary from this side shows that.
+    const shared = await mkdtemp(path.join(tmpdir(), "daintree-engine-stale-"));
+    try {
+      // Boot once so the engine writes a REAL database at the CURRENT baseline. Built
+      // by the engine rather than hand-rolled here: a synthetic SQLite file is rejected
+      // as malformed long before the version check this test is about.
+      await driveEngine(binary!, "ses_seed", shared);
+
+      // Age it. `user_version` is a big-endian u32 at offset 60 of the 100-byte header,
+      // so one four-byte write turns a current database into a legacy one without
+      // needing a driver or knowing anything about the schema itself.
+      const dbPath = path.join(shared, "state.db");
+      const handle = await open(dbPath, "r+");
+      try {
+        await handle.write(Buffer.from([0, 0, 0, 1]), 0, 4, 60);
+      } finally {
+        await handle.close();
+      }
+
+      const { frames, exitCode } = await driveEngine(binary!, "ses_stale", shared);
+      const parsed = frames.map(parseAssistantHostEvent);
+
+      const refusal = parsed.find((e) => e?.type === "host:error");
+      expect(
+        refusal,
+        `the engine refused to boot instead of recovering: ${JSON.stringify(refusal)}`
+      ).toBeUndefined();
+      expect(
+        parsed.find((e) => e?.type === "host:ready"),
+        "the engine never became ready on a legacy state directory"
+      ).toBeDefined();
+      expect(exitCode).toBe(0);
+
+      // Recovered, not discarded: the previous database is moved aside, so a user's
+      // timers, watchers, memories and history survive an upgrade they did not ask for.
+      const backups = (await readdir(shared)).filter((n) => n.startsWith("state.db.bak-v"));
+      expect(backups, "the old database was not preserved").toHaveLength(1);
+    } finally {
+      await rm(shared, { recursive: true, force: true });
+    }
+  }, 60_000);
 
   it("keeps diagnostics off the protocol stream", async () => {
     // The engine reports a degraded MCP connection on a run like this. It must arrive

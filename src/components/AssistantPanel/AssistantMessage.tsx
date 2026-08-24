@@ -1,6 +1,9 @@
 import { memo, useMemo } from "react";
-import ReactMarkdown from "react-markdown";
+import ReactMarkdown, { type Components } from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { HighlightedCode } from "@/components/Markdown/HighlightedCode";
+import { isReferenceKind, remarkReferences, type ReferenceKind } from "./remarkReferences";
+import { AssistantLink } from "./AssistantLink";
 import { cn } from "@/lib/utils";
 
 /**
@@ -27,10 +30,35 @@ import { cn } from "@/lib/utils";
  * less.
  */
 
+/** A reference the reader clicked, for the panel's owner to route. */
+export interface AssistantReference {
+  kind: ReferenceKind;
+  number: number;
+}
+
 export interface AssistantMessageProps {
   content: string;
   /** Renders the streaming caret. */
   streaming?: boolean;
+  /**
+   * Routes a click on an internal reference. This component stays presentational and
+   * holds no dispatch of its own — the owner decides what "open issue 11244" means,
+   * because that depends on the project and the resolved forge provider, neither of
+   * which a message knows about.
+   *
+   * MUST be referentially stable. It is a prop of a memoized component that re-renders
+   * on every frame of a streaming turn, so a fresh closure per render would defeat the
+   * memo boundary this file exists to protect.
+   */
+  onActivateReference?: (reference: AssistantReference) => void;
+  /**
+   * Whether a forge provider resolved for this project.
+   *
+   * Gates recognition, not just routing: with no provider there is no destination, and
+   * a reference rendered as a link that cannot go anywhere is a broken promise. It
+   * stays plain text.
+   */
+  forgeAvailable?: boolean;
   className?: string;
 }
 
@@ -105,29 +133,95 @@ function balanceFences(text: string): string {
 export const AssistantMessage = memo(function AssistantMessage({
   content,
   streaming = false,
+  onActivateReference,
+  forgeAvailable = false,
   className,
 }: AssistantMessageProps) {
   const source = useMemo(() => balanceFences(content), [content]);
 
+  // Rebuilt only when the capability actually changes, so a settled message is not
+  // reparsed on every render — and never during a turn, because a forge provider does
+  // not resolve or disappear mid-stream.
+  const plugins = useMemo(
+    () => [remarkGfm, remarkReferences({ forge: forgeAvailable }), remarkSoftBreaks],
+    [forgeAvailable]
+  );
+
+  // Memoized on what the renderers actually read.
+  //
+  // An inline object here means a NEW component function for every element on every
+  // render, so React unmounts and remounts each one — and a reference button that has
+  // keyboard focus loses it on the next frame of a streaming turn. The message is
+  // memoized on `content`, which changes on every token, so during a turn that is every
+  // frame. (`AssistantLink` and `HighlightedCode` themselves are stable; it is the
+  // arrow functions wrapping them that were not.)
+  const components = useMemo<Components>(
+    () => ({
+      // A fenced block with a language gets syntax colour from the TERMINAL's own
+      // ANSI slots (see `palette.ts`), so it reads as the same material as the pane
+      // beside it rather than as a web page's idea of code.
+      //
+      // Held off until the turn settles. Mid-stream a fence is a syntactically
+      // broken fragment, so highlighting it re-tokenises a growing buffer every
+      // frame — quadratic over a turn — to show colours that are wrong until the
+      // last character lands. The block visibly reinterprets itself as it fills.
+      // Waiting costs one highlight and shows a stable answer.
+      //
+      // A fence with NO language stays plain: `refractor` cannot guess a grammar,
+      // and picking one for the reader would colour a paste of log output as if it
+      // were source.
+      // `node` is react-markdown's own hast node, not a DOM attribute. Dropped
+      // here rather than spread onto the element, which makes React warn about an
+      // unknown prop on every inline code span. `MarkdownDocument` already does
+      // this; the extraction copied the body without the guard.
+      code: ({ node: _node, className: codeClassName, children, ...props }) => {
+        const language = /language-([\w+-]+)/.exec(codeClassName ?? "")?.[1];
+        if (language) {
+          return (
+            <HighlightedCode
+              language={language}
+              code={String(children).replace(/\n$/, "")}
+              enabled={!streaming}
+            />
+          );
+        }
+        return (
+          <code className={codeClassName} {...props}>
+            {children}
+          </code>
+        );
+      },
+      // Navigable text, in one primitive. A markdown link and a forge reference are
+      // different elements for a mechanical reason (a reference has no URL of its
+      // own) but ONE signal — both open the system browser — so `AssistantLink`
+      // paints them identically. See that file.
+      a: ({ node: _node, children, href, ...props }) => {
+        const attrs: Record<string, unknown> = props;
+        const kind = attrs["data-ref-kind"];
+        const number = attrs["data-ref-number"];
+        if (isReferenceKind(kind) && typeof number === "string") {
+          const parsed = Number(number);
+          // The reference carries no URL, so there is nothing for a missing handler
+          // to navigate to — and a link that looks live and does nothing is worse
+          // than plain text, so it renders as the plain text it came from.
+          if (!onActivateReference || !Number.isSafeInteger(parsed) || parsed <= 0) {
+            return <>{children}</>;
+          }
+          return (
+            <AssistantLink onActivate={() => onActivateReference({ kind, number: parsed })}>
+              {children}
+            </AssistantLink>
+          );
+        }
+        return <AssistantLink href={href}>{children}</AssistantLink>;
+      },
+    }),
+    [streaming, onActivateReference]
+  );
+
   return (
     <div className={cn("assistant-prose", streaming && "is-streaming", className)}>
-      <ReactMarkdown
-        remarkPlugins={[remarkGfm, remarkSoftBreaks]}
-        components={{
-          // Links always leave the app, so they always get the affordances of doing
-          // so. `noreferrer` matters because the target is model-authored.
-          a: ({ children, href }) => (
-            <a
-              href={href}
-              target="_blank"
-              rel="noopener noreferrer"
-              className="text-[var(--assistant-accent)] underline decoration-[var(--assistant-accent)]/40 underline-offset-2 hover:decoration-[var(--assistant-accent)]"
-            >
-              {children}
-            </a>
-          ),
-        }}
-      >
+      <ReactMarkdown remarkPlugins={plugins} components={components}>
         {source}
       </ReactMarkdown>
       {/* The caret is drawn as an ::after on the last block of prose (see the CSS), so

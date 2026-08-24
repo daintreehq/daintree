@@ -278,7 +278,7 @@ The shape test lives in `HttpLifecycle.resolveWorkspaceSelector`, not in `parseW
 
 A degraded binding carries the `workspaceId` and nothing else: `kind` and `workspacePath` are read off the live view, so their absence is the signal. There is deliberately **no** liveness flag on the binding — `capabilities.experimental` is built once at `initialize` and never updated, so a flag would be a snapshot that is wrong seconds after it is read. The live answer is the per-call one.
 
-A refused handshake returns HTTP 400 with a JSON-RPC error body at `MCP_HANDSHAKE_REJECTED_CODE` (`-32002`, distinct from the `-32001` "Session not found"), a stable `error.data.code`, and **no** `Mcp-Session-Id` — no session state is created at all. Note that SDK 1.29's `StreamableHTTPClientTransport` surfaces a non-2xx handshake as a `StreamableHTTPError` carrying the raw body as text, so a client that wants to branch on `data.code` has to parse that body itself; the codes are a stable contract, not something the stock client destructures for you.
+A refused handshake returns HTTP 400 with a JSON-RPC error body at `MCP_HANDSHAKE_REJECTED_CODE` (`-32002`, distinct from the `-32000` "Session not found"), a stable `error.data.code`, and **no** `Mcp-Session-Id` — no session state is created at all. Note that SDK 1.29's `StreamableHTTPClientTransport` surfaces a non-2xx handshake as a `StreamableHTTPError` carrying the raw body as text, so a client that wants to branch on `data.code` has to parse that body itself; the codes are a stable contract, not something the stock client destructures for you.
 
 ### The bound-but-viewless surface (#12082)
 

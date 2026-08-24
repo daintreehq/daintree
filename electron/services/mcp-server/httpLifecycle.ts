@@ -1300,7 +1300,15 @@ export class HttpLifecycle {
         res.end(
           JSON.stringify({
             jsonrpc: "2.0",
-            error: { code: -32001, message: "Session not found" },
+            // -32000 is the MCP SDK's own ErrorCode.ConnectionClosed — the code the
+            // JSON-RPC BODY should carry for a gone session, matching the SDK's own
+            // vocabulary. The 404 HTTP STATUS above is what actually governs client
+            // behavior (a spec-faithful client, including the Go SDK's Streamable
+            // HTTP transport, keys off the status and treats 404 as session-missing
+            // independent of this body's error code) — this exists so a client or
+            // log that decodes the body doesn't read a stale, misleading -32001
+            // ("RequestTimeout") for something that was never a timeout.
+            error: { code: -32000, message: "Session not found" },
             id: null,
           })
         );

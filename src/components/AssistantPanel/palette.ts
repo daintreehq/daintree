@@ -74,14 +74,38 @@ export interface AssistantPalette extends Record<string, string> {
 }
 
 /**
+ * The ANSI slots a fenced code block is coloured from.
+ *
+ * A narrow structural shape rather than xterm's `ITheme` so this module keeps taking
+ * only what it reads, and so a contract test can build an adversarial theme by hand
+ * without constructing a whole terminal theme around it. Every slot is optional: a
+ * half-written custom scheme is a real input, and each one falls back to a colour the
+ * panel has already derived.
+ */
+export interface AnsiSyntaxSlots {
+  brightBlack?: string;
+  green?: string;
+  blue?: string;
+  magenta?: string;
+  cyan?: string;
+}
+
+/**
  * Builds the panel's custom properties from a resolved terminal theme.
  *
  * Everything is emitted as a concrete `#rrggbb` rather than a `color-mix()` expression,
  * so the values can be ASSERTED. `palette.contract.test.ts` walks every shipped terminal
  * scheme and checks each floor, which is only possible because the answer is a number
  * here rather than something the browser resolves later.
+ *
+ * `ansi` is the raw 16-colour half of the terminal theme, which `resolveInputBarColors`
+ * narrows away. It is optional because only the fenced-code tokens need it, and a caller
+ * that has not got it should still get a whole panel palette rather than an exception.
  */
-export function buildAssistantPalette(term: InputBarColors): AssistantPalette {
+export function buildAssistantPalette(
+  term: InputBarColors,
+  ansi?: AnsiSyntaxSlots
+): AssistantPalette {
   const fg = parse(term.foreground) ?? [204, 204, 204];
   const bg = parse(term.background) ?? [30, 30, 30];
 
@@ -156,6 +180,39 @@ export function buildAssistantPalette(term: InputBarColors): AssistantPalette {
   const warning = ink(term.voiceCursor, [229, 192, 123]);
   const success = ink(term.successColor, [137, 209, 133]);
   const accent = ink(term.accent, [88, 166, 255]);
+  // Inline code. The terminal's own cyan slot — the same one the composer below paints
+  // its `/command` and `@file` chips with (`inputEditorExtensions/base.ts`), and the
+  // same one the CLI cockpit called "info" and gave to every code span.
+  //
+  // NOT the accent, deliberately and on two counts. The accent is the terminal's CURSOR
+  // colour and this panel's one load-bearing signal, already spent on hyperlinks; and a
+  // code span is not a priority, it is a KIND — "this is a literal, not prose". That
+  // claim is true of every backticked span by construction, so it needs no guess about
+  // what the span contains.
+  //
+  // It takes the TEXT floor because a code span is read, not glanced at. On most themes
+  // that costs nothing: the theme's own cyan already clears it and ships untouched.
+  const code = ink(term.chipColor, [88, 166, 255]);
+
+  // FENCED-CODE SYNTAX, from the terminal's own 16 colours.
+  //
+  // The point is not decoration. A fence in this panel sits inches from a terminal
+  // running the same font at the same size, and the reader is comparing the two — a
+  // block that borrows the terminal's own hues reads as the same material, while one
+  // borrowing the APP's syntax tokens reads as a web page that wandered into the rail.
+  // The CLI cockpit did exactly this (chroma, themed to the terminal's mode).
+  //
+  // FIVE roles, not sixteen. Every hue spent here is one that stops meaning anything
+  // else, and red and yellow are deliberately NOT spent: they are the panel's danger
+  // and warning inks, and a language whose punctuation is red would make a failed tool
+  // call and a semicolon the same colour. Operators and punctuation take the secondary
+  // TEXT tier instead of a hue, which is what they are — structure, not content.
+  //
+  // Every one takes the TEXT floor. A comment is the tempting exception and the wrong
+  // one: comments are prose, they are frequently the most important line in a snippet,
+  // and the graphical floor is for glyphs nobody reads.
+  const syntax = (slot: string | undefined, fallback: RGB): RGB =>
+    readableOn(parse(slot ?? "") ?? fallback, grounds, TEXT_FLOOR, pole);
 
   return {
     "--assistant-fg": toHex(primary),
@@ -176,6 +233,15 @@ export function buildAssistantPalette(term: InputBarColors): AssistantPalette {
     // another. `tintWithin` takes as much of it as the floor allows and no more.
     "--assistant-warning-surface": toHex(tintWithin(bg, warning, 0.12, primary, TEXT_FLOOR)),
     "--assistant-accent": toHex(accent),
+    "--assistant-code": toHex(code),
+    // A comment falls back to the panel's own secondary tier rather than to a hue: a
+    // theme with no `brightBlack` has told us nothing about what "quiet" looks like in
+    // it, and the tier already answers that question.
+    "--assistant-syntax-comment": toHex(syntax(ansi?.brightBlack, secondary)),
+    "--assistant-syntax-keyword": toHex(syntax(ansi?.magenta, [197, 134, 192])),
+    "--assistant-syntax-string": toHex(syntax(ansi?.green, [137, 209, 133])),
+    "--assistant-syntax-number": toHex(syntax(ansi?.cyan, [88, 166, 255])),
+    "--assistant-syntax-function": toHex(syntax(ansi?.blue, [97, 175, 239])),
     // Icons and focus rings take the graphical floor rather than the text one, so they
     // stay recognisably the theme's own colours instead of being pushed to near-black
     // or near-white by a floor written for prose.

@@ -41,6 +41,10 @@ export class AgentAvailabilityStore {
   private agentToTerminal: Map<string, string> = new Map();
   private trashedTerminals: Set<string> = new Set();
   private trashedAgentIds: Set<string> = new Set();
+  // When each currently-trashed terminal was closed. A stable source for a waiter
+  // that checks in more than once during the same trash TTL — reading `Date.now()`
+  // at check time instead would report a different "transition" moment on every call.
+  private trashedAt: Map<string, number> = new Map();
   private helpTerminalIds: Set<string> = new Set();
   private helpAgentIds: Set<string> = new Set();
   private unsubscribers: Array<() => void> = [];
@@ -81,6 +85,7 @@ export class AgentAvailabilityStore {
     this.unsubscribers.push(
       events.on("terminal:trashed", (payload) => {
         this.trashedTerminals.add(payload.id);
+        this.trashedAt.set(payload.id, Date.now());
         const agentId = this.terminalToAgent.get(payload.id);
         if (agentId) {
           this.trashedAgentIds.add(agentId);
@@ -91,6 +96,7 @@ export class AgentAvailabilityStore {
     this.unsubscribers.push(
       events.on("terminal:restored", (payload) => {
         this.trashedTerminals.delete(payload.id);
+        this.trashedAt.delete(payload.id);
         const agentId = this.terminalToAgent.get(payload.id);
         if (agentId) {
           this.trashedAgentIds.delete(agentId);
@@ -162,6 +168,26 @@ export class AgentAvailabilityStore {
    */
   getAgentIdForTerminal(terminalId: string): string | undefined {
     return this.terminalToAgent.get(terminalId);
+  }
+
+  /**
+   * Whether a terminal is currently in the trash — closed by the user, alive for its
+   * TTL grace period before the underlying process is actually killed. Lets a waiter
+   * (`terminal.waitUntilIdle`) recognise a manual close as its own settled outcome
+   * instead of reading it, up to `TRASH_TTL_MS` later, as an ordinary process exit.
+   */
+  isTrashed(terminalId: string): boolean {
+    return this.trashedTerminals.has(terminalId);
+  }
+
+  /**
+   * When a currently-trashed terminal was closed. `undefined` when it is not
+   * trashed. The one source of truth for that moment — read this rather than
+   * timestamping at read time, or two waiters checking in during the same trash
+   * TTL would report two different transitions for the one close.
+   */
+  getTrashedAt(terminalId: string): number | undefined {
+    return this.trashedAt.get(terminalId);
   }
 
   /**
@@ -290,6 +316,7 @@ export class AgentAvailabilityStore {
     if (terminalId) {
       this.terminalToAgent.delete(terminalId);
       this.trashedTerminals.delete(terminalId);
+      this.trashedAt.delete(terminalId);
       this.helpTerminalIds.delete(terminalId);
       this.agentToTerminal.delete(agentId);
     }
@@ -310,6 +337,7 @@ export class AgentAvailabilityStore {
     this.terminalToAgent.clear();
     this.agentToTerminal.clear();
     this.trashedTerminals.clear();
+    this.trashedAt.clear();
     this.trashedAgentIds.clear();
     this.helpTerminalIds.clear();
     this.helpAgentIds.clear();

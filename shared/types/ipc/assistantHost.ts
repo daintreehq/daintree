@@ -321,12 +321,19 @@ export interface AssistantQuestionRequestedEvent extends AssistantHostEventBase 
   requestedAt: number;
 }
 
-/** A question settled. `index` is -1 when it was dismissed without choosing. */
+/**
+ * A question settled.
+ *
+ * `cancelled` is the authoritative "no answer", reported rather than inferred:
+ * `choiceIndex` is -1 alongside it, but a surface that read only the index could not
+ * tell a dismissal from an out-of-range answer the engine refused to clamp.
+ */
 export interface AssistantQuestionAnsweredEvent extends AssistantHostEventBase {
   type: "question:answered";
   questionId: string;
-  turnId?: string;
-  index: number;
+  choiceIndex: number;
+  cancelled: boolean;
+  answeredAt: number;
   label?: string;
   text?: string;
 }
@@ -729,15 +736,16 @@ export interface AssistantCommandCommand {
 /**
  * Answer an outstanding `question:requested`.
  *
- * `index` is -1 to DISMISS without choosing. There is deliberately no "default"
- * answer the host can send blind: answering on the user's behalf is the one thing a
- * question surface must never do.
+ * `choiceIndex` is -1 to DISMISS without choosing, and is REQUIRED: the engine
+ * refuses a command that omits it rather than defaulting to the first option. There is
+ * deliberately no "default" answer the host can send blind — answering on the user's
+ * behalf is the one thing a question surface must never do.
  */
 export interface AssistantQuestionAnswerCommand {
   type: "question:answer";
   sessionId: string;
   questionId: string;
-  index: number;
+  choiceIndex: number;
 }
 
 /** Interrupt the in-flight turn (user pressed stop). */
