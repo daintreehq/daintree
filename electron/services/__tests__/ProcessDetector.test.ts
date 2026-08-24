@@ -4,6 +4,7 @@ import {
   detectCommandIdentity,
   extractCommandNameCandidates,
   extractScriptBasenameFromCommand,
+  redactArgv,
 } from "../ProcessDetector.js";
 import {
   clearPluginProcessToolRegistryForTests,
@@ -2179,6 +2180,12 @@ describe("ProcessDetector", () => {
       cache.emitRefresh();
       cache.emitRefresh();
 
+      // npm committed — the detector ran and reached a verdict; it just was
+      // not an agent, so nothing is logged.
+      expect(callback).toHaveBeenCalledWith(
+        expect.objectContaining({ processIconId: "npm", isBusy: true }),
+        expect.any(Number)
+      );
       expect(agentCommitLogs()).toHaveLength(0);
     });
   });
@@ -2638,6 +2645,39 @@ describe("agent CLI name aliases", () => {
     expect(detectCommandIdentity("node /repo/node_modules/electron/cli.js .")?.agentType).toBe(
       undefined
     );
+  });
+});
+
+describe("redactArgv", () => {
+  it("reduces a launch path to its basename on both platforms", () => {
+    expect(redactArgv('"C:\\Users\\alice\\secret-project\\opencode.cmd" --resume')).toBe(
+      '"opencode.cmd"'
+    );
+    expect(redactArgv("/Users/alice/secret-project/opencode --resume")).toBe('"opencode"');
+    // A quote groups the token, it does not end it.
+    expect(redactArgv("'/Users/alice/secret-project'/opencode --resume")).toBe('"opencode"');
+  });
+
+  it("emits nothing rather than guess at unbalanced quoting", () => {
+    // Returning the remainder here is how an inline secret reaches the log.
+    expect(redactArgv('"C:\\Users\\alice\\opencode.cmd --api-key=sk-secret')).toBe("");
+    expect(redactArgv("'/Users/alice/opencode --api-key=sk-secret")).toBe("");
+  });
+
+  it("never carries anything past argv[0]", () => {
+    for (const command of [
+      "opencode --api-key=sk-secret",
+      '"/opt/bin/opencode" --api-key=sk-secret',
+      "node /opt/bin/opencode --api-key=sk-secret",
+    ]) {
+      expect(redactArgv(command), command).not.toContain("sk-secret");
+    }
+  });
+
+  it("returns nothing for empty input", () => {
+    expect(redactArgv(undefined)).toBe("");
+    expect(redactArgv("")).toBe("");
+    expect(redactArgv("   ")).toBe("");
   });
 });
 

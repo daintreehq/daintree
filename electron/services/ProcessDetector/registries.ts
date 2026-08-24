@@ -7,7 +7,7 @@ import { PROCESS_TOOL_ICON_BY_COMMAND } from "../../../shared/config/processTool
  * Is this package tail specific enough to stand alone as an agent name?
  *
  * The tail is a convenience alias, so it only earns registration when it
- * actually names its agent: one of its `-`/`_`-separated tokens must be the
+ * actually names its agent: one of its alphanumeric tokens must be the
  * agent's id or command. `@anthropic-ai/claude-code` → `claude-code` keeps its
  * alias; `@ampcode/cli` → `cli` loses it, because nothing about `cli` says
  * Amp, and registering it made every Node CLI launched as `node …/cli.js` —

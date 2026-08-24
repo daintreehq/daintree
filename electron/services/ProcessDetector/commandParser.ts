@@ -110,22 +110,40 @@ export function extractScriptBasenameFromCommand(command: string | undefined): s
 // argv[0]'s basename so log noise still identifies the runtime without
 // leaking credentials into console or into window.__daintreeIdentityEvents().
 /**
- * argv[0] as written — quotes removed, path separators intact.
+ * argv[0] as written — grouping quotes removed, path separators intact.
  *
  * Deliberately not `splitShellLikeCommand`, which treats `\` as an escape.
- * That flattens a Windows path (`"C:\Users\me\proj\claude.cmd"` becomes
- * `C:Usersmeprojclaude.cmd`), so the basename split below finds no separator
- * and the whole path — home directory and project name included — survives
- * into a log that is persisted to disk.
+ * This input is a command line as the OS *reports* it (`ps`, Win32
+ * `CommandLine`), not shell input: a backslash there is a Windows path
+ * separator. Eating it flattens `"C:\Users\me\proj\claude.cmd"` into one
+ * separator-less token, so the basename split below finds nothing and the
+ * whole path — home directory and project name included — survives into a log
+ * that is persisted to disk.
+ *
+ * A quote groups but does not end the token, so a compound path like
+ * `'/Users/me/my project'/claude` still resolves to `claude`. Unbalanced
+ * quoting is unparseable, and guessing at it is exactly how the rest of argv —
+ * an inline `--api-key=…` among it — reaches the log, so it fails closed.
  */
 function firstCommandToken(command: string): string {
-  const trimmed = command.trim();
-  const quote = trimmed[0];
-  if (quote === '"' || quote === "'") {
-    const end = trimmed.indexOf(quote, 1);
-    return end === -1 ? trimmed.slice(1) : trimmed.slice(1, end);
+  let token = "";
+  let quote: '"' | "'" | null = null;
+
+  for (const char of command.trim()) {
+    if (quote) {
+      if (char === quote) quote = null;
+      else token += char;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (/\s/.test(char)) break;
+    token += char;
   }
-  return trimmed.split(/\s+/)[0] ?? "";
+
+  return quote === null ? token : "";
 }
 
 export function redactArgv(command: string | undefined): string {

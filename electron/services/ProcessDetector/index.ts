@@ -13,8 +13,6 @@ export {
   extractCommandNameCandidates,
   extractScriptBasenameFromCommand,
   stripCommandExecutableExtension,
-  executablePositionLimit,
-  isChromiumChildProcess,
   redactArgv,
   detectCommandIdentity,
 } from "./commandParser.js";
