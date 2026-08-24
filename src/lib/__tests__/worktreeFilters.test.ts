@@ -15,6 +15,7 @@ import {
   matchesDevServerFilter,
   isLiveDevServerStatus,
   isExternalWorktree,
+  copyableBranchName,
   type DerivedWorktreeMeta,
   type FilterState,
 } from "../worktreeFilters";
@@ -455,6 +456,28 @@ describe("isExternalWorktree", () => {
     expect(isExternalWorktree(createMockWorktree({ isExternal: false }))).toBe(false);
     expect(isExternalWorktree(createMockWorktree({ isExternal: undefined }))).toBe(false);
     expect(isExternalWorktree(createMockWorktree())).toBe(false);
+  });
+});
+
+describe("copyableBranchName", () => {
+  it("offers the branch itself, not the display name, when one is checked out", () => {
+    const worktree = createMockWorktree({ branch: "feature/x", name: "some-other-label" });
+
+    expect(copyableBranchName(worktree)).toBe(worktree.branch);
+  });
+
+  it("offers nothing when the worktree reports no branch", () => {
+    expect(copyableBranchName(createMockWorktree({ branch: undefined }))).toBeNull();
+    expect(copyableBranchName(createMockWorktree({ branch: "" }))).toBeNull();
+  });
+
+  it("offers nothing on a detached HEAD still carrying its pre-detach branch", () => {
+    // The status pass only overwrites `branch` when it reads a new one, so the
+    // old name outlives the detach. Handing it back would name a branch this
+    // worktree no longer has checked out.
+    expect(
+      copyableBranchName(createMockWorktree({ branch: "feature/x", isDetached: true }))
+    ).toBeNull();
   });
 });
 

@@ -13,11 +13,6 @@ vi.mock("@/components/Plugin/PluginContextMenuSection", () => ({
 
 afterEach(cleanup);
 
-/**
- * Plain-DOM stand-ins for the Radix menu primitives. The component is a pure
- * render layer over whatever `components` it is given, so both real surfaces
- * (right-click menu and the ⋯ dropdown) exercise this same tree.
- */
 const components: WorktreeMenuComponents = {
   Item: ({ children, onSelect }: { children?: React.ReactNode; onSelect?: () => void }) => (
     <button type="button" onClick={onSelect}>
@@ -32,15 +27,18 @@ const components: WorktreeMenuComponents = {
   SubContent: ({ children }: { children?: React.ReactNode }) => <div>{children}</div>,
 };
 
-// eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- WorktreeState has ~60 fields and this render layer reads four of them; the repo's other worktree component tests build fixtures the same way.
-const worktree = {
-  id: "wt-1",
-  name: "feature",
-  path: "/repo/wt-1",
-  branch: "feature",
-} as WorktreeState;
+function makeWorktree(overrides: Partial<WorktreeState> = {}): WorktreeState {
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- WorktreeState has ~60 fields and this render layer reads four of them; the sibling WorktreeMenuItems tests build their fixtures the same way.
+  return {
+    id: "wt-1",
+    name: "feature",
+    path: "/repo/wt-1",
+    branch: "feature/copy-branch-name",
+    ...overrides,
+  } as WorktreeState;
+}
 
-function renderMenu(onOpenChanges?: () => void, onOpenReviewHub?: () => void) {
+function renderMenu(worktree: WorktreeState, onCopyBranchName: () => void = vi.fn()) {
   return render(
     <WorktreeMenuItems
       worktree={worktree}
@@ -52,7 +50,7 @@ function renderMenu(onOpenChanges?: () => void, onOpenReviewHub?: () => void) {
       onCopyContextFull={vi.fn()}
       onCopyContextModified={vi.fn()}
       onCopyPath={vi.fn()}
-      onCopyBranchName={vi.fn()}
+      onCopyBranchName={onCopyBranchName}
       onOpenEditor={vi.fn()}
       onRevealInFinder={vi.fn()}
       onRunRecipe={vi.fn()}
@@ -65,43 +63,47 @@ function renderMenu(onOpenChanges?: () => void, onOpenReviewHub?: () => void) {
       onCloseAll={vi.fn()}
       onTerminateAll={vi.fn()}
       onClearHistory={vi.fn()}
-      onOpenChanges={onOpenChanges}
-      onOpenReviewHub={onOpenReviewHub}
     />
   );
 }
 
-describe("WorktreeMenuItems — Open changes (#11420)", () => {
-  it("omits the item when no callback is supplied", () => {
-    renderMenu(undefined);
+describe("WorktreeMenuItems — Copy branch name (#11930)", () => {
+  it("offers the item for a worktree checked out on a branch", () => {
+    renderMenu(makeWorktree());
 
-    expect(screen.queryByText("Open changes")).toBeNull();
+    expect(screen.queryByText("Copy branch name")).not.toBeNull();
   });
 
-  it("renders the item when a callback is supplied", () => {
-    renderMenu(vi.fn());
+  it("withholds the item when the worktree reports no branch", () => {
+    renderMenu(makeWorktree({ branch: undefined }));
 
-    expect(screen.queryByText("Open changes")).not.toBeNull();
+    expect(screen.queryByText("Copy branch name")).toBeNull();
+  });
+
+  it("withholds the item on a detached HEAD still carrying its pre-detach branch", () => {
+    renderMenu(makeWorktree({ isDetached: true }));
+
+    expect(screen.queryByText("Copy branch name")).toBeNull();
   });
 
   it("invokes the supplied callback when the item is chosen", () => {
-    const onOpenChanges = vi.fn();
-    renderMenu(onOpenChanges);
+    const onCopyBranchName = vi.fn();
+    renderMenu(makeWorktree(), onCopyBranchName);
 
-    fireEvent.click(screen.getByText("Open changes"));
+    fireEvent.click(screen.getByText("Copy branch name"));
 
-    expect(onOpenChanges).toHaveBeenCalledTimes(1);
+    expect(onCopyBranchName).toHaveBeenCalledTimes(1);
   });
 
-  it("places the item before Review & Commit, so diffing reads ahead of committing", () => {
-    renderMenu(vi.fn(), vi.fn());
+  it("places the item directly under Copy Path, so the two copy targets read together", () => {
+    renderMenu(makeWorktree());
 
-    const labels = screen.getAllByRole("button").map((el) => el.textContent);
-    const openChangesAt = labels.findIndex((t) => t?.includes("Open changes"));
-    const reviewAt = labels.findIndex((t) => t?.includes("Review & Commit"));
+    // Sibling order, not button indices: an index comparison stays green if a
+    // separator or label gets inserted between the two, since neither renders
+    // as a button.
+    const copyPath = screen.getByText("Copy Path");
+    const copyBranch = screen.getByText("Copy branch name");
 
-    expect(openChangesAt).toBeGreaterThanOrEqual(0);
-    expect(reviewAt).toBeGreaterThanOrEqual(0);
-    expect(openChangesAt).toBeLessThan(reviewAt);
+    expect(copyPath.nextElementSibling).toBe(copyBranch);
   });
 });

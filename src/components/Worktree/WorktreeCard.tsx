@@ -29,7 +29,7 @@ import { actionService } from "@/services/ActionService";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
 import { cn } from "../../lib/utils";
-import { isExternalWorktree } from "@/lib/worktreeFilters";
+import { copyableBranchName, isExternalWorktree } from "@/lib/worktreeFilters";
 import { getAgentConfig, getAgentIds } from "@/config/agents";
 import { isAssistantOnlyAgentId } from "@shared/config/agentIds";
 import { getAgentSettingsEntry } from "@/types";
@@ -494,6 +494,13 @@ export function WorktreeCard({
     void copyWorktreePath(worktree.path);
   };
 
+  const { copy: copyBranchName } = useCopyWithFeedback({ announcement: "Branch name copied" });
+  const handleCopyBranchName = () => {
+    const branch = copyableBranchName(worktree);
+    if (!branch) return;
+    void copyBranchName(branch);
+  };
+
   const [showIssuePicker, setShowIssuePicker] = useState(false);
   const [showPlanViewer, setShowPlanViewer] = useState(false);
 
@@ -748,6 +755,7 @@ export function WorktreeCard({
     onCopyContextFull: handleCopyContextFull,
     onCopyContextModified: handleCopyContextModified,
     onCopyPath: handleCopyPath,
+    onCopyBranchName: handleCopyBranchName,
     onOpenEditor,
     onRevealInFinder: handlePathClick,
     onOpenIssueExternal: worktree.issueNumber ? handleOpenIssueExternal : undefined,

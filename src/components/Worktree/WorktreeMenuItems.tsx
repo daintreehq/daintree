@@ -21,6 +21,7 @@ import {
   FileText,
   Folder,
   FolderTree,
+  GitBranch,
   GitCommitHorizontal,
   GitCompare,
   GitPullRequest,
@@ -50,7 +51,7 @@ import {
   Zap,
 } from "lucide-react";
 import { Folders, Workflow } from "@/components/icons";
-import { isExternalWorktree } from "@/lib/worktreeFilters";
+import { copyableBranchName, isExternalWorktree } from "@/lib/worktreeFilters";
 import { PluginContextMenuSection } from "@/components/Plugin/PluginContextMenuSection";
 import type { PluginContextMenuItemEntry } from "@/hooks/usePluginContextMenuItems";
 
@@ -108,6 +109,7 @@ export interface WorktreeMenuItemsProps {
   onCopyContextFull: () => void;
   onCopyContextModified: () => void;
   onCopyPath: () => void;
+  onCopyBranchName: () => void;
   onOpenEditor: () => void;
   onRevealInFinder: () => void;
   onOpenIssueExternal?: () => void;
@@ -177,6 +179,7 @@ export function WorktreeMenuItems({
   onCopyContextFull,
   onCopyContextModified,
   onCopyPath,
+  onCopyBranchName,
   onOpenEditor,
   onRevealInFinder,
   onOpenIssueExternal,
@@ -218,6 +221,7 @@ export function WorktreeMenuItems({
   pluginItems,
 }: WorktreeMenuItemsProps) {
   const hasIssueItem = Boolean(worktree.issueNumber && onOpenIssueExternal);
+  const canCopyBranchName = copyableBranchName(worktree) !== null;
   const hasPRItem = Boolean(worktree.linked?.pr && onOpenPRExternal);
   const hasIssueOrPrSection = hasIssueItem || hasPRItem;
   const hasRecipes = recipes.length > 0;
@@ -530,6 +534,12 @@ export function WorktreeMenuItems({
         <Copy className="w-3.5 h-3.5 mr-2" />
         Copy Path
       </C.Item>
+      {canCopyBranchName && (
+        <C.Item onSelect={onCopyBranchName}>
+          <GitBranch className="w-3.5 h-3.5 mr-2" />
+          Copy branch name
+        </C.Item>
+      )}
 
       {onTogglePin && !worktree.isMainWorktree && !isExternalWorktree(worktree) && (
         <C.Item onSelect={onTogglePin}>

@@ -97,6 +97,7 @@ const baseMenu: WorktreeHeaderProps["menu"] = {
   onCopyContextFull: noop,
   onCopyContextModified: noop,
   onCopyPath: noop,
+  onCopyBranchName: noop,
   onOpenEditor: noop,
   onRevealInFinder: noop,
   onRunRecipe: noop,
