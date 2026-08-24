@@ -745,7 +745,13 @@ describe("McpServerService", () => {
       id: null;
     };
     expect(parsed.jsonrpc).toBe("2.0");
-    expect(parsed.error.code).toBe(-32001);
+    // The 404 STATUS above is what actually drives a spec-faithful client's
+    // re-handshake (the MCP Go SDK's Streamable HTTP transport keys off it
+    // directly, before even decoding this body). This body's code is
+    // ConnectionClosed, not RequestTimeout, so anything that DOES decode it —
+    // logs, other clients — reads the SDK's own vocabulary for "session gone"
+    // rather than a stale, misleading "request timed out".
+    expect(parsed.error.code).toBe(-32000);
     expect(parsed.error.message).toBe("Session not found");
     expect(parsed.id).toBeNull();
   });

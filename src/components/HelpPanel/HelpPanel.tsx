@@ -1271,11 +1271,21 @@ export function HelpPanel({
     pendingCloseSlot === null
       ? null
       : (sessionTabs.find((tab) => tab.slot === pendingCloseSlot)?.label ?? "this session");
+  // The operations deck's open state.
+  //
+  // Owned here rather than inside the assistant panel because the way IN is the header
+  // menu above, and a menu item cannot reach state held below it. The deck itself still
+  // renders inside the panel — it replaces the transcript, not the header.
+  const [operationsOpen, setOperationsOpen] = useState(false);
+  const handleViewOperations = useCallback(() => setOperationsOpen(true), []);
 
   const handleNewSession = useCallback(() => {
     if (useNativeAssistant) {
       // The native transcript lives only in the store, so "something to lose" is
       // whether anything has been said at all.
+      // The deck is a reading of the session that just ended, so it closes with it —
+      // leaving it up would show the outgoing session's watchers over a fresh one.
+      setOperationsOpen(false);
       setNativeSessionNonce((n) => n + 1);
       return;
     }
@@ -1302,6 +1312,7 @@ export function HelpPanel({
     if (useNativeAssistant) {
       // Disarming stops the engine through the same effect cleanup that a project
       // change uses; re-opening the panel arms it again.
+      setOperationsOpen(false);
       setArmedWorkspaceId(null);
       return;
     }
@@ -1622,8 +1633,10 @@ export function HelpPanel({
         agentState={terminalPty?.agentState}
         canRestartConversation={Boolean((terminalId && agentId) || nativeSessionArmed)}
         canEndSession={Boolean((terminalId && agentId) || nativeSessionArmed)}
+        canViewOperations={useNativeAssistant && nativeSessionArmed}
         onRestartConversation={handleNewSession}
         onEndSession={handleEndSession}
+        onViewOperations={handleViewOperations}
         onOpenDocs={handleOpenAssistantDocs}
         onClose={handleClose}
         isFocused={isHighlighted}
@@ -1723,6 +1736,8 @@ export function HelpPanel({
               // then live until the project changes or the view goes away.
               active={nativeSessionArmed}
               restartNonce={nativeSessionNonce}
+              operationsOpen={operationsOpen}
+              onOperationsOpenChange={setOperationsOpen}
               className="h-full"
             />
           </div>

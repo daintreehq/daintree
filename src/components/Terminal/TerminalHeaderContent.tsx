@@ -17,7 +17,6 @@ import {
 } from "@shared/utils/waitingReasonDisplay";
 import { useShallow } from "zustand/react/shallow";
 import { formatElapsedDuration } from "@/utils/formatElapsedDuration";
-import { formatTokenCount } from "@/utils/formatTokenCount";
 import { formatTimeAgo } from "@/utils/timeAgo";
 import { useResourceMonitoringStore } from "@/store/resourceMonitoringStore";
 import { useErrorStore } from "@/store/errorStore";
@@ -172,7 +171,6 @@ export function TerminalHeaderContent({
     stateChangeConfidence,
     waitingReason,
     sessionCost,
-    sessionTokens,
     heldDurationMs,
   } = usePanelStore(
     useShallow((state) => {
@@ -186,7 +184,6 @@ export function TerminalHeaderContent({
         stateChangeConfidence: pty?.stateChangeConfidence,
         waitingReason: pty?.waitingReason,
         sessionCost: pty?.sessionCost,
-        sessionTokens: pty?.sessionTokens,
         heldDurationMs: pty?.heldDurationMs,
       };
     })
@@ -313,7 +310,6 @@ export function TerminalHeaderContent({
                 style={{ fontVariantNumeric: "tabular-nums" }}
               >
                 ${sessionCost.toFixed(2)}
-                {sessionTokens != null && ` · ${formatTokenCount(sessionTokens)}`}
               </span>
             )}
           </div>
@@ -347,7 +343,6 @@ export function TerminalHeaderContent({
             {sessionCost != null && (
               <span className="text-text-secondary tabular-nums">
                 Cost: ${sessionCost.toFixed(2)}
-                {sessionTokens != null && ` · ${formatTokenCount(sessionTokens)} tokens`}
               </span>
             )}
             {errorCount > 0 && (

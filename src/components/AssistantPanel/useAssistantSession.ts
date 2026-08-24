@@ -424,9 +424,9 @@ export function useAssistantSession(opts: AssistantSessionOptions): AssistantSes
   );
 
   const answerQuestion = useCallback(
-    (questionId: string, index: number) => {
+    (questionId: string, choiceIndex: number) => {
       const sessionId = sessionIdRef.current;
-      if (sessionId) send({ type: "question:answer", sessionId, questionId, index });
+      if (sessionId) send({ type: "question:answer", sessionId, questionId, choiceIndex });
     },
     [send]
   );
