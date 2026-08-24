@@ -1,9 +1,14 @@
 import type { BuiltInAgentId } from "../../../shared/config/agentIds.js";
 import type { ProcessInfo, ProcessTreeCache } from "../ProcessTreeCache.js";
 import type { ImagePathProbe } from "../pty/ImagePathProbe.js";
-import { logDebug, logWarn } from "../../utils/logger.js";
+import { logDebug, logInfo, logWarn } from "../../utils/logger.js";
 import { logIdentityDebug } from "../pty/identityDebug.js";
-import type { ChildProcess, DetectedProcessCandidate, CommandIdentity } from "./types.js";
+import type {
+  ChildProcess,
+  DetectedProcessCandidate,
+  CommandIdentity,
+  DetectionPass,
+} from "./types.js";
 import {
   makeAgentResult,
   makeNoAgentResult,
@@ -11,8 +16,8 @@ import {
   makeAmbiguousResult,
 } from "./types.js";
 import type { DetectionCallback } from "./types.js";
-import type { DetectionResult, DetectionEvidenceSource } from "./types.js";
-import { redactArgv } from "./commandParser.js";
+import type { DetectionEvidenceSource } from "./types.js";
+import { isChromiumChildProcess, redactArgv } from "./commandParser.js";
 import { buildDetectedCandidate, selectPreferredCandidate } from "./candidateHelpers.js";
 
 export { type DetectionResult } from "./types.js";
@@ -328,7 +333,7 @@ export class ProcessDetector {
         }
       }
 
-      const result = this.detectAgent();
+      const { result, treeMatch } = this.detectAgent();
 
       // Per-pass log is gated behind DAINTREE_IDENTITY_DEBUG_PASS=1 so the hot
       // path is silent by default. Enable when diagnosing "detector ran but
@@ -422,6 +427,10 @@ export class ProcessDetector {
             this.onStreak = 0;
             this.pendingDetected = null;
             gatedCommitted = true;
+
+            if (rawAgent !== null) {
+              this.logAgentCommit(rawAgent, this.lastEvidenceSource, treeMatch);
+            }
 
             // Anchor runtime-promoted agents once the process tree corroborates
             // them. A plain terminal the user typed `codex`/`claude` into starts
@@ -539,7 +548,7 @@ export class ProcessDetector {
     }
   }
 
-  private detectAgent(): DetectionResult {
+  private detectAgent(): DetectionPass {
     if (!Number.isInteger(this.ptyPid) || this.ptyPid <= 0) {
       const shellEvidenceValid = this.isShellCommandEvidenceValid(false);
       if (shellEvidenceValid) {
@@ -548,7 +557,7 @@ export class ProcessDetector {
       // Invalid PID — no evidence, not negative evidence. Hold committed
       // state rather than emitting a demotion.
       console.warn(`Invalid PTY PID for terminal ${this.terminalId}: ${this.ptyPid}`);
-      return makeUnknownResult({ isBusy: false });
+      return { result: makeUnknownResult({ isBusy: false }), treeMatch: null };
     }
 
     const children = this.cache.getChildren(this.ptyPid);
@@ -573,7 +582,7 @@ export class ProcessDetector {
       if (shellEvidenceValid) {
         return this.mergeWithShellEvidence(null, { isBusy: false, currentCommand: undefined });
       }
-      return makeUnknownResult({ isBusy: false });
+      return { result: makeUnknownResult({ isBusy: false }), treeMatch: null };
     }
 
     if (!isBusy) {
@@ -609,11 +618,21 @@ export class ProcessDetector {
     // visiting the same PID twice when a node appears under two parents.
     const scheduled = new Set<number>([this.ptyPid]);
 
-    let frontier = liveChildren.filter((proc) => {
+    // Chromium's own helpers mark a process-domain boundary. A nested Electron
+    // app launched from this terminal spawns its pty-host as one of them, and
+    // that host's descendants are the *inner* instance's agent terminals —
+    // walking into them brands the outer terminal with an agent it never ran.
+    // Refusing the node here (already marked scheduled, so it is never
+    // reconsidered under another parent) keeps it out of candidate matching,
+    // image probing, child expansion, and the descent budget in one place.
+    // The node stays in `liveChildren`, so the terminal is still busy. #11931
+    const shouldSchedule = (proc: ProcessInfo): boolean => {
       if (scheduled.has(proc.pid)) return false;
       scheduled.add(proc.pid);
-      return true;
-    });
+      return !isChromiumChildProcess(proc.command);
+    };
+
+    let frontier = liveChildren.filter((proc) => shouldSchedule(proc));
 
     for (let depth = 1; depth <= MAX_PROCESS_TREE_DEPTH && frontier.length > 0; depth++) {
       // Direct children are always scanned in full — they are the cheap,
@@ -627,7 +646,12 @@ export class ProcessDetector {
 
       for (const proc of level) {
         const command = proc.command || proc.comm;
-        const candidate = buildDetectedCandidate(proc.comm, command, order++);
+        const candidate = buildDetectedCandidate(proc.comm, command, order++, {
+          pid: proc.pid,
+          depth,
+          comm: proc.comm,
+          source: "comm",
+        });
         if (candidate) {
           bestMatch = selectPreferredCandidate(bestMatch, candidate);
         }
@@ -646,7 +670,12 @@ export class ProcessDetector {
           probedPids.add(proc.pid);
           const imageBasename = this.imagePathProbe.readBasename(proc.pid);
           if (imageBasename) {
-            const imageCandidate = buildDetectedCandidate(imageBasename, command, order++);
+            const imageCandidate = buildDetectedCandidate(imageBasename, command, order++, {
+              pid: proc.pid,
+              depth,
+              comm: proc.comm,
+              source: "image_path",
+            });
             if (imageCandidate) {
               bestMatch = selectPreferredCandidate(bestMatch, imageCandidate);
             }
@@ -665,8 +694,8 @@ export class ProcessDetector {
       const next: ProcessInfo[] = [];
       for (const proc of level) {
         for (const child of this.cache.getChildren(proc.pid)) {
-          if (child.command.includes("<defunct>") || scheduled.has(child.pid)) continue;
-          scheduled.add(child.pid);
+          if (child.command.includes("<defunct>")) continue;
+          if (!shouldSchedule(child)) continue;
           next.push(child);
         }
       }
@@ -753,7 +782,7 @@ export class ProcessDetector {
   private mergeWithShellEvidence(
     treeMatch: DetectedProcessCandidate | null,
     ctx: { isBusy: boolean; currentCommand?: string }
-  ): DetectionResult {
+  ): DetectionPass {
     const shellIdentity = this.shellCommandIdentity;
     // Merge uses the wider expiry window (30 s) — shell evidence stays valid
     // for merging even after the 12 s sticky window closes. Sticky governs
@@ -765,29 +794,38 @@ export class ProcessDetector {
     if (treeMatch?.agentType) {
       if (shellEvidenceValid && shellIdentity?.agentType) {
         if (shellIdentity.agentType === treeMatch.agentType) {
-          return makeAgentResult({
-            agentType: treeMatch.agentType,
-            processIconId: treeMatch.processIconId,
-            processName: treeMatch.processName,
-            isBusy: ctx.isBusy,
-            currentCommand: ctx.currentCommand,
-            evidenceSource: "both",
-          });
+          return {
+            result: makeAgentResult({
+              agentType: treeMatch.agentType,
+              processIconId: treeMatch.processIconId,
+              processName: treeMatch.processName,
+              isBusy: ctx.isBusy,
+              currentCommand: ctx.currentCommand,
+              evidenceSource: "both",
+            }),
+            treeMatch,
+          };
         }
         // Two distinct positive agent identities — genuinely ambiguous. Hold.
-        return makeAmbiguousResult({
+        return {
+          result: makeAmbiguousResult({
+            isBusy: ctx.isBusy,
+            currentCommand: ctx.currentCommand,
+          }),
+          treeMatch: null,
+        };
+      }
+      return {
+        result: makeAgentResult({
+          agentType: treeMatch.agentType,
+          processIconId: treeMatch.processIconId,
+          processName: treeMatch.processName,
           isBusy: ctx.isBusy,
           currentCommand: ctx.currentCommand,
-        });
-      }
-      return makeAgentResult({
-        agentType: treeMatch.agentType,
-        processIconId: treeMatch.processIconId,
-        processName: treeMatch.processName,
-        isBusy: ctx.isBusy,
-        currentCommand: ctx.currentCommand,
-        evidenceSource: "process_tree",
-      });
+          evidenceSource: "process_tree",
+        }),
+        treeMatch,
+      };
     }
 
     // Case B — no tree agent match, but shell is valid with an agent. The
@@ -796,42 +834,89 @@ export class ProcessDetector {
     // shell has vouched for the command; prompt-return/PTy exit/kill are the
     // explicit lifecycle signals that clear this evidence.
     if (shellEvidenceValid && shellIdentity?.agentType) {
-      return makeAgentResult({
-        agentType: shellIdentity.agentType,
-        processIconId: shellIdentity.processIconId ?? treeMatch?.processIconId,
-        processName: shellIdentity.processName ?? treeMatch?.processName,
-        isBusy: ctx.isBusy,
-        currentCommand: this.shellCommandText ?? ctx.currentCommand,
-        evidenceSource: "shell_command",
-      });
+      // The committed agent came from the shell, so the tree candidate (a
+      // generic icon at best) is not what produced it and must not be
+      // reported as its provenance.
+      return {
+        result: makeAgentResult({
+          agentType: shellIdentity.agentType,
+          processIconId: shellIdentity.processIconId ?? treeMatch?.processIconId,
+          processName: shellIdentity.processName ?? treeMatch?.processName,
+          isBusy: ctx.isBusy,
+          currentCommand: this.shellCommandText ?? ctx.currentCommand,
+          evidenceSource: "shell_command",
+        }),
+        treeMatch: null,
+      };
     }
 
     // Case C — tree has a non-agent icon match (npm/docker/etc). Shell icon
     // is only consulted when tree has nothing at all.
     if (treeMatch?.processIconId) {
-      return makeAgentResult({
-        processIconId: treeMatch.processIconId,
-        processName: treeMatch.processName,
-        isBusy: ctx.isBusy,
-        currentCommand: ctx.currentCommand,
-        evidenceSource: "process_tree",
-      });
+      return {
+        result: makeAgentResult({
+          processIconId: treeMatch.processIconId,
+          processName: treeMatch.processName,
+          isBusy: ctx.isBusy,
+          currentCommand: ctx.currentCommand,
+          evidenceSource: "process_tree",
+        }),
+        treeMatch,
+      };
     }
 
     // Case D — no tree evidence. If shell has a non-agent icon and is still
     // valid, surface it the same way a tree icon would be surfaced.
     if (shellEvidenceValid && shellIdentity?.processIconId) {
-      return makeAgentResult({
-        processIconId: shellIdentity.processIconId,
-        processName: shellIdentity.processName,
-        isBusy: ctx.isBusy,
-        currentCommand: this.shellCommandText ?? ctx.currentCommand,
-        evidenceSource: "shell_command",
-      });
+      return {
+        result: makeAgentResult({
+          processIconId: shellIdentity.processIconId,
+          processName: shellIdentity.processName,
+          isBusy: ctx.isBusy,
+          currentCommand: this.shellCommandText ?? ctx.currentCommand,
+          evidenceSource: "shell_command",
+        }),
+        treeMatch: null,
+      };
     }
 
     // Case E — no evidence from either source → genuine no_agent.
-    return makeNoAgentResult({ isBusy: ctx.isBusy, currentCommand: ctx.currentCommand });
+    return {
+      result: makeNoAgentResult({ isBusy: ctx.isBusy, currentCommand: ctx.currentCommand }),
+      treeMatch: null,
+    };
+  }
+
+  /**
+   * Always-on record of which process produced a committed agent identity.
+   *
+   * Agent commits are rare, high-consequence and sticky — `setLaunchAnchored`
+   * latches them until an explicit lifecycle signal — and they drive the
+   * pane's icon, title and placeholder. Every other identity log is gated
+   * behind `DAINTREE_DEBUG`, so a wrong label left no trace in a packaged
+   * build. `info` reaches the rotated log file at the default level; a correct
+   * commit is normal operation, not a warning. Fires only inside the
+   * committed-transition branch, so re-confirmation ticks stay silent. #11931
+   *
+   * Argv is reduced to argv[0]'s basename by `redactArgv` — users pass secrets
+   * inline (`claude --api-key=…`) and this line is persisted to disk.
+   */
+  private logAgentCommit(
+    agentType: BuiltInAgentId,
+    evidenceSource: DetectionEvidenceSource,
+    treeMatch: DetectedProcessCandidate | null
+  ): void {
+    const provenance = treeMatch?.provenance;
+    const argv0 = treeMatch ? redactArgv(treeMatch.processCommand) : "";
+    logInfo(
+      `[ProcessDetector ${this.terminalId.slice(-8)}] agent identity committed: ` +
+        `agent=${agentType} evidence=${evidenceSource} ` +
+        `match=${provenance?.matchSource ?? "<none>"} ` +
+        `pid=${provenance?.pid ?? "<none>"} ` +
+        `comm=${provenance ? JSON.stringify(provenance.comm) : "<none>"} ` +
+        `argv0=${argv0 || "<none>"} ` +
+        `depth=${provenance?.depth ?? "<none>"}`
+    );
   }
 
   getLastDetected(): BuiltInAgentId | null {

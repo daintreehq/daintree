@@ -1,5 +1,9 @@
 import type { CommandIdentity } from "./types.js";
-import { getProcessToolPriority } from "../../../shared/config/processToolRegistry.js";
+import {
+  getProcessToolConfig,
+  getProcessToolPriority,
+  PROCESS_TOOL_ICON_BY_COMMAND,
+} from "../../../shared/config/processToolRegistry.js";
 import { AGENT_CLI_NAMES, getProcessIconMap } from "./registries.js";
 
 const WINDOWS_LAUNCHER_EXTENSION_PATTERN = /\.(?:exe|cmd|bat|com|ps1)$/i;
@@ -105,9 +109,46 @@ export function extractScriptBasenameFromCommand(command: string | undefined): s
 // secrets inline (e.g. `claude --api-key=…`, `gh auth --token …`). Keep only
 // argv[0]'s basename so log noise still identifies the runtime without
 // leaking credentials into console or into window.__daintreeIdentityEvents().
+/**
+ * argv[0] as written — grouping quotes removed, path separators intact.
+ *
+ * Deliberately not `splitShellLikeCommand`, which treats `\` as an escape.
+ * This input is a command line as the OS *reports* it (`ps`, Win32
+ * `CommandLine`), not shell input: a backslash there is a Windows path
+ * separator. Eating it flattens `"C:\Users\me\proj\claude.cmd"` into one
+ * separator-less token, so the basename split below finds nothing and the
+ * whole path — home directory and project name included — survives into a log
+ * that is persisted to disk.
+ *
+ * A quote groups but does not end the token, so a compound path like
+ * `'/Users/me/my project'/claude` still resolves to `claude`. Unbalanced
+ * quoting is unparseable, and guessing at it is exactly how the rest of argv —
+ * an inline `--api-key=…` among it — reaches the log, so it fails closed.
+ */
+function firstCommandToken(command: string): string {
+  let token = "";
+  let quote: '"' | "'" | null = null;
+
+  for (const char of command.trim()) {
+    if (quote) {
+      if (char === quote) quote = null;
+      else token += char;
+      continue;
+    }
+    if (char === '"' || char === "'") {
+      quote = char;
+      continue;
+    }
+    if (/\s/.test(char)) break;
+    token += char;
+  }
+
+  return quote === null ? token : "";
+}
+
 export function redactArgv(command: string | undefined): string {
   if (!command) return "";
-  const first = splitShellLikeCommand(command)[0];
+  const first = firstCommandToken(command);
   if (!first) return "";
   const basename = first.split(/[\\/]/).pop() ?? first;
   return JSON.stringify(basename);
@@ -126,16 +167,126 @@ export function redactArgv(command: string | undefined): string {
 export const BINARY_EXEC_SUBCOMMANDS = new Set(["exec", "dlx", "x"]);
 
 /**
- * Highest candidate index that can still name the tool being run. Normally
- * argv[0] and the token it executes; a package manager's exec subcommand
- * shifts that one further right (`pnpm exec vitest`).
+ * Commands that run another program named in their arguments but carry no
+ * process-tool registry entry: shells, environment/privilege prefixes, and
+ * version-manager shims. Registry entries at `runtime` or `package-manager`
+ * tier already mean exactly this, so those are derived instead of relisted.
+ */
+const SHELL_AND_PREFIX_EXECUTORS = new Set([
+  "sh",
+  "bash",
+  "zsh",
+  "fish",
+  "dash",
+  "ash",
+  "ksh",
+  "csh",
+  "tcsh",
+  "pwsh",
+  "powershell",
+  "cmd",
+  "env",
+  "sudo",
+  "doas",
+  "nohup",
+  "nice",
+  "time",
+  "stdbuf",
+  "setsid",
+  "command",
+  "exec",
+  "mise",
+  "asdf",
+  "rtx",
+  "direnv",
+  "pipx",
+  "rye",
+  "pdm",
+  "hatch",
+]);
+
+/**
+ * Does this command run *another* program named in its arguments? Only then
+ * can a later argv token be the executable.
+ *
+ * Built-in registry tiers only. A plugin-contributed command must not be able
+ * to widen how far right an agent name is allowed to sit — that is the
+ * positional guard this feeds, and plugins carry no tier to justify it.
+ */
+function isExecutorCommand(name: string | undefined): boolean {
+  if (!name) return false;
+  const lower = name.toLowerCase();
+  if (SHELL_AND_PREFIX_EXECUTORS.has(lower)) return true;
+  // Own-key check: this table is a plain object, so a process literally named
+  // `constructor` would otherwise index an inherited function.
+  if (!Object.hasOwn(PROCESS_TOOL_ICON_BY_COMMAND, lower)) return false;
+  const tier = getProcessToolConfig(PROCESS_TOOL_ICON_BY_COMMAND[lower])?.tier;
+  return tier === "runtime" || tier === "package-manager";
+}
+
+/**
+ * Highest candidate index that can still name the tool being run.
+ *
+ * argv[0] always can. Anything further right counts only when argv[0] is a
+ * command that runs another program named in its arguments — a shell, a
+ * runtime, a package manager, an env/privilege prefix. For everything else
+ * the remaining tokens are operands: `cat shared/config/agents/opencode.ts`,
+ * `git log -- …/opencode.ts` and an editor opened on that file all name a
+ * path, not an executable, and must not resolve to the agent. #11931
+ *
+ * A package manager's exec subcommand shifts the window one further right
+ * (`pnpm exec vitest`).
  *
  * This is positional, not a full argv grammar — a flag that takes a value
  * (`node --require ts-node/register app.js`) still consumes a slot, so the
  * process-tree walk remains the primary signal.
  */
 export function executablePositionLimit(candidates: string[]): number {
+  if (!isExecutorCommand(candidates[0])) return 0;
   return candidates[1] && BINARY_EXEC_SUBCOMMANDS.has(candidates[1].toLowerCase()) ? 2 : 1;
+}
+
+/**
+ * Chromium's own multi-process children, which every Electron app spawns and
+ * which all carry a `--type=` switch naming their role.
+ */
+const CHROMIUM_CHILD_PROCESS_TYPES = new Set([
+  "renderer",
+  "utility",
+  "gpu-process",
+  "zygote",
+  "sandbox-ipc",
+  "crashpad-handler",
+]);
+
+/**
+ * Is this process one of Chromium's internal helpers?
+ *
+ * Such a helper is never the identity of the terminal that launched the app,
+ * and everything below it belongs to that app's own process scope. A nested
+ * Daintree's pty-host is exactly this node, so its descendants are the *inner*
+ * instance's agent terminals — walking into them brands the outer terminal
+ * with an agent it never ran. #11931
+ *
+ * Matched on an exact argv token so an unrelated `--type=json` flag, a path
+ * containing the string, or an operand after `--` cannot trip it.
+ *
+ * The switch alone is the signal — no corroborating Chromium flag is required.
+ * That accepts a rare false positive (a non-Chromium process that happens to
+ * take `--type=utility` loses its subtree) to avoid a false negative, which
+ * would let the nested-instance bleed-through straight back in.
+ */
+export function isChromiumChildProcess(command: string | undefined): boolean {
+  if (!command || !command.includes("--type=")) return false;
+  for (const token of splitShellLikeCommand(command)) {
+    // Everything after a bare `--` is an operand, not a switch.
+    if (token === "--") return false;
+    if (!token.startsWith("--type=")) continue;
+    if (CHROMIUM_CHILD_PROCESS_TYPES.has(token.slice("--type=".length).toLowerCase())) {
+      return true;
+    }
+  }
+  return false;
 }
 
 /**
@@ -148,12 +299,19 @@ export function executablePositionLimit(candidates: string[]): number {
  */
 export function detectCommandIdentity(command: string | undefined): CommandIdentity | null {
   const candidates = extractCommandNameCandidates(command);
+  const positionLimit = executablePositionLimit(candidates);
   let iconMatch: { name: string; icon: string; priority: number } | null = null;
   // Captured once so every lookup in this resolution sees one consistent map,
   // even if a plugin loads mid-pass.
   const processIconMap = getProcessIconMap();
 
   for (const [index, candidate] of candidates.entries()) {
+    // Same executable-position rule as the process-tree path, and it binds
+    // agents too: an argument that happens to name an agent is still an
+    // argument. Candidates are in argv order, so nothing past the limit
+    // qualifies either. #11931
+    if (index > positionLimit) break;
+
     const lowerCandidate = candidate.toLowerCase();
     const candidateAgent = AGENT_CLI_NAMES[lowerCandidate];
     if (candidateAgent) {
@@ -164,8 +322,6 @@ export function detectCommandIdentity(command: string | undefined): CommandIdent
       };
     }
 
-    // Same executable-position rule as the process-tree path.
-    if (index > executablePositionLimit(candidates)) continue;
     const candidateIcon = processIconMap[lowerCandidate];
     if (candidateIcon) {
       // Tier preference, so a typed `npx vitest` reports Vitest rather than
