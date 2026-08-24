@@ -23,7 +23,7 @@ export const MAX_WAIT_UNTIL_IDLE_TIMEOUT_MS = 2 * 60 * 60 * 1000;
  * silently desyncing.
  */
 export type WaitUntilIdleIdleReason =
-  "idle" | "waiting_for_user" | "completed" | "exited" | "unknown";
+  "idle" | "waiting_for_user" | "completed" | "exited" | "closed" | "unknown";
 
 /** Literal values of {@link WaitUntilIdleIdleReason}, for the raw JSON schemas. */
 export const WAIT_UNTIL_IDLE_IDLE_REASONS: readonly WaitUntilIdleIdleReason[] = [
@@ -31,6 +31,7 @@ export const WAIT_UNTIL_IDLE_IDLE_REASONS: readonly WaitUntilIdleIdleReason[] = 
   "waiting_for_user",
   "completed",
   "exited",
+  "closed",
   "unknown",
 ];
 
@@ -143,7 +144,7 @@ export const WAIT_UNTIL_IDLE_OUTPUT_SCHEMA: Record<string, unknown> = {
       type: "string",
       enum: [...WAIT_UNTIL_IDLE_IDLE_REASONS],
       description:
-        "Why the terminal is not working: 'idle' at rest, 'waiting_for_user' blocked on input, 'completed' or 'exited' once the process ended, 'unknown' when the terminal is not tracked. Only the ended states carry an exit code.",
+        "Why the terminal is not working: 'idle' at rest, 'waiting_for_user' blocked on input, 'completed' or 'exited' once the process ended, 'closed' when the user closed the terminal itself (the process is still tearing down, so no exit code yet — treat the terminal as gone), 'unknown' when the terminal is not tracked. Only the ended states carry an exit code.",
     },
     trackingState: {
       type: "string",

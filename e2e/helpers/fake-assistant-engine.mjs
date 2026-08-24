@@ -437,8 +437,9 @@ const SCENARIOS = {
     emit({
       type: "question:answered",
       questionId: "qst_1",
-      turnId,
-      index: chosen ? index : -1,
+      choiceIndex: chosen ? index : -1,
+      cancelled: !chosen,
+      answeredAt: now(),
       ...(chosen ? { label: ["A", "B", "C"][index], text: options[index] } : {}),
     });
 
@@ -776,7 +777,10 @@ async function handleCommand(cmd) {
       const resolve = pendingQuestions.get(cmd.questionId);
       if (resolve) {
         pendingQuestions.delete(cmd.questionId);
-        resolve(cmd.index);
+        // `choiceIndex` is REQUIRED on the wire, and the engine refuses the command
+        // when it is absent rather than defaulting to the first option — so the fake
+        // treats an absent one as a dismissal instead of quietly answering.
+        resolve(typeof cmd.choiceIndex === "number" ? cmd.choiceIndex : -1);
       }
       return;
     }

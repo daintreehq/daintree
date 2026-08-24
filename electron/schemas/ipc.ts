@@ -1395,9 +1395,12 @@ export const AssistantHostEventSchema = z.discriminatedUnion("type", [
     ...hostEventBase,
     type: z.literal("question:answered"),
     questionId: IdString,
-    turnId: IdString.optional(),
-    // -1 means dismissed without choosing.
-    index: z.number().int().min(-1).max(25),
+    // -1 means dismissed. `cancelled` says the same thing explicitly rather than
+    // leaving it encoded in a sentinel index, so "the user closed the sheet" and
+    // "the user picked option -1" can never be confused for one another.
+    choiceIndex: z.number().int().min(-1).max(25),
+    cancelled: z.boolean(),
+    answeredAt: Timestamp,
     label: z.string().max(4).optional(),
     text: z.string().max(500).optional(),
   }),
@@ -1470,8 +1473,10 @@ export const AssistantHostCommandSchema = z.discriminatedUnion("type", [
     sessionId: IdString,
     questionId: IdString,
     // -1 dismisses. Bounded to the engine's option ceiling so a nonsense index is
-    // refused at the boundary rather than parked against a live dispatch.
-    index: z.number().int().min(-1).max(25),
+    // refused at the boundary rather than parked against a live dispatch. REQUIRED:
+    // the engine refuses the command outright when it is missing or non-numeric,
+    // rather than defaulting to 0 and answering for a user who never chose.
+    choiceIndex: z.number().int().min(-1).max(25),
   }),
   z.object({
     type: z.literal("interrupt"),

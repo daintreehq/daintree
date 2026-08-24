@@ -805,6 +805,86 @@ test.describe.serial("Assistant: native panel", () => {
     await expect(panel.getByText("Put agents to work")).toBeVisible({ timeout: T_MEDIUM });
   });
 
+  test("the panel header's menu opens the operations deck", async () => {
+    const { window } = ctx;
+    const panel = await openAssistant(window);
+    await waitForSession(window);
+
+    // The deck's only pointer-driven way in. It used to be an overflow button sitting
+    // in the composer's status row — the narrowest strip in the app, and otherwise
+    // nothing but readings — so a mouse user reaching for "what is running" was
+    // reaching into a row of numbers. ^O covers the keyboard, and covered it before
+    // this moved, so a suite that only tested the chord would not have noticed the
+    // click target disappear.
+    await panel.getByTestId("assistant-header-more").click();
+    await window.getByRole("menuitem", { name: "View operations" }).click();
+
+    await expect(panel.getByRole("button", { name: "Close" })).toBeVisible({
+      timeout: T_MEDIUM,
+    });
+    // Answered on REQUEST: opening has to ask the engine for a fresh reading, or the
+    // deck draws whatever was last cached — which for a first open is nothing at all.
+    // Rows rather than headings, for the same reason as above.
+    await expect(panel.getByText(/wt_forge is waiting/)).toBeVisible({ timeout: T_MEDIUM });
+
+    // And the status row it left is now free of controls entirely.
+    await expect(
+      panel.getByTestId("assistant-status-row").getByRole("button", { name: "Operations" })
+    ).toHaveCount(0);
+  });
+
+  test("the status row stays on one line at the panel's narrowest, mid-tool", async () => {
+    const { window } = ctx;
+    const panel = await openAssistant(window);
+
+    // Squeezed to the minimum the panel allows, which is where this broke. At a
+    // comfortable width the old row fitted and every assertion below would have passed
+    // over the bug.
+    const handle = window.getByRole("separator", { name: "Resize Daintree Assistant panel" });
+    await handle.focus();
+    await window.keyboard.press("Home");
+
+    await ask(window, "/scenario proseThenTool");
+
+    const row = panel.getByTestId("assistant-status-row");
+    const stop = row.getByRole("button", { name: "Stop", exact: true });
+    await expect(stop).toBeVisible({ timeout: T_MEDIUM });
+
+    // Genuinely mid-tool, not just mid-turn: wait for the activity row the scenario's
+    // tool call announces. That phase is the worst case for this row — it is the one
+    // the inline status line deliberately stays silent for, so the composer row was
+    // the only thing saying anything, and "Inspecting project… · still working · 41s"
+    // is the longest string the phase vocabulary can produce.
+    await expect(panel.getByText(/Listed worktrees/)).toBeVisible({ timeout: T_MEDIUM });
+
+    // The phase is gone from here. It is drawn once, at the tail of the running turn,
+    // where the next output will appear — not twice, with the second copy in the one
+    // place there is no room for it.
+    await expect(panel.getByText(/Inspecting project/)).toHaveCount(0);
+
+    // Nothing in the row wraps. Asked of the TEXT, via the rects the browser actually
+    // laid it out into, rather than of the row's pixel height against a constant — a
+    // height threshold is a test of the theme's font and density, and would have to be
+    // retuned by whoever changes either. A text node that fits on one line has exactly
+    // one client rect; one that wrapped has two.
+    const wrapped = await row.evaluate((el) => {
+      const walker = document.createTreeWalker(el, NodeFilter.SHOW_TEXT);
+      const out: string[] = [];
+      let node = walker.nextNode();
+      while (node) {
+        const text = node.textContent?.trim() ?? "";
+        if (text) {
+          const range = document.createRange();
+          range.selectNodeContents(node);
+          if (range.getClientRects().length > 1) out.push(text);
+        }
+        node = walker.nextNode();
+      }
+      return out;
+    });
+    expect(wrapped, `these wrapped onto a second line: ${wrapped.join(" | ")}`).toEqual([]);
+  });
+
   test("Escape stops a running turn", async () => {
     const { window } = ctx;
     await openAssistant(window);
@@ -1139,15 +1219,11 @@ test.describe.serial("Assistant: native panel", () => {
     ).toHaveAttribute("aria-pressed", "true");
   });
 
-  test("usage and cost read out of the engine's own numbers", async () => {
+  test("cost reads out of the engine's own numbers", async () => {
     const { window } = ctx;
     const panel = await openAssistant(window);
     await ask(window, "/scenario streaming");
 
-    // Context is shown as used/window, formatted — the raw counts would be unreadable
-    // and the ratio is what a reader is actually judging.
-    await expect(panel.getByTitle("Context used")).toBeVisible({ timeout: T_MEDIUM });
-    await expect(panel.getByTitle("Context used")).toContainText("/");
     // Cost appears only once there is a figure to show. `≥` when the accounting is
     // incomplete: claiming an exact bill from a partial sample is the one thing a spend
     // readout must not do.

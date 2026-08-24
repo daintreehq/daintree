@@ -1,9 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type React from "react";
-import { ChevronDown, Info, MoreHorizontal, TriangleAlert, ZapOff } from "lucide-react";
+import { ChevronDown, Info, Square, TriangleAlert, ZapOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DaintreeIcon } from "@/components/icons/DaintreeIcon";
-import { AssistantMessage } from "./AssistantMessage";
+import { AssistantMessage, type AssistantReference } from "./AssistantMessage";
 import { AssistantToolRow, AssistantToolGroupHeader } from "./AssistantToolRow";
 import { AssistantApprovalCard } from "./AssistantApprovalCard";
 import type {
@@ -52,6 +52,16 @@ export interface AssistantPanelViewProps {
   onGrantTool?: (approval: AssistantApproval, uses: number) => void;
   onRequestOperations?: () => void;
   /**
+   * Whether the operations deck is showing, when an owner above the panel drives it.
+   *
+   * The way IN is the panel header's overflow menu, which lives outside this component
+   * — the composer strip is the narrowest row in the app and an overflow button sat
+   * there among readings that are not controls. Leaving it undefined keeps the deck on
+   * this component's own state, which is what the preview harness renders it with.
+   */
+  operationsOpen?: boolean;
+  onOperationsOpenChange?: (open: boolean) => void;
+  /**
    * Take back the newest buffered follow-up (LIFO), the cockpit's Esc-retract.
    *
    * Fired from the input bar's `onSendKey("escape")`, which is what the bar forwards
@@ -69,6 +79,20 @@ export interface AssistantPanelViewProps {
   composerId?: string;
   /** Project root, for the bar's `@` file completion. */
   cwd?: string | null;
+  /**
+   * Routes a click on an internal reference in rendered prose (an issue or pull-request
+   * number the model named explicitly). Undefined renders those references as plain
+   * text — see `AssistantMessage`.
+   *
+   * MUST be referentially stable: it reaches a memoized component that re-renders every
+   * frame of a streaming turn.
+   */
+  onActivateReference?: (reference: AssistantReference) => void;
+  /**
+   * Whether a forge provider resolved for this project. Gates whether issue and PR
+   * references are recognised at all, because without one they have no destination.
+   */
+  forgeAvailable?: boolean;
   className?: string;
 }
 
@@ -104,42 +128,9 @@ export const LIVE_STATUS_LABEL: Record<string, string> = {
   cancelling: "Cancelling",
 };
 
-/**
- * The COMPOSER cue label (the cockpit's `runStageLabel`).
- *
- * Covers every phase, including the ones the inline line omits, because down here the
- * question is only "is it still going" — there are no activity rows beside it to answer
- * that. Same verbs as the inline labels wherever both exist, so the two lines can never
- * disagree about what the turn is doing.
- */
-export const STAGE_LABEL: Record<string, string> = {
-  received: "Received",
-  analyzing: "Analyzing request…",
-  thinking: "Model working…",
-  generating: "Writing…",
-  integrating: "Integrating results…",
-  tool_running: "Inspecting project…",
-  awaiting_approval: "Waiting for approval…",
-  awaiting_question: "Waiting for your answer…",
-  cancelling: "Cancelling…",
-};
-
 function liveStatusLabel(phase: string | null): string | null {
   if (!phase) return null;
   return LIVE_STATUS_LABEL[phase] ?? null;
-}
-
-function stageLabel(phase: string | null): string | null {
-  if (!phase) return null;
-  // The cockpit's generic fallback, for a phase this build does not know about.
-  return STAGE_LABEL[phase] ?? "Processing…";
-}
-
-/** Formats a token count for the context meter: 31200 → "31.2k". */
-function formatTokens(n: number): string {
-  if (n < 1000) return String(n);
-  if (n < 1_000_000) return `${(n / 1000).toFixed(n < 10_000 ? 1 : 0)}k`;
-  return `${(n / 1_000_000).toFixed(1)}M`;
 }
 
 /**
@@ -161,8 +152,15 @@ const ELAPSED_TICK_MS = 500;
 function formatDuration(ms: number): string {
   if (ms < 1000) return `${ms}ms`;
   if (ms < 60_000) return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)}s`;
-  const mins = Math.floor(ms / 60_000);
-  return `${mins}m ${Math.round((ms % 60_000) / 1000)}s`;
+  // Rounded to whole seconds FIRST, then split.
+  //
+  // Rounding only the remainder produces "1m 60s": at 119,600ms the minutes floor to 1
+  // and the leftover 59,600ms rounds up to 60, so the two halves disagree about what
+  // they add up to. Harmless in a clock that ticks past it twice a second, and not
+  // harmless in the turn endcap, which stamps whatever it is handed into the transcript
+  // and keeps it there.
+  const totalSeconds = Math.round(ms / 1000);
+  return `${Math.floor(totalSeconds / 60)}m ${totalSeconds % 60}s`;
 }
 
 function formatCost(total: number, complete: boolean): string {
@@ -300,7 +298,17 @@ function UserTurn({ text }: { text: string }) {
   );
 }
 
-function TurnBlock({ turn, state }: { turn: AssistantTurn; state: AssistantSessionState }) {
+function TurnBlock({
+  turn,
+  state,
+  onActivateReference,
+  forgeAvailable,
+}: {
+  turn: AssistantTurn;
+  state: AssistantSessionState;
+  onActivateReference?: (reference: AssistantReference) => void;
+  forgeAvailable?: boolean;
+}) {
   if (turn.role === "user") {
     return <UserTurn text={turn.text} />;
   }
@@ -314,11 +322,16 @@ function TurnBlock({ turn, state }: { turn: AssistantTurn; state: AssistantSessi
     // 85% width, so which side of the conversation a block belongs to is legible from
     // its shape alone, without spending horizontal space per line to say so.
     <div className="w-full">
-      <div className="min-w-0 space-y-2">
+      <div className="min-w-0 space-y-5">
         {/* Rendered IN ORDER. A turn is a sequence — prose, then the tools it reached
             for, then prose reacting to the results, with steers where the engine folded
             them in. Drawing tools first and prose last regardless made a turn that
-            explained itself before acting read as if it had acted in silence. */}
+            explained itself before acting read as if it had acted in silence.
+
+            space-y-5 (not the tighter space-y-1 ToolSegment uses between its own rows)
+            is deliberate: a batch of tool calls reads as one unit, so its rows stay
+            tight, but the boundary where prose meets that unit — or meets the next one
+            — needs a full line of breathing room or the transcript reads as a wall. */}
         {turn.segments.map((segment, i) => {
           if (segment.kind === "interjection") {
             return (
@@ -363,6 +376,8 @@ function TurnBlock({ turn, state }: { turn: AssistantTurn; state: AssistantSessi
             <AssistantMessage
               key={`${turn.turnId}-seg-${i}`}
               content={segment.text}
+              onActivateReference={onActivateReference}
+              forgeAvailable={forgeAvailable}
               // Only the LAST segment can still be streaming — AND only while the engine
               // is actually producing prose. An unfinished turn is not the same thing:
               // the engine leaves `generating` the moment the model stops emitting text
@@ -379,10 +394,68 @@ function TurnBlock({ turn, state }: { turn: AssistantTurn; state: AssistantSessi
         })}
 
         {/* A turn that has produced nothing yet still needs to show it is alive — but
-            only when no tool group is already carrying that signal, and never once an
-            approval card has taken over saying the turn is blocked on the user. */}
-        {turn.segments.length === 0 && !turn.complete && <AssistantMessage content="" streaming />}
+            only when no tool group is already carrying that signal, never once an
+            approval card has taken over saying the turn is blocked on the user, and
+            — same rule as the segment caret above — only while text is actually
+            arriving. Analyzing/thinking/integrating already have their own words in
+            the live-status label; blinking a caret through them too just resurrects
+            "Thinking" inferred from silence under a different name. */}
+        {turn.segments.length === 0 && !turn.complete && state.phase === "generating" && (
+          <AssistantMessage content="" streaming />
+        )}
       </div>
+    </div>
+  );
+}
+
+/**
+ * The quiet rule that closes a settled assistant turn.
+ *
+ * Assistant turns are full width with no avatar column, so consecutive answers run
+ * together as one continuous column and there is nothing to say where one ended. The
+ * user's own turns break it up when there are any — but a turn that spawns a wake, or a
+ * run of follow-ups the assistant answers in sequence, has no such break.
+ *
+ * It carries the TURN'S DURATION rather than being a bare divider, and that is the
+ * whole reason it earns a line. The elapsed clock ticks in the live status line while a
+ * turn runs and then vanishes when it completes, so "that took forty seconds" is a fact
+ * the panel knows, shows, and then throws away. Parking it here keeps it, and gives the
+ * boundary something to be other than decoration.
+ *
+ * Deliberately NOT an outcome badge. The store carries a heuristic `outcome`
+ * classification, and painting every settled answer with its guess — green for success,
+ * amber for hedged — would put a confident colour on an inference, on every turn, in a
+ * panel whose whole design is that it reports what it SAW rather than what it concluded.
+ * A wake and a stop are different: both are facts the engine states outright.
+ */
+function TurnEndcap({ turn }: { turn: AssistantTurn }) {
+  // Assistant turns only. A user's turn is a right-aligned bubble whose shape already
+  // bounds it, and it is rendered by the same loop — so the guard lives here rather
+  // than being implied by the call site.
+  if (turn.role !== "assistant") return null;
+  if (!turn.complete) return null;
+  // A turn that never recorded an end has no duration to state, and a rule alone is a
+  // divider with nothing to say. Rather than draw a bare line, draw nothing — the
+  // spacing between turns is already a boundary, just a weaker one.
+  if (turn.endedAt === undefined) return null;
+  const elapsedMs = turn.endedAt - turn.startedAt;
+  // Sub-second turns are the wake acknowledgements and one-line answers, where a rule
+  // per turn would out-weigh the turns themselves. The gap between blocks carries those.
+  if (elapsedMs < 1000) return null;
+
+  return (
+    <div className="mt-3 flex items-center gap-2 text-[0.92em]">
+      {/* Only the RULE is decorative. The duration beside it is a fact about the turn
+          that exists nowhere else once the live clock stops, so hiding the whole row
+          from assistive technology — which is what an `aria-hidden` on this container
+          did — deleted it for anyone reading the transcript with a screen reader. */}
+      <span aria-hidden="true" className="h-px min-w-0 flex-1 bg-[var(--assistant-border)]" />
+      <span className="shrink-0 tabular-nums text-[var(--assistant-fg-secondary)]">
+        {/* "Background" because the turn was not one the user asked for — the assistant
+            woke itself. Without it a wake's rule is indistinguishable from an answer's,
+            and the transcript claims the user started something they did not. */}
+        {turn.wake ? `Background · ${formatDuration(elapsedMs)}` : formatDuration(elapsedMs)}
+      </span>
     </div>
   );
 }
@@ -633,10 +706,14 @@ export function AssistantPanelView({
   onAnswerQuestion,
   onGrantTool,
   onRequestOperations,
+  operationsOpen,
+  onOperationsOpenChange,
   onRetractInterjection,
   onRetractedDraftConsumed,
   composerId = "daintree-assistant",
   cwd,
+  onActivateReference,
+  forgeAvailable,
   className,
 }: AssistantPanelViewProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -682,7 +759,19 @@ export function AssistantPanelView({
   // The deck replaces the transcript rather than sitting beside it: the panel is a
   // sidebar, and two scrolling regions in that width makes both unreadable. The cockpit
   // did the same — its deck took the screen.
-  const [deckOpen, setDeckOpen] = useState(false);
+  //
+  // Controlled when an owner above the panel supplies the state — the header's overflow
+  // menu is the way in, and it cannot reach a `useState` down here. Uncontrolled
+  // otherwise, so the preview harness and any bare render still get a working deck.
+  const [ownDeckOpen, setOwnDeckOpen] = useState(false);
+  const deckOpen = operationsOpen ?? ownDeckOpen;
+  const setDeckOpen = useCallback(
+    (open: boolean) => {
+      if (onOperationsOpenChange) onOperationsOpenChange(open);
+      else setOwnDeckOpen(open);
+    },
+    [onOperationsOpenChange]
+  );
 
   /**
    * ^O opens the operations deck, as it did in the cockpit.
@@ -701,25 +790,27 @@ export function AssistantPanelView({
       if (!onRequestOperations) return;
       e.preventDefault();
       e.stopPropagation();
-      setDeckOpen((open) => {
-        // Ask for a fresh reading on the way IN only. The deck is answered on request,
-        // so re-requesting as it closes spends a round trip on a view being dismissed.
-        if (!open) onRequestOperations();
-        return !open;
-      });
+      setDeckOpen(!deckOpen);
     },
-    [onRequestOperations]
+    [onRequestOperations, deckOpen, setDeckOpen]
   );
+
+  // Ask for a fresh reading on the way IN, once, wherever the deck was opened from —
+  // ^O, or the panel header's menu. The deck is answered on request, so this cannot
+  // live in the toggle any more: there are two of them now, and only one is in this
+  // file. Requesting on the way OUT would spend a round trip on a view being dismissed.
+  useEffect(() => {
+    if (deckOpen) onRequestOperations?.();
+  }, [deckOpen, onRequestOperations]);
 
   // A live session is one that can still act. Several readouts describe the session
   // rather than the transcript, and none of them is true once it has stopped.
   const live = state.connection === "ready";
 
-  // Two lines, as the cockpit had: the inline one at the tail of the running turn,
-  // and the composer cue under the input. `liveLabel` is null for the phases whose
-  // activity rows already explain themselves.
+  // ONE status line, at the tail of the running turn. The cockpit had a second one
+  // under the composer; that copy is gone — see the status row below. `liveLabel` is
+  // null for the phases whose activity rows already explain themselves.
   const liveLabel = liveStatusLabel(state.phase);
-  const phase = stageLabel(state.phase);
 
   // A clock, ticking only while a turn is running.
   //
@@ -897,7 +988,12 @@ export function AssistantPanelView({
    *     standing on. Solarized Light's own foreground is 4.13:1 before anything is
    *     derived from it; ANSI yellow on Ayu Light is 1.84:1.
    */
-  const paletteVars = useMemo(() => buildAssistantPalette(term), [term]);
+  // `termTheme` as well as `term`: `resolveInputBarColors` narrows the 16 ANSI slots
+  // away, and fenced-code syntax is coloured from them. Passed straight through rather
+  // than widening `InputBarColors` — that shape is the INPUT BAR's contract, shared with
+  // the terminal composer, and growing it to carry colours only this panel reads would
+  // make every consumer of it pay for one.
+  const paletteVars = useMemo(() => buildAssistantPalette(term, termTheme), [term, termTheme]);
 
   const shellVars = {
     "--ib-bg": term.shellBg,
@@ -960,12 +1056,12 @@ export function AssistantPanelView({
           onScroll={onScroll}
           className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-3"
         >
-          <Masthead state={state} live={live} />
+          {!booting && <Masthead state={state} live={live} />}
           {booting ? (
-            // The boot state, matching the cockpit: the mark draws itself while the
-            // engine connects. The composer below stays live throughout — the cockpit's
-            // was too — so this never gates input, it just fills the space the first
-            // answer will occupy.
+            // The boot state: the mark draws itself while the engine connects, ALONE —
+            // masthead and composer wait for `onDone` rather than arriving underneath a
+            // still-drawing mark, so the reveal reads as one deliberate sequence
+            // (splash, then panel) instead of two animations landing at once.
             <div className="flex h-full flex-col items-center justify-center">
               <AssistantBootSplash
                 // Keyed on the boot generation so a NEW session replays the reveal from
@@ -992,13 +1088,25 @@ export function AssistantPanelView({
               </p>
             </div>
           ) : (
-            <div className="space-y-4">
+            <div className="space-y-6">
               {state.turns.map((turn) => (
                 <div key={turn.turnId} className="space-y-1">
-                  <TurnBlock turn={turn} state={state} />
+                  <TurnBlock
+                    turn={turn}
+                    state={state}
+                    onActivateReference={onActivateReference}
+                    forgeAvailable={forgeAvailable}
+                  />
                   {noticesByTurn.get(turn.turnId)?.map((notice) => (
                     <NoticeRow key={notice.id} notice={notice} />
                   ))}
+                  {/* AFTER the turn's own notices, not inside `TurnBlock`.
+                      A notice attributed to a turn is part of what happened in it — a
+                      rate-limit warning, a retry — and the rule that closes the turn has
+                      to come after everything it closes. Rendered from inside the block
+                      it landed above them, so a five-second turn with a warning read as
+                      "answer, end of turn, then an unattached warning". */}
+                  <TurnEndcap turn={turn} />
                 </div>
               ))}
             </div>
@@ -1081,16 +1189,21 @@ export function AssistantPanelView({
 
       {/* No horizontal padding here: HybridInputBar carries its own, and doubling it
           is what made the assistant's input sit visibly further inset than the one in
-          every terminal pane. */}
-      <div className="shrink-0 pb-2.5 pt-2.5">
-        {state.pendingQuestion && onAnswerQuestion ? (
-          // The sheet REPLACES the composer, as the cockpit's did: the engine has
-          // parked the tool dispatch, so there is nothing a typed message could reach.
-          // The status line below stays, because it is still true.
-          <AssistantQuestionCard question={state.pendingQuestion} onAnswer={onAnswerQuestion} />
-        ) : (
-          <>
-            {/* The terminal's OWN input bar, not a copy of it.
+          every terminal pane.
+
+          Held back for the whole boot state, composer and status row alike: showing
+          either underneath a still-drawing splash read as two things happening on top
+          of each other rather than one boot finishing before the panel does. */}
+      {!booting && (
+        <div className="shrink-0 pb-2.5 pt-2.5">
+          {state.pendingQuestion && onAnswerQuestion ? (
+            // The sheet REPLACES the composer, as the cockpit's did: the engine has
+            // parked the tool dispatch, so there is nothing a typed message could reach.
+            // The status line below stays, because it is still true.
+            <AssistantQuestionCard question={state.pendingQuestion} onAnswer={onAnswerQuestion} />
+          ) : (
+            <>
+              {/* The terminal's OWN input bar, not a copy of it.
                 This was a copy: the same border, radius and `--ib-*` variables, hand
                 rebuilt around a plain textarea. It drifted immediately — different font,
                 different size, a different command menu — which is what a copy always
@@ -1099,121 +1212,78 @@ export function AssistantPanelView({
 
                 What the assistant supplies is the one thing that genuinely differs: its
                 commands come from the engine over the host protocol, not from disk. */}
-            <HybridInputBar
-              ref={composerRef}
-              terminalId={composerId}
-              // Not a terminal pane surface, so it neither records nor obeys the
-              // session-wide xterm-vs-input-bar preference. Writing it from here made
-              // every click in this composer re-run the focus effect of whatever grid
-              // terminal still held store focus, which took the caret back.
-              participatesInTerminalFocus={false}
-              cwd={cwd ?? ""}
-              agentId="daintree-assistant"
-              commands={slashCommands}
-              disabled={!live}
-              // The bar resolves Escape's local meanings first — close the completion
-              // menu, collapse the expanded editor — and forwards what is left. For a
-              // terminal that goes to the PTY; here it lands on the cockpit's Escape
-              // matrix (internal/ui/composer/hints.go), minus the draft-clearing branch
-              // the editor already owns.
-              onSendKey={(key) => {
-                if (key !== "escape") return;
-                // Retract before cancel, as the cockpit ordered it: a follow-up typed
-                // mid-turn is buffered by the engine until the turn folds it in, so
-                // Escape can still pull it back. Cancelling instead would abandon the
-                // work when the user only asked to take back a message.
-                if (state.queuedInterjections.length > 0 && onRetractInterjection) {
-                  onRetractInterjection();
-                  return;
-                }
-                if (busy && interruptible !== false) onInterrupt();
-              }}
-              // The bar hands back a PTY payload as well; the engine takes prose. The
-              // acceptance flag has to be RETURNED, not dropped: the shared send path
-              // clears the draft on a truthy result, so swallowing a refusal is what
-              // makes a prompt vanish when the session was not ready to take it.
-              onSend={({ text }) => (text.trim() ? onSubmit(text) : false)}
-            />
-            {busy && (
-              // Stop lives outside the bar because the bar has no concept of a turn in
-              // flight — it drives a PTY, where Ctrl-C is the out. Worded and weighted
-              // like the prompt glyph rather than like a button.
-              <div className="mt-1 flex justify-end">
-                <button
-                  type="button"
-                  onClick={onInterrupt}
-                  disabled={interruptible === false}
-                  aria-label="Stop"
-                  title={
-                    interruptible === false
-                      ? "Background work the assistant started on its own — it will finish on its own"
-                      : undefined
+              <HybridInputBar
+                ref={composerRef}
+                terminalId={composerId}
+                // Not a terminal pane surface, so it neither records nor obeys the
+                // session-wide xterm-vs-input-bar preference. Writing it from here made
+                // every click in this composer re-run the focus effect of whatever grid
+                // terminal still held store focus, which took the caret back.
+                participatesInTerminalFocus={false}
+                cwd={cwd ?? ""}
+                agentId="daintree-assistant"
+                commands={slashCommands}
+                disabled={!live}
+                // The bar resolves Escape's local meanings first — close the completion
+                // menu, collapse the expanded editor — and forwards what is left. For a
+                // terminal that goes to the PTY; here it lands on the cockpit's Escape
+                // matrix (internal/ui/composer/hints.go), minus the draft-clearing branch
+                // the editor already owns.
+                onSendKey={(key) => {
+                  if (key !== "escape") return;
+                  // Retract before cancel, as the cockpit ordered it: a follow-up typed
+                  // mid-turn is buffered by the engine until the turn folds it in, so
+                  // Escape can still pull it back. Cancelling instead would abandon the
+                  // work when the user only asked to take back a message.
+                  if (state.queuedInterjections.length > 0 && onRetractInterjection) {
+                    onRetractInterjection();
+                    return;
                   }
-                  className={cn(
-                    // `leading-5` is not a stray literal: 20px is the composer's own
-                    // line box (inputEditorExtensions/base.ts), and this sits on that
-                    // line. It is fixed for the same reason the editor's is.
-                    "select-none px-1 text-[0.92em] leading-5",
-                    // Colour, not transparency. `opacity` scales the element toward
-                    // whatever is behind it and drags its contrast floor down with it —
-                    // and "stop" is a control someone reaches for mid-turn, when they
-                    // are least inclined to hunt for it.
-                    "text-[var(--assistant-fg-secondary)] transition-colors duration-150 ease-out",
-                    "hover:text-[var(--assistant-fg)] disabled:opacity-40"
-                  )}
-                >
-                  stop
-                </button>
-              </div>
-            )}
-          </>
-        )}
+                  if (busy && interruptible !== false) onInterrupt();
+                }}
+                // The bar hands back a PTY payload as well; the engine takes prose. The
+                // acceptance flag has to be RETURNED, not dropped: the shared send path
+                // clears the draft on a truthy result, so swallowing a refusal is what
+                // makes a prompt vanish when the session was not ready to take it.
+                onSend={({ text }) => (text.trim() ? onSubmit(text) : false)}
+              />
+            </>
+          )}
 
-        {/* The status row under the composer.
+          {/* The status row under the composer.
 
           The cockpit put its adaptive key hints here (internal/ui/composer/keymap.go
           hintRow). Those hints now belong to the input bar, which owns the editor and
           teaches its own bindings — duplicating them here would state the composer's
           contract in a second place, free to drift from it.
 
-          What is left is what only the PANEL knows: the phase and its clock on the
-          left, and the session readouts on the right — the deck, rate limiting,
-          standing approval, context and cost. Each is suppressed when it is not true
-          of a live session rather than shown as an empty slot. */}
+          This is the narrowest row in the app, and it had grown to hold the phase, the
+          stall warning, the clock, the standing approval, the context meter, the cost
+          and an overflow button — at a sidebar's width that wrapped to two lines. What
+          is left is one reading the transcript cannot give (the connection), the one
+          control that has to be reachable mid-turn (stop), and the session readouts.
 
-        <div className="mt-1.5 flex items-center gap-2 px-3.5 text-[0.92em] text-[var(--assistant-fg-secondary)]">
-          {phase ? (
-            <span
-              className={cn(
-                "flex items-center gap-1.5",
-                stalled ? "text-[var(--assistant-warning)]" : "text-[var(--assistant-fg-secondary)]"
-              )}
-            >
-              <span
-                aria-hidden="true"
-                className={cn(
-                  "assistant-pulse size-1.5 rounded-full",
-                  stalled
-                    ? "bg-[var(--assistant-warning-graphic)]"
-                    : "bg-[var(--assistant-fg-secondary)]"
-                )}
-              />
-              {phase}
-              {/* The stalled warning and the clock belong to the inline status line,
-                  which is showing whenever `liveLabel` is set. They repeat here only
-                  for the phases that line omits — chiefly `tool_running` — so the
-                  elapsed time never disappears just because the turn moved into
-                  tools. */}
-              {!liveLabel && stalled && " · still working"}
-              {!liveLabel && elapsed && ` · ${elapsed}`}
-            </span>
-          ) : (
-            // A DOT, then the word, as the cockpit drew it (render_chrome.go). The word
-            // alone made the one line that is true for the whole session read as body
-            // text; a lit dot is what says "live" at a glance, and it is the same
-            // vocabulary the phase row above uses while a turn runs — that one pulses
-            // because it is transient, this one is steady because the connection is not.
-            <span className="flex items-center gap-1.5">
+          The PHASE is gone from here on purpose. It was being drawn twice: once at the
+          tail of the running turn, where the next output will appear and where anyone
+          waiting is already looking, and again down here below the input. Two labels
+          for one fact, and this was the copy with no room for it — "Inspecting
+          project… · still working · 41s" is the longest string the phase vocabulary
+          can produce and it is unbounded from here, since a future phase label is
+          whatever the engine names it.
+
+          The CLOCK is gone from here too, for the same reason and one more: it was
+          also drawn at the tail of the running turn, and down here it sat right next
+          to "Connected" — reading as how long the session had been connected, not how
+          long the current turn had been running. */}
+
+          <div
+            data-testid="assistant-status-row"
+            className="mt-1.5 flex items-center gap-2 px-3.5 text-[0.92em] text-[var(--assistant-fg-secondary)]"
+          >
+            {/* A DOT, then the word, as the cockpit drew it (render_chrome.go). The word
+              alone made the one line that is true for the whole session read as body
+              text; a lit dot is what says "live" at a glance. */}
+            <span className="flex min-w-0 items-center gap-1.5">
               <span
                 aria-hidden="true"
                 className={cn(
@@ -1225,84 +1295,94 @@ export function AssistantPanelView({
                       : "bg-[var(--assistant-success-graphic)]"
                 )}
               />
-              {state.connection === "ready"
-                ? state.mcpUnavailable
-                  ? // Qualified deliberately. The engine is up, but it cannot reach
-                    // Daintree — so it can talk and cannot act, and "Connected" alone
-                    // would describe only the half that works.
-                    "Connected · no Daintree tools"
-                  : "Connected"
-                : state.connection}
+              {/* Truncated, not wrapped. `state.connection` carries whatever the host
+                names the state, so the width of this cell is not something this
+                component gets to know — and the row has to stay one line. */}
+              <span className="truncate">
+                {state.connection === "ready"
+                  ? state.mcpUnavailable
+                    ? // Qualified deliberately. The engine is up, but it cannot reach
+                      // Daintree — so it can talk and cannot act, and "Connected" alone
+                      // would describe only the half that works.
+                      "Connected · no Daintree tools"
+                    : "Connected"
+                  : state.connection}
+              </span>
             </span>
-          )}
 
-          <span className="ml-auto flex items-center gap-2 tabular-nums">
-            {/* Both describe a LIVE session, so neither survives it stopping:
+            {busy && (
+              // Stop lives outside the input bar because the bar has no concept of a turn
+              // in flight — it drives a PTY, where Ctrl-C is the out.
+              //
+              // Anchored to the LEFT, beside the status it acts on, rather than floating
+              // right-aligned on a strip of its own above this row. Right-aligned put it
+              // at the end of a queue of readouts whose widths change as the turn runs —
+              // a control that moves while you reach for it — and the strip made the
+              // composer three stacked rows deep.
+              <button
+                type="button"
+                onClick={onInterrupt}
+                disabled={interruptible === false}
+                aria-label="Stop"
+                title={
+                  interruptible === false
+                    ? "Background work the assistant started on its own — it will finish on its own"
+                    : "Stop this turn (Esc)"
+                }
+                className={cn(
+                  "flex shrink-0 items-center gap-1 rounded-sm px-1.5 py-0.5",
+                  // Colour, not transparency, for the resting state. `opacity` scales the
+                  // element toward whatever is behind it and drags its contrast floor
+                  // down with it — and stop is a control someone reaches for mid-turn,
+                  // when they are least inclined to hunt for it.
+                  "text-[var(--assistant-fg-secondary)] transition-colors duration-150 ease-out",
+                  "hover:bg-[var(--assistant-hover)] hover:text-[var(--assistant-fg)]",
+                  "disabled:pointer-events-none disabled:opacity-40"
+                )}
+              >
+                <Square aria-hidden="true" className="size-2.5 fill-current" />
+                Stop
+              </button>
+            )}
+
+            <span className="ml-auto flex shrink-0 items-center gap-2 tabular-nums">
+              {/* Both describe a LIVE session, so neither survives it stopping:
                 "Auto-approve on" over a dead engine states a standing permission that
                 no longer applies to anything, and "Rate limited" a condition nothing
                 is subject to. */}
-            {live && state.rateLimited && (
-              <span className="text-[var(--assistant-warning)]">Rate limited</span>
-            )}
-            {/* Auto-approve is a standing state, not an event — if confirmations are
+              {live && state.rateLimited && (
+                <span className="text-[var(--assistant-warning)]">Rate limited</span>
+              )}
+              {/* Auto-approve is a standing state, not an event — if confirmations are
                 off that must stay visible for the whole session. Worded as what is
                 switched ON, because "approvals off" reads ambiguously as "approving is
                 unavailable" rather than "nothing will ask you". */}
-            {/* "on" is carried by the fact that it is drawn at all — the row shows
+              {/* "on" is carried by the fact that it is drawn at all — the row shows
                 nothing when the setting is off — so the word was spending width in the
                 one place there is least of it to say what its presence already says.
-                The full sentence still lives in the masthead. */}
-            {live && state.autoApprove && (
-              <span className="font-medium text-[var(--assistant-danger)]">Auto-approve</span>
-            )}
-            {state.usage && state.usage.contextWindow > 0 && (
-              <span title="Context used">
-                {formatTokens(state.usage.contextTokens)}/{formatTokens(state.usage.contextWindow)}
-              </span>
-            )}
-            {/* Nothing is a floor of zero. A backend that reports no cost figures at
+                The full sentence still lives in the masthead.
+
+                `whitespace-nowrap` because it is a two-word label in a flex row that
+                can be squeezed: without it, "Auto-approve" broke across the hyphen and
+                took the whole row to two lines. */}
+              {live && state.autoApprove && (
+                <span className="whitespace-nowrap font-medium text-[var(--assistant-danger)]">
+                  Auto-approve
+                </span>
+              )}
+              {/* Nothing is a floor of zero. A backend that reports no cost figures at
                 all yields total 0 with complete false, and "≥ $0.00" is clutter that
                 says less than saying nothing — the cockpit stayed silent on unknown
                 cost for the same reason. */}
-            {state.cost && (state.cost.total > 0 || state.cost.complete) && (
-              <span>{formatCost(state.cost.total, state.cost.complete)}</span>
-            )}
-            {/* The way into the operations deck, as an overflow control rather than the
-                word "Operations" spelled out. This row is the narrowest space in the
-                panel and everything else on it is a READING — connection, context,
-                cost — so a labelled verb sitting among them both cost width and read as
-                one more readout. It stays a direct toggle rather than a menu of one:
-                a dropdown whose only entry is the thing the button already does is a
-                second click for nothing. */}
-            {onRequestOperations && (
-              <button
-                type="button"
-                onClick={() => {
-                  setDeckOpen((v) => !v);
-                  if (!deckOpen) onRequestOperations();
-                }}
-                aria-pressed={deckOpen}
-                // Constant in both states, with `aria-pressed` carrying open-vs-closed.
-                // A toggle whose NAME changes is a control that reads as two different
-                // ones to anyone who cannot see it change, and it is what made this
-                // button collide with the deck's own Close button by name.
-                aria-label="Operations"
-                // The chord lives in the tooltip, not beside the control: a shortcut
-                // printed next to every button is the clutter the cockpit's adaptive
-                // hint row existed to avoid.
-                title="Operations (^O)"
-                className={cn(
-                  "rounded-sm p-0.5 transition-colors duration-150 ease-out",
-                  "hover:bg-[var(--assistant-hover)]",
-                  deckOpen && "bg-[var(--assistant-hover)]"
-                )}
-              >
-                <MoreHorizontal aria-hidden="true" className="size-3.5" />
-              </button>
-            )}
-          </span>
+              {state.cost && (state.cost.total > 0 || state.cost.complete) && (
+                <span className="whitespace-nowrap">
+                  {formatCost(state.cost.total, state.cost.complete)}
+                </span>
+              )}
+            </span>
+          </div>
         </div>
-      </div>
+      )}
     </div>
   );
 }
