@@ -21,6 +21,7 @@ import {
   FileText,
   Folder,
   FolderTree,
+  GitBranch,
   GitCommitHorizontal,
   GitCompare,
   GitPullRequest,
@@ -108,6 +109,7 @@ export interface WorktreeMenuItemsProps {
   onCopyContextFull: () => void;
   onCopyContextModified: () => void;
   onCopyPath: () => void;
+  onCopyBranchName: () => void;
   onOpenEditor: () => void;
   onRevealInFinder: () => void;
   onOpenIssueExternal?: () => void;
@@ -177,6 +179,7 @@ export function WorktreeMenuItems({
   onCopyContextFull,
   onCopyContextModified,
   onCopyPath,
+  onCopyBranchName,
   onOpenEditor,
   onRevealInFinder,
   onOpenIssueExternal,
@@ -530,6 +533,15 @@ export function WorktreeMenuItems({
         <Copy className="w-3.5 h-3.5 mr-2" />
         Copy Path
       </C.Item>
+      {/* `isDetached` has to gate this too, not just `branch`: the status pass
+          only overwrites `branch` when it reads a new one, so a worktree that
+          detaches keeps its pre-detach branch on the snapshot. */}
+      {worktree.branch && !worktree.isDetached && (
+        <C.Item onSelect={onCopyBranchName}>
+          <GitBranch className="w-3.5 h-3.5 mr-2" />
+          Copy branch name
+        </C.Item>
+      )}
 
       {onTogglePin && !worktree.isMainWorktree && !isExternalWorktree(worktree) && (
         <C.Item onSelect={onTogglePin}>

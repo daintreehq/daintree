@@ -494,6 +494,15 @@ export function WorktreeCard({
     void copyWorktreePath(worktree.path);
   };
 
+  const { copy: copyBranchName } = useCopyWithFeedback({ announcement: "Branch name copied" });
+  const handleCopyBranchName = () => {
+    const branch = worktree.branch;
+    // The menu already hides the item in both cases; re-checking keeps a stale
+    // callback from copying the branch a detached worktree has left behind.
+    if (!branch || worktree.isDetached) return;
+    void copyBranchName(branch);
+  };
+
   const [showIssuePicker, setShowIssuePicker] = useState(false);
   const [showPlanViewer, setShowPlanViewer] = useState(false);
 
@@ -748,6 +757,7 @@ export function WorktreeCard({
     onCopyContextFull: handleCopyContextFull,
     onCopyContextModified: handleCopyContextModified,
     onCopyPath: handleCopyPath,
+    onCopyBranchName: handleCopyBranchName,
     onOpenEditor,
     onRevealInFinder: handlePathClick,
     onOpenIssueExternal: worktree.issueNumber ? handleOpenIssueExternal : undefined,

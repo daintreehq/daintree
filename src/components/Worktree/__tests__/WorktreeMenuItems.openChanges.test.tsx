@@ -52,6 +52,7 @@ function renderMenu(onOpenChanges?: () => void, onOpenReviewHub?: () => void) {
       onCopyContextFull={vi.fn()}
       onCopyContextModified={vi.fn()}
       onCopyPath={vi.fn()}
+      onCopyBranchName={vi.fn()}
       onOpenEditor={vi.fn()}
       onRevealInFinder={vi.fn()}
       onRunRecipe={vi.fn()}

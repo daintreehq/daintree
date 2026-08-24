@@ -50,6 +50,7 @@ function renderMenu(worktree: WorktreeState, onTogglePin?: () => void, isPinned 
       onCopyContextFull={vi.fn()}
       onCopyContextModified={vi.fn()}
       onCopyPath={vi.fn()}
+      onCopyBranchName={vi.fn()}
       onOpenEditor={vi.fn()}
       onRevealInFinder={vi.fn()}
       onRunRecipe={vi.fn()}
