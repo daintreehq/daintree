@@ -87,6 +87,17 @@ export interface AssistantHostProcessOptions {
 
 export class AssistantHostProcess {
   private child: ChildProcessWithoutNullStreams | null = null;
+  /** True once the child has actually exited, so a waiter arriving late is not stranded. */
+  private exited = false;
+  private readonly exitWaiters = new Set<() => void>();
+
+  /** Records the exit and releases anything waiting on it. Idempotent. */
+  private markExited(): void {
+    this.child = null;
+    this.exited = true;
+    for (const resolve of this.exitWaiters) resolve();
+    this.exitWaiters.clear();
+  }
   private readonly readyPromise: Promise<void>;
   private readyEvent: AssistantHostReadyEvent | null = null;
   /**
@@ -141,6 +152,12 @@ export class AssistantHostProcess {
           `Failed to start the assistant engine (${this.opts.binaryPath}): ${error.message}`
         )
       );
+      // Settle the same state the exit handler settles. Node does not promise an `exit`
+      // after a spawn failure, so without this a shutdown waiting on this host sits out
+      // its full grace period for a process that never existed — and `onExit` could then
+      // be called twice if an exit did arrive.
+      if (this.exited) return;
+      this.markExited();
       this.opts.onExit?.(null, null);
     });
 
@@ -162,7 +179,8 @@ export class AssistantHostProcess {
     child.stderr.on("data", (chunk: string) => this.consumeStderr(chunk));
 
     child.on("exit", (code, signal) => {
-      this.child = null;
+      if (this.exited) return;
+      this.markExited();
       this.clearReadyTimer();
       if (!this.settled) {
         this.rejectReady(
@@ -189,6 +207,56 @@ export class AssistantHostProcess {
   /** Resolves on `host:ready`; rejects on early exit, spawn failure, or timeout. */
   waitForReady(): Promise<void> {
     return this.readyPromise;
+  }
+
+  /**
+   * Resolves when the child exits, or when `timeoutMs` runs out — and KILLS it if it
+   * does. Resolves immediately if there was never a child, or it is already gone.
+   *
+   * This is the piece shutdown needs that `dispose` cannot provide. `dispose` asks the
+   * engine to stop and arms an unref'd backstop, which is right while the app is
+   * running: a displaced engine must not hold the process open. At quit that same
+   * unref'd timer is worthless, because `app.exit()` takes it with it — so the kill has
+   * to happen synchronously with the shutdown sequence, while there is still a process
+   * around to issue it. A spawned child is not reaped with its parent.
+   */
+  waitForExit(timeoutMs: number): Promise<void> {
+    const child = this.child;
+    if (!child || this.exited) return Promise.resolve();
+    return new Promise<void>((resolve) => {
+      let done = false;
+      const settle = () => {
+        if (done) return;
+        done = true;
+        clearTimeout(timer);
+        this.exitWaiters.delete(settle);
+        resolve();
+      };
+      const timer = setTimeout(() => {
+        // Out of budget. A signal is not a bad outcome for a process being torn down;
+        // an orphan holding a state lease is.
+        let signalled: boolean;
+        try {
+          signalled = child.kill("SIGKILL");
+        } catch {
+          // Exited between the timer firing and this call — which is the outcome we
+          // wanted anyway.
+          signalled = true;
+        }
+        if (!signalled) {
+          // The signal did not land, and reporting "shut down" over that would be the
+          // same lie this method exists to stop telling. Say so and settle regardless:
+          // there is nothing further this process can do about it, and holding the
+          // quit open would not change the answer.
+          console.warn(
+            `[assistant-host] Could not signal engine ${this.opts.descriptor.sessionId}; it may outlive Daintree.`
+          );
+        }
+        settle();
+      }, timeoutMs);
+      timer.unref?.();
+      this.exitWaiters.add(settle);
+    });
   }
 
   /** The `host:ready` frame this engine announced itself with, once ready. */

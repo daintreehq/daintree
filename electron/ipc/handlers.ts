@@ -72,6 +72,7 @@ import { registerCopyTreeHistoryHandlers } from "./handlers/copyTreeHistory.js";
 import { registerFleetHandlers } from "./handlers/fleet.js";
 import { registerVoiceInputHandlers } from "./handlers/voiceInput.js";
 import { registerMcpServerHandlers } from "./handlers/mcpServer.js";
+import { registerAssistantAccountHandlers } from "./handlers/assistantAccount.js";
 import { registerHelpAssistantHandlers } from "./handlers/helpAssistant.js";
 import { registerWebviewHandlers } from "./handlers/webview.js";
 import { registerWebviewNavigationHandlers } from "./handlers/webviewNavigation.js";
@@ -213,6 +214,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerFleetHandlers());
     register(() => registerVoiceInputHandlers(deps));
     register(() => registerMcpServerHandlers());
+    register(() => registerAssistantAccountHandlers());
     register(() => registerHelpAssistantHandlers());
     register(() => registerWebviewHandlers(deps));
     register(() => registerWebviewNavigationHandlers(deps));

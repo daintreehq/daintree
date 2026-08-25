@@ -52,6 +52,20 @@ vi.mock("../../services/CrashRecoveryService.js", () => ({
   getCrashRecoveryService: vi.fn(() => crashRecoveryMock),
 }));
 
+const assistantHostMock = vi.hoisted(() => ({
+  shutdown: vi.fn<() => Promise<void>>(),
+}));
+vi.mock("../../services/assistant-host/AssistantHostService.js", () => ({
+  assistantHostService: assistantHostMock,
+}));
+
+const assistantAccountMock = vi.hoisted(() => ({
+  shutdown: vi.fn<() => Promise<void>>(),
+}));
+vi.mock("../../services/assistant-account/AssistantAccountService.js", () => ({
+  assistantAccountService: assistantAccountMock,
+}));
+
 const crashLoopGuardMock = vi.hoisted(() => ({
   markCleanExit: vi.fn(),
 }));
@@ -321,6 +335,10 @@ describe("registerShutdownHandler", () => {
     quitWarningMock.showQuitWarning.mockResolvedValue(true);
     ccrConfigMock.stopWatching.mockResolvedValue(undefined);
     serviceRefsMock.setInitialState({});
+    assistantHostMock.shutdown.mockReset();
+    assistantHostMock.shutdown.mockResolvedValue(undefined);
+    assistantAccountMock.shutdown.mockReset();
+    assistantAccountMock.shutdown.mockResolvedValue(undefined);
   });
 
   async function setup(overrides?: Partial<ShutdownDeps>) {
@@ -332,6 +350,67 @@ describe("registerShutdownHandler", () => {
     )![1] as (event: { preventDefault: () => void }) => Promise<void>;
     return { deps, beforeQuitCb };
   }
+
+  /**
+   * The assistant's children are real subprocesses, and quitting has to take them.
+   *
+   * Asserted HERE rather than only on the services because that is precisely where the
+   * bug was: the teardown methods all existed and nothing called them. A test that only
+   * proves the service does the right thing when asked would have passed throughout.
+   */
+  describe("assistant subprocess teardown", () => {
+    // The shutdown chain is started, not awaited, by `beforeQuitCb` — so a test that
+    // returns before its chain finishes leaves it running into the next one, where its
+    // `app.exit()` reads as this test's. Each test below drains its own chain, and the
+    // spy is reset either way.
+    afterEach(() => {
+      appMock.exit.mockReset();
+    });
+
+    it("tears down the engines and any sign-in on quit", async () => {
+      const { beforeQuitCb } = await setup();
+      await beforeQuitCb(makeEvent());
+
+      // `beforeQuitCb` returns once it has preventDefault'd and started the chain, not
+      // once the chain has finished — hence the wait, as in the telemetry tests below.
+      await vi.waitFor(() => {
+        expect(assistantHostMock.shutdown).toHaveBeenCalled();
+        expect(assistantAccountMock.shutdown).toHaveBeenCalled();
+      });
+      // Drain this test's chain so its exit cannot land inside the next one.
+      await vi.waitFor(() => {
+        expect(appMock.exit).toHaveBeenCalled();
+      });
+    });
+
+    it("does not exit until the engines have gone", async () => {
+      // The whole reason this is awaited. Stopping an engine writes a shutdown frame
+      // and arms an UNREF'D kill backstop — worthless once `app.exit()` is on its way,
+      // because it takes the timer with it and a spawned child is not reaped with its
+      // parent. Exiting early leaves an orphan holding its project's state lease.
+      let release!: () => void;
+      assistantHostMock.shutdown.mockReturnValue(
+        new Promise<void>((resolve) => {
+          release = resolve;
+        })
+      );
+
+      const { beforeQuitCb } = await setup();
+      appMock.exit.mockReset();
+      await beforeQuitCb(makeEvent());
+      await vi.waitFor(() => {
+        expect(assistantHostMock.shutdown).toHaveBeenCalled();
+      });
+
+      // Asked, but not yet finished — and the app must still be here.
+      expect(appMock.exit).not.toHaveBeenCalled();
+
+      release();
+      await vi.waitFor(() => {
+        expect(appMock.exit).toHaveBeenCalled();
+      });
+    });
+  });
 
   it("skips cleanup entirely in smoke test mode", async () => {
     isSmokeTestMock.value = true;
