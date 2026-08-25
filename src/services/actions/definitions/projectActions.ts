@@ -12,7 +12,7 @@ import { actionService } from "@/services/ActionService";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { notify, EVENT_KIND_TO_SETTING_KEY, EVENT_KIND_LABEL } from "@/lib/notify";
 import type { NotificationEventKind } from "@/lib/notify";
-import { switchToLastProject } from "@/lib/projectHistoryNav";
+import { switchToLastWorkspace } from "@/lib/projectHistoryNav";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { isScratchWorkspaceId } from "@shared/utils/workspaceIds";
 import { suppressPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
@@ -179,14 +179,14 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
   // orphan any binding a user has already customised.
   actions.set("project.mruCycleOlder", () => ({
     id: "project.mruCycleOlder",
-    title: "Switch to Last Project",
+    title: "Switch to Last Workspace",
     description:
-      "Switch to the project this window was in before the current one. Running it again returns to where you started.",
+      "Switch to the workspace this window was in before the current one — a project or a scratch. Running it again returns to where you started.",
     category: "project",
     kind: "command",
     danger: "safe",
     scope: "renderer",
-    run: () => switchToLastProject(),
+    run: () => switchToLastWorkspace(),
   }));
 
   actions.set("project.add", () => ({

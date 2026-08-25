@@ -534,18 +534,24 @@ async function activateProjectView(
   const { view, isNew } = swapResult;
   const swapMs = Math.round(performance.now() - activateStart);
 
-  // Fold the completed switch into this window's project history. Recorded here
-  // — after the view swap has actually committed — because this is the path
+  // Fold the completed switch into this window's workspace history. Recorded
+  // here — after the view swap has actually committed — because this is the path
   // every real switch takes: `ProjectSwitchService` only runs on the legacy
   // non-PVM fallback, so recording there alone left history empty in normal
   // use. `windowId` comes from the captured operation, so a second window
   // records into its own list rather than the first window's.
   //
-  // The outgoing project is recorded first, so it lands directly behind the
+  // The outgoing workspace is recorded first, so it lands directly behind the
   // incoming one and becomes the toggle target. Nothing else records the
   // project a window opens on — that load never reaches this path — so without
   // it the most common flow of all, open on A and switch to B, would leave the
   // toggle with nowhere to go.
+  //
+  // `outgoingProjectId` is the sender view's binding, which is a scratch UUID
+  // when the switch is leaving a scratch — `ProjectViewManager` registers views
+  // under whatever workspace id it was handed. That already recorded the right
+  // thing before #11936; what dropped it was the reader pruning every entry
+  // that wasn't a project.
   if (windowId !== undefined) {
     const history = getProjectHistory(windowId);
     if (outgoingProjectId) history.record(outgoingProjectId);

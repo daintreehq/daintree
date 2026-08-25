@@ -286,11 +286,13 @@ export interface ProjectStatusEntry extends AssistantPresenceEntry {
 }
 
 /**
- * The project this window was in before the current one. Main resolves it; the
- * renderer performs the switch through its ordinary path.
+ * The workspace this window was in before the current one — a project or a
+ * scratch (#11936). Main resolves it; the renderer performs the switch through
+ * its ordinary path, routing on the id's shape the way every other
+ * project-or-scratch destination does.
  */
 export interface ProjectHistoryTarget {
-  projectId: string;
+  workspaceId: string;
 }
 
 /**

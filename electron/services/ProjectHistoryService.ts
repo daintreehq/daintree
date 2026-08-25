@@ -1,32 +1,39 @@
 /**
- * Upper bound on remembered projects. Deep enough that no real session walks off
- * the end, shallow enough that the list stays trivial to scan.
+ * Upper bound on remembered workspaces. Deep enough that no real session walks
+ * off the end, shallow enough that the list stays trivial to scan.
  */
 const MAX_ENTRIES = 50;
 
 /**
- * The projects a window has visited, most recent first.
+ * The workspaces a window has visited, most recent first.
  *
- * This exists to answer exactly one question — "what was the last project?" —
+ * This exists to answer exactly one question — "what was the last workspace?" —
  * because the shortcut it feeds is a toggle, not a walk. Going back and going
- * again returns you to where you started, from any number of projects. That
- * self-inverse property is the entire value of the key: it is the only project
- * navigation you can perform without looking, since you never have to know
- * where in a sequence you currently are.
+ * again returns you to where you started, from any number of workspaces. That
+ * self-inverse property is the entire value of the key: it is the only
+ * workspace navigation you can perform without looking, since you never have to
+ * know where in a sequence you currently are.
  *
- * A cursor that advanced on every press loses it. From a third project two
+ * A cursor that advanced on every press loses it. From a third workspace two
  * presses land somewhere new rather than back where you started, so the key
  * stops being a reflex and becomes a guess — precisely when there are enough
- * projects for the guess to be wrong.
+ * workspaces for the guess to be wrong.
  *
- * Reaching a project that isn't the last one belongs to the palette, and
+ * Ids are opaque here, and that is what lets projects and scratches share one
+ * list (#11936). The two id spaces are disjoint, so callers decide what an
+ * entry means: every read takes an `exists` predicate that resolves the id
+ * against whichever store owns it. What the user is toggling between matters
+ * less than that the toggle inverts, and a scratch is exactly the workspace
+ * they most often want back.
+ *
+ * Reaching a workspace that isn't the last one belongs to the palette, and
  * deliberately so. A switch here swaps a `WebContentsView` and reloads
  * worktrees; it is far too expensive to spam blindly the way alt-tab spams
  * window focus. Anything past "the other one" should be picked from a list you
  * can see.
  *
  * Deliberately in-memory and per-window: a list restored across restarts would
- * be full of projects the user has since forgotten, and one shared between
+ * be full of workspaces the user has since forgotten, and one shared between
  * windows would make Back in one window jump to something another window
  * visited. Windows navigate independently, like browser tabs.
  *
@@ -39,53 +46,54 @@ export class ProjectHistoryService {
   private disposed = false;
 
   /**
-   * Promote a project to the head of the list.
+   * Promote a workspace to the head of the list.
    *
-   * Re-recording the project already at the head is a no-op, which is what lets
-   * callers seed defensively: the switch path records the outgoing project
-   * before the incoming one, and the IPC layer records wherever the window
-   * currently is, without either needing to know what the other already did.
+   * Re-recording the workspace already at the head is a no-op, which is what
+   * lets callers seed defensively: the switch path records the outgoing
+   * workspace before the incoming one, and the IPC layer records wherever the
+   * window currently is, without either needing to know what the other already
+   * did.
    */
-  record(projectId: string): void {
-    if (this.disposed || !projectId) return;
-    if (this.entries[0] === projectId) return;
+  record(workspaceId: string): void {
+    if (this.disposed || !workspaceId) return;
+    if (this.entries[0] === workspaceId) return;
 
-    const existing = this.entries.indexOf(projectId);
+    const existing = this.entries.indexOf(workspaceId);
     if (existing > 0) this.entries.splice(existing, 1);
-    this.entries.unshift(projectId);
+    this.entries.unshift(workspaceId);
 
     if (this.entries.length > MAX_ENTRIES) this.entries.length = MAX_ENTRIES;
   }
 
   /**
-   * The project at the head — where the window is now. Null while empty.
+   * The workspace at the head — where the window is now. Null while empty.
    *
    * Pass `exists` when the answer is going to be acted on. Without it the head
-   * can name a project deleted since the last switch, and a caller that treats
-   * a missing project as "nowhere to go" then no-ops on every press while a
-   * perfectly good project waits behind it.
+   * can name a workspace deleted since the last switch, and a caller that
+   * treats a missing workspace as "nowhere to go" then no-ops on every press
+   * while a perfectly good one waits behind it.
    */
-  current(exists?: (projectId: string) => boolean): string | null {
+  current(exists?: (workspaceId: string) => boolean): string | null {
     if (exists) this.prune(exists);
     return this.entries[0] ?? null;
   }
 
   /**
-   * The project to toggle to, or null when this window has only ever been in
-   * one project.
+   * The workspace to toggle to, or null when this window has only ever been in
+   * one workspace.
    *
-   * Prunes removed projects first rather than skipping over them, so a project
-   * deleted since the last switch demotes the next one into its place instead
-   * of leaving the toggle pointing at nothing.
+   * Prunes removed workspaces first rather than skipping over them, so one
+   * deleted since the last switch demotes the next into its place instead of
+   * leaving the toggle pointing at nothing.
    */
-  peekLast(exists: (projectId: string) => boolean): string | null {
+  peekLast(exists: (workspaceId: string) => boolean): string | null {
     this.prune(exists);
     return this.entries[1] ?? null;
   }
 
-  private prune(exists: (projectId: string) => boolean): void {
-    if (this.entries.every((projectId) => exists(projectId))) return;
-    this.entries = this.entries.filter((projectId) => exists(projectId));
+  private prune(exists: (workspaceId: string) => boolean): void {
+    if (this.entries.every((workspaceId) => exists(workspaceId))) return;
+    this.entries = this.entries.filter((workspaceId) => exists(workspaceId));
   }
 
   /**

@@ -8,19 +8,25 @@ import {
 
 const always = () => true;
 
-function visit(history: ProjectHistoryService, ...projectIds: string[]): void {
-  for (const projectId of projectIds) history.record(projectId);
+// Real id shapes for the mixed-workspace case: a project is 64 hex characters,
+// a scratch a UUIDv4, and the two spaces are disjoint.
+const PROJECT_A = "a".repeat(64);
+const PROJECT_B = "b".repeat(64);
+const SCRATCH_ONE = "11111111-1111-4111-8111-111111111111";
+
+function visit(history: ProjectHistoryService, ...workspaceIds: string[]): void {
+  for (const workspaceId of workspaceIds) history.record(workspaceId);
 }
 
 /**
- * How a real switch folds in: the outgoing project is recorded before the
+ * How a real switch folds in: the outgoing workspace is recorded before the
  * incoming one, exactly as the view-swap path does. Peeking in isolation would
  * miss whether the pair leaves the list able to answer the next press.
  */
-function switchTo(history: ProjectHistoryService, projectId: string): void {
+function switchTo(history: ProjectHistoryService, workspaceId: string): void {
   const outgoing = history.current();
   if (outgoing) history.record(outgoing);
-  history.record(projectId);
+  history.record(workspaceId);
 }
 
 /** Press the toggle: resolve a target, then switch to it the way the app does. */
@@ -33,12 +39,12 @@ function pressToggle(history: ProjectHistoryService): string | null {
 describe("ProjectHistoryService", () => {
   it("returns to where you started after two presses, from any depth", () => {
     // The property the shortcut exists for. A cursor that advanced on every
-    // press had it only for two projects: from a third, two presses landed
+    // press had it only for two workspaces: from a third, two presses landed
     // somewhere new and the key stopped being pressable without looking.
     for (const depth of [2, 3, 5]) {
       const history = new ProjectHistoryService();
-      const projects = Array.from({ length: depth }, (_, i) => `p${i}`);
-      visit(history, ...projects);
+      const workspaces = Array.from({ length: depth }, (_, i) => `p${i}`);
+      visit(history, ...workspaces);
 
       const origin = history.current();
       pressToggle(history);
@@ -49,24 +55,38 @@ describe("ProjectHistoryService", () => {
     }
   });
 
-  it("alternates between exactly two projects however long you keep pressing", () => {
+  it("alternates between exactly two workspaces however long you keep pressing", () => {
+    // The pair here is a scratch and a project. Nothing in the list tells them
+    // apart — ids are opaque and the caller's `exists` predicate resolves them
+    // — which is what lets a scratch hold a slot at all (#11936).
     const history = new ProjectHistoryService();
-    visit(history, "a", "b", "c");
+    visit(history, PROJECT_A, SCRATCH_ONE, PROJECT_B);
 
     const visited: string[] = [];
     for (let press = 0; press < 6; press++) {
       visited.push(pressToggle(history)!);
     }
 
-    // "c" is where we started, so the pair is c/b — never drifting onto "a".
-    expect(visited).toEqual(["b", "c", "b", "c", "b", "c"]);
+    // The project is where we started, so the pair is project/scratch — never
+    // drifting onto the one behind them.
+    expect(visited).toEqual([
+      SCRATCH_ONE,
+      PROJECT_B,
+      SCRATCH_ONE,
+      PROJECT_B,
+      SCRATCH_ONE,
+      PROJECT_B,
+    ]);
     // Toggling reorders but never grows.
-    expect(new Set(history.snapshot().entries)).toEqual(new Set(["a", "b", "c"]));
+    expect(new Set(history.snapshot().entries)).toEqual(
+      new Set([PROJECT_A, SCRATCH_ONE, PROJECT_B])
+    );
   });
 
   it("retargets the toggle after an unrelated switch", () => {
     // Going somewhere by other means — palette, menu, agent jump — has to
-    // reseat the toggle, or it would still point at a project two switches ago.
+    // reseat the toggle, or it would still point at a workspace two switches
+    // ago.
     const history = new ProjectHistoryService();
     visit(history, "a", "b");
     switchTo(history, "c");
@@ -76,7 +96,7 @@ describe("ProjectHistoryService", () => {
 
   it("holds its invariants across a long mixed walk", () => {
     // Toggles interleaved with off-list jumps: the arrangement that previously
-    // stranded navigation, since a project reachable two ways could end up
+    // stranded navigation, since a workspace reachable two ways could end up
     // recorded twice and the second copy was indistinguishable from the first.
     const history = new ProjectHistoryService();
     visit(history, "a", "b", "c", "d", "e");
@@ -92,7 +112,7 @@ describe("ProjectHistoryService", () => {
       }
 
       const { entries } = history.snapshot();
-      // A project recorded twice would make "the last project" ambiguous.
+      // A workspace recorded twice would make "the last workspace" ambiguous.
       expect(new Set(entries).size).toBe(entries.length);
       // Whatever we last switched to is where the window is.
       expect(entries[0]).toBe(history.current());
@@ -131,7 +151,7 @@ describe("ProjectHistoryService", () => {
     const second = getProjectHistory(2);
     visit(second, "c", "d");
 
-    // A shared instance would let one window's toggle jump into a project the
+    // A shared instance would let one window's toggle jump into a workspace the
     // other window visited.
     expect(second).not.toBe(first);
     expect(first.peekLast(always)).toBe("a");
@@ -140,7 +160,7 @@ describe("ProjectHistoryService", () => {
     disposeProjectHistory(1);
 
     // Window ids are recycled; inheriting the previous occupant's history would
-    // point Back at projects this window never visited.
+    // point Back at workspaces this window never visited.
     expect(getProjectHistory(1).snapshot().entries).toEqual([]);
     expect(getProjectHistory(2).snapshot().entries).toEqual(second.snapshot().entries);
 

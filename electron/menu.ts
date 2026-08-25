@@ -912,6 +912,12 @@ export async function handleDirectoryOpen(
     // the wrong window's view (#11100).
     const pvm = getWindowRegistry()?.getByWindowId(targetWindow.id)?.services.projectViewManager;
     if (pvm) {
+      // The workspace this window is leaving, read from its own view manager
+      // before the swap flips `activeProjectId` to the incoming project. Unlike
+      // the project pointer below it this survives a scratch, which has no
+      // project row to be the current project of (#11936).
+      const departingWorkspaceId = pvm.getActiveProjectId();
+
       const { view, isNew } = await pvm.switchTo(project.id, project.path);
       // Capture the outgoing project id before the pointer flips so we can
       // broadcast its bumped `lastOpened` to every cached view (#8561).
@@ -926,8 +932,14 @@ export async function handleDirectoryOpen(
       // entirely. Without this, opening a project from File → Recent Projects as
       // the very first switch of a session leaves the history holding only the
       // destination, so `Cmd+Alt+=` has nowhere to go back to.
+      //
+      // History takes the departing *workspace*, not `previousProjectId`: this
+      // menu stays reachable from a scratch, and the project pointer is null
+      // there. `previousProjectId` still feeds the broadcast above, which is
+      // about a project row's `lastOpened` and has nothing to say about a
+      // scratch.
       const menuHistory = getProjectHistory(targetWindow.id);
-      if (previousProjectId) menuHistory.record(previousProjectId);
+      if (departingWorkspaceId) menuHistory.record(departingWorkspaceId);
       menuHistory.record(project.id);
 
       // Notify the activated view of the switch so it refreshes its cache, MRU,
