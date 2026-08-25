@@ -1,6 +1,6 @@
 import { useEffect } from "react";
 
-import { switchToLastProject } from "@/lib/projectHistoryNav";
+import { switchToLastWorkspace } from "@/lib/projectHistoryNav";
 
 export type UseProjectMruSwitcherReturn = void;
 
@@ -19,7 +19,7 @@ function consumeEvent(event: KeyboardEvent): void {
 }
 
 /**
- * `Cmd+Alt+=` — toggle to the project this window was in before this one.
+ * `Cmd+Alt+=` — toggle to the workspace this window was in before this one.
  *
  * Shift is explicitly not handled: there is no "forward" from a toggle, and
  * swallowing `Cmd+Shift+Alt+=` would leave a key that consumes the event and
@@ -41,7 +41,7 @@ export function useProjectMruSwitcher(): UseProjectMruSwitcherReturn {
 
       consumeEvent(event);
       if (event.repeat) return;
-      void switchToLastProject();
+      void switchToLastWorkspace();
     };
 
     window.addEventListener("keydown", handleKeyDown, { capture: true });

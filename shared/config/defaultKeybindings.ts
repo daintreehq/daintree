@@ -887,7 +887,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Cmd+Alt+=",
     scope: "global",
     priority: 10,
-    description: "Switch to last project",
+    description: "Switch to last workspace",
     category: "Project",
   },
   {

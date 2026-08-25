@@ -33,8 +33,8 @@ vi.mock("../../../../services/ScratchStore.js", () => ({
 
 const projectStoreMock = vi.hoisted(() => ({
   clearCurrentProject: vi.fn(),
-  // Read just before the pointer is cleared, to record the departing project in
-  // this window's history so `Cmd+Alt+=` can leave the scratch again.
+  // The global "last window to switch" pointer. History deliberately does not
+  // read it (#11936) — this stays only because other code in the handler does.
   getCurrentProjectId: vi.fn<() => string | null>(() => null),
 }));
 
@@ -47,12 +47,14 @@ vi.mock("../../../../projectMenuState.js", () => ({
   refreshProjectMenuState: refreshProjectMenuStateMock,
 }));
 
-// buildIpcContext resolves the sender's project through this registry, so the
-// factory has to export it even though this suite never asserts on it.
-vi.mock("../../../../window/webContentsRegistry.js", () => ({
+// `buildIpcContext` resolves the sender's own workspace binding through this
+// registry, and that binding — not the global project pointer — is what the
+// handler records as the workspace being left.
+const webContentsRegistryMock = vi.hoisted(() => ({
   getWindowForWebContents: vi.fn(() => null),
-  getProjectForWebContents: vi.fn(() => null),
+  getProjectForWebContents: vi.fn<(id: number) => string | null>(() => null),
 }));
+vi.mock("../../../../window/webContentsRegistry.js", () => webContentsRegistryMock);
 
 const broadcastMock = vi.hoisted(() => ({ broadcastToRenderer: vi.fn() }));
 vi.mock("../../../utils.js", async (importOriginal) => {
@@ -81,12 +83,27 @@ function getHandler(channel: string) {
 
 const fakeEvent = { sender: { id: 1 }, senderFrame: { url: "http://localhost:5173" } };
 
+// Real id shapes, because the reader that consumes this history routes its
+// existence checks on them: a scratch is a UUIDv4, a project 64 hex characters.
+const PROJECT_A = "a".repeat(64);
+const SCRATCH_ONE = "11111111-1111-4111-8111-111111111111";
+const SCRATCH_TWO = "22222222-2222-4222-9222-222222222222";
+
+/** Point the scratch store at one scratch, the way a real switch would find it. */
+function enterScratch(scratchId: string): void {
+  scratchStoreMock.getScratchById.mockReturnValue({ id: scratchId, path: `/tmp/${scratchId}` });
+  scratchStoreMock.setCurrentScratch.mockReturnValue({ id: scratchId, path: `/tmp/${scratchId}` });
+}
+
 // #11136: a scratch is not a project. Switching to one leaves the window's
 // ProjectViewManager holding a scratch id that has no project row, so the
 // File-menu project gates have to drop — but only a refresh makes the menu notice.
 describe("scratch:switch refreshes the File-menu project gates", () => {
   beforeEach(() => {
     vi.clearAllMocks();
+    // `clearAllMocks` clears calls, not queued return values, so a binding set
+    // by one test would otherwise leak into the next.
+    webContentsRegistryMock.getProjectForWebContents.mockReturnValue(null);
     scratchStoreMock.getScratchById.mockReturnValue({ id: "scratch-1", path: "/tmp/scratch-1" });
     scratchStoreMock.setCurrentScratch.mockReturnValue({
       id: "scratch-1",
@@ -113,21 +130,62 @@ describe("scratch:switch refreshes the File-menu project gates", () => {
     );
   });
 
-  it("records the departing project so the shortcut can leave the scratch again", async () => {
-    projectStoreMock.getCurrentProjectId.mockReturnValue("project-a");
+  it("records the departing project and the scratch as a workspace pair", async () => {
+    webContentsRegistryMock.getProjectForWebContents.mockReturnValue(PROJECT_A);
+    enterScratch(SCRATCH_ONE);
     const deps = { mainWindow: { id: 77 } } as unknown as HandlerDependencies;
     // Reset rather than dispose: a disposed id stays tombstoned and refuses to
     // record, which is the guard against a closed window's late switch.
     resetProjectHistory(77);
     registerScratchHandlers(deps);
 
-    await getHandler(CHANNELS.SCRATCH_SWITCH)(fakeEvent, "scratch-1");
+    await getHandler(CHANNELS.SCRATCH_SWITCH)(fakeEvent, SCRATCH_ONE);
 
-    // A scratch can never be a history entry, so this is the only point that
-    // can capture where the window came from. Without it, entering a scratch as
-    // the first move of a session leaves `Cmd+Alt+=` with nowhere to go.
-    expect(getProjectHistory(77).snapshot().entries).toEqual(["project-a"]);
+    // Both sides, outgoing first: the project so the shortcut can leave the
+    // scratch, and the scratch itself so the shortcut can come back to it. A
+    // scratch that left no entry made `Cmd+Alt+=` land on an older project
+    // instead (#11936).
+    expect(getProjectHistory(77).snapshot().entries).toEqual([SCRATCH_ONE, PROJECT_A]);
     disposeProjectHistory(77);
+  });
+
+  it("records the departing scratch when moving between two scratches", async () => {
+    // The global project pointer was cleared on the way into the first scratch,
+    // so it has nothing to say here. Only the sender's own binding does.
+    projectStoreMock.getCurrentProjectId.mockReturnValue(null);
+    webContentsRegistryMock.getProjectForWebContents.mockReturnValue(SCRATCH_ONE);
+    enterScratch(SCRATCH_TWO);
+    const deps = { mainWindow: { id: 78 } } as unknown as HandlerDependencies;
+    resetProjectHistory(78);
+    registerScratchHandlers(deps);
+
+    await getHandler(CHANNELS.SCRATCH_SWITCH)(fakeEvent, SCRATCH_TWO);
+
+    expect(getProjectHistory(78).snapshot().entries).toEqual([SCRATCH_TWO, SCRATCH_ONE]);
+    disposeProjectHistory(78);
+  });
+
+  it("records nothing when the view swap fails", async () => {
+    webContentsRegistryMock.getProjectForWebContents.mockReturnValue(PROJECT_A);
+    enterScratch(SCRATCH_ONE);
+    const deps = {
+      mainWindow: { id: 79 },
+      projectViewManager: {
+        setPendingFocusIntent: vi.fn(),
+        switchTo: vi.fn().mockRejectedValue(new Error("swap failed")),
+      },
+    } as unknown as HandlerDependencies;
+    resetProjectHistory(79);
+    registerScratchHandlers(deps);
+
+    await expect(getHandler(CHANNELS.SCRATCH_SWITCH)(fakeEvent, SCRATCH_ONE)).rejects.toThrow(
+      "swap failed"
+    );
+
+    // A switch that threw never happened, and moving the toggle for it would
+    // point the shortcut at a workspace the window is not in.
+    expect(getProjectHistory(79).snapshot().entries).toEqual([]);
+    disposeProjectHistory(79);
   });
 
   it("does not refresh when the scratch does not exist", async () => {
