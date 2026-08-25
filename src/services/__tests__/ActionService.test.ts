@@ -810,9 +810,11 @@ describe("ActionService", () => {
         // The three-segment form is what the preload actually emits when the
         // AppError carried a userMessage; only the transport wrapper is removed.
         expect(result.error.message).toBe("Path is outside all allowed roots");
-        expect((result.error.details as { userMessage?: string }).userMessage).toBe(
-          "Path is not in a project root"
-        );
+        // `toMatchObject` rather than a cast: `details` is `unknown`, and the
+        // repo's lint ratchet counts every type assertion.
+        expect(result.error.details).toMatchObject({
+          userMessage: "Path is not in a project root",
+        });
       }
     });
 
