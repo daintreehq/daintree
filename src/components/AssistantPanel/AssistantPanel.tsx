@@ -5,6 +5,9 @@ import { useAssistantSession } from "./useAssistantSession";
 import { useAssistantStore, type AssistantSessionState } from "@/store/assistantStore";
 import type { AssistantReference } from "./AssistantMessage";
 import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
+import { useAssistantAccount } from "@/hooks/useAssistantAccount";
+import { AssistantAccountGate } from "./AssistantAccountGate";
+import { resolveAssistantLaunchGate } from "./assistantLaunchGate";
 import { actionService } from "@/services/ActionService";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { notify } from "@/lib/notify";
@@ -47,6 +50,12 @@ export function AssistantPanel({
   onOperationsOpenChange,
   className,
 }: AssistantPanelProps) {
+  // Read before the session hook, because its result decides whether the session may
+  // start at all. Shared module-level state, so this costs nothing extra when the
+  // settings panel is already reading the same account.
+  const account = useAssistantAccount(active);
+  const gate = useMemo(() => resolveAssistantLaunchGate(account.result), [account.result]);
+
   const {
     submit,
     interrupt,
@@ -57,7 +66,16 @@ export function AssistantPanel({
   } = useAssistantSession({
     projectId,
     cwd: projectPath,
-    enabled: active,
+    // The account decides whether starting the engine could achieve anything.
+    //
+    // Deliberately NOT held until the first status read resolves. That read is not
+    // reliably quick — the capability probe and the status call are each allowed ten
+    // seconds and run in sequence on a cold start — so waiting would leave the panel
+    // blank for up to twenty seconds to answer a question that is almost always "yes".
+    // Booting an engine costs nothing by itself; only a turn is billable, and no turn can
+    // run before the user types. So the gate works reactively: if the account resolves to
+    // a blocking state the gate renders and the session tears down cleanly.
+    enabled: active && !gate.gated,
     restartNonce,
   });
 
@@ -195,6 +213,29 @@ export function AssistantPanel({
     },
     [projectPath]
   );
+
+  if (gate.gated) {
+    return (
+      <AssistantAccountGate
+        reason={gate.reason}
+        busy={account.loginInProgress}
+        error={account.lastError}
+        onCancel={() => safeFireAndForget(account.cancelLogin())}
+        onDismissError={account.dismissError}
+        onAct={() => {
+          // Each reason has exactly one way forward, and it is the one the copy names.
+          if (gate.reason === "signed-out" || gate.reason === "revoked") {
+            safeFireAndForget(account.login());
+          } else if (gate.reason === "subscription-required") {
+            safeFireAndForget(account.openSubscribe());
+          } else {
+            safeFireAndForget(account.openAccount());
+          }
+        }}
+        className={className}
+      />
+    );
+  }
 
   return (
     <AssistantPanelView

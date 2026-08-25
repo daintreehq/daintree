@@ -1,7 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { spawn } from "node:child_process";
-import { existsSync } from "node:fs";
-import { mkdtemp, open, readdir, rm } from "node:fs/promises";
+import { open, mkdtemp, readdir, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import {
@@ -9,6 +7,7 @@ import {
   AssistantHostEventSchema,
   ASSISTANT_HOST_PROTOCOL_VERSION,
 } from "../../../schemas/ipc.js";
+import { binary, driveEngine } from "./engineHarness.js";
 
 /**
  * CROSS-REPO CONFORMANCE.
@@ -27,146 +26,10 @@ import {
  * the handshake, the framing, the sequence stamping, and several event shapes. The
  * engine reports a degraded MCP on stderr and carries on, which is itself part of the
  * contract being asserted (diagnostics never contaminate the protocol stream).
- */
-
-const REPO_ROOT = path.resolve(__dirname, "../../../..");
-
-function enginePath(): string | null {
-  const suffix = process.platform === "win32" ? ".exe" : "";
-  const candidate = path.join(
-    REPO_ROOT,
-    "resources",
-    "assistant",
-    `daintree-assistant-${process.platform}-${process.arch}${suffix}`
-  );
-  return existsSync(candidate) ? candidate : null;
-}
-
-/**
- * The project this harness claims to be, in BOTH the descriptor and the environment.
- * The engine treats a disagreement between the two as a fatal binding mismatch.
- */
-const CONFORMANCE_PROJECT_ID = "p_conformance";
-
-interface DriveResult {
-  frames: unknown[];
-  stderr: string;
-  exitCode: number | null;
-}
-
-/** Boots the engine, sends a descriptor then a shutdown, and collects stdout frames. */
-async function driveEngine(
-  binary: string,
-  sessionId: string,
-  /** Reuse a state dir across boots, so a second boot sees the first one's database. */
-  stateDirOverride?: string
-): Promise<DriveResult> {
-  const dir = await mkdtemp(path.join(tmpdir(), "daintree-engine-conformance-"));
-  const projectDir = path.join(dir, "project");
-  const stateDir = stateDirOverride ?? path.join(dir, "state");
-  try {
-    const child = spawn(binary, ["host", "--stdio"], {
-      cwd: REPO_ROOT,
-      env: {
-        ...process.env,
-        DAINTREE_ASSISTANT_STATE_DIR: stateDir,
-        DAINTREE_ASSISTANT_LOG_DIR: path.join(dir, "logs"),
-        // The SAME id the descriptor below carries, because that is what
-        // `AssistantHostService` does (`DAINTREE_PROJECT_ID: opts.projectId`). The
-        // engine binds its runtime to this variable and refuses a descriptor that
-        // disagrees — "the host and the runtime disagree about which session this is,
-        // so neither can be trusted to act on it". Leaving it inherited meant the
-        // engine bound to whatever project the developer's own shell was in and
-        // rejected the handshake before it ever reached ready.
-        DAINTREE_PROJECT_ID: CONFORMANCE_PROJECT_ID,
-        // Deliberately unreachable. The handshake must not depend on a backend, and
-        // pointing at a real one would make this test do billable work.
-        DAINTREE_BACKEND_URL: "http://127.0.0.1:59999",
-        DAINTREE_ASSISTANT_PROJECT: projectDir,
-      },
-      stdio: ["pipe", "pipe", "pipe"],
-    });
-
-    const frames: unknown[] = [];
-    let stdoutBuffer = "";
-    let stderr = "";
-    let onReady: (() => void) | undefined;
-
-    child.stdout.setEncoding("utf8");
-    child.stdout.on("data", (chunk: string) => {
-      stdoutBuffer += chunk;
-      let i: number;
-      while ((i = stdoutBuffer.indexOf("\n")) !== -1) {
-        const line = stdoutBuffer.slice(0, i).trim();
-        stdoutBuffer = stdoutBuffer.slice(i + 1);
-        if (!line) continue;
-        const frame: unknown = JSON.parse(line);
-        frames.push(frame);
-        if ((frame as { type?: string }).type === "host:ready") onReady?.();
-      }
-    });
-    child.stderr.setEncoding("utf8");
-    child.stderr.on("data", (chunk: string) => {
-      stderr += chunk;
-    });
-
-    child.stdin.write(
-      `${JSON.stringify({
-        sessionId,
-        windowId: 1,
-        projectId: CONFORMANCE_PROJECT_ID,
-        cwd: REPO_ROOT,
-        tier: "system",
-        protocolVersion: ASSISTANT_HOST_PROTOCOL_VERSION,
-      })}\n`
-    );
-
-    const exitCode = await new Promise<number | null>((resolve) => {
-      const kill = setTimeout(() => child.kill("SIGKILL"), 25_000);
-      const requestShutdown = () => {
-        if (child.stdin.writable) {
-          child.stdin.write(`${JSON.stringify({ type: "shutdown", sessionId })}\n`);
-        }
-      };
-      // Shut down on the READY FRAME, not on a timer. A fixed grace period is a guess
-      // about how long a 15MB Go binary takes to spawn and reach ready, and that guess
-      // fails under a loaded machine — the full suite runs thousands of files in
-      // parallel — producing a run whose frames legitimately lack `host:ready` and a
-      // flake that reads as a protocol regression. The timer stays only as a backstop
-      // for an engine that never becomes ready at all, which is a real failure worth
-      // capturing rather than hanging on.
-      onReady = requestShutdown;
-      const shutdown = setTimeout(requestShutdown, 20_000);
-      child.on("exit", (code) => {
-        clearTimeout(kill);
-        clearTimeout(shutdown);
-        resolve(code);
-      });
-    });
-
-    return { frames, stderr, exitCode };
-  } finally {
-    await rm(dir, { recursive: true, force: true });
-  }
-}
-
-const binary = enginePath();
-
-/**
- * In CI the engine MUST be present. Locally it may not be — a fresh clone has an
- * empty submodule, and a test that fails there just teaches people to ignore it.
  *
- * The asymmetry is the point. A conformance test that skips silently is worse than no
- * test: it reports green while proving nothing, which is exactly how a packaging
- * blocker reached a release branch under a passing pipeline.
+ * The boot harness itself lives in `engineHarness.ts`, shared with the tier-binding
+ * suite.
  */
-if (process.env.CI && !binary) {
-  throw new Error(
-    "The assistant engine is not built, so cross-repo conformance cannot run.\n" +
-      "CI must run `npm run build:assistant` (and check out submodules) before vitest.\n" +
-      "Skipping here would report a green build that proved nothing."
-  );
-}
 
 describe.skipIf(!binary)("assistant engine wire conformance", () => {
   it("emits frames that validate against Daintree's own schema", async () => {
@@ -226,7 +89,7 @@ describe.skipIf(!binary)("assistant engine wire conformance", () => {
       // Boot once so the engine writes a REAL database at the CURRENT baseline. Built
       // by the engine rather than hand-rolled here: a synthetic SQLite file is rejected
       // as malformed long before the version check this test is about.
-      await driveEngine(binary!, "ses_seed", shared);
+      await driveEngine(binary!, "ses_seed", { stateDir: shared });
 
       // Age it. `user_version` is a big-endian u32 at offset 60 of the 100-byte header,
       // so one four-byte write turns a current database into a legacy one without
@@ -239,7 +102,7 @@ describe.skipIf(!binary)("assistant engine wire conformance", () => {
         await handle.close();
       }
 
-      const { frames, exitCode } = await driveEngine(binary!, "ses_stale", shared);
+      const { frames, exitCode } = await driveEngine(binary!, "ses_stale", { stateDir: shared });
       const parsed = frames.map(parseAssistantHostEvent);
 
       const refusal = parsed.find((e) => e?.type === "host:error");
@@ -258,7 +121,7 @@ describe.skipIf(!binary)("assistant engine wire conformance", () => {
       const backups = (await readdir(shared)).filter((n) => n.startsWith("state.db.bak-v"));
       expect(backups, "the old database was not preserved").toHaveLength(1);
     } finally {
-      await rm(shared, { recursive: true, force: true });
+      await rm(shared, { recursive: true, force: true, maxRetries: 10, retryDelay: 50 });
     }
   }, 60_000);
 

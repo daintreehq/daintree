@@ -7,6 +7,7 @@ import {
   ChevronRight,
   Copy,
   FolderOpen,
+  Info,
   KeyRound,
   Moon,
   RefreshCw,
@@ -17,6 +18,9 @@ import {
   X,
 } from "lucide-react";
 import * as semver from "semver";
+import { assistantPlatformSupport } from "@shared/config/assistantPlatform";
+import { AssistantDiagnosticsPanel } from "./AssistantDiagnosticsPanel";
+import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { DaintreeIcon, McpServerIcon } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { useDeferredLoading, useHelpSessionLiveStatus } from "@/hooks";
@@ -27,6 +31,7 @@ import { actionService } from "@/services/ActionService";
 import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { SettingsSection } from "./SettingsSection";
+import { AssistantAccountSection } from "./AssistantAccountSection";
 import { SettingsInput } from "./SettingsInput";
 import { SettingsSelect } from "./SettingsSelect";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
@@ -45,6 +50,10 @@ import { DEFAULT_DANGEROUS_ARGS } from "@shared/types/agentSettings";
 import { agentCapabilitiesClient } from "@/clients/agentCapabilitiesClient";
 import { DAINTREE_ASSISTANT_AGENT_ID, type AgentModelConfig } from "@shared/config/agentRegistry";
 import { useHelpPanelStore, selectActiveSlot } from "@/store/helpPanelStore";
+import {
+  DEFAULT_ASSISTANT_BACKEND_ENVIRONMENT,
+  type AssistantBackendEnvironment,
+} from "@shared/config/assistantBackend";
 import type {
   HelpAssistantIdleHibernateMinutes,
   HelpAssistantSettings,
@@ -74,6 +83,7 @@ const DEFAULT_SETTINGS: HelpAssistantSettings = {
   customArgs: "",
   idleHibernateMinutes: 5,
   debugLogging: false,
+  backendEnvironment: DEFAULT_ASSISTANT_BACKEND_ENVIRONMENT,
 };
 
 // Radix Select rejects an empty-string item value, so the "use the CLI default"
@@ -247,6 +257,24 @@ function getBypassCopy(agentId: string | null, tier: HelpAssistantTier): BypassC
   };
 }
 
+/**
+ * The values a patch's own keys held before it was applied.
+ *
+ * Used to undo exactly one failed write and nothing else — a blanket revert to a whole
+ * snapshot would drag a concurrent write's successful result back with it. `for...in`
+ * over a `Partial<T>` keeps the key typed, which `Object.keys` (widening to `string`)
+ * would not.
+ */
+function undoOf<T extends object>(patch: Partial<T>, previous: T): Partial<T> {
+  const undo: Partial<T> = {};
+  // Own keys only. `for...in` would also walk inherited enumerable properties, and an
+  // undo assembled from a prototype's keys is not an undo of this write.
+  for (const key in patch) {
+    if (Object.hasOwn(patch, key)) undo[key] = previous[key];
+  }
+  return undo;
+}
+
 export function DaintreeAssistantSettingsTab() {
   const [settings, setSettings] = useState<HelpAssistantSettings>(DEFAULT_SETTINGS);
   const [mcpStatus, setMcpStatus] = useState<McpStatusSnapshot | null>(null);
@@ -324,12 +352,22 @@ export function DaintreeAssistantSettingsTab() {
     required: string;
   } | null>(null);
 
+  /** Whether the built-in engine can run here — see `assistantPlatformSupport`. */
+  const platformSupport = assistantPlatformSupport();
+
   const agentOptions = useMemo(() => {
-    return getAssistantSupportedAgentIds().map((id) => ({
-      value: id,
-      label: getAgentConfig(id)?.name ?? id,
-    }));
-  }, []);
+    return (
+      getAssistantSupportedAgentIds()
+        // The built-in engine is not an option where it cannot run. Leaving it selectable
+        // — right above a banner saying it is unavailable — makes the banner read as
+        // advisory when it is not.
+        .filter((id) => platformSupport.supported || id !== DAINTREE_ASSISTANT_AGENT_ID)
+        .map((id) => ({
+          value: id,
+          label: getAgentConfig(id)?.name ?? id,
+        }))
+    );
+  }, [platformSupport.supported]);
   // Track the persisted choice exactly — falling back to a default would visually
   // suggest a value is set when it isn't, leaving onChange unfired and the help
   // panel still in its empty state. The placeholder makes "no selection" explicit.
@@ -650,18 +688,49 @@ export function DaintreeAssistantSettingsTab() {
     setShowClearAuditConfirm(false);
   };
 
+  /**
+   * Writes a patch, then reconciles against what main says is now stored.
+   *
+   * The optimistic update stays — a toggle that waits for an IPC round trip before
+   * moving reads as a broken toggle — but it is no longer the last word. Main answers
+   * with the settings as they ACTUALLY stand, which differs from the request whenever a
+   * field was rejected, sanitised, or canonicalised; taking the request as the outcome
+   * left the panel displaying a value nothing had saved. A failure reverts to the last
+   * state we know landed, so the switch goes back rather than lying.
+   */
   const persist = useCallback(
-    async (patch: Partial<HelpAssistantSettings>) => {
-      const next = { ...settings, ...patch } as HelpAssistantSettings;
-      setSettings(next);
+    async (patch: Partial<HelpAssistantSettings>): Promise<HelpAssistantSettings | null> => {
+      const previous = settings;
+      // `backendEnvironment` is deliberately held back from the OPTIMISTIC merge.
+      //
+      // Everything else can move early — a toggle that waits for an IPC round trip
+      // reads as a broken toggle — but this one field is not just displayed, it is a
+      // trigger: the account section re-reads whenever it changes, and that read
+      // resolves its endpoint from the store. Moving it here is what made the reload
+      // race the write. The picker still responds immediately; it follows
+      // `pendingEnvironment` below instead, and this field moves only when main has
+      // confirmed what is stored.
+      const { backendEnvironment: _deferred, ...optimistic } = patch;
+      // Functional updates throughout, because two writes can be in flight at once —
+      // switching the environment and then flicking a toggle is an ordinary thing to
+      // do. Merging into a captured `settings` would make the second write's snapshot
+      // the last word, silently undoing whatever the first one had already landed.
+      setSettings((current) => ({ ...current, ...optimistic }) as HelpAssistantSettings);
       try {
-        await window.electron.helpAssistant.setSettings(patch);
+        const stored = await window.electron.helpAssistant.setSettings(patch);
+        setSettings(stored);
+        return stored;
       } catch (err) {
+        // Revert only the fields THIS write touched, back to what they were when it
+        // started. A blanket revert to the whole snapshot would drag a concurrent
+        // write's successful result back with it — and for `backendEnvironment` that
+        // is not a cosmetic slip, it would leave the panel reloading the account
+        // against an environment the store no longer holds.
+        setSettings((current) => ({ ...current, ...undoOf(patch, previous) }));
         setError(formatErrorMessage(err, "Couldn't save assistant settings"));
         logError("Failed to save Daintree Assistant settings", err);
+        return null;
       }
-      // settings is intentionally read at call time via the closure; no stale risk
-      // because we set it synchronously above.
     },
     [settings]
   );
@@ -673,6 +742,50 @@ export function DaintreeAssistantSettingsTab() {
   const toggleDaintreeControl = () => {
     void persist({ daintreeControl: !settings.daintreeControl });
   };
+
+  /**
+   * The one setting whose value must NOT move optimistically.
+   *
+   * The environment reaches both the engine and the `auth` commands from one stored
+   * value — see `resolveBackendUrl` — and the account section re-reads the account
+   * whenever the environment prop changes. Moving the prop first meant that read raced
+   * the write: `setSettings` had not necessarily reached the store when the reload
+   * fired, so the first `auth status` after a switch could run against the environment
+   * the user had just left, and report an account belonging to it.
+   *
+   * So the picker shows a PENDING value while the write is in flight — the same
+   * treatment `pendingCustomArgs` gets above — and the prop that triggers the reload
+   * moves only once main has confirmed what is stored. On failure the pending value is
+   * dropped and the picker snaps back to the environment that is really in force,
+   * which is the one the assistant is really talking to.
+   */
+  const [pendingEnvironment, setPendingEnvironment] = useState<AssistantBackendEnvironment | null>(
+    null
+  );
+
+  /**
+   * Which environment write owns the pending slot, tracked synchronously.
+   *
+   * `disabled` on the picker is a DOM courtesy, not a lock — it is enforced by the
+   * rendered control and bypassed by anything programmatic. Without a token, an earlier
+   * write's `finally` would clear the pending value out from under a later one, leaving
+   * the picker showing a stored value while a different write was still in flight.
+   * A ref rather than state because it has to be true the instant the click is handled,
+   * not on the next render.
+   */
+  const environmentWriteToken = useRef(0);
+
+  const setBackendEnvironment = useCallback(
+    (value: AssistantBackendEnvironment) => {
+      const token = ++environmentWriteToken.current;
+      setPendingEnvironment(value);
+      void persist({ backendEnvironment: value }).finally(() => {
+        // Only the write that still owns the slot may release it.
+        if (environmentWriteToken.current === token) setPendingEnvironment(null);
+      });
+    },
+    [persist]
+  );
 
   const setTier = (value: string) => {
     if (value !== "workbench" && value !== "action" && value !== "system") return;
@@ -745,10 +858,12 @@ export function DaintreeAssistantSettingsTab() {
   // still captures the in-flight value.
   useSettingsTabFlush(
     "assistant",
-    () => {
+    async () => {
       const pending = pendingCustomArgsRef.current;
       if (pending === null) return;
-      return persist({ customArgs: pending });
+      // The settings persist() answers with are of no use to a flush — the dialog is
+      // closing, and the only thing the caller needs is the write finishing.
+      await persist({ customArgs: pending });
     },
     isCustomArgsDirty
   );
@@ -819,6 +934,36 @@ export function DaintreeAssistantSettingsTab() {
           </p>
         </div>
       </header>
+
+      {/* Before everything else, because it changes what all of it means: the settings
+          below configure an engine that will not start here. The picker is on this page,
+          so no action is needed — the description already names what to do with it. */}
+      {!platformSupport.supported && (
+        <InlineStatusBanner
+          severity="warning"
+          icon={Info}
+          title={platformSupport.reason}
+          description={platformSupport.detail}
+          role="status"
+          ariaLive="polite"
+        />
+      )}
+
+      {/* Account — first, because none of the settings below matter to someone who
+          cannot sign in. */}
+      {/* Withheld where the engine cannot run. Every control in it shells out to that
+          binary, and on Windows the credential lock is the same unported one — so a
+          sign-in opens a browser, completes, and then fails to persist. Offering an
+          account for an engine that cannot start is the same over-promise this whole
+          section was just corrected for. */}
+      {platformSupport.supported && (
+        <AssistantAccountSection
+          backendEnvironment={settings.backendEnvironment}
+          pendingBackendEnvironment={pendingEnvironment}
+          onBackendEnvironmentChange={setBackendEnvironment}
+          settingsLoading={loading}
+        />
+      )}
 
       {/* Agent */}
       <SettingsSection
@@ -1133,6 +1278,11 @@ export function DaintreeAssistantSettingsTab() {
           </button>
           {advancedDiagnosticsOpen && (
             <div className="flex flex-col gap-4 px-3 pb-3 pt-1">
+              {/* FIRST, because it is the question everything below assumes an answer
+                  to: which backend is this actually talking to, and is it one. An audit
+                  log is only informative once you know the session it describes reached
+                  the endpoint you meant. */}
+              <AssistantDiagnosticsPanel />
               <McpAuditLogViewer
                 records={auditRecords}
                 turnRecords={turnRecords}

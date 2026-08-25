@@ -10,7 +10,15 @@ import {
   useSyncExternalStore,
 } from "react";
 import { useShallow } from "zustand/react/shallow";
-import { ExternalLink, MessageCircle, Settings2, ShieldAlert, Sparkles, X } from "lucide-react";
+import {
+  ExternalLink,
+  Info,
+  MessageCircle,
+  Settings2,
+  ShieldAlert,
+  Sparkles,
+  X,
+} from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { XtermAdapter } from "@/components/Terminal/XtermAdapter";
@@ -26,6 +34,8 @@ import { terminalClient } from "@/clients";
 import { logWarn } from "@/utils/logger";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { DAINTREE_ASSISTANT_AGENT_ID } from "@shared/config/agentRegistry";
+import { assistantPlatformSupport } from "@shared/config/assistantPlatform";
+import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
 import { HelpIntroBanner } from "./HelpIntroBanner";
 import { HelpPanelHeader } from "./HelpPanelHeader";
@@ -272,6 +282,9 @@ export function HelpPanel({
    */
   const useNativeAssistant =
     (agentId ?? preferredAgentId ?? DAINTREE_ASSISTANT_AGENT_ID) === DAINTREE_ASSISTANT_AGENT_ID;
+
+  /** Whether the built-in engine can run here — see `assistantPlatformSupport`. */
+  const platformSupport = assistantPlatformSupport();
 
   const terminal = usePanelStore((s) => (terminalId ? s.panelsById[terminalId] : undefined));
   const terminalPty = terminal && isPtyPanel(terminal) ? terminal : undefined;
@@ -1722,7 +1735,26 @@ export function HelpPanel({
           onStartNewSession={handleNewSession}
           onDismissSessionRevoked={dismissSessionRevoked}
         />
-        {useNativeAssistant ? (
+        {useNativeAssistant && !platformSupport.supported ? (
+          <div className="flex-1 min-h-0 overflow-y-auto p-3">
+            <InlineStatusBanner
+              severity="warning"
+              icon={Info}
+              title={platformSupport.reason}
+              description={platformSupport.detail}
+              role="status"
+              ariaLive="polite"
+              // The one thing that actually resolves this. There is no agent picker in
+              // this panel's header, so "use another agent" without a route to choosing
+              // one is advice the user cannot act on.
+              action={{
+                id: "open-assistant-settings",
+                label: "Open assistant settings",
+                onClick: handleOpenAgentSettings,
+              }}
+            />
+          </div>
+        ) : useNativeAssistant ? (
           <div className="flex-1 relative min-h-0">
             <AssistantPanel
               projectId={activeWorkspaceId}

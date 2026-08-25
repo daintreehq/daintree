@@ -1631,6 +1631,8 @@ export interface IpcEventMap {
    * multi-window and each project has its own renderer.
    */
   "assistant-host:event": import("./assistantHost.js").AssistantHostEvent;
+  /** One validated progress event from an in-flight assistant sign-in. */
+  "assistant-account:login-progress": import("./assistantAccount.js").AssistantAccountLoginProgress;
   /** Frames were lost in transit; the transcript is incomplete from this point. */
   "assistant-host:gap": import("./assistantHostIpc.js").AssistantHostGapPayload;
   "assistant-host:exit": import("./assistantHostIpc.js").AssistantHostExitPayload;

@@ -1,180 +1,200 @@
 import { describe, it, expect } from "vitest";
-import { resolveBackendUrl } from "../AssistantHostService.js";
+import { resolveBackendUrl } from "../resolveBackendUrl.js";
+import {
+  ASSISTANT_BACKEND_ENVIRONMENTS,
+  SELECTABLE_ASSISTANT_BACKEND_ENVIRONMENTS,
+  DEFAULT_ASSISTANT_BACKEND_ENVIRONMENT,
+  assistantBackendEnvironment,
+  canonicalAssistantBackendEnvironment,
+  isAssistantBackendEnvironment,
+  isSelectableAssistantBackendEnvironment,
+} from "../../../../shared/config/assistantBackend.js";
 import { readFileSync } from "node:fs";
 import path from "node:path";
 
 /**
- * The assistant engine must not silently reach the DEPLOYED backend.
+ * The assistant engine must not reach a paid backend by ACCIDENT.
  *
- * The engine's own default endpoint is `https://assistant.daintree.org`. If Daintree
- * spawns it without setting `DAINTREE_BACKEND_URL`, an unconfigured dev machine — or a
- * CI run, or a test that forgot to isolate itself — talks to production and spends
- * real money on model calls. Nothing fails; a turn just quietly succeeds against the
- * wrong endpoint, which is the failure mode that costs money rather than time.
+ * The original form of this guard was absolute: no value could move the endpoint off
+ * this machine, because the panel was pre-release and unauthenticated. Sign-in changed
+ * that — a remote backend is now the point — so the guard changed shape rather than
+ * going away.
  *
- * These are source-level assertions rather than a spawn test on purpose: the property
- * being protected is "this file always sets the variable", and reading the source
- * proves that without needing an engine binary, a backend, or a live session.
+ * What it protects now is the distinction between a choice and an accident:
+ *
+ *   - A CHOICE, made in Settings, may select any environment we operate.
+ *   - `DAINTREE_BACKEND_URL` may still only move the endpoint within loopback, because
+ *     an inherited variable is exactly the accident this was written for. It is the one
+ *     input that arrives from a shell exported months ago, a parent process, or a CI
+ *     job nobody is looking at.
+ *   - The DEFAULT, with neither of those, is still local. An install that has never
+ *     been configured spends nobody's money.
+ *
+ * The source-level assertions are deliberate: the property is "this file always sets
+ * the variable", and reading the source proves that without needing an engine binary, a
+ * backend, or a live session.
  */
 
 const SERVICE = path.resolve(__dirname, "../AssistantHostService.ts");
 const source = readFileSync(SERVICE, "utf8");
 
-/**
- * The source with comments removed.
- *
- * The file legitimately NAMES the deployed endpoint while explaining why it is not the
- * default, so a scan of the raw text would forbid the explanation along with the
- * behaviour. Stripping comments is also more honest than trying to detect string
- * literals with a regex: prose contains apostrophes, and "engine's" opens a quote that
- * never closes.
- */
-const code = source.replace(/\/\*[\s\S]*?\*\//g, "").replace(/^\s*\/\/.*$/gm, "");
+const REMOTES = ASSISTANT_BACKEND_ENVIRONMENTS.filter((e) => e.remote);
 
 describe("assistant backend pinning", () => {
   it("sets DAINTREE_BACKEND_URL on every spawn", () => {
-    // Without this line the engine falls back to its own default, which is deployed.
+    // Without this line the engine falls back to its OWN default, which is deployed —
+    // so an unset variable would reach production rather than the local default.
     expect(source).toContain("DAINTREE_BACKEND_URL:");
   });
 
-  it("defaults to a loopback endpoint, never the deployed one", () => {
-    const match = /const DEFAULT_BACKEND_URL = "([^"]+)"/.exec(source);
-    expect(match, "DEFAULT_BACKEND_URL is no longer declared").not.toBeNull();
+  it("resolves the endpoint through the shared resolver, not its own copy", () => {
+    // Two resolvers is how the engine and the `auth` commands drifted apart in the
+    // first place. There must be exactly one, and this file must use it.
+    expect(source).toContain("resolveBackendUrl(");
+    expect(source).not.toContain("const DEFAULT_BACKEND_URL");
+  });
 
-    const url = new URL(match![1]!);
-    // Loopback by construction rather than by string match: `localhost`, `127.0.0.1`
-    // and `[::1]` are all acceptable, and anything else is not.
+  it("defaults to a local endpoint with nothing configured", () => {
+    const url = new URL(resolveBackendUrl(undefined, undefined));
     const loopback =
       url.hostname === "localhost" ||
       url.hostname === "127.0.0.1" ||
       url.hostname === "[::1]" ||
       url.hostname === "::1";
-    expect(loopback, `DEFAULT_BACKEND_URL points at ${url.hostname}, which is not loopback`).toBe(
-      true
-    );
+    expect(loopback, `the default points at ${url.hostname}, which is not loopback`).toBe(true);
   });
 
-  it("never uses the deployed backend as a value", () => {
-    // Checked against the comment-stripped source — see `code` above.
-    expect(code).not.toContain("assistant.daintree.org");
+  it("keeps the shipped default environment local", () => {
+    // The constant and the table have to agree; a default that named a remote would
+    // move every unconfigured install onto it at once.
+    expect(assistantBackendEnvironment(DEFAULT_ASSISTANT_BACKEND_ENVIRONMENT).remote).toBe(false);
   });
 
-  describe("resolveBackendUrl", () => {
-    it("lets an override move the endpoint around inside loopback", () => {
+  describe("DAINTREE_BACKEND_URL", () => {
+    it("moves the endpoint around inside loopback", () => {
       // Port, scheme and path are a developer's business — a second backend on another
-      // port is a normal thing to run. Leaving the machine is not. Values come back in
-      // the URL parser's canonical form, which is why the trailing slash appears.
+      // port is a normal thing to run. Values come back in the URL parser's canonical
+      // form, which is why the trailing slash appears.
       expect(resolveBackendUrl("http://localhost:9999")).toBe("http://localhost:9999/");
       expect(resolveBackendUrl("http://127.0.0.1:8474/api")).toBe("http://127.0.0.1:8474/api");
       expect(resolveBackendUrl("https://localhost:8473")).toBe("https://localhost:8473/");
       expect(resolveBackendUrl("http://[::1]:8473")).toBe("http://[::1]:8473/");
     });
 
-    it("refuses an off-box override", () => {
-      // The panel is pre-release and UNAUTHENTICATED: every prompt, path and command it
-      // carries goes to whatever this names. A stray DAINTREE_BACKEND_URL exported in a
-      // shell months ago, or inherited from a parent process, must not be able to route
-      // that off-box without anyone touching this feature.
-      for (const remote of [
-        "https://assistant.daintree.org",
-        "https://staging.example.test",
+    it("cannot reach off-box, not even an environment we operate", () => {
+      // The asymmetry that is the whole point. A variable is set by accident constantly;
+      // a settings picker is not. So the variable keeps its original ceiling even for
+      // endpoints a CHOICE is allowed to select — otherwise a stray export would still
+      // be able to start spending money.
+      const offBox = [
+        ...REMOTES.map((e) => e.url),
+        "https://elsewhere.example.test",
         "http://192.168.1.50:8473",
         "http://evil.test:8473",
         // Not loopback: a bare hostname that merely CONTAINS one.
         "http://localhost.evil.test:8473",
-      ]) {
-        expect(new URL(resolveBackendUrl(remote)).hostname).toBe("127.0.0.1");
+      ];
+      for (const remote of offBox) {
+        expect(new URL(resolveBackendUrl(remote)).hostname, remote).toBe("127.0.0.1");
+      }
+    });
+
+    it("falls back to the CHOSEN environment when refused, not to local", () => {
+      // Someone on Staging who also has a stray variable exported should stay on
+      // Staging. Dropping them to loopback would look like the setting being ignored.
+      const staging = assistantBackendEnvironment("staging").url;
+      expect(resolveBackendUrl("http://evil.test:8473", "staging")).toBe(staging);
+      expect(resolveBackendUrl("not a url", "staging")).toBe(staging);
+    });
+
+    it("treats blank as absent rather than passing it through", () => {
+      // The engine reads an empty value as unset and falls through to its own deployed
+      // default, so forwarding "" would quietly undo the choice — on the one input a
+      // shell most easily produces.
+      for (const blank of ["", "   ", undefined]) {
+        expect(resolveBackendUrl(blank, "local")).toBe(assistantBackendEnvironment("local").url);
       }
     });
 
     it("normalises the IPv4 shorthands rather than passing them through", () => {
-      // These are all 127.0.0.1 written differently, and the URL parser resolves them
-      // before the check runs — so they are accepted. But the CANONICAL form is what
-      // gets handed on, because the engine is a second parser and Go's `net.ParseIP`
-      // does not recognise the decimal or hex spelling as loopback. Passing the raw
-      // string through meant a value this function had just approved as local could be
-      // sent through an inherited HTTP_PROXY on the far side.
-      expect(resolveBackendUrl("http://2130706433:8473")).toBe("http://127.0.0.1:8473/");
-      expect(resolveBackendUrl("http://0x7f000001:8473")).toBe("http://127.0.0.1:8473/");
-      // A second local backend on another 127/8 address is an ordinary setup.
-      expect(resolveBackendUrl("http://127.0.0.2:8473")).toBe("http://127.0.0.2:8473/");
-      // Same name, absolutely qualified.
-      expect(new URL(resolveBackendUrl("http://localhost.:8473")).hostname).toBe("localhost.");
-      // Case is the parser's business, not ours.
-      expect(resolveBackendUrl("http://LOCALHOST:8473")).toBe("http://localhost:8473/");
+      // WHATWG resolves these to 127.0.0.1; Go's net.ParseIP does not recognise the
+      // decimal form at all, so the engine would call itself non-loopback and be free to
+      // send the request through an inherited HTTP_PROXY. Handing on the canonical form
+      // means both parsers see the same address.
+      expect(new URL(resolveBackendUrl("http://2130706433:8473")).hostname).toBe("127.0.0.1");
+      expect(new URL(resolveBackendUrl("http://0x7f000001:8473")).hostname).toBe("127.0.0.1");
     });
 
-    it("is not fooled by a host that only looks like loopback", () => {
-      // Userinfo is the oldest trick in this family: the loopback address here is a
-      // USERNAME, and the request would go to evil.test. The URL parser puts it in the
-      // right field, which is why the check reads `hostname` rather than the string.
-      for (const spoof of [
-        "http://127.0.0.1@evil.test/",
-        "http://localhost@evil.test/",
-        "http://localhost.evil.test:8473",
-        "http://evil.test/?h=127.0.0.1",
-        "http://evil.test/127.0.0.1",
-        "http://evil.test#localhost",
-        // Not in 127/8, whatever it reads like.
-        "http://127.evil.test:8473",
-        "http://1.2.3.4:8473",
-      ]) {
-        expect(new URL(resolveBackendUrl(spoof)).hostname, spoof).toBe("127.0.0.1");
-      }
-    });
-
-    it("falls back to loopback when the variable is unset", () => {
-      expect(new URL(resolveBackendUrl(undefined)).hostname).toBe("127.0.0.1");
-    });
-
-    it("treats a blank value as unset rather than forwarding it", () => {
-      // The regression this exists for: `??` guards only null and undefined, so an
-      // empty or whitespace value reached the engine, which reads empty as UNSET and
-      // falls through to the stored preference and then to its deployed default. The
-      // pin came undone on the one input a shell most easily produces.
-      for (const blank of ["", "   ", "\t", "\n"]) {
-        expect(new URL(resolveBackendUrl(blank)).hostname).toBe("127.0.0.1");
-      }
-    });
-
-    it("falls back rather than forwarding an unparseable value", () => {
-      // A typo is not a deliberate override, and passing it through lands the engine on
-      // its own deployed default — the one outcome this pin exists to prevent.
-      for (const junk of ["not a url", "127.0.0.1:8473", "://", "http://"]) {
-        expect(new URL(resolveBackendUrl(junk)).hostname).toBe("127.0.0.1");
-      }
-    });
-
-    it("trims surrounding whitespace off a real override", () => {
-      expect(resolveBackendUrl("  http://localhost:9999  ")).toBe("http://localhost:9999/");
+    it("reads the hostname the parser found, not the one the string suggests", () => {
+      // `http://127.0.0.1@evil.test/` has hostname `evil.test` — userinfo, not a host.
+      expect(new URL(resolveBackendUrl("http://127.0.0.1@evil.test/")).hostname).toBe("127.0.0.1");
     });
   });
 
-  it("sends no credential of its own, and strips an inherited one", () => {
-    // There is no sign-in: the backend holds its own upstream credential and returns an
-    // anonymous principal. Daintree must not start inventing one — a bearer minted here
-    // would be spent against whatever account it belongs to, invisibly.
-    expect(code).not.toContain("Authorization");
+  describe("a deliberate choice", () => {
+    for (const env of ASSISTANT_BACKEND_ENVIRONMENTS) {
+      it(`reaches ${env.label}`, () => {
+        expect(resolveBackendUrl(undefined, env.id)).toBe(env.url);
+      });
+    }
 
-    // Nor may it PASS ONE THROUGH. `DAINTREE_API_KEY` is the engine's upstream bearer
-    // (vendor/daintree-assistant/internal/config/config.go), and the only way it can be
-    // set here is by inheritance from the shell that launched Electron. An inherited key
-    // does not fail — it succeeds, billed to whoever it belongs to, with nothing on
-    // screen to say the session stopped being anonymous.
-    //
-    // The earlier version of this test asserted the name was ABSENT from the file, and
-    // passed for exactly the wrong reason: the key was never mentioned because it was
-    // never removed.
-    const stripped = /const ENGINE_CONTROLLED_ENV = \[([\s\S]*?)\] as const;/.exec(source);
-    expect(stripped, "ENGINE_CONTROLLED_ENV is no longer declared").not.toBeNull();
-    expect(stripped![1]).toContain("DAINTREE_API_KEY");
-  });
+    it("sends every remote over https", () => {
+      // Prompts, file paths and commands travel on this. The CLI refuses a plaintext
+      // remote anyway; naming it here means a table edit cannot quietly introduce one.
+      for (const env of REMOTES) {
+        expect(new URL(env.url).protocol, env.label).toBe("https:");
+      }
+    });
 
-  it("strips control variables case-insensitively", () => {
-    // Windows environment variables are case-insensitive: a parent that exported
-    // `daintree_assistant_auto_approve=1` reaches process.env under that spelling, an
-    // exact-match filter keeps it, and the child reads it under any casing. The one
-    // variable where that matters most is the one that turns off every confirmation.
-    expect(code).toContain("toUpperCase()");
+    it("never resolves to the website origin", () => {
+      // `staging.daintree.org` is the marketing and account site. It serves none of
+      // `/v1/daintree/*`, `/version` or `/readyz`, so an assistant pointed at it gets
+      // HTML where JSON was expected — which surfaces as a parse failure rather than as
+      // "wrong host", and is therefore worth naming here rather than diagnosing later.
+      // Browser destinations come from the CLI's own validated manifest, not this table.
+      for (const env of ASSISTANT_BACKEND_ENVIRONMENTS) {
+        expect(new URL(env.url).hostname, env.label).not.toBe("staging.daintree.org");
+      }
+    });
+
+    it("gives every selectable environment its own endpoint", () => {
+      // Two options resolving to one URL is a picker that cannot mean what it says: the
+      // choice reads as consequential and is not. A retired name keeps its row so a
+      // stored value still resolves, but it stops being offered.
+      const urls = SELECTABLE_ASSISTANT_BACKEND_ENVIRONMENTS.map((e) => e.url);
+      // The non-empty check is not decoration: an empty list has no duplicates either,
+      // so without it this passes for a table with nothing left to choose from.
+      expect(urls.length).toBeGreaterThan(1);
+      expect(new Set(urls).size).toBe(urls.length);
+    });
+
+    /**
+     * The migration property, pinned against LITERALS rather than the table.
+     *
+     * "production" is a value sitting in real settings files today, and
+     * `https://assistant.daintree.org` is the endpoint it has always meant. Written out
+     * here because reading both sides from the table would compare it to itself: the
+     * assertion would survive deleting the row (an empty loop passes) and survive
+     * repointing it (both sides move together), which are precisely the two edits that
+     * would move somebody's prompts without telling them.
+     */
+    it("still points a stored 'production' at the endpoint it has always meant", () => {
+      expect(isAssistantBackendEnvironment("production")).toBe(true);
+      expect(resolveBackendUrl(undefined, "production")).toBe("https://assistant.daintree.org");
+      // Not offered any more — but canonicalised onto a live choice that resolves
+      // identically, so the picker is never handed a value it has no option for.
+      expect(isSelectableAssistantBackendEnvironment("production")).toBe(false);
+      expect(canonicalAssistantBackendEnvironment("production")).toBe("staging");
+      expect(resolveBackendUrl(undefined, "staging")).toBe("https://assistant.daintree.org");
+    });
+
+    it("falls back to the local default for an unrecognised environment", () => {
+      // A hand-edited or downgraded settings file is the input here. It must not stop
+      // the assistant launching, and it must not launch it somewhere remote.
+      // @ts-expect-error deliberately outside the union — this is the corruption case.
+      expect(resolveBackendUrl(undefined, "somewhere-else")).toBe(
+        assistantBackendEnvironment(DEFAULT_ASSISTANT_BACKEND_ENVIRONMENT).url
+      );
+    });
   });
 });

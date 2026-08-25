@@ -3,6 +3,10 @@ import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { AssistantHostProcess } from "./AssistantHostProcess.js";
 import { resolveAssistantBinary } from "./resolveAssistantBinary.js";
+import { resolveBackendUrl } from "./resolveBackendUrl.js";
+import { assistantPlatformSupport } from "../../../shared/config/assistantPlatform.js";
+import { assistantChildEnv } from "./assistantChildEnv.js";
+import { getHelpAssistantSettings } from "../../ipc/handlers/helpAssistant.js";
 import { helpSessionService } from "../HelpSessionService.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import {
@@ -35,7 +39,6 @@ export interface StartSessionOptions {
   windowId: number;
   /** The renderer that owns this session. Events are pinned to it. */
   webContentsId: number;
-  tier?: string;
 }
 
 interface LiveSession {
@@ -43,110 +46,28 @@ interface LiveSession {
   projectId: string;
   host: AssistantHostProcess;
   webContentsId: number;
-}
-
-/**
- * The assistant backend the engine talks to.
- *
- * Pinned EXPLICITLY, and to localhost, for two reasons. The engine's own default is
- * the deployed `https://assistant.daintree.org`, so inheriting the environment means
- * an unconfigured dev machine — or a test run — silently reaches production and spends
- * real money on model calls. And "which endpoint is this talking to" should be a
- * decision this file makes visibly, not an accident of whatever is exported in the
- * shell that happened to launch Electron.
- *
- * `DAINTREE_BACKEND_URL` moves it, but only within loopback — see `resolveBackendUrl`.
- * Change this constant when the native panel is ready to face the deployed backend by
- * default.
- */
-const DEFAULT_BACKEND_URL = "http://127.0.0.1:8473";
-
-/** Hostnames that mean "this machine". `[::1]` arrives bracketed from a URL. */
-const LOOPBACK_HOSTS = new Set(["localhost", "127.0.0.1", "::1", "[::1]"]);
-
-/**
- * Whether a URL hostname names this machine.
- *
- * Read AFTER the URL parser, which is what makes this safe to do by name: WHATWG
- * normalises the IPv4 shorthands an allowlist would otherwise have to know about
- * (`http://2130706433/` and `http://0x7f000001/` both arrive here as `127.0.0.1`), and
- * it puts userinfo where it belongs — `http://127.0.0.1@evil.test/` has hostname
- * `evil.test`, so the oldest trick in this family is answered by asking the parser
- * rather than by matching the string.
- *
- * The whole 127.0.0.0/8 block counts, not just `.1`: binding a second local backend on
- * `127.0.0.2` is an ordinary thing to do and there is no reason to refuse it. Anything
- * this does not recognise — a trailing-dot FQDN, an IPv4-mapped IPv6 literal — is
- * REFUSED rather than guessed at. Refusing is a fallback to the default, so the cost of
- * being wrong in that direction is an inconvenience, and in the other it is a prompt
- * leaving the machine.
- */
-function isLoopbackHost(hostname: string): boolean {
-  const host = hostname.toLowerCase();
-  if (LOOPBACK_HOSTS.has(host)) return true;
-  // A trailing dot is the same name, absolutely qualified.
-  if (host.endsWith(".") && LOOPBACK_HOSTS.has(host.slice(0, -1))) return true;
-  const v4 = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(host);
-  if (!v4) return false;
-  const octets = v4.slice(1).map(Number);
-  if (octets.some((n) => n > 255)) return false;
-  return octets[0] === 127;
-}
-
-/**
- * The backend endpoint for a spawned engine — LOOPBACK ONLY.
- *
- * An override still wins for the parts that are a developer's business: the port, the
- * scheme, a path prefix. What it cannot do is leave the machine. The native panel is
- * pre-release and unauthenticated, and every prompt, file path and command it carries
- * goes to whatever this names — so a stray `DAINTREE_BACKEND_URL` exported in a shell
- * months ago, or inherited from a parent process, must not be able to silently route
- * that off-box. Loopback is the pin; the override moves it around inside the pin.
- *
- * A rejected value falls back to the default rather than failing the launch. The
- * assistant still works, on the backend it was always supposed to use, and the reason
- * is on the console — which is the right trade for a setting nobody deliberately aimed
- * off-box in the first place.
- *
- * A blank value is treated as ABSENT rather than passed through. The engine reads an
- * empty `DAINTREE_BACKEND_URL` as unset and falls through to the stored `/backend`
- * preference and then to its own deployed default, so forwarding `""` would quietly
- * undo the pin — and do it on the one input a shell most easily produces.
- */
-export function resolveBackendUrl(raw: string | undefined): string {
-  const trimmed = raw?.trim();
-  if (!trimmed) return DEFAULT_BACKEND_URL;
-  let parsed: URL;
-  try {
-    parsed = new URL(trimmed);
-  } catch {
-    // Unparseable is not a deliberate override — it is a typo, and passing it through
-    // lands the engine on its deployed default, which is the one outcome to avoid.
-    console.warn(
-      `[assistant-host] Ignoring unparseable DAINTREE_BACKEND_URL ${JSON.stringify(trimmed)}; using ${DEFAULT_BACKEND_URL}.`
-    );
-    return DEFAULT_BACKEND_URL;
-  }
-  if (!isLoopbackHost(parsed.hostname)) {
-    console.warn(
-      `[assistant-host] DAINTREE_BACKEND_URL points off-box (${parsed.hostname}); the assistant is loopback-only while it is unauthenticated. Using ${DEFAULT_BACKEND_URL}.`
-    );
-    return DEFAULT_BACKEND_URL;
-  }
-  // The NORMALISED serialisation, not the string we were handed.
-  //
-  // Two runtimes read this value and they do not agree on the exotic spellings.
-  // `http://2130706433/` is loopback to the WHATWG parser used above, which resolves it
-  // to 127.0.0.1 — but Go's `net.ParseIP` does not recognise the decimal form at all, so
-  // the engine's own "is this loopback?" check says no and its client is free to send
-  // the request through an inherited `HTTP_PROXY`. Validated here, refused off-box, and
-  // then quietly proxied off-box anyway. Handing on the canonical form closes that gap:
-  // both parsers see the same address.
-  return parsed.href;
+  /**
+   * The window that owns this session.
+   *
+   * Recorded alongside the WebContents id because the two are lost at different moments
+   * and by different code. A view is evicted or crashes; a window is closed. Both are
+   * "the owner is gone", and a session reachable by only one of them survives the other.
+   */
+  windowId: number;
 }
 
 /** The roster id the MCP tier policy is keyed on for this surface. */
 const ASSISTANT_AGENT_ID = "daintree-assistant";
+
+/**
+ * How long shutdown waits for an engine to exit on its own before killing it.
+ *
+ * Short, and deliberately shorter than the engine's own teardown can take. Electron's
+ * entire main-process cleanup budget is ten seconds; spending most of it waiting for a
+ * graceful exit would starve everything else that has to run before the app dies, and
+ * the fallback — a signal — is not a bad outcome for a process being torn down anyway.
+ */
+const SHUTDOWN_GRACE_MS = 2_000;
 
 /**
  * engine sessionId → the help-session id holding its MCP bearer.
@@ -168,52 +89,6 @@ function revokeHelpSessionFor(sessionId: string): void {
 }
 
 /**
- * Assistant-control variables stripped from the inherited environment.
- *
- * `process.env` is spread into the child so it keeps PATH, HOME and the rest of a
- * normal environment. But these particular names are the engine's SAFETY surface — its
- * control plane, its bearer, its tier, and the switch that runs mutating tools with no
- * confirmation at all. Inheriting them means whatever is exported in the shell that
- * launched Electron silently outranks what Daintree decided: a stale `DAINTREE_MCP_URL`
- * survives a provisioning failure and points the engine at a dead endpoint, and an
- * ambient `DAINTREE_ASSISTANT_AUTO_APPROVE=1` turns approvals off for a user whose
- * settings say otherwise. Every one of them is re-set below from an authoritative
- * source, or deliberately left unset.
- */
-const ENGINE_CONTROLLED_ENV = [
-  "DAINTREE_MCP_URL",
-  "DAINTREE_MCP_TOKEN",
-  "DAINTREE_ASSISTANT_TIER",
-  "DAINTREE_ASSISTANT_AUTO_APPROVE",
-  "DAINTREE_ASSISTANT_DEBUG_LOG",
-  "DAINTREE_ASSISTANT_LOG_DIR",
-  "DAINTREE_PROJECT_ID",
-  "DAINTREE_WINDOW_ID",
-  // The engine's UPSTREAM credential (internal/config/config.go), sent as the backend
-  // bearer. There is no sign-in here and Daintree mints nothing, so the only way this
-  // can be set is by inheritance — and an inherited key does not fail, it succeeds:
-  // turns go through, billed to whoever the key belongs to, with nothing on screen to
-  // say the session stopped being anonymous. Stripped and never re-set, which is what
-  // "zero authentication" has to mean if it is to mean anything.
-  "DAINTREE_API_KEY",
-  // The endpoint. Not inherited raw — `resolveBackendUrl` decides it below, and letting
-  // the parent's value through would sit in the environment beside the resolved one.
-  "DAINTREE_BACKEND_URL",
-] as const;
-
-/**
- * Names to strip, upper-cased once.
- *
- * Windows environment variables are case-INSENSITIVE: a parent that exported
- * `daintree_assistant_auto_approve=1` reaches `process.env` under that spelling, an
- * exact-match filter keeps it, and the child then reads it under any casing. The one
- * variable where that matters most is the one that turns off every confirmation.
- */
-const ENGINE_CONTROLLED_ENV_UPPER = new Set<string>(
-  ENGINE_CONTROLLED_ENV.map((name) => name.toUpperCase())
-);
-
-/**
  * Where native-engine debug logs are written: `~/.daintree/logs`.
  *
  * The ENGINE's own default, restated here rather than left unset, so the value is
@@ -232,14 +107,28 @@ function assistantLogDir(): string {
 }
 
 /**
+ * The engine's own tier vocabulary (`internal/domain/enums.go`). Anything outside this
+ * set is either a refused handshake or a silent re-tiering at the far end.
+ */
+type EngineTier = "supervisor" | "operator" | "system";
+
+/**
  * Daintree's Help tier → the engine's own tier vocabulary.
  *
  * Two separate ladders that happen to share one name. The engine defaults an UNSET
  * tier to its widest (`system`), so failing to map this is not a missing feature — it
  * silently runs every native session at maximum authority regardless of what the
  * user's assistant settings say.
+ *
+ * The result is never blank. The engine's descriptor parser rejects an empty `tier`
+ * outright, so "say nothing and let the engine decide" is not an option on this side
+ * of the wire even when it would resolve to the same value.
+ *
+ * The parameter stays a plain `string` because the runtime input is a STORED value that
+ * a hand-edited or downgraded settings file is free to make nonsense of; the return type
+ * is narrow so that a future edit to the mapping has to be a deliberate one.
  */
-function engineTierFor(helpTier: string): string {
+export function engineTierFor(helpTier: string): EngineTier {
   switch (helpTier) {
     case "workbench":
       return "supervisor";
@@ -253,17 +142,6 @@ function engineTierFor(helpTier: string): string {
   }
 }
 
-/** The environment a child engine starts with, with inherited control vars removed. */
-function baseEngineEnv(): Record<string, string> {
-  const env: Record<string, string> = {};
-  for (const [key, value] of Object.entries(process.env)) {
-    if (value === undefined) continue;
-    if (ENGINE_CONTROLLED_ENV_UPPER.has(key.toUpperCase())) continue;
-    env[key] = value;
-  }
-  return env;
-}
-
 export class AssistantHostService {
   /** projectId → live session. The one-per-project rule lives in this keying. */
   private readonly byProject = new Map<string, LiveSession>();
@@ -271,6 +149,31 @@ export class AssistantHostService {
   private readonly bySession = new Map<string, LiveSession>();
   /** projectId → tail of the in-flight start chain. See `start`. */
   private readonly startQueue = new Map<string, Promise<unknown>>();
+  /**
+   * Set once the app is shutting down. New starts are refused from here on.
+   *
+   * Without it, `shutdown()` can take a snapshot of the live sessions while a start is
+   * still queued or awaiting provisioning — and that start then spawns an engine after
+   * the teardown pass has already run, into a process that is about to exit. The child
+   * outlives Daintree holding the project's state lease, and the next launch waits for
+   * a lease held by nothing anyone can see.
+   */
+  private closing = false;
+  /**
+   * Every host that has been SPAWNED and has not yet exited — including ones already
+   * draining.
+   *
+   * `bySession` is not enough to tear down from, and the gap is the whole failure this
+   * phase is about. `stop()` removes a session from both maps immediately, while
+   * `dispose()` only writes a shutdown frame and arms an UNREF'D kill backstop. So an
+   * engine displaced by a restart, evicted with its view, or dropped by a failed start
+   * is gone from the maps while its process is still very much alive — invisible to a
+   * teardown that snapshots `bySession`, and orphaned when `app.exit()` discards the
+   * timer that was going to kill it.
+   *
+   * Entries are removed when the child actually exits, not when Daintree stops caring.
+   */
+  private readonly spawnedHosts = new Set<AssistantHostProcess>();
 
   /**
    * Starts an engine for a project, displacing any existing one.
@@ -281,6 +184,17 @@ export class AssistantHostService {
    * never answers.
    */
   async start(opts: StartSessionOptions): Promise<AssistantHostStartResult> {
+    if (this.closing) throw new Error("Daintree is shutting down");
+    // Refused here rather than spawned and left to fail: the engine takes its project
+    // lease before opening the database, through a lock with no Windows port, so the
+    // child would boot and die with `ipc: file locks are not supported on this
+    // platform`. Defence in depth — the panel does not offer the launch — but reachable
+    // by direct IPC, and cheap. See `assistantPlatformSupport`.
+    //
+    // `process.platform` explicitly: this runs in MAIN, where it is the authority, and
+    // the shared helper's renderer fallback has no business deciding it here.
+    const platform = assistantPlatformSupport(process.platform);
+    if (!platform.supported) throw new Error(`${platform.reason}. ${platform.detail}`);
     // Serialized per project. `start` awaits twice — the displacement grace period and
     // the engine's own readiness — and the one-per-project invariant lives in a plain
     // Map, so two overlapping starts could both clear the project entry and then both
@@ -321,8 +235,25 @@ export class AssistantHostService {
     // `provisionSession` throws a TYPED reason when the MCP server is not ready, and
     // swallowing it is precisely the silent-degrade this codebase already fixed once
     // for the PTY path. The reason is carried back to the renderer, which says so.
-    let mcp: { url: string | null; token: string; tier: string } | null = null;
+    let mcp: { url: string | null; token: string } | null = null;
     let mcpUnavailableReason: string | null = null;
+    /**
+     * The session's tier, in the ENGINE's vocabulary, decided exactly once.
+     *
+     * There used to be two answers. The descriptor carried the renderer's requested
+     * tier (defaulting to `system`) and the environment carried the provisioned tier
+     * mapped into the engine's ladder (defaulting to `operator` for the shipped
+     * `action` setting) — and the engine compares the two and refuses to boot when
+     * they disagree. So a default install could not start the native assistant at all:
+     * every launch died on `binding-mismatch` before reaching ready.
+     *
+     * Seeded from the stored setting so a failed provision still has an answer, then
+     * overwritten below with the tier the MCP bearer was actually minted at. Reading
+     * the setting again after provisioning would reintroduce a smaller version of the
+     * same bug — a tier changed mid-launch would leave the engine at one authority and
+     * its bearer at another.
+     */
+    let engineTier = engineTierFor(getHelpAssistantSettings().tier);
     // Resolved BEFORE provisioning, from the stored preference, so a launch that fails
     // to provision still writes a trace. Overwritten below with the session's own
     // snapshot on the happy path, which is the same value unless the setting changed in
@@ -344,7 +275,11 @@ export class AssistantHostService {
         // Exempt from the orphan sweep: it binds an engine, not a terminal, and the
         // sweeper would otherwise revoke this bearer 30 minutes into a live session.
         helpSessionService.markEngineSession(provisioned.sessionId);
-        mcp = { url: provisioned.mcpUrl, token: provisioned.token, tier: provisioned.tier };
+        mcp = { url: provisioned.mcpUrl, token: provisioned.token };
+        // The tier the bearer was MINTED at, which is the one the control plane will
+        // actually enforce. Daintree control being switched off does not reach this
+        // branch differently — provisioning still returns a tier, with `mcpUrl` null.
+        engineTier = engineTierFor(provisioned.tier);
         debugLogging = helpSessionService.getDebugLogging(provisioned.token);
         autoApprove = helpSessionService.getBypassPermissions(provisioned.token);
         helpSessionIdBySession.set(sessionId, provisioned.sessionId);
@@ -370,21 +305,30 @@ export class AssistantHostService {
         windowId: opts.windowId,
         projectId: opts.projectId,
         cwd: opts.cwd,
-        tier: opts.tier ?? "system",
+        tier: engineTier,
         protocolVersion: ASSISTANT_HOST_PROTOCOL_VERSION,
       },
       env: {
-        // Inherited MINUS the control variables — see ENGINE_CONTROLLED_ENV.
-        ...baseEngineEnv(),
-        DAINTREE_BACKEND_URL: resolveBackendUrl(process.env.DAINTREE_BACKEND_URL),
+        // Inherited MINUS the control variables — see `assistantChildEnv`, which the
+        // account commands spawn through too so the two cannot diverge.
+        ...assistantChildEnv(),
+        // The environment the USER chose, in Settings. Read at spawn time rather than
+        // captured once, so switching it takes effect on the next session without a
+        // restart — and read here in main, next to the spawn, because the renderer must
+        // never be the thing that says where prompts go.
+        DAINTREE_BACKEND_URL: resolveBackendUrl(
+          process.env.DAINTREE_BACKEND_URL,
+          getHelpAssistantSettings().backendEnvironment
+        ),
         // Nothing from the renderer reaches here, deliberately: a renderer-supplied
         // bag would let a compromised view repoint the engine or hand itself standing
         // approval. Secrets are provisioned in main, next to the service issuing them.
         DAINTREE_PROJECT_ID: opts.projectId,
         DAINTREE_WINDOW_ID: String(opts.windowId),
-        // The tier the SETTINGS decided, mapped into the engine's vocabulary — not the
-        // renderer's requested tier, which only ever reaches the descriptor.
-        DAINTREE_ASSISTANT_TIER: engineTierFor(mcp?.tier ?? "workbench"),
+        // The SAME value the descriptor above carries. The engine cross-checks the two
+        // and treats a disagreement as fatal, so this is one variable holding one
+        // decision rather than two independent derivations that happen to agree.
+        DAINTREE_ASSISTANT_TIER: engineTier,
         // The assistant has no --dangerously-skip-permissions flag; the preference maps
         // to skipping its own confirm sheet, which the engine reads from here at
         // startup. Set only when ON: the variable is stripped from inherited env
@@ -419,6 +363,7 @@ export class AssistantHostService {
         console.warn(`[assistant-host:${sessionId}] ${line}`);
       },
       onExit: (code, signal) => {
+        this.spawnedHosts.delete(host);
         this.bySession.delete(sessionId);
         revokeHelpSessionFor(sessionId);
         if (this.byProject.get(opts.projectId)?.sessionId === sessionId) {
@@ -432,11 +377,16 @@ export class AssistantHostService {
       },
     });
 
+    // Registered the moment it exists, and removed only when the child actually exits
+    // (see `onExit` above) — never when Daintree merely stops tracking the session.
+    this.spawnedHosts.add(host);
+
     const session: LiveSession = {
       sessionId,
       projectId: opts.projectId,
       host,
       webContentsId: opts.webContentsId,
+      windowId: opts.windowId,
     };
     this.byProject.set(opts.projectId, session);
     this.bySession.set(sessionId, session);
@@ -506,7 +456,53 @@ export class AssistantHostService {
     await new Promise((r) => setTimeout(r, 250));
   }
 
-  /** Tears down every session (app shutdown). */
+  /**
+   * Tears down every session and WAITS for the children to go.
+   *
+   * `stop` is not enough on its own at quit. It writes a shutdown frame, closes stdin
+   * and arms an UNREF'D kill backstop — deliberately, so a displaced engine cannot hold
+   * the app open — and then returns immediately. At shutdown that unref'd timer is a
+   * promise the process will not be around to keep: Electron calls `app.exit()` and the
+   * timer dies with it, leaving any engine that did not manage a clean exit orphaned,
+   * still holding its project's state lease. A spawned child is not reaped with its
+   * parent.
+   *
+   * So this asks nicely, waits a bounded moment, and then kills what is left — while
+   * there is still a process alive to do the killing. The budget is small on purpose:
+   * Electron's whole main-process cleanup window is ten seconds, and the engine's own
+   * teardown can want longer than that, so waiting for a graceful exit that may never
+   * come would spend the entire budget here.
+   */
+  async shutdown(graceMs = SHUTDOWN_GRACE_MS): Promise<void> {
+    // Refuse new starts FIRST, before the first await, so nothing can slip in behind
+    // the teardown.
+    this.closing = true;
+
+    // Stop what is live NOW, before draining. The order matters: a start already past
+    // the `closing` check can be sitting on binary resolution, on provisioning, or on
+    // the engine's own 90-second readiness deadline — and draining first would spend
+    // the entire shutdown budget waiting for it while every engine that is already
+    // running went untouched. Ask them all to stop first; the drain is only about
+    // catching whatever spawned during it.
+    for (const session of [...this.bySession.values()]) this.stop(session.sessionId);
+
+    // Then give the in-flight starts a BOUNDED moment to settle. Whatever they spawn
+    // lands in `spawnedHosts` and is stopped in the second pass below. Bounded because
+    // this is a quit: a start that has not finished by now is not going to be waited
+    // for, and its child is reaped by the same pass as everything else.
+    await Promise.race([
+      Promise.allSettled([...this.startQueue.values()]),
+      new Promise((resolve) => setTimeout(resolve, graceMs).unref?.()),
+    ]);
+    for (const session of [...this.bySession.values()]) this.stop(session.sessionId);
+
+    // Wait on every host that has ever been spawned and not yet exited — including the
+    // ones already draining from an earlier displacement or eviction, which the session
+    // maps no longer know about at all.
+    await Promise.all([...this.spawnedHosts].map((host) => host.waitForExit(graceMs)));
+  }
+
+  /** Tears down every session without waiting. Retained for non-shutdown callers. */
   disposeAll(): void {
     for (const sessionId of [...this.bySession.keys()]) this.stop(sessionId);
   }
@@ -541,6 +537,24 @@ export class AssistantHostService {
   stopByWebContents(webContentsId: number): void {
     for (const session of [...this.bySession.values()]) {
       if (session.webContentsId === webContentsId) this.stop(session.sessionId);
+    }
+  }
+
+  /**
+   * Stops every session owned by a window (window closed).
+   *
+   * A linear scan rather than a second index: there is at most one engine per project
+   * and a handful of projects, so the map is tiny — and a second index would have to be
+   * kept consistent through displacement, failed starts and exits, which is more ways to
+   * be wrong than it saves work.
+   *
+   * Window ids are reused, so this has to run while the window is being unregistered
+   * rather than lazily afterwards: by the time an id comes round again it names a
+   * different window, and a session left behind is one nothing will ever match.
+   */
+  stopByWindow(windowId: number): void {
+    for (const session of [...this.bySession.values()]) {
+      if (session.windowId === windowId) this.stop(session.sessionId);
     }
   }
 
