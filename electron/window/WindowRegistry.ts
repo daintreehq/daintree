@@ -199,6 +199,20 @@ export class WindowRegistry {
         console.warn("[WindowRegistry] revokeByWindowId failed during unregister:", err);
       });
 
+    // And stop the native assistant engines this window owned.
+    //
+    // Started HERE, while the window is being unregistered, rather than left to a later
+    // sweep: window ids are REUSED, so by the time this one comes round again it names a
+    // different window, and a session still filed under it is one nothing will ever
+    // match. The per-view cleanup in main.ts does not cover this — a window can close
+    // without its views being individually evicted, and a quiet engine is never reaped
+    // by the lazy dead-view path because it has nothing to deliver.
+    import("../services/assistant-host/AssistantHostService.js")
+      .then(({ assistantHostService }) => assistantHostService.stopByWindow(windowId))
+      .catch((err) => {
+        console.warn("[WindowRegistry] assistant host stop failed during unregister:", err);
+      });
+
     this.webContentsIndex.delete(ctx.webContentsId);
     const appViewWcIds = this.appViewWebContentsIds.get(windowId);
     if (appViewWcIds) {
