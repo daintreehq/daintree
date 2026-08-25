@@ -786,6 +786,66 @@ describe("ActionService", () => {
       }
     });
 
+    it("carries the decoded userMessage through to details", async () => {
+      const transported = new Error(
+        `[AppError|OUTSIDE_ROOT|${encodeURIComponent("Path is not in a project root")}] Path is outside all allowed roots`
+      );
+      const action: ActionDefinition = {
+        id: "actions.list" as ActionId,
+        title: "Test Action",
+        description:
+          "A test action for validating ActionService dispatch, registration, and manifest entry generation.",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        run: vi.fn().mockRejectedValue(transported),
+      };
+
+      service.register(action);
+      const result = await service.dispatch("actions.list");
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        // The three-segment form is what the preload actually emits when the
+        // AppError carried a userMessage; only the transport wrapper is removed.
+        expect(result.error.message).toBe("Path is outside all allowed roots");
+        expect((result.error.details as { userMessage?: string }).userMessage).toBe(
+          "Path is not in a project root"
+        );
+      }
+    });
+
+    it.each([
+      [
+        "a prefix that is not at the start of the message",
+        new Error("wrapped: [AppError|OUTSIDE_ROOT] Path is outside all allowed roots"),
+        "wrapped: [AppError|OUTSIDE_ROOT] Path is outside all allowed roots",
+      ],
+      ["a rejection that is not an Error at all", "plain string failure", "plain string failure"],
+    ])("leaves %s alone", async (_label, rejection, expected) => {
+      const action: ActionDefinition = {
+        id: "actions.list" as ActionId,
+        title: "Test Action",
+        description:
+          "A test action for validating ActionService dispatch, registration, and manifest entry generation.",
+        category: "test",
+        kind: "command",
+        danger: "safe",
+        scope: "renderer",
+        run: vi.fn().mockRejectedValue(rejection),
+      };
+
+      service.register(action);
+      const result = await service.dispatch("actions.list");
+
+      expect(result.ok).toBe(false);
+      if (!result.ok) {
+        expect(result.error.message).toBe(expected);
+        expect(result.error.code).toBe("EXECUTION_ERROR");
+      }
+    });
+
     it("returns BINDING_STALE when contextOverride projectId differs from live context (#8432)", async () => {
       const mockRun = vi.fn().mockResolvedValue(undefined);
       const action: ActionDefinition = {

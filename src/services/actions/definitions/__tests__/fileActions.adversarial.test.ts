@@ -41,10 +41,13 @@ function setupActions() {
 beforeEach(() => {
   vi.clearAllMocks();
   openPanelDialogMock.mockReset().mockResolvedValue("file-panel-1");
-  systemClientMock.openInEditor.mockResolvedValue(undefined);
-  systemClientMock.openPath.mockResolvedValue(undefined);
-  systemClientMock.showItemInFolder.mockResolvedValue(undefined);
-  systemClientMock.showItemInFolderUnconfined.mockResolvedValue(undefined);
+  // `mockReset`, not `clearAllMocks` alone: the latter drains call records but
+  // NOT queued `...Once` implementations, so a test that aborts before consuming
+  // its rejection would hand it to the next one.
+  systemClientMock.openInEditor.mockReset().mockResolvedValue(undefined);
+  systemClientMock.openPath.mockReset().mockResolvedValue(undefined);
+  systemClientMock.showItemInFolder.mockReset().mockResolvedValue(undefined);
+  systemClientMock.showItemInFolderUnconfined.mockReset().mockResolvedValue(undefined);
   projectStoreMock.getState.mockReturnValue({
     currentProject: { id: "proj-1", path: "/repo" },
   });
@@ -176,13 +179,35 @@ describe("fileActions adversarial", () => {
       );
     });
 
-    it("rethrows OUTSIDE_ROOT untouched when the flag is left at its default", async () => {
+    it.each([
+      ["omitted, so Zod's default decides", {}],
+      ["passed explicitly as false", { allowOutsideRoots: false }],
+    ])("rethrows OUTSIDE_ROOT untouched when the flag is %s", async (_label, flag) => {
       const rejection = encoded("OUTSIDE_ROOT", "Path is outside all allowed roots");
       systemClientMock.showItemInFolder.mockRejectedValueOnce(rejection);
       const run = setupActions();
 
-      // No `allowOutsideRoots` key at all, so Zod's `.default(false)` decides.
-      await expect(run("file.showItemInFolder", { path: OUT_OF_ROOT })).rejects.toBe(rejection);
+      await expect(run("file.showItemInFolder", { path: OUT_OF_ROOT, ...flag })).rejects.toBe(
+        rejection
+      );
+      expect(systemClientMock.showItemInFolderUnconfined).not.toHaveBeenCalled();
+      // Identity alone would also hold for a decode-then-rethrow. What the five
+      // non-viewer dispatchers rely on is that a caller who never opted in hands
+      // its error onward exactly as it arrived: `isClientAppError` decodes by
+      // mutating, so reaching it at all would strip the prefix and stamp
+      // `name`/`code` here instead of at the one place that owns that decode.
+      expect(rejection.message).toBe("[AppError|OUTSIDE_ROOT] Path is outside all allowed roots");
+      expect(rejection.name).toBe("Error");
+      expect(Object.hasOwn(rejection, "code")).toBe(false);
+    });
+
+    it("rejects a non-boolean flag before reaching either client method", async () => {
+      const run = setupActions();
+
+      await expect(
+        run("file.showItemInFolder", { path: OUT_OF_ROOT, allowOutsideRoots: "yes" })
+      ).rejects.toThrow();
+      expect(systemClientMock.showItemInFolder).not.toHaveBeenCalled();
       expect(systemClientMock.showItemInFolderUnconfined).not.toHaveBeenCalled();
     });
 
@@ -208,17 +233,25 @@ describe("fileActions adversarial", () => {
       expect(systemClientMock.showItemInFolderUnconfined).not.toHaveBeenCalled();
     });
 
-    it("propagates a failure from the unconfined op rather than swallowing it", async () => {
+    // Every one of these, not just the deny-list case: an implementation that
+    // retried or swallowed the relaxed op's own OUTSIDE_ROOT would loop, and one
+    // that only rethrew decodable errors would eat a raw shell failure.
+    it.each([
+      ["a denied executable target", () => encoded("INVALID_PATH", "Path is not a valid file")],
+      ["OUTSIDE_ROOT again", () => encoded("OUTSIDE_ROOT", "Path is outside all allowed roots")],
+      ["an undecodable failure", () => new Error("shell unavailable")],
+    ])("propagates %s from the unconfined op rather than swallowing it", async (_label, make) => {
       systemClientMock.showItemInFolder.mockRejectedValueOnce(
         encoded("OUTSIDE_ROOT", "Path is outside all allowed roots")
       );
-      const denied = encoded("INVALID_PATH", "Executable targets cannot be revealed");
+      const denied = make();
       systemClientMock.showItemInFolderUnconfined.mockRejectedValueOnce(denied);
       const run = setupActions();
 
       await expect(
         run("file.showItemInFolder", { path: "/tmp/Evil.app", allowOutsideRoots: true })
       ).rejects.toBe(denied);
+      expect(systemClientMock.showItemInFolderUnconfined).toHaveBeenCalledTimes(1);
     });
 
     it("refuses the flag from a plugin dispatch before either client call", async () => {
