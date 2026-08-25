@@ -2,7 +2,9 @@ import { defineIpcNamespace, op } from "../define.js";
 import { ASSISTANT_HOST_METHOD_CHANNELS } from "./assistantHost.preload.js";
 import { assistantHostService } from "../../services/assistant-host/AssistantHostService.js";
 import { parseAssistantHostCommand } from "../../schemas/ipc.js";
+import { collectAssistantDiagnostics } from "../../services/assistant-host/AssistantDiagnostics.js";
 import type {
+  AssistantDiagnostics,
   AssistantHostStartPayload,
   AssistantHostStartResult,
 } from "../../../shared/types/ipc/assistantHostIpc.js";
@@ -31,9 +33,18 @@ export const assistantHostNamespace = defineIpcNamespace({
           throw new Error("Invalid projectId");
         }
         if (typeof payload.cwd !== "string" || !payload.cwd) throw new Error("Invalid cwd");
-        if (payload.tier !== undefined && typeof payload.tier !== "string") {
-          throw new Error("Invalid tier");
-        }
+        // A start with no owning window is REFUSED rather than filed under window 0.
+        //
+        // `senderWindow` resolves through Daintree's own registry, not Electron's native
+        // lookup — which returns null for a `WebContentsView` — so every live project
+        // view does have one. Reaching here without it means the sender is destroyed,
+        // unregistered, or otherwise ownerless, and `?? 0` only papered over that: the
+        // window id is one of the three fields the engine binds a session to, and it is
+        // what a window's teardown reclaims sessions by. A session filed under a window
+        // that has never existed is one nothing can reclaim, and it holds the project's
+        // state lease against every later launch.
+        const windowId = ctx.senderWindow?.id;
+        if (windowId === undefined) throw new Error("No owning window for this session");
         return assistantHostService.start({
           projectId: payload.projectId,
           cwd: payload.cwd,
@@ -41,8 +52,7 @@ export const assistantHostNamespace = defineIpcNamespace({
           // must not be able to nominate which view an assistant session — and
           // therefore its approval prompts — gets delivered to.
           webContentsId: ctx.webContentsId,
-          windowId: ctx.senderWindow?.id ?? 0,
-          tier: payload.tier,
+          windowId,
         });
       },
       { withContext: true }
@@ -71,6 +81,18 @@ export const assistantHostNamespace = defineIpcNamespace({
         return { delivered: assistantHostService.send(command) };
       },
       { withContext: true }
+    ),
+
+    /**
+     * A safe readout of what the assistant is actually configured to do.
+     *
+     * No ownership check, unlike the operating commands below: this reads configuration
+     * and asks an endpoint what it is. It starts nothing, changes nothing, and there is
+     * no field in the answer a secret could travel in.
+     */
+    diagnostics: op(
+      ASSISTANT_HOST_METHOD_CHANNELS.diagnostics,
+      async (): Promise<AssistantDiagnostics> => collectAssistantDiagnostics()
     ),
 
     stop: op(
