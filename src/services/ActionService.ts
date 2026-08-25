@@ -16,6 +16,7 @@ import { keybindingService } from "./KeybindingService";
 import { shortcutHintStore } from "../store/shortcutHintStore";
 import { useUIStore } from "@/store/uiStore";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { isClientAppError } from "@/utils/clientAppError";
 import { PartialSuccessError } from "@shared/utils/partialSuccess";
 import {
   WORKBENCH_TIER_TOOLS,
@@ -644,6 +645,17 @@ export class ActionService {
         this.emitShortcutHint(actionId, source, overlayEpochBeforeRun);
       return { ok: true, result: (validatedResult ? validatedResult.data : result) as Result };
     } catch (err) {
+      // An AppError that crossed the contextBridge carries its code in an
+      // `[AppError|CODE] ` message prefix and nowhere else (#6116), and
+      // `formatErrorMessage` hands the message back verbatim — so without this
+      // every pane that renders `error.message` shows the transport prefix.
+      // The guard strips it as a side effect, which is the whole point: one
+      // decode here clears FilePane, DiffPane and FileBrowserViewer together.
+      // `details` still points at the same throw, so consumers that decode it
+      // themselves (`reportFileLinkFailure`) hit the guard's same-realm path.
+      const message = isClientAppError(err)
+        ? err.message
+        : formatErrorMessage(err, `Action "${actionId}" failed`);
       const error: ActionError = {
         // `PartialSuccessError` is the one throw that carries a provenance
         // claim: a composite created a real worktree before failing, and the
@@ -653,7 +665,7 @@ export class ActionService {
         // upstream forge/git rejection reaching this line is an ordinary
         // `EXECUTION_ERROR` however its message happens to read.
         code: err instanceof PartialSuccessError ? "PARTIAL_SUCCESS" : "EXECUTION_ERROR",
-        message: formatErrorMessage(err, `Action "${actionId}" failed`),
+        message,
         details: err,
       };
       return { ok: false, error };

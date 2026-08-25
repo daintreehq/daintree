@@ -131,6 +131,34 @@ describe("ActionService adversarial", () => {
     expect(observed).toEqual({ dispatchSource: "user" });
   });
 
+  // Definitions that refuse a conditional effect for one source (the recipe
+  // gate in `workflowCreationActions`, the out-of-root reveal opt-in in
+  // `fileActions`) are only as sound as this stamp: it has to be the resolved
+  // source and it has to beat anything the caller put on the context itself.
+  it.each(["plugin", "agent", "menu"] as const)(
+    "stamps the resolved %s source onto the run context, overriding the caller's claim",
+    async (source) => {
+      let observed: unknown = "unset";
+      service.register(
+        safeAction("actions.list", {
+          run: vi.fn(async (_args, ctx) => {
+            observed = ctx?.dispatchSource;
+            return "ok";
+          }),
+        })
+      );
+
+      const result = await service.dispatch("actions.list" as ActionId, undefined, {
+        source,
+        // A caller claiming to be someone else must not be believed.
+        contextOverride: { dispatchSource: "user" },
+      });
+
+      expect(result.ok).toBe(true);
+      expect(observed).toBe(source);
+    }
+  );
+
   it("events.emit throwing during teardown does not block handler execution", async () => {
     const emit = vi.fn(() => {
       throw new Error("WebContents destroyed");

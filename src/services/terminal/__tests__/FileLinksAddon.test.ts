@@ -966,7 +966,10 @@ describe("FileLinksAddon", () => {
       expect(payload.action?.label).toBe("Reveal in File Manager");
 
       // Clicking Reveal routes the resolved absolute path (line/col stripped)
-      // through the unconfined IPC op — never auto, always user-initiated.
+      // through the unconfined IPC op — never auto, always user-initiated. The
+      // negative assertion is the load-bearing half: surfacing the toast must
+      // not have already relaxed containment on the user's behalf.
+      expect(systemClient.showItemInFolderUnconfined).not.toHaveBeenCalled();
       payload.action?.onClick?.();
       await new Promise((resolve) => setTimeout(resolve, 0));
       expect(systemClient.showItemInFolderUnconfined).toHaveBeenCalledWith(

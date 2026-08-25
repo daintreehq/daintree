@@ -162,9 +162,13 @@ async function assertPathAllowed(
 }
 
 /**
- * Resolve a renderer-supplied path for the UNCONFINED reveal op — the
- * user-initiated recovery path for a file link that resolved outside project
- * roots. Unlike {@link assertPathAllowed}, this deliberately skips roots
+ * Resolve a renderer-supplied path for the UNCONFINED reveal op. Two
+ * user-initiated callers: the recovery action on a terminal file link that
+ * resolved outside project roots, and the file viewer's reveal button, whose
+ * read root falls back to the file's own parent, so the pane routinely
+ * displays files no project owns (#11934). Both arrive here only after the
+ * contained reveal has already been tried and refused with OUTSIDE_ROOT.
+ * Unlike {@link assertPathAllowed}, this deliberately skips roots
  * containment (that's the rejection the user is asking to bypass), but keeps
  * every other guard: absolute-only, executable deny-list on both the raw
  * input and the realpath target (defeats a safe-named symlink → Evil.app),
@@ -172,9 +176,11 @@ async function assertPathAllowed(
  * #6442), and a stat gate so a since-deleted path surfaces as INVALID_PATH
  * instead of `shell.showItemInFolder`'s silent no-op. The deny-list is
  * unconditional here — unlike the confined "editor" flavor, which relaxes it —
- * because an out-of-root path is untrusted terminal output and the historical
- * Windows ShellExecute("open") / Linux xdg-open fallbacks make reveal a launch
- * surface on some platforms.
+ * because an out-of-root path sits outside every root the app vouches for
+ * (parsed terminal output, or a path the viewer was merely pointed at), and the
+ * historical Windows ShellExecute("open") / Linux xdg-open fallbacks make
+ * reveal a launch surface on some platforms. So this op cannot reveal
+ * everything the contained one can, and callers must not promise it will.
  */
 async function resolveRevealTargetUnconfined(targetPath: string): Promise<string> {
   if (!nodePath.isAbsolute(targetPath)) {
@@ -288,8 +294,9 @@ export function registerSystemShellHandlers(_deps: HandlerDependencies): () => v
           }
         }
       ),
-      // User-initiated reveal of an OUTSIDE_ROOT path (the recovery action on
-      // a file-link toast). Bypasses roots containment but keeps the deny-list,
+      // User-initiated reveal of an OUTSIDE_ROOT path: the recovery action on a
+      // terminal file-link toast, or the file viewer's reveal of a file it is
+      // already displaying. Bypasses roots containment but keeps the deny-list,
       // realpath canonicalization, and a stat gate — see
       // resolveRevealTargetUnconfined.
       showItemInFolderUnconfined: opValidated(

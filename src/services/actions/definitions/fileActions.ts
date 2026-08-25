@@ -10,6 +10,7 @@ import { isHtmlFilePath } from "@/components/Html/isHtmlFile";
 import { isAbsolute, isPathInside, join, normalize, toWorktreeRelative } from "@shared/utils/path";
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import type { ActionContext } from "@shared/types/actions";
+import { isClientAppError } from "@/utils/clientAppError";
 import { isForegroundDispatch } from "./dispatchSource";
 import { PANEL_LIMIT_ERROR_SUFFIX } from "./panelLimitError";
 
@@ -90,6 +91,7 @@ const openImageViewerArgsSchema = z.object({
 
 const showItemInFolderArgsSchema = z.object({
   path: z.string().min(1),
+  allowOutsideRoots: z.boolean().default(false),
 });
 
 function resolveFilePanelPath(path: string, rootPath: string | undefined): string {
@@ -367,15 +369,44 @@ export function registerFileActions(actions: ActionRegistry, callbacks: ActionCa
     id: "file.showItemInFolder",
     title: "Reveal in File Manager",
     description:
-      "Reveal a file or directory in the OS file manager (Finder on macOS, Explorer on Windows, the default file manager on Linux) with the item selected. Args: `path` (required) — absolute file or directory path. Reveals only; it never opens or launches the item. Errors when the path is missing, outside your project roots, or no longer exists.",
+      "Reveal a file or directory in the OS file manager (Finder on macOS, Explorer on Windows, the default file manager on Linux) with the item selected. Args: `path` (required) — absolute file or directory path; `allowOutsideRoots` (optional, default false) — when containment refuses the path, retry through a guarded fallback that skips project-root containment but still refuses executable targets, so it cannot reveal everything a root-contained reveal can. Plugins may not set it. Reveals only; it never opens or launches the item. Errors when the path is missing, no longer exists, or sits outside your project roots without `allowOutsideRoots`.",
     category: "files",
     kind: "command",
     danger: "safe",
     scope: "renderer",
     argsSchema: showItemInFolderArgsSchema,
-    run: async (args: unknown) => {
-      const { path } = showItemInFolderArgsSchema.parse(args);
-      await systemClient.showItemInFolder(path);
+    run: async (args: unknown, ctx?: ActionContext) => {
+      const { path, allowOutsideRoots } = showItemInFolderArgsSchema.parse(args);
+
+      // The plugin system gates its own reveal capability; letting a plugin set
+      // the flag would hand it the unconfined op for free. Refused ahead of the
+      // confined call so it is the flag being rejected, not the reveal — a
+      // plugin dispatching `{ path }` keeps today's contained behavior. Plain
+      // `Error` rather than an AppError, mirroring the recipe-terminal gate in
+      // `workflowCreationActions.ts`.
+      if (allowOutsideRoots && ctx?.dispatchSource === "plugin") {
+        throw new Error(
+          "Plugins cannot reveal paths outside your project roots. Dispatch file.showItemInFolder without `allowOutsideRoots`."
+        );
+      }
+
+      try {
+        await systemClient.showItemInFolder(path);
+      } catch (error) {
+        // Flag first so a caller that never opted in gets an untouched rethrow:
+        // `isClientAppError` decodes by mutating the error in place. Then the
+        // decode, which is the only sound read of the discriminant — contextBridge
+        // strips the error's own `code`/`name` on the way to the renderer, leaving
+        // the encoded message prefix as the sole carrier (#6116). Narrowed to the
+        // exact containment rejection: INVALID_PATH, a denied extension, or any
+        // other failure must never reach the relaxed op.
+        if (!allowOutsideRoots || !isClientAppError(error) || error.code !== "OUTSIDE_ROOT") {
+          throw error;
+        }
+        // Deliberately not wrapped: a rejection here is the user's answer, and
+        // the unconfined op keeps its own deny-list, realpath and stat guards.
+        await systemClient.showItemInFolderUnconfined(path);
+      }
     },
   }));
 }
