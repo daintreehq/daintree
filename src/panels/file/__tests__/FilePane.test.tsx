@@ -525,7 +525,7 @@ describe("FilePane reveal in file manager (#11386)", () => {
 
     expect(dispatchMock).toHaveBeenCalledWith(
       "file.showItemInFolder",
-      { path: PATH },
+      { path: PATH, allowOutsideRoots: true },
       { source: "user" }
     );
   });
@@ -540,7 +540,7 @@ describe("FilePane reveal in file manager (#11386)", () => {
     await click(findButton(container, revealLabel));
     expect(dispatchMock).toHaveBeenCalledWith(
       "file.showItemInFolder",
-      { path: "/repo/media/demo.mov" },
+      { path: "/repo/media/demo.mov", allowOutsideRoots: true },
       { source: "user" }
     );
   });
@@ -568,7 +568,7 @@ describe("FilePane reveal in file manager (#11386)", () => {
     expect(dispatchMock).toHaveBeenCalledTimes(1);
     expect(dispatchMock).toHaveBeenCalledWith(
       "file.showItemInFolder",
-      { path: PATH },
+      { path: PATH, allowOutsideRoots: true },
       { source: "user" }
     );
     expect(container.querySelector('[role="alert"]')).toBeNull();
@@ -628,7 +628,7 @@ describe("FilePane reveal in file manager (#11386)", () => {
     // editor's own banner is untouched.
     expect(dispatchMock).toHaveBeenCalledWith(
       "file.showItemInFolder",
-      { path: PATH },
+      { path: PATH, allowOutsideRoots: true },
       { source: "user" }
     );
     expect(container.querySelector('[role="alert"]')?.textContent).toContain(
@@ -887,9 +887,10 @@ describe("FilePane show in file browser (#11483)", () => {
     });
   });
 
-  // The reveal target is path-only; regressing the args builder into a single
-  // shape would send {path} to the worktree action (or vice versa).
-  it("keeps the path-only args for the sibling reveal target", async () => {
+  // Reveal carries the path plus the out-of-root opt-in, which is a third shape
+  // alongside the worktree action's and the path-only editor/browser one.
+  // Regressing the args builder into a single branch would send the wrong one.
+  it("keeps reveal's own args shape alongside the sibling worktree target", async () => {
     worktreeState.worktrees.set("wt-1", { id: "wt-1", path: "/repo" });
     const { container } = renderPane("/repo/src/index.ts");
 
@@ -897,7 +898,7 @@ describe("FilePane show in file browser (#11483)", () => {
 
     expect(dispatchMock).toHaveBeenCalledWith(
       "file.showItemInFolder",
-      { path: "/repo/src/index.ts" },
+      { path: "/repo/src/index.ts", allowOutsideRoots: true },
       { source: "user" }
     );
   });

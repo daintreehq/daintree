@@ -1468,7 +1468,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "files",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Reveal a file or directory in the OS file manager (Finder on macOS, Explorer on Windows, the default file manager on Linux) with the item selected. Args: \`path\` (required) — absolute file or directory path. Reveals only; it never opens or launches the item. Errors when the path is missing, outside your project roots, or no longer exists.",
+    "description": "Reveal a file or directory in the OS file manager (Finder on macOS, Explorer on Windows, the default file manager on Linux) with the item selected. Args: \`path\` (required) — absolute file or directory path; \`allowOutsideRoots\` (optional, default false) — when containment refuses the path, retry through a guarded fallback that skips project-root containment but still refuses executable targets, so it cannot reveal everything a root-contained reveal can. Plugins may not set it. Reveals only; it never opens or launches the item. Errors when the path is missing, no longer exists, or sits outside your project roots without \`allowOutsideRoots\`.",
     "examples": undefined,
     "id": "file.showItemInFolder",
     "keywords": undefined,

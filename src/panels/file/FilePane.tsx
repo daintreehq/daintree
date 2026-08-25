@@ -930,9 +930,10 @@ export function FilePane({
   const handleOpenExternal = useCallback(
     async (target: ExternalTarget) => {
       if (!filePath) return;
-      // Only the file-browser target carries structured args; the rest are
-      // path-only. Built before the pending flip so a missing scope can't leave
-      // the button spinning on a dispatch that was never going to happen.
+      // File-browser carries worktree-scoped args and reveal opts into the
+      // guarded out-of-root fallback; browser/editor stay path-only. Built
+      // before the pending flip so a missing scope can't leave the button
+      // spinning on a dispatch that was never going to happen.
       let args: unknown;
       if (target === "file-browser") {
         if (!revealWorktreeId) return;
@@ -946,6 +947,14 @@ export function FilePane({
             relativeFilePath && relativeFilePath !== filePath ? relativeFilePath : undefined,
           revealKind: "file",
         };
+      } else if (target === "reveal") {
+        // Sent on every reveal, in-root or not: `effectiveRootPath` already
+        // falls back to the file's own parent, so this pane deliberately
+        // displays files no project owns, and reveal was the last surface in it
+        // still asking the project registry for permission (#11934). The action
+        // decides whether the fallback is needed — a second copy of the
+        // containment rule has no business living in the renderer.
+        args = { path: filePath, allowOutsideRoots: true };
       } else {
         args = { path: filePath };
       }
