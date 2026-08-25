@@ -924,6 +924,14 @@ describe("handleDirectoryOpen window targeting", () => {
     projectStoreMock.addProject.mockResolvedValue(PROJECT);
     projectStoreMock.getProjectById.mockReturnValue(PROJECT);
     projectStoreMock.getCurrentProjectId.mockReturnValue(null);
+    // Revive window 7's history per test, and retire it afterwards even when a
+    // test fails: a leftover tombstone silently makes the next test's switch
+    // record nothing, which passes for the wrong reason.
+    resetProjectHistory(7);
+  });
+
+  afterEach(() => {
+    disposeProjectHistory(7);
   });
 
   it("records the scratch it is leaving behind the project it opens", async () => {
@@ -939,7 +947,6 @@ describe("handleDirectoryOpen window targeting", () => {
       getPrimary: () => ({ services: { projectViewManager: targetManager } }),
     });
 
-    resetProjectHistory(7);
     const targetWindow = { id: 7, isDestroyed: () => false } as unknown as Electron.BrowserWindow;
     await handleDirectoryOpen(PROJECT.path, targetWindow);
 
@@ -950,7 +957,6 @@ describe("handleDirectoryOpen window targeting", () => {
     expect(targetManager.getActiveProjectId.mock.invocationCallOrder[0]).toBeLessThan(
       targetManager.switchTo.mock.invocationCallOrder[0]!
     );
-    disposeProjectHistory(7);
   });
 
   it("switches the view of the window the menu action came from, not the newest window", async () => {

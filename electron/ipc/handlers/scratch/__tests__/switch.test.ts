@@ -51,7 +51,7 @@ vi.mock("../../../../projectMenuState.js", () => ({
 // registry, and that binding — not the global project pointer — is what the
 // handler records as the workspace being left.
 const webContentsRegistryMock = vi.hoisted(() => ({
-  getWindowForWebContents: vi.fn(() => null),
+  getWindowForWebContents: vi.fn<() => { id: number } | null>(() => null),
   getProjectForWebContents: vi.fn<(id: number) => string | null>(() => null),
 }));
 vi.mock("../../../../window/webContentsRegistry.js", () => webContentsRegistryMock);
@@ -104,6 +104,7 @@ describe("scratch:switch refreshes the File-menu project gates", () => {
     // `clearAllMocks` clears calls, not queued return values, so a binding set
     // by one test would otherwise leak into the next.
     webContentsRegistryMock.getProjectForWebContents.mockReturnValue(null);
+    webContentsRegistryMock.getWindowForWebContents.mockReturnValue(null);
     scratchStoreMock.getScratchById.mockReturnValue({ id: "scratch-1", path: "/tmp/scratch-1" });
     scratchStoreMock.setCurrentScratch.mockReturnValue({
       id: "scratch-1",
@@ -163,6 +164,26 @@ describe("scratch:switch refreshes the File-menu project gates", () => {
 
     expect(getProjectHistory(78).snapshot().entries).toEqual([SCRATCH_TWO, SCRATCH_ONE]);
     disposeProjectHistory(78);
+  });
+
+  it("records into the sending window's history, not the main window's", async () => {
+    // Windows navigate independently. Folding a second window's scratch switch
+    // into the primary window's list would send the primary somewhere it has
+    // never been, and leave the sender with nothing to go back to.
+    webContentsRegistryMock.getWindowForWebContents.mockReturnValue({ id: 81 });
+    webContentsRegistryMock.getProjectForWebContents.mockReturnValue(PROJECT_A);
+    enterScratch(SCRATCH_ONE);
+    const deps = { mainWindow: { id: 80 } } as unknown as HandlerDependencies;
+    resetProjectHistory(80);
+    resetProjectHistory(81);
+    registerScratchHandlers(deps);
+
+    await getHandler(CHANNELS.SCRATCH_SWITCH)(fakeEvent, SCRATCH_ONE);
+
+    expect(getProjectHistory(81).snapshot().entries).toEqual([SCRATCH_ONE, PROJECT_A]);
+    expect(getProjectHistory(80).snapshot().entries).toEqual([]);
+    disposeProjectHistory(80);
+    disposeProjectHistory(81);
   });
 
   it("records nothing when the view swap fails", async () => {

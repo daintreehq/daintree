@@ -20,6 +20,14 @@ const scopedProjectMock = vi.hoisted(() =>
   vi.fn<() => { project: { id: string } | null; workspaceId: string | null } | null>(() => null)
 );
 
+// `buildIpcContext` reads the sender's raw view binding and its window from the
+// registry. Overridden rather than replaced so nothing else in the module graph
+// loses an export it imports.
+const registryMock = vi.hoisted(() => ({
+  getProjectForWebContents: vi.fn<(id: number) => string | null>(() => null),
+  getWindowForWebContents: vi.fn<() => { id: number } | null>(() => null),
+}));
+
 // `buildIpcContext` resolves the sender's window through `BrowserWindow`; left
 // unmocked it throws before the handler runs.
 vi.mock("electron", () => ({
@@ -31,6 +39,10 @@ vi.mock("../../../services/ScratchStore.js", () => ({ scratchStore: scratchStore
 vi.mock("../../projectContext.js", () => ({
   resolveScopedProjectForIpcContext: scopedProjectMock,
 }));
+vi.mock("../../../window/webContentsRegistry.js", async (importOriginal) => {
+  const actual = await importOriginal<typeof import("../../../window/webContentsRegistry.js")>();
+  return { ...actual, ...registryMock };
+});
 
 import { registerProjectHistoryHandlers } from "../projectHistory.js";
 import {
@@ -83,6 +95,17 @@ function unbound(): void {
   scopedProjectMock.mockReturnValue({ project: null, workspaceId: null });
 }
 
+/**
+ * A sender still displaying a project the scoped resolver refuses to name. It
+ * blanks a closed row so hydration cannot resurrect a workspace the user closed
+ * — but the view is on screen, and only the raw binding still says where.
+ */
+function inClosedProject(id: string): void {
+  existingProjectIds.add(id);
+  scopedProjectMock.mockReturnValue({ project: null, workspaceId: null });
+  registryMock.getProjectForWebContents.mockReturnValue(id);
+}
+
 describe("projectHistory IPC", () => {
   let cleanup: () => void;
 
@@ -101,6 +124,9 @@ describe("projectHistory IPC", () => {
       existingScratchIds.has(id) ? { id } : null
     );
     projectStoreMock.getCurrentProjectId.mockReturnValue(null);
+    // `clearAllMocks` clears calls, not queued return values.
+    registryMock.getProjectForWebContents.mockReturnValue(null);
+    registryMock.getWindowForWebContents.mockReturnValue(null);
 
     const deps = {
       mainWindow: { id: WINDOW_ID },
@@ -256,6 +282,50 @@ describe("projectHistory IPC", () => {
     await expect(peek()).resolves.toBeNull();
   });
 
+  it("keeps a closed project's own view from being handed back to itself", async () => {
+    // The scoped resolver blanks a closed row, which used to make the window
+    // look like it was nowhere — and "nowhere" hands back the head, which is
+    // the closed project still on screen. The key then did nothing at all.
+    existingProjectIds.add(PROJECT_B);
+    const history = getProjectHistory(WINDOW_ID);
+    history.record(PROJECT_B);
+    history.record(PROJECT_A);
+    inClosedProject(PROJECT_A);
+
+    await expect(peek()).resolves.toEqual({ workspaceId: PROJECT_B });
+  });
+
+  it("falls back to the global pointer only when there is no view scoping at all", async () => {
+    // The legacy single-renderer path: no ProjectViewManager anywhere, so the
+    // scoped resolver has nothing to answer with and the global pointer is the
+    // only thing that names a workspace.
+    existingProjectIds.add(PROJECT_A);
+    existingProjectIds.add(PROJECT_B);
+    getProjectHistory(WINDOW_ID).record(PROJECT_A);
+    scopedProjectMock.mockReturnValue(null);
+    projectStoreMock.getCurrentProjectId.mockReturnValue(PROJECT_B);
+
+    await expect(peek()).resolves.toEqual({ workspaceId: PROJECT_A });
+  });
+
+  it("reads the sending window's history, not the main window's", async () => {
+    // Windows navigate independently. Answering from the main window's list
+    // would send a second window back somewhere it has never been.
+    const SENDER_WINDOW_ID = 42;
+    existingProjectIds.add(PROJECT_A);
+    existingProjectIds.add(PROJECT_B);
+    resetProjectHistory(SENDER_WINDOW_ID);
+    getProjectHistory(WINDOW_ID).record(PROJECT_OLDER);
+    getProjectHistory(SENDER_WINDOW_ID).record(PROJECT_A);
+    registryMock.getWindowForWebContents.mockReturnValue({ id: SENDER_WINDOW_ID });
+    inProject(PROJECT_B);
+
+    await expect(peek()).resolves.toEqual({ workspaceId: PROJECT_A });
+    // And the seed landed in the sender's list, leaving the main window's alone.
+    expect(getProjectHistory(WINDOW_ID).snapshot().entries).toEqual([PROJECT_OLDER]);
+    disposeProjectHistory(SENDER_WINDOW_ID);
+  });
+
   it("resolves each workspace against the store that owns its id shape", async () => {
     existingProjectIds.add(PROJECT_A);
     existingScratchIds.add(SCRATCH_ONE);
@@ -274,24 +344,29 @@ describe("projectHistory IPC", () => {
   });
 
   it("looks each workspace up once however many times the request prunes", async () => {
+    // A dead entry in the middle makes `prune` take both passes — `every` finds
+    // the gap, then `filter` re-tests every entry — which is where a plain
+    // predicate would put a second database read behind each survivor.
     existingProjectIds.add(PROJECT_A);
     existingScratchIds.add(SCRATCH_ONE);
     const history = getProjectHistory(WINDOW_ID);
     history.record(PROJECT_A);
+    history.record(SCRATCH_TWO);
     history.record(SCRATCH_ONE);
     inScratch(SCRATCH_ONE);
 
-    await peek();
+    await expect(peek()).resolves.toEqual({ workspaceId: PROJECT_A });
 
-    // Pruning tests every entry twice, and a request can prune more than once.
-    // Repeating the row lookup would put a database read behind each of those,
-    // and would let a workspace deleted mid-request be present for the seed and
-    // absent for the peek.
-    expect(
-      scratchStoreMock.getScratchById.mock.calls.filter(([id]) => id === SCRATCH_ONE)
-    ).toHaveLength(1);
-    expect(
-      projectStoreMock.getProjectById.mock.calls.filter(([id]) => id === PROJECT_A)
-    ).toHaveLength(1);
+    const lookups = (id: string) =>
+      [
+        ...scratchStoreMock.getScratchById.mock.calls,
+        ...projectStoreMock.getProjectById.mock.calls,
+      ].filter(([called]) => called === id).length;
+
+    // Repeating a lookup would also let a workspace deleted mid-request be
+    // present for the seed and absent for the peek.
+    expect(lookups(SCRATCH_ONE)).toBe(1);
+    expect(lookups(SCRATCH_TWO)).toBe(1);
+    expect(lookups(PROJECT_A)).toBe(1);
   });
 });

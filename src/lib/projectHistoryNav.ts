@@ -3,6 +3,7 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { isScratchWorkspaceId } from "@shared/utils/workspaceIds";
 import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
+import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 
 /**
  * Toggle to the workspace this window was in before the current one — project
@@ -40,9 +41,13 @@ export async function switchToLastWorkspace(): Promise<void> {
     const projectState = useProjectStore.getState();
     const scratchState = useScratchStore.getState();
 
-    // The two pointers are mutually exclusive, so whichever is set is where the
-    // window is.
-    const currentWorkspaceId = projectState.currentProject?.id ?? scratchState.currentScratch?.id;
+    // The view's own immutable workspace id, never `currentScratch`: scratch
+    // switches reach every renderer through `broadcastToRenderer`, so
+    // `currentScratch` says what the user is looking at *globally*. A second
+    // window entering the scratch this one is about to toggle into would make
+    // that pointer match here and swallow the press. `currentProject` is the
+    // pre-seed fallback and stays view-targeted.
+    const currentWorkspaceId = getViewWorkspaceId() ?? projectState.currentProject?.id;
     if (currentWorkspaceId === target.workspaceId) return;
 
     // Routed on the id's shape, not on whether the scratch store lists it: both

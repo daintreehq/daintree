@@ -55,10 +55,16 @@ export function createProjectHistoryNamespace(deps: HandlerDependencies) {
    * `workspaceId`, not `project?.id`: a scratch is a workspace with no project
    * row, so reading the project would answer null for a window that is very
    * much somewhere (#11936). That null was what forced the toggle to guess.
+   *
+   * The raw binding backs it up because the scoped resolver also blanks a
+   * *closed* project — the right answer for state hydration, which must not
+   * resurrect a workspace the user closed, and the wrong one here: the view is
+   * still on screen, and calling it nowhere hands the toggle back the very
+   * workspace it is standing in.
    */
   const resolveCurrentWorkspaceId = (ctx: IpcContext): string | null => {
     const scoped = resolveScopedProjectForIpcContext(ctx, deps);
-    if (scoped) return scoped.workspaceId;
+    if (scoped) return scoped.workspaceId ?? ctx.projectId;
     return ctx.projectId ?? projectStore.getCurrentProjectId();
   };
 

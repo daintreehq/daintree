@@ -20,6 +20,11 @@ vi.mock("@/store/projectStore", () => ({
 vi.mock("@/store/scratchStore", () => ({
   useScratchStore: { getState: () => scratchState },
 }));
+// The view's own immutable workspace id, seeded by main at view creation.
+const viewWorkspaceId = vi.hoisted(() => ({ current: null as string | null }));
+vi.mock("@/store/viewWorkspaceId", () => ({
+  getViewWorkspaceId: () => viewWorkspaceId.current,
+}));
 
 import { switchToLastWorkspace } from "../projectHistoryNav";
 
@@ -34,6 +39,7 @@ const SCRATCH_ONE = "11111111-1111-4111-8111-111111111111";
 beforeEach(() => {
   notifyMock.mockClear();
   peekMock.mockReset();
+  viewWorkspaceId.current = CURRENT_PROJECT;
   projectState.currentProject = { id: CURRENT_PROJECT };
   projectState.projects = [
     { id: CURRENT_PROJECT, status: "active" },
@@ -88,6 +94,7 @@ describe("switchToLastWorkspace", () => {
   });
 
   it("switches to a scratch through the scratch store", async () => {
+    scratchState.scratches = [{ id: SCRATCH_ONE }];
     peekMock.mockResolvedValue({ workspaceId: SCRATCH_ONE });
 
     await switchToLastWorkspace();
@@ -131,8 +138,9 @@ describe("switchToLastWorkspace", () => {
   });
 
   it("ignores a target that resolves to the scratch already showing", async () => {
-    // On a scratch the project pointer is null, so the window's own position
-    // can only be read from the scratch pointer.
+    // A scratch view is seeded with its own scratch id, which is what says the
+    // window is already there — the project pointer is null on a scratch.
+    viewWorkspaceId.current = SCRATCH_ONE;
     projectState.currentProject = null;
     scratchState.currentScratch = { id: SCRATCH_ONE };
     peekMock.mockResolvedValue({ workspaceId: SCRATCH_ONE });
@@ -142,9 +150,35 @@ describe("switchToLastWorkspace", () => {
     expect(scratchState.switchScratch).not.toHaveBeenCalled();
   });
 
+  it("still switches when another window entered the scratch this one is toggling into", async () => {
+    // `currentScratch` is broadcast to every renderer, so a sibling window
+    // entering the destination sets it here too. Reading the window's position
+    // from it would make this press look like a switch to where we already are
+    // and swallow it — in the one workspace people toggle into most.
+    viewWorkspaceId.current = CURRENT_PROJECT;
+    scratchState.currentScratch = { id: SCRATCH_ONE };
+    peekMock.mockResolvedValue({ workspaceId: SCRATCH_ONE });
+
+    await switchToLastWorkspace();
+
+    expect(scratchState.switchScratch).toHaveBeenCalledWith(SCRATCH_ONE);
+  });
+
   it("still switches to a project while the window is in a scratch", async () => {
+    viewWorkspaceId.current = SCRATCH_ONE;
     projectState.currentProject = null;
     scratchState.currentScratch = { id: SCRATCH_ONE };
+    peekMock.mockResolvedValue({ workspaceId: TARGET_PROJECT });
+
+    await switchToLastWorkspace();
+
+    expect(projectState.switchProject).toHaveBeenCalledWith(TARGET_PROJECT);
+  });
+
+  it("dispatches a project target before the project list has hydrated", async () => {
+    // The list only picks switch-vs-reopen. Treating an unlisted id as unknown
+    // would strand the toggle for the whole boot window.
+    projectState.projects = [];
     peekMock.mockResolvedValue({ workspaceId: TARGET_PROJECT });
 
     await switchToLastWorkspace();
@@ -182,12 +216,21 @@ describe("switchToLastWorkspace", () => {
     expect(notifyMock).toHaveBeenCalledTimes(1);
   });
 
-  it("surfaces a failed scratch switch with a retry", async () => {
+  it("surfaces a failed scratch switch with a retry that actually retries", async () => {
     peekMock.mockResolvedValue({ workspaceId: SCRATCH_ONE });
-    scratchState.switchScratch.mockRejectedValue(new Error("scratch gone"));
+    scratchState.switchScratch.mockRejectedValueOnce(new Error("scratch gone"));
 
     await switchToLastWorkspace();
 
     expect(notifyMock).toHaveBeenCalledTimes(1);
+    const call = notifyMock.mock.calls[0]![0] as {
+      actions: Array<{ onClick: () => void }>;
+    };
+
+    call.actions[0]!.onClick();
+    await Promise.resolve();
+    await Promise.resolve();
+
+    expect(scratchState.switchScratch).toHaveBeenCalledTimes(2);
   });
 });
