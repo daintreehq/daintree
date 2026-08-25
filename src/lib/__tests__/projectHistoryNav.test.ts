@@ -35,6 +35,7 @@ const CURRENT_PROJECT = "c".repeat(64);
 const TARGET_PROJECT = "1".repeat(64);
 const PARKED_PROJECT = "2".repeat(64);
 const SCRATCH_ONE = "11111111-1111-4111-8111-111111111111";
+const SCRATCH_TWO = "22222222-2222-4222-9222-222222222222";
 
 beforeEach(() => {
   notifyMock.mockClear();
@@ -151,17 +152,32 @@ describe("switchToLastWorkspace", () => {
   });
 
   it("still switches when another window entered the scratch this one is toggling into", async () => {
+    // This view owns scratch one, so its project pointer is null — and
     // `currentScratch` is broadcast to every renderer, so a sibling window
-    // entering the destination sets it here too. Reading the window's position
-    // from it would make this press look like a switch to where we already are
-    // and swallow it — in the one workspace people toggle into most.
-    viewWorkspaceId.current = CURRENT_PROJECT;
-    scratchState.currentScratch = { id: SCRATCH_ONE };
-    peekMock.mockResolvedValue({ workspaceId: SCRATCH_ONE });
+    // entering scratch two sets it here too. Reading the window's position from
+    // that pointer makes this press look like a switch to where we already are
+    // and swallows it, in the workspace people toggle into most.
+    viewWorkspaceId.current = SCRATCH_ONE;
+    projectState.currentProject = null;
+    scratchState.currentScratch = { id: SCRATCH_TWO };
+    peekMock.mockResolvedValue({ workspaceId: SCRATCH_TWO });
 
     await switchToLastWorkspace();
 
-    expect(scratchState.switchScratch).toHaveBeenCalledWith(SCRATCH_ONE);
+    expect(scratchState.switchScratch).toHaveBeenCalledWith(SCRATCH_TWO);
+  });
+
+  it("switches back to the project a never-reloaded renderer booted on", async () => {
+    // The legacy single-renderer keeps one view for every project, so its
+    // seeded id stays pinned to the project it launched with. Trusting that
+    // over the live pointer would make the toggle home refuse to go home.
+    viewWorkspaceId.current = TARGET_PROJECT;
+    projectState.currentProject = { id: CURRENT_PROJECT };
+    peekMock.mockResolvedValue({ workspaceId: TARGET_PROJECT });
+
+    await switchToLastWorkspace();
+
+    expect(projectState.switchProject).toHaveBeenCalledWith(TARGET_PROJECT);
   });
 
   it("still switches to a project while the window is in a scratch", async () => {

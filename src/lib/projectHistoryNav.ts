@@ -41,13 +41,18 @@ export async function switchToLastWorkspace(): Promise<void> {
     const projectState = useProjectStore.getState();
     const scratchState = useScratchStore.getState();
 
-    // The view's own immutable workspace id, never `currentScratch`: scratch
-    // switches reach every renderer through `broadcastToRenderer`, so
-    // `currentScratch` says what the user is looking at *globally*. A second
-    // window entering the scratch this one is about to toggle into would make
-    // that pointer match here and swallow the press. `currentProject` is the
-    // pre-seed fallback and stays view-targeted.
-    const currentWorkspaceId = getViewWorkspaceId() ?? projectState.currentProject?.id;
+    // Where this view is, and deliberately not `currentScratch`: scratch
+    // switches reach every renderer through `broadcastToRenderer`, so that
+    // pointer says what the user is looking at *globally*. A second window
+    // entering the scratch this one is about to toggle into would make it match
+    // here and swallow the press.
+    //
+    // `currentProject` leads because it is live and arrives by targeted send,
+    // and the legacy single-renderer never reloads — its seeded id stays pinned
+    // to the project it booted on. On a scratch there is no project pointer at
+    // all, and the view's own seeded id is the only thing left that names this
+    // view rather than the window that switched most recently.
+    const currentWorkspaceId = projectState.currentProject?.id ?? getViewWorkspaceId();
     if (currentWorkspaceId === target.workspaceId) return;
 
     // Routed on the id's shape, not on whether the scratch store lists it: both

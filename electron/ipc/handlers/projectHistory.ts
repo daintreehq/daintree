@@ -65,7 +65,13 @@ export function createProjectHistoryNamespace(deps: HandlerDependencies) {
   const resolveCurrentWorkspaceId = (ctx: IpcContext): string | null => {
     const scoped = resolveScopedProjectForIpcContext(ctx, deps);
     if (scoped) return scoped.workspaceId ?? ctx.projectId;
-    return ctx.projectId ?? projectStore.getCurrentProjectId();
+    // No view scoping anywhere: the legacy single-renderer, where there is one
+    // window and the global pointers are its own. The scratch pointer has to be
+    // consulted too, or a window sitting in a scratch looks like nowhere and is
+    // handed back the scratch it is already in.
+    return (
+      ctx.projectId ?? projectStore.getCurrentProjectId() ?? scratchStore.getCurrentScratchId()
+    );
   };
 
   /**

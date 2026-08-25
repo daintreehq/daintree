@@ -14,6 +14,7 @@ const projectStoreMock = vi.hoisted(() => ({
 }));
 const scratchStoreMock = vi.hoisted(() => ({
   getScratchById: vi.fn((id: string) => (existingScratchIds.has(id) ? { id } : null)),
+  getCurrentScratchId: vi.fn<() => string | null>(() => null),
 }));
 
 const scopedProjectMock = vi.hoisted(() =>
@@ -124,6 +125,7 @@ describe("projectHistory IPC", () => {
       existingScratchIds.has(id) ? { id } : null
     );
     projectStoreMock.getCurrentProjectId.mockReturnValue(null);
+    scratchStoreMock.getCurrentScratchId.mockReturnValue(null);
     // `clearAllMocks` clears calls, not queued return values.
     registryMock.getProjectForWebContents.mockReturnValue(null);
     registryMock.getWindowForWebContents.mockReturnValue(null);
@@ -295,15 +297,34 @@ describe("projectHistory IPC", () => {
     await expect(peek()).resolves.toEqual({ workspaceId: PROJECT_B });
   });
 
-  it("falls back to the global pointer only when there is no view scoping at all", async () => {
+  it("falls back to the global pointers only when there is no view scoping at all", async () => {
     // The legacy single-renderer path: no ProjectViewManager anywhere, so the
-    // scoped resolver has nothing to answer with and the global pointer is the
-    // only thing that names a workspace.
+    // scoped resolver has nothing to answer with and the global pointers are
+    // the only things that name a workspace. There is one window there, so
+    // "switched most recently" and "this window" are the same question.
     existingProjectIds.add(PROJECT_A);
     existingProjectIds.add(PROJECT_B);
     getProjectHistory(WINDOW_ID).record(PROJECT_A);
     scopedProjectMock.mockReturnValue(null);
     projectStoreMock.getCurrentProjectId.mockReturnValue(PROJECT_B);
+
+    await expect(peek()).resolves.toEqual({ workspaceId: PROJECT_A });
+    // The snapshot is what separates this from ignoring the pointer entirely:
+    // without the seed the list stays [A] and still answers A.
+    expect(getProjectHistory(WINDOW_ID).snapshot().entries).toEqual([PROJECT_B, PROJECT_A]);
+  });
+
+  it("reaches the scratch pointer when the legacy window is sitting in a scratch", async () => {
+    // Both project pointers are null on a scratch. Stopping there makes the
+    // window look like nowhere, and nowhere is handed back the head — the very
+    // scratch it is already in.
+    existingProjectIds.add(PROJECT_A);
+    existingScratchIds.add(SCRATCH_ONE);
+    const history = getProjectHistory(WINDOW_ID);
+    history.record(PROJECT_A);
+    history.record(SCRATCH_ONE);
+    scopedProjectMock.mockReturnValue(null);
+    scratchStoreMock.getCurrentScratchId.mockReturnValue(SCRATCH_ONE);
 
     await expect(peek()).resolves.toEqual({ workspaceId: PROJECT_A });
   });
