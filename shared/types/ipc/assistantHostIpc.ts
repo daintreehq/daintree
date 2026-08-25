@@ -26,11 +26,19 @@ export interface AssistantHostSessionEnv {
   DAINTREE_ASSISTANT_DEBUG_LOG?: string;
 }
 
+/**
+ * NOTE: there is deliberately no `tier` here either, for the same reason there is no
+ * `windowId`. The session's permission tier is decided in main — from the MCP bearer it
+ * was provisioned with, or from the stored setting when provisioning failed and there is
+ * no bearer to read — and the same value has to reach both the session descriptor and
+ * the engine's own environment, which the engine cross-checks and refuses to boot on a
+ * disagreement. A renderer-supplied tier could only ever be a second answer to a
+ * question that must have exactly one.
+ */
 export interface AssistantHostStartPayload {
   projectId: string;
   /** Project root; the engine's working directory. */
   cwd: string;
-  tier?: string;
 }
 
 /**
@@ -88,4 +96,49 @@ export interface AssistantHostExitPayload {
   sessionId: string;
   code: number | null;
   signal: NodeJS.Signals | null;
+}
+
+/**
+ * A safe, structured readout of the assistant's actual configuration.
+ *
+ * Built to settle the questions that otherwise take a support thread: which endpoint is
+ * it ACTUALLY talking to, is that endpoint even a backend, which engine build is this,
+ * and do the two sides agree on the protocol.
+ *
+ * None of DAINTREE'S secrets can appear here: no token, bearer or MCP value is read, the
+ * probe sends no credentials, and the resolved origin is stripped of userinfo, query and
+ * fragment. Several fields are nonetheless FREE TEXT — a binary path the user chose, a
+ * version string an engine printed, a snippet of whatever answered the probe — and free
+ * text belongs to whoever produced it. Bounded, but not vouched for.
+ */
+export interface AssistantDiagnostics {
+  platform: {
+    os: string;
+    arch: string;
+    supported: boolean;
+    /** Present only when unsupported. The same sentence the UI shows. */
+    unsupportedReason?: string;
+  };
+  environment: {
+    selected: string;
+    /** Where turns actually go — resolved, not merely selected, and stripped for display. */
+    resolvedUrl: string;
+    /**
+     * What `DAINTREE_BACKEND_URL` did.
+     *
+     * `refused` is its own answer because the resolver declines an off-box value
+     * silently: the variable is set, it changed nothing, and a reader who does not know
+     * that concludes the setting is broken.
+     */
+    envOverride: "none" | "applied" | "refused";
+  };
+  engine: { found: true; binaryPath: string; version?: string } | { found: false; detail: string };
+  backend: import("./assistantHostBackendProbe.js").AssistantBackendProbeResult;
+  /**
+   * The host<->engine protocol version THIS build speaks.
+   *
+   * Not an agreement: the engine's own is known only once a session reaches ready, and
+   * the backend's protocol range is a third, unrelated number.
+   */
+  hostProtocolVersion: number;
 }

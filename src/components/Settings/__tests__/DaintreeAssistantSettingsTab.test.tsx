@@ -1,6 +1,7 @@
 // @vitest-environment jsdom
-import { render, screen, fireEvent, waitFor, within } from "@testing-library/react";
+import { render, screen, fireEvent, waitFor, within, act } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
+import type { HelpAssistantSettings } from "@shared/types/ipc/api";
 
 vi.stubGlobal(
   "ResizeObserver",
@@ -63,6 +64,29 @@ interface SettingsSelectStubOption {
   label: string;
 }
 
+/**
+ * A complete `HelpAssistantSettings`, as main would return it.
+ *
+ * Typed rather than a loose object literal so a field added to the interface surfaces
+ * here as a compile error. It matters because `persist` now replaces state WHOLESALE
+ * from main's answer — a mock missing a field would silently blank it, and the test
+ * would be exercising a shape the real handler never produces.
+ */
+function settingsFixture(): HelpAssistantSettings {
+  return {
+    docSearch: true,
+    daintreeControl: true,
+    tier: "action",
+    bypassPermissions: false,
+    auditRetention: 7,
+    customArgs: "",
+    modelId: "",
+    debugLogging: false,
+    idleHibernateMinutes: 0,
+    backendEnvironment: "local",
+  };
+}
+
 vi.mock("../SettingsSelect", () => ({
   SettingsSelect: ({
     label,
@@ -70,17 +94,26 @@ vi.mock("../SettingsSelect", () => ({
     value,
     onValueChange,
     options,
+    disabled,
   }: {
     label: string;
     description?: React.ReactNode;
     value: string;
     onValueChange: (v: string) => void;
     options: SettingsSelectStubOption[];
+    disabled?: boolean;
   }) => (
     <label>
       {label}
       {description != null && <span>{description}</span>}
-      <select aria-label={label} value={value} onChange={(e) => onValueChange(e.target.value)}>
+      {/* `disabled` is forwarded deliberately: it is part of what the component
+          promises, and a stub that drops it makes every lock look untested. */}
+      <select
+        aria-label={label}
+        value={value}
+        disabled={disabled}
+        onChange={(e) => onValueChange(e.target.value)}
+      >
         {options.map((o) => (
           <option key={o.value} value={o.value}>
             {o.label}
@@ -178,6 +211,7 @@ import {
   formatGrantRemaining,
 } from "../DaintreeAssistantSettingsTab";
 import { SettingsValidationProvider } from "../SettingsValidationRegistry";
+import { resetAssistantAccountStateForTests } from "@/hooks/useAssistantAccount";
 
 const writeText = vi.fn().mockResolvedValue(undefined);
 
@@ -213,16 +247,15 @@ function installApi(
   mcpServer: Partial<McpServerApi> = {},
   system: Partial<SystemApi> = {}
 ) {
+  const storedSettings = settingsFixture();
   const helpDefaults: HelpAssistantApi = {
-    getSettings: vi.fn().mockResolvedValue({
-      docSearch: true,
-      daintreeControl: true,
-      tier: "action" as const,
-      bypassPermissions: false,
-      auditRetention: 7,
-      customArgs: "",
+    getSettings: vi.fn().mockResolvedValue({ ...storedSettings }),
+    // Answers with the settings as they now stand, like the real handler: it reads
+    // back rather than echoing the patch, so a caller can tell what actually landed.
+    setSettings: vi.fn(async (patch: Record<string, unknown>) => {
+      Object.assign(storedSettings, patch);
+      return { ...storedSettings };
     }),
-    setSettings: vi.fn().mockResolvedValue(undefined),
     getLiveSessionStatus: vi
       .fn()
       .mockResolvedValue({ connected: false, tier: "workbench", activeGrants: [] }),
@@ -281,11 +314,26 @@ function installApi(
       // exercise the pre-picker layout they were written against.
       getResolvedModelList: vi.fn().mockResolvedValue(null),
     },
+    // The Account section reads status and subscribes to sign-in progress on mount.
+    // Defaults to an engine without accounts, which is the state that renders least
+    // and so leaves the layout these tests were written against unchanged.
+    assistantAccount: {
+      getStatus: vi
+        .fn()
+        .mockResolvedValue({ available: false, reason: "cli-too-old", message: "no accounts" }),
+      login: vi.fn().mockResolvedValue({ signedIn: false, cancelled: true, message: "" }),
+      cancelLogin: vi.fn().mockResolvedValue({ cancelled: false }),
+      logout: vi.fn().mockResolvedValue({ signedOut: false }),
+      onLoginProgress: vi.fn().mockReturnValue(() => {}),
+    },
   } as unknown as typeof window.electron;
 }
 
 describe("DaintreeAssistantSettingsTab", () => {
   beforeEach(() => {
+    // The account store is module-level — one account, shared by every view of it — so
+    // it outlives a test and would carry the previous one's state into the next.
+    resetAssistantAccountStateForTests();
     vi.clearAllMocks();
     helpPanelState.preferredAgentId = null;
     helpPanelState.droppedPreferredAgentId = null;
@@ -966,6 +1014,199 @@ describe("DaintreeAssistantSettingsTab", () => {
         "Allow the assistant to search Daintree documentation"
       );
       expect(docSearchToggle.getAttribute("data-state")).toBe("unchecked");
+    });
+  });
+
+  /**
+   * The environment picker, and the race it used to lose.
+   *
+   * The account section re-reads the account whenever the environment prop changes, and
+   * that read reaches main, which resolves the endpoint from the STORE. The prop used
+   * to move optimistically — synchronously, before `setSettings` had been awaited — so
+   * the reload could reach `auth status` while the store still held the old value, and
+   * the panel would report an account belonging to the environment the user had just
+   * left. It looked like it worked, which is the worst shape this bug could have.
+   */
+  describe("environment persistence", () => {
+    // jest-dom's matchers are not installed in this project's vitest setup, so the
+    // select is read directly rather than through `toHaveValue`.
+    const environmentValue = () =>
+      (screen.getByLabelText("Environment") as HTMLSelectElement).value;
+
+    /** A `setSettings` whose write lands only when the test says so. */
+    function deferredSetSettings() {
+      let release!: () => void;
+      const landed = new Promise<void>((resolve) => {
+        release = resolve;
+      });
+      const setSettings = vi.fn(async (patch: Record<string, unknown>) => {
+        await landed;
+        return { ...settingsFixture(), ...patch };
+      });
+      return { setSettings, release };
+    }
+
+    it("does not read the account against the new environment until the write lands", async () => {
+      const { setSettings, release } = deferredSetSettings();
+      const getStatus = vi
+        .fn()
+        .mockResolvedValue({ available: false, reason: "cli-too-old", message: "no accounts" });
+      installApi({ setSettings });
+      (
+        window.electron as unknown as { assistantAccount: { getStatus: typeof getStatus } }
+      ).assistantAccount.getStatus = getStatus;
+
+      const { container } = render(
+        <SettingsValidationProvider>
+          <DaintreeAssistantSettingsTab />
+        </SettingsValidationProvider>
+      );
+      // Wait for the account's own answer to be on screen rather than sleeping: that
+      // is the observable end of the mount reads, so the baseline below is taken at a
+      // known point instead of a hoped-for one.
+      await waitForContent(container, "Environment");
+      await waitForContent(container, "doesn't support accounts yet");
+      getStatus.mockClear();
+
+      fireEvent.change(screen.getByLabelText("Environment"), { target: { value: "staging" } });
+
+      // The write is in flight. The picker has moved — the control must answer the
+      // click — but the reload must NOT have fired, because the store does not yet
+      // hold the value it would be read against.
+      await waitFor(() =>
+        expect(setSettings).toHaveBeenCalledWith(
+          expect.objectContaining({ backendEnvironment: "staging" })
+        )
+      );
+      expect(environmentValue()).toBe("staging");
+      // Flush the microtask queue the reload would have ridden. This is the ordering
+      // question, not a timing one — a reload triggered by the optimistic update would
+      // already be queued by now — so draining the queue answers it without a sleep.
+      await act(async () => {
+        await Promise.resolve();
+        await Promise.resolve();
+      });
+      expect(getStatus).not.toHaveBeenCalled();
+
+      release();
+
+      // Landed. Now — and only now — the account is re-read, and it is read against the
+      // environment that is genuinely stored.
+      await waitFor(() => expect(getStatus).toHaveBeenCalled());
+    });
+
+    it("snaps back to the stored environment when the write fails", async () => {
+      installApi({ setSettings: vi.fn().mockRejectedValue(new Error("disk full")) });
+
+      const { container } = render(
+        <SettingsValidationProvider>
+          <DaintreeAssistantSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "Environment");
+      expect(environmentValue()).toBe("local");
+
+      fireEvent.change(screen.getByLabelText("Environment"), { target: { value: "staging" } });
+
+      // Reverted, and SAYING so. Leaving the picker on the value it failed to save
+      // would show one environment while the assistant talked to another.
+      await waitForContent(container, "disk full");
+      await waitFor(() => expect(environmentValue()).toBe("local"));
+    });
+
+    it("takes the stored answer over the requested one when they differ", async () => {
+      // Main validates each field and skips an invalid one, so what was asked for and
+      // what is now true are not the same question. The panel follows the answer.
+      //
+      // The starting point is STAGING, not local. Starting from local would make
+      // "requested staging", "never moved" and "authoritative local" three
+      // indistinguishable outcomes, and the test would pass against a renderer that
+      // simply never applies an environment change at all.
+      installApi({
+        getSettings: vi
+          .fn()
+          .mockResolvedValue({ ...settingsFixture(), backendEnvironment: "staging" }),
+        setSettings: vi
+          .fn()
+          .mockResolvedValue({ ...settingsFixture(), backendEnvironment: "staging" }),
+      });
+
+      const { container } = render(
+        <SettingsValidationProvider>
+          <DaintreeAssistantSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "Environment");
+      await waitFor(() => expect(environmentValue()).toBe("staging"));
+
+      // Asked for local; main says it is still staging. The panel must show staging.
+      fireEvent.change(screen.getByLabelText("Environment"), { target: { value: "local" } });
+
+      await waitFor(() => expect(environmentValue()).toBe("staging"));
+    });
+
+    it("reverts an optimistic field when its write is rejected", async () => {
+      // The other half of the rollback, and the half the environment tests cannot
+      // reach: `backendEnvironment` never moves optimistically, so a test that only
+      // watches the picker would pass with the patch-scoped revert deleted entirely.
+      installApi({ setSettings: vi.fn().mockRejectedValue(new Error("disk full")) });
+
+      const { container } = render(
+        <SettingsValidationProvider>
+          <DaintreeAssistantSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "Search documentation");
+      const toggle = () =>
+        screen.getByLabelText("Allow the assistant to search Daintree documentation");
+      expect(toggle().getAttribute("data-state")).toBe("checked");
+
+      fireEvent.click(toggle());
+
+      await waitForContent(container, "disk full");
+      // Back on. A switch left in the position it failed to save is a switch that lies
+      // about what the assistant will actually do.
+      await waitFor(() => expect(toggle().getAttribute("data-state")).toBe("checked"));
+    });
+
+    it("starts a new account read rather than joining one bound to the old environment", async () => {
+      // Reads are COALESCED: a second reader normally joins the one already running.
+      // That is right everywhere except here — an in-flight read is bound to the
+      // endpoint its process was spawned against, so joining it answers "which account
+      // is this?" with a status about the environment the user just left.
+      let releaseFirst!: (value: unknown) => void;
+      const firstRead = new Promise((resolve) => {
+        releaseFirst = resolve;
+      });
+      const unavailable = { available: false, reason: "cli-too-old", message: "no accounts" };
+      let call = 0;
+      const getStatus = vi.fn(async () => {
+        call += 1;
+        if (call === 1) {
+          await firstRead;
+        }
+        return unavailable;
+      });
+      installApi();
+      (
+        window.electron as unknown as { assistantAccount: { getStatus: typeof getStatus } }
+      ).assistantAccount.getStatus = getStatus;
+
+      const { container } = render(
+        <SettingsValidationProvider>
+          <DaintreeAssistantSettingsTab />
+        </SettingsValidationProvider>
+      );
+      await waitForContent(container, "Environment");
+      await waitFor(() => expect(getStatus).toHaveBeenCalledTimes(1));
+
+      // The first read is still hanging, bound to `local`.
+      fireEvent.change(screen.getByLabelText("Environment"), { target: { value: "staging" } });
+
+      // A SECOND process must start, without waiting for the first to come back.
+      await waitFor(() => expect(getStatus.mock.calls.length).toBeGreaterThan(1));
+
+      releaseFirst(undefined);
     });
   });
 
