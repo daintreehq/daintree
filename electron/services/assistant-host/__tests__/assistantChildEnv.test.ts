@@ -72,6 +72,32 @@ describe("assistantChildEnv", () => {
     expect(env.DAINTREE_ASSISTANT_OFFLINE).toBeUndefined();
   });
 
+  it("strips the knobs the engine reads outside its own trust tiering", () => {
+    // All but the last are read with a bare `os.Getenv` outside config resolution, so
+    // they never pass `trustedGet` at all — the engine documents them as test-only or
+    // operator-only, and nothing in it stops one arriving from a shell instead.
+    // `SOCKET_DIR` is the load-bearing one: the embedded host has to find the supervisor
+    // holding this project's owner lock over that socket before it can ask it to yield,
+    // and pointed at the wrong root it waits the lease out and refuses to start.
+    setEnv("DAINTREE_ASSISTANT_SOCKET_DIR", "/tmp/a-lease-nobody-can-see");
+    setEnv("DAINTREE_ASSISTANT_NO_DAEMON", "1");
+    setEnv("DAINTREE_ASSISTANT_DAEMON_FAST", "1");
+    setEnv("DAINTREE_ASSISTANT_DAEMON_IDLE_EXIT_MS", "250");
+    setEnv("DAINTREE_ASSISTANT_BOOT_TRACE", "/tmp/a-path-nobody-chose.trace");
+    setEnv("DAINTREE_WORKFLOW_INTELLIGENCE", "0");
+
+    const env = assistantChildEnv();
+
+    expect(
+      Object.keys(env).filter((k) => k.startsWith("DAINTREE_ASSISTANT_DAEMON_")),
+      "the daemon's test cadences retire the supervisor mid-session"
+    ).toEqual([]);
+    expect(env.DAINTREE_ASSISTANT_SOCKET_DIR).toBeUndefined();
+    expect(env.DAINTREE_ASSISTANT_NO_DAEMON).toBeUndefined();
+    expect(env.DAINTREE_ASSISTANT_BOOT_TRACE).toBeUndefined();
+    expect(env.DAINTREE_WORKFLOW_INTELLIGENCE).toBeUndefined();
+  });
+
   it("leaves an ordinary environment intact", () => {
     // The strip is a named list, never a `DAINTREE_`-prefixed sweep and never a
     // reconstructed environment: the engine spawns tools and a shell, and an env missing
