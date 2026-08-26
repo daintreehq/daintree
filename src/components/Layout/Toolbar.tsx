@@ -2061,6 +2061,7 @@ export function Toolbar({
                       isOpen={isDropdownOpen}
                       query={projectSwitcher.query}
                       results={projectSwitcher.results}
+                      browseBands={projectSwitcher.browseBands}
                       selectedIndex={projectSwitcher.selectedIndex}
                       onQueryChange={projectSwitcher.setQuery}
                       onSelectPrevious={projectSwitcher.selectPrevious}

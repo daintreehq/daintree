@@ -228,6 +228,60 @@ describe("preferencesStore cross-view write merge (#11351)", () => {
     expect(written.state.dockDensity).toBe("compact");
   });
 
+  it("keeps a sibling's folded band when this view folds a different one", async () => {
+    // Per-key, not whole-field: two project views each fold the bands they read
+    // past, and a whole-map write from either would take the other's fold with
+    // it. This is the failure `mergeRecordByWriterDelta` exists to prevent.
+    const backing = installLocalStorage({});
+    const { usePreferencesStore: store } = await import("../preferencesStore");
+
+    store.getState().setDockDensity("normal");
+
+    const disk = readBlob(backing);
+    disk.state.projectSwitcherCollapsedBands = { running: true };
+    backing.set(STORAGE_KEY, JSON.stringify(disk));
+
+    store.getState().setProjectSwitcherBandCollapsed("other", true);
+
+    const written = readBlob(backing);
+    expect(written.state.projectSwitcherCollapsedBands).toEqual({ running: true, other: true });
+  });
+
+  it("does not resurrect a band this view unfolded, and keeps a sibling's", async () => {
+    // An unfolded band is stored as `false`, not deleted, so "this view unfolded
+    // it" and "this view never touched it" stay distinguishable to the merge.
+    const backing = installLocalStorage({});
+    const { usePreferencesStore: store } = await import("../preferencesStore");
+
+    store.getState().setProjectSwitcherBandCollapsed("other", true);
+
+    const disk = readBlob(backing);
+    disk.state.projectSwitcherCollapsedBands = { other: true, pinned: true };
+    backing.set(STORAGE_KEY, JSON.stringify(disk));
+
+    store.getState().setProjectSwitcherBandCollapsed("other", false);
+
+    const written = readBlob(backing);
+    expect(written.state.projectSwitcherCollapsedBands).toEqual({ other: false, pinned: true });
+  });
+
+  it("keeps a sibling's fold through an unrelated preference write", async () => {
+    const backing = installLocalStorage({});
+    const { usePreferencesStore: store } = await import("../preferencesStore");
+
+    store.getState().setDockDensity("normal");
+
+    const disk = readBlob(backing);
+    disk.state.projectSwitcherCollapsedBands = { scratch: false };
+    backing.set(STORAGE_KEY, JSON.stringify(disk));
+
+    store.getState().setReduceAnimations(true);
+
+    const written = readBlob(backing);
+    expect(written.state.projectSwitcherCollapsedBands).toEqual({ scratch: false });
+    expect(written.state.reduceAnimations).toBe(true);
+  });
+
   it("keeps this view's sort mode when a sibling changes an unrelated scalar", async () => {
     const backing = installLocalStorage({});
     const { usePreferencesStore: store } = await import("../preferencesStore");

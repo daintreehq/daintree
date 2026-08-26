@@ -136,6 +136,7 @@ beforeAll(async () => {
 
 beforeEach(() => {
   usePreferencesStore.getState().setProjectSwitcherOtherSortMode(DEFAULT_OTHER_PROJECTS_SORT_MODE);
+  usePreferencesStore.setState({ projectSwitcherCollapsedBands: {} });
 });
 
 function makeProject(
@@ -164,16 +165,19 @@ function makeProject(
   } as ProjectSwitcherProjectRow;
 }
 
-function renderPalette(otherRows: number) {
+function renderPalette(otherRows: number, { collapsed = false }: { collapsed?: boolean } = {}) {
   const results = Array.from({ length: otherRows }, (_, i) =>
     makeProject({ id: `other-${i}`, lastOpened: 1_000 - i })
   );
+  // Mirrors the hook: a folded band declares its full count and contributes no
+  // rows, so nothing `selectedIndex` can address is missing from the DOM.
   return render(
     <ProjectSwitcherPalette
       isOpen
       mode="modal"
       query=""
-      results={results}
+      results={collapsed ? [] : results}
+      browseBands={[{ key: "other", label: "Other projects", itemCount: otherRows, collapsed }]}
       selectedIndex={0}
       onQueryChange={vi.fn()}
       onSelectPrevious={vi.fn()}
@@ -195,8 +199,11 @@ function trigger(): HTMLElement {
  */
 function headerRow(): HTMLElement {
   const label = document.getElementById("project-section-other");
-  if (!label?.parentElement) throw new Error("Other projects header not found");
-  return label.parentElement;
+  // Not `parentElement`: the leaf sits inside the fold control now (#11943), so
+  // walking one level up lands on the button rather than the row Radix is on.
+  const row = label?.closest('[role="presentation"]');
+  if (!(row instanceof HTMLElement)) throw new Error("Other projects header not found");
+  return row;
 }
 
 /** Radix opens a dropdown on primary-button pointerdown, not on click. */
@@ -273,5 +280,34 @@ describe("Other projects sort control (#11455)", () => {
     const group = screen.getByRole("group", { name: "Other projects" });
     // The control lives inside the header row but outside the labelling leaf.
     expect(within(group).getByTestId("other-projects-sort-trigger")).toBeTruthy();
+  });
+
+  it("shares the header row with the fold control without renaming the band", () => {
+    // Two controls now sit around the labelling leaf (#11943). Either one
+    // nested inside it would name the band "Other projects Most used" or
+    // "Other projects Other projects".
+    renderPalette(4);
+    const group = screen.getByRole("group", { name: "Other projects" });
+    expect(within(group).getByTestId("other-projects-sort-trigger")).toBeTruthy();
+    expect(within(group).getByTestId("band-collapse-toggle-other")).toBeTruthy();
+  });
+
+  it("keeps the fold control out of the tab order, like the sort trigger", () => {
+    // Section headers live inside the listbox, where a focusable child is
+    // invalid and unreachable anyway — arrow keys move across rows, never here.
+    renderPalette(4);
+    expect(screen.getByTestId("band-collapse-toggle-other").getAttribute("tabindex")).toBe("-1");
+    expect(trigger().getAttribute("tabindex")).toBe("-1");
+  });
+
+  it("drops the sort control while the band is folded", () => {
+    // Naming the order of rows nobody can see spends the header's one free slot
+    // on the fact least worth having; the folded count takes it instead.
+    renderPalette(4, { collapsed: true });
+
+    expect(screen.queryByTestId("other-projects-sort-trigger")).toBeNull();
+    const group = screen.getByRole("group", { name: "Other projects" });
+    expect(within(group).getByText("4")).toBeTruthy();
+    expect(within(group).queryAllByRole("option")).toHaveLength(0);
   });
 });

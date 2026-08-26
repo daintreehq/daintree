@@ -133,6 +133,27 @@ interface PreferencesState {
    */
   projectSwitcherOtherSortMode: OtherProjectsSortMode;
   setProjectSwitcherOtherSortMode: (mode: OtherProjectsSortMode) => void;
+  /**
+   * Which project-switcher bands the user has folded away, keyed by band
+   * ({@link PROJECT_SECTION_ORDER}'s members plus `"scratch"`). Global for the
+   * same reason the sort mode above is: it names how the user reads their whole
+   * project set (#11943).
+   *
+   * Keys are free-form strings rather than the band union, matching
+   * `skipPushConfirmByWorktreePath`. Typing them would mean importing the
+   * palette hook's `ProjectSectionKey` into the store, and a band that is later
+   * renamed leaves an inert unused entry either way — which is what
+   * `persistWriteMerge` is built to tolerate.
+   *
+   * Unlike the skip map, an entry is NEVER dropped for looking like a default.
+   * Absent and `false` are different facts here: Scratch's default is dynamic
+   * (collapsed only while it is empty), so deleting the key on expand would
+   * silently re-collapse it on the next open. Storing the explicit boolean is
+   * what makes "the user has chosen" outlive the condition that set the
+   * default — and at eight possible keys there is nothing to garbage-collect.
+   */
+  projectSwitcherCollapsedBands: Record<string, boolean>;
+  setProjectSwitcherBandCollapsed: (bandKey: string, collapsed: boolean) => void;
   setDeletedWorktreeCleanupSeconds: (value: DeletedWorktreeCleanupSeconds) => void;
   /**
    * Basename globs always hidden in the file browser, across every panel. See
@@ -237,14 +258,15 @@ function sanitizePersistedPreferences(
   );
 
   // A truthy non-record value here would otherwise bypass the push-confirm gate.
-  const skip = sanitized.skipPushConfirmByWorktreePath;
-  const validatedSkip: Record<string, boolean> = {};
-  if (skip !== null && typeof skip === "object" && !Array.isArray(skip)) {
-    for (const [key, value] of Object.entries(skip)) {
-      if (typeof value === "boolean") validatedSkip[key] = value;
-    }
-  }
-  sanitized.skipPushConfirmByWorktreePath = validatedSkip;
+  sanitized.skipPushConfirmByWorktreePath = normalizeBooleanMap(
+    sanitized.skipPushConfirmByWorktreePath
+  );
+
+  // Same hazard in the other direction: a hand-edited string would read as
+  // "collapsed" for every band and leave the switcher looking empty.
+  sanitized.projectSwitcherCollapsedBands = normalizeBooleanMap(
+    sanitized.projectSwitcherCollapsedBands
+  );
 
   // A non-boolean here would be truthy for any hand-edited string, retiring the
   // hint for a user who never saw it.
@@ -280,6 +302,7 @@ type PreferencesPersistedState = Pick<
   | "markdownWrapLines"
   | "deletedWorktreeCleanupSeconds"
   | "projectSwitcherOtherSortMode"
+  | "projectSwitcherCollapsedBands"
   | "lastSelectedWorktreeRecipeIdByProject"
   | "skipPushConfirmByWorktreePath"
   | "fileBrowserAlwaysHiddenPatterns"
@@ -305,6 +328,7 @@ const PREFERENCES_PERSISTED_DEFAULTS: PreferencesPersistedState = {
   markdownWrapLines: true,
   deletedWorktreeCleanupSeconds: DELETED_WORKTREE_CLEANUP_DEFAULT,
   projectSwitcherOtherSortMode: DEFAULT_OTHER_PROJECTS_SORT_MODE,
+  projectSwitcherCollapsedBands: {},
   lastSelectedWorktreeRecipeIdByProject: {},
   skipPushConfirmByWorktreePath: {},
   fileBrowserAlwaysHiddenPatterns: [...DEFAULT_FILE_BROWSER_ALWAYS_HIDDEN],
@@ -331,7 +355,12 @@ function normalizeRecipeMap(value: unknown): Record<string, string | null> {
   return result;
 }
 
-function normalizeSkipMap(value: unknown): Record<string, boolean> {
+/**
+ * Keep only the boolean-valued keys of a persisted string→boolean map. Shared
+ * by every such field: a non-boolean entry is dropped rather than coerced,
+ * because a hand-edited string is truthy and would flip the flag on.
+ */
+function normalizeBooleanMap(value: unknown): Record<string, boolean> {
   if (value === null || typeof value !== "object" || Array.isArray(value)) return {};
   const result: Record<string, boolean> = {};
   for (const [key, entry] of Object.entries(value)) {
@@ -432,10 +461,11 @@ function toPreferencesPersisted(
     projectSwitcherOtherSortMode: isOtherProjectsSortMode(raw.projectSwitcherOtherSortMode)
       ? raw.projectSwitcherOtherSortMode
       : d.projectSwitcherOtherSortMode,
+    projectSwitcherCollapsedBands: normalizeBooleanMap(raw.projectSwitcherCollapsedBands),
     lastSelectedWorktreeRecipeIdByProject: normalizeRecipeMap(
       raw.lastSelectedWorktreeRecipeIdByProject
     ),
-    skipPushConfirmByWorktreePath: normalizeSkipMap(raw.skipPushConfirmByWorktreePath),
+    skipPushConfirmByWorktreePath: normalizeBooleanMap(raw.skipPushConfirmByWorktreePath),
     fileBrowserAlwaysHiddenPatterns: sanitizeAlwaysHiddenPatterns(
       raw.fileBrowserAlwaysHiddenPatterns
     ),
@@ -543,6 +573,14 @@ function mergePreferencesPersistedWrite({
         inc.projectSwitcherOtherSortMode,
         disk.projectSwitcherOtherSortMode
       ),
+      // Per-key, not whole-field: two project views each folding a different
+      // band must both survive, and a stale view's snapshot must not carry its
+      // hydration-time copy of a band the sibling has since toggled.
+      projectSwitcherCollapsedBands: mergeRecordByWriterDelta(
+        base.projectSwitcherCollapsedBands,
+        inc.projectSwitcherCollapsedBands,
+        disk.projectSwitcherCollapsedBands
+      ),
       lastSelectedWorktreeRecipeIdByProject: mergeRecordByWriterDelta(
         base.lastSelectedWorktreeRecipeIdByProject,
         inc.lastSelectedWorktreeRecipeIdByProject,
@@ -641,6 +679,19 @@ export const usePreferencesStore = create<PreferencesState>()(
       setDeletedWorktreeCleanupSeconds: (value) => set({ deletedWorktreeCleanupSeconds: value }),
       projectSwitcherOtherSortMode: DEFAULT_OTHER_PROJECTS_SORT_MODE,
       setProjectSwitcherOtherSortMode: (mode) => set({ projectSwitcherOtherSortMode: mode }),
+      projectSwitcherCollapsedBands: {},
+      // Writes the boolean either way — see the field's note on why an expanded
+      // band is stored rather than deleted.
+      setProjectSwitcherBandCollapsed: (bandKey, collapsed) =>
+        set((state) => {
+          if (state.projectSwitcherCollapsedBands[bandKey] === collapsed) return state;
+          return {
+            projectSwitcherCollapsedBands: {
+              ...state.projectSwitcherCollapsedBands,
+              [bandKey]: collapsed,
+            },
+          };
+        }),
       fileBrowserAlwaysHiddenPatterns: [...DEFAULT_FILE_BROWSER_ALWAYS_HIDDEN],
       setFileBrowserAlwaysHiddenPatterns: (patterns) =>
         set({ fileBrowserAlwaysHiddenPatterns: sanitizeAlwaysHiddenPatterns(patterns) }),
@@ -686,7 +737,7 @@ export const usePreferencesStore = create<PreferencesState>()(
       storage: createSafeJSONStorage<PreferencesPersistedState>({
         mergeOnWrite: mergePreferencesPersistedWrite,
       }),
-      version: 16,
+      version: 17,
       // Explicit persisted subset — matches the pre-existing default (setters are
       // dropped by JSON serialization); named so the write merge (#11351) has a
       // typed persisted shape to reconcile.
@@ -708,6 +759,7 @@ export const usePreferencesStore = create<PreferencesState>()(
         markdownWrapLines: state.markdownWrapLines,
         deletedWorktreeCleanupSeconds: state.deletedWorktreeCleanupSeconds,
         projectSwitcherOtherSortMode: state.projectSwitcherOtherSortMode,
+        projectSwitcherCollapsedBands: state.projectSwitcherCollapsedBands,
         lastSelectedWorktreeRecipeIdByProject: state.lastSelectedWorktreeRecipeIdByProject,
         skipPushConfirmByWorktreePath: state.skipPushConfirmByWorktreePath,
         fileBrowserAlwaysHiddenPatterns: state.fileBrowserAlwaysHiddenPatterns,
@@ -842,6 +894,13 @@ export const usePreferencesStore = create<PreferencesState>()(
             persisted.keyboardLayoutConfirmationsByBinding = {};
           }
         }
+        if (version < 17 && isRecord(persisted)) {
+          // Only Scratch could be folded before this shipped, and it never
+          // persisted, so everyone starts with every band open (#11943).
+          if (!isRecord(persisted.projectSwitcherCollapsedBands)) {
+            persisted.projectSwitcherCollapsedBands = {};
+          }
+        }
         return persisted as PreferencesState;
       },
     }
@@ -852,5 +911,5 @@ registerPersistedStore({
   storeId: "preferencesStore",
   store: usePreferencesStore,
   persistedStateType:
-    "{ showProjectPulse: boolean; showDeveloperTools: boolean; showGridAgentHighlights: boolean; showDockAgentHighlights: boolean; showAgentTaskTitles: boolean; dockDensity: DockDensity; assignWorktreeToSelf: boolean; reduceAnimations: boolean; diffViewType: DiffViewType; diffWrapLines: boolean; diffIgnoreWhitespace: boolean; diffShowFileList: boolean; diffFullFile: boolean; diffFontSize: DiffFontSize; markdownWrapLines: boolean; lastSelectedWorktreeRecipeIdByProject: Record<string, string | null | undefined>; skipPushConfirmByWorktreePath: Record<string, boolean>; deletedWorktreeCleanupSeconds: DeletedWorktreeCleanupSeconds; projectSwitcherOtherSortMode: OtherProjectsSortMode; fileBrowserAlwaysHiddenPatterns: string[]; hasSeenActionPalettePrefixHint: boolean; keyboardLayoutConfirmationsByBinding: Record<string, number> }",
+    "{ showProjectPulse: boolean; showDeveloperTools: boolean; showGridAgentHighlights: boolean; showDockAgentHighlights: boolean; showAgentTaskTitles: boolean; dockDensity: DockDensity; assignWorktreeToSelf: boolean; reduceAnimations: boolean; diffViewType: DiffViewType; diffWrapLines: boolean; diffIgnoreWhitespace: boolean; diffShowFileList: boolean; diffFullFile: boolean; diffFontSize: DiffFontSize; markdownWrapLines: boolean; lastSelectedWorktreeRecipeIdByProject: Record<string, string | null | undefined>; skipPushConfirmByWorktreePath: Record<string, boolean>; deletedWorktreeCleanupSeconds: DeletedWorktreeCleanupSeconds; projectSwitcherOtherSortMode: OtherProjectsSortMode; projectSwitcherCollapsedBands: Record<string, boolean>; fileBrowserAlwaysHiddenPatterns: string[]; hasSeenActionPalettePrefixHint: boolean; keyboardLayoutConfirmationsByBinding: Record<string, number> }",
 });

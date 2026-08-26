@@ -198,6 +198,7 @@ import type {
 import { primeRadix } from "@/components/ui/radix-loader";
 
 const { ProjectSwitcherPalette } = await import("../ProjectSwitcherPalette");
+const { usePreferencesStore } = await import("@/store/preferencesStore");
 
 beforeAll(async () => {
   // The context-menu primitives resolve through the lazy Radix loader; without
@@ -317,6 +318,9 @@ function consequenceNoun(): string {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  // Persisted and app-global (#11943): the collapse test below would otherwise
+  // leave every later case looking at a folded section.
+  usePreferencesStore.setState({ projectSwitcherCollapsedBands: {} });
 });
 
 // The action has to survive BOTH surfaces. The two hosts forward props through
