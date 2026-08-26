@@ -23,11 +23,18 @@ vi.mock("@/store/panelDialogStore", () => ({
 
 import { registerFileActions } from "../fileActions";
 
+/**
+ * `wt-1` is what `getActiveWorktreeId` reports, so it is the fallback under
+ * test; `wt-other` is a real worktree that is not the active one. Paths are
+ * disjoint so containment has an unambiguous answer.
+ */
+let worktreesFixture: Array<{ id: string; path: string }> = [];
+
 function setupActions() {
   const actions: ActionRegistry = new Map();
   const callbacks: ActionCallbacks = {
     getActiveWorktreeId: () => "wt-1",
-    getWorktrees: () => [],
+    getWorktrees: () => worktreesFixture,
   } as unknown as ActionCallbacks;
   registerFileActions(actions, callbacks);
   return async (id: string, args?: unknown, ctx?: Partial<ActionContext>): Promise<unknown> => {
@@ -40,6 +47,10 @@ function setupActions() {
 
 beforeEach(() => {
   vi.clearAllMocks();
+  worktreesFixture = [
+    { id: "wt-1", path: "/repo/wt-1" },
+    { id: "wt-other", path: "/repo/wt-other" },
+  ];
   openPanelDialogMock.mockReset().mockResolvedValue("file-panel-1");
   // `mockReset`, not `clearAllMocks` alone: the latter drains call records but
   // NOT queued `...Once` implementations, so a test that aborts before consuming
@@ -97,24 +108,62 @@ describe("fileActions adversarial", () => {
     await expect(run("file.view", { path: "/a/b.ts" })).rejects.toThrow();
   });
 
-  it("file.view binds the panel to the active worktree when none is named", async () => {
+  it("file.view falls back to the active worktree for a file outside every one", async () => {
     const run = setupActions();
-    await run("file.view", { path: "/a/b.ts" });
+    await run("file.view", { path: "/elsewhere/b.ts" });
 
     expect(openPanelDialogMock).toHaveBeenCalledWith(
       expect.objectContaining({ worktreeId: "wt-1" })
     );
   });
 
-  it("file.view lets an explicit worktreeId beat the active worktree", async () => {
+  it("file.view binds an unnamed target to the worktree containing it", async () => {
     const run = setupActions();
-    await run("file.view", { path: "/other/b.ts", worktreeId: "wt-other" });
+    await run("file.view", { path: "/repo/wt-other/src/b.ts" });
 
-    // `wt-1` is what `getActiveWorktreeId` reports, so a stamped `wt-1` here
-    // would be the bug: it decides the pane's read root and, on promotion,
-    // which worktree bucket the panel lands in.
+    // `wt-1` is the active worktree, so stamping it here would be the bug: the
+    // binding decides the pane's read root and, on promotion, which worktree
+    // bucket the panel lands in (#11276).
     expect(openPanelDialogMock).toHaveBeenCalledWith(
       expect.objectContaining({ worktreeId: "wt-other" })
+    );
+  });
+
+  it("file.view honours an explicit worktreeId over the active worktree", async () => {
+    const run = setupActions();
+    await run("file.view", { path: "/elsewhere/b.ts", worktreeId: "wt-other" });
+
+    expect(openPanelDialogMock).toHaveBeenCalledWith(
+      expect.objectContaining({ worktreeId: "wt-other" })
+    );
+  });
+
+  it("file.view rejects a worktreeId the project does not have", async () => {
+    const run = setupActions();
+
+    // Silently binding somewhere else on a named target is the class of bug
+    // #7880 banned — the caller's claim is wrong, and it must be told.
+    await expect(run("file.view", { path: "/a/b.ts", worktreeId: "ghost" })).rejects.toThrow();
+    expect(openPanelDialogMock).not.toHaveBeenCalled();
+  });
+
+  it("file.view rejects an empty worktreeId rather than treating it as absent", async () => {
+    const run = setupActions();
+
+    // `""` is falsy but not nullish, so a plain `??` would carry it through and
+    // index the panel under an empty, unreachable worktree bucket.
+    await expect(run("file.view", { path: "/a/b.ts", worktreeId: "" })).rejects.toThrow();
+    expect(openPanelDialogMock).not.toHaveBeenCalled();
+  });
+
+  it("file.view distinguishes an unloaded worktree list from a foreign id", async () => {
+    worktreesFixture = [];
+    const run = setupActions();
+
+    // Transient and worth retrying, unlike a foreign id — so it must not read
+    // as the same refusal.
+    await expect(run("file.view", { path: "/a/b.ts", worktreeId: "wt-1" })).rejects.toThrow(
+      /haven't loaded yet/
     );
   });
 
@@ -124,6 +173,17 @@ describe("fileActions adversarial", () => {
 
     const options = openPanelDialogMock.mock.calls[0]![0] as Record<string, unknown>;
     expect(options).not.toHaveProperty("fileViewMode");
+  });
+
+  it("file.view keeps an explicit source request on a renderable file", async () => {
+    const run = setupActions();
+    await run("file.view", { path: "/a/notes.md", viewMode: "source" });
+
+    // The clamp only ever demotes; asking for source on a file that *could*
+    // render must not be quietly upgraded.
+    expect(openPanelDialogMock).toHaveBeenCalledWith(
+      expect.objectContaining({ fileViewMode: "source" })
+    );
   });
 
   it("file.view passes a rendered request through for markdown", async () => {
@@ -150,16 +210,16 @@ describe("fileActions adversarial", () => {
     // filename, joined against the card's own worktree rather than the project.
     await run("file.view", {
       path: "TODO.md",
-      rootPath: "/repo/worktrees/feature",
-      worktreeId: "wt-feature",
+      rootPath: "/repo/wt-other",
+      worktreeId: "wt-other",
       viewMode: "rendered",
     });
 
     expect(openPanelDialogMock).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "file",
-        filePath: "/repo/worktrees/feature/TODO.md",
-        worktreeId: "wt-feature",
+        filePath: "/repo/wt-other/TODO.md",
+        worktreeId: "wt-other",
         fileViewMode: "rendered",
         title: "TODO.md",
       })

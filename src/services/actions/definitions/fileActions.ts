@@ -7,7 +7,14 @@ import { usePanelDialogStore } from "@/store/panelDialogStore";
 import { isFilePanel, type FileViewMode } from "@shared/types/panel";
 import { isMarkdownFilePath } from "@/components/Markdown/isMarkdownFile";
 import { isHtmlFilePath } from "@/components/Html/isHtmlFile";
-import { isAbsolute, isPathInside, join, normalize, toWorktreeRelative } from "@shared/utils/path";
+import {
+  isAbsolute,
+  isPathInside,
+  join,
+  normalize,
+  resolveWorktreePathScope,
+  toWorktreeRelative,
+} from "@shared/utils/path";
 import type { ActionCallbacks, ActionRegistry } from "../actionTypes";
 import type { ActionContext } from "@shared/types/actions";
 import { isClientAppError } from "@/utils/clientAppError";
@@ -24,8 +31,9 @@ const viewArgsSchema = z.object({
     ),
   worktreeId: z
     .string()
+    .min(1)
     .optional()
-    .describe("Worktree the panel belongs to; defaults to the active one."),
+    .describe("Worktree the panel belongs to; defaults to the one containing the file."),
   viewMode: z
     .enum(["rendered", "source"])
     .optional()
@@ -115,6 +123,43 @@ function resolveFileViewMode(
   return isMarkdownFilePath(absolutePath) || isHtmlFilePath(absolutePath) ? viewMode : "source";
 }
 
+/**
+ * Which worktree a file panel belongs to. That binding decides the pane's read
+ * root and, on promotion, which grid bucket it lands in.
+ *
+ * An explicit id is a claim about the target, so an unresolvable one throws
+ * rather than falling back — a silent substitution on a named target is the
+ * class of bug #7880 banned, and it is what `panel.openPluginPanel` already
+ * refuses. Otherwise the answer is containment, never whichever worktree
+ * happens to be selected (#11276): the active worktree is only right when it is
+ * also the containing one, and a file outside every worktree (a scratch folder,
+ * a worktree-less project) has no containing answer to give.
+ */
+function resolveFilePanelWorktreeId(
+  absolutePath: string,
+  requested: string | undefined,
+  callbacks: ActionCallbacks
+): string | undefined {
+  const worktrees = callbacks.getWorktrees();
+  if (requested !== undefined) {
+    // An unloaded list can't establish membership either, and says so
+    // distinctly: that one is transient and worth retrying, a foreign id never
+    // will be.
+    if (worktrees.length === 0) {
+      throw new Error(
+        `Can't verify worktree "${requested}": the project's worktrees haven't loaded yet`
+      );
+    }
+    if (!worktrees.some((worktree) => worktree.id === requested)) {
+      throw new Error(`Worktree "${requested}" does not belong to the current project`);
+    }
+    return requested;
+  }
+  return (
+    resolveWorktreePathScope(absolutePath, worktrees)?.worktreeId ?? callbacks.getActiveWorktreeId()
+  );
+}
+
 function resolveFilePanelPath(path: string, rootPath: string | undefined): string {
   if (isAbsolute(path)) return normalize(path);
   const root = rootPath ?? useProjectStore.getState().currentProject?.path;
@@ -158,11 +203,7 @@ export function registerFileActions(actions: ActionRegistry, callbacks: ActionCa
       const panelId = await usePanelDialogStore.getState().openPanelDialog({
         kind: "file",
         filePath: absolutePath,
-        // An explicit id wins over the active worktree: a caller opening a file
-        // for a specific worktree (a sidebar card that isn't the selected one)
-        // would otherwise stamp the panel with a worktree the file isn't in,
-        // which is what decides its read root and where a promotion lands.
-        worktreeId: worktreeId ?? callbacks.getActiveWorktreeId(),
+        worktreeId: resolveFilePanelWorktreeId(absolutePath, worktreeId, callbacks),
         ...(fileName && { title: fileName }),
         ...(effectiveViewMode && { fileViewMode: effectiveViewMode }),
         ...(line != null && { initialLine: line }),

@@ -503,15 +503,10 @@ export function WorktreeCard({
 
   const [showIssuePicker, setShowIssuePicker] = useState(false);
 
-  // The plan file opens through the generic file viewer, like any other file:
-  // rendered Markdown by default, source a click away, and the full toolbar
-  // (reveal, copy, Open as panel) the bespoke plan dialog never had (#11942).
   // `planFilePath` is a bare candidate filename (`TODO.md` and friends), so
-  // `worktree.path` is the root it resolves against.
-  //
-  // The explicit `worktreeId` is what keeps an inactive card honest: without it
-  // `file.view` stamps the *active* worktree, and that is what decides the
-  // panel's read root and which bucket a promotion lands in.
+  // `worktree.path` is the root it resolves against, and naming the card's own
+  // worktree is what stops an inactive card's plan from being bound to whichever
+  // worktree happens to be selected (#11942).
   const planFilePath = worktree.planFilePath;
   const openPlanFileForThisWorktree =
     worktree.hasPlanFile && planFilePath
