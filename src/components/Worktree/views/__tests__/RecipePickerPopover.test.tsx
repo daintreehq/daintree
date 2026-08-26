@@ -40,11 +40,11 @@ function renderPicker(recipes: TerminalRecipe[], props?: { defaultRecipeId?: str
   );
 }
 
-/** The rows for real recipes, minus the fixed "Clone current layout" / "Empty" entries. */
+/** The rows for real recipes, minus the fixed "Clone current layout" / "No recipe" entries. */
 function recipeRows() {
   return within(screen.getByRole("listbox"))
     .getAllByRole("option")
-    .filter((row) => !/Clone current layout|^Empty$/.test(row.textContent ?? ""));
+    .filter((row) => !/Clone current layout|^No recipe$/.test(row.textContent ?? ""));
 }
 
 afterEach(cleanup);

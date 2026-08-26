@@ -99,7 +99,7 @@ test.describe.serial("Full: New Worktree Dialog", () => {
     const { window } = ctx;
     await openDialog(window);
 
-    await expect(window.locator(SEL.worktree.newDialog)).toContainText("Create New Worktree");
+    await expect(window.locator(SEL.worktree.newDialog)).toContainText("Create worktree");
     await expect(window.locator(SEL.worktree.branchNameInput)).toBeVisible({ timeout: T_MEDIUM });
     await expect(window.locator(SEL.worktree.createButton)).toBeVisible();
   });

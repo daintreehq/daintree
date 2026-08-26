@@ -41,7 +41,7 @@ describe("ExistingBranchPicker trigger", () => {
   it("prompts for a local branch when none is chosen", () => {
     renderPicker();
     expect(screen.getByTestId("existing-branch-picker").textContent).toContain(
-      "Select a local branch..."
+      "Select a local branch"
     );
   });
 

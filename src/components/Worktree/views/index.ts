@@ -8,3 +8,4 @@ export { NewBranchInput } from "./NewBranchInput";
 export { WorktreePathPicker } from "./WorktreePathPicker";
 export { EnvironmentRadioGroup } from "./EnvironmentRadioGroup";
 export { RecipePickerPopover } from "./RecipePickerPopover";
+export { FormGrid, FormSection, FormRow } from "./WorktreeFormLayout";
