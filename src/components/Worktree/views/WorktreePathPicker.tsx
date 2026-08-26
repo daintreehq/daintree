@@ -1,8 +1,9 @@
-import { Button } from "@/components/ui/button";
 import { Spinner } from "@/components/ui/Spinner";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
-import { FolderOpen, Info } from "lucide-react";
+import { FolderOpen } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
+import { FIELD_SURFACE } from "./WorktreeFormLayout";
 
 interface WorktreePathPickerProps {
   value: string;
@@ -15,6 +16,14 @@ interface WorktreePathPickerProps {
   disabled?: boolean;
 }
 
+/**
+ * Control only — "Path" lives on the form's label rail.
+ *
+ * Input and browse action are one compound control rather than a field with a
+ * detached button beside it: they are a single decision, and the seam made the
+ * row read as assembled parts. The focus ring is hoisted to the wrapper, scoped
+ * to the input, so the whole control lights up as one object.
+ */
 export function WorktreePathPicker({
   value,
   onChange,
@@ -29,62 +38,61 @@ export function WorktreePathPicker({
   // the debounced generation usually resolves fast — only show the spinner for
   // genuinely slow lookups.
   const showGeneratingSpinner = useDohertyGate(isGeneratingPath);
+  const hasError = errorField === "worktree-path";
+
   return (
-    <div className="space-y-2">
-      <div className="flex items-center gap-2">
-        <label htmlFor="worktree-path" className="block text-sm font-medium text-daintree-text">
-          Worktree Path
-        </label>
+    <div className="space-y-1.5">
+      <div
+        className={cn(
+          FIELD_SURFACE,
+          "flex h-8 items-center overflow-hidden",
+          // Scoped to the input rather than focus-within: the browse button paints
+          // its own ring, and focus-within would stack a second one around the pair.
+          "has-[input:focus-visible]:outline has-[input:focus-visible]:outline-2 has-[input:focus-visible]:outline-daintree-accent has-[input:focus-visible]:outline-offset-2",
+          hasError && "border-status-error"
+        )}
+      >
+        <input
+          id="worktree-path"
+          data-testid="worktree-path-input"
+          type="text"
+          value={value}
+          onChange={(e) => onChange(e.target.value)}
+          placeholder="/path/to/worktree"
+          className="min-w-0 flex-1 bg-transparent px-2.5 font-mono text-xs text-daintree-text placeholder:text-text-placeholder focus:outline-hidden disabled:opacity-50"
+          disabled={isPending}
+          aria-invalid={hasError ? true : undefined}
+          aria-describedby={hasError ? "validation-error" : undefined}
+        />
+        {showGeneratingSpinner && (
+          <Spinner size="sm" className="mr-1.5 shrink-0 text-text-secondary" />
+        )}
         <Tooltip>
           <TooltipTrigger asChild>
             <button
               type="button"
-              className="text-daintree-text/40 hover:text-daintree-text/60 transition-colors focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent focus-visible:ring-offset-2"
-              aria-label="Help for Worktree Path field"
+              onClick={onBrowseClick}
               disabled={disabled}
+              aria-label="Browse for a worktree directory"
+              className={cn(
+                "flex h-full w-8 shrink-0 items-center justify-center border-l border-border-subtle",
+                "text-text-secondary transition-colors duration-150 ease-out",
+                "hover:bg-overlay-hover hover:text-daintree-text",
+                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:-outline-offset-2",
+                "disabled:opacity-50 disabled:cursor-not-allowed"
+              )}
             >
-              <Info className="w-3.5 h-3.5" aria-hidden="true" />
-              <span className="sr-only">Help for Worktree Path field</span>
+              <FolderOpen className="h-3.5 w-3.5" aria-hidden="true" />
             </button>
           </TooltipTrigger>
-          <TooltipContent side="right">
-            <p>Directory where the worktree will be created</p>
+          <TooltipContent side="left">
+            <p>Browse for a directory</p>
           </TooltipContent>
         </Tooltip>
       </div>
-      <div className="flex gap-2 items-center">
-        <div className="relative flex-1">
-          <input
-            id="worktree-path"
-            data-testid="worktree-path-input"
-            type="text"
-            value={value}
-            onChange={(e) => onChange(e.target.value)}
-            placeholder="/path/to/worktree"
-            className="w-full px-3 pr-10 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-daintree-text focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/30"
-            disabled={isPending}
-            aria-invalid={errorField === "worktree-path" ? true : undefined}
-            aria-describedby={errorField === "worktree-path" ? "validation-error" : undefined}
-          />
-          {showGeneratingSpinner && (
-            <Spinner
-              size="md"
-              className="absolute right-3 top-1/2 -translate-y-1/2 text-daintree-text/40 pointer-events-none"
-            />
-          )}
-        </div>
-        <Button variant="outline" size="sm" onClick={onBrowseClick} disabled={disabled}>
-          <FolderOpen />
-        </Button>
-      </div>
       {pathWasAutoResolved && (
-        <p
-          className="text-xs text-status-success flex items-center gap-1.5 mt-1"
-          role="status"
-          aria-live="polite"
-        >
-          <Info className="w-3.5 h-3.5" aria-hidden="true" />
-          Path auto-incremented to avoid conflict with existing directory
+        <p className="text-xs text-text-secondary" role="status" aria-live="polite">
+          Renamed to avoid a conflict with an existing directory
         </p>
       )}
     </div>

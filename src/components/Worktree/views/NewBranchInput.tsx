@@ -1,9 +1,9 @@
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { Spinner } from "@/components/ui/Spinner";
-import { Info } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
+import { FIELD_INPUT } from "./WorktreeFormLayout";
 import type { PrefixSuggestion } from "../branchPrefixUtils";
 
 interface NewBranchInputProps {
@@ -14,7 +14,6 @@ interface NewBranchInputProps {
   isCheckingBranch: boolean;
   errorField?: "base-branch" | "new-branch" | "worktree-path" | null;
   branchWasAutoResolved: boolean;
-  parsedBranch: { hasPrefix: boolean; prefix: string; slug: string; fullBranchName: string };
   prefixPickerOpen: boolean;
   onPrefixPickerOpenChange: (open: boolean) => void;
   prefixSuggestions: PrefixSuggestion[];
@@ -25,6 +24,14 @@ interface NewBranchInputProps {
   inputRef: React.RefObject<HTMLInputElement | null>;
 }
 
+/**
+ * Control only — "Name" lives on the form's label rail.
+ *
+ * The old mono echo line under this input is gone: it restated the input's own
+ * value, and rendered a bare "..." before anything was typed, which read as a
+ * broken field. The base → branch preview in the dialog footer does that job
+ * once, for the whole form.
+ */
 export function NewBranchInput({
   value,
   onChange,
@@ -33,7 +40,6 @@ export function NewBranchInput({
   isCheckingBranch,
   errorField,
   branchWasAutoResolved,
-  parsedBranch,
   prefixPickerOpen,
   onPrefixPickerOpenChange,
   prefixSuggestions,
@@ -47,11 +53,10 @@ export function NewBranchInput({
   // the debounced check usually resolves fast — only show the spinner for
   // genuinely slow validations.
   const showCheckingSpinner = useDohertyGate(isCheckingBranch);
+  const hasError = errorField === "new-branch";
+
   return (
-    <div className="space-y-2">
-      <label htmlFor="new-branch" className="block text-sm font-medium text-daintree-text">
-        New Branch Name
-      </label>
+    <div className="space-y-1.5">
       <Popover open={prefixPickerOpen} onOpenChange={onPrefixPickerOpenChange}>
         <PopoverTrigger asChild>
           <div className="relative">
@@ -65,12 +70,16 @@ export function NewBranchInput({
               onBlur={onBlur}
               onKeyDown={onPrefixKeyDown}
               placeholder="feature/add-user-auth"
-              className="w-full px-3 pr-10 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-daintree-text focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/30 font-mono text-sm"
+              className={cn(
+                FIELD_INPUT,
+                "pr-9 font-mono text-xs",
+                hasError && "border-status-error"
+              )}
               disabled={isPending}
-              aria-invalid={errorField === "new-branch" ? true : undefined}
+              aria-invalid={hasError ? true : undefined}
               aria-describedby={
                 [
-                  errorField === "new-branch" ? "validation-error" : null,
+                  hasError ? "validation-error" : null,
                   branchWasAutoResolved ? "branch-resolved-hint" : null,
                 ]
                   .filter(Boolean)
@@ -83,8 +92,8 @@ export function NewBranchInput({
             />
             {showCheckingSpinner && (
               <Spinner
-                size="md"
-                className="absolute right-3 top-1/2 -translate-y-1/2 text-daintree-text/40 pointer-events-none"
+                size="sm"
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-text-secondary pointer-events-none"
               />
             )}
           </div>
@@ -103,7 +112,7 @@ export function NewBranchInput({
             scrollClassName="p-1"
           >
             {prefixSuggestions.length === 0 ? (
-              <div className="py-4 text-center text-sm text-daintree-text/60">
+              <div className="py-4 text-center text-sm text-text-secondary">
                 No matching prefixes
               </div>
             ) : (
@@ -114,37 +123,28 @@ export function NewBranchInput({
                   aria-selected={index === prefixSelectedIndex}
                   onClick={() => onPrefixSelect(suggestion)}
                   className={cn(
-                    "flex items-center gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-daintree-border",
+                    "flex items-center gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-overlay-hover",
                     index === prefixSelectedIndex && "bg-overlay-selected"
                   )}
                 >
-                  <span className="font-mono text-daintree-text">{suggestion.type.prefix}/</span>
-                  <span className="text-daintree-text/60">{suggestion.type.displayName}</span>
+                  <span className="font-mono text-xs text-daintree-text">
+                    {suggestion.type.prefix}/
+                  </span>
+                  <span className="text-text-secondary">{suggestion.type.displayName}</span>
                 </div>
               ))
             )}
           </ScrollShadow>
         </PopoverContent>
       </Popover>
-      <p className="text-xs text-daintree-text/60 select-text">
-        {parsedBranch.hasPrefix ? (
-          <>
-            <span className="font-mono text-daintree-text">{parsedBranch.prefix}/</span>
-            <span className="font-mono">{parsedBranch.slug || "..."}</span>
-          </>
-        ) : (
-          <span className="font-mono">{parsedBranch.fullBranchName || "..."}</span>
-        )}
-      </p>
       {branchWasAutoResolved && (
         <p
           id="branch-resolved-hint"
-          className="text-xs text-status-success flex items-center gap-1.5 mt-1"
+          className="text-xs text-text-secondary"
           role="status"
           aria-live="polite"
         >
-          <Info className="w-3.5 h-3.5" aria-hidden="true" />
-          Name auto-incremented to avoid conflict with existing branch
+          Renamed to avoid a conflict with an existing branch
         </p>
       )}
     </div>

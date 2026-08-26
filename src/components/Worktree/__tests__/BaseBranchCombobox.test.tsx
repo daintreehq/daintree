@@ -52,7 +52,7 @@ describe("BaseBranchCombobox trigger", () => {
 
   it("prompts when no branch is chosen yet", () => {
     renderCombobox();
-    expect(document.getElementById("base-branch")!.textContent).toContain("Select base branch...");
+    expect(document.getElementById("base-branch")!.textContent).toContain("Select base branch");
   });
 
   it("flags the field as invalid only for its own error", () => {

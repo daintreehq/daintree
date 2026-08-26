@@ -209,13 +209,10 @@ const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
     "src/components/Terminal/UpdateCwdDialog.tsx",
     "src/components/Terminal/VoiceInputButton.tsx",
     "src/components/TerminalRecipe/RecipeEditor.tsx",
-    "src/components/Worktree/NewWorktreeDialog.tsx",
     "src/components/Worktree/QuickCreatePalette.tsx",
     "src/components/Worktree/WorktreeCard/WorktreeTerminalSection.tsx",
     "src/components/Worktree/WorktreeDeleteDialog.tsx",
     "src/components/Worktree/WorktreeFilterPopover.tsx",
-    "src/components/Worktree/views/IssueSelectorView.tsx",
-    "src/components/Worktree/views/RecipePickerPopover.tsx",
     "src/hooks/useUpdateListener.tsx",
   ],
 };

@@ -126,7 +126,7 @@ export const SEL = {
     quickCreateCustomize: "#quick-create-option-__customize__",
     newWorktreeButton: '[aria-label="Create new worktree"]',
     branchModeGroup: '[role="radiogroup"][aria-label="Branch mode"]',
-    environmentGroup: '[role="radiogroup"][aria-label="Worktree environment mode"]',
+    environmentGroup: '[role="radiogroup"][aria-label="Environment"]',
     recipeTrigger: "#recipe-selector-trigger",
     recipeListbox: "#recipe-selector",
     baseBranchTrigger: "#base-branch",

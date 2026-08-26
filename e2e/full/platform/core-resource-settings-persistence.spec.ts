@@ -202,7 +202,7 @@ test.describe.serial("Full: Resource Settings Persistence", () => {
     const dialog = window.locator(SEL.worktree.newDialog);
     await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
 
-    const modeGroup = window.locator('[role="radiogroup"][aria-label="Worktree environment mode"]');
+    const modeGroup = window.locator(SEL.worktree.environmentGroup);
     await expect(modeGroup).toBeVisible({ timeout: T_MEDIUM });
 
     // Select "e2e-docker" environment
@@ -348,7 +348,7 @@ test.describe.serial("Full: Resource Settings Persistence", () => {
     const dialog = window.locator(SEL.worktree.newDialog);
     await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
 
-    const modeGroup = window.locator('[role="radiogroup"][aria-label="Worktree environment mode"]');
+    const modeGroup = window.locator(SEL.worktree.environmentGroup);
     await expect(modeGroup).toBeVisible({ timeout: T_MEDIUM });
 
     const dockerModeBtn = modeGroup.locator('[role="radio"]').filter({ hasText: "e2e-docker" });
