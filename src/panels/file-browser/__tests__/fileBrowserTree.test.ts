@@ -141,13 +141,34 @@ describe("flattenTree", () => {
 
   it("stops descending past the depth guard instead of recursing forever", () => {
     // A listings map where a directory contains itself — the shape a symlink
-    // cycle would produce if the service ever stopped skipping symlinks.
+    // cycle produces, now that the service lists symlinks (#11939). Reaching
+    // this bound takes one deliberate expansion per level, but the guard is
+    // what stops the render walk regardless.
     const listings = listingsOf({ "": [dir("loop")], loop: [dir("loop")] });
 
     const rows = flattenTree(listings, new Set(["loop"]), new Set());
 
     expect(rows.length).toBeGreaterThan(1);
     expect(rows.length).toBeLessThan(200);
+  });
+
+  it("carries a node's symlink metadata onto its row (#11939)", () => {
+    // The row is what both views read to pick a glyph and describe the link,
+    // so the field has to survive flattening rather than be re-fetched.
+    const link: FileTreeNode = {
+      name: "aliased",
+      path: "aliased",
+      isDirectory: true,
+      symlink: { target: "/repo/real", targetKind: "directory" },
+    };
+    const listings = listingsOf({ "": [link, file("README.md")] });
+
+    const rows = flattenTree(listings, new Set(), new Set());
+
+    expect(rows[0]?.symlink).toEqual(link.symlink);
+    // Absent — not null, not a placeholder — on everything else, which is what
+    // lets every existing consumer keep ignoring it.
+    expect(rows[1]).not.toHaveProperty("symlink");
   });
 });
 
@@ -675,6 +696,36 @@ describe("listingsFromSnapshot", () => {
       pathsOf(flattenTree(listings, new Set(["src"]), new Set()))
     );
   });
+
+  it("drops symlink metadata but keeps the bit that decides expandability (#11939)", () => {
+    // The snapshot is structure-only by design — no sizes, no timestamps, no
+    // symlink detail. What must survive is `isDirectory`, because that alone
+    // is what stops a restored external link from being fetched: the listing
+    // never sets it true for a link it could not resolve inside the root.
+    const external: FileTreeNode = {
+      name: "outward",
+      path: "outward",
+      isDirectory: false,
+      symlink: { target: "/elsewhere", targetKind: "external" },
+    };
+    const inRoot: FileTreeNode = {
+      name: "aliased",
+      path: "aliased",
+      isDirectory: true,
+      symlink: { target: "/repo/real", targetKind: "directory" },
+    };
+
+    const snapshot = snapshotFromListings(listingsOf({ "": [external, inRoot] }), WT_SOURCE, "");
+    const restored = listingsFromSnapshot(snapshot!)?.get("");
+
+    expect(restored?.map((node) => ({ name: node.name, isDirectory: node.isDirectory }))).toEqual([
+      { name: "outward", isDirectory: false },
+      { name: "aliased", isDirectory: true },
+    ]);
+    // Degraded to a plain row, not a wrong one: the glyph and the description
+    // come back with the next live listing.
+    expect(restored?.every((node) => node.symlink === undefined)).toBe(true);
+  });
 });
 
 describe("sortFileNodes", () => {
@@ -813,6 +864,18 @@ describe("flattenTree sorting", () => {
 });
 
 describe("buildFolderListingRows", () => {
+  it("carries symlink metadata onto a listing row (#11939)", () => {
+    const link: FileTreeNode = {
+      name: "acorn",
+      path: ".bin/acorn",
+      isDirectory: false,
+      symlink: { target: "/repo/acorn/bin/acorn", targetKind: "file" },
+    };
+    const rows = buildFolderListingRows(listingsOf({ ".bin": [link] }), ".bin");
+
+    expect(rows?.[0]?.symlink).toEqual(link.symlink);
+  });
+
   it("returns null for a directory that has not been listed", () => {
     // Distinguishable from an empty array on purpose: null is "still pending",
     // [] is "this folder really holds nothing".

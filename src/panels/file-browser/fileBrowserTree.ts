@@ -1,4 +1,4 @@
-import type { FileTreeNode } from "@shared/types";
+import type { FileTreeNode, FileTreeSymlink } from "@shared/types";
 import type {
   FileBrowserSortDirection,
   FileBrowserSortKey,
@@ -54,6 +54,13 @@ export interface FlatTreeRow {
   isLoading: boolean;
   /** Byte size for files; undefined for directories */
   size?: number;
+  /**
+   * Present only on rows that are symbolic links (#11939). `isDirectory` still
+   * answers whether the row behaves as a directory — the listing reports the
+   * link's *target* kind — so nothing that reads that field needs to know
+   * about this one.
+   */
+  symlink?: FileTreeSymlink;
 }
 
 /**
@@ -90,6 +97,8 @@ export interface FolderListingRow {
    * folder the user has never opened is not an empty folder.
    */
   itemCount?: number;
+  /** Present only on rows that are symbolic links (#11939). */
+  symlink?: FileTreeSymlink;
 }
 
 export type { FileBrowserSortDirection, FileBrowserSortKey };
@@ -320,9 +329,15 @@ export function flattenTree(
   const rows: FlatTreeRow[] = [];
 
   const walk = (dirPath: string, depth: number): void => {
-    // Depth guard: a listings map assembled from a symlink cycle (or a bug in
-    // the caller) would otherwise recurse until the stack blows. The service
-    // skips symlinks, so this is a backstop, not the primary defense.
+    // Depth guard: a listings map whose directories contain one another — the
+    // shape a symlink cycle produces, now that the service lists symlinks
+    // (#11939) — would otherwise recurse until the stack blows.
+    //
+    // This is the bound on *rendering*, and it is the only one needed. A cycle
+    // cannot run away on its own: every listing is one level fetched on
+    // explicit expansion, nothing auto-expands, and a restored panel replays a
+    // finite recorded set. Reaching depth 64 through a loop takes 64 deliberate
+    // clicks, and the rows simply stop there.
     if (depth > MAX_TREE_DEPTH) return;
     const listed = listings.get(dirPath);
     if (!listed) return;
@@ -346,6 +361,7 @@ export function flattenTree(
         isExpanded,
         isLoading: node.isDirectory && loadingPaths.has(node.path) && !listings.has(node.path),
         ...(node.size != null && { size: node.size }),
+        ...(node.symlink && { symlink: node.symlink }),
       });
       if (isExpanded) walk(node.path, depth + 1);
     }
@@ -395,6 +411,7 @@ export function buildFolderListingRows(
       ...(node.size != null && { size: node.size }),
       ...(node.mtimeMs != null && { mtimeMs: node.mtimeMs }),
       ...(itemCount != null && { itemCount }),
+      ...(node.symlink && { symlink: node.symlink }),
     };
   });
 }
