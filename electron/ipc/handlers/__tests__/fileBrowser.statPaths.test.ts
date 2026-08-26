@@ -136,7 +136,7 @@ describe("fileBrowser statPaths", () => {
       await fs.mkdir(path.join(outside, "secret"));
       await fs.symlink(outside, path.join(root, "hop"));
       const { invoke } = makeHandler([]);
-      // Realpath equality rejects the intermediate symlink, so the escape is
+      // The canonical target lands outside the root, so the escape stays
       // indistinguishable from a missing path — same guarantee as a worktree.
       await expect(invoke(ctx, { paths: ["hop/secret"] })).resolves.toEqual([null]);
     } finally {
@@ -181,9 +181,48 @@ describe("fileBrowser statPaths", () => {
     }
   });
 
-  it("refuses in-root symlinks too — only paths the tree can render validate", async () => {
+  it("resolves in-root symlinks, and paths reached through one (#11939)", async () => {
+    // The tree lists symlinks now, so a reference in terminal output that
+    // points at or through an in-root link names something the browser can
+    // actually open — reporting it absent would be the wrong answer.
     await fs.symlink(path.join(root, "src"), path.join(root, "src-link"));
+    await fs.symlink(path.join(root, "src", "index.ts"), path.join(root, "index-link.ts"));
+
     const { invoke } = makeHandler([{ id: root, path: root }]);
-    await expect(invoke(ctx, { worktreeId: root, paths: ["src-link"] })).resolves.toEqual([null]);
+    await expect(
+      invoke(ctx, {
+        worktreeId: root,
+        paths: ["src-link", "index-link.ts", "src-link/index.ts"],
+      })
+    ).resolves.toEqual(["directory", "file", "file"]);
+  });
+
+  it("still reports a dangling in-root symlink as absent", async () => {
+    // Containment is not the only reason to answer null: a link whose target
+    // does not exist names nothing openable either, and `realpath` throws.
+    await fs.symlink(path.join(root, "gone.ts"), path.join(root, "dangling.ts"));
+    const { invoke } = makeHandler([{ id: root, path: root }]);
+    await expect(invoke(ctx, { worktreeId: root, paths: ["dangling.ts"] })).resolves.toEqual([
+      null,
+    ]);
+  });
+
+  it("rejects a sibling directory whose path merely starts with the root's", async () => {
+    // `${root}-sibling` passes a naive `startsWith(root)` prefix test while
+    // living entirely outside it. Containment is decided by `path.relative`
+    // precisely so that shape can't slip through.
+    const sibling = `${root}-sibling`;
+    await fs.mkdir(sibling, { recursive: true });
+    try {
+      await fs.writeFile(path.join(sibling, "secret.txt"), "x");
+      await fs.symlink(sibling, path.join(root, "near"));
+
+      const { invoke } = makeHandler([{ id: root, path: root }]);
+      await expect(
+        invoke(ctx, { worktreeId: root, paths: ["near", "near/secret.txt"] })
+      ).resolves.toEqual([null, null]);
+    } finally {
+      await fs.rm(sibling, { recursive: true, force: true });
+    }
   });
 });

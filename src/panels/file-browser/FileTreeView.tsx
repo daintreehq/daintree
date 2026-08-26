@@ -1,6 +1,13 @@
 import { useCallback, useEffect, useId, useMemo, useRef } from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
-import { ChevronDown, ChevronRight, Folder, FolderOpen } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  FileSymlink,
+  Folder,
+  FolderOpen,
+  FolderSymlink,
+} from "lucide-react";
 import { join } from "@shared/utils/path";
 import { cn } from "@/lib/utils";
 import { UI_INLINE_LOADING_GATE_MS } from "@/lib/animationUtils";
@@ -522,7 +529,27 @@ function FileTreeRow({ row, isSelected, isOpen, context }: FileTreeRowProps) {
   // Files carry their type; folders keep the folder shape (#11596). Resolved
   // per render rather than memoized: it is an object lookup, and Virtuoso only
   // ever renders the visible window.
-  const RowIcon = row.isDirectory ? FolderIcon : getFileTypeIcon(row.name).Icon;
+  // A symlink says so in the glyph itself rather than through a badge layered
+  // over the type icon: the row's icon slot is a single bare element by
+  // contract (see below), and "this is a link" outranks the file's extension
+  // for a row that used to be invisible entirely (#11939).
+  const RowIcon = row.symlink
+    ? row.isDirectory
+      ? FolderSymlink
+      : FileSymlink
+    : row.isDirectory
+      ? FolderIcon
+      : getFileTypeIcon(row.name).Icon;
+  // What the link points at, and why it is inert when it is. Out-of-root
+  // targets are deliberately never dereferenced, so "unknown" is the honest
+  // word for what is on the other side rather than a failure to look.
+  const symlinkDescription = row.symlink
+    ? row.symlink.targetKind === "broken"
+      ? `Broken symlink to ${row.symlink.target}`
+      : !row.symlink.insideRoot
+        ? `Symlink to ${row.symlink.target}, outside this folder`
+        : `Symlink to ${row.symlink.target}`
+    : null;
 
   // A file's own status; a folder's is the worst thing anywhere beneath it, so a
   // collapsed branch still says that something inside it changed.
@@ -535,6 +562,10 @@ function FileTreeRow({ row, isSelected, isOpen, context }: FileTreeRowProps) {
     : null;
   const rowId = rowDomId(context.instanceId, row.path);
   const gitMarkerId = gitPresentation ? `${rowId}-git` : undefined;
+  const symlinkMarkerId = symlinkDescription ? `${rowId}-symlink` : undefined;
+  // Space-separated id list: a row can be both a link and changed, and the two
+  // descriptions are owned by different concerns.
+  const describedBy = [gitMarkerId, symlinkMarkerId].filter(Boolean).join(" ") || undefined;
 
   const menuItems = context.rowContextMenu?.(row);
   const rowSurface = (
@@ -548,7 +579,7 @@ function FileTreeRow({ row, isSelected, isOpen, context }: FileTreeRowProps) {
       // filename above, and rows are virtualized — folding status into the name
       // would rewrite every accessible row query and re-announce the row as a
       // different thing whenever an agent touched the file.
-      {...(gitMarkerId && { "aria-describedby": gitMarkerId })}
+      {...(describedBy && { "aria-describedby": describedBy })}
       aria-level={row.depth + 1}
       aria-selected={isSelected}
       // "The viewer is showing this one" — a different question from which row
@@ -619,7 +650,21 @@ function FileTreeRow({ row, isSelected, isOpen, context }: FileTreeRowProps) {
       {/* `min-w-0` is what lets `truncate` actually shrink here: a flex item
           defaults to `min-width: auto` and would otherwise push the trailing
           status marker out of the row instead of ellipsing the name. */}
-      <span className={cn("min-w-0 truncate", isSelected && "font-medium")}>{row.name}</span>
+      <span
+        className={cn("min-w-0 truncate", isSelected && "font-medium")}
+        title={symlinkDescription ?? undefined}
+      >
+        {row.name}
+      </span>
+      {symlinkMarkerId && (
+        // Screen-reader only, and layout-neutral (`sr-only` is absolutely
+        // positioned) so it can sit between the name and the `ml-auto` git
+        // marker without disturbing either. The title above is the mouse's
+        // half of the same answer.
+        <span id={symlinkMarkerId} className="sr-only">
+          {symlinkDescription}
+        </span>
+      )}
       {gitPresentation && (
         // `ml-auto` parks the marker at the trailing edge so a column of them
         // scans vertically, rather than tracking each name's ragged end.

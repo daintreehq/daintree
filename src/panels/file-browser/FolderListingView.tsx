@@ -1,6 +1,6 @@
 import { useCallback, useMemo } from "react";
 import { Virtuoso } from "react-virtuoso";
-import { Folder } from "lucide-react";
+import { FileSymlink, Folder, FolderSymlink } from "lucide-react";
 import { join } from "@shared/utils/path";
 import { cn } from "@/lib/utils";
 import { formatBytes } from "@/lib/formatBytes";
@@ -173,7 +173,22 @@ function FolderListingRowView({ row, context }: FolderListingRowViewProps) {
     dataTransfer.setDragImage(event.currentTarget, 12, ROW_HEIGHT_PX / 2);
   };
 
-  const RowIcon = row.isDirectory ? Folder : getFileTypeIcon(row.name).Icon;
+  // Same rule as the tree: a link's glyph says "link" (#11939), and the
+  // description carries where it points and why it may be inert.
+  const RowIcon = row.symlink
+    ? row.isDirectory
+      ? FolderSymlink
+      : FileSymlink
+    : row.isDirectory
+      ? Folder
+      : getFileTypeIcon(row.name).Icon;
+  const symlinkDescription = row.symlink
+    ? row.symlink.targetKind === "broken"
+      ? `Broken symlink to ${row.symlink.target}`
+      : !row.symlink.insideRoot
+        ? `Symlink to ${row.symlink.target}, outside this folder`
+        : `Symlink to ${row.symlink.target}`
+    : null;
 
   const menuItems = context.rowContextMenu?.(row);
   const rowSurface = (
@@ -196,7 +211,10 @@ function FolderListingRowView({ row, context }: FolderListingRowViewProps) {
           className={cn(FILE_TREE_ICON_CLASS, "h-3.5 w-3.5 shrink-0", FILE_TREE_ICON_COLOR_CLASS)}
           aria-hidden="true"
         />
-        <span className="truncate">{row.name}</span>
+        <span className="truncate" title={symlinkDescription ?? undefined}>
+          {row.name}
+        </span>
+        {symlinkDescription && <span className="sr-only">{symlinkDescription}</span>}
       </span>
       <span className="w-20 shrink-0 text-right tabular-nums text-daintree-text/50">
         {formatSize(row)}

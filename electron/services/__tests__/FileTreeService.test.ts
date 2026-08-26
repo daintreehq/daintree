@@ -150,26 +150,6 @@ describe("FileTreeService", () => {
     expect(nodes.map((node) => node.name).sort()).toEqual([".git", ".gitignore", "app.ts", "dist"]);
   });
 
-  it("omits symlinked entries", async () => {
-    // Containment property, independent of any ignore filtering.
-    await fs.writeFile(path.join(tempDir, "app.ts"), "export {};");
-    try {
-      await fs.symlink(path.join(tempDir, "app.ts"), path.join(tempDir, "link.ts"));
-    } catch (error) {
-      // Only platforms that genuinely forbid symlinks may skip: without a link
-      // on disk the assertion below proves nothing, so any other setup failure
-      // has to surface rather than pass as a silent no-op.
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code === "EPERM" || code === "EACCES") return;
-      throw error;
-    }
-
-    const nodes = await service.getFileTree(tempDir);
-
-    expect(nodes.some((node) => node.name === "app.ts")).toBe(true);
-    expect(nodes.some((node) => node.name === "link.ts")).toBe(false);
-  });
-
   it("blocks dirPath values that resolve through symlinks outside base path", async () => {
     const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-file-tree-outside-"));
     await fs.writeFile(path.join(outsideDir, "outside.txt"), "outside");
@@ -188,12 +168,214 @@ describe("FileTreeService", () => {
         throw error;
       }
 
+      // The link is listed now (#11939) — but only as a terminal node. Descent
+      // is still refused, which is the guard that makes it terminal: the
+      // renderer is told not to ask, and this is what holds if it asks anyway.
+      const nodes = await service.getFileTree(tempDir);
+      const link = nodes.find((node) => node.name === "external-link");
+      expect(link?.symlink?.insideRoot).toBe(false);
+      expect(link?.isDirectory).toBe(false);
+
       await expect(service.getFileTree(tempDir, "external-link")).rejects.toThrow(
         "path traversal not allowed"
       );
     } finally {
       await fs.rm(outsideDir, { recursive: true, force: true });
     }
+  });
+});
+
+/**
+ * Symlinks are entries, not omissions (#11939). Every test here builds real
+ * links on a real filesystem, because the behaviour under test is precisely
+ * how the OS resolves them — a mocked `fs` would assert the mock.
+ */
+describe("FileTreeService symlinks (#11939)", () => {
+  let tempDir: string;
+  let service: FileTreeService;
+
+  beforeEach(async () => {
+    tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-file-tree-symlink-"));
+    service = new FileTreeService();
+  });
+
+  afterEach(async () => {
+    await fs.rm(tempDir, { recursive: true, force: true });
+  });
+
+  /**
+   * Create a link, or bail out of the calling test on a platform that forbids
+   * them outright. Scoped to the creation call alone: a later failure is a real
+   * failure, and swallowing it would turn the whole suite into a silent no-op
+   * on the platform that most needs it (Windows, where junctions take this
+   * same path).
+   */
+  async function symlinkOrSkip(
+    target: string,
+    linkPath: string,
+    type?: "file" | "dir"
+  ): Promise<boolean> {
+    try {
+      await fs.symlink(target, linkPath, type);
+      return true;
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "EPERM" || code === "EACCES") return false;
+      throw error;
+    }
+  }
+
+  it("lists a relative in-root symlink to a file and reports the target's kind", async () => {
+    // The `node_modules/.bin` shape from the issue: a link in one directory
+    // pointing at a file in a sibling one, written relative to the link's own
+    // directory rather than to any process cwd.
+    await fs.mkdir(path.join(tempDir, "acorn", "bin"), { recursive: true });
+    await fs.mkdir(path.join(tempDir, ".bin"), { recursive: true });
+    const realFile = path.join(tempDir, "acorn", "bin", "acorn");
+    await fs.writeFile(realFile, "#!/usr/bin/env node\n");
+    if (!(await symlinkOrSkip("../acorn/bin/acorn", path.join(tempDir, ".bin", "acorn")))) return;
+
+    const nodes = await service.getFileTree(tempDir, ".bin");
+    const link = nodes.find((node) => node.name === "acorn");
+
+    expect(link).toBeDefined();
+    expect(link?.isDirectory).toBe(false);
+    expect(link?.symlink).toEqual({
+      target: realFile,
+      targetKind: "file",
+      insideRoot: true,
+    });
+  });
+
+  it("reports the target's size and mtime for a resolved link, not the link's own", async () => {
+    // A symlink's own `lstat.size` is the byte length of the stored target
+    // string — a real number that means nothing as a file size. Compared
+    // against the target's actual stat rather than a literal so this asserts
+    // the value is plumbed from the right syscall.
+    const realFile = path.join(tempDir, "app.ts");
+    await fs.writeFile(realFile, "export {};");
+    if (!(await symlinkOrSkip(realFile, path.join(tempDir, "link.ts")))) return;
+    const targetStat = await fs.stat(realFile);
+    const linkStat = await fs.lstat(path.join(tempDir, "link.ts"));
+
+    const link = (await service.getFileTree(tempDir)).find((node) => node.name === "link.ts");
+
+    expect(link?.size).toBe(targetStat.size);
+    expect(link?.mtimeMs).toBe(targetStat.mtimeMs);
+    // Non-vacuous: the two stats genuinely disagree, so reading the wrong one
+    // would have been caught.
+    expect(linkStat.size).not.toBe(targetStat.size);
+  });
+
+  it("lists an in-root symlink to a directory as a directory and descends through it", async () => {
+    await fs.mkdir(path.join(tempDir, "real"), { recursive: true });
+    await fs.writeFile(path.join(tempDir, "real", "inner.ts"), "export {};");
+    if (!(await symlinkOrSkip(path.join(tempDir, "real"), path.join(tempDir, "aliased"), "dir")))
+      return;
+
+    const link = (await service.getFileTree(tempDir)).find((node) => node.name === "aliased");
+    expect(link?.isDirectory).toBe(true);
+    expect(link?.symlink?.targetKind).toBe("directory");
+    expect(link?.symlink?.insideRoot).toBe(true);
+
+    // Descent through the link works and paths stay expressed through it, so
+    // the tree can address the rows it renders.
+    const children = await service.getFileTree(tempDir, "aliased");
+    expect(children.map((node) => node.path)).toEqual(["aliased/inner.ts"]);
+  });
+
+  it("sorts an in-root directory symlink with the directories", async () => {
+    // Ordering keys off `isDirectory`, which for a link means the target's
+    // kind — so a link to a folder must not sink into the file group.
+    await fs.mkdir(path.join(tempDir, "zzz-real"), { recursive: true });
+    await fs.writeFile(path.join(tempDir, "aaa-file.ts"), "");
+    if (
+      !(await symlinkOrSkip(path.join(tempDir, "zzz-real"), path.join(tempDir, "mmm-link"), "dir"))
+    )
+      return;
+
+    const names = (await service.getFileTree(tempDir)).map((node) => node.name);
+
+    expect(names).toEqual(["mmm-link", "zzz-real", "aaa-file.ts"]);
+  });
+
+  it("marks a dangling in-root symlink broken", async () => {
+    if (!(await symlinkOrSkip(path.join(tempDir, "gone.ts"), path.join(tempDir, "dangling.ts"))))
+      return;
+
+    const link = (await service.getFileTree(tempDir)).find((node) => node.name === "dangling.ts");
+
+    expect(link?.symlink?.targetKind).toBe("broken");
+    expect(link?.symlink?.insideRoot).toBe(false);
+    expect(link?.isDirectory).toBe(false);
+  });
+
+  it("reports no size for an unresolved link rather than the target string's length", async () => {
+    if (!(await symlinkOrSkip(path.join(tempDir, "gone.ts"), path.join(tempDir, "dangling.ts"))))
+      return;
+    const linkStat = await fs.lstat(path.join(tempDir, "dangling.ts"));
+
+    const link = (await service.getFileTree(tempDir)).find((node) => node.name === "dangling.ts");
+
+    expect(link?.size).toBeUndefined();
+    // The link's own mtime is the only honest timestamp left, and it is shown.
+    expect(link?.mtimeMs).toBe(linkStat.mtimeMs);
+    // Non-vacuous: there really was a plausible-looking number to leak.
+    expect(linkStat.size).toBeGreaterThan(0);
+  });
+
+  it("never dereferences an out-of-root target, even to learn whether it exists", async () => {
+    // The distinction this pins: a link the listing DID follow and found
+    // missing reports "broken"; one it deliberately never followed reports
+    // "unknown". Both point at a path that does not exist, so the only thing
+    // separating the two answers is whether a syscall was made — which is
+    // exactly the probe (and, on a dead network mount, the hang) that
+    // out-of-root targets must not cost.
+    const outsideMissing = path.join(os.tmpdir(), "daintree-file-tree-absent-11939", "nope");
+    if (!(await symlinkOrSkip(outsideMissing, path.join(tempDir, "outward")))) return;
+    if (!(await symlinkOrSkip(path.join(tempDir, "gone.ts"), path.join(tempDir, "inward")))) return;
+
+    const nodes = await service.getFileTree(tempDir);
+
+    expect(nodes.find((node) => node.name === "outward")?.symlink).toEqual({
+      target: outsideMissing,
+      targetKind: "unknown",
+      insideRoot: false,
+    });
+    expect(nodes.find((node) => node.name === "inward")?.symlink?.targetKind).toBe("broken");
+  });
+
+  it("refuses a link that is lexically inside the root but canonically escapes it", async () => {
+    // `hop` resolves to the filesystem root, so `through-hop -> ./hop/etc`
+    // passes a purely lexical containment check and still lands outside. The
+    // canonical check is what catches it — and until it does, nothing stats
+    // the target.
+    const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-file-tree-hop-"));
+    try {
+      await fs.writeFile(path.join(outsideDir, "secret.txt"), "x");
+      if (!(await symlinkOrSkip(outsideDir, path.join(tempDir, "hop"), "dir"))) return;
+      if (!(await symlinkOrSkip("./hop/secret.txt", path.join(tempDir, "through-hop")))) return;
+
+      const link = (await service.getFileTree(tempDir)).find((node) => node.name === "through-hop");
+
+      expect(link).toBeDefined();
+      expect(link?.symlink?.insideRoot).toBe(false);
+      expect(link?.symlink?.targetKind).toBe("unknown");
+    } finally {
+      await fs.rm(outsideDir, { recursive: true, force: true });
+    }
+  });
+
+  it("keeps listing the rest of a directory when one link is unresolvable", async () => {
+    // One bad entry must not take the listing with it — the old behaviour
+    // dropped every link silently, and the new one must not swing to throwing.
+    await fs.writeFile(path.join(tempDir, "app.ts"), "export {};");
+    if (!(await symlinkOrSkip(path.join(tempDir, "gone.ts"), path.join(tempDir, "dangling.ts"))))
+      return;
+
+    const names = (await service.getFileTree(tempDir)).map((node) => node.name);
+
+    expect(names).toEqual(["app.ts", "dangling.ts"]);
   });
 });
 

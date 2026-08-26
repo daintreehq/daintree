@@ -93,6 +93,54 @@ describe("CopyTreeService.getFileTree", () => {
     expect(nodes.map((node) => node.name)).toEqual(["a.ts", "b.lock", "c.png", "d.md"]);
   });
 
+  it("routes a symlink by the kind the raw listing reports (#11939)", async () => {
+    // The verdict overlay branches on `isDirectory` to choose between the
+    // manifest's file set and the derived populated-directory set. Now that
+    // the raw listing surfaces symlinks — reporting the TARGET's kind — a link
+    // to a file has to be looked up as a file and a link to a directory as a
+    // directory, or each would be judged against the wrong set and vanish.
+    await fs.mkdir(path.join(tempDir, "real"), { recursive: true });
+    await fs.writeFile(path.join(tempDir, "real", "inner.ts"), "");
+    await fs.writeFile(path.join(tempDir, "app.ts"), "");
+    try {
+      await fs.symlink(path.join(tempDir, "app.ts"), path.join(tempDir, "app-link.ts"));
+      await fs.symlink(path.join(tempDir, "real"), path.join(tempDir, "dir-link"), "dir");
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "EPERM" || code === "EACCES") return;
+      throw error;
+    }
+    // What the SDK walker would report having followed both links.
+    copyMock.mockResolvedValue(
+      dryRunResult(
+        manifest([["app.ts"], ["app-link.ts"], ["dir-link/inner.ts"], ["real/inner.ts"]])
+      )
+    );
+
+    const nodes = await copyTreeService.getFileTree(tempDir);
+
+    expect(nodes.map((node) => node.name)).toEqual(["dir-link", "real", "app-link.ts", "app.ts"]);
+  });
+
+  it("drops a symlink the dry run excluded, exactly like any other entry", async () => {
+    // CopyTree owns the bundling policy — `symlinkEscape` is one of its own
+    // exclusion reasons. The picker preview must inherit that verdict rather
+    // than acquire an opinion of its own now that links are listed.
+    await fs.writeFile(path.join(tempDir, "app.ts"), "");
+    try {
+      await fs.symlink(path.join(tempDir, "app.ts"), path.join(tempDir, "escaping.ts"));
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "EPERM" || code === "EACCES") return;
+      throw error;
+    }
+    copyMock.mockResolvedValue(dryRunResult(manifest([["app.ts"]])));
+
+    const nodes = await copyTreeService.getFileTree(tempDir);
+
+    expect(nodes.map((node) => node.name)).toEqual(["app.ts"]);
+  });
+
   it("hides a file the dry run never recorded", async () => {
     // CopyTree's manifest lists only what survived, so an excluded path has no
     // entry at all. Absence is the exclusion signal, and it covers every layer

@@ -353,6 +353,47 @@ export interface CopyTreeProgress {
   traceId?: string;
 }
 
+/**
+ * What a listed symbolic link points at (#11939).
+ *
+ * Windows junctions are covered by the same shape with no special-casing: a
+ * `Dirent` reports `isSymbolicLink()` true and `isDirectory()` false for both a
+ * junction and a directory symlink, and nothing short of reading the target's
+ * NT-namespace prefix tells them apart — so nothing here tries to.
+ */
+export interface FileTreeSymlink {
+  /**
+   * Absolute path the link points at, resolved against the link's own
+   * directory (a raw target like `../acorn/bin/acorn` is relative to where the
+   * link lives, not to the process cwd). This is the lexical resolution, not
+   * the canonical one: it is the only form available for a target the listing
+   * deliberately refuses to dereference, so carrying it uniformly keeps the
+   * field present on every symlink node.
+   */
+  target: string;
+  /**
+   * What the target turned out to be.
+   *
+   * `"broken"` means the target genuinely does not exist. `"unknown"` covers
+   * both "not dereferenced on purpose" (the target resolves outside the root)
+   * and "could not be dereferenced" (permission denied, symlink loop) — the
+   * two are distinguishable through `insideRoot`, and neither is a state the
+   * browser can act on.
+   */
+  targetKind: "file" | "directory" | "broken" | "unknown";
+  /**
+   * Whether the target canonically resolves inside the workspace root — i.e.
+   * whether descending through this link is allowed at all.
+   *
+   * The listing only ever reports `isDirectory: true` for a symlink whose
+   * target it verified is a contained directory, so `isDirectory` already
+   * implies this. It is carried separately because "is a directory" and "may
+   * be descended into" are different questions, and the renderer needs the
+   * second one answered before it asks for a listing it would be refused.
+   */
+  insideRoot: boolean;
+}
+
 /** File tree node for file picker */
 export interface FileTreeNode {
   /** File/folder name */
@@ -377,6 +418,17 @@ export interface FileTreeNode {
   mtimeMs?: number;
   /** Children (only populated for directories if expanded) */
   children?: FileTreeNode[];
+  /**
+   * Present only on symbolic links (#11939). Absence means the entry is a
+   * plain file or directory, which is why every consumer can keep reading
+   * `isDirectory` and ignore this field entirely.
+   *
+   * Not carried by the persisted tree snapshot, which stores structure only —
+   * a restored out-of-root link comes back as `isDirectory: false` and is
+   * therefore still non-descendable, and its decoration returns as soon as the
+   * live listing lands.
+   */
+  symlink?: FileTreeSymlink;
   /**
    * Set when the node contributes nothing to the context CopyTree would
    * generate — an excluded file, or a directory with no includable descendant.

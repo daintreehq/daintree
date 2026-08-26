@@ -106,6 +106,69 @@ function renderTree(overrides: Partial<Parameters<typeof FileTreeView>[0]> = {})
   return { onSelect, ...utils };
 }
 
+describe("FileTreeView symlink rows (#11939)", () => {
+  function symlinkRow(overrides: Partial<FlatTreeRow["symlink"]> = {}): FlatTreeRow {
+    return {
+      ...row("aliased", true),
+      symlink: {
+        target: "/repo/real",
+        targetKind: "directory",
+        insideRoot: true,
+        ...overrides,
+      } as NonNullable<FlatTreeRow["symlink"]>,
+    };
+  }
+
+  /** The row's own accessible description text, resolved through the id list. */
+  function describedText(container: HTMLElement, name: string): string {
+    const treeitem = container.querySelector<HTMLElement>(
+      `[role="treeitem"][aria-label="${name}"]`
+    );
+    const ids = treeitem?.getAttribute("aria-describedby")?.split(" ") ?? [];
+    // `getElementById`, not a `#id` selector: row ids are built from file
+    // paths, so they routinely carry characters a CSS selector would have to
+    // escape.
+    return ids
+      .map((id) => container.ownerDocument.getElementById(id)?.textContent ?? "")
+      .join(" ")
+      .trim();
+  }
+
+  it("names the target so a link is not just another folder row", () => {
+    // The bug was that these rows did not exist at all; a row that renders but
+    // says nothing about where it points would only half-fix that.
+    const { container } = renderTree({ rows: [symlinkRow()] });
+
+    expect(describedText(container, "aliased")).toBe("Symlink to /repo/real");
+  });
+
+  it("says a link points outside the folder, since that is why it is inert", () => {
+    const { container } = renderTree({
+      rows: [symlinkRow({ targetKind: "unknown", insideRoot: false })],
+    });
+
+    expect(describedText(container, "aliased")).toBe("Symlink to /repo/real, outside this folder");
+  });
+
+  it("calls a dangling link broken rather than merely external", () => {
+    // Broken outranks the containment wording: the target not existing is the
+    // more specific answer, and both states are non-actionable.
+    const { container } = renderTree({
+      rows: [symlinkRow({ targetKind: "broken", insideRoot: false })],
+    });
+
+    expect(describedText(container, "aliased")).toBe("Broken symlink to /repo/real");
+  });
+
+  it("describes an ordinary row with no link wording at all", () => {
+    // Guards the whole feature against becoming unconditional: a plain row
+    // must gain no description from this change.
+    const { container } = renderTree({ rows: [row("README.md")] });
+
+    expect(describedText(container, "README.md")).toBe("");
+  });
+});
+
 describe("FileTreeView context-menu interactions", () => {
   it("opens the menu on the right-clicked row without moving the selection", async () => {
     // Right-click must not swap the viewed file: the menu targets the
