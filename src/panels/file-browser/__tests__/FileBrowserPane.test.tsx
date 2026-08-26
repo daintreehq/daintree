@@ -2137,6 +2137,14 @@ describe("FileBrowserPane Refresh reachability and media wiring (#11586, #11938)
     )!;
     expect(refreshButtons()).toHaveLength(1);
     expect(treeColumn.contains(refreshButtons()[0]!)).toBe(true);
+
+    // And it works from here. Every other Refresh press in this file collapses
+    // the sidebar first, so without this the layout Refresh now lives in by
+    // default could go inert — visible, unwired — with the suite still green.
+    act(() => {
+      fireEvent.click(refreshButtons()[0]!);
+    });
+    expect(treeState.refresh).toHaveBeenCalledWith({ manual: true });
   });
 
   it("keeps the tree's Refresh when a selected file's viewer is collapsed", () => {
@@ -2156,8 +2164,8 @@ describe("FileBrowserPane Refresh reachability and media wiring (#11586, #11938)
 
   it("runs the pane's manual refresh from the viewer with nothing selected", () => {
     // Nothing selected is not a dead layout: Refresh re-reads the tree, and a
-    // browser whose source reports no change tick (a workspace root, #11482)
-    // has no other freshness signal at all.
+    // browser whose source has no worktree tick (a workspace root) is left with
+    // just the polled reconcile (#11590) until someone asks.
     mockPanel.browserSidebarCollapsed = true;
     renderPane();
 

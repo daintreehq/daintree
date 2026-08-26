@@ -636,8 +636,28 @@ describe("FileBrowserViewer Refresh control (#11586, #11938)", () => {
     renderViewer(null, { sidebarCollapsed: true, onRefresh });
 
     // Nothing selected still needs it: Refresh re-reads the tree too, and a
-    // workspace-rooted browser has no change tick to fall back on (#11482).
+    // workspace root has only the polled reconcile to fall back on (#11590).
     expect(screen.getByText("Nothing selected")).toBeTruthy();
+    const button = screen.getByRole("button", { name: "Refresh" });
+    await act(async () => {
+      button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers Refresh over a folder listing once the tree is collapsed away", async () => {
+    // The third selection state. Refresh re-reads the browser whatever the
+    // viewer happens to be showing, so a listing must not be the one surface
+    // that loses it — the sort menu beside it orders rows, it can't re-read.
+    const onRefresh = vi.fn();
+    renderViewer(null, {
+      sidebarCollapsed: true,
+      folderPath: "src",
+      folderRows: [],
+      folderStatus: "ready",
+      onRefresh,
+    });
+
     const button = screen.getByRole("button", { name: "Refresh" });
     await act(async () => {
       button.dispatchEvent(new MouseEvent("click", { bubbles: true }));

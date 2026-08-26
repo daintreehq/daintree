@@ -568,8 +568,9 @@ export function FileBrowserViewer({
               buttons have always run the same handler (#11938). One Refresh in
               every layout either way (#11496), and this one still has to exist
               for the collapsed-tree layouts (#11586), including with nothing
-              selected — a workspace-rooted browser has no change tick at all
-              (#11482), so it would otherwise offer no refresh. */}
+              selected: a workspace root has no worktree tick, only the polled
+              reconcile (#11590), and a poll is not a gesture — nor does it
+              re-fetch an open media preview, which needs the manual nonce. */}
           {sidebarCollapsed && (
             <FileViewerToolbar.IconButton label="Refresh" onClick={onRefresh}>
               <SpinningIcon icon={RefreshCw} active={isRefreshing} className="h-4 w-4" />
