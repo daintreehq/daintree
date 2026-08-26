@@ -171,7 +171,7 @@ import {
   OTHER_PROJECTS_SORT_MODES,
   type OtherProjectsSortMode,
 } from "@/lib/projectSort";
-import { useProjectSwitcherPalette } from "../useProjectSwitcherPalette";
+import { useProjectSwitcherPalette, PROJECT_SECTION_ORDER } from "../useProjectSwitcherPalette";
 import type { ProjectSwitcherProjectRow, ProjectSwitcherRow } from "../useProjectSwitcherPalette";
 
 /**
@@ -191,6 +191,10 @@ function asProject(row: ProjectSwitcherRow | undefined): ProjectSwitcherProjectR
 
 function setOtherSortMode(mode: OtherProjectsSortMode): void {
   usePreferencesStore.getState().setProjectSwitcherOtherSortMode(mode);
+}
+
+function collapseBand(key: string): void {
+  usePreferencesStore.getState().setProjectSwitcherBandCollapsed(key, true);
 }
 
 const emptyBulkStats = (projectIds: string[]) => {
@@ -246,6 +250,9 @@ describe("useProjectSwitcherPalette", () => {
       projectStatsState.stats = stats;
     });
     usePaletteStore.setState({ activePaletteId: null });
+    // Persisted and app-global (#11943) — a fold set by one case is otherwise
+    // still in force for every case after it.
+    usePreferencesStore.setState({ projectSwitcherCollapsedBands: {} });
   });
 
   // The header's "is it safe to look away?" total, tested against raw projects
@@ -3091,6 +3098,154 @@ describe("useProjectSwitcherPalette", () => {
       expect(new Set(backwards).size).toBe(size);
     });
 
+    // Folding a band (#11943) is the first thing that ever removed rows from
+    // browse, which puts it squarely on top of the invariant this describe
+    // exists to protect: whatever `results` holds must be on screen, because
+    // the highlight, `aria-activedescendant` and Enter all read it by index.
+    describe("folded bands", () => {
+      it("drops a folded band's rows from results while keeping its header", async () => {
+        collapseBand("current");
+        const result = await openIn("modal");
+
+        await waitFor(() => {
+          expect(result.current.results).toHaveLength(2);
+        });
+        expect(result.current.results.map(asProject).map((p) => p.section)).not.toContain(
+          "current"
+        );
+
+        // The band still has to say it exists, or there is no way to unfold it.
+        const current = result.current.browseBands.find((band) => band.key === "current");
+        expect(current).toMatchObject({ collapsed: true, itemCount: 1 });
+      });
+
+      it("counts a folded band's projects even though none of them render", async () => {
+        const result = await openIn("modal");
+        await waitFor(() => {
+          expect(result.current.results).toHaveLength(3);
+        });
+        const before = result.current.browseBands.map((band) => ({
+          key: band.key,
+          itemCount: band.itemCount,
+        }));
+
+        act(() => {
+          collapseBand("other");
+        });
+
+        await waitFor(() => {
+          expect(result.current.browseBands.some((band) => band.collapsed)).toBe(true);
+        });
+        // Same bands, same counts — folding changes what renders, not what exists.
+        expect(
+          result.current.browseBands.map((band) => ({ key: band.key, itemCount: band.itemCount }))
+        ).toEqual(before);
+      });
+
+      it("never steps onto a row that folding took off screen", async () => {
+        collapseBand("current");
+        const result = await openIn("modal");
+        await waitFor(() => {
+          expect(result.current.results).toHaveLength(2);
+        });
+
+        const visible = new Set(result.current.results.map((row) => row.id));
+        for (let step = 0; step < 6; step++) {
+          const selected = result.current.results[result.current.selectedIndex];
+          expect(selected).toBeDefined();
+          expect(visible.has(selected!.id)).toBe(true);
+          act(() => {
+            result.current.selectNext();
+          });
+        }
+      });
+
+      it("preselects a visible row rather than a folded band's project", async () => {
+        collapseBand("other");
+        const result = await openIn("modal");
+
+        await waitFor(() => {
+          expect(result.current.results.length).toBeGreaterThan(0);
+        });
+        const selected = result.current.results[result.current.selectedIndex];
+        expect(selected).toBeDefined();
+        expect(asProject(selected).section).not.toBe("other");
+      });
+
+      it("falls back to the first visible row when the selected band folds under it", async () => {
+        const result = await openIn("modal");
+        await waitFor(() => {
+          expect(result.current.results).toHaveLength(3);
+        });
+
+        const selected = asProject(result.current.results[result.current.selectedIndex]);
+        act(() => {
+          collapseBand(selected.section);
+        });
+
+        await waitFor(() => {
+          expect(result.current.results.map((row) => row.id)).not.toContain(selected.id);
+        });
+        // Derived at read time, so it lands on a rendered row in the same commit
+        // rather than pointing at the vanished one for a frame.
+        expect(result.current.selectedIndex).toBe(0);
+        expect(result.current.results[result.current.selectedIndex]).toBeDefined();
+      });
+
+      it("holds still and commits nothing when every band is folded", async () => {
+        for (const section of PROJECT_SECTION_ORDER) collapseBand(section);
+        const result = await openIn("modal");
+
+        await waitFor(() => {
+          expect(result.current.results).toHaveLength(0);
+        });
+
+        // Stepping an empty domain must be a no-op rather than a wrap that
+        // divides by its own length, and Enter must not reach for `results[0]`.
+        act(() => {
+          result.current.selectNext();
+          result.current.selectPrevious();
+          result.current.confirmSelection();
+        });
+        expect(result.current.selectedIndex).toBe(0);
+        expect(projectState.switchProject).not.toHaveBeenCalled();
+        expect(projectState.reopenProject).not.toHaveBeenCalled();
+        // The headers survive, which is the only way back.
+        expect(result.current.browseBands.length).toBeGreaterThan(0);
+      });
+
+      it("still finds a folded band's project by name", async () => {
+        // Folding is a browse-layout choice. A query that silently skipped its
+        // own matches would make projects look deleted.
+        collapseBand("other");
+        const result = await openIn("modal");
+        await waitFor(() => {
+          expect(result.current.results.length).toBeGreaterThan(0);
+        });
+
+        const hidden = "Background Project";
+        act(() => {
+          result.current.setQuery("Background");
+        });
+
+        // Settle first. The deferred-query frame serves the unfolded browse list
+        // by design, so asserting straight away would pass even if the ranking
+        // itself only ever saw the visible rows.
+        await waitFor(() => {
+          expect(result.current.isRankedSearch).toBe(true);
+          expect(result.current.isFiltering).toBe(false);
+        });
+        expect(result.current.results.map((row) => row.name)).toContain(hidden);
+
+        act(() => {
+          result.current.setQuery("");
+        });
+        await waitFor(() => {
+          expect(result.current.results.map((row) => row.name)).not.toContain(hidden);
+        });
+      });
+    });
+
     it("confirmSelection switches to the highlighted project", async () => {
       const result = await openIn("modal");
       await waitFor(() => {
@@ -3348,6 +3503,9 @@ describe("assistant presence banding (#11806)", () => {
       projectStatsState.stats = stats;
     });
     usePaletteStore.setState({ activePaletteId: null });
+    // Persisted and app-global (#11943) — a fold set by one case is otherwise
+    // still in force for every case after it.
+    usePreferencesStore.setState({ projectSwitcherCollapsedBands: {} });
   });
 
   afterEach(() => {

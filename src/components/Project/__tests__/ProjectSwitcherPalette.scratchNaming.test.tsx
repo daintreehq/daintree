@@ -169,6 +169,14 @@ import type { SearchableScratch } from "@/hooks/useProjectSwitcherPalette";
 import { defaultScratchName } from "@shared/utils/scratchName";
 
 const { ProjectSwitcherPalette } = await import("../ProjectSwitcherPalette");
+const { usePreferencesStore } = await import("@/store/preferencesStore");
+
+// `expandScratchSection()` writes the fold preference now (#11943), and it is
+// app-global — without this, every case after the first starts explicitly
+// expanded instead of exercising the empty-band default.
+beforeEach(() => {
+  usePreferencesStore.setState({ projectSwitcherCollapsedBands: {} });
+});
 
 function makeScratch(overrides: Partial<SearchableScratch> = {}): SearchableScratch {
   return {
