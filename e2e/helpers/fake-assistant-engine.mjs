@@ -36,6 +36,11 @@
  *   DAINTREE_ASSISTANT_BIN=/path/to/fake-assistant-engine.mjs
  *   FAKE_ENGINE_SCENARIO=streaming            # which script to run on a prompt
  *   FAKE_ENGINE_SPEED=1                       # delay multiplier; 0 = instant
+ *   FAKE_ENGINE_SIGNED_IN=1                   # start the session with an account
+ *   FAKE_ENGINE_PLAN=standard                 # the plan /account and /login report
+ *   FAKE_ENGINE_CHECKOUT_PLAN=pro             # a purchase that lands on the next /account
+ *   FAKE_ENGINE_ACCOUNT=unavailable           # the plan cannot be checked right now
+ *   FAKE_ENGINE_REQUIRE_ACCOUNT=1             # refuse turns while signed out
  *
  * Daintree invokes it as `<bin> host --stdio`; the argv is accepted and ignored.
  */
@@ -45,6 +50,30 @@ import { createInterface } from "node:readline";
 const PROTOCOL_VERSION = 3;
 const SCENARIO = process.env.FAKE_ENGINE_SCENARIO ?? "streaming";
 const SPEED = Number(process.env.FAKE_ENGINE_SPEED ?? "1");
+
+/**
+ * The session's account, held HERE because the engine holds it — Daintree does not.
+ *
+ * That is the whole architecture being tested rather than an implementation detail of
+ * this fake. Daintree removed its own account settings, IPC and service on the
+ * understanding that sign-in moved into the session: the panel routes `/login` down the
+ * command path, renders whatever text comes back, and keeps no plan, no credential and
+ * no cached judgement of its own. So a test of the account journey can only drive it
+ * from this side, and a fake that let Daintree see account state some other way would be
+ * testing a product that does not exist.
+ *
+ * `checkoutPlan` is the mocked purchase: the plan the account moves to on the SECOND
+ * `/account`, which is how a checkout completed in a browser reaches a running session
+ * without a restart or a second sign-in.
+ */
+const account = {
+  signedIn: process.env.FAKE_ENGINE_SIGNED_IN === "1",
+  plan: process.env.FAKE_ENGINE_PLAN ?? "standard",
+  checkoutPlan: process.env.FAKE_ENGINE_CHECKOUT_PLAN || null,
+  // The backend's DEPENDENCY taxonomy: the credential is fine and nothing was
+  // established. It must never render as "not subscribed" — see accountText.
+  unavailable: process.env.FAKE_ENGINE_ACCOUNT === "unavailable",
+};
 
 let seq = 0;
 let sessionId = "";
@@ -690,6 +719,24 @@ async function runTurn(text) {
     ...(wantsWake ? { wake: true } : {}),
   });
 
+  // A protected turn on a session with no account, refused the way the engine refuses
+  // it (internal/agent/session.go `accountFailureAdvice`): the failed phase, then the
+  // reply on the error channel, carrying the registered "Account problem:" prefix. It is
+  // the ENGINE that decides this and says so in typed events — Daintree renders the
+  // refusal, and must never reach it by consulting an account value of its own.
+  if (process.env.FAKE_ENGINE_REQUIRE_ACCOUNT === "1" && !account.signedIn) {
+    emit({ type: "turn:phase", turnId, phase: "failed" });
+    emit({
+      type: "host:error",
+      code: "auth_required",
+      message:
+        "Account problem: this backend requires an account and no credential was sent. " +
+        "Run /login to sign in through your browser.",
+    });
+    emit({ type: "turn:end", turnId, endedAt: now(), outcome: "refused" });
+    return;
+  }
+
   // A prompt may name a scenario inline (`/scenario approval`), so one session can
   // exercise several without respawning the process.
   const inline = /^\/scenario\s+(\w+)/.exec(text.trim());
@@ -702,6 +749,43 @@ async function runTurn(text) {
     emit({ type: "host:error", code: "fake_engine_error", message: String(err) });
     emit({ type: "turn:end", turnId, endedAt: now(), outcome: "unknown" });
   }
+}
+
+/**
+ * Runs one account command and returns the text the panel will render verbatim.
+ *
+ * Formatted as the engine formats command output — a padded label column, one fact per
+ * line — because the panel preserves that whitespace rather than reflowing it, and a
+ * fake that returned a sentence would test a rendering path the product never takes.
+ */
+function runAccountCommand(verb) {
+  if (verb === "/logout") {
+    account.signedIn = false;
+    return "Signed out on this machine.";
+  }
+  if (verb === "/login") {
+    account.signedIn = true;
+    return `Signed in.\n\nplan     ${account.plan}\naccess   active`;
+  }
+  // `/account`
+  if (!account.signedIn) {
+    return "Not signed in on this machine. Run /login to sign in through your browser.";
+  }
+  if (account.unavailable) {
+    // The DEPENDENCY case, worded as the engine words it: the credential is good and
+    // the answer simply could not be obtained. Rendering this as "not subscribed" is
+    // the failure the whole taxonomy exists to prevent — it tells a paying customer
+    // they have not paid, which is the one wrong answer that costs money to fix.
+    return "plan     unknown\naccess   unverified\n\nThe plan could not be checked right now. Your sign-in is fine — try again shortly.";
+  }
+  // The mocked checkout lands on the NEXT read, so a test can see the plan change
+  // within one running session, which is the property that matters: no restart, no
+  // second sign-in.
+  if (account.checkoutPlan) {
+    account.plan = account.checkoutPlan;
+    account.checkoutPlan = null;
+  }
+  return `plan     ${account.plan}\naccess   active`;
 }
 
 let busy = false;
@@ -745,6 +829,18 @@ async function handleCommand(cmd) {
       // Each answers with text unique to ITSELF. They all returned the same masthead
       // before, which made "the palette ran the command I picked" unprovable:
       // dispatching the wrong known command produced identical output and passed.
+      // The account commands, answered from the state above. They are handled before
+      // the static table because they are the only commands whose answer CHANGES — that
+      // is what makes them worth driving from a test at all.
+      if (["/login", "/logout", "/account"].includes(cmd.line.split(/\s+/)[0])) {
+        emit({
+          type: "command:result",
+          command: cmd.line,
+          text: runAccountCommand(cmd.line.split(/\s+/)[0]),
+        });
+        return;
+      }
+
       const KNOWN = {
         "/status": `backend  local (http://127.0.0.1:8473)\ntier     operator`,
         "/help": "COMMANDS\n  /status   runtime and connections",
@@ -938,6 +1034,18 @@ rl.on("line", (line) => {
         { name: "/status", syntax: "/status", palette: "runtime and connections" },
         { name: "/watchers", syntax: "/watchers", palette: "supervised agents" },
         { name: "/inbox", syntax: "/inbox [sev]", palette: "items requiring attention" },
+        // The account surface, with the engine's own registry strings
+        // (internal/commands/registry.go). Advertised because the panel builds its
+        // palette from this catalog and nothing else: an engine that serves `/login`
+        // without advertising it leaves the panel sending it to the model as a prompt,
+        // and an install with a complete OAuth implementation one registry row out of
+        // reach. `/backend` belongs with them — it is the other half of the same
+        // ownership move, and Daintree deleted its backend-URL setting on the strength
+        // of it existing here.
+        { name: "/login", syntax: "/login", palette: "sign in to your account" },
+        { name: "/logout", syntax: "/logout", palette: "sign out on this machine" },
+        { name: "/account", syntax: "/account", palette: "who you are signed in as" },
+        { name: "/backend", syntax: "/backend [target]", palette: "which backend answers" },
       ],
       autoApprove: process.env.FAKE_ENGINE_AUTO_APPROVE === "1",
       // The session facts the masthead is drawn from. The real engine fills all of
