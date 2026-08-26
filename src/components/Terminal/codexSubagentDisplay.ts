@@ -32,25 +32,28 @@ export function subagentStatusTone(status: CodexSubagentStatus): "error" | "acti
   return "muted";
 }
 
-function firstLine(value: string): string {
-  return value.trim().split("\n")[0]?.trim() ?? "";
+function firstLine(value: string | null): string {
+  return value?.trim().split("\n")[0]?.trim() ?? "";
 }
 
 /** Nickname first — it's the handle the parent transcript uses for the child. */
 export function subagentTitle(subagent: CodexSubagent): string {
-  if (subagent.nickname) return subagent.nickname;
-  if (subagent.role) return subagent.role;
-  const preview = firstLine(subagent.preview);
-  if (preview) return preview.slice(0, 48);
-  return subagent.threadId.slice(0, 8);
+  // Every field goes through the same normalizer: a whitespace-only nickname
+  // is not a title, it's a blank row.
+  return (
+    firstLine(subagent.nickname) ||
+    firstLine(subagent.role) ||
+    firstLine(subagent.preview).slice(0, 48) ||
+    subagent.threadId.slice(0, 8)
+  );
 }
 
 /** Shown under the title when it would not merely repeat it. */
 export function subagentSubtitle(subagent: CodexSubagent): string | null {
-  const preview = firstLine(subagent.preview);
-  if (!preview) return subagent.nickname ? subagent.role : null;
-  if (preview === subagentTitle(subagent)) return subagent.role;
-  return preview.slice(0, 120);
+  const title = subagentTitle(subagent);
+  const candidate = firstLine(subagent.preview) || firstLine(subagent.role);
+  if (!candidate || candidate === title) return null;
+  return candidate.slice(0, 120);
 }
 
 export function codexUnavailableMessage(reason: CodexSubagentUnavailableReason): string {
@@ -59,6 +62,8 @@ export function codexUnavailableMessage(reason: CodexSubagentUnavailableReason):
       return "Codex CLI isn't available";
     case "no-session":
       return "Couldn't match this terminal to a Codex session";
+    case "ambiguous-session":
+      return "More than one Codex session ran in this folder, so we can't tell which is this terminal's";
     case "timeout":
       return "Codex took too long to respond";
     case "not-codex":

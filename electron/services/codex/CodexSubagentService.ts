@@ -22,8 +22,8 @@ import {
 import {
   CODEX_SUBAGENT_MESSAGE_MAX_CHARS,
   CODEX_SUBAGENT_TRANSCRIPT_TURN_LIMIT,
-  type CodexSessionCandidate,
   type CodexSubagent,
+  type CodexSubagentMatch,
   type CodexSubagentMessage,
   type CodexSubagentStatus,
   type CodexSubagentTurn,
@@ -37,17 +37,17 @@ const PARENT_CANDIDATE_LIMIT = 25;
 /** Cap on children returned for one parent. */
 const SUBAGENT_LIMIT = 50;
 /**
- * A root thread created more than this long before the terminal started is a
- * different session that merely shares the folder, not this terminal's.
- * Generous because a resumed session keeps its original `createdAt`, so
- * `recencyAt` is what actually pins it — this only trims obvious strangers.
+ * A session whose last activity is older than this at the moment the terminal
+ * launched cannot be the one the terminal is running — it went quiet before
+ * the terminal existed. Small slack absorbs clock skew between the two.
  */
-const PARENT_RECENCY_WINDOW_SECONDS = 6 * 60 * 60;
+const STALE_ACTIVITY_SLACK_SECONDS = 5 * 60;
 /**
- * Two candidates whose activity falls inside this window of each other are
- * genuinely indistinguishable by recency, so the UI is told it is a guess.
+ * Two roots whose start times sit this close to the terminal's own launch are
+ * indistinguishable. Rather than pick one, the lookup reports
+ * `ambiguous-session` — a wrong list is indistinguishable from a right one.
  */
-const AMBIGUITY_WINDOW_SECONDS = 60 * 60;
+const AMBIGUITY_MARGIN_SECONDS = 5 * 60;
 
 /** Protocol timestamps are Unix seconds; the renderer works in milliseconds. */
 function secondsToMs(seconds: unknown): number {
@@ -124,31 +124,32 @@ export function toSubagent(raw: RawThread): CodexSubagent | null {
   };
 }
 
-export interface ParentSelection {
-  parentThreadId: string | null;
-  matchedBy: "session-id" | "cwd-recency";
-  candidates: CodexSessionCandidate[];
-}
+export type ParentSelection =
+  | { parentThreadId: string; matchedBy: CodexSubagentMatch }
+  | { parentThreadId: null; reason: "no-session" | "ambiguous-session" };
 
 /**
- * Pick the root thread that most likely belongs to this terminal.
+ * Pick the root thread this terminal is running.
  *
- * An exact `agentSessionId` wins outright. Otherwise: keep root threads (a
- * thread with a `parentThreadId` is itself a subagent), drop any whose activity
- * predates the terminal's launch by more than the window, order by recency, and
- * take the newest. Candidates are reported whenever a second thread's activity
- * lands close enough that recency cannot separate them.
+ * An exact `agentSessionId` wins outright. Otherwise the signal is *when the
+ * terminal started*, not which thread is newest: a second Codex session in the
+ * same folder is usually the more recently active one, so ranking by recency
+ * hands terminal A the children of terminal B with nothing to show for it.
+ * Ranking by |thread start − terminal start| separates them, because a session
+ * a terminal launched begins when that terminal does.
+ *
+ * Two filters keep the field honest. A root that had already gone quiet before
+ * the terminal launched is dropped — whatever this terminal is running, it
+ * isn't that. And when the two closest roots start within
+ * `AMBIGUITY_MARGIN_SECONDS` of each other, nothing distinguishes them, so the
+ * lookup reports ambiguity instead of guessing.
  */
 export function selectParentThread(
   threads: RawThread[],
   input: { spawnedAtMs?: number; agentSessionId?: string | null }
 ): ParentSelection {
   if (input.agentSessionId) {
-    return {
-      parentThreadId: input.agentSessionId,
-      matchedBy: "session-id",
-      candidates: [],
-    };
+    return { parentThreadId: input.agentSessionId, matchedBy: "session-id" };
   }
 
   const spawnedAtSeconds =
@@ -156,44 +157,51 @@ export function selectParentThread(
       ? Math.floor(input.spawnedAtMs / 1000)
       : null;
 
-  const activityOf = (thread: RawThread): number => {
-    const recency = thread.recencyAt;
-    if (typeof recency === "number" && Number.isFinite(recency)) return recency;
-    const updated = thread.updatedAt;
-    if (typeof updated === "number" && Number.isFinite(updated)) return updated;
-    return typeof thread.createdAt === "number" ? thread.createdAt : 0;
-  };
+  const numberOf = (value: unknown): number | null =>
+    typeof value === "number" && Number.isFinite(value) ? value : null;
 
-  const roots = threads
-    .filter((thread) => asString(thread.id) !== null && asString(thread.parentThreadId) === null)
-    .filter((thread) => {
-      if (spawnedAtSeconds === null) return true;
-      return activityOf(thread) >= spawnedAtSeconds - PARENT_RECENCY_WINDOW_SECONDS;
-    })
-    .sort((a, b) => activityOf(b) - activityOf(a));
+  const activityOf = (thread: RawThread): number =>
+    numberOf(thread.recencyAt) ?? numberOf(thread.updatedAt) ?? numberOf(thread.createdAt) ?? 0;
 
-  const best = roots[0];
-  if (!best) return { parentThreadId: null, matchedBy: "cwd-recency", candidates: [] };
-
-  const bestActivity = activityOf(best);
-  const rivals = roots.filter(
-    (thread) => thread !== best && bestActivity - activityOf(thread) <= AMBIGUITY_WINDOW_SECONDS
+  const roots = threads.filter(
+    (thread) => asString(thread.id) !== null && asString(thread.parentThreadId) === null
   );
 
-  return {
-    parentThreadId: asString(best.id),
-    matchedBy: "cwd-recency",
-    // Only meaningful when a rival exists — an unambiguous match reports none,
-    // so the renderer can treat a non-empty list as "we had to guess".
-    candidates:
-      rivals.length === 0
-        ? []
-        : [best, ...rivals].map((thread) => ({
-            threadId: asString(thread.id) ?? "",
-            preview: typeof thread.preview === "string" ? thread.preview : "",
-            createdAt: secondsToMs(thread.createdAt),
-          })),
-  };
+  if (spawnedAtSeconds === null) {
+    // With no launch time there is nothing to correlate against, so a single
+    // root is the only answer we can give honestly.
+    if (roots.length === 0) return { parentThreadId: null, reason: "no-session" };
+    if (roots.length > 1) return { parentThreadId: null, reason: "ambiguous-session" };
+    const only = asString(roots[0]?.id);
+    return only
+      ? { parentThreadId: only, matchedBy: "spawn-time" }
+      : { parentThreadId: null, reason: "no-session" };
+  }
+
+  const live = roots.filter(
+    (thread) => activityOf(thread) >= spawnedAtSeconds - STALE_ACTIVITY_SLACK_SECONDS
+  );
+
+  const ranked = live
+    .map((thread) => ({
+      id: asString(thread.id),
+      // A resumed session keeps its original `createdAt`, so it ranks far from
+      // the terminal's launch — that path is served by `agentSessionId`, and
+      // when it isn't, the liveness filter usually leaves it as the sole root.
+      distance: Math.abs((numberOf(thread.createdAt) ?? activityOf(thread)) - spawnedAtSeconds),
+    }))
+    .filter((entry): entry is { id: string; distance: number } => entry.id !== null)
+    .sort((a, b) => a.distance - b.distance);
+
+  const best = ranked[0];
+  if (!best) return { parentThreadId: null, reason: "no-session" };
+
+  const runnerUp = ranked[1];
+  if (runnerUp && runnerUp.distance - best.distance <= AMBIGUITY_MARGIN_SECONDS) {
+    return { parentThreadId: null, reason: "ambiguous-session" };
+  }
+
+  return { parentThreadId: best.id, matchedBy: "spawn-time" };
 }
 
 interface RawTurnItem {
@@ -334,15 +342,40 @@ async function listChildren(
 }
 
 /**
- * An exact session id skips the cwd query entirely — a resumed terminal was
- * launched with the thread id, so there is nothing to guess.
+ * Confirm a launch-recorded session id really names a Codex thread for this
+ * folder before trusting it. `agentSessionId` is generic launch metadata — a
+ * pane launched as another agent carries that agent's id, and a Codex pane
+ * whose agent exited can be reused for a fresh session the recorded id no
+ * longer describes. One cheap `thread/read` on an already-spawned server tells
+ * us which it is; anything unexpected falls back to spawn-time correlation.
  */
+async function verifySessionThread(
+  call: CodexAppServerCall,
+  threadId: string,
+  cwds: string[]
+): Promise<boolean> {
+  try {
+    const response = await call<{ thread?: RawThread }>("thread/read", { threadId });
+    const cwd = response?.thread?.cwd;
+    return typeof cwd === "string" && cwds.includes(cwd);
+  } catch {
+    // No such thread, or a server that won't answer — either way, don't trust it.
+    return false;
+  }
+}
+
 async function resolveParent(
   call: CodexAppServerCall,
   terminal: ResolvedTerminal
 ): Promise<ParentSelection> {
-  if (terminal.agentSessionId) return selectParentThread([], terminal);
-  return selectParentThread(await listThreadsInCwd(call, terminal.cwds), terminal);
+  if (terminal.agentSessionId) {
+    if (await verifySessionThread(call, terminal.agentSessionId, terminal.cwds)) {
+      return selectParentThread([], terminal);
+    }
+  }
+  return selectParentThread(await listThreadsInCwd(call, terminal.cwds), {
+    spawnedAtMs: terminal.spawnedAtMs,
+  });
 }
 
 export async function listCodexSubagents(terminalId: string): Promise<CodexSubagentsResult> {
@@ -352,7 +385,7 @@ export async function listCodexSubagents(terminalId: string): Promise<CodexSubag
   try {
     return await runCodexAppServerSession(async (call) => {
       const selection = await resolveParent(call, resolved);
-      if (!selection.parentThreadId) return unavailable("no-session");
+      if (selection.parentThreadId === null) return unavailable(selection.reason);
 
       const children = await listChildren(call, selection.parentThreadId);
       return {
@@ -363,7 +396,6 @@ export async function listCodexSubagents(terminalId: string): Promise<CodexSubag
           .map(toSubagent)
           .filter((child): child is CodexSubagent => child !== null)
           .sort((a, b) => b.updatedAt - a.updatedAt),
-        candidates: selection.candidates,
       };
     });
   } catch (error) {
@@ -381,7 +413,9 @@ export async function readCodexSubagentTranscript(
   try {
     return await runCodexAppServerSession(async (call) => {
       const selection = await resolveParent(call, resolved);
-      if (!selection.parentThreadId) return unavailable("no-session");
+      // Ambiguity fails the read too, not just the list: an unresolved parent
+      // means we cannot say the requested thread belongs to this terminal.
+      if (selection.parentThreadId === null) return unavailable(selection.reason);
 
       // Membership check before any read: the renderer names a thread id, and
       // without this a wrong or hostile id would read an unrelated Codex
@@ -404,7 +438,11 @@ export async function readCodexSubagentTranscript(
       return {
         status: "ok" as const,
         threadId,
-        turns: turns.map(toSubagentTurn).filter((turn): turn is CodexSubagentTurn => turn !== null),
+        // A turn whose only items were reasoning has nothing to show, and an
+        // all-empty page would still read as "loaded" to the renderer.
+        turns: turns
+          .map(toSubagentTurn)
+          .filter((turn): turn is CodexSubagentTurn => turn !== null && turn.messages.length > 0),
       };
     });
   } catch (error) {

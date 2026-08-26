@@ -50,33 +50,37 @@ export interface CodexSubagent {
   acceptsDirectInput: boolean;
 }
 
-/** A root Codex thread in the terminal's cwd that could be its parent session. */
-export interface CodexSessionCandidate {
-  threadId: string;
-  preview: string;
-  createdAt: number;
-}
-
 /**
  * Why the subagent view has nothing to show. Stable slugs, not prose: the
  * renderer maps them to microcopy, and `detail` (scrubbed) is diagnostics only.
  */
 export type CodexSubagentUnavailableReason =
-  "not-codex" | "terminal-unknown" | "cli-missing" | "no-session" | "timeout" | "protocol-error";
+  | "not-codex"
+  | "terminal-unknown"
+  | "cli-missing"
+  | "no-session"
+  /**
+   * Two or more Codex sessions in this folder started close enough together
+   * that nothing distinguishes which one this terminal is running. Reported
+   * instead of a guess: the wrong session's children look exactly like the
+   * right ones, and the user has no way to tell which they got.
+   */
+  | "ambiguous-session"
+  | "timeout"
+  | "protocol-error";
 
-export type CodexSubagentMatch = "session-id" | "cwd-recency";
+/**
+ * `session-id` is exact — the terminal was launched against a known thread.
+ * `spawn-time` matched the folder's Codex threads against when this terminal
+ * started, which is a correlation rather than an identity.
+ */
+export type CodexSubagentMatch = "session-id" | "spawn-time";
 
 export interface CodexSubagentsOk {
   status: "ok";
   parentThreadId: string;
-  /** How the parent was resolved — `cwd-recency` is a heuristic, and says so. */
   matchedBy: CodexSubagentMatch;
   subagents: CodexSubagent[];
-  /**
-   * Populated only when more than one root thread in this cwd could be the
-   * parent. Empty means the match was unambiguous.
-   */
-  candidates: CodexSessionCandidate[];
 }
 
 export interface CodexSubagentsUnavailable {

@@ -13,11 +13,7 @@ vi.mock("../../../utils/spawnEnv.js", () => ({
   buildProbeEnv: () => ({ PATH: "/usr/bin" }),
 }));
 
-import {
-  CODEX_APP_SERVER_ALLOWED_METHODS,
-  CodexAppServerError,
-  runCodexAppServerSession,
-} from "../CodexAppServerClient.js";
+import { CodexAppServerError, runCodexAppServerSession } from "../CodexAppServerClient.js";
 
 class FakeStream extends EventEmitter {
   destroyed = false;
@@ -117,8 +113,6 @@ describe("runCodexAppServerSession", () => {
   });
 
   it("refuses methods outside the read-only allowlist without writing to stdin", async () => {
-    expect(CODEX_APP_SERVER_ALLOWED_METHODS.has("thread/start")).toBe(false);
-
     const error = await startSession(async (call) =>
       call("thread/start", { cwd: "/repo" }).then(
         () => null,
@@ -245,6 +239,120 @@ describe("runCodexAppServerSession", () => {
     });
 
     expect((error as CodexAppServerError).message).toContain("exceeded limit");
+  });
+
+  it("classifies an asynchronous ENOENT the same as a synchronous one", async () => {
+    // `spawn` reports a missing binary through an 'error' event, not a throw,
+    // whenever the failure is detected after the call returns.
+    const promise = runCodexAppServerSession(async () => "unused", {
+      command: "codex-test",
+    }).catch((error: unknown) => error);
+    await flush();
+    const enoent = new Error("spawn codex-test ENOENT") as NodeJS.ErrnoException;
+    enoent.code = "ENOENT";
+    child.emit("error", enoent);
+
+    expect(await promise).toMatchObject({ reason: "cli-missing" });
+  });
+
+  it("drops a response that arrives after its request timed out, leaving others correlated", async () => {
+    vi.useFakeTimers();
+    vi.spyOn(process, "kill").mockImplementation(() => true);
+
+    const promise = runCodexAppServerSession(
+      async (call) => {
+        const stale = call("thread/list").then(
+          () => "resolved",
+          (err: unknown) => (err as CodexAppServerError).reason
+        );
+        await vi.advanceTimersByTimeAsync(0);
+        const staleId = child.requests.filter((entry) => entry.id !== undefined).at(-1)?.id;
+
+        // Blow the per-request budget on the first call only.
+        await vi.advanceTimersByTimeAsync(10_001);
+        const staleOutcome = await stale;
+
+        const live = call<{ tag: string }>("thread/read");
+        await vi.advanceTimersByTimeAsync(0);
+        // The late response for the abandoned id must not satisfy the new call.
+        child.emitLines(JSON.stringify({ id: staleId, result: { tag: "stale" } }));
+        const liveId = child.requests.filter((entry) => entry.id !== undefined).at(-1)?.id;
+        expect(liveId).not.toBe(staleId);
+        child.emitLines(JSON.stringify({ id: liveId, result: { tag: "live" } }));
+
+        return { staleOutcome, live: await live };
+      },
+      { command: "codex-test", timeoutMs: 60_000 }
+    );
+
+    await vi.advanceTimersByTimeAsync(0);
+    child.respondTo("initialize", { userAgent: "codex" });
+    await vi.advanceTimersByTimeAsync(0);
+
+    await expect(promise).resolves.toEqual({ staleOutcome: "timeout", live: { tag: "live" } });
+  });
+
+  it("rejects a call made after the session was torn down", async () => {
+    vi.spyOn(process, "kill").mockImplementation(() => true);
+    let escaped: ((method: string) => Promise<unknown>) | null = null;
+
+    await startSession(async (call) => {
+      escaped = call;
+      return "done";
+    });
+
+    await expect(escaped!("thread/list")).rejects.toBeInstanceOf(CodexAppServerError);
+  });
+
+  it("caps how many app-servers run at once so a project restore can't burst", async () => {
+    // Every Codex pane asks for its own subagents when a project restores;
+    // ungated that is one child process per pane, all at the same instant.
+    const children: FakeChild[] = [];
+    spawnMock.mockImplementation(() => {
+      const next = new FakeChild();
+      children.push(next);
+      return next;
+    });
+    vi.spyOn(process, "kill").mockImplementation(() => true);
+
+    const handshakeAll = async () => {
+      await flush();
+      for (const spawned of children) {
+        if (
+          spawned.requests.some((entry) => entry.method === "initialize" && entry.id !== undefined)
+        ) {
+          try {
+            spawned.respondTo("initialize", {});
+          } catch {
+            // Already answered on an earlier pass.
+          }
+        }
+      }
+      await flush();
+    };
+
+    const release: Array<() => void> = [];
+    const sessions = Array.from({ length: 5 }, () =>
+      runCodexAppServerSession(
+        () => new Promise<string>((resolve) => release.push(() => resolve("done"))),
+        { command: "codex-test" }
+      )
+    );
+
+    await handshakeAll();
+    // The gate is what keeps this below the number of callers.
+    const spawnedWhileGated = children.length;
+
+    // Drain: each completion frees a slot, which spawns and handshakes the next.
+    while (release.length > 0) {
+      release.shift()?.();
+      await handshakeAll();
+    }
+    await Promise.all(sessions);
+
+    expect(spawnedWhileGated).toBeLessThan(sessions.length);
+    // Every queued session still runs once a slot frees.
+    expect(children.length).toBe(sessions.length);
   });
 
   it("times the whole session out and reaps rather than hanging on a silent server", async () => {

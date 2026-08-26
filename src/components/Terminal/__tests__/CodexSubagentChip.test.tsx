@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import React from "react";
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { CodexSubagent, CodexSubagentsResult } from "@shared/types/ipc/codexSubagents";
 
@@ -31,6 +31,7 @@ vi.mock("@/components/ui/popover", () => ({
 }));
 
 import { CodexSubagentChip } from "../CodexSubagentChip";
+import { __resetCodexSubagentThrottle } from "@/hooks/useCodexSubagents";
 
 function subagent(overrides: Partial<CodexSubagent> = {}): CodexSubagent {
   return {
@@ -52,9 +53,8 @@ function ok(subagents: CodexSubagent[]): CodexSubagentsResult {
   return {
     status: "ok",
     parentThreadId: "root",
-    matchedBy: "cwd-recency",
+    matchedBy: "spawn-time",
     subagents,
-    candidates: [],
   };
 }
 
@@ -69,6 +69,8 @@ beforeEach(() => {
   readSubagentTranscript.mockReset();
   mockPanel = { id: "t1", kind: "terminal", launchAgentId: "codex", cwd: "/repo" };
   setElectronBridge(true);
+  // Module-scoped so it survives remounts in the app; must not leak between tests.
+  __resetCodexSubagentThrottle();
 });
 
 afterEach(() => {
@@ -115,28 +117,90 @@ describe("CodexSubagentChip", () => {
     expect(screen.queryByRole("textbox")).toBeNull();
   });
 
-  it("says the parent is a guess when more than one session ran in the folder", async () => {
-    listSubagents.mockResolvedValue({
+  it("shows nothing at all when the parent session is ambiguous", async () => {
+    // Fail closed: another terminal's children are indistinguishable from
+    // this one's, so the chip must not appear rather than guess.
+    listSubagents.mockResolvedValue({ status: "unavailable", reason: "ambiguous-session" });
+    render(<CodexSubagentChip terminalId="t1" />);
+    await waitFor(() => expect(listSubagents).toHaveBeenCalled());
+    expect(screen.queryByRole("button", { name: /subagent/i })).toBeNull();
+  });
+
+  it("loads a child's transcript once on expand, addressed to that child alone", async () => {
+    listSubagents.mockResolvedValue(
+      ok([subagent(), subagent({ threadId: "child-2", nickname: "Kant" })])
+    );
+    readSubagentTranscript.mockResolvedValue({
       status: "ok",
-      parentThreadId: "root",
-      matchedBy: "cwd-recency",
-      subagents: [subagent()],
-      candidates: [
-        { threadId: "root", preview: "one", createdAt: 1 },
-        { threadId: "other", preview: "two", createdAt: 2 },
+      threadId: "child-1",
+      turns: [
+        {
+          turnId: "t1",
+          status: "completed",
+          startedAt: null,
+          completedAt: null,
+          messages: [{ role: "agent", text: "All good" }],
+        },
       ],
     });
 
     render(<CodexSubagentChip terminalId="t1" />);
+    fireEvent.click(await screen.findByText("Meitner"));
 
-    expect(await screen.findByText(/best guess/i)).toBeTruthy();
+    expect(await screen.findByText("All good")).toBeTruthy();
+    // Exactly the child that was expanded, and only once.
+    expect(readSubagentTranscript.mock.calls).toEqual([
+      [{ terminalId: "t1", threadId: "child-1" }],
+    ]);
+
+    // Collapsing and reopening must not refetch a transcript we already hold.
+    fireEvent.click(screen.getByText("Meitner"));
+    fireEvent.click(screen.getByText("Meitner"));
+    await waitFor(() => expect(readSubagentTranscript).toHaveBeenCalledTimes(1));
   });
 
-  it("shows no ambiguity warning when the match was unambiguous", async () => {
+  it("offers a way out of a failed transcript read instead of wedging the row", async () => {
     listSubagents.mockResolvedValue(ok([subagent()]));
+    readSubagentTranscript.mockResolvedValueOnce({
+      status: "unavailable",
+      reason: "protocol-error",
+    });
+
+    render(<CodexSubagentChip terminalId="t1" />);
+    fireEvent.click(await screen.findByText("Meitner"));
+
+    const retry = await screen.findByRole("button", { name: "Retry" });
+    readSubagentTranscript.mockResolvedValueOnce({
+      status: "ok",
+      threadId: "child-1",
+      turns: [
+        {
+          turnId: "t1",
+          status: null,
+          startedAt: null,
+          completedAt: null,
+          messages: [{ role: "agent", text: "Second time" }],
+        },
+      ],
+    });
+    fireEvent.click(retry);
+
+    expect(await screen.findByText("Second time")).toBeTruthy();
+  });
+
+  it("exposes no way to send input to a child, even one the protocol says accepts it", async () => {
+    // `acceptsDirectInput` is fail-closed in the mapper, but the UI must be
+    // read-only regardless of what the protocol reports.
+    listSubagents.mockResolvedValue(ok([subagent({ acceptsDirectInput: true })]));
+
     render(<CodexSubagentChip terminalId="t1" />);
     await screen.findByText("Meitner");
-    expect(screen.queryByText(/best guess/i)).toBeNull();
+
+    expect(screen.queryByRole("textbox")).toBeNull();
+    const actions = screen
+      .getAllByRole("button")
+      .map((el) => el.getAttribute("aria-label") ?? el.textContent);
+    expect(actions.some((label) => /send|reply|steer|prompt/i.test(label ?? ""))).toBe(false);
   });
 
   it("does not query the pty host once the terminal has exited", async () => {

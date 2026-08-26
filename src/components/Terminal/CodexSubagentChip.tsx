@@ -1,4 +1,4 @@
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import { ChevronDown, ChevronRight, RefreshCw } from "lucide-react";
 import { Network } from "@/components/icons";
@@ -31,10 +31,27 @@ const TONE_CLASSES: Record<"error" | "active" | "muted", string> = {
   muted: "text-daintree-text/40",
 };
 
-function TranscriptBody({ transcript }: { transcript: CodexSubagentTranscriptResult }) {
+function TranscriptBody({
+  transcript,
+  onRetry,
+}: {
+  transcript: CodexSubagentTranscriptResult;
+  onRetry: () => void;
+}) {
   if (transcript.status === "unavailable") {
     return (
-      <p className="text-xs text-daintree-text/50">{codexUnavailableMessage(transcript.reason)}</p>
+      <div className="flex flex-col items-start gap-1">
+        <p className="text-xs text-daintree-text/50">
+          {codexUnavailableMessage(transcript.reason)}
+        </p>
+        <button
+          type="button"
+          onClick={onRetry}
+          className="text-xs text-daintree-text/70 hover:text-daintree-text underline underline-offset-2 transition-colors"
+        >
+          Retry
+        </button>
+      </div>
     );
   }
   if (transcript.turns.length === 0) {
@@ -64,15 +81,19 @@ function SubagentRow({ terminalId, subagent }: { terminalId: string; subagent: C
   const [isOpen, setIsOpen] = useState(false);
   const [transcript, setTranscript] = useState<CodexSubagentTranscriptResult | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  // The child's `updatedAt` at the moment we last fetched. Holding the version
+  // rather than a boolean is what makes a child that ran again reload instead
+  // of showing turns from before its latest run.
+  const [loadedFor, setLoadedFor] = useState<number | null>(null);
   const showSpinner = useDohertyGate(isLoading);
   const subtitle = subagentSubtitle(subagent);
   const tone = subagentStatusTone(subagent.status);
+  const panelId = `codex-subagent-${subagent.threadId}`;
 
-  const toggle = useCallback(() => {
-    const next = !isOpen;
-    setIsOpen(next);
-    if (!next || transcript !== null || isLoading) return;
+  const load = useCallback(() => {
+    if (isLoading) return;
     setIsLoading(true);
+    setLoadedFor(subagent.updatedAt);
     void codexClient
       .readSubagentTranscript({ terminalId, threadId: subagent.threadId })
       .then(setTranscript)
@@ -83,7 +104,19 @@ function SubagentRow({ terminalId, subagent }: { terminalId: string; subagent: C
         setTranscript({ status: "unavailable", reason: "protocol-error" });
       })
       .finally(() => setIsLoading(false));
-  }, [isOpen, isLoading, transcript, terminalId, subagent.threadId]);
+  }, [isLoading, terminalId, subagent.threadId, subagent.updatedAt]);
+
+  // Fetch on expand, and again if the child has run since we last looked.
+  // Driving this from state rather than the click handler is what keeps an
+  // already-open row from going blank when its version changes.
+  useEffect(() => {
+    if (!isOpen || loadedFor === subagent.updatedAt) return;
+    load();
+  }, [isOpen, loadedFor, subagent.updatedAt, load]);
+
+  // Clearing the version is the retry: the effect above sees the mismatch and
+  // refetches, so there is one load path rather than two.
+  const retry = useCallback(() => setLoadedFor(null), []);
 
   const Chevron = isOpen ? ChevronDown : ChevronRight;
 
@@ -91,8 +124,9 @@ function SubagentRow({ terminalId, subagent }: { terminalId: string; subagent: C
     <li className="border-b border-divider last:border-b-0">
       <button
         type="button"
-        onClick={toggle}
+        onClick={() => setIsOpen((open) => !open)}
         aria-expanded={isOpen}
+        aria-controls={panelId}
         className="w-full flex items-start gap-2 px-3 py-2 text-left hover:bg-overlay-subtle transition-colors"
       >
         <Chevron className="w-3 h-3 mt-0.5 shrink-0 text-daintree-text/40" aria-hidden="true" />
@@ -115,17 +149,25 @@ function SubagentRow({ terminalId, subagent }: { terminalId: string; subagent: C
           </span>
         )}
       </button>
-      {isOpen && (
-        <div className="px-3 pb-3 pl-8">
-          {transcript === null ? (
+      <div
+        id={panelId}
+        role="region"
+        aria-label={`${subagentTitle(subagent)} transcript`}
+        hidden={!isOpen}
+        className="px-3 pb-3 pl-8"
+      >
+        {isOpen &&
+          (transcript === null ? (
             showSpinner ? (
-              <Spinner size="sm" />
+              <span className="flex items-center gap-2 text-xs text-daintree-text/50" role="status">
+                <Spinner size="sm" />
+                Loading transcript
+              </span>
             ) : null
           ) : (
-            <TranscriptBody transcript={transcript} />
-          )}
-        </div>
-      )}
+            <TranscriptBody transcript={transcript} onRetry={retry} />
+          ))}
+      </div>
     </li>
   );
 }
@@ -161,7 +203,7 @@ export function CodexSubagentChip({ terminalId }: { terminalId: string }) {
 
   if (!enabled || result?.status !== "ok" || result.subagents.length === 0) return null;
 
-  const { subagents, candidates } = result;
+  const { subagents } = result;
 
   return (
     <Popover>
@@ -188,14 +230,6 @@ export function CodexSubagentChip({ terminalId }: { terminalId: string }) {
             <RefreshCw className={cn("w-3 h-3", isLoading && "animate-spin")} aria-hidden="true" />
           </button>
         </div>
-        {candidates.length > 0 && (
-          // Correlation is by folder plus recency, so a second Codex session in
-          // the same worktree makes the parent a guess. Say so rather than
-          // present another session's children as this terminal's.
-          <p className="px-3 py-2 text-[11px] text-status-warning border-b border-divider">
-            More than one Codex session ran here, so this list is a best guess
-          </p>
-        )}
         <ul className="max-h-80 overflow-y-auto">
           {subagents.map((subagent) => (
             <SubagentRow key={subagent.threadId} terminalId={terminalId} subagent={subagent} />

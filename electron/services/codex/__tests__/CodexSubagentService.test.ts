@@ -47,6 +47,13 @@ const codexTerminal = {
   spawnedAt: 1_700_000_000_000,
 };
 
+/** The unambiguous parent: started with the terminal and still live. */
+const rootThread = {
+  id: "root",
+  createdAt: codexTerminal.spawnedAt / 1000 + 1,
+  recencyAt: codexTerminal.spawnedAt / 1000 + 60,
+};
+
 beforeEach(() => {
   getTerminalAsync.mockReset();
   runSession.mockReset();
@@ -94,80 +101,97 @@ describe("toSubagent", () => {
 
 describe("selectParentThread", () => {
   const spawnedAtMs = 1_700_000_000_000;
-  const spawnedAtSeconds = spawnedAtMs / 1000;
+  const spawnedAt = spawnedAtMs / 1000;
 
   it("uses an exact session id without consulting the thread list", () => {
-    const selection = selectParentThread([{ id: "other", recencyAt: spawnedAtSeconds }], {
+    const selection = selectParentThread([{ id: "other", recencyAt: spawnedAt }], {
       spawnedAtMs,
       agentSessionId: "known-thread",
     });
-    expect(selection).toEqual({
-      parentThreadId: "known-thread",
-      matchedBy: "session-id",
-      candidates: [],
-    });
+    expect(selection).toEqual({ parentThreadId: "known-thread", matchedBy: "session-id" });
   });
 
   it("ignores threads that are themselves subagents", () => {
     const selection = selectParentThread(
       [
-        { id: "child", parentThreadId: "root", recencyAt: spawnedAtSeconds + 100 },
-        { id: "root", parentThreadId: null, recencyAt: spawnedAtSeconds },
+        { id: "child", parentThreadId: "root", createdAt: spawnedAt, recencyAt: spawnedAt + 100 },
+        { id: "root", parentThreadId: null, createdAt: spawnedAt, recencyAt: spawnedAt + 100 },
       ],
       { spawnedAtMs }
     );
     expect(selection.parentThreadId).toBe("root");
   });
 
-  it("picks the most recently active root and reports no ambiguity when it stands alone", () => {
-    const selection = selectParentThread(
-      [
-        { id: "stale", recencyAt: spawnedAtSeconds - 10 * 60 * 60 },
-        { id: "live", recencyAt: spawnedAtSeconds + 60 },
-      ],
-      { spawnedAtMs }
-    );
-    expect(selection.parentThreadId).toBe("live");
-    expect(selection.matchedBy).toBe("cwd-recency");
-    // `stale` predates the terminal by more than the window, so it is not a rival.
-    expect(selection.candidates).toEqual([]);
-  });
-
-  it("reports every plausible root when recency cannot separate them", () => {
+  it("picks the session that started with this terminal, not the newest one", () => {
+    // The regression this guards: terminal A launches, then two hours later a
+    // second Codex session starts in the same folder and becomes the most
+    // recently active. Ranking by recency would hand A the other session.
     const selection = selectParentThread(
       [
         {
-          id: "a",
-          recencyAt: spawnedAtSeconds + 120,
-          preview: "first",
-          createdAt: spawnedAtSeconds,
+          id: "other-terminal",
+          createdAt: spawnedAt + 2 * 60 * 60,
+          recencyAt: spawnedAt + 2 * 60 * 60,
         },
-        {
-          id: "b",
-          recencyAt: spawnedAtSeconds + 60,
-          preview: "second",
-          createdAt: spawnedAtSeconds,
-        },
+        { id: "mine", createdAt: spawnedAt + 2, recencyAt: spawnedAt + 30 * 60 },
       ],
       { spawnedAtMs }
     );
-    expect(selection.parentThreadId).toBe("a");
-    expect(selection.candidates.map((candidate) => candidate.threadId)).toEqual(["a", "b"]);
+    expect(selection.parentThreadId).toBe("mine");
+    expect(selection).toMatchObject({ matchedBy: "spawn-time" });
   });
 
-  it("falls back to updatedAt then createdAt when recencyAt is absent", () => {
+  it("refuses to choose between two sessions that started together", () => {
     const selection = selectParentThread(
       [
-        { id: "older", createdAt: spawnedAtSeconds, recencyAt: null },
-        { id: "newer", updatedAt: spawnedAtSeconds + 5000, recencyAt: null },
+        { id: "a", createdAt: spawnedAt + 1, recencyAt: spawnedAt + 60 },
+        { id: "b", createdAt: spawnedAt + 3, recencyAt: spawnedAt + 60 },
       ],
       { spawnedAtMs }
     );
-    expect(selection.parentThreadId).toBe("newer");
+    // Guessing here is indistinguishable from being right, so it doesn't guess.
+    expect(selection).toEqual({ parentThreadId: null, reason: "ambiguous-session" });
+  });
+
+  it("drops a session that had already gone quiet before the terminal launched", () => {
+    const selection = selectParentThread(
+      [
+        { id: "abandoned", createdAt: spawnedAt - 10, recencyAt: spawnedAt - 6 * 60 * 60 },
+        { id: "mine", createdAt: spawnedAt + 120, recencyAt: spawnedAt + 600 },
+      ],
+      { spawnedAtMs }
+    );
+    // `abandoned` starts closer to launch, but nothing has touched it since —
+    // whatever this terminal is running, it isn't that.
+    expect(selection.parentThreadId).toBe("mine");
+  });
+
+  it("keeps a lone live session even when it started long before the terminal", () => {
+    // A hand-typed `codex resume` carries an old createdAt and no session id.
+    const selection = selectParentThread(
+      [{ id: "resumed", createdAt: spawnedAt - 3 * 24 * 60 * 60, recencyAt: spawnedAt + 60 }],
+      { spawnedAtMs }
+    );
+    expect(selection.parentThreadId).toBe("resumed");
+  });
+
+  it("will not pick between roots when the terminal's launch time is unknown", () => {
+    const threads = [
+      { id: "a", createdAt: 10, recencyAt: 10 },
+      { id: "b", createdAt: 20, recencyAt: 20 },
+    ];
+    expect(selectParentThread(threads, {})).toEqual({
+      parentThreadId: null,
+      reason: "ambiguous-session",
+    });
+    expect(selectParentThread([threads[0]!], {}).parentThreadId).toBe("a");
   });
 
   it("returns no parent when the cwd has no root threads", () => {
-    expect(selectParentThread([], { spawnedAtMs }).parentThreadId).toBeNull();
+    expect(selectParentThread([], { spawnedAtMs })).toEqual({
+      parentThreadId: null,
+      reason: "no-session",
+    });
   });
 });
 
@@ -193,12 +217,17 @@ describe("toSubagentTurn", () => {
     expect(turn?.completedAt).toBe(1_700_000_007_000);
   });
 
-  it("truncates a message that would otherwise flood IPC", () => {
-    const turn = toSubagentTurn({
-      id: "turn-2",
-      items: [{ type: "agentMessage", text: "x".repeat(9000) }],
-    });
-    expect(turn?.messages[0].text.length).toBe(4000);
+  it("truncates a message that would otherwise flood IPC, keeping its start", () => {
+    const text = `START${"x".repeat(20_000)}`;
+    const turn = toSubagentTurn({ id: "turn-2", items: [{ type: "agentMessage", text }] });
+    const kept = turn?.messages[0]?.text ?? "";
+    expect(kept.length).toBeLessThan(text.length);
+    expect(text.startsWith(kept)).toBe(true);
+  });
+
+  it("drops a turn that carried no readable message", () => {
+    const turn = toSubagentTurn({ id: "turn-3", items: [{ type: "reasoning", content: [] }] });
+    expect(turn?.messages).toEqual([]);
   });
 });
 
@@ -226,7 +255,7 @@ describe("listCodexSubagents", () => {
     scriptSession((method, params) => {
       seen.push({ method, params });
       if (method === "thread/list" && params.cwd) {
-        return { data: [{ id: "root", recencyAt: codexTerminal.spawnedAt / 1000 }] };
+        return { data: [rootThread] };
       }
       return { data: [] };
     });
@@ -241,7 +270,7 @@ describe("listCodexSubagents", () => {
     let childParams: QueryParams = {};
     scriptSession((method, params) => {
       if (method === "thread/list" && params.cwd) {
-        return { data: [{ id: "root", recencyAt: codexTerminal.spawnedAt / 1000 }] };
+        return { data: [rootThread] };
       }
       if (method === "thread/list") {
         childParams = params;
@@ -260,7 +289,7 @@ describe("listCodexSubagents", () => {
     expect(result).toMatchObject({
       status: "ok",
       parentThreadId: "root",
-      matchedBy: "cwd-recency",
+      matchedBy: "spawn-time",
     });
     if (result.status !== "ok") throw new Error("expected ok");
     expect(result.subagents.map((s) => s.threadId)).toEqual(["newer", "older"]);
@@ -279,6 +308,27 @@ describe("listCodexSubagents", () => {
     });
   });
 
+  it("reports ambiguity instead of showing another session's children", async () => {
+    getTerminalAsync.mockResolvedValue(codexTerminal);
+    const methods: string[] = [];
+    scriptSession((method, params) => {
+      methods.push(method);
+      if (method === "thread/list" && params.cwd) {
+        return {
+          data: [rootThread, { ...rootThread, id: "rival", createdAt: rootThread.createdAt + 2 }],
+        };
+      }
+      return { data: [] };
+    });
+
+    await expect(listCodexSubagents("t1")).resolves.toEqual({
+      status: "unavailable",
+      reason: "ambiguous-session",
+    });
+    // Nothing is listed for an unresolved parent, so nothing can be shown.
+    expect(methods.filter((method) => method === "thread/list")).toHaveLength(1);
+  });
+
   it("carries the transport's reason through instead of flattening every failure", async () => {
     getTerminalAsync.mockResolvedValue(codexTerminal);
     runSession.mockRejectedValue(new CodexAppServerError("cli-missing", "Codex CLI not found"));
@@ -290,13 +340,58 @@ describe("listCodexSubagents", () => {
 });
 
 describe("readCodexSubagentTranscript", () => {
+  it("refuses to read anything while the parent is ambiguous", async () => {
+    getTerminalAsync.mockResolvedValue(codexTerminal);
+    const methods: string[] = [];
+    scriptSession((method, params) => {
+      methods.push(method);
+      if (method === "thread/list" && params.cwd) {
+        return {
+          data: [rootThread, { ...rootThread, id: "rival", createdAt: rootThread.createdAt + 2 }],
+        };
+      }
+      return { data: [] };
+    });
+
+    // Even a genuine child id must not resolve: ownership is unproven.
+    await expect(readCodexSubagentTranscript("t1", "some-child")).resolves.toEqual({
+      status: "unavailable",
+      reason: "ambiguous-session",
+    });
+    expect(methods).not.toContain("thread/turns/list");
+  });
+
+  it("falls back to spawn-time matching when a recorded session id names no thread here", async () => {
+    // `agentSessionId` is generic launch metadata — a pane launched as another
+    // agent, or reused for a fresh session, carries an id that isn't ours.
+    getTerminalAsync.mockResolvedValue({ ...codexTerminal, agentSessionId: "stale-or-foreign" });
+    const methods: string[] = [];
+    scriptSession((method, params) => {
+      methods.push(method);
+      if (method === "thread/read") return { thread: { id: params.threadId, cwd: "/elsewhere" } };
+      if (method === "thread/list" && params.cwd) return { data: [rootThread] };
+      if (method === "thread/list") return { data: [{ id: "mine" }] };
+      if (method === "thread/turns/list") {
+        return { data: [{ id: "t", items: [{ type: "agentMessage", text: "done" }] }] };
+      }
+      return {};
+    });
+
+    const result = await readCodexSubagentTranscript("t1", "mine");
+
+    expect(result).toMatchObject({ status: "ok" });
+    // The cwd query ran, which only happens when the recorded id was rejected.
+    expect(methods).toContain("thread/read");
+    expect(methods.filter((method) => method === "thread/list")).toHaveLength(2);
+  });
+
   it("refuses a thread that is not a child of this terminal's session", async () => {
     getTerminalAsync.mockResolvedValue(codexTerminal);
     const methods: string[] = [];
     scriptSession((method, params) => {
       methods.push(method);
       if (method === "thread/list" && params.cwd) {
-        return { data: [{ id: "root", recencyAt: codexTerminal.spawnedAt / 1000 }] };
+        return { data: [rootThread] };
       }
       if (method === "thread/list") return { data: [{ id: "mine" }] };
       return { data: [] };
@@ -314,7 +409,7 @@ describe("readCodexSubagentTranscript", () => {
     let turnParams: QueryParams = {};
     scriptSession((method, params) => {
       if (method === "thread/list" && params.cwd) {
-        return { data: [{ id: "root", recencyAt: codexTerminal.spawnedAt / 1000 }] };
+        return { data: [rootThread] };
       }
       if (method === "thread/list") return { data: [{ id: "mine" }] };
       if (method === "thread/turns/list") {

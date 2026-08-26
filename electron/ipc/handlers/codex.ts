@@ -10,11 +10,13 @@ import type {
 // resolves the cwd and the owning Codex thread from the pty-host record and
 // refuses any thread that isn't a child of it, so a wrong or forged id can't
 // reach an unrelated Codex conversation.
-const listSchema = z.object({ terminalId: z.string().min(1) });
-const readSchema = z.object({
-  terminalId: z.string().min(1),
-  threadId: z.string().min(1),
-});
+// Ids are UUIDs and terminal keys, not free text: bound them so a malformed
+// payload is rejected at the boundary rather than carried into a protocol query.
+const ID_MAX = 128;
+const id = z.string().trim().min(1).max(ID_MAX);
+
+const listSchema = z.object({ terminalId: id });
+const readSchema = z.object({ terminalId: id, threadId: id });
 
 export const codexNamespace = defineIpcNamespace({
   name: "codex",

@@ -27,13 +27,21 @@ import { buildProbeEnv } from "../../utils/spawnEnv.js";
 import { scrubSecrets } from "../../../shared/utils/secretScrubber.js";
 import type { CodexSubagentUnavailableReason } from "../../../shared/types/ipc/codexSubagents.js";
 
-/** Read-only surface. `thread/start` is absent by design — see the file header. */
-export const CODEX_APP_SERVER_ALLOWED_METHODS = new Set([
+/**
+ * Read-only surface. `thread/start` is absent by design — see the file header.
+ * Held in a module-private frozen tuple rather than an exported `Set`, which
+ * any importer could have added to.
+ */
+const ALLOWED_METHODS = Object.freeze([
   "initialize",
   "thread/list",
   "thread/read",
   "thread/turns/list",
-]);
+] as const);
+
+export function isAllowedCodexAppServerMethod(method: string): boolean {
+  return (ALLOWED_METHODS as readonly string[]).includes(method);
+}
 
 /** Whole-session budget: spawn, handshake, every query, teardown. */
 const SESSION_TIMEOUT_MS = 15_000;
@@ -62,6 +70,34 @@ interface Pending {
   timer: ReturnType<typeof setTimeout>;
 }
 
+/**
+ * A project restore mounts every Codex pane at once, and each asks for its own
+ * subagents. Without a gate that is N concurrent `codex app-server` processes;
+ * with one it is a short queue, and each query is single-digit milliseconds
+ * once the server is up.
+ */
+const MAX_CONCURRENT_SESSIONS = 2;
+let activeSessions = 0;
+const sessionQueue: Array<() => void> = [];
+
+function acquireSessionSlot(): Promise<void> {
+  if (activeSessions < MAX_CONCURRENT_SESSIONS) {
+    activeSessions++;
+    return Promise.resolve();
+  }
+  return new Promise<void>((resolve) => {
+    sessionQueue.push(() => {
+      activeSessions++;
+      resolve();
+    });
+  });
+}
+
+function releaseSessionSlot(): void {
+  activeSessions--;
+  sessionQueue.shift()?.();
+}
+
 export interface CodexAppServerSessionOptions {
   /** Overridable so tests don't depend on a `codex` binary being installed. */
   command?: string;
@@ -84,10 +120,12 @@ function classifySpawnError(error: NodeJS.ErrnoException): CodexAppServerError {
  * default profile while the terminal itself runs against a relocated one.
  *
  * This inherits main's `CODEX_HOME`, not the terminal's own spawn env, so a
- * per-project override is invisible here. The failure is quiet rather than
- * wrong: the default profile holds no thread for that cwd, the lookup reports
- * `no-session`, and the UI stays hidden instead of showing another profile's
- * subagents.
+ * per-project override is invisible here. Usually that fails quiet — the
+ * default profile holds no thread for that cwd, so the lookup reports
+ * `no-session` and the UI stays hidden — but if the default profile also has
+ * threads for the same folder, spawn-time correlation runs against the wrong
+ * profile. Carrying the terminal's effective profile through pty-host metadata
+ * is the real fix and is not wired yet.
  */
 function buildAppServerEnv(): NodeJS.ProcessEnv {
   const env = buildProbeEnv();
@@ -105,6 +143,18 @@ function buildAppServerEnv(): NodeJS.ProcessEnv {
 export async function runCodexAppServerSession<T>(
   run: (call: CodexAppServerCall) => Promise<T>,
   options: CodexAppServerSessionOptions = {}
+): Promise<T> {
+  await acquireSessionSlot();
+  try {
+    return await spawnCodexAppServerSession(run, options);
+  } finally {
+    releaseSessionSlot();
+  }
+}
+
+async function spawnCodexAppServerSession<T>(
+  run: (call: CodexAppServerCall) => Promise<T>,
+  options: CodexAppServerSessionOptions
 ): Promise<T> {
   const command = options.command ?? "codex";
   const timeoutMs = options.timeoutMs ?? SESSION_TIMEOUT_MS;
@@ -189,6 +239,9 @@ export async function runCodexAppServerSession<T>(
     if (disposed) return;
     disposed = true;
     if (sessionTimer) clearTimeout(sessionTimer);
+    // Anything `run` left in flight settles now rather than idling until its
+    // own 10s timer. Harmless on the happy path, where nothing is pending.
+    failAll(new CodexAppServerError("protocol-error", "Codex app-server session ended"));
     if (reap) killTree();
     // Drop only `data`, keeping the no-op `error` sinks below alive: destroy()
     // can surface a pending EIO/EBADF on the next tick, and an unhandled
@@ -296,12 +349,16 @@ export async function runCodexAppServerSession<T>(
   });
 
   const call: CodexAppServerCall = <T>(method: string, params?: unknown): Promise<T> => {
-    if (!CODEX_APP_SERVER_ALLOWED_METHODS.has(method)) {
+    if (!isAllowedCodexAppServerMethod(method)) {
       return Promise.reject(
         new CodexAppServerError("protocol-error", `Method not permitted: ${method}`)
       );
     }
-    if (failure) return Promise.reject(failure);
+    if (disposed || failure) {
+      return Promise.reject(
+        failure ?? new CodexAppServerError("protocol-error", "Codex app-server session ended")
+      );
+    }
     const id = nextId++;
     return new Promise<T>((resolve, reject) => {
       const timer = setTimeout(() => {

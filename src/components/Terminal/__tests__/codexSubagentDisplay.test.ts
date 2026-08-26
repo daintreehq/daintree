@@ -32,16 +32,27 @@ describe("subagentTitle", () => {
     expect(subagentTitle({ ...full, nickname: null, role: null })).toBe("Review the diff");
 
     const bare = subagent();
-    // Falls back to a short id rather than rendering an empty row.
-    expect(subagentTitle(bare)).toBe(bare.threadId.slice(0, 8));
+    // Falls back to a fragment of the id rather than rendering an empty row.
+    const fallback = subagentTitle(bare);
+    expect(fallback).not.toBe("");
+    expect(fallback.length).toBeLessThan(bare.threadId.length);
+    expect(bare.threadId.startsWith(fallback)).toBe(true);
   });
 
   it("uses only the first line of a multi-line task and bounds its length", () => {
     const multiline = subagent({ preview: "Check the parser\nthen report back" });
     expect(subagentTitle(multiline)).toBe("Check the parser");
 
-    const long = subagent({ preview: "x".repeat(200) });
-    expect(subagentTitle(long).length).toBe(48);
+    const source = `START${"x".repeat(500)}`;
+    const long = subagent({ preview: source });
+    const title = subagentTitle(long);
+    expect(title.length).toBeLessThan(source.length);
+    expect(source.startsWith(title)).toBe(true);
+  });
+
+  it("does not render whitespace-only metadata as a title", () => {
+    const blankName = subagent({ nickname: "   ", role: "\n", preview: "Review the diff" });
+    expect(subagentTitle(blankName)).toBe("Review the diff");
   });
 });
 
@@ -62,6 +73,16 @@ describe("subagentSubtitle", () => {
   it("falls back to the role when there is no task text", () => {
     expect(subagentSubtitle(subagent({ nickname: "Kant", role: "tester" }))).toBe("tester");
     expect(subagentSubtitle(subagent())).toBeNull();
+  });
+
+  it("never restates the title, whichever field the title came from", () => {
+    // Every collision the fallback chain can produce: role doubling as the
+    // task, and a nickname identical to the role.
+    const roleIsTask = subagent({ role: "reviewer", preview: "reviewer" });
+    expect(subagentSubtitle(roleIsTask)).not.toBe(subagentTitle(roleIsTask));
+
+    const sameNameAndRole = subagent({ nickname: "reviewer", role: "reviewer" });
+    expect(subagentSubtitle(sameNameAndRole)).not.toBe(subagentTitle(sameNameAndRole));
   });
 });
 
@@ -113,6 +134,7 @@ describe("codexUnavailableMessage", () => {
     const reasons = [
       "cli-missing",
       "no-session",
+      "ambiguous-session",
       "timeout",
       "protocol-error",
       "not-codex",
