@@ -1289,3 +1289,170 @@ test.describe.serial("Assistant: native panel", () => {
     });
   }
 });
+
+/**
+ * The account journey, driven through the host.
+ *
+ * Daintree implements NONE of this. It removed its own assistant account settings, IPC
+ * and service when sign-in moved into the session, and what is left is a transport: the
+ * panel sends `/login` down the command path and renders the text that comes back. So
+ * every assertion here is about transport and rendering — that the engine's commands
+ * reach it, that its answers are shown as it wrote them, and that Daintree never
+ * arrives at "signed in", "subscribed" or "not subscribed" on its own.
+ *
+ * That last one is the point of the suite rather than a nicety. A host that cached a
+ * plan, or inferred one from prose, would be a second authority on billing that the
+ * backend never agreed to — and the first thing it would get wrong is telling a paying
+ * customer they have not paid.
+ */
+test.describe.serial("Assistant: the account journey", () => {
+  let accountCtx: AppContext;
+  let accountFixture: string;
+  let accountCleanup: (() => void) | undefined;
+
+  /** Launches the app with the fake engine in a given account state. */
+  async function launchWithAccount(env: Record<string, string>) {
+    if (accountCtx?.app) await closeApp(accountCtx.app);
+    accountCtx = await launchApp({
+      env: { DAINTREE_ASSISTANT_BIN: FAKE_ENGINE, FAKE_ENGINE_SPEED: "0", ...env },
+    });
+    accountCtx.window = await openAndOnboardProject(
+      accountCtx.app,
+      accountCtx.window,
+      accountFixture,
+      "Assistant Account Test"
+    );
+    return accountCtx.window;
+  }
+
+  test.beforeEach(() => {
+    const { dir, cleanup } = createFixtureRepo({ name: "assistant-account" });
+    accountFixture = dir;
+    accountCleanup = cleanup;
+  });
+
+  test.afterEach(async () => {
+    if (accountCtx?.app) await closeApp(accountCtx.app);
+    accountCleanup?.();
+  });
+
+  test("the palette offers the engine's account commands", async () => {
+    // The panel keeps no command list of its own — the palette is built from the
+    // catalog in `host:ready` and nothing else. So this is the check that the account
+    // surface is REACHABLE: with the commands removed from Settings, a `/login` the
+    // palette does not offer is an install with no way to sign in at all, which is
+    // exactly the state this branch was in before the engine gained them.
+    const window = await launchWithAccount({});
+    await openAssistant(window);
+    await type(window, "/");
+
+    const palette = window.getByRole("listbox", { name: "Command autocomplete" });
+    await expect(palette).toBeVisible({ timeout: T_MEDIUM });
+    for (const gloss of [
+      "sign in to your account",
+      "sign out on this machine",
+      "who you are signed in as",
+      "which backend answers",
+    ]) {
+      await expect(palette.getByText(gloss)).toBeVisible();
+    }
+  });
+
+  test("signing in renders the plan the engine reports", async () => {
+    const window = await launchWithAccount({ FAKE_ENGINE_PLAN: "standard" });
+    await openAssistant(window);
+    const panel = window.locator("#daintree-assistant-panel");
+
+    await ask(window, "/login");
+
+    // The engine's own words and its own layout. `innerText` rather than
+    // `textContent`, because the padded label column only survives if the panel is
+    // actually honouring the whitespace rather than reflowing the answer into prose.
+    const rendered = await panel
+      .getByTestId("assistant-notice")
+      .filter({ hasText: /plan/ })
+      .last()
+      .evaluate((el: HTMLElement) => el.innerText);
+    expect(rendered).toMatch(/plan {2,}standard/);
+    expect(rendered).toMatch(/access {2,}active/);
+  });
+
+  test("a checkout reaches a running session without a restart or a second sign-in", async () => {
+    // The property a subscription flow lives or dies on: someone buys a plan in a
+    // browser, comes back to the window they left open, and the app knows. A host that
+    // cached the plan at boot would need a restart, and would be wrong in the meantime.
+    const window = await launchWithAccount({
+      FAKE_ENGINE_PLAN: "standard",
+      FAKE_ENGINE_CHECKOUT_PLAN: "pro",
+    });
+    await openAssistant(window);
+    const panel = window.locator("#daintree-assistant-panel");
+
+    await ask(window, "/login");
+    await expect(panel.getByText(/plan\s+standard/).last()).toBeVisible({ timeout: T_MEDIUM });
+
+    // The purchase lands between the two reads. Same window, same session, same engine.
+    await ask(window, "/account");
+    await expect(panel.getByText(/plan\s+pro/).last()).toBeVisible({ timeout: T_MEDIUM });
+  });
+
+  test("a plan that cannot be checked reads as unverified, never as unsubscribed", async () => {
+    // The dependency case, and the one wrong answer that costs money: the credential is
+    // good and the billing authority simply did not answer. Rendering that as "not
+    // subscribed" tells a paying customer they have not paid. The engine words it as
+    // retryable; the host's job is to not turn that into a verdict of its own.
+    const window = await launchWithAccount({
+      FAKE_ENGINE_SIGNED_IN: "1",
+      FAKE_ENGINE_ACCOUNT: "unavailable",
+    });
+    await openAssistant(window);
+    const panel = window.locator("#daintree-assistant-panel");
+
+    await ask(window, "/account");
+
+    await expect(panel.getByText(/access\s+unverified/).last()).toBeVisible({ timeout: T_MEDIUM });
+    await expect(panel.getByText(/try again shortly/i)).toBeVisible();
+    // Nothing anywhere says the account has no plan. The words are the product here.
+    await expect(panel.getByText(/not signed in|no plan|not subscribed/i)).toHaveCount(0);
+  });
+
+  test("signing out ends the session, and the next turn is refused by the engine", async () => {
+    const window = await launchWithAccount({
+      FAKE_ENGINE_SIGNED_IN: "1",
+      FAKE_ENGINE_REQUIRE_ACCOUNT: "1",
+    });
+    await openAssistant(window);
+    const panel = window.locator("#daintree-assistant-panel");
+
+    // Signed in, a turn runs.
+    await ask(window, "/scenario simple");
+    await expect(panel.locator(".assistant-prose").first()).toBeVisible({ timeout: T_MEDIUM });
+
+    await ask(window, "/logout");
+    await expect(panel.getByText(/Signed out/).last()).toBeVisible({ timeout: T_MEDIUM });
+
+    // The refusal comes from the ENGINE, as a typed error with its registered prefix —
+    // not from Daintree noticing it had just seen a `/logout` go past. The distinction
+    // is the whole ownership boundary: a host that pre-empted here would be refusing
+    // turns on its own reading of an account it does not own.
+    await ask(window, "/scenario simple");
+    await expect(panel.getByText(/Account problem:/)).toBeVisible({ timeout: T_MEDIUM });
+    await expect(panel.getByText(/\/login/)).toBeVisible();
+  });
+
+  test("no account or backend controls exist in Settings", async () => {
+    // The architecture, asserted where it would regress: someone adds a "Sign in"
+    // button to the assistant's settings tab because it seems more discoverable there.
+    // It would be a second credential surface, a second endpoint choice, and a second
+    // opinion about the plan — all of which this branch deleted on purpose.
+    const window = await launchWithAccount({});
+    await openSettings(window);
+    const dialog = window.getByRole("dialog");
+    await dialog.getByRole("tab", { name: /Assistant/ }).click();
+
+    for (const control of [/sign in/i, /log in/i, /account/i, /backend url/i, /api key/i]) {
+      await expect(dialog.getByRole("button", { name: control })).toHaveCount(0);
+      await expect(dialog.getByRole("textbox", { name: control })).toHaveCount(0);
+    }
+  });
+});

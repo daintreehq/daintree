@@ -72,6 +72,27 @@ export interface DriveOptions {
    * against a real state directory after the temp tree was deleted.
    */
   environmentTier?: string;
+  /**
+   * Slash-command lines to send once the engine reports ready, as the panel sends them:
+   * `{ type: "command", sessionId, line }`.
+   *
+   * The panel routes EVERY slash line down this path — it keeps no command list of its
+   * own, deliberately, so the two cannot drift — which means the account commands
+   * working in the panel is entirely a claim about the engine. Nothing in Daintree's own
+   * tree can check it; only driving the real binary can.
+   */
+  commands?: string[];
+  /**
+   * Whether to wait for each command's `command:result` before asking for shutdown.
+   *
+   * `false` sends the commands and the shutdown together, which is the test for the
+   * property the engine's `Slow` flag exists to provide: `/login`, `/logout` and
+   * `/account` can wait on a browser or a backend round trip, and while they do, the
+   * embedded host's command loop must keep servicing everything else. A loop that ran
+   * them inline would post nothing and answer nothing until they finished — the panel
+   * would simply freeze — so a shutdown that lands promptly IS the assertion.
+   */
+  awaitCommandResults?: boolean;
 }
 
 /** Boots the engine, sends a descriptor then a shutdown, and collects stdout frames. */
@@ -114,9 +135,13 @@ export async function driveEngine(
     });
 
     const frames: unknown[] = [];
+    const commands = opts.commands ?? [];
+    const awaitResults = opts.awaitCommandResults ?? true;
+    let outstandingResults = commands.length;
     let stdoutBuffer = "";
     let stderr = "";
     let onReady: (() => void) | undefined;
+    let onCommandResult: (() => void) | undefined;
 
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
@@ -128,7 +153,9 @@ export async function driveEngine(
         if (!line) continue;
         const frame: unknown = JSON.parse(line);
         frames.push(frame);
-        if ((frame as { type?: string }).type === "host:ready") onReady?.();
+        const type = (frame as { type?: string }).type;
+        if (type === "host:ready") onReady?.();
+        if (type === "command:result") onCommandResult?.();
       }
     });
     child.stderr.setEncoding("utf8");
@@ -161,7 +188,22 @@ export async function driveEngine(
       // flake that reads as a protocol regression. The timer stays only as a backstop
       // for an engine that never becomes ready at all, which is a real failure worth
       // capturing rather than hanging on.
-      onReady = requestShutdown;
+      //
+      // With commands, the same rule one step later: send them on ready, then leave on
+      // the last result rather than on a guess at how long a backend round trip takes.
+      onReady = () => {
+        for (const line of commands) {
+          if (child.stdin.writable) {
+            child.stdin.write(`${JSON.stringify({ type: "command", sessionId, line })}\n`);
+          }
+        }
+        if (commands.length === 0 || !awaitResults) requestShutdown();
+      };
+      onCommandResult = () => {
+        if (!awaitResults) return;
+        outstandingResults -= 1;
+        if (outstandingResults <= 0) requestShutdown();
+      };
       const shutdown = setTimeout(requestShutdown, 20_000);
       child.on("exit", (code) => {
         clearTimeout(kill);
