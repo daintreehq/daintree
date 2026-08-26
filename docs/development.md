@@ -159,24 +159,46 @@ The flag is gated on `app.isPackaged === false` (forwarded to the pty host as `D
 
 ## Compiler bailout tooling
 
-React Compiler bailouts are tracked with two complementary tools. These run locally on demand — like the other budget scripts, the compiler budget is intentionally not wired into CI pre-1.0 (see the dormancy note in `.github/workflows/ci.yml`); the "gate" framing below describes how the check behaves when run and how it is designed to gate CI once budgets are reintroduced post-1.0.
+React Compiler bailouts are tracked with two tools that share **one collector**: `scripts/lib/compiler-scan.mjs` runs the compiler over a declared set of files on disk, under the options `vite.config.ts` passes to `reactCompilerPreset`. Each command performs its own scan (~20s over ~1,500 files, with progress on stderr); neither needs a build. These run locally on demand — like the other budget scripts, the compiler budget is intentionally not wired into CI pre-1.0 (see the dormancy note in `.github/workflows/ci.yml`); the "gate" framing below describes how the check behaves when run.
 
 ```bash
-npm run compiler-budget:check     # Check: diffs build report against baseline (catches ALL regressions)
-npm run compiler-budget:critical  # Triage: re-runs compiler with severity:"Error" filter (surfaces real bailouts only)
-npm run compiler-budget:update    # Accept: refreshes baseline after intentional regressions
+npm run compiler-budget:check     # Gate: diffs the scan against the baseline
+npm run compiler-budget:critical  # Triage: the same scan, filtered to severity "Error"
+npm run compiler-budget:update    # Accept: rewrites the baseline from the scan
 ```
 
-The **budget check** (`compiler-budget:check`) is severity-aware. Severity is derived dynamically from the plugin's exported `LintRules` registry (1 `Hint` category `Todo`, 2 `Warning`, 23 `Error` as of `babel-plugin-react-compiler` 1.0.0), so a plugin upgrade that recategorizes a rule reflows the gate automatically. Per `CompileError` event, the gate buckets by severity:
+**Scope** is declared in one place, `scripts/lib/compiler-scan-surface.mjs`: `src/**/*.{ts,tsx}` plus `plugins/builtin/*/renderer/**/*.{ts,tsx}`, minus `*.test.*`, `*.spec.*`, `__tests__/` and `.d.ts`. `plugins/sample/**` is excluded because it builds through its own Vite config that never registers the compiler. The scan reuses the preset's own source filter; Rolldown's per-extension parser options are mirrored by hand (`.ts` deliberately parses without the `jsx` plugin, or `<T>(x)` would be read as a JSX element), and the fingerprint records that mirroring so a change on either side invalidates the baseline.
 
-- **`Hint` (cosmetic `Todo` noise — try/catch lowering, dynamic-import arrows):** collapsed to a single per-file `hintCount`, not stored verbatim. This keeps `compiler-bailout-baseline.json` compact — a shifting Todo count is a one-line diff instead of dozens of repeated reason strings. Gated only by a **global Hint budget**: per-file churn moves freely (a refactor shifting noise between files nets to zero), but the whole-repo total may not grow.
-- **`Error` + `Warning` (load-bearing rule-of-React violations):** tracked verbatim in `errorBailouts` (with `category`, `severity`, `reason`) and protected by a **strict zero-regression gate** — any per-file increase, any new file with a strict bailout, or any growth in the whole-repo strict total fails the check (and will fail CI once budgets gate CI post-1.0).
+`vite.config.ts` also holds the build to that same surface: if the compiler ever processes a renderer file outside it, the build fails naming the file. Without that, moving renderer code to a new root would retire its debt silently — the old path reads as deleted and the new path is simply never scanned.
 
-The raw `error` count is kept per file for diagnostics but no longer gates directly. The **critical-errors script** (`compiler-budget:critical`) re-runs the React Compiler directly on `src/` and filters to `severity: "Error"`, isolating the small subset of diagnostics that actually affect optimization. Run it when the budget gate fires to determine whether the new bailout is cosmetic noise or needs attention.
+**Why a scan and not the build.** The gate used to read a logger threaded into `vite build`. That measures whatever the module graph reaches, which moves with tree-shaking, dynamic imports and entry changes — and it was never "the files that ship" either, since most of what the compiler transforms is tree-shaken out of the emitted chunks afterwards. React Compiler diagnostics are file-local, so the file on disk is the honest unit. When this was introduced the scan reproduced every file the build reported with identical per-file counts, plus eight the bundler had tree-shaken away.
 
-Both tools use `panicThreshold: "none"` — the signal lives in the report and the triage script, never in build crashes.
+**Severity buckets** are derived from the plugin's exported `LintRules` registry, so a plugin upgrade that recategorizes a rule reflows the gate:
 
-Refresh the baseline with `npm run compiler-budget:update` when a regression is intentional. The 10% shrinkage guard counts file keys (not entry shape), so the one-time severity-aware reformat doesn't trip it; `--force` is only needed if the file count genuinely drops by more than 10%.
+- **`Hint` (cosmetic `Todo` noise):** collapsed to a per-file `hintCount` and gated only by a **global budget**. Per-file churn moves freely; the whole-repo total may not grow. Entries for deleted files are excluded from that ceiling — their budget left with the code.
+- **`Error` + `Warning`:** tracked verbatim in `errorBailouts` and gated **strictly** — any per-file increase, any new file with a strict bailout, or any count-neutral swap to a different category fails.
+
+**A baseline entry with nothing to report is three different events**, and the gate resolves which by asking the filesystem and the scan:
+
+| Situation | Outcome |
+| --- | --- |
+| File deleted from the repo | Entry retired, its Hint budget retired with it |
+| File scanned, now clean — or no longer holding React code | Entry retired as an improvement |
+| File on disk but the scan never decided about it | **Failure** — coverage was lost |
+
+Only the third fails. Treating all three as failures is what made contributors hand-edit the baseline instead of regenerating it, and hand-editing is how it silently stopped covering 190 files between June and August 2026. "Retired" describes the comparison, not the file — `check` never rewrites the baseline; `--update` is the only writer.
+
+The baseline is versioned and carries a **fingerprint** of everything that changes what the numbers mean: the collector's own revision, the installed versions of the compiler, Babel, `@vitejs/plugin-react` and glob, the compiler options, the patterns and ignores, the source filter, the mirrored parser options, and the Hint category list. A mismatch is refused rather than migrated. A version that cannot be resolved fails the scan rather than being recorded as "unknown" — banking "unknown" once would make every later unknown compare equal to it.
+
+The gate is **fail-closed** about its own collection. A file that cannot be read or parsed fails the run outright, because a hole in the scan reports as "clean". A scan that compiles files but records no diagnostics at all fails both modes, because it would otherwise read as the whole repo becoming clean. And a scan whose coverage falls more than 10% short of what the baseline implies should still be there, after allowing for deleted files, fails both modes rather than being written into a new baseline. That shortfall is measured against the baseline's recorded `scanned` count while only files with diagnostics are named in it, so an honest bulk deletion of clean files can trip it; `--update --accept-coverage-drop` downgrades it to a warning for that case, and has no effect in check mode, which stays fail-closed.
+
+The baseline also records a **coverage** block (`discovered` / `scanned` / `filtered` / `withEvents`). It is what the collapse guard compares against; without it a silent collector is indistinguishable from a codebase that got clean.
+
+`compiler-budget:critical` exits 0 when the scan **completed**, not when it found nothing — findings may still be listed. It exits 1 only when the listing is incomplete.
+
+`vite.config.ts` keeps a minimal `reactCompilerReportPlugin` that writes nothing and only asserts the compiler is still wired into the real build.
+
+Note that a **third**, separate compiler signal exists: CI ratchets `react-compiler/react-compiler` ESLint warnings against `scripts/baselines/eslint-warnings-baseline.json`. That runs `eslint-plugin-react-compiler` 19.1.0-rc.2, which bundles different compiler behaviour, disables ref-access validation, and reports only its default levels. It is not the same signal as the Babel compiler 1.0.0 scan above, and the two are not expected to agree.
 
 ## Code Patterns
 
