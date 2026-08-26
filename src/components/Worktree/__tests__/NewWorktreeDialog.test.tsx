@@ -592,7 +592,7 @@ describe("NewWorktreeDialog — existing branch mode", () => {
       });
 
       expect(screen.getByTestId("existing-branch-picker").textContent).toContain(
-        "Select a local branch..."
+        "Select a local branch"
       );
     });
   });
@@ -1541,7 +1541,7 @@ describe("NewWorktreeDialog — deferred branch auto-resolve", () => {
     const branchInput = await typeBranch("feature/terrain");
 
     expect(branchInput.value).toBe("feature/terrain");
-    expect(screen.getByText(/auto-incremented/i)).toBeDefined();
+    expect(screen.getByText(/renamed to avoid a conflict/i)).toBeDefined();
   });
 
   it("does not clobber characters typed past the conflicting prefix", async () => {
@@ -1554,7 +1554,7 @@ describe("NewWorktreeDialog — deferred branch auto-resolve", () => {
     await typeBranch(`${branchInput.value}-shadows`);
 
     expect(branchInput.value).toBe("feature/terrain-shadows");
-    expect(screen.queryByText(/auto-incremented/i)).toBeNull();
+    expect(screen.queryByText(/renamed to avoid a conflict/i)).toBeNull();
   });
 
   it("applies the auto-incremented name on blur without re-checking or disabling Create", async () => {

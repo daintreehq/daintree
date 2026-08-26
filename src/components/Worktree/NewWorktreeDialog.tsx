@@ -1123,7 +1123,7 @@ export function NewWorktreeDialog({
                             />
                           )}
                         </span>
-                        Create from the remote branch
+                        Create from remote branch
                       </label>
                     }
                   >

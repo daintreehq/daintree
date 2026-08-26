@@ -228,6 +228,12 @@ type FocusRingAllowlistEntry = {
 
 const ALLOWLIST: FocusRingAllowlistEntry[] = [
   {
+    file: "src/components/Worktree/views/WorktreePathPicker.tsx",
+    fragment: "focus:outline-hidden disabled:opacity-50",
+    reason:
+      "Path input and its browse button are one compound control — the ring is painted once on the wrapper via has-[input:focus-visible], so an element-owned ring here would draw a second ring around the pair",
+  },
+  {
     file: "src/components/HelpPanel/HelpPanel.tsx",
     fragment: "relative shrink-0 flex flex-col h-full overflow-hidden outline-hidden",
     reason:
