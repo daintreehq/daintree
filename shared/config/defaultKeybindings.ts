@@ -875,6 +875,24 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     category: "Project",
   },
   {
+    // The sibling one step IN from the chord above: same surface, same rows,
+    // scoped to the project this view owns and grouped by worktree. Adjacent
+    // letter because the two are one pair — O for the whole fleet, I for the
+    // project you are already inside.
+    //
+    // `Alt+CommandOrControl+I` used to be the dev-only Toggle Developer Tools
+    // accelerator in `electron/menu.ts`. A native accelerator takes the keydown
+    // before the renderer ever sees it, so leaving it there would have made
+    // this binding work in the shipped app and do nothing on every machine that
+    // develops or tests it. It was removed with this row (#11950).
+    actionId: "pilot.openProject",
+    combo: "Cmd+Alt+I",
+    scope: "global",
+    priority: 0,
+    description: "View this project's agents by worktree",
+    category: "Project",
+  },
+  {
     actionId: "project.switcherPalette",
     combo: "Cmd+Alt+P",
     scope: "global",

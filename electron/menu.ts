@@ -407,7 +407,13 @@ export function createApplicationMenu(
           : [
               {
                 label: "Toggle Developer Tools",
-                accelerator: "Alt+CommandOrControl+I",
+                // No accelerator. `Alt+CommandOrControl+I` now belongs to the
+                // renderer's `pilot.openProject` binding, and a native menu
+                // accelerator consumes the keydown before the renderer sees it
+                // — so a dev-only accelerator here would leave that shortcut
+                // working in the shipped app and dead on every development and
+                // CI machine (#11950). The menu item and the `window.toggleDevTools`
+                // action both still open the tools.
                 click: (
                   _item: Electron.MenuItem,
                   browserWindow: Electron.BaseWindow | undefined

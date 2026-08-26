@@ -169,6 +169,7 @@ Default keyboard shortcuts shipped with Daintree. This page lists defaults only 
 | Action | macOS | Windows/Linux |
 | --- | --- | --- |
 | View all agents | `⌘+⌥+O` | `Ctrl+Alt+O` |
+| View this project's agents by worktree | `⌘+⌥+I` | `Ctrl+Alt+I` |
 | Open project switcher | `⌘+⌥+P` | `Ctrl+Alt+P` |
 | Switch to last workspace | `⌘+⌥+=` | `Ctrl+Alt+=` |
 

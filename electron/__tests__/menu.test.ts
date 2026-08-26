@@ -241,6 +241,18 @@ function findMenuItem(
   return (menu.submenu as Electron.MenuItemConstructorOptions[]).find((i) => i.label === itemLabel);
 }
 
+/** Every item in the template, submenus included, so a chord can be searched for. */
+function flattenMenuItems(
+  template: readonly Electron.MenuItemConstructorOptions[]
+): Electron.MenuItemConstructorOptions[] {
+  return template.flatMap((item) => [
+    item,
+    ...(Array.isArray(item.submenu)
+      ? flattenMenuItems(item.submenu as Electron.MenuItemConstructorOptions[])
+      : []),
+  ]);
+}
+
 describe("About panel build channel (#11121)", () => {
   it("wires setAboutPanelOptions at import with the real running version", () => {
     // Captured at module import: app.getVersion() is mocked to "1.0.0", proving
@@ -327,7 +339,21 @@ describe("createApplicationMenu", () => {
       mockWebContents.isDevToolsOpened.mockReturnValue(false);
       const item = findMenuItem(capturedTemplate, "View", "Toggle Developer Tools");
       expect(item).toBeDefined();
-      expect(item!.accelerator).toBe("Alt+CommandOrControl+I");
+      // No accelerator: `Alt+CommandOrControl+I` belongs to the renderer's
+      // `pilot.openProject` binding now, and a native menu accelerator eats the
+      // keydown before the renderer ever sees it — a dev-only one here would
+      // leave that shortcut working in the shipped app and dead on every
+      // machine that develops or tests it (#11950).
+      expect(item!.accelerator).toBeUndefined();
+      // The invariant, not just this item's property: no menu item anywhere may
+      // claim the chord, or the same collision comes back under another label.
+      const flattened = flattenMenuItems(capturedTemplate);
+      // Proof the walk actually reached into the submenus — an empty result
+      // below would otherwise be true of a recursion that found nothing.
+      expect(flattened).toContain(item);
+      expect(flattened.filter((entry) => entry.accelerator === "Alt+CommandOrControl+I")).toEqual(
+        []
+      );
       item!.click!(
         {} as Electron.MenuItem,
         mockBrowserWindow as unknown as Electron.BaseWindow,
