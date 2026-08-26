@@ -11,7 +11,6 @@ import {
 } from "lucide-react";
 import * as semver from "semver";
 import { assistantPlatformSupport } from "@shared/config/assistantPlatform";
-import { AssistantDiagnosticsPanel } from "./AssistantDiagnosticsPanel";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { cn } from "@/lib/utils";
 import { useDeferredLoading, useHelpSessionLiveStatus } from "@/hooks";
@@ -25,7 +24,6 @@ import { SettingsSection } from "./SettingsSection";
 import { SettingsDependents, SettingsGroup, SettingsRow } from "./SettingsGroup";
 import { SettingsChoicebox } from "./SettingsChoicebox";
 import { SettingsPresetGroup } from "./SettingsPresetGroup";
-import { AssistantAccountSection } from "./AssistantAccountSection";
 import { SettingsInput } from "./SettingsInput";
 import { SettingsSelect } from "./SettingsSelect";
 import { SettingsSwitchCard } from "./SettingsSwitchCard";
@@ -45,10 +43,6 @@ import { DEFAULT_DANGEROUS_ARGS } from "@shared/types/agentSettings";
 import { agentCapabilitiesClient } from "@/clients/agentCapabilitiesClient";
 import { DAINTREE_ASSISTANT_AGENT_ID, type AgentModelConfig } from "@shared/config/agentRegistry";
 import { useHelpPanelStore, selectActiveSlot } from "@/store/helpPanelStore";
-import {
-  DEFAULT_ASSISTANT_BACKEND_ENVIRONMENT,
-  type AssistantBackendEnvironment,
-} from "@shared/config/assistantBackend";
 import type {
   HelpAssistantIdleHibernateMinutes,
   HelpAssistantSettings,
@@ -68,19 +62,11 @@ import {
 const COPY_RESET_DELAY_MS = 2000;
 const CUSTOM_ARGS_DEBOUNCE_MS = 500;
 
-type SaveGroup =
-  | "account"
-  | "agent"
-  | "launch"
-  | "behavior"
-  | "security"
-  | "privacy"
-  | "content";
+type SaveGroup = "agent" | "launch" | "behavior" | "security" | "privacy" | "content";
 
 const SAVE_GROUP_BY_KEY: Record<keyof HelpAssistantSettings, SaveGroup> = {
   modelId: "agent",
   customArgs: "launch",
-  debugLogging: "launch",
   docSearch: "behavior",
   daintreeControl: "behavior",
   idleHibernateMinutes: "launch",
@@ -88,13 +74,11 @@ const SAVE_GROUP_BY_KEY: Record<keyof HelpAssistantSettings, SaveGroup> = {
   bypassPermissions: "security",
   auditRetention: "privacy",
   loadGlobalHooksAndServers: "content",
-  backendEnvironment: "account",
 };
 
 const SETTING_KEYS: readonly (keyof HelpAssistantSettings)[] = [
   "modelId",
   "customArgs",
-  "debugLogging",
   "docSearch",
   "daintreeControl",
   "idleHibernateMinutes",
@@ -102,7 +86,6 @@ const SETTING_KEYS: readonly (keyof HelpAssistantSettings)[] = [
   "bypassPermissions",
   "auditRetention",
   "loadGlobalHooksAndServers",
-  "backendEnvironment",
 ];
 
 function patchedKeys(patch: Partial<HelpAssistantSettings>): (keyof HelpAssistantSettings)[] {
@@ -125,7 +108,6 @@ function copySetting<K extends keyof HelpAssistantSettings>(
 const SETTING_LABEL: Record<keyof HelpAssistantSettings, string> = {
   modelId: "Model",
   customArgs: "Custom CLI args",
-  debugLogging: "Debug logging",
   docSearch: "Search documentation",
   daintreeControl: "Daintree control",
   idleHibernateMinutes: "Hibernate after",
@@ -133,7 +115,6 @@ const SETTING_LABEL: Record<keyof HelpAssistantSettings, string> = {
   bypassPermissions: "Bypass",
   auditRetention: "Audit log retention",
   loadGlobalHooksAndServers: "Load my MCP servers and hooks",
-  backendEnvironment: "Environment",
 };
 
 interface SaveFailure {
@@ -150,9 +131,7 @@ const DEFAULT_SETTINGS: HelpAssistantSettings = {
   modelId: "",
   customArgs: "",
   idleHibernateMinutes: 5,
-  debugLogging: false,
   loadGlobalHooksAndServers: false,
-  backendEnvironment: DEFAULT_ASSISTANT_BACKEND_ENVIRONMENT,
 };
 
 // Radix Select rejects an empty-string item value, so the "use the CLI default"
@@ -400,17 +379,6 @@ export function DaintreeAssistantSettingsTab() {
   useSettingsTabValidation("assistant", Boolean(loadError || saveFailure));
 
   const preferredAgentId = useHelpPanelStore((s) => s.preferredAgentId);
-  /**
-   * Whether the assistant surface is Daintree's own engine.
-   *
-   * Resolved the SAME way `HelpPanel` resolves it — an unset preference means the
-   * native assistant, because that is the default surface. Reading the raw preference
-   * instead hid every engine-specific control from exactly the people who get the
-   * engine: someone who has never opened the agent picker has `preferredAgentId ===
-   * null`, gets the native panel, and saw no debug-logging switch anywhere in settings.
-   */
-  const isNativeAssistant =
-    (preferredAgentId ?? DAINTREE_ASSISTANT_AGENT_ID) === DAINTREE_ASSISTANT_AGENT_ID;
   const setPreferredAgent = useHelpPanelStore((s) => s.setPreferredAgent);
   const droppedPreferredAgentId = useHelpPanelStore((s) => s.droppedPreferredAgentId);
   const clearDroppedPreferredAgent = useHelpPanelStore((s) => s.clearDroppedPreferredAgent);
@@ -806,16 +774,11 @@ export function DaintreeAssistantSettingsTab() {
     async (patch: Partial<HelpAssistantSettings>): Promise<HelpAssistantSettings | null> => {
       const previous = settings;
       const group = saveGroupOf(patch);
-      // `backendEnvironment` is deliberately held back from the OPTIMISTIC merge.
-      //
-      // Everything else can move early, but this one field is not just displayed, it is
-      // a trigger: the account section re-reads whenever it changes, and that read
-      // resolves its endpoint from the store. Moving it here is what made the reload
-      // race the write. The picker still responds immediately; it follows
-      // `pendingEnvironment` below instead, and this field moves only when main has
-      // confirmed what is stored.
-      const { backendEnvironment: _deferred, ...optimistic } = patch;
-      setSettings((current) => ({ ...current, ...optimistic }));
+      // Functional updates throughout, because two writes can be in flight at once —
+      // switching the environment and then flicking a toggle is an ordinary thing to
+      // do. Merging into a captured `settings` would make the second write's snapshot
+      // the last word, silently undoing whatever the first one had already landed.
+      setSettings((current) => ({ ...current, ...patch }) as HelpAssistantSettings);
       try {
         const stored = await window.electron.helpAssistant.setSettings(patch);
         setSettings(stored);
@@ -854,50 +817,6 @@ export function DaintreeAssistantSettingsTab() {
     void persist({ daintreeControl: !settings.daintreeControl });
   };
 
-  /**
-   * The one setting whose value must NOT move optimistically.
-   *
-   * The environment reaches both the engine and the `auth` commands from one stored
-   * value — see `resolveBackendUrl` — and the account section re-reads the account
-   * whenever the environment prop changes. Moving the prop first meant that read raced
-   * the write: `setSettings` had not necessarily reached the store when the reload
-   * fired, so the first `auth status` after a switch could run against the environment
-   * the user had just left, and report an account belonging to it.
-   *
-   * So the picker shows a PENDING value while the write is in flight — the same
-   * treatment `pendingCustomArgs` gets above — and the prop that triggers the reload
-   * moves only once main has confirmed what is stored. On failure the pending value is
-   * dropped and the picker snaps back to the environment that is really in force,
-   * which is the one the assistant is really talking to.
-   */
-  const [pendingEnvironment, setPendingEnvironment] = useState<AssistantBackendEnvironment | null>(
-    null
-  );
-
-  /**
-   * Which environment write owns the pending slot, tracked synchronously.
-   *
-   * `disabled` on the picker is a DOM courtesy, not a lock — it is enforced by the
-   * rendered control and bypassed by anything programmatic. Without a token, an earlier
-   * write's `finally` would clear the pending value out from under a later one, leaving
-   * the picker showing a stored value while a different write was still in flight.
-   * A ref rather than state because it has to be true the instant the click is handled,
-   * not on the next render.
-   */
-  const environmentWriteToken = useRef(0);
-
-  const setBackendEnvironment = useCallback(
-    (value: AssistantBackendEnvironment) => {
-      const token = ++environmentWriteToken.current;
-      setPendingEnvironment(value);
-      void persist({ backendEnvironment: value }).finally(() => {
-        // Only the write that still owns the slot may release it.
-        if (environmentWriteToken.current === token) setPendingEnvironment(null);
-      });
-    },
-    [persist]
-  );
-
   const setTier = (value: string) => {
     if (value !== "workbench" && value !== "action" && value !== "system") return;
     void persist({ tier: value });
@@ -905,10 +824,6 @@ export function DaintreeAssistantSettingsTab() {
 
   const toggleBypassPermissions = () => {
     void persist({ bypassPermissions: !settings.bypassPermissions });
-  };
-
-  const toggleDebugLogging = () => {
-    void persist({ debugLogging: !settings.debugLogging });
   };
 
   const toggleLoadGlobalHooksAndServers = () => {
@@ -1137,23 +1052,6 @@ export function DaintreeAssistantSettingsTab() {
           description={platformSupport.detail}
           role="status"
           ariaLive="polite"
-        />
-      )}
-
-      {/* Account — first, because none of the settings below matter to someone who
-          cannot sign in. */}
-      {/* Withheld where the engine cannot run. Every control in it shells out to that
-          binary, and on Windows the credential lock is the same unported one — so a
-          sign-in opens a browser, completes, and then fails to persist. Offering an
-          account for an engine that cannot start is the same over-promise this whole
-          section was just corrected for. */}
-      {platformSupport.supported && saveError("account")}
-      {platformSupport.supported && (
-        <AssistantAccountSection
-          backendEnvironment={settings.backendEnvironment}
-          pendingBackendEnvironment={pendingEnvironment}
-          onBackendEnvironmentChange={setBackendEnvironment}
-          settingsLoading={loading}
         />
       )}
 
@@ -1398,11 +1296,6 @@ export function DaintreeAssistantSettingsTab() {
             disclosure as siblings rather than nesting cards inside its card. */}
         {advancedDiagnosticsOpen && (
           <>
-            {/* FIRST, because it is the question everything below assumes an answer
-                to: which backend is this actually talking to, and is it one. An audit
-                log is only informative once you know the session it describes reached
-                the endpoint you meant. */}
-            <AssistantDiagnosticsPanel />
             <McpAuditLogViewer
               records={auditRecords}
               turnRecords={turnRecords}
@@ -1473,18 +1366,6 @@ export function DaintreeAssistantSettingsTab() {
             isModified={settings.idleHibernateMinutes !== DEFAULT_SETTINGS.idleHibernateMinutes}
             onReset={() => setHibernateMinutes(String(DEFAULT_SETTINGS.idleHibernateMinutes))}
           />
-          {isNativeAssistant && (
-            <SettingsSwitchCard
-              title="Debug logging"
-              subtitle="Write a full-fidelity per-session trace to ~/.daintree/logs"
-              isEnabled={settings.debugLogging}
-              onChange={toggleDebugLogging}
-              ariaLabel="Enable Daintree Assistant debug logging"
-              disabled={settingsUnavailable}
-              isModified={settings.debugLogging !== DEFAULT_SETTINGS.debugLogging}
-              onReset={() => void persist({ debugLogging: DEFAULT_SETTINGS.debugLogging })}
-            />
-          )}
         </SettingsGroup>
       </SettingsSection>
 

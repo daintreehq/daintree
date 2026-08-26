@@ -5712,7 +5712,7 @@ exports[`ActionService.list() snapshot > produces a stable, sorted manifest snap
     "category": "terminal",
     "danger": "safe",
     "dangerRationale": undefined,
-    "description": "Block until the first of several agents stops working, or all of them do; the fan-out primitive when agents finish at different speeds. Use this rather than waiting on each in turn, or a status snapshot with \`includeOutput\` to poll without blocking; both can report \`lastOutputChangeAt\`, not a hang verdict. Timing out means not met yet; a gone terminal settles too, so read \`trackingState\`.",
+    "description": "Block until the first of several agents stops working, or all do; the fan-out primitive when agents finish at different speeds. Prefer it to waiting on each in turn, or a status snapshot with \`includeOutput\` to poll without blocking; both report \`lastOutputChangeAt\`, not a hang verdict. Timing out means not met yet; a gone terminal settles too, \`closed\` if user-closed; read \`trackingState\`.",
     "examples": undefined,
     "id": "terminal.waitUntilIdleBatch",
     "keywords": undefined,
