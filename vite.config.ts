@@ -1,6 +1,5 @@
 import { defineConfig, type Plugin, type HtmlTagDescriptor } from "vite";
 import react, { reactCompilerPreset } from "@vitejs/plugin-react";
-import { LintRules } from "babel-plugin-react-compiler";
 import babel from "@rolldown/plugin-babel";
 import tailwindcss from "@tailwindcss/vite";
 import { visualizer } from "rollup-plugin-visualizer";
@@ -10,6 +9,7 @@ import { createRequire } from "node:module";
 import { createHash } from "node:crypto";
 import { gzipSync } from "node:zlib";
 import { getDevServerConfig } from "./shared/config/devServer";
+import { isInScanSurface } from "./scripts/lib/compiler-scan-surface.mjs";
 import { getDaintreeAppDevCSP, getDaintreeAppProdCSP } from "./shared/config/csp";
 // Source of truth for the host/plugin React contract. The plugin build
 // (@daintreehq/plugin-vite) errors on any React subpath outside this list, and
@@ -30,171 +30,41 @@ const devServerConfig = getDevServerConfig();
 // any divergence silently tightens the effective policy and breaks the app.
 const DEV_CSP = getDaintreeAppDevCSP();
 
-// Severity bucketing derived from the live plugin's LintRules registry rather
-// than hard-coded, so a plugin upgrade that recategorizes a rule reflows the
-// gate automatically. As of babel-plugin-react-compiler 1.0.0: 1 Hint (Todo),
-// 2 Warning (IncompatibleLibrary, UnsupportedSyntax), 23 Error categories.
-const SEVERITY_BY_CATEGORY: Record<string, string> = Object.fromEntries(
-  LintRules.map((rule) => [rule.category, rule.severity])
-);
-
-// Look up a category's severity WITHOUT touching detail.severity — that getter
-// throws ("Unsupported category X") for any ErrorCategory not in the plugin's
-// internal switch, which would crash the build the first time a future plugin
-// version emits a new category. Unknown categories default to "Error" so they
-// land in the strict gate (fail loud) rather than the silent Hint count.
-function severityForCategory(category: string): string {
-  return SEVERITY_BY_CATEGORY[category] ?? "Error";
-}
-
-// Per-file accumulator written to dist/compiler-bailout-report.json after the
-// build completes. Counts come from babel-plugin-react-compiler's logger:
-// CompileSuccess, CompileSkip, CompileError, PipelineError. Other event kinds
-// (Timing, CompileDiagnostic, AutoDeps*) are ignored — they aren't regression
-// signals. CompileError events are bucketed by severity: Hint-severity bailouts
-// (the cosmetic "Todo" try/catch-lowering noise that dominates the report)
-// collapse to a single `hintCount`, while Error+Warning bailouts are tracked
-// verbatim in `errorBailouts` so the strict gate can point at the actual cause
-// without rebuilding locally. The accumulator Map and the logger object MUST be
-// created in the same factory call so they share state via closure; threading
-// either through module scope would silently produce an empty report.
-type CompilerBailoutEntry = {
-  success: number;
-  skip: number;
-  error: number;
-  pipeline: number;
-  // Hint-severity CompileError count (cosmetic "Todo" bailouts). Collapsed to a
-  // number so a shifting count produces a one-line diff instead of N lines of
-  // repeated reason-string churn.
-  hintCount: number;
-  // Error+Warning-severity bailouts only — Hint entries are counted in
-  // hintCount, not pushed here. Source type is `ErrorCategory` from
-  // babel-plugin-react-compiler — kept as string at this boundary to avoid
-  // cross-package type coupling that would break silently on a plugin upgrade.
-  errorBailouts: Array<{ category: string; severity: string; reason: string }>;
-  skipReasons: string[];
-  pipelineErrors: string[];
-};
-
-type CompilerLoggerEvent =
-  | { kind: "CompileSuccess" }
-  | { kind: "CompileSkip"; reason?: unknown }
-  | { kind: "CompileError"; detail?: unknown }
-  | { kind: "PipelineError"; data?: unknown }
-  | { kind: string };
+type CompilerLoggerEvent = { kind: string };
 
 type CompilerLogger = {
   logEvent: (filename: string | null, event: CompilerLoggerEvent) => void;
 };
 
-// PipelineError.data is a serialized stack trace. Keep only the first line
-// (the error message) and cap length so a pathological single-line error
-// can't bloat the report.
-function summarizePipelineError(data: unknown): string {
-  return String(data ?? "")
-    .split(/\r?\n/)[0]
-    .slice(0, 200);
-}
-
+// Proves the React Compiler is still wired into the real build, and nothing
+// else. It used to accumulate per-file diagnostics and write
+// dist/compiler-bailout-report.json, which the bailout budget then diffed —
+// but a bundler only ever sees what its module graph reaches, so that report
+// moved with tree-shaking, dynamic imports and entry changes for reasons
+// unrelated to compiler health, and the budget it fed drifted with it. The
+// budget is measured by `scripts/lib/compiler-scan.mjs` now, over files on
+// disk. What a build can still tell us, and a scan cannot, is whether the
+// logger is plumbed into `reactCompilerPreset` at all.
+//
+// The counter and the logger MUST be created in the same factory call so they
+// share state via closure; threading either through module scope would leave
+// this assertion watching an object nothing writes to.
 function reactCompilerReportPlugin(command: "build" | "serve"): {
   plugin: Plugin;
   logger: CompilerLogger;
 } {
-  const counts = new Map<string, CompilerBailoutEntry>();
+  let eventCount = 0;
+  const offSurface = new Set<string>();
   const cwd = process.cwd();
-  const reportPath = path.join(cwd, "dist", "compiler-bailout-report.json");
-
-  function getOrInit(filename: string): CompilerBailoutEntry {
-    let entry = counts.get(filename);
-    if (!entry) {
-      entry = {
-        success: 0,
-        skip: 0,
-        error: 0,
-        pipeline: 0,
-        hintCount: 0,
-        errorBailouts: [],
-        skipReasons: [],
-        pipelineErrors: [],
-      };
-      counts.set(filename, entry);
-    }
-    return entry;
-  }
 
   const logger: CompilerLogger = {
-    logEvent(filename, event) {
-      // Skip in dev — the closeBundle flush is gated to build mode (the
-      // plugin has apply:"build"), so accumulating in serve would just leak.
+    logEvent(filename) {
       if (command !== "build") return;
       if (!filename) return;
-      // Normalize to repo-relative POSIX path so report keys match across
-      // operating systems and don't leak absolute filesystem paths.
+      eventCount++;
       const rel = path.relative(cwd, filename).split(path.sep).join("/");
-      if (!rel || rel.startsWith("..")) return;
-      const entry = getOrInit(rel);
-      switch (event.kind) {
-        case "CompileSuccess":
-          entry.success++;
-          break;
-        case "CompileSkip": {
-          entry.skip++;
-          const reason = (event as { reason?: unknown }).reason;
-          if (typeof reason === "string" && reason.length > 0) {
-            entry.skipReasons.push(reason);
-          }
-          break;
-        }
-        case "CompileError": {
-          // Raw event count, kept for diagnostics — it is NOT a gate key (the
-          // strict gate counts errorBailouts; Hints gate via hintCount).
-          entry.error++;
-          // detail is CompilerErrorDetail | CompilerDiagnostic — both expose
-          // .category (ErrorCategory enum) and .reason (string) via getters
-          // backed by required Zod-validated options. Cast is safe. We resolve
-          // severity from the category via the prebuilt map rather than the
-          // detail.severity getter, which throws on unknown categories.
-          const detail = (event as { detail?: { category?: unknown; reason?: unknown } }).detail;
-          if (detail && typeof detail === "object") {
-            const category = String(detail.category ?? "");
-            const severity = severityForCategory(category);
-            if (severity === "Hint") {
-              // Cosmetic Todo-style bailout — collapse to a count, don't store
-              // the verbose reason string.
-              entry.hintCount++;
-            } else {
-              entry.errorBailouts.push({
-                category,
-                severity,
-                reason:
-                  typeof detail.reason === "string" ? detail.reason : String(detail.reason ?? ""),
-              });
-            }
-          } else {
-            // Malformed CompileError (absent/non-object detail). The raw
-            // entry.error count no longer gates CI, so a silent drop here would
-            // be invisible coverage loss. Land it in the strict gate under an
-            // unknown category so it fails loud rather than vanishing — most
-            // likely an upstream plugin event-shape change.
-            entry.errorBailouts.push({
-              category: "(unknown)",
-              severity: "Error",
-              reason: "malformed CompileError event (no detail object)",
-            });
-          }
-          break;
-        }
-        case "PipelineError": {
-          entry.pipeline++;
-          const summary = summarizePipelineError((event as { data?: unknown }).data);
-          if (summary.length > 0) entry.pipelineErrors.push(summary);
-          break;
-        }
-        default:
-          // Timing, CompileDiagnostic, AutoDepsDecorations, AutoDepsEligible —
-          // not regression signals.
-          break;
-      }
+      if (!rel || rel.startsWith("../")) return;
+      if (!isInScanSurface(rel)) offSurface.add(rel);
     },
   };
 
@@ -204,29 +74,34 @@ function reactCompilerReportPlugin(command: "build" | "serve"): {
       name: "react-compiler-report",
       apply: "build",
       buildStart() {
-        // Reset between builds — relevant for `vite build --watch` or any
-        // scenario that triggers a second build inside the same Node process.
-        // Without this, watch-mode rebuilds would inflate every count.
-        counts.clear();
+        // Reset between builds — `vite build --watch` and anything else that
+        // triggers a second build in the same process would otherwise carry a
+        // stale non-zero count past a genuine wiring break.
+        eventCount = 0;
+        offSurface.clear();
       },
       closeBundle() {
         if (command !== "build") return;
-        if (counts.size === 0) {
-          // Empty accumulator means the logger was never invoked — almost
-          // certainly a wiring bug (logger not threaded into reactCompilerPreset
-          // or factory called twice and the report plugin captured a stale
-          // Map). Failing loud here beats silently passing CI.
+        if (eventCount === 0) {
           throw new Error(
             "[react-compiler-report] logger received zero events; check that the logger from reactCompilerReportPlugin() is passed into reactCompilerPreset({ logger })."
           );
         }
-        // Plain lexicographic sort matches the check script's default Array#sort
-        // so the freshly built report and the checked-in baseline diff cleanly.
-        const sorted = [...counts.entries()].sort(([a], [b]) => (a < b ? -1 : a > b ? 1 : 0));
-        const out: Record<string, CompilerBailoutEntry> = {};
-        for (const [file, entry] of sorted) out[file] = entry;
-        mkdirSync(path.dirname(reportPath), { recursive: true });
-        writeFileSync(reportPath, JSON.stringify(out, null, 2) + "\n");
+        if (offSurface.size > 0) {
+          // The budget scans files on disk, so a renderer file living outside
+          // the declared patterns is never measured — and moving one there
+          // retires its debt silently, because the old path just reads as
+          // deleted. The build is the only place that sees the real set of
+          // files the compiler touches, so this is where that gap closes.
+          throw new Error(
+            `[react-compiler-report] the React Compiler processed ${offSurface.size} file(s) outside the bailout-budget scan surface, so their diagnostics are untracked:\n` +
+              [...offSurface]
+                .sort()
+                .map((f) => `  ${f}`)
+                .join("\n") +
+              "\nAdd them to SCAN_PATTERNS in scripts/lib/compiler-scan-surface.mjs, or move them back under an existing pattern."
+          );
+        }
       },
     },
   };
