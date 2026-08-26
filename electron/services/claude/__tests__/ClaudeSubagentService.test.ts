@@ -69,6 +69,16 @@ describe("listClaudeSubagents", () => {
     });
   });
 
+  it("refuses a pane that was launched as Claude but is now running something else", async () => {
+    // Launch identity is a hint that outlives a relaunch; live detection is
+    // what says which store actually holds this session's children.
+    getTerminalAsync.mockResolvedValue(claudeTerminal({ detectedAgentId: "codex" }));
+    await expect(listClaudeSubagents("t1")).resolves.toEqual({
+      status: "unavailable",
+      reason: "provider-mismatch",
+    });
+  });
+
   it("accepts a terminal detected as Claude even when it was launched as something else", async () => {
     getTerminalAsync.mockResolvedValue(
       claudeTerminal({ launchAgentId: "bash", detectedAgentId: "claude" })

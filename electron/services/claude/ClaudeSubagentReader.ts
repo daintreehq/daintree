@@ -151,8 +151,15 @@ export async function findSubagentsDir(
   const projectsRoot = path.join(options.configDir ?? resolveClaudeConfigDir(), "projects");
   // Resolved once so a user who symlinks their whole config dir still matches,
   // while a symlink planted *inside* it cannot point the read somewhere else.
-  const rootReal = await realpathOrNull(projectsRoot);
-  if (!rootReal) return null;
+  // A store that is there but unreadable is a failure worth reporting, not an
+  // empty list. Only its absence is the ordinary case.
+  let rootReal: string;
+  try {
+    rootReal = await realpath(projectsRoot);
+  } catch (error) {
+    if (isAbsence(error)) return null;
+    throw error;
+  }
 
   const direct = path.join(projectsRoot, deriveProjectSlug(cwd), parentSessionId, "subagents");
   if (await isContainedDirectory(direct, rootReal)) return direct;
@@ -160,8 +167,9 @@ export async function findSubagentsDir(
   let entries: string[];
   try {
     entries = await readdir(projectsRoot);
-  } catch {
-    return null;
+  } catch (error) {
+    if (isAbsence(error)) return null;
+    throw error;
   }
   for (const entry of entries) {
     // `entry` comes from the filesystem, but it is still joined blind, so a
@@ -418,13 +426,12 @@ async function probeTranscript(file: string, size: number): Promise<Probe> {
     const headText = headBytes.subarray(0, head.bytesRead).toString("utf8");
     const firstBreak = headText.indexOf("\n");
     // A file of one record and no trailing newline is still one whole record,
-    // as long as the probe reached the end of it.
+    // as long as the probe covered the whole file. Decided on the file's size
+    // rather than on a short read: a file of exactly the probe window has been
+    // read to its end too, and would otherwise lose its preview.
+    const reachedEnd = size <= LIST_PROBE_BYTES;
     const firstLine =
-      firstBreak === -1
-        ? head.bytesRead < LIST_PROBE_BYTES
-          ? headText
-          : ""
-        : headText.slice(0, firstBreak);
+      firstBreak === -1 ? (reachedEnd ? headText : "") : headText.slice(0, firstBreak);
     const first = parseRecord(firstLine);
 
     if (size <= LIST_PROBE_BYTES) return { first, ...finalRecord(headText, true) };
@@ -608,7 +615,10 @@ export interface TranscriptRead {
  * message count on the way out.
  */
 export async function readTranscriptFile(file: string): Promise<TranscriptRead> {
-  const stream = createReadStream(file, { encoding: "utf8", end: TRANSCRIPT_MAX_BYTES - 1 });
+  // `end` is inclusive, and the budget is deliberately overshot by one byte:
+  // reading past the ceiling is how a file that merely reaches it is told apart
+  // from one that exceeds it.
+  const stream = createReadStream(file, { encoding: "utf8", end: TRANSCRIPT_MAX_BYTES });
   const lines = createInterface({ input: stream, crlfDelay: Infinity });
   const messages: AgentSubagentMessage[] = [];
   let dropped = false;
@@ -639,7 +649,8 @@ export async function readTranscriptFile(file: string): Promise<TranscriptRead> 
     stream.destroy();
   }
 
-  // The byte ceiling cuts the tail off rather than the head, so say so.
-  if (stream.bytesRead >= TRANSCRIPT_MAX_BYTES - 1) dropped = true;
+  // The byte ceiling cuts the tail off rather than the head, so say so — but
+  // only when the extra byte actually arrived, meaning there was more to read.
+  if (stream.bytesRead > TRANSCRIPT_MAX_BYTES) dropped = true;
   return { messages, truncated: dropped };
 }

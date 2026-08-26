@@ -366,18 +366,25 @@ describe("listSubagentsInDir", () => {
     await expect(listSubagentsInDir(path.join(root, "absent"))).resolves.toEqual([]);
   });
 
-  it("raises a directory it cannot read rather than reporting it as empty", async () => {
-    const dir = await makeSubagentsDir("/Users/x/Projects/demo");
-    await writeChild(dir, "aaa1", [userRecord("go")]);
-    await chmod(dir, 0o000);
-    try {
-      // "No children" and "no permission" are different answers, and only one
-      // of them is something we observed.
-      await expect(listSubagentsInDir(dir)).rejects.toThrow();
-    } finally {
-      await chmod(dir, 0o700);
+  // Mode bits do not gate reads for Windows or for root, so the setup this
+  // needs cannot be arranged there.
+  const enforcesModeBits = process.platform !== "win32" && process.getuid?.() !== 0;
+
+  it.skipIf(!enforcesModeBits)(
+    "raises a directory it cannot read rather than reporting it as empty",
+    async () => {
+      const dir = await makeSubagentsDir("/Users/x/Projects/demo");
+      await writeChild(dir, "aaa1", [userRecord("go")]);
+      await chmod(dir, 0o000);
+      try {
+        // "No children" and "no permission" are different answers, and only one
+        // of them is something we observed.
+        await expect(listSubagentsInDir(dir)).rejects.toThrow();
+      } finally {
+        await chmod(dir, 0o700);
+      }
     }
-  });
+  );
 
   it("does not report a child as done when its last line is still being written", async () => {
     const dir = await makeSubagentsDir("/Users/x/Projects/demo");
@@ -397,6 +404,24 @@ describe("listSubagentsInDir", () => {
 
     const [child] = await listSubagentsInDir(dir);
     expect(child?.preview).toBe("the only task");
+  });
+
+  it("keeps reading a transcript once it outgrows the probe window", async () => {
+    const dir = await makeSubagentsDir("/Users/x/Projects/demo");
+    // Padding puts the closing record far past the head probe, so status has to
+    // come from the tail read rather than from the opening chunk.
+    const filler = Array.from({ length: 400 }, (_, index) =>
+      assistantRecord(`step ${index} ${"x".repeat(500)}`, "tool_use")
+    );
+    await writeChild(dir, "aaa1", [
+      userRecord("the delegated task"),
+      ...filler,
+      assistantRecord("all done", "end_turn"),
+    ]);
+
+    const [child] = await listSubagentsInDir(dir);
+    expect(child?.preview).toBe("the delegated task");
+    expect(child?.status).toEqual({ type: "completed" });
   });
 
   it("skips a transcript name that is a symlink to another session's history", async () => {

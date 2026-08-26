@@ -152,11 +152,18 @@ export const SUBAGENT_LIST_LIMIT = 50;
  * per provider, because both trim and both promised the same thing.
  */
 export function trimPreservingTask(messages: AgentSubagentMessage[], limit: number): void {
-  if (limit <= 0 || messages.length <= limit) return;
-  const taskIndex = messages.findIndex((message) => message.role === "task");
+  if (messages.length <= limit) return;
+  if (limit <= 0) {
+    messages.length = 0;
+    return;
+  }
+  // Held by identity rather than by index: every eviction shifts the array, so
+  // an index captured once stops pointing at the task after the first splice
+  // and the loop goes on to delete the very message it was protecting.
+  const task = messages.find((message) => message.role === "task");
   while (messages.length > limit) {
-    // Evict the oldest message that isn't the task. With no task present at
-    // all, index 0 is simply the oldest.
-    messages.splice(taskIndex === 0 ? 1 : 0, 1);
+    const oldestEvictable = messages.findIndex((message) => message !== task);
+    // Nothing but the protected message left, so the limit wins over it.
+    messages.splice(oldestEvictable === -1 ? 0 : oldestEvictable, 1);
   }
 }

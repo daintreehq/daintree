@@ -100,10 +100,14 @@ export function useSubagents(
   });
   const [isLoading, setIsLoading] = useState(false);
   const mountedRef = useRef(true);
-  // The key a settling request was issued under. A respawn or an agent switch
-  // moves the key, and the old request must not land on the new one.
-  const keyRef = useRef(key);
-  keyRef.current = key;
+  // The key currently on screen. Written from an effect rather than during
+  // render: a ref mutated mid-render is impure, and a speculative render that
+  // React throws away would leave this pointing at a key that never committed.
+  // Declared before the fetch effects so it is current when they run.
+  const committedKeyRef = useRef(key);
+  useEffect(() => {
+    committedKeyRef.current = key;
+  }, [key]);
 
   useEffect(() => {
     mountedRef.current = true;
@@ -136,11 +140,12 @@ export function useSubagents(
           // Answers the key it was asked under. Without this an in-flight
           // lookup that outlives an agent switch overwrites the new agent's
           // list with the old one's, and stays wrong until something refetches.
-          if (mountedRef.current && keyRef.current === key) setEntry({ key, result: next });
+          if (mountedRef.current && committedKeyRef.current === key)
+            setEntry({ key, result: next });
         })
         .catch((error: unknown) => {
           logWarn(`[useSubagents] list failed: ${formatErrorMessage(error, "unknown error")}`);
-          if (mountedRef.current && keyRef.current === key) {
+          if (mountedRef.current && committedKeyRef.current === key) {
             setEntry({ key, result: { status: "unavailable", reason: adapter.fallbackReason } });
           }
         })
