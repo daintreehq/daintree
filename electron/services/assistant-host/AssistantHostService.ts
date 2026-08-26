@@ -2,7 +2,7 @@ import { app, webContents, type WebContents } from "electron";
 import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { AssistantHostProcess } from "./AssistantHostProcess.js";
-import { resolveAssistantBinary } from "./resolveAssistantBinary.js";
+import { resolveAssistantBinary, ASSISTANT_BIN_ENV } from "./resolveAssistantBinary.js";
 import { assistantPlatformSupport } from "../../../shared/config/assistantPlatform.js";
 import { assistantChildEnv } from "./assistantChildEnv.js";
 import { getHelpAssistantSettings } from "../../ipc/handlers/helpAssistant.js";
@@ -219,8 +219,22 @@ export class AssistantHostService {
     // state lease before the new one tries to take it.
     await this.stopProject(opts.projectId);
 
-    const binaryPath = await resolveAssistantBinary();
+    const engine = await resolveAssistantBinary();
+    const binaryPath = engine.path;
     const sessionId = `ses_${randomBytes(8).toString("hex")}`;
+    // Which copy of the engine a session ran is acceptance evidence, not chatter. A
+    // packaged run only proves the shipped artifact when the source is `packaged`, and
+    // `scripts/afterPack.cjs` has already matched THAT binary's SHA against the
+    // gitlink — so the one line is recorded every start, and says more when the answer
+    // is one an acceptance run must not accept. Once per engine start, not per turn.
+    const substituted = app.isPackaged && engine.source !== "packaged";
+    console.warn(
+      `[assistant-host:${sessionId}] engine ${engine.source}: ${binaryPath}` +
+        (substituted
+          ? ` — ${ASSISTANT_BIN_ENV} selected this instead of the engine this app ships. ` +
+            `Unset ${ASSISTANT_BIN_ENV} and relaunch to test the packaged engine.`
+          : "")
+    );
 
     // Provision the MCP binding BEFORE spawning, in main, next to the service that
     // issues it. Without this the engine starts fine and answers fine — it just has no
