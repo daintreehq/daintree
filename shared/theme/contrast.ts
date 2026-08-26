@@ -113,6 +113,13 @@ const CONTRAST_PAIRS: Array<{
   // polarities, because the button renders in both and its label is normal-sized text,
   // so AA 4.5:1 is the right floor. The built-ins clear it by a wide margin (weakest
   // ~12:1); a theme that fails here cannot carry a legible primary button.
+  //
+  // LIMIT: this checks the resting fill only. The variant's hover and active states mix
+  // the fill 90%/82% toward the label (`color-mix(in oklab, ...)` in button.tsx), so a
+  // theme sitting just over this floor at rest can dip under it while pressed. Modelling
+  // that would need an OKLab->sRGB round-trip this module doesn't have, and the built-ins
+  // are ~3x clear of the floor, so their interaction states have ample room. A custom
+  // theme near the floor gets a warning here for the resting state either way.
   { foreground: "text-inverse", background: "text-primary", minimum: 4.5 },
   { foreground: "search-highlight-text", background: "search-highlight-background", minimum: 3.0 },
 ];

@@ -156,12 +156,19 @@ export const ALL_THEMES = [
 ];
 
 const ONLY = (process.env.DAINTREE_SHOT_ONLY ?? "").split(",").filter(Boolean);
+
+// A failed step must not abort the run — the other shots are still worth having, and a
+// per-theme sweep shouldn't lose fourteen themes to one bad selector. But the run must
+// still FAIL, or a silent exit 0 with an empty output directory reads as success.
+const failures: string[] = [];
 async function step(name: string, fn: () => Promise<void>): Promise<void> {
   if (ONLY.length > 0 && !ONLY.includes(name)) return;
   try {
     await fn();
   } catch (error) {
-    console.warn(`[confirm-shots] step "${name}" skipped:`, String(error).slice(0, 300));
+    const detail = String(error).slice(0, 300);
+    console.warn(`[confirm-shots] step "${name}" failed:`, detail);
+    failures.push(`${name}: ${detail}`);
   }
 }
 
@@ -240,10 +247,7 @@ test("dialog primary-action review — contrast CTA and destructive precedence",
       await snap(page, "10-primary-action-resolver", '[data-testid="add-preset-dialog"]');
       await snap(page, "11-primary-action-in-window");
       await escapeAll(page);
-      await page
-        .locator(SEL.settings.closeButton)
-        .click()
-        .catch(() => {});
+      await page.locator(SEL.settings.closeButton).click();
       await settle(page, 400);
     });
 
@@ -252,32 +256,39 @@ test("dialog primary-action review — contrast CTA and destructive precedence",
       await page.locator(SEL.projectSettings.addRecipeButton).click();
       await settle(page, 600);
       await snap(page, "20-handwritten-footer-editor", DIALOG);
+      await escapeAll(page);
+      await closeProjectSettings(page);
     });
 
-    // 2. Nested destructive confirm stacked over the editor: two dialog surfaces,
-    //    and the confirm must still read as destructive.
+    // 2. Nested destructive confirm stacked over the editor: two dialog surfaces, and
+    //    the confirm must still read as destructive. Opens its own editor so the step
+    //    runs standalone under DAINTREE_SHOT_ONLY.
     await step("discard", async () => {
-      await page
-        .locator(SEL.recipeEditor.nameInput)
-        .fill("Review sweep")
-        .catch(() => {});
+      await openRecipesTab(page);
+      await page.locator(SEL.projectSettings.addRecipeButton).click();
+      await settle(page, 600);
+      await page.locator(SEL.recipeEditor.nameInput).fill("Review sweep");
       await settle(page, 250);
       await page.locator(SEL.recipeEditor.cancelButton).first().click();
-      await page
-        .getByRole("alertdialog")
-        .waitFor({ state: "visible", timeout: 5000 })
-        .catch(() => {});
+      await page.getByRole("alertdialog").waitFor({ state: "visible", timeout: 5000 });
       await snap(page, "30-nested-destructive-confirm");
-      await escapeAll(page);
+      // Actually discard. Escaping only dismisses the confirm — the editor stays dirty
+      // and re-raises it on the next close, which would wedge every later step.
+      await page.locator(SEL.confirmDialog.confirm).last().click();
+      await page
+        .locator(SEL.recipeEditor.nameInput)
+        .waitFor({ state: "hidden", timeout: 5000 })
+        .catch(() => {});
+      await closeProjectSettings(page);
     });
 
     await step("import", async () => {
-      await escapeAll(page);
       await openRecipesTab(page);
       await page.getByRole("button", { name: "Import recipe" }).click();
       await settle(page, 500);
       await snap(page, "40-handwritten-footer-import", DIALOG);
       await escapeAll(page);
+      await closeProjectSettings(page);
     });
 
     // 3. The precedence check the issue calls out: destructive must not become contrast.
@@ -286,18 +297,29 @@ test("dialog primary-action review — contrast CTA and destructive precedence",
       await page
         .locator(SEL.projectSettings.deleteRecipeButton(SEEDED_RECIPE.name))
         .click({ force: true });
-      await page
-        .getByRole("alertdialog")
-        .waitFor({ state: "visible", timeout: 5000 })
-        .catch(() => {});
+      await page.getByRole("alertdialog").waitFor({ state: "visible", timeout: 5000 });
       await snap(page, "50-destructive-confirm", DIALOG);
       await snap(page, "51-destructive-in-window");
       await escapeAll(page);
       await closeProjectSettings(page);
     });
   } finally {
-    if (ctx?.app) await closeApp(ctx.app);
-    repo.cleanup();
-    rmSync(userDataDir, { recursive: true, force: true });
+    // Each cleanup runs even if an earlier one throws — a rejected closeApp used to
+    // strand the fixture repo and the user-data dir on disk.
+    if (ctx?.app) await closeApp(ctx.app).catch(() => {});
+    try {
+      repo.cleanup();
+    } catch {
+      /* best effort */
+    }
+    try {
+      rmSync(userDataDir, { recursive: true, force: true });
+    } catch {
+      /* best effort */
+    }
+  }
+
+  if (failures.length > 0) {
+    throw new Error(`[confirm-shots] ${failures.length} step(s) failed:\n${failures.join("\n")}`);
   }
 });
