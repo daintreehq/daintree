@@ -5,6 +5,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 
 import { ASSISTANT_HOST_PROTOCOL_VERSION } from "../../../schemas/ipc.js";
+import { assistantChildEnv } from "../assistantChildEnv.js";
 
 /**
  * The shared real-engine harness.
@@ -60,6 +61,16 @@ export interface DriveResult {
    * to know the run did not reach the timer, or it is reading teardown's work.
    */
   backstopFired: boolean;
+  /**
+   * How many frames had arrived when a shutdown was FIRST asked for, or null if none
+   * ever was.
+   *
+   * The companion to `backstopFired`, and the sharper of the two: it dates the request
+   * against the wire. A frame at a lower index than this one cannot be teardown's work,
+   * whichever route the shutdown came by — which is what a test needs before reading a
+   * late-arriving event as something the engine did while it was still running.
+   */
+  shutdownRequestedAtFrame: number | null;
 }
 
 export interface DriveOptions {
@@ -118,26 +129,44 @@ export interface DriveOptions {
    * WHILE a command is outstanding needs a socket that accepts and then never answers,
    * which the caller supplies.
    *
-   * A LOOPBACK FIXTURE, never a real endpoint. The default is unreachable so that this
-   * suite can never do billable work, and an option that pointed somewhere real would
-   * quietly undo that for every test after it.
+   * A LOOPBACK FIXTURE, never a real endpoint — REFUSED below rather than merely asked
+   * for. The default is unreachable so that this suite can never do billable work, and
+   * an option that could point somewhere real would quietly undo that for every test
+   * after it.
    *
    * Named rather than folded into an env bag for the reason `environmentTier` gives:
-   * the two variables `stopSupervisor` reads back must stay where this harness put
-   * them, or a run leaves a live supervisor behind a deleted temp tree.
+   * `DAINTREE_ASSISTANT_STATE_DIR` is where a run's supervisor lives and the only thing
+   * `stopSupervisor` has to find it by, so it must stay where this harness put it or a
+   * run leaves a live supervisor behind a deleted temp tree.
    */
   backendUrl?: string;
   /**
-   * Send an `interrupt` frame the moment the engine reports a command already in flight.
+   * Send one `interrupt` frame once this settles, and never before.
    *
-   * Gated on that refusal rather than on a delay, for the reason the shutdown below is
-   * gated on `host:ready`: the interesting moment is "the command is outstanding", and
-   * a timer only guesses at when that is. The engine's `command-busy` refusal is the
-   * one frame that STATES it — it is emitted from the branch that found `cmdBusy` still
-   * set — so a second command in `commands` doubles as the probe that says when to stop
-   * the first one.
+   * A promise rather than a delay, for the reason the shutdown below waits on
+   * `host:ready` rather than on a grace period: the moment worth interrupting at is a
+   * CONDITION, and a timer only guesses at when it holds. The condition that matters is
+   * not visible from this side at all — "the command has reached the network" is
+   * something only the fixture on the other end of the socket can say — so the caller
+   * that owns the fixture supplies it. An interrupt aimed a few milliseconds too early
+   * would cancel a context before any I/O began and prove strictly less.
+   *
+   * Nothing is sent if it never settles; the run then reaches its backstop, which
+   * `backstopFired` reports rather than hides.
    */
-  interruptOnCommandBusy?: boolean;
+  interruptWhen?: Promise<unknown>;
+}
+
+/** Whether a URL names this machine, and therefore something a test can be holding. */
+function isLoopbackUrl(raw: string): boolean {
+  let host: string;
+  try {
+    host = new URL(raw).hostname;
+  } catch {
+    return false;
+  }
+  // Bracketed IPv6 arrives with the brackets stripped by URL, so ::1 compares plainly.
+  return host === "127.0.0.1" || host === "::1" || host === "localhost";
 }
 
 /** Boots the engine, sends a descriptor then a shutdown, and collects stdout frames. */
@@ -146,6 +175,13 @@ export async function driveEngine(
   sessionId: string,
   opts: DriveOptions = {}
 ): Promise<DriveResult> {
+  if (opts.backendUrl !== undefined && !isLoopbackUrl(opts.backendUrl)) {
+    throw new Error(
+      `driveEngine refuses a non-loopback backend (${opts.backendUrl}). ` +
+        "This suite drives the real engine, so an endpoint it can actually reach is a " +
+        "test that does real work against a real account."
+    );
+  }
   const dir = await mkdtemp(path.join(tmpdir(), "daintree-engine-conformance-"));
   const projectDir = path.join(dir, "project");
   const stateDir = opts.stateDir ?? path.join(dir, "state");
@@ -154,7 +190,15 @@ export async function driveEngine(
     const child = spawn(binary, ["host", "--stdio"], {
       cwd: REPO_ROOT,
       env: {
-        ...process.env,
+        // The SAME filter production spawns through, not a raw `process.env`.
+        //
+        // Every name on that list changes what the engine does, and a test fixture is
+        // the worst place to inherit one: `DAINTREE_ASSISTANT_OFFLINE` alone turns a
+        // command that was supposed to reach a backend into one that never opens a
+        // socket, and the suite would go on passing while asserting nothing. Sharing
+        // the production filter also means a name added there for a real session is
+        // stripped here without anybody remembering this file exists.
+        ...assistantChildEnv(),
         DAINTREE_ASSISTANT_STATE_DIR: stateDir,
         DAINTREE_ASSISTANT_LOG_DIR: path.join(dir, "logs"),
         // The SAME id the descriptor below carries, because that is what
@@ -175,14 +219,6 @@ export async function driveEngine(
         // regression — or, worse, a mismatch test that passed on the wrong field.
         DAINTREE_WINDOW_ID: String(DESCRIPTOR_WINDOW_ID),
         DAINTREE_ASSISTANT_TIER: opts.environmentTier ?? descriptorTier,
-        // BLANKED, for the same reason the binding fields are stated explicitly: this
-        // one is read from the real environment only, and a developer who has it
-        // exported gets a materially different engine. A caller key overrides account
-        // identity for every request, so the engine builds NO account manager beside
-        // one — `/account` then answers from memory without touching a backend at all,
-        // and a test about what the host does while a backend command is outstanding
-        // would be driving a command that does no I/O.
-        DAINTREE_API_KEY: "",
       },
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -232,9 +268,11 @@ export async function driveEngine(
     );
 
     let backstopFired = false;
+    let shutdownRequestedAtFrame: number | null = null;
     const exitCode = await new Promise<number | null>((resolve) => {
       const kill = setTimeout(() => child.kill("SIGKILL"), 25_000);
       const requestShutdown = () => {
+        shutdownRequestedAtFrame ??= frames.length;
         if (child.stdin.writable) {
           child.stdin.write(`${JSON.stringify({ type: "shutdown", sessionId })}\n`);
         }
@@ -263,27 +301,50 @@ export async function driveEngine(
         if (commands.length === 0 || !awaitResults) requestShutdown();
       };
       onCommandResult = settleOne;
-      onCommandBusy = () => {
-        // Interrupt FIRST, settle after: the refusal may be the last thing this run was
-        // waiting on, and a shutdown written ahead of the interrupt would test teardown
-        // again rather than the stop path.
-        if (opts.interruptOnCommandBusy && child.stdin.writable) {
-          child.stdin.write(`${JSON.stringify({ type: "interrupt", sessionId })}\n`);
-        }
-        settleOne();
-      };
+      onCommandBusy = settleOne;
+      // Rejection is swallowed rather than surfaced here: the caller owns this promise
+      // and can assert on it directly, and a fixture that failed must not also become an
+      // unhandled rejection in whatever test happens to be running when it lands.
+      void opts.interruptWhen?.then(
+        () => {
+          if (child.stdin.writable) {
+            child.stdin.write(`${JSON.stringify({ type: "interrupt", sessionId })}\n`);
+          }
+        },
+        () => undefined
+      );
       const shutdown = setTimeout(() => {
-        backstopFired = true;
+        // Only when the timer is what ASKED. It is never cancelled on the event path —
+        // a shutdown already requested makes it harmless — so setting it unconditionally
+        // would report a slow-but-correct teardown as a run that never got its answer.
+        backstopFired = shutdownRequestedAtFrame === null;
         requestShutdown();
       }, 20_000);
-      child.on("exit", (code) => {
+      // `close`, not `exit`. `exit` fires when the PROCESS is gone, which says nothing
+      // about the pipes: bytes already written can still be sitting in the stdio buffers,
+      // and reading the frame list at that point drops however much of the tail the
+      // event loop had not got to. On a loaded machine that is the last frames of a run
+      // — `host:shutdown`, a final `command:result` — and the assertion that goes red is
+      // whichever one happened to need them. `close` waits for both streams to end.
+      child.on("close", (code) => {
         clearTimeout(kill);
         clearTimeout(shutdown);
         resolve(code);
       });
     });
 
-    return { frames, stderr, exitCode, backstopFired };
+    // A clean exit that leaves a half-written line is a truncated frame, and a truncated
+    // frame is silent: the reader above only ever parses whole lines, so the remainder
+    // would simply never be seen. Reported rather than dropped — but only on a clean
+    // exit, because a killed engine is EXPECTED to be cut mid-frame, and raising that
+    // would bury the real finding (a null exit code) under a parse complaint.
+    if (exitCode === 0 && stdoutBuffer.trim() !== "") {
+      throw new Error(
+        `the engine exited cleanly but left an unterminated frame on stdout: ${stdoutBuffer}`
+      );
+    }
+
+    return { frames, stderr, exitCode, backstopFired, shutdownRequestedAtFrame };
   } finally {
     // Stop the supervisor BEFORE deleting the directory it lives in.
     //
@@ -312,7 +373,11 @@ async function stopSupervisor(binary: string, stateDir: string, projectDir: stri
     const child = spawn(binary, ["daemon", "stop"], {
       cwd: REPO_ROOT,
       env: {
-        ...process.env,
+        // Through the same filter, and for a reason of its own: `daemon stop` resolves
+        // the FULL config before it asks anything to stop, so an inherited endpoint or
+        // key that the engine rejects fails the resolve — and a cleanup that fails is a
+        // supervisor left running against a directory this run is about to delete.
+        ...assistantChildEnv(),
         DAINTREE_ASSISTANT_STATE_DIR: stateDir,
         DAINTREE_PROJECT_ID: CONFORMANCE_PROJECT_ID,
         DAINTREE_ASSISTANT_PROJECT: projectDir,

@@ -166,20 +166,58 @@ describe.skipIf(!binary)("assistant engine wire conformance", () => {
  * a shutdown behind it is racing a command that has already returned.
  *
  * Accepting and stalling is what makes an account command genuinely outstanding, and it
- * does it hermetically — no network, no billable work, identical on every platform. The
- * engine's own ceiling on one such attempt is a minute (`jsonAttemptTimeout`,
- * `internal/backend/client.go`), far past the harness's 25s kill, so within a run here
- * nothing parked on this socket can come back on its own. Whatever ends it was serviced
- * by the host loop.
+ * does it hermetically — no network, no billable work, identical on every platform.
+ *
+ * How long "outstanding" lasts was MEASURED against this binary rather than reasoned
+ * from any one timeout, because `/account` is several requests and no single constant
+ * bounds it: auth discovery runs first under its own 10s ceiling, is asked for more than
+ * once, and the protected account read that follows carries the backend client's 60s
+ * per-attempt ceiling. Driven against this fixture the command was still running after
+ * 95 seconds, with the engine's own goroutine dump showing it inside the discovery
+ * fetch. That is four times the harness's 25s kill, so nothing here comes back on its
+ * own inside a run: whatever ends the command was serviced by the host loop.
+ *
+ * `requested` resolves with the first request line the engine writes, and `requestLine`
+ * reads it back afterwards. That is what turns "the command was registered" into "the
+ * command was on the network" — the host claims its busy flag before the worker
+ * goroutine has done anything at all, so a frame alone cannot tell those apart.
  */
-async function startStallingBackend(): Promise<{ url: string; close: () => Promise<void> }> {
+async function startStallingBackend(): Promise<{
+  url: string;
+  requested: Promise<string>;
+  requestLine: () => string | null;
+  close: () => Promise<void>;
+}> {
   const sockets = new Set<Socket>();
+  let firstRequestLine: string | null = null;
+  let announceRequest: (line: string) => void = () => undefined;
+  const requested = new Promise<string>((resolve) => {
+    announceRequest = resolve;
+  });
   const server = createServer((socket) => {
     sockets.add(socket);
+    // Read and answer NOTHING. Reading matters anyway: it is how the fixture knows a
+    // request was actually written rather than a connection merely opened, and a socket
+    // whose buffer is never drained would eventually stall the writer for the wrong
+    // reason.
+    //
+    // Buffered to the first CRLF rather than reported per chunk, because TCP chunk
+    // boundaries are arbitrary: a request line split across two reads would otherwise be
+    // announced as a fragment, and the caller would be matching half a line.
+    let pending = "";
+    socket.setEncoding("utf8");
+    socket.on("data", (chunk: string) => {
+      if (firstRequestLine !== null) return;
+      pending += chunk;
+      const end = pending.indexOf("\r\n");
+      if (end === -1) return;
+      firstRequestLine = pending.slice(0, end);
+      announceRequest(firstRequestLine);
+    });
     // A held socket is torn down from both ends — destroyed here, and dropped when the
     // engine exits or is killed. An unhandled `error` on a net.Socket is thrown, which
     // would take the whole vitest worker down over a reset the fixture expects.
-    socket.on("error", () => {});
+    socket.on("error", () => undefined);
     socket.on("close", () => sockets.delete(socket));
   });
   await new Promise<void>((resolve, reject) => {
@@ -192,6 +230,8 @@ async function startStallingBackend(): Promise<{ url: string; close: () => Promi
   }
   return {
     url: `http://127.0.0.1:${address.port}`,
+    requested,
+    requestLine: () => firstRequestLine,
     // Destroy the held connections first: `close` only stops new ones, and a server
     // still holding the engine's stalled socket never fires its callback.
     close: () =>
@@ -322,8 +362,10 @@ describe.skipIf(!binary)("assistant engine account commands", () => {
     // The stalling backend is what gives that assertion its teeth. Against the default
     // refused port the command answers in under a millisecond, so an exit code of 0
     // proves nothing about a command still in flight — it is compatible with a loop that
-    // blocked and was simply never made to wait. Parked on a socket that never answers,
-    // `/account` cannot have finished by the time the shutdown is serviced.
+    // blocked and was simply never made to wait. Against a socket that never answers the
+    // command runs for over 95 seconds (measured — see `startStallingBackend`), so a
+    // loop that ran it inline would still be inside it when the harness kills at 25s,
+    // and the kill reports a null exit code rather than 0.
     const backend = await startStallingBackend();
     try {
       const { exitCode, stderr } = await driveEngine(binary!, "ses_slow_command", {
@@ -341,14 +383,15 @@ describe.skipIf(!binary)("assistant engine account commands", () => {
   }, 60_000);
 
   it("services an interrupt while a slow account command is still in flight", async () => {
-    // Stop is the only way out of a slow account command, and it is the half of that
-    // contract nothing drove from this side. `/login` waits up to five minutes on a
+    // Stop is the user's only immediate way out of a slow account command, and it is the
+    // half of that contract nothing drove from this side. `/login` waits five minutes on a
     // browser callback the user may simply abandon; `handleInterrupt` cancels the
     // in-flight command first and unconditionally (internal/host/loop.go) precisely so
     // the panel's Stop means something there. If that stopped working, the panel would
     // keep offering a control that does nothing and the session would stay wedged.
     //
-    // Every step is read off a frame, and none of it is a clock:
+    // Nothing here is a clock. Each step rules out one way the result could have arrived
+    // without the engine having done the thing being claimed:
     //
     // 1. `/logout` arrives behind an unfinished `/account` and comes back REFUSED as
     //    `command-busy`. That refusal is emitted from the branch that found the first
@@ -357,27 +400,28 @@ describe.skipIf(!binary)("assistant engine account commands", () => {
     //    second command while the first was outstanding. Deterministic, not racy: the
     //    busy flag is claimed inline on the single-threaded command loop before the
     //    worker goroutine is spawned, so the second line cannot arrive ahead of it.
-    // 2. The interrupt goes out on that refusal, and `/account` then answers. Nothing
-    //    else in this run could have made it answer: the socket never replies, and the
-    //    engine's own ceiling on the attempt is a minute — past the harness's kill.
-    // 3. Except teardown, which cancels an in-flight command before it seals the output
-    //    stream, so a shutdown can carry a result out with it. `backstopFired` is what
-    //    excludes that: false means the run was driven entirely by frames, and no
-    //    shutdown had been asked for when the result arrived.
+    // 2. The interrupt waits for the FIXTURE to see a request, not for that refusal.
+    //    The refusal proves the command is registered; only the socket proves it is
+    //    doing the work an interrupt has to reach into. Interrupting between those two
+    //    would cancel a context before any I/O began.
+    // 3. `/account` then answers, and nothing else in the run could have made it: this
+    //    command runs for over 95 seconds against this fixture (measured — see
+    //    `startStallingBackend`), and the harness kills at 25.
+    // 4. Except teardown, which cancels an in-flight command before it seals the output
+    //    stream, so a shutdown can carry a result out with it. The result's position
+    //    ahead of the first shutdown request excludes that, and `backstopFired` says the
+    //    run never limped to its timer to get there.
     //
     // The refused command contributes no result of its own, which is the second thing
     // the result list pins: a rejection and an answer must not look alike to the panel.
     const backend = await startStallingBackend();
     try {
-      const { frames, exitCode, stderr, backstopFired } = await driveEngine(
-        binary!,
-        "ses_slow_interrupt",
-        {
+      const { frames, exitCode, stderr, backstopFired, shutdownRequestedAtFrame } =
+        await driveEngine(binary!, "ses_slow_interrupt", {
           commands: ["/account", "/logout"],
           backendUrl: backend.url,
-          interruptOnCommandBusy: true,
-        }
-      );
+          interruptWhen: backend.requested,
+        });
       const parsed = frames.map(parseAssistantHostEvent);
 
       expect(
@@ -385,6 +429,16 @@ describe.skipIf(!binary)("assistant engine account commands", () => {
         `the engine never refused the second account command, so nothing shows it was ` +
           `servicing the loop while the first was outstanding.\n${stderr}`
       ).toBeDefined();
+
+      // Read back, never awaited. Awaiting a promise that only settles when the engine
+      // makes a request means a run where it never does hangs the test to its own
+      // timeout, and a timed-out test never reaches the `finally` that closes this
+      // server.
+      expect(
+        backend.requestLine(),
+        "the engine never reached the backend, so the interrupt did not land on a " +
+          "command that was doing any work"
+      ).toMatch(/^[A-Z]+ \/\S+ HTTP\//);
 
       expect(
         backstopFired,
@@ -400,6 +454,12 @@ describe.skipIf(!binary)("assistant engine account commands", () => {
         `the in-flight command was never stopped, so Stop does nothing for a user ` +
           `waiting on one.\n${stderr}`
       ).toEqual(["/account"]);
+
+      expect(
+        parsed.findIndex((e) => e?.type === "command:result"),
+        `the result landed after a shutdown had been asked for, so teardown could have ` +
+          `produced it rather than the interrupt.\n${stderr}`
+      ).toBeLessThan(shutdownRequestedAtFrame ?? -1);
 
       expect(exitCode, `the engine did not exit cleanly after the interrupt.\n${stderr}`).toBe(0);
     } finally {
