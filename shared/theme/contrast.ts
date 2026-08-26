@@ -116,10 +116,12 @@ const CONTRAST_PAIRS: Array<{
   //
   // LIMIT: this checks the resting fill only. The variant's hover and active states mix
   // the fill 90%/82% toward the label (`color-mix(in oklab, ...)` in button.tsx), so a
-  // theme sitting just over this floor at rest can dip under it while pressed. Modelling
-  // that would need an OKLab->sRGB round-trip this module doesn't have, and the built-ins
-  // are ~3x clear of the floor, so their interaction states have ample room. A custom
-  // theme near the floor gets a warning here for the resting state either way.
+  // theme sitting just over this floor at rest can dip under it while pressed — e.g.
+  // #767676/#ffffff is 4.54:1 at rest, ~3.8:1 hovered, ~3.3:1 pressed. Modelling that
+  // exactly needs an OKLab round-trip, which means either hand-rolling one here or
+  // pulling culori (a devDependency) into code the main process loads. Not worth it yet:
+  // every built-in is ~3x clear of the floor (weakest interaction state ~8:1), and the
+  // consequence for a custom theme is an advisory warning, never a rejected import.
   { foreground: "text-inverse", background: "text-primary", minimum: 4.5 },
   { foreground: "search-highlight-text", background: "search-highlight-background", minimum: 3.0 },
 ];

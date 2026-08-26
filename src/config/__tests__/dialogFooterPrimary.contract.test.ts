@@ -36,19 +36,23 @@ const SCAN_ROOTS = [
   path.join(REPO_ROOT, "plugins/builtin/github/renderer"),
 ];
 
-const APP_DIALOG_MODULE = "components/ui/AppDialog";
+const APP_DIALOG_MODULE = "/AppDialog";
 const DEFAULT_DIALOG_BINDING = "AppDialog";
 const FOOTER_MEMBER = "Footer";
 const BUTTON_TAG = "Button";
-// cva's own fallback. Naming it explicitly is the same accent fill as omitting the prop,
-// so both are rejected — the point is that no dialog footer paints the accent CTA.
-const REJECTED_VARIANT = "default";
+// Every Button variant that paints the accent fill (`bg-primary`, per button.tsx).
+// `default` is cva's own fallback, so naming it explicitly and omitting the prop are the
+// same thing; `glow` and `vibrant` are the same fill with a shadow or a gradient. The
+// point is that no dialog footer paints the accent CTA, however it's spelled.
+const ACCENT_FILL_VARIANTS = new Set(["default", "glow", "vibrant"]);
 
-// Ratchets. These are floors, not exact counts: they exist so a rename or refactor that
-// stopped matching can't leave the contract green by inspecting nothing. Raise them only
-// alongside a deliberate change in how many footers exist.
-const MIN_FOOTERS_INSPECTED = 20;
-const MIN_BUTTONS_INSPECTED = 40;
+// Coverage ratchets, set to the current actuals rather than a loose floor: this is a
+// static repo scan, so the numbers only move when someone adds or removes a dialog
+// footer. Growth passes freely; a DROP fails, which is the point — it means a rename or
+// refactor stopped matching and the contract went blind. Lower them deliberately, in the
+// same commit that removes the footers.
+const MIN_FOOTERS_INSPECTED = 24;
+const MIN_BUTTONS_INSPECTED = 53;
 
 function tsxFiles(dir: string, found: string[] = []): string[] {
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
@@ -71,7 +75,7 @@ function dialogBinding(source: ts.SourceFile): string {
   for (const statement of source.statements) {
     if (!ts.isImportDeclaration(statement)) continue;
     const specifier = statement.moduleSpecifier;
-    if (!ts.isStringLiteral(specifier) || !specifier.text.includes(APP_DIALOG_MODULE)) continue;
+    if (!ts.isStringLiteral(specifier) || !specifier.text.endsWith(APP_DIALOG_MODULE)) continue;
     const bindings = statement.importClause?.namedBindings;
     if (!bindings || !ts.isNamedImports(bindings)) continue;
     for (const element of bindings.elements) {
@@ -83,44 +87,53 @@ function dialogBinding(source: ts.SourceFile): string {
 }
 
 /**
- * Every string literal an expression can evaluate to, or null when that can't be
- * determined statically. Covers the shapes a variant realistically takes.
+ * Every string literal an expression can evaluate to, plus whether some branch of it was
+ * opaque. The two are kept separate on purpose: `variant={candidate ?? "default"}` has one
+ * branch we can't read and one we can, and dropping the readable half because of the
+ * other would let an explicit accent branch through.
  */
-function literalValues(node: ts.Expression): string[] | null {
-  if (ts.isStringLiteralLike(node)) return [node.text];
+type Resolution = { literals: string[]; unknown: boolean };
+
+const OPAQUE: Resolution = { literals: [], unknown: true };
+
+function merge(...parts: Resolution[]): Resolution {
+  return {
+    literals: parts.flatMap((part) => part.literals),
+    unknown: parts.some((part) => part.unknown),
+  };
+}
+
+function literalValues(node: ts.Expression): Resolution {
+  if (ts.isStringLiteralLike(node)) return { literals: [node.text], unknown: false };
   if (ts.isParenthesizedExpression(node)) return literalValues(node.expression);
   if (ts.isConditionalExpression(node)) {
-    const whenTrue = literalValues(node.whenTrue);
-    const whenFalse = literalValues(node.whenFalse);
-    return whenTrue && whenFalse ? [...whenTrue, ...whenFalse] : null;
+    return merge(literalValues(node.whenTrue), literalValues(node.whenFalse));
   }
   if (
     ts.isBinaryExpression(node) &&
     (node.operatorToken.kind === ts.SyntaxKind.BarBarToken ||
       node.operatorToken.kind === ts.SyntaxKind.QuestionQuestionToken)
   ) {
-    const left = literalValues(node.left);
-    const right = literalValues(node.right);
-    return left && right ? [...left, ...right] : null;
+    return merge(literalValues(node.left), literalValues(node.right));
   }
-  return null;
+  return OPAQUE;
 }
 
-type VariantInfo =
-  { kind: "absent" } | { kind: "literals"; values: string[] } | { kind: "unresolvable" };
+type VariantInfo = { kind: "absent" } | ({ kind: "expression" } & Resolution);
 
 function variantOf(element: ts.JsxOpeningLikeElement): VariantInfo {
   for (const attribute of element.attributes.properties) {
     if (!ts.isJsxAttribute(attribute)) continue;
     if (attribute.name.getText() !== "variant") continue;
     const initializer = attribute.initializer;
-    if (!initializer) return { kind: "unresolvable" };
-    if (ts.isStringLiteral(initializer)) return { kind: "literals", values: [initializer.text] };
-    if (ts.isJsxExpression(initializer) && initializer.expression) {
-      const values = literalValues(initializer.expression);
-      return values ? { kind: "literals", values } : { kind: "unresolvable" };
+    if (!initializer) return { kind: "expression", ...OPAQUE };
+    if (ts.isStringLiteral(initializer)) {
+      return { kind: "expression", literals: [initializer.text], unknown: false };
     }
-    return { kind: "unresolvable" };
+    if (ts.isJsxExpression(initializer) && initializer.expression) {
+      return { kind: "expression", ...literalValues(initializer.expression) };
+    }
+    return { kind: "expression", ...OPAQUE };
   }
   return { kind: "absent" };
 }
@@ -155,8 +168,13 @@ function scan(filePath: string): ScanResult {
           line,
           reason: "no variant (inherits the accent CTA)",
         });
-      } else if (variant.kind === "literals" && variant.values.includes(REJECTED_VARIANT)) {
-        result.violations.push({ file: relative, line, reason: `variant="${REJECTED_VARIANT}"` });
+      } else {
+        // Any branch we CAN see that paints the accent is a violation, even when a
+        // sibling branch is opaque.
+        for (const value of new Set(variant.literals)) {
+          if (!ACCENT_FILL_VARIANTS.has(value)) continue;
+          result.violations.push({ file: relative, line, reason: `variant="${value}"` });
+        }
       }
     }
     ts.forEachChild(node, inspectButtons);
@@ -248,7 +266,7 @@ describe("dialog footers never inherit the accent CTA (#11963)", () => {
   it("follows an aliased AppDialog import", () => {
     withFixture(
       [
-        'import { AppDialog as Modal } from "@/components/ui/AppDialog";',
+        'import { AppDialog as Modal } from "../ui/AppDialog";',
         "export const D = () => (",
         "  <Modal.Footer>",
         "    <Button onClick={go}>Go</Button>",
@@ -277,10 +295,55 @@ describe("dialog footers never inherit the accent CTA (#11963)", () => {
         ");",
       ],
       (result) => {
-        // Only the branch that can resolve to the accent CTA is rejected; an
-        // unresolvable expression is a documented known limit, not a violation.
+        // Only the branch that can resolve to the accent CTA is rejected; a wholly
+        // unreadable expression is a documented known limit, not a violation.
         expect(result.violations.map((v) => v.reason)).toEqual(['variant="default"']);
         expect(result.buttons).toBe(3);
+      }
+    );
+  });
+
+  // The half-readable case: one opaque branch must not buy amnesty for a sibling branch
+  // that plainly names the accent fill.
+  it("still rejects a readable accent branch when a sibling branch is opaque", () => {
+    withFixture(
+      [
+        'import { AppDialog } from "@/components/ui/AppDialog";',
+        "export const D = () => (",
+        "  <AppDialog.Footer>",
+        '    <Button variant={candidate ?? "default"}>A</Button>',
+        '    <Button variant={flag ? candidate : "default"}>B</Button>',
+        "  </AppDialog.Footer>",
+        ");",
+      ],
+      (result) => {
+        expect(result.violations.map((v) => v.reason)).toEqual([
+          'variant="default"',
+          'variant="default"',
+        ]);
+      }
+    );
+  });
+
+  // `glow` and `vibrant` are the same `bg-primary` accent fill wearing a shadow or a
+  // gradient — spelling it differently must not slip the CTA past the contract.
+  it("rejects the other variants that paint the accent fill", () => {
+    withFixture(
+      [
+        'import { AppDialog } from "@/components/ui/AppDialog";',
+        "export const D = () => (",
+        "  <AppDialog.Footer>",
+        '    <Button variant="glow">A</Button>',
+        '    <Button variant="vibrant">B</Button>',
+        '    <Button variant="subtle">C</Button>',
+        "  </AppDialog.Footer>",
+        ");",
+      ],
+      (result) => {
+        expect(result.violations.map((v) => v.reason)).toEqual([
+          'variant="glow"',
+          'variant="vibrant"',
+        ]);
       }
     );
   });

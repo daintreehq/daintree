@@ -161,7 +161,7 @@ const ONLY = (process.env.DAINTREE_SHOT_ONLY ?? "").split(",").filter(Boolean);
 // per-theme sweep shouldn't lose fourteen themes to one bad selector. But the run must
 // still FAIL, or a silent exit 0 with an empty output directory reads as success.
 const failures: string[] = [];
-async function step(name: string, fn: () => Promise<void>): Promise<void> {
+async function step(page: Page, name: string, fn: () => Promise<void>): Promise<void> {
   if (ONLY.length > 0 && !ONLY.includes(name)) return;
   try {
     await fn();
@@ -169,6 +169,12 @@ async function step(name: string, fn: () => Promise<void>): Promise<void> {
     const detail = String(error).slice(0, 300);
     console.warn(`[confirm-shots] step "${name}" failed:`, detail);
     failures.push(`${name}: ${detail}`);
+  } finally {
+    // Unconditionally, not on the success path only: a step that dies holding an open
+    // editor would otherwise wedge every step after it behind a modal.
+    await returnToRest(page).catch((error) => {
+      failures.push(`${name} (reset): ${String(error).slice(0, 200)}`);
+    });
   }
 }
 
@@ -196,12 +202,36 @@ async function openRecipesTab(page: Page): Promise<void> {
   await settle(page, 500);
 }
 
-async function closeProjectSettings(page: Page): Promise<void> {
-  await page
-    .locator(SEL.projectSettings.closeButton)
-    .click()
-    .catch(() => {});
-  await settle(page, 300);
+/**
+ * Dismiss whatever is open and get back to the workbench. Escape closes the topmost
+ * surface, so this presses once per possible layer and then closes any settings dialog by
+ * its own button, waiting for the heading to actually go rather than assuming it did.
+ */
+async function returnToRest(page: Page): Promise<void> {
+  for (const heading of [SEL.projectSettings.heading, SEL.settings.heading]) {
+    for (let layer = 0; layer < 3; layer++) {
+      if (
+        !(await page
+          .locator(heading)
+          .isVisible()
+          .catch(() => false))
+      )
+        break;
+      const closeButton = page.locator(SEL.settings.closeButton).first();
+      if (await closeButton.isVisible().catch(() => false)) {
+        await closeButton.click().catch(() => {});
+      } else {
+        await page.keyboard.press("Escape").catch(() => {});
+      }
+      await settle(page, 200);
+    }
+    await page
+      .locator(heading)
+      .waitFor({ state: "hidden", timeout: 5000 })
+      .catch(() => {});
+  }
+  await escapeAll(page, 1);
+  await dismissBlockingPalette(page);
 }
 
 test("dialog primary-action review — contrast CTA and destructive precedence", async () => {
@@ -210,6 +240,10 @@ test("dialog primary-action review — contrast CTA and destructive precedence",
     description: "DAINTREE_SHOT_CONFIRM is required for the dialog capture",
   });
   test.skip(!ENABLED, "Set DAINTREE_SHOT_CONFIRM to run the dialog capture");
+
+  // Module-scoped so `step()` can reach it; cleared here so a Playwright retry starts
+  // from a clean slate rather than inheriting the previous attempt's failures.
+  failures.length = 0;
 
   mkdirSync(OUTPUT_DIR, { recursive: true });
   const repo = createFixtureRepo();
@@ -235,7 +269,7 @@ test("dialog primary-action review — contrast CTA and destructive precedence",
 
     // 1. The central resolver. Whatever this footer paints is what every
     //    non-destructive ConfirmDialog in the app paints.
-    await step("preset", async () => {
+    await step(page, "preset", async () => {
       await navigateToAgentSettings(page, "claude");
       await page
         .locator(SEL.preset.section)
@@ -246,24 +280,19 @@ test("dialog primary-action review — contrast CTA and destructive precedence",
         .waitFor({ state: "visible", timeout: 6000 });
       await snap(page, "10-primary-action-resolver", '[data-testid="add-preset-dialog"]');
       await snap(page, "11-primary-action-in-window");
-      await escapeAll(page);
-      await page.locator(SEL.settings.closeButton).click();
-      await settle(page, 400);
     });
 
-    await step("editor", async () => {
+    await step(page, "editor", async () => {
       await openRecipesTab(page);
       await page.locator(SEL.projectSettings.addRecipeButton).click();
       await settle(page, 600);
       await snap(page, "20-handwritten-footer-editor", DIALOG);
-      await escapeAll(page);
-      await closeProjectSettings(page);
     });
 
     // 2. Nested destructive confirm stacked over the editor: two dialog surfaces, and
     //    the confirm must still read as destructive. Opens its own editor so the step
     //    runs standalone under DAINTREE_SHOT_ONLY.
-    await step("discard", async () => {
+    await step(page, "discard", async () => {
       await openRecipesTab(page);
       await page.locator(SEL.projectSettings.addRecipeButton).click();
       await settle(page, 600);
@@ -274,25 +303,22 @@ test("dialog primary-action review — contrast CTA and destructive precedence",
       await snap(page, "30-nested-destructive-confirm");
       // Actually discard. Escaping only dismisses the confirm — the editor stays dirty
       // and re-raises it on the next close, which would wedge every later step.
-      await page.locator(SEL.confirmDialog.confirm).last().click();
+      await page.getByRole("alertdialog").locator(SEL.confirmDialog.confirm).click();
       await page
         .locator(SEL.recipeEditor.nameInput)
         .waitFor({ state: "hidden", timeout: 5000 })
         .catch(() => {});
-      await closeProjectSettings(page);
     });
 
-    await step("import", async () => {
+    await step(page, "import", async () => {
       await openRecipesTab(page);
       await page.getByRole("button", { name: "Import recipe" }).click();
       await settle(page, 500);
       await snap(page, "40-handwritten-footer-import", DIALOG);
-      await escapeAll(page);
-      await closeProjectSettings(page);
     });
 
     // 3. The precedence check the issue calls out: destructive must not become contrast.
-    await step("destructive", async () => {
+    await step(page, "destructive", async () => {
       await openRecipesTab(page);
       await page
         .locator(SEL.projectSettings.deleteRecipeButton(SEEDED_RECIPE.name))
@@ -300,8 +326,6 @@ test("dialog primary-action review — contrast CTA and destructive precedence",
       await page.getByRole("alertdialog").waitFor({ state: "visible", timeout: 5000 });
       await snap(page, "50-destructive-confirm", DIALOG);
       await snap(page, "51-destructive-in-window");
-      await escapeAll(page);
-      await closeProjectSettings(page);
     });
   } finally {
     // Each cleanup runs even if an earlier one throws — a rejected closeApp used to
