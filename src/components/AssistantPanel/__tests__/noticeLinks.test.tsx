@@ -47,16 +47,36 @@ function hrefs(el: HTMLElement): (string | null)[] {
   return links(el).map((a) => a.getAttribute("href"));
 }
 
-/** The invariant that makes a link honest: what you read is what opens. */
-function expectHrefMatchesText(el: HTMLElement) {
+/**
+ * The two invariants that make a link honest: what you read is what opens, and it reads
+ * as itself whatever the text around it is doing.
+ */
+function expectLinksHonest(el: HTMLElement) {
   for (const a of links(el)) {
     expect(a.getAttribute("href")).toBe(a.textContent);
+    expect(a.parentElement?.tagName).toBe("BDI");
   }
 }
 
 /** Every rendered notice keeps its message intact, whatever the linkifier did to it. */
 function expectTextPreserved(el: HTMLElement, message: string) {
   expect(el.textContent).toBe(message);
+}
+
+/** How many single-character reads rendering this message costs. */
+function charReads(message: string): number {
+  const original = String.prototype.charAt;
+  let reads = 0;
+  String.prototype.charAt = function (this: string, index: number): string {
+    reads += 1;
+    return original.call(this, index);
+  };
+  try {
+    renderNotice(message);
+  } finally {
+    String.prototype.charAt = original;
+  }
+  return reads;
 }
 
 function noticeRow(message: string, level: AssistantNotice["level"]): HTMLElement {
@@ -87,7 +107,7 @@ describe("notice links", () => {
     const el = renderNotice(message);
 
     expect(links(el)).toHaveLength(1);
-    expectHrefMatchesText(el);
+    expectLinksHonest(el);
     expectTextPreserved(el, message);
   });
 
@@ -102,7 +122,7 @@ describe("notice links", () => {
       "https://staging.daintree.test/subscribe",
       "https://staging.daintree.test/account",
     ]);
-    expectHrefMatchesText(el);
+    expectLinksHonest(el);
     expectTextPreserved(el, message);
   });
 
@@ -121,7 +141,7 @@ describe("notice links", () => {
       "https://Staging.Daintree.test/Account",
       "HTTPS://staging.daintree.test/x",
     ]);
-    expectHrefMatchesText(el);
+    expectLinksHonest(el);
     expectTextPreserved(el, message);
   });
 
@@ -161,7 +181,7 @@ describe("notice links", () => {
 
     expectTextPreserved(el, message);
     expect(links(el)).toHaveLength(2);
-    expectHrefMatchesText(el);
+    expectLinksHonest(el);
   });
 
   it("leaves sentence punctuation outside the address", () => {
@@ -175,6 +195,11 @@ describe("notice links", () => {
       ["See [https://a.test/x] now", "https://a.test/x"],
       ["See <https://a.test/x>", "https://a.test/x"],
       ['See "https://a.test/x"', "https://a.test/x"],
+      // Engine prose is written with typographic quotes, so a URL inside a pair of them
+      // is an ordinary sight and not an exotic one.
+      ["Read \u201Chttps://docs.daintree.test/setup\u201D", "https://docs.daintree.test/setup"],
+      ["Read \u2018https://a.test/x\u2019", "https://a.test/x"],
+      ["Read \u00ABhttps://a.test/x\u00BB", "https://a.test/x"],
       // The token can never contain the quote that opened it, so a lone apostrophe
       // inside a path is not one and must not adopt the sentence's closing quote.
       ["See 'https://a.test/what's-new'", "https://a.test/what's-new"],
@@ -191,7 +216,7 @@ describe("notice links", () => {
     for (const [message, href] of cases) {
       const el = renderNotice(message);
       expect(hrefs(el), message).toEqual([href]);
-      expectHrefMatchesText(el);
+      expectLinksHonest(el);
       expectTextPreserved(el, message);
     }
   });
@@ -255,7 +280,7 @@ describe("notice links", () => {
     const el = renderNotice(message);
 
     expect(hrefs(el)).toEqual(["https://127.0.0.1:8080/healthz", "https://[::1]:8443/x"]);
-    expectHrefMatchesText(el);
+    expectLinksHonest(el);
     expectTextPreserved(el, message);
   });
 
@@ -266,8 +291,42 @@ describe("notice links", () => {
     const el = renderNotice(message);
 
     expect(hrefs(el)).toEqual(["https://good.test"]);
-    expectHrefMatchesText(el);
+    expectLinksHonest(el);
     expectTextPreserved(el, message);
+  });
+
+  it("reads a link as itself when the text around it says otherwise", () => {
+    // A directional override earlier in the message stays in force over everything after
+    // it, so a label can be painted reversed while the href it belongs to is untouched —
+    // the reader sees one host and reaches another, without the token itself containing
+    // anything a scan of it would object to. Isolating rather than refusing, because a
+    // notice in an RTL language is ordinary and still has to work.
+    //
+    // jsdom runs no bidi algorithm, so what is asserted is the isolation itself.
+    const message = "\u202E https://evil.test";
+    const el = renderNotice(message);
+
+    expect(hrefs(el)).toEqual(["https://evil.test"]);
+    expectLinksHonest(el);
+    expectTextPreserved(el, message);
+  });
+
+  it("does work proportional to the message it is given", () => {
+    // One whitespace-delimited token holding thousands of candidates, every one of them
+    // refused because a legacy IPv4 host resolves to 127.0.0.1 and so never matches what
+    // it says. Answering "does my prefix leave a bracket open?" by rescanning that prefix
+    // per candidate is quadratic, and the engine may send a 200,000-character result.
+    //
+    // Counted, not timed — a wall-clock assertion is a flake waiting to happen. The scan
+    // reads the message one character at a time, so those reads ARE the work, and
+    // doubling the input must not quadruple them.
+    const hostile = (k: number) => `Go to ${"(https://127.1/x".repeat(k)})`;
+
+    expect(links(renderNotice(hostile(200)))).toHaveLength(0);
+
+    const small = charReads(hostile(500));
+    const large = charReads(hostile(1000));
+    expect(large).toBeLessThan(small * 3);
   });
 
   it("treats markup in an error as text, never as elements", () => {
@@ -286,7 +345,7 @@ describe("notice links", () => {
     const row = noticeRow(message, "info");
 
     expect(hrefs(row)).toEqual(["https://staging.daintree.test/account"]);
-    expectHrefMatchesText(row);
+    expectLinksHonest(row);
     expectTextPreserved(row, message);
   });
 
@@ -298,7 +357,7 @@ describe("notice links", () => {
     const row = noticeRow(message, "error");
 
     expect(hrefs(row)).toEqual(["https://staging.daintree.test/subscribe"]);
-    expectHrefMatchesText(row);
+    expectLinksHonest(row);
     expectTextPreserved(row, message);
   });
 });
