@@ -8,6 +8,8 @@ import { usePilotStore } from "@/store/pilotStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
+import { isScratchWorkspaceId } from "@shared/utils/workspaceIds";
+import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
 import { actionService } from "@/services/ActionService";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
@@ -625,22 +627,48 @@ function findParkTarget(
 }
 
 /**
- * Whether this group is a project whose rows, as currently narrowed, span more
- * than one worktree.
+ * Whether this group is a project with a worktree axis to drill into.
  *
  * A type predicate so the drill target is proven to be a project group at the
  * one place that reads its workspace id. Computed from the DISPLAYED rows, so a
  * query that narrows a project down to a single worktree also withdraws the
  * affordance rather than offering a regrouping that would change nothing.
+ *
+ * `currentViewWorktreeCount` is the enrichment, and two checks keep it honest.
+ * `isCurrent`, because it is the count for the ONE project this renderer view
+ * owns, and lending it to a neighbouring project's group would draw a chevron
+ * on a heading using a number about somewhere else entirely (#11950 — worktree
+ * metadata exists for the view's own project and for no other). And the scratch
+ * check, because a scratch is not a git repository: no count of its worktrees
+ * can be anything but zero, whatever an unparameterized current-view accessor
+ * happens to be holding. `pilot.openProject` refuses a scratch on the same
+ * grounds, and the two have to refuse it the same way or the chevron and the
+ * chord disagree about a workspace — the one property #11955 established by
+ * construction.
+ *
+ * Structural, off the id, rather than off `group.kind`. The kind is metadata
+ * and arrives asynchronously — a scratch reads `"unknown"` until its name
+ * hydrates — so keying on it would open a window where the chevron enriches a
+ * workspace the chord is already refusing. The id shape is true immediately and
+ * is the same test the action applies.
  */
-function canDrill(group: PilotDisplayGroup): group is PilotProjectGroup {
-  return group.axis === "workspace" && hasWorktreeAxis(group.rows.map((row) => row.run));
+function canDrill(
+  group: PilotDisplayGroup,
+  currentViewWorktreeCount: number
+): group is PilotProjectGroup {
+  if (group.axis !== "workspace") return false;
+  const enriched = group.isCurrent && !isScratchWorkspaceId(group.workspaceId);
+  return hasWorktreeAxis(
+    group.rows.map((row) => row.run),
+    enriched ? currentViewWorktreeCount : undefined
+  );
 }
 
 export function PilotView() {
   const isOpen = usePilotStore((s) => s.isOpen);
   const close = usePilotStore((s) => s.close);
   const scope = usePilotStore((s) => s.scope);
+  const fellBackFrom = usePilotStore((s) => s.fellBackFrom);
   const showFleet = usePilotStore((s) => s.showFleet);
   const openProject = usePilotStore((s) => s.openProject);
   const snapshot = useFleetSnapshotStore((s) => s.snapshot);
@@ -648,6 +676,29 @@ export function PilotView() {
   const scratches = useScratchStore((s) => s.scratches);
   const pilotShortcut = useEffectiveCombo("pilot.toggle");
   const scopedShortcut = useEffectiveCombo("pilot.openProject");
+
+  /**
+   * What this view's own project knows about its worktrees, as opposed to what
+   * its live agents happen to reveal (#11957).
+   *
+   * Subscribed rather than read once, because closing the last agent in a
+   * worktree — or creating a worktree while the overview is open — has to move
+   * the chevron with it. Both selectors return a primitive, which is what keeps
+   * an unrelated worktree update (a git-status poll rewriting a snapshot) from
+   * re-rendering this surface: only the count or the identity of the main
+   * worktree changing does.
+   *
+   * Optional because this is an overlay, not the project view. It renders in
+   * tests and could render before the provider mounts; a missing store just
+   * means no enrichment, which is exactly the pre-#11957 behavior.
+   */
+  const viewWorktreeCount = useWorktreeStoreOptional((s) => s.worktrees.size, 0);
+  const viewMainWorktreeId = useWorktreeStoreOptional<string | null>((s) => {
+    for (const [id, worktree] of s.worktrees) {
+      if (worktree.isMainWorktree === true) return id;
+    }
+    return null;
+  }, null);
 
   useOverlayClaim("pilot", isOpen);
 
@@ -775,8 +826,53 @@ export function PilotView() {
    */
   const displayGroups = useMemo<PilotDisplayGroup[]>(() => {
     if (scope.kind === "fleet") return liveGroups;
-    return scopedProject === null ? [] : buildPilotWorktreeGroups(scopedProject);
-  }, [scope.kind, liveGroups, scopedProject]);
+    if (scopedProject === null) return [];
+    // The root checkout leads, and only where this view can name it: the drill
+    // is reachable on a neighbouring project's heading too, and this view's
+    // worktree store describes its own project only. A foreign project keeps
+    // the label order, which is the honest answer there.
+    return buildPilotWorktreeGroups(
+      scopedProject,
+      scopedProject.isCurrent ? viewMainWorktreeId : null
+    );
+  }, [scope.kind, liveGroups, scopedProject, viewMainWorktreeId]);
+
+  /**
+   * The project a scoped opening asked for and could not give, named.
+   *
+   * Null unless this opening is the fallback, so a later back-out to the fleet
+   * from a scope the user chose does not inherit an explanation about a
+   * different gesture. Null too when the map cannot name the workspace: a line
+   * that says something has no worktree axis without saying WHICH something is
+   * worse than the silence it replaces.
+   *
+   * And null once the premise stops holding. The explanation describes a
+   * decision taken at press time, and the world moves under it — create a
+   * worktree, or launch an agent in a second one, and the same press would now
+   * scope. Left up, it would put a chevron offering the drill beside a sentence
+   * saying there is nothing to group: one screen, two answers. Recomputed
+   * through the same predicates the affordance reads, on the UNNARROWED groups,
+   * so the line answers "would a fresh press scope now" rather than "is the
+   * chevron drawn under this query". Where the workspace has no runs at all
+   * there is no group to ask and its own worktrees are the whole answer, so the
+   * count carries `canDrill`'s scratch guard with it: a scratch DOES record a
+   * fallback (its none is a real none), and letting the current view's worktrees
+   * answer for it would suppress the very explanation it just earned.
+   */
+  const fallbackGroup =
+    fellBackFrom === null
+      ? null
+      : (liveGroups.find((group) => group.workspaceId === fellBackFrom) ?? null);
+  const fallbackWorktreeCount =
+    fellBackFrom !== null && !isScratchWorkspaceId(fellBackFrom) ? viewWorktreeCount : 0;
+  const fallbackHasAxis =
+    fallbackGroup !== null
+      ? canDrill(fallbackGroup, fallbackWorktreeCount)
+      : hasWorktreeAxis([], fallbackWorktreeCount);
+  const fallbackName =
+    scope.kind === "fleet" && fellBackFrom !== null && !fallbackHasAxis
+      ? (workspaces.get(fellBackFrom)?.name ?? null)
+      : null;
 
   /** The scoped project's name, for the breadcrumb and the copy around it. */
   const scopedName =
@@ -1049,6 +1145,30 @@ export function PilotView() {
   }, []);
 
   /**
+   * Whether either narrowing is in play, which is what an empty list means.
+   *
+   * A query or a filter turning up nothing is a true statement about the
+   * narrowing. A fleet with nothing in it at all is a statement about the
+   * fleet, and only live data can make that one.
+   *
+   * Declared up here rather than beside the empty state because the drill reads
+   * it too: the affordance is computed from the rows actually drawn, so a
+   * narrowing that hides most of a project has to withdraw the enrichment along
+   * with them.
+   */
+  const hasNarrowing = query.trim().length > 0 || bandFilter !== "all";
+
+  /**
+   * The project's own worktree count, as the drill may use it.
+   *
+   * Zeroed under a narrowing, which keeps #11955's rule intact: a query that
+   * cuts a project down to one visible worktree withdraws the chevron rather
+   * than offering a regrouping of what is already one section. Unnarrowed, the
+   * project's real topology decides, which is the whole point of #11957.
+   */
+  const drillWorktreeCount = hasNarrowing ? 0 : viewWorktreeCount;
+
+  /**
    * Alt+Enter on the highlighted row opens the park editor — a second verb on
    * the same selection, so it lives beside Enter in both key paths rather
    * than in the navigation model, which owns structure and not actions.
@@ -1078,7 +1198,7 @@ export function PilotView() {
    */
   const drillTarget =
     scope.kind === "fleet" && selectedRow !== null && selectedRow.kind === "item"
-      ? canDrill(selectedRow.group)
+      ? canDrill(selectedRow.group, drillWorktreeCount)
         ? selectedRow.group.workspaceId
         : null
       : null;
@@ -1285,15 +1405,6 @@ export function PilotView() {
 
   const hasTree = renderGroups.length > 0;
 
-  /**
-   * Whether either narrowing is in play, which is what an empty list means.
-   *
-   * A query or a filter turning up nothing is a true statement about the
-   * narrowing. A fleet with nothing in it at all is a statement about the
-   * fleet, and only live data can make that one.
-   */
-  const hasNarrowing = query.trim().length > 0 || bandFilter !== "all";
-
   // Stale narrows honestly — retained runs are real rows, so a query matching
   // none of them says something true — but a retained EMPTY fleet may not
   // render the zero-data prompt: "Start an agent in any project" over a feed
@@ -1422,6 +1533,32 @@ export function PilotView() {
                   {scopedName}
                 </span>
               </div>
+            )}
+
+            {/*
+              Why this is the fleet when a project was asked for.
+
+              The scoped chord's fallback lands on a surface byte for byte
+              identical to the one the unscoped chord gives, so without a word
+              here the key is indistinguishable from a dead one (#11957). It
+              stays a line of text: nothing has gone wrong, there is nothing to
+              retry, and the user is already looking at the surface it describes
+              — a toast or an inbox entry would outlive the opening it belongs
+              to and interrupt for a routine outcome.
+
+              `role="status"` because the whole point is that the surface is not
+              the one that was asked for, and a screen reader hearing only the
+              dialog's "All agents" label would be told the same thing the
+              unscoped chord says.
+            */}
+            {fallbackName !== null && (
+              <p
+                role="status"
+                data-testid="pilot-fallback-note"
+                className="mb-1.5 min-w-0 text-[11px] leading-snug text-daintree-text/60"
+              >
+                {fallbackName} has nothing to group by worktree, so this is every agent
+              </p>
             )}
 
             <AppPaletteDialog.Input
@@ -1605,7 +1742,7 @@ export function PilotView() {
             // Bound to a const so the discriminant narrows inside the drill
             // handler's closure as well as at the branch.
             const group = header.group;
-            const drillTo = canDrill(group) ? group.workspaceId : null;
+            const drillTo = canDrill(group, drillWorktreeCount) ? group.workspaceId : null;
             return (
               // `role="group"` is a permitted listbox child and carries the
               // group's name as the label for every option inside it, which is

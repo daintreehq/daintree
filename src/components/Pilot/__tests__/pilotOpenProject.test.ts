@@ -10,6 +10,7 @@ import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
 import { usePilotStore } from "@/store/pilotStore";
+import { resetStoreAccessorsForTesting, setWorktreeIdSetAccessor } from "@/store/storeAccessors";
 import type { ActionCallbacks, ActionRegistry } from "@/services/actions/actionTypes";
 import type { ActionContext } from "@shared/types/actions";
 import type { FleetRunRow } from "@shared/types/ipc/fleet";
@@ -22,6 +23,9 @@ import type { FleetRunRow } from "@shared/types/ipc/fleet";
 const PROJECT_HERE = "a".repeat(64);
 const PROJECT_ELSEWHERE = "b".repeat(64);
 const SCRATCH_HERE = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+
+/** The project root, which carries a worktree id like any other checkout. */
+const ROOT = "/repo";
 
 const NOW = 1_830_000_000_000;
 
@@ -44,6 +48,15 @@ function seedView(workspaceId: string | null): void {
   viewWorkspaceId.current = workspaceId;
 }
 
+/**
+ * The worktrees the VIEW's own store knows about — the project's real topology,
+ * which the fleet snapshot cannot report because it only carries agent runs.
+ * `null` is a view with no store mounted, which is what a bare test process has.
+ */
+function seedWorktrees(ids: string[] | null): void {
+  setWorktreeIdSetAccessor(() => (ids === null ? null : new Set(ids)));
+}
+
 function seedFleet(runs: FleetRunRow[] | null): void {
   useFleetSnapshotStore.setState({
     snapshot:
@@ -59,7 +72,8 @@ function openProject(): Promise<unknown> {
 
 beforeEach(() => {
   vi.clearAllMocks();
-  usePilotStore.setState({ isOpen: false, scope: { kind: "fleet" } });
+  resetStoreAccessorsForTesting();
+  usePilotStore.setState({ isOpen: false, scope: { kind: "fleet" }, fellBackFrom: null });
   // The globally-replicated pointers, deliberately seeded to CONTRADICT the
   // view below, so a regression that reads either of them fails loudly.
   // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test carrier: only the pointer's id matters, and the action must not read it at all
@@ -120,9 +134,11 @@ describe("pilot.openProject", () => {
   });
 
   it("falls back for a project worked only in its own root", async () => {
-    // A root launch carries no worktree id at all, so there is no axis to cut
-    // on — one of the two cases the issue left open.
-    seedFleet([run({ runId: "a" }), run({ runId: "b" })]);
+    // A root launch DOES carry a worktree id — the project root path (#11957) —
+    // so this is one bucket by both counts: one worktree in the store, one
+    // among the runs. There is no axis to cut on either way.
+    seedWorktrees([ROOT]);
+    seedFleet([run({ runId: "a", worktreeId: ROOT }), run({ runId: "b", worktreeId: ROOT })]);
 
     await openProject();
 
@@ -139,6 +155,19 @@ describe("pilot.openProject", () => {
       run({ runId: "a", workspaceId: SCRATCH_HERE }),
       run({ runId: "b", workspaceId: SCRATCH_HERE }),
     ]);
+
+    await openProject();
+
+    expect(usePilotStore.getState()).toMatchObject({ isOpen: true, scope: { kind: "fleet" } });
+  });
+
+  it("refuses a worktree count in a scratch view even where one is on offer", async () => {
+    // The accessor is unparameterized current-view state. A scratch is not a
+    // git repository, so no count of its worktrees can be anything but zero
+    // whatever a store happens to be holding at the time.
+    seedView(SCRATCH_HERE);
+    seedWorktrees(["/repo/wt/alpha", "/repo/wt/beta", "/repo/wt/gamma"]);
+    seedFleet([run({ runId: "a", workspaceId: SCRATCH_HERE })]);
 
     await openProject();
 
@@ -253,6 +282,163 @@ describe("pilot.openProject", () => {
     expect(usePilotStore.getState().scope).toEqual({
       kind: "project",
       workspaceId: PROJECT_HERE,
+    });
+  });
+});
+
+describe("pilot.openProject against the project's own worktrees", () => {
+  it("scopes where every agent shares one worktree but the project has three", async () => {
+    // The measured bug (#11957): a fleet row exists only for a terminal
+    // classified an agent, so drillability tracked where agents happened to be
+    // sitting. Four of five real projects fell back on this.
+    seedWorktrees([ROOT, "/repo/wt/alpha", "/repo/wt/beta"]);
+    seedFleet([
+      run({ runId: "a", worktreeId: "/repo/wt/alpha" }),
+      run({ runId: "b", worktreeId: "/repo/wt/alpha" }),
+    ]);
+
+    await openProject();
+
+    expect(usePilotStore.getState().scope).toEqual({
+      kind: "project",
+      workspaceId: PROJECT_HERE,
+    });
+  });
+
+  it("keeps the chord working when the second agent exits", async () => {
+    // Closing an agent used to take the shortcut away with nothing to say so.
+    seedWorktrees([ROOT, "/repo/wt/alpha"]);
+    seedFleet([run({ runId: "a", worktreeId: ROOT })]);
+
+    await openProject();
+
+    expect(usePilotStore.getState().scope).toEqual({
+      kind: "project",
+      workspaceId: PROJECT_HERE,
+    });
+  });
+
+  it("scopes a project with no agents at all once its worktrees prove the axis", async () => {
+    // "None here yet" answers the question the user asked. The whole fleet
+    // answers a different one.
+    seedWorktrees([ROOT, "/repo/wt/alpha"]);
+    seedFleet([run({ runId: "x", workspaceId: PROJECT_ELSEWHERE, worktreeId: "/o/a" })]);
+
+    await openProject();
+
+    expect(usePilotStore.getState().scope).toEqual({
+      kind: "project",
+      workspaceId: PROJECT_HERE,
+    });
+  });
+
+  it("scopes even where the store and the runs spell the same worktree differently", async () => {
+    // The rule the fix has to keep: a worktree id has two mint sites that can
+    // spell one directory differently (`realpath` at creation, `pathResolve`
+    // over porcelain at enumeration), so the two sources are OR'd as counts and
+    // their ids never meet. A join here would find nothing and refuse.
+    seedWorktrees(["/private/repo", "/private/repo/wt/alpha"]);
+    seedFleet([run({ runId: "a", worktreeId: "/repo/wt/alpha" })]);
+
+    await openProject();
+
+    expect(usePilotStore.getState().scope).toEqual({
+      kind: "project",
+      workspaceId: PROJECT_HERE,
+    });
+  });
+
+  it("falls back where the project has exactly one worktree", async () => {
+    // The root is a first-class entry in that count, so one means root-only.
+    seedWorktrees([ROOT]);
+    seedFleet([run({ runId: "a", worktreeId: ROOT })]);
+
+    await openProject();
+
+    expect(usePilotStore.getState()).toMatchObject({ isOpen: true, scope: { kind: "fleet" } });
+  });
+});
+
+describe("pilot.openProject fallback explanation", () => {
+  it("names the project it could not scope to", async () => {
+    // The fleet it lands on is byte for byte what the unscoped chord gives, so
+    // without this the key is indistinguishable from a dead one.
+    seedWorktrees([ROOT]);
+    seedFleet([run({ runId: "a", worktreeId: ROOT })]);
+
+    await openProject();
+
+    expect(usePilotStore.getState().fellBackFrom).toBe(PROJECT_HERE);
+  });
+
+  it("says nothing when the project's own worktrees have not been read yet", async () => {
+    // A project carries its own root the moment its view store hydrates, so a
+    // zero is "not told yet". Claiming a project has nothing to group on the
+    // strength of an answer nobody gave is the explanation lying.
+    seedWorktrees([]);
+    seedFleet([run({ runId: "a", worktreeId: ROOT })]);
+
+    await openProject();
+
+    expect(usePilotStore.getState()).toMatchObject({
+      isOpen: true,
+      scope: { kind: "fleet" },
+      fellBackFrom: null,
+    });
+  });
+
+  it("still explains itself for a scratch, whose none is a real none", async () => {
+    // A scratch is not a git repository, so zero worktrees there is an answer
+    // rather than a silence — and the user still pressed a key.
+    seedView(SCRATCH_HERE);
+    seedFleet([run({ runId: "a", workspaceId: SCRATCH_HERE })]);
+
+    await openProject();
+
+    expect(usePilotStore.getState().fellBackFrom).toBe(SCRATCH_HERE);
+  });
+
+  it("says nothing when the fleet has not been read yet", async () => {
+    // Nothing was decided, so there is nothing to explain — an explanation here
+    // would blame a project for a snapshot that has not arrived.
+    seedFleet(null);
+
+    await openProject();
+
+    expect(usePilotStore.getState()).toMatchObject({ isOpen: true, fellBackFrom: null });
+  });
+
+  it("says nothing when the view has no workspace identity", async () => {
+    seedView(null);
+    seedFleet([run({ runId: "a", worktreeId: "/repo/wt/alpha" })]);
+
+    await openProject();
+
+    expect(usePilotStore.getState()).toMatchObject({ isOpen: true, fellBackFrom: null });
+  });
+
+  it("says nothing when the scope succeeds", async () => {
+    seedFleet([
+      run({ runId: "a", worktreeId: "/repo/wt/alpha" }),
+      run({ runId: "b", worktreeId: "/repo/wt/beta" }),
+    ]);
+
+    await openProject();
+
+    expect(usePilotStore.getState().fellBackFrom).toBeNull();
+  });
+
+  it("clears a stale explanation when a later press does scope", async () => {
+    seedWorktrees([ROOT]);
+    seedFleet([run({ runId: "a", worktreeId: ROOT })]);
+    await openProject();
+
+    seedWorktrees([ROOT, "/repo/wt/alpha"]);
+    await openProject();
+
+    expect(usePilotStore.getState()).toMatchObject({
+      scope: { kind: "project", workspaceId: PROJECT_HERE },
+      fellBackFrom: null,
     });
   });
 });

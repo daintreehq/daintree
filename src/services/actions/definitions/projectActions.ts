@@ -10,6 +10,7 @@ import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { usePilotStore } from "@/store/pilotStore";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { hasWorktreeAxis } from "@/components/Pilot/pilotRows";
+import { getWorktreeIdSet } from "@/store/storeAccessors";
 import { actionService } from "@/services/ActionService";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { notify, EVENT_KIND_TO_SETTING_KEY, EVENT_KIND_LABEL } from "@/lib/notify";
@@ -139,22 +140,44 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
         return;
       }
 
-      // Scoping is offered only where regrouping would say something new. A
-      // scratch workspace's runs carry no worktree id, and neither does a
-      // project being worked only in its own root, so both land here — and so
-      // does a project with no runs at all, which is what keeps an empty scoped
-      // list unreachable. The unscoped fleet is the honest fallback: it is
-      // still the surface the user asked for, just without a narrowing it
-      // cannot support.
+      // Two states where the question cannot be asked yet, as opposed to
+      // answered no: a view with no workspace identity has no project to scope
+      // to, and a fleet nobody has reported cannot be filtered. Both open the
+      // plain fleet and say nothing — an explanation naming a project would be
+      // describing a decision that was never taken.
       const runs = useFleetSnapshotStore.getState().snapshot?.runs;
       if (workspaceId === null || runs === undefined) {
         pilot.open();
         return;
       }
 
+      // Scoping is offered only where regrouping would say something new, and
+      // the project's own worktrees are the half of that the runs cannot answer
+      // (#11957). Read here rather than inside the gate because this is the one
+      // place the two identities are known to agree: `getWorktreeIdSet` is the
+      // CURRENT VIEW's store and `getViewWorkspaceId` is that view's workspace,
+      // so the count belongs to the project being asked about. A scratch is
+      // excluded outright — it is not a git repository, so no count of its
+      // worktrees can be anything but zero, whatever a store happens to hold.
       const projectRuns = runs.filter((run) => run.workspaceId === workspaceId);
-      if (!hasWorktreeAxis(projectRuns)) {
-        pilot.open();
+      const isScratch = isScratchWorkspaceId(workspaceId);
+      const knownWorktreeCount = isScratch ? 0 : (getWorktreeIdSet()?.size ?? 0);
+
+      // A project carries its own root as a first-class entry the moment its
+      // view store hydrates, so a zero there is "not told yet" rather than "no
+      // worktrees" — and a decision taken on an answer nobody gave has no
+      // business explaining itself. A scratch IS a real answer: it is not a git
+      // repository, so its none is a none.
+      const topologyIsKnown = isScratch || knownWorktreeCount > 0;
+
+      if (!hasWorktreeAxis(projectRuns, knownWorktreeCount)) {
+        // The unscoped fleet is the honest fallback — still the surface the
+        // user asked for, just without a narrowing it cannot support — but it
+        // is byte for byte what the unscoped chord already gives, so where the
+        // refusal is informed it goes through the fallback opening, which
+        // carries the reason with it.
+        if (topologyIsKnown) pilot.openFleetFallback(workspaceId);
+        else pilot.open();
         return;
       }
 
