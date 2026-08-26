@@ -66,6 +66,14 @@ export interface GeneratedElectronAPI {
       ...args: IpcInvokeMap["clipboard:write-text"]["args"]
     ): Promise<IpcInvokeMap["clipboard:write-text"]["result"]>;
   };
+  codex: {
+    listSubagents(
+      ...args: IpcInvokeMap["codex:list-subagents"]["args"]
+    ): Promise<IpcInvokeMap["codex:list-subagents"]["result"]>;
+    readSubagentTranscript(
+      ...args: IpcInvokeMap["codex:read-subagent-transcript"]["args"]
+    ): Promise<IpcInvokeMap["codex:read-subagent-transcript"]["result"]>;
+  };
   commands: {
     execute(
       ...args: IpcInvokeMap["commands:execute"]["args"]

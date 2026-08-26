@@ -498,6 +498,9 @@ export const CHANNELS = {
   GEMINI_GET_STATUS: "gemini:get-status",
   GEMINI_ENABLE_ALTERNATE_BUFFER: "gemini:enable-alternate-buffer",
 
+  CODEX_LIST_SUBAGENTS: "codex:list-subagents",
+  CODEX_READ_SUBAGENT_TRANSCRIPT: "codex:read-subagent-transcript",
+
   DEV_PREVIEW_ENSURE: "dev-preview:ensure",
   DEV_PREVIEW_RESTART: "dev-preview:restart",
   DEV_PREVIEW_RESTART_AND_CLEAR_CACHE: "dev-preview:restart-and-clear-cache",
