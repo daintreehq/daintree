@@ -276,4 +276,4 @@ export const WAIT_UNTIL_IDLE_BATCH_OUTPUT_SCHEMA: Record<string, unknown> = {
 };
 
 export const WAIT_UNTIL_IDLE_BATCH_DESCRIPTION =
-  "Block until the first of several agents stops working, or until all of them do; the fan-out primitive when agents finish at different speeds. Use this rather than waiting on each terminal in turn, or a status snapshot to poll without blocking. It can hold open for a minute interactively, far longer headless. Timing out means not met yet; a gone terminal settles too, so read `trackingState`.";
+  "Block until the first of several agents stops working, or until all do; the fan-out primitive when agents stop at different times. Prefer it to waiting on each terminal in turn; to poll without blocking, use a status snapshot. Timing out means the predicate is unmet, not failed; a gone terminal settles too (idleReason 'closed' when the user closed it), so read `trackingState`.";

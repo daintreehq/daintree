@@ -171,6 +171,14 @@ const run = (cmd, args) =>
   execFileSync(cmd, args, { stdio: "inherit", cwd: root, shell: process.platform === "win32" });
 
 run("npm", ["run", "build"]);
+// The assistant engine, before electron-builder reads `resources/assistant/`. A local
+// package is the build most likely to run against a moved submodule — it is what a
+// developer reaches for right after changing the engine — and `resources/assistant/` is
+// written only by an explicit build, so without this the app installs with the previous
+// engine. afterPack refuses that outright now, which turns a silent wrong-engine install
+// into a failed pack; building here is what keeps the command working rather than
+// failing. Both darwin arches: the mac config packs arm64, x64 and their universal merge.
+run("npm", ["run", "build:assistant", "--", "--platform", "darwin"]);
 run("npx", [
   "electron-builder",
   // electron-builder does not auto-detect the `.config.cjs` infix, so the full

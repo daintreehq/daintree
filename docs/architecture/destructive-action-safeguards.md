@@ -273,7 +273,6 @@ Direct `window.electron.*` IPC calls that skip `ActionService`. These are the hi
 | `src/components/Fleet/fleetEnterBroadcast.ts` | `fleet.broadcast` (Enter-broadcast → `executeFleetBroadcast` → `terminalClient.submit`) | **No (deliberate, #9722)** — confirm removed; arming the 2+ fleet is the opt-in, matching the always-unconfirmed raw-input path (`broadcastFleetRawInput`). Per-target overrides/skips still applied via the Enter-time snapshot |
 | `src/components/Settings/McpServerSettingsTab.tsx` | `mcpServer.setEnabled(false)` (server toggle) | **Yes** — `ConfirmDialog` naming each connected external client; fires only when `listActiveClients()` is non-empty, else disables immediately (#8779) |
 | `src/components/Settings/DaintreeAssistantSettingsTab.tsx` | `helpAssistant.setSettings({ daintreeControl: false })` (assistant toggle) | **No** — disabling Daintree control has no MCP stop side-effect, so no external clients are severed; D0, no confirm needed (#8779) |
-| `src/components/Settings/AssistantAccountSection.tsx` | `assistantAccount.logout` (assistant account sign-out) | **Yes** — `ConfirmDialog` with destructive variant, titled on the entity and stating the local-only consequence. D1: it destroys the credential on this machine and the inverse is a full browser sign-in, not one click. No typed-name gate — nothing server-side is revoked, so blast radius stops at this machine; revoking every device is the website's "Disconnect", not this button |
 
 ## Palette pre-warn layers
 

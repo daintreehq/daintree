@@ -77,7 +77,7 @@ CI on PRs: `check` + vitest (4 shards) + build + smoke, Ubuntu only, no E2E. `ci
 - `.daintree/recipes/*.json` are intentionally tracked. Never remove or gitignore them.
 - `.planning/` is gitignored and the pre-commit hook rejects it.
 - Skip issues labelled **`human-review`** (not solvable autonomously; 10-20x cost) and **`monitoring`** (blocked on an external event — checkable, not workable; sweep monthly via the `monitoring-sweep` skill).
-- The in-app assistant is a **separate repo**, `daintreehq/assistant`. Its host-embedding contract lives there in `DAINTREE_HOST.md`; a change to that contract belongs in both repos.
+- The in-app assistant is a **separate repo**, `daintreehq/assistant`, vendored as a git submodule at `vendor/daintree-assistant` — Go, not TypeScript, and it merges to `main`, not `develop`. Its host-embedding contract lives there in `DAINTREE_HOST.md`; a change to that contract belongs in both repos. Its slash-command surface is `internal/commands/registry.go`, and the native panel's palette is fed from it over the wire, so a command added there appears in the panel with no Daintree change. Editing it means a commit in the submodule **and** a pin bump here.
 - `AGENTS.md` and `GEMINI.md` point here. Update this file, not those.
 
 ## Product invariants

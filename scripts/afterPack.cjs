@@ -2,6 +2,10 @@ const path = require("path");
 const fs = require("fs");
 const { spawnSync } = require("child_process");
 const { getRawHeader } = require("@electron/asar");
+const { readEnginePin, describePackagedEngineProblem } = require("./assistantEnginePin.cjs");
+
+/** The repository root, from which the assistant submodule's pin is read. */
+const REPO_ROOT = path.resolve(__dirname, "..");
 
 // electron-builder passes `context.arch` as an integer from the `Arch` enum
 // in builder-util (ia32=0, x64=1, armv7l=2, arm64=3, universal=4).
@@ -584,7 +588,38 @@ function validateAssistantBinary(appOutDir, electronPlatformName, appName) {
     }
   }
 
-  console.log(`[afterPack] assistant engine verified: ${binPath} (${sizeMb.toFixed(1)}MB)`);
+  // Every check above passes on a PERFECTLY GOOD engine that is simply the wrong one.
+  // `resources/assistant/` is written only by an explicit `npm run build:assistant`, so
+  // moving the submodule and packaging ships the previous binary — right name, right
+  // arch, right size, right mode, previous engine's bugs, and nothing anywhere says so.
+  // Matching its embedded version against the checked-out gitlink is the only check that
+  // can tell those apart, and it is made HERE because afterPack is the one hook every
+  // packaging path — the `package:*` scripts, `package-local-dmg.mjs`, and all three
+  // release workflows — already runs.
+  const pin = readEnginePin({ root: REPO_ROOT, spawnSync });
+  // Only when there is something to read. A pin that could not be resolved, or a dirty
+  // submodule, is decided without the binary — and reading 15MB to be told so is waste.
+  let bytes = Buffer.alloc(0);
+  if (!pin.problem && !pin.dirty) {
+    try {
+      bytes = fs.readFileSync(binPath);
+    } catch (error) {
+      // Named, because a bare ENOENT or EACCES from inside electron-builder's hook says
+      // nothing about which of the dozen checks here was reading, or why.
+      throw new Error(
+        `[afterPack] could not read the packaged assistant engine at ${binPath} to check ` +
+          `it against the pinned commit (${pin.version}): ${error.message}`
+      );
+    }
+  }
+  const problem = describePackagedEngineProblem({ pin, buffer: bytes });
+  if (problem) {
+    throw new Error(`[afterPack] ${problem}`);
+  }
+
+  console.log(
+    `[afterPack] assistant engine verified: ${binPath} (${sizeMb.toFixed(1)}MB, ${pin.version})`
+  );
 }
 
 /**
