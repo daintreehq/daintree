@@ -11,6 +11,13 @@ import type {
 } from "@shared/types/commands";
 import { ChevronLeft, ChevronRight, AlertCircle, CheckCircle } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
+import {
+  FIELD_FOCUS,
+  FIELD_INPUT,
+  FIELD_SURFACE,
+  FormGrid,
+  FormRow,
+} from "@/components/Worktree/views";
 
 interface CommandBuilderProps {
   command: CommandManifestEntry;
@@ -76,6 +83,42 @@ function validateField(field: BuilderField, value: unknown): string | null {
   return null;
 }
 
+// Command labels come from a manifest we don't author, so the rail can't rely on
+// them staying short: cap the cell rather than let one field's label set the
+// column width for the whole step.
+const BUILDER_LABEL = "max-w-48 break-words";
+
+// A plain function, not a component: `FormRow` skips its hint row on a falsy
+// hint, and an element is truthy even when it renders nothing.
+function builderFieldHint({
+  error,
+  helpText,
+  errorId,
+  helpId,
+}: {
+  error?: string;
+  helpText?: string;
+  errorId: string;
+  helpId: string;
+}): React.ReactNode {
+  if (error) {
+    return (
+      <p id={errorId} className="text-xs text-status-error flex items-center gap-1" role="alert">
+        <AlertCircle className="h-3 w-3" aria-hidden="true" />
+        {error}
+      </p>
+    );
+  }
+  if (helpText) {
+    return (
+      <p id={helpId} className="text-xs text-text-muted">
+        {helpText}
+      </p>
+    );
+  }
+  return null;
+}
+
 function BuilderTextField({
   field,
   value,
@@ -93,10 +136,12 @@ function BuilderTextField({
   const helpId = `${inputId}-help`;
 
   return (
-    <div className="space-y-1.5">
-      <label htmlFor={inputId} className="block text-sm font-medium text-daintree-text">
-        {field.label}
-      </label>
+    <FormRow
+      label={field.label}
+      htmlFor={inputId}
+      labelClassName={BUILDER_LABEL}
+      hint={builderFieldHint({ error, helpText: field.helpText, errorId, helpId })}
+    >
       <input
         ref={inputRef}
         id={inputId}
@@ -106,27 +151,9 @@ function BuilderTextField({
         placeholder={field.placeholder}
         aria-describedby={error ? errorId : field.helpText ? helpId : undefined}
         aria-invalid={error ? "true" : undefined}
-        className={cn(
-          "w-full px-3 py-2 text-sm rounded-[var(--radius-md)]",
-          "bg-daintree-bg border text-daintree-text placeholder:text-text-placeholder",
-          "focus:outline-hidden focus:ring-1",
-          error
-            ? "border-status-error focus:border-status-error focus:ring-status-error"
-            : "border-daintree-border focus:border-daintree-accent/40 focus:ring-daintree-accent/30"
-        )}
+        className={cn(FIELD_INPUT, error && "border-status-error")}
       />
-      {field.helpText && !error && (
-        <p id={helpId} className="text-xs text-daintree-text/50">
-          {field.helpText}
-        </p>
-      )}
-      {error && (
-        <p id={errorId} className="text-xs text-status-error flex items-center gap-1" role="alert">
-          <AlertCircle className="h-3 w-3" />
-          {error}
-        </p>
-      )}
-    </div>
+    </FormRow>
   );
 }
 
@@ -146,10 +173,14 @@ function BuilderTextareaField({
   const helpId = `${inputId}-help`;
 
   return (
-    <div className="space-y-1.5">
-      <label htmlFor={inputId} className="block text-sm font-medium text-daintree-text">
-        {field.label}
-      </label>
+    <FormRow
+      label={field.label}
+      htmlFor={inputId}
+      // The grid centres every cell; a four-row textarea would leave its label
+      // floating halfway down the box.
+      labelClassName={cn(BUILDER_LABEL, "self-start pt-2")}
+      hint={builderFieldHint({ error, helpText: field.helpText, errorId, helpId })}
+    >
       <textarea
         id={inputId}
         value={value}
@@ -159,26 +190,14 @@ function BuilderTextareaField({
         aria-describedby={error ? errorId : field.helpText ? helpId : undefined}
         aria-invalid={error ? "true" : undefined}
         className={cn(
-          "w-full px-3 py-2 text-sm rounded-[var(--radius-md)] resize-y min-h-[100px]",
-          "bg-daintree-bg border text-daintree-text placeholder:text-text-placeholder",
-          "focus:outline-hidden focus:ring-1",
-          error
-            ? "border-status-error focus:border-status-error focus:ring-status-error"
-            : "border-daintree-border focus:border-daintree-accent/40 focus:ring-daintree-accent/30"
+          FIELD_SURFACE,
+          FIELD_FOCUS,
+          "w-full px-2.5 py-2 text-sm resize-y min-h-[100px]",
+          "text-daintree-text placeholder:text-text-placeholder",
+          error && "border-status-error"
         )}
       />
-      {field.helpText && !error && (
-        <p id={helpId} className="text-xs text-daintree-text/50">
-          {field.helpText}
-        </p>
-      )}
-      {error && (
-        <p id={errorId} className="text-xs text-status-error flex items-center gap-1" role="alert">
-          <AlertCircle className="h-3 w-3" />
-          {error}
-        </p>
-      )}
-    </div>
+    </FormRow>
   );
 }
 
@@ -198,24 +217,19 @@ function BuilderSelectField({
   const helpId = `${inputId}-help`;
 
   return (
-    <div className="space-y-1.5">
-      <label htmlFor={inputId} className="block text-sm font-medium text-daintree-text">
-        {field.label}
-      </label>
+    <FormRow
+      label={field.label}
+      htmlFor={inputId}
+      labelClassName={BUILDER_LABEL}
+      hint={builderFieldHint({ error, helpText: field.helpText, errorId, helpId })}
+    >
       <select
         id={inputId}
         value={value}
         onChange={(e) => onChange(e.target.value)}
         aria-describedby={error ? errorId : field.helpText ? helpId : undefined}
         aria-invalid={error ? "true" : undefined}
-        className={cn(
-          "w-full px-3 py-2 text-sm rounded-[var(--radius-md)]",
-          "bg-daintree-bg border text-daintree-text",
-          "focus:outline-hidden focus:ring-1",
-          error
-            ? "border-status-error focus:border-status-error focus:ring-status-error"
-            : "border-daintree-border focus:border-daintree-accent/40 focus:ring-daintree-accent/30"
-        )}
+        className={cn(FIELD_INPUT, "pr-8", error && "border-status-error")}
       >
         <option value="">{field.placeholder ?? "Select an option..."}</option>
         {field.options?.map((opt) => (
@@ -224,18 +238,7 @@ function BuilderSelectField({
           </option>
         ))}
       </select>
-      {field.helpText && !error && (
-        <p id={helpId} className="text-xs text-daintree-text/50">
-          {field.helpText}
-        </p>
-      )}
-      {error && (
-        <p id={errorId} className="text-xs text-status-error flex items-center gap-1" role="alert">
-          <AlertCircle className="h-3 w-3" />
-          {error}
-        </p>
-      )}
-    </div>
+    </FormRow>
   );
 }
 
@@ -248,25 +251,35 @@ function BuilderCheckboxField({
   value: boolean;
   onChange: (value: boolean) => void;
 }) {
+  const inputId = `field-${field.name}`;
+  const helpId = `${inputId}-help`;
+
   return (
-    <div className="space-y-1.5">
-      <label className="flex items-center gap-3 cursor-pointer group">
-        <input
-          type="checkbox"
-          checked={value}
-          onChange={(e) => onChange(e.target.checked)}
-          className={cn(
-            "h-4 w-4 rounded border-daintree-border bg-daintree-bg",
-            "text-daintree-accent focus:ring-daintree-accent/30 focus:ring-offset-0",
-            "cursor-pointer"
-          )}
-        />
-        <span className="text-sm font-medium text-daintree-text group-hover:text-daintree-text/90">
-          {field.label}
-        </span>
-      </label>
-      {field.helpText && <p className="text-xs text-daintree-text/50 ml-7">{field.helpText}</p>}
-    </div>
+    <FormRow
+      label={field.label}
+      htmlFor={inputId}
+      labelClassName={BUILDER_LABEL}
+      hint={
+        field.helpText && (
+          <p id={helpId} className="text-xs text-text-muted">
+            {field.helpText}
+          </p>
+        )
+      }
+    >
+      <input
+        id={inputId}
+        type="checkbox"
+        checked={value}
+        onChange={(e) => onChange(e.target.checked)}
+        aria-describedby={field.helpText ? helpId : undefined}
+        className={cn(
+          "h-4 w-4 rounded border-daintree-border bg-daintree-bg",
+          "text-daintree-accent focus:ring-daintree-accent/30 focus:ring-offset-0",
+          "cursor-pointer"
+        )}
+      />
+    </FormRow>
   );
 }
 
@@ -480,7 +493,7 @@ export function CommandBuilder({
                   <p className="text-sm text-daintree-text/70">{currentStep.description}</p>
                 )}
 
-                <div className="space-y-4">
+                <FormGrid>
                   {currentStep.fields.map((field) => (
                     <BuilderFieldRenderer
                       key={field.name}
@@ -490,7 +503,7 @@ export function CommandBuilder({
                       onChange={(value) => handleFieldChange(field.name, value, field)}
                     />
                   ))}
-                </div>
+                </FormGrid>
               </>
             )}
 

@@ -112,7 +112,9 @@ describe("ResourceEnvironmentsSection", () => {
       />
     );
 
-    const selector = screen.getByLabelText("Select environment");
+    // The rail's visible label is "Environment", so the select's own name has to
+    // match it rather than read "Select environment" (WCAG 2.5.3).
+    const selector = screen.getByLabelText("Environment");
     expect(selector).toBeTruthy();
 
     const options = selector.querySelectorAll("option");
