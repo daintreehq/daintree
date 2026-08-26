@@ -493,6 +493,26 @@ function PilotFooter({
   );
 }
 
+/**
+ * The run `parkTargetId` names, resolved against the live fleet.
+ *
+ * A plain function rather than a `useMemo` in the component: the compiler could
+ * not preserve the manual memo here and skipped optimizing `PilotView` whole,
+ * so one hand-written cache was costing the entire component its automatic
+ * ones. Called bare, the compiler caches the result itself.
+ */
+function findParkTarget(
+  liveGroups: PilotProjectGroup[],
+  parkTargetId: string | null
+): PilotParkTarget | null {
+  if (parkTargetId === null) return null;
+  for (const group of liveGroups) {
+    const row = group.rows.find((r) => r.run.runId === parkTargetId);
+    if (row) return { row, group, existingPark: row.run.park };
+  }
+  return null;
+}
+
 export function PilotView() {
   const isOpen = usePilotStore((s) => s.isOpen);
   const close = usePilotStore((s) => s.close);
@@ -690,14 +710,7 @@ export function PilotView() {
    */
   const [parkTargetId, setParkTargetId] = useState<string | null>(null);
 
-  const parkTarget = useMemo<PilotParkTarget | null>(() => {
-    if (parkTargetId === null) return null;
-    for (const group of liveGroups) {
-      const row = group.rows.find((r) => r.run.runId === parkTargetId);
-      if (row) return { row, group, existingPark: row.run.park };
-    }
-    return null;
-  }, [parkTargetId, liveGroups]);
+  const parkTarget = findParkTarget(liveGroups, parkTargetId);
 
   const gateCandidates = useMemo<PilotGateCandidate[]>(() => {
     if (parkTargetId === null) return [];
