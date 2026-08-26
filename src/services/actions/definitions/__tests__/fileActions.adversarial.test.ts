@@ -97,6 +97,75 @@ describe("fileActions adversarial", () => {
     await expect(run("file.view", { path: "/a/b.ts" })).rejects.toThrow();
   });
 
+  it("file.view binds the panel to the active worktree when none is named", async () => {
+    const run = setupActions();
+    await run("file.view", { path: "/a/b.ts" });
+
+    expect(openPanelDialogMock).toHaveBeenCalledWith(
+      expect.objectContaining({ worktreeId: "wt-1" })
+    );
+  });
+
+  it("file.view lets an explicit worktreeId beat the active worktree", async () => {
+    const run = setupActions();
+    await run("file.view", { path: "/other/b.ts", worktreeId: "wt-other" });
+
+    // `wt-1` is what `getActiveWorktreeId` reports, so a stamped `wt-1` here
+    // would be the bug: it decides the pane's read root and, on promotion,
+    // which worktree bucket the panel lands in.
+    expect(openPanelDialogMock).toHaveBeenCalledWith(
+      expect.objectContaining({ worktreeId: "wt-other" })
+    );
+  });
+
+  it("file.view omits fileViewMode when no view mode was requested", async () => {
+    const run = setupActions();
+    await run("file.view", { path: "/a/notes.md" });
+
+    const options = openPanelDialogMock.mock.calls[0]![0] as Record<string, unknown>;
+    expect(options).not.toHaveProperty("fileViewMode");
+  });
+
+  it("file.view passes a rendered request through for markdown", async () => {
+    const run = setupActions();
+    await run("file.view", { path: "/a/notes.md", viewMode: "rendered" });
+
+    expect(openPanelDialogMock).toHaveBeenCalledWith(
+      expect.objectContaining({ fileViewMode: "rendered" })
+    );
+  });
+
+  it("file.view clamps a rendered request on a non-renderable file to source", async () => {
+    const run = setupActions();
+    await run("file.view", { path: "/a/styles.css", viewMode: "rendered" });
+
+    expect(openPanelDialogMock).toHaveBeenCalledWith(
+      expect.objectContaining({ fileViewMode: "source" })
+    );
+  });
+
+  it("file.view opens a worktree plan file rendered, rooted on that worktree (#11942)", async () => {
+    const run = setupActions();
+    // The shape a worktree card dispatches: `planFilePath` is a bare candidate
+    // filename, joined against the card's own worktree rather than the project.
+    await run("file.view", {
+      path: "TODO.md",
+      rootPath: "/repo/worktrees/feature",
+      worktreeId: "wt-feature",
+      viewMode: "rendered",
+    });
+
+    expect(openPanelDialogMock).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "file",
+        filePath: "/repo/worktrees/feature/TODO.md",
+        worktreeId: "wt-feature",
+        fileViewMode: "rendered",
+        title: "TODO.md",
+      })
+    );
+  });
+
   it("file.openInEditor forwards projectId from current project", async () => {
     const run = setupActions();
     await run("file.openInEditor", { path: "/a/b.ts", line: 5 });

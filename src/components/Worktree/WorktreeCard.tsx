@@ -502,9 +502,28 @@ export function WorktreeCard({
   };
 
   const [showIssuePicker, setShowIssuePicker] = useState(false);
-  const [showPlanViewer, setShowPlanViewer] = useState(false);
 
-  const onClosePlanViewer = () => setShowPlanViewer(false);
+  // The plan file opens through the generic file viewer, like any other file:
+  // rendered Markdown by default, source a click away, and the full toolbar
+  // (reveal, copy, Open as panel) the bespoke plan dialog never had (#11942).
+  // `planFilePath` is a bare candidate filename (`TODO.md` and friends), so
+  // `worktree.path` is the root it resolves against.
+  //
+  // The explicit `worktreeId` is what keeps an inactive card honest: without it
+  // `file.view` stamps the *active* worktree, and that is what decides the
+  // panel's read root and which bucket a promotion lands in.
+  const planFilePath = worktree.planFilePath;
+  const openPlanFileForThisWorktree =
+    worktree.hasPlanFile && planFilePath
+      ? () => {
+          void actionService.dispatch("file.view", {
+            path: planFilePath,
+            rootPath: worktree.path,
+            worktreeId: worktree.id,
+            viewMode: "rendered",
+          });
+        }
+      : undefined;
 
   // Every Review Hub entry point (banner button, menu, header, terminal
   // section) dispatches the action, which presents the review panel as a
@@ -761,7 +780,7 @@ export function WorktreeCard({
     onOpenIssueExternal: worktree.issueNumber ? handleOpenIssueExternal : undefined,
     onOpenPRExternal: worktree.linked?.pr?.url ? handleOpenPRExternal : undefined,
     onAttachIssue: () => setShowIssuePicker(true),
-    onViewPlan: () => setShowPlanViewer(true),
+    onViewPlan: openPlanFileForThisWorktree,
     // Gated on the change list, not `hasChanges` (a `changedFileCount` read):
     // an external git provider may report a count with no per-file entries, and
     // the action has nothing to open then. Same guard the Changed Files header
@@ -1055,7 +1074,7 @@ export function WorktreeCard({
                 badges={{
                   onOpenIssue: worktree.issueNumber ? handleOpenIssueExternal : undefined,
                   onOpenPR: worktree.linked?.pr ? handleOpenPRExternal : undefined,
-                  onOpenPlan: worktree.hasPlanFile ? () => setShowPlanViewer(true) : undefined,
+                  onOpenPlan: openPlanFileForThisWorktree,
                 }}
                 gitStateIndicator={gitStateIndicator}
                 menu={menuActions}
@@ -1150,8 +1169,6 @@ export function WorktreeCard({
                 onCloseIssuePicker={() => setShowIssuePicker(false)}
                 onAttachIssue={handleAttachIssue}
                 onDetachIssue={handleDetachIssue}
-                showPlanViewer={showPlanViewer}
-                onClosePlanViewer={onClosePlanViewer}
               />
             </div>
           </div>

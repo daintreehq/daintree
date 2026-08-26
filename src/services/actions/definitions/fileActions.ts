@@ -4,7 +4,7 @@ import { filesClient } from "@/clients/filesClient";
 import { useProjectStore } from "@/store";
 import { usePanelStore } from "@/store/panelStore";
 import { usePanelDialogStore } from "@/store/panelDialogStore";
-import { isFilePanel } from "@shared/types/panel";
+import { isFilePanel, type FileViewMode } from "@shared/types/panel";
 import { isMarkdownFilePath } from "@/components/Markdown/isMarkdownFile";
 import { isHtmlFilePath } from "@/components/Html/isHtmlFile";
 import { isAbsolute, isPathInside, join, normalize, toWorktreeRelative } from "@shared/utils/path";
@@ -22,6 +22,14 @@ const viewArgsSchema = z.object({
     .describe(
       "Repository root that a relative path is resolved against — use a worktree root from the worktree-listing capability."
     ),
+  worktreeId: z
+    .string()
+    .optional()
+    .describe("Worktree the panel belongs to; defaults to the active one."),
+  viewMode: z
+    .enum(["rendered", "source"])
+    .optional()
+    .describe('Initial view mode; defaults to "source". "rendered" applies to Markdown and HTML.'),
   line: z.number().int().positive().optional().describe("1-based line to scroll to."),
   col: z.number().int().positive().optional().describe("1-based column to scroll to."),
 });
@@ -94,6 +102,19 @@ const showItemInFolderArgsSchema = z.object({
   allowOutsideRoots: z.boolean().default(false),
 });
 
+/**
+ * "rendered" applies only to Markdown and HTML — clamp so a stray request can't
+ * persist a mode the panel can never display. Shared by the dialog and grid
+ * openers so both answer the same way for the same path.
+ */
+function resolveFileViewMode(
+  absolutePath: string,
+  viewMode: FileViewMode | undefined
+): FileViewMode | undefined {
+  if (viewMode !== "rendered") return viewMode;
+  return isMarkdownFilePath(absolutePath) || isHtmlFilePath(absolutePath) ? viewMode : "source";
+}
+
 function resolveFilePanelPath(path: string, rootPath: string | undefined): string {
   if (isAbsolute(path)) return normalize(path);
   const root = rootPath ?? useProjectStore.getState().currentProject?.path;
@@ -125,10 +146,11 @@ export function registerFileActions(actions: ActionRegistry, callbacks: ActionCa
       },
     ],
     run: async (args: unknown) => {
-      const { path, rootPath, line } = viewArgsSchema.parse(args);
+      const { path, rootPath, worktreeId, viewMode, line } = viewArgsSchema.parse(args);
       // Resolve before creating the record, matching file.openPanel: the panel
       // stores an absolute path and has no root to resolve against later.
       const absolutePath = resolveFilePanelPath(path, rootPath);
+      const effectiveViewMode = resolveFileViewMode(absolutePath, viewMode);
       // Title the panel with the file name so the dialog header names the file.
       // FilePane derives the same name for its own panel header, but the dialog
       // header reads the stored title through the kind-agnostic host.
@@ -136,8 +158,13 @@ export function registerFileActions(actions: ActionRegistry, callbacks: ActionCa
       const panelId = await usePanelDialogStore.getState().openPanelDialog({
         kind: "file",
         filePath: absolutePath,
-        worktreeId: callbacks.getActiveWorktreeId(),
+        // An explicit id wins over the active worktree: a caller opening a file
+        // for a specific worktree (a sidebar card that isn't the selected one)
+        // would otherwise stamp the panel with a worktree the file isn't in,
+        // which is what decides its read root and where a promotion lands.
+        worktreeId: worktreeId ?? callbacks.getActiveWorktreeId(),
         ...(fileName && { title: fileName }),
+        ...(effectiveViewMode && { fileViewMode: effectiveViewMode }),
         ...(line != null && { initialLine: line }),
       });
       if (!panelId) {
@@ -223,14 +250,7 @@ export function registerFileActions(actions: ActionRegistry, callbacks: ActionCa
     run: async (args: unknown, ctx?: ActionContext) => {
       const { path, rootPath, viewMode } = openPanelArgsSchema.parse(args);
       const absolutePath = resolveFilePanelPath(path, rootPath);
-      // "rendered" applies only to Markdown and HTML — clamp so a stray request
-      // can't persist a mode the panel can never display.
-      const effectiveViewMode =
-        viewMode === "rendered" &&
-        !isMarkdownFilePath(absolutePath) &&
-        !isHtmlFilePath(absolutePath)
-          ? "source"
-          : viewMode;
+      const effectiveViewMode = resolveFileViewMode(absolutePath, viewMode);
 
       const store = usePanelStore.getState();
       const existing = store.panelIds
