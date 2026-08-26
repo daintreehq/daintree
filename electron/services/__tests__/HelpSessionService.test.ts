@@ -571,17 +571,14 @@ describe("HelpSessionService", () => {
     expect(service.getBypassPermissions(result.token)).toBe(false);
   });
 
-  it("getDebugLogging returns the snapshot taken at provision time", async () => {
-    mockStoreGet.mockReturnValue({ tier: "action", debugLogging: true });
-
+  it("getDebugLogging is bound to the token, and released when the session is revoked", async () => {
     const result = await service.provisionSession(provisionInput());
     if (!result) throw new Error("expected result");
 
-    // Mutate the store after provisioning: the accessor must return the
-    // value captured at provision time, not re-read the live store.
-    mockStoreGet.mockReturnValue({ tier: "action", debugLogging: false });
-
-    expect(service.getDebugLogging(result.token)).toBe(true);
+    // Not asserted against a literal: the value is deliberately build-dependent (on in
+    // development, off when packaged), so a literal here would just restate
+    // `helpAssistantDefaults.ts` and would have to be edited in lockstep with it.
+    expect(service.getDebugLogging(result.token)).toBe(defaultDebugLogging());
     expect(service.getDebugLogging("not-a-token")).toBe(false);
     expect(service.getDebugLogging("")).toBe(false);
 
@@ -589,21 +586,18 @@ describe("HelpSessionService", () => {
     expect(service.getDebugLogging(result.token)).toBe(false);
   });
 
-  it("an untouched setting follows the build default, and a stored one overrides it", async () => {
-    // Not asserted against a literal: the default is deliberately build-dependent (on
-    // in development, off when packaged), so a literal here would just restate
-    // `helpAssistantDefaults.ts` and would have to be edited in lockstep with it. What
-    // matters is that an ABSENT preference defers to that default and a PRESENT one
-    // wins over it — including when the stored value agrees with neither.
-    const untouched = await service.provisionSession(provisionInput());
-    if (!untouched) throw new Error("expected result");
-    expect(service.getDebugLogging(untouched.token)).toBe(defaultDebugLogging());
-
-    for (const stored of [true, false]) {
-      mockStoreGet.mockReturnValue({ tier: "action", debugLogging: stored });
+  it("ignores a stored debugLogging preference, in both directions", async () => {
+    // There is no such setting any more. The engine's own settings left Daintree with
+    // the account and the endpoint, and a trace switch only one of three assistant
+    // backends ever read went with them — so a value left behind in an older install's
+    // settings file must not quietly go on steering what the engine is told. Asserted in
+    // BOTH directions because only one of them can agree with the build default, and a
+    // test that checked the agreeing one would pass whether the value was read or not.
+    for (const stale of [true, false]) {
+      mockStoreGet.mockReturnValue({ tier: "action", debugLogging: stale });
       const result = await service.provisionSession(provisionInput());
       if (!result) throw new Error("expected result");
-      expect(service.getDebugLogging(result.token)).toBe(stored);
+      expect(service.getDebugLogging(result.token)).toBe(defaultDebugLogging());
     }
   });
 

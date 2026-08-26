@@ -5,7 +5,6 @@ export { terminalConfigClient } from "./terminalConfigClient";
 export { cliAvailabilityClient } from "./cliAvailabilityClient";
 export { appClient } from "./appClient";
 export { artifactClient } from "./artifactClient";
-export { assistantAccountClient } from "./assistantAccountClient";
 export { copyTreeClient } from "./copyTreeClient";
 export { errorsClient } from "./errorsClient";
 export { eventInspectorClient } from "./eventInspectorClient";

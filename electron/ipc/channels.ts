@@ -782,7 +782,6 @@ export const CHANNELS = {
   ASSISTANT_HOST_START: "assistant-host:start",
   ASSISTANT_HOST_SEND: "assistant-host:send",
   ASSISTANT_HOST_STOP: "assistant-host:stop",
-  ASSISTANT_HOST_DIAGNOSTICS: "assistant-host:diagnostics",
   /** One validated protocol event from the engine. */
   ASSISTANT_HOST_EVENT: "assistant-host:event",
   /**
@@ -819,21 +818,6 @@ export const CHANNELS = {
   VOICE_INPUT_FLUSH_PARAGRAPH: "voice-input:flush-paragraph",
   VOICE_INPUT_PARAGRAPH_BOUNDARY: "voice-input:paragraph-boundary",
   VOICE_INPUT_FILE_TOKEN_RESOLVED: "voice-input:file-token-resolved",
-
-  /**
-   * Daintree Assistant ACCOUNT. Commands go renderer -> main; login progress comes back
-   * on the push channel below.
-   *
-   * The push is a TARGETED send to the WebContents that started the sign-in, never a
-   * broadcast: an account is personal, and another project's window has no business
-   * seeing whose it is (#7003).
-   */
-  ASSISTANT_ACCOUNT_GET_STATUS: "assistant-account:get-status",
-  ASSISTANT_ACCOUNT_LOGIN: "assistant-account:login",
-  ASSISTANT_ACCOUNT_CANCEL_LOGIN: "assistant-account:cancel-login",
-  ASSISTANT_ACCOUNT_LOGOUT: "assistant-account:logout",
-  /** One validated progress event from an in-flight sign-in. */
-  ASSISTANT_ACCOUNT_LOGIN_PROGRESS: "assistant-account:login-progress",
 
   // Help assistant settings channels
   HELP_ASSISTANT_GET_SETTINGS: "help-assistant:get-settings",

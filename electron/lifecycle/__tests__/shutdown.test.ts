@@ -59,13 +59,6 @@ vi.mock("../../services/assistant-host/AssistantHostService.js", () => ({
   assistantHostService: assistantHostMock,
 }));
 
-const assistantAccountMock = vi.hoisted(() => ({
-  shutdown: vi.fn<() => Promise<void>>(),
-}));
-vi.mock("../../services/assistant-account/AssistantAccountService.js", () => ({
-  assistantAccountService: assistantAccountMock,
-}));
-
 const crashLoopGuardMock = vi.hoisted(() => ({
   markCleanExit: vi.fn(),
 }));
@@ -337,8 +330,6 @@ describe("registerShutdownHandler", () => {
     serviceRefsMock.setInitialState({});
     assistantHostMock.shutdown.mockReset();
     assistantHostMock.shutdown.mockResolvedValue(undefined);
-    assistantAccountMock.shutdown.mockReset();
-    assistantAccountMock.shutdown.mockResolvedValue(undefined);
   });
 
   async function setup(overrides?: Partial<ShutdownDeps>) {
@@ -367,7 +358,7 @@ describe("registerShutdownHandler", () => {
       appMock.exit.mockReset();
     });
 
-    it("tears down the engines and any sign-in on quit", async () => {
+    it("tears down the engines on quit", async () => {
       const { beforeQuitCb } = await setup();
       await beforeQuitCb(makeEvent());
 
@@ -375,7 +366,6 @@ describe("registerShutdownHandler", () => {
       // once the chain has finished — hence the wait, as in the telemetry tests below.
       await vi.waitFor(() => {
         expect(assistantHostMock.shutdown).toHaveBeenCalled();
-        expect(assistantAccountMock.shutdown).toHaveBeenCalled();
       });
       // Drain this test's chain so its exit cannot land inside the next one.
       await vi.waitFor(() => {

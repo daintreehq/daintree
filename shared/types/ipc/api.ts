@@ -1,4 +1,3 @@
-import type { AssistantBackendEnvironment } from "../../config/assistantBackend.js";
 import type { PushProgressEvent } from "./gitPush.js";
 import type { IdArrayFieldEdit } from "../../utils/layoutMerge.js";
 import type { GitStatus, StagingStatus } from "../git.js";
@@ -1929,36 +1928,6 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     ): () => void;
   };
   /**
-   * The Daintree Assistant account.
-   *
-   * Daintree implements no part of sign-in — the CLI owns the credential and this is a
-   * control surface over it. Nothing below can carry a token: the CLI reports state
-   * only, and the authorization URL never enters its event stream.
-   */
-  assistantAccount: {
-    /**
-     * Read the account state. Never mutates anything.
-     *
-     * Pass `{ refresh: true }` to make the CLI re-verify against the backend rather than
-     * answer from disk — needed after a checkout, where the cached answer is stale by
-     * construction.
-     */
-    getStatus(
-      options?: import("./assistantAccount.js").AssistantAccountStatusOptions
-    ): Promise<import("./assistantAccount.js").AssistantAccountStatusResult>;
-    /** Start an interactive sign-in. One at a time, pinned to this window. */
-    login(): Promise<import("./assistantAccount.js").AssistantAccountLoginResult>;
-    /** Cancel a sign-in THIS window started. */
-    cancelLogin(): Promise<{ cancelled: boolean }>;
-    /** Sign out on this machine. */
-    logout(): Promise<{ signedOut: boolean; message?: string }>;
-    /** Progress from an in-flight sign-in, targeted at this view. */
-    onLoginProgress(
-      callback: (event: import("./assistantAccount.js").AssistantAccountLoginProgress) => void
-    ): () => void;
-  };
-
-  /**
    * The native assistant engine (protocol v3). Invoke methods start/stop a session
    * and send commands; the event stream arrives on the subscriptions below, each a
    * targeted push to this view.
@@ -1971,12 +1940,6 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       command: import("./assistantHost.js").AssistantHostCommand
     ): Promise<{ delivered: boolean }>;
     stop(sessionId: string): Promise<{ stopped: boolean }>;
-    /**
-     * A safe readout of what the assistant is actually configured to do — the resolved
-     * endpoint, the engine build, the protocol version, and what that endpoint says it
-     * is. No field in the answer can carry a token.
-     */
-    diagnostics(): Promise<import("./assistantHostIpc.js").AssistantDiagnostics>;
     /** One validated protocol event from the engine. */
     onEvent(callback: (event: import("./assistantHost.js").AssistantHostEvent) => void): () => void;
     /**
@@ -2541,23 +2504,6 @@ export interface HelpAssistantSettings {
    * Memory Saver tiers).
    */
   idleHibernateMinutes: HelpAssistantIdleHibernateMinutes;
-  /**
-   * Enable the Daintree Assistant's own full-fidelity debug log for new
-   * sessions, by setting `DAINTREE_ASSISTANT_DEBUG_LOG=1` in the spawn env.
-   * Only the `daintree-assistant` backend reads this var (per-session trace to
-   * `~/.daintree/logs`); it is a no-op for other assistant agents. Defaults to false.
-   */
-  debugLogging: boolean;
-  /**
-   * Which backend the assistant talks to — both for turns and for sign-in.
-   *
-   * ONE setting for both on purpose. The engine and the `auth` commands are separate
-   * processes, and when they resolved the endpoint separately it was possible to be
-   * signed in to one backend while every turn went to another, with nothing reporting
-   * the mismatch. Defaults to `"local"`: the panel is pre-release, and a remote
-   * backend costs money, so it is opted into rather than arrived at.
-   */
-  backendEnvironment: AssistantBackendEnvironment;
 }
 
 /**

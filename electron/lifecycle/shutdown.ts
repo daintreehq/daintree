@@ -505,14 +505,6 @@ async function runShutdownChain(deps: ShutdownDeps): Promise<ShutdownOutcome> {
           .catch((err) => {
             console.warn("[MAIN] assistant host shutdown failed:", err);
           }),
-        // Reap a sign-in subprocess still waiting on its browser callback. It holds the
-        // CLI's one fixed callback port, and it would sit there for its full five-minute
-        // timeout after the app it belonged to is gone.
-        import("../services/assistant-account/AssistantAccountService.js")
-          .then(({ assistantAccountService }) => assistantAccountService.shutdown())
-          .catch((err) => {
-            console.warn("[MAIN] assistant account shutdown failed:", err);
-          }),
         // Tear down every supervised plugin MCP subprocess (#9233). Same
         // lazy-import guard — if no plugin ever activated an MCP server, the
         // supervisor module never loaded and there is nothing to stop.

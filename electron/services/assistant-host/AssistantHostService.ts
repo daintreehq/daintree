@@ -3,7 +3,6 @@ import path from "node:path";
 import { randomBytes } from "node:crypto";
 import { AssistantHostProcess } from "./AssistantHostProcess.js";
 import { resolveAssistantBinary } from "./resolveAssistantBinary.js";
-import { resolveBackendUrl } from "./resolveBackendUrl.js";
 import { assistantPlatformSupport } from "../../../shared/config/assistantPlatform.js";
 import { assistantChildEnv } from "./assistantChildEnv.js";
 import { getHelpAssistantSettings } from "../../ipc/handlers/helpAssistant.js";
@@ -309,17 +308,18 @@ export class AssistantHostService {
         protocolVersion: ASSISTANT_HOST_PROTOCOL_VERSION,
       },
       env: {
-        // Inherited MINUS the control variables — see `assistantChildEnv`, which the
-        // account commands spawn through too so the two cannot diverge.
+        // Inherited MINUS the control variables — see `assistantChildEnv`.
+        //
+        // `DAINTREE_BACKEND_URL` is deliberately NOT among what we set. Daintree used to
+        // pin the endpoint here from a Settings picker, and the engine reads that
+        // variable as a pin by a host: it outranks the stored choice at every launch and
+        // makes the endpoint unswitchable from inside the session (`ErrBackendPinned`),
+        // so `/backend` could report a switch it was never allowed to make. The endpoint
+        // belongs to the engine, which remembers its own choice across restarts and can
+        // explain it — the picker, and the account that had to agree with it, went the
+        // same way. The variable is still STRIPPED from what is inherited, which is the
+        // half that was ever load-bearing.
         ...assistantChildEnv(),
-        // The environment the USER chose, in Settings. Read at spawn time rather than
-        // captured once, so switching it takes effect on the next session without a
-        // restart — and read here in main, next to the spawn, because the renderer must
-        // never be the thing that says where prompts go.
-        DAINTREE_BACKEND_URL: resolveBackendUrl(
-          process.env.DAINTREE_BACKEND_URL,
-          getHelpAssistantSettings().backendEnvironment
-        ),
         // Nothing from the renderer reaches here, deliberately: a renderer-supplied
         // bag would let a compromised view repoint the engine or hand itself standing
         // approval. Secrets are provisioned in main, next to the service issuing them.

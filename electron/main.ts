@@ -461,17 +461,6 @@ if (!gotTheLock) {
           .catch((err) => {
             console.warn("[main] assistant host stop failed during eviction:", err);
           });
-        // And a sign-in this view started. The CLI binds ONE fixed callback port and
-        // waits five minutes for a browser that is never coming back — so an abandoned
-        // login does not just linger, it blocks the next window's sign-in from
-        // completing at all.
-        import("./services/assistant-account/AssistantAccountService.js")
-          .then(({ assistantAccountService }) =>
-            assistantAccountService.disposeForWebContents(wcId)
-          )
-          .catch((err) => {
-            console.warn("[main] assistant login cleanup failed during eviction:", err);
-          });
       },
       onViewCached: (wcId) => {
         // Same producer cleanup as eviction: a cached view becomes
@@ -504,13 +493,6 @@ if (!gotTheLock) {
           .then(({ assistantHostService }) => assistantHostService.stopByWebContents(crashedWcId))
           .catch((err) => {
             console.warn("[main] assistant host stop failed during crash:", err);
-          });
-        import("./services/assistant-account/AssistantAccountService.js")
-          .then(({ assistantAccountService }) =>
-            assistantAccountService.disposeForWebContents(crashedWcId)
-          )
-          .catch((err) => {
-            console.warn("[main] assistant login cleanup failed during crash:", err);
           });
         // Tear down the per-window PTY MessagePort on renderer crash so the
         // pty-host's PortQueueManager can drop stale queue accounting before

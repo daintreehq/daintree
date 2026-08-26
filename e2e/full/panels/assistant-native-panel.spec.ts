@@ -503,6 +503,40 @@ test.describe.serial("Assistant: native panel", () => {
     await expect(window.getByText(/Three worktrees are ready/)).toHaveCount(0);
   });
 
+  test("command output keeps the engine's own line breaks and column padding", async () => {
+    const { window } = ctx;
+    await openAssistant(window);
+    const panel = window.locator("#daintree-assistant-panel");
+
+    await ask(window, "/status");
+    await expect(panel.getByText(/backend\s+local/).last()).toBeVisible({ timeout: T_MEDIUM });
+
+    // `innerText`, NOT `textContent`. The distinction is the entire test: textContent
+    // returns the source string, newlines and all, no matter what CSS does to it — so a
+    // regex over it passes whether the panel preserved the engine's formatting or folded
+    // it into one line, which is how the neighbouring `/backend\s+local` assertion above
+    // went on passing while every command result rendered as a single paragraph of prose.
+    // innerText is the RENDERED text, so it can only look like this if white-space is
+    // actually being honoured.
+    //
+    // The engine formats command output as terminal text: `/status` puts `backend` and
+    // `tier` on their own lines and pads the label column so the values line up. Both
+    // halves are asserted because they fail independently — folding destroys the break,
+    // and whitespace collapsing destroys the padding that carries the alignment.
+    // Scoped to the NOTICE, by testid. The masthead carries the same words in its own
+    // per-line elements, so a text-shaped locator matched it instead and read newlines
+    // that came from block boundaries rather than from preserved whitespace — passing
+    // identically with the fix reverted, which is the one thing this test must not do.
+    const rendered = await panel
+      .getByTestId("assistant-notice")
+      .filter({ hasText: /backend/ })
+      .last()
+      .evaluate((el: HTMLElement) => el.innerText);
+
+    expect(rendered).toMatch(/backend {2,}local/);
+    expect(rendered).toMatch(/\n\s*tier {2,}operator/);
+  });
+
   test("slash-prefixed prose still reaches the model", async () => {
     const { window } = ctx;
     await openAssistant(window);

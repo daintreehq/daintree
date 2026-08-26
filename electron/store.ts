@@ -43,7 +43,6 @@ import type {
   ActionUsageEntry,
 } from "../shared/types/ipc/app.js";
 import type { HelpAssistantTier } from "../shared/types/ipc/maps.js";
-import type { AssistantBackendEnvironment } from "../shared/config/assistantBackend.js";
 
 interface WindowStateEntry {
   x?: number;
@@ -342,12 +341,6 @@ export interface StoreSchema {
      */
     skipPermissions?: boolean;
     auditRetention: 7 | 30 | 0;
-    /**
-     * Which backend the assistant talks to, for turns AND for sign-in. Optional
-     * because every install predating it has no stored value and must keep the local
-     * default rather than being migrated onto a paid endpoint.
-     */
-    backendEnvironment?: AssistantBackendEnvironment;
   };
   pendingErrors: ErrorRecord[];
   errorFingerprints: Record<string, { count: number; firstSeen: number; lastSeen: number }>;

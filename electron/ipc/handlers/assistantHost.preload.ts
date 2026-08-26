@@ -12,7 +12,6 @@ export const ASSISTANT_HOST_METHOD_CHANNELS = {
   start: "assistant-host:start",
   send: "assistant-host:send",
   stop: "assistant-host:stop",
-  diagnostics: "assistant-host:diagnostics",
 } as const satisfies Record<string, keyof IpcInvokeMap>;
 
 type Methods = typeof ASSISTANT_HOST_METHOD_CHANNELS;

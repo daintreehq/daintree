@@ -26,7 +26,6 @@ import type {
   McpTurnOutcomeAlertPayload,
 } from "../shared/types/ipc/mcpServer.js";
 import type { AssistantHostEvent } from "../shared/types/ipc/assistantHost.js";
-import type { AssistantAccountLoginProgress } from "../shared/types/ipc/assistantAccount.js";
 import type {
   AssistantHostGapPayload,
   AssistantHostExitPayload,
@@ -84,7 +83,6 @@ import { buildResourceProfilePreloadBindings } from "./ipc/handlers/resourceProf
 import { buildWhySlowPreloadBindings } from "./ipc/handlers/whySlow.preload.js";
 import { buildOsDndPreloadBindings } from "./ipc/handlers/osDnd.preload.js";
 import { buildAgentCapabilitiesPreloadBindings } from "./ipc/handlers/agentCapabilities.preload.js";
-import { buildAssistantAccountPreloadBindings } from "./ipc/handlers/assistantAccount.preload.js";
 import { buildHelpAssistantPreloadBindings } from "./ipc/handlers/helpAssistant.preload.js";
 import { buildMenuPreloadBindings } from "./ipc/handlers/menu.preload.js";
 import { buildCliPreloadBindings } from "./ipc/handlers/cli.preload.js";
@@ -3089,20 +3087,6 @@ function buildElectronApi(): ElectronAPI {
         _typedOn(CHANNELS.MCP_HELP_DISPLAY_IMAGE, callback),
       onTurnOutcomeAlert: (callback: (payload: McpTurnOutcomeAlertPayload) => void) =>
         _typedOn(CHANNELS.MCP_TURN_OUTCOME_ALERT, callback),
-    },
-
-    /**
-     * The Daintree Assistant account. Commands are invokes; login progress arrives on a
-     * push channel targeted at THIS view.
-     *
-     * Nothing here can carry a credential — the CLI reports state only, and the
-     * authorization URL never enters its event stream.
-     */
-    assistantAccount: {
-      ...buildAssistantAccountPreloadBindings(_unwrappingInvoke),
-
-      onLoginProgress: (callback: (event: AssistantAccountLoginProgress) => void) =>
-        _typedOn(CHANNELS.ASSISTANT_ACCOUNT_LOGIN_PROGRESS, callback),
     },
 
     helpAssistant: buildHelpAssistantPreloadBindings(_unwrappingInvoke),

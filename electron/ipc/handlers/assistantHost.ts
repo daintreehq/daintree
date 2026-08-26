@@ -2,9 +2,7 @@ import { defineIpcNamespace, op } from "../define.js";
 import { ASSISTANT_HOST_METHOD_CHANNELS } from "./assistantHost.preload.js";
 import { assistantHostService } from "../../services/assistant-host/AssistantHostService.js";
 import { parseAssistantHostCommand } from "../../schemas/ipc.js";
-import { collectAssistantDiagnostics } from "../../services/assistant-host/AssistantDiagnostics.js";
 import type {
-  AssistantDiagnostics,
   AssistantHostStartPayload,
   AssistantHostStartResult,
 } from "../../../shared/types/ipc/assistantHostIpc.js";
@@ -81,18 +79,6 @@ export const assistantHostNamespace = defineIpcNamespace({
         return { delivered: assistantHostService.send(command) };
       },
       { withContext: true }
-    ),
-
-    /**
-     * A safe readout of what the assistant is actually configured to do.
-     *
-     * No ownership check, unlike the operating commands below: this reads configuration
-     * and asks an endpoint what it is. It starts nothing, changes nothing, and there is
-     * no field in the answer a secret could travel in.
-     */
-    diagnostics: op(
-      ASSISTANT_HOST_METHOD_CHANNELS.diagnostics,
-      async (): Promise<AssistantDiagnostics> => collectAssistantDiagnostics()
     ),
 
     stop: op(
