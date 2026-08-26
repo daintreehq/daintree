@@ -570,14 +570,22 @@ function ToolSegment({
 }
 
 /**
- * The session masthead, ported from the CLI cockpit's own (internal/ui/render_chrome.go).
+ * The session masthead, ported from the CLI cockpit's. That renderer is gone at the
+ * pinned SHA; the facts it showed are now assembled engine-side in
+ * internal/host/masthead.go, which is where the reasoning below lives on.
  *
- * Same facts in the same order, for the same reasons that file gives: identity and
- * build; the project; the tier and what it permits; a non-default backend, which since
- * sign-in went away is the ONLY readout of which endpoint answers a turn; a non-default
- * routing policy; then the auto-approve warning on its own row — never appended to the
- * tier line, because appending puts the safety text where truncation eats it first.
- * Below the rule sits the debug-log badge.
+ * Mostly the same facts, deliberately not in the same order: the tier and what it
+ * permits; the backend endpoint; a non-default routing policy; the build; then the
+ * auto-approve warning on its own row — never appended to the tier line, because
+ * appending puts the safety text where truncation eats it first. Below the rule sits the
+ * debug-log badge. Identity and project are dropped because the panel's own chrome
+ * already says both, and the build moves last because it is the least urgent.
+ *
+ * The backend row is named on every session whose endpoint renders safely, deployed
+ * default included (internal/host/masthead.go): it is the only passive readout of which
+ * endpoint answers a turn now that Daintree's own Settings picker and the sign-in beside
+ * it are gone. `/backend` reports it on demand. An ABSENT backend is not the default —
+ * the engine omits one it could not sanitize, and it means unknown.
  *
  * Every value is resolved by the ENGINE and arrives on `host:ready`, so this component
  * decides layout only and cannot disagree with the engine about what is default.
@@ -605,7 +613,7 @@ function Masthead({ state, live }: { state: AssistantSessionState; live: boolean
           what this session may do, which backend answers it, and under what routing. */}
       {state.tier ? (
         // Quiet at rest for every tier, and DANGEROUS only while a destructive action
-        // waits on an answer — the cockpit's own rule (render_chrome.go:66). The tier
+        // waits on an answer — the cockpit's own rule, carried over. The tier
         // names what this session is allowed to do; the one moment that matters is when
         // it is about to be exercised. The gloss stays dim throughout: it describes the
         // tier, it is not a live state.
@@ -1332,7 +1340,7 @@ export function AssistantPanelView({
             data-testid="assistant-status-row"
             className="mt-1.5 flex items-center gap-2 px-3.5 text-[0.92em] text-[var(--assistant-fg-secondary)]"
           >
-            {/* A DOT, then the word, as the cockpit drew it (render_chrome.go). The word
+            {/* A DOT, then the word, as the cockpit drew it. The word
               alone made the one line that is true for the whole session read as body
               text; a lit dot is what says "live" at a glance. */}
             <span className="flex min-w-0 items-center gap-1.5">
