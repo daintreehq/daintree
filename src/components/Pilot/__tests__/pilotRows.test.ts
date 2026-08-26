@@ -1277,16 +1277,78 @@ describe("buildPilotWorktreeGroups", () => {
     expect(groups.map((g) => g.name).sort()).toEqual(["one/feature-x", "two/feature-x"]);
   });
 
-  it("gives every section a distinct id even when the labels match", () => {
+  it("keeps a worktree literally named 'none' out of the no-worktree bucket", () => {
     // Ids are what selection, the pointer's order hold and the DOM key on, so
-    // two sections sharing one would make the second behave as the first.
+    // two sections sharing one make the second behave as the first. The wire
+    // type is a bare string: nothing stops a worktree id spelling the sentinel.
     const groups = worktreeGroups([
-      run({ runId: "a", worktreeId: "/repos/one/feature-x" }),
-      run({ runId: "b", worktreeId: "/repos/two/feature-x" }),
+      run({ runId: "root" }),
+      run({ runId: "named", worktreeId: "none" }),
+    ]);
+
+    expect(groups).toHaveLength(2);
+    expect(new Set(groups.map((g) => g.groupId)).size).toBe(2);
+  });
+
+  it("falls back to whole ids for two worktrees differing only in case", () => {
+    // The disambiguator folds case to DETECT a collision, because that is how
+    // the name reads — but it cannot then emit one label for two real
+    // directories, so it runs out of path and says both in full.
+    const groups = worktreeGroups([
+      run({ runId: "a", worktreeId: "/repos/one/Feature" }),
+      run({ runId: "b", worktreeId: "/repos/one/feature" }),
+    ]);
+
+    expect(groups).toHaveLength(2);
+    expect(new Set(groups.map((g) => g.groupId)).size).toBe(2);
+    expect(groups.map((g) => g.name).sort()).toEqual(["/repos/one/Feature", "/repos/one/feature"]);
+  });
+
+  it("survives worktree ids the wire type allows but the app never mints", () => {
+    // A display path has no business rejecting data. Every one of these is
+    // type-valid, and the failure to avoid is a thrown palette rather than an
+    // ugly heading — `encodeURIComponent` alone throws on the lone surrogate.
+    const hostile = [
+      "",
+      "   ",
+      "/",
+      "//",
+      "\\",
+      "/repos/one/feature-x/",
+      "C:\\repos\\one\\feature-x",
+      "/repos/one/f e a t u r e",
+      "/repos/one/\uD800",
+      `/repos/${"deep/".repeat(60)}leaf`,
+    ];
+    const runs = hostile.map((worktreeId, i) => run({ runId: `r${i}`, worktreeId }));
+
+    const groups = worktreeGroups(runs);
+
+    // Nothing dropped: a live agent must not vanish because a field was odd.
+    expect(groups.flatMap((g) => g.rows)).toHaveLength(runs.length);
+    // Separately addressable, or two sections share a DOM id and a React key.
+    expect(new Set(groups.map((g) => g.groupId)).size).toBe(groups.length);
+    // Nameable: a blank heading files its rows under nothing at all.
+    expect(groups.every((g) => g.name.trim().length > 0)).toBe(true);
+  });
+
+  it("files an empty worktree id with the runs whose worktree is unknown", () => {
+    // An empty id identifies no worktree, so a section of its own would be a
+    // blank heading standing beside the one that already means "unknown".
+    const groups = worktreeGroups([
+      run({ runId: "blank", worktreeId: "" }),
       run({ runId: "root" }),
     ]);
 
-    expect(new Set(groups.map((g) => g.groupId)).size).toBe(groups.length);
+    expect(groups).toHaveLength(1);
+    expect(groups[0]!.worktreeId).toBeNull();
+    expect(groups[0]!.rows.map((r) => r.run.runId).sort()).toEqual(["blank", "root"]);
+  });
+
+  it("agrees with the drill gate about an empty id", () => {
+    // The gate and the grouping have to count buckets the same way, or the
+    // chevron promises an axis the regrouping then declines to cut.
+    expect(hasWorktreeAxis([{ worktreeId: "" }, {}])).toBe(false);
   });
 
   it("opens the same way twice for the same fleet", () => {
@@ -1318,6 +1380,12 @@ describe("narrowing on the worktree axis", () => {
       since: NOW - 60_000,
     }),
     run({ runId: "busy", worktreeId: "/repo/wt/beta", title: "Run tests", agentState: "working" }),
+    run({
+      runId: "quiet",
+      worktreeId: "/repo/wt/beta",
+      title: "Nothing alike",
+      agentState: "working",
+    }),
   ];
 
   it("drops a worktree the query emptied", () => {
@@ -1329,15 +1397,31 @@ describe("narrowing on the worktree axis", () => {
   it("admits a whole worktree on its own name", () => {
     // Typing a worktree name to see everything in it is the question this
     // surface exists for, and it is the same rule the project name already got.
+    // Both of beta's rows have to survive — one of them matches nothing about
+    // the query itself, which is the whole point of a group-level match.
     const filtered = filterPilotGroups(worktreeGroups(SPREAD), "beta");
 
-    expect(filtered.flatMap((g) => g.rows.map((r) => r.run.runId))).toEqual(["busy"]);
+    expect(filtered.map((g) => g.name)).toEqual(["beta"]);
+    expect(filtered.flatMap((g) => g.rows.map((r) => r.run.runId)).sort()).toEqual([
+      "busy",
+      "quiet",
+    ]);
+  });
+
+  it("still admits the scope on the project's name after the drill", () => {
+    // A query naming the PROJECT is how the user found the project to drill
+    // into. Once inside, the project heading is gone and its name matches no
+    // worktree label — so without the parent alias the drill would empty the
+    // very list it just opened.
+    const filtered = filterPilotGroups(worktreeGroups(SPREAD), "daintree");
+
+    expect(filtered.flatMap((g) => g.rows)).toHaveLength(SPREAD.length);
   });
 
   it("counts and summarises the scoped population only", () => {
     const groups = worktreeGroups(SPREAD);
 
-    expect(countPilotBands(groups).all).toBe(2);
+    expect(countPilotBands(groups).all).toBe(SPREAD.length);
     expect(summarizePilotGroups(groups).demand).toBe(1);
   });
 

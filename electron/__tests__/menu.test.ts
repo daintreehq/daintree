@@ -241,6 +241,18 @@ function findMenuItem(
   return (menu.submenu as Electron.MenuItemConstructorOptions[]).find((i) => i.label === itemLabel);
 }
 
+/** Every item in the template, submenus included, so a chord can be searched for. */
+function flattenMenuItems(
+  template: readonly Electron.MenuItemConstructorOptions[]
+): Electron.MenuItemConstructorOptions[] {
+  return template.flatMap((item) => [
+    item,
+    ...(Array.isArray(item.submenu)
+      ? flattenMenuItems(item.submenu as Electron.MenuItemConstructorOptions[])
+      : []),
+  ]);
+}
+
 describe("About panel build channel (#11121)", () => {
   it("wires setAboutPanelOptions at import with the real running version", () => {
     // Captured at module import: app.getVersion() is mocked to "1.0.0", proving
@@ -333,6 +345,12 @@ describe("createApplicationMenu", () => {
       // leave that shortcut working in the shipped app and dead on every
       // machine that develops or tests it (#11950).
       expect(item!.accelerator).toBeUndefined();
+      // The invariant, not just this item's property: no menu item anywhere may
+      // claim the chord, or the same collision comes back under another label.
+      const claimants = flattenMenuItems(capturedTemplate).filter(
+        (entry) => entry.accelerator === "Alt+CommandOrControl+I"
+      );
+      expect(claimants).toEqual([]);
       item!.click!(
         {} as Electron.MenuItem,
         mockBrowserWindow as unknown as Electron.BaseWindow,

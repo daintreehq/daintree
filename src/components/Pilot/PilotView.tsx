@@ -908,6 +908,19 @@ export function PilotView() {
     if (parkTargetId !== null && parkTarget === null) setParkTargetId(null);
   }, [parkTargetId, parkTarget]);
 
+  /**
+   * A scope change takes the editor with it.
+   *
+   * The target is resolved against every project's rows rather than the scoped
+   * ones, so it survives a re-scope on its own — and the scoped shortcut can
+   * fire from outside the dialog while the editor owns the body. Without this
+   * the user would land in one project's worktrees with another project's park
+   * note still open on top of them.
+   */
+  useEffect(() => {
+    setParkTargetId(null);
+  }, [scope]);
+
   const parkEditing = parkTarget !== null;
 
   const closeParkEditor = useCallback((_changed: boolean) => {
@@ -1102,7 +1115,7 @@ export function PilotView() {
    * End already get.
    */
   const interceptScopeBackKey = useCallback(
-    (event: KeyboardEvent<HTMLInputElement>): boolean => {
+    (event: KeyboardEvent<HTMLElement>): boolean => {
       if (event.key !== "Backspace" || event.defaultPrevented) return false;
       if (event.metaKey || event.ctrlKey || event.altKey) return false;
       if (scope.kind !== "project" || query.length > 0) return false;
@@ -1113,18 +1126,58 @@ export function PilotView() {
     [scope.kind, query, showFleet]
   );
 
+  /**
+   * A modified Enter this surface recognises but cannot act on right now.
+   *
+   * The navigation model reads `Enter` and nothing else about the event, so a
+   * chord the intercepts above decline falls straight through to "open the
+   * highlighted run". Cmd+Enter over a project with no worktree axis, a held
+   * Cmd+Enter whose repeat lands after the first one already drilled, or
+   * Alt+Enter over a snapshot too stale to park against would each OPEN a run
+   * on a keystroke that asked for something else. Doing nothing is the right
+   * answer to an unavailable verb; doing a DIFFERENT one is not.
+   *
+   * Shift is deliberately outside the set: nothing here claims it, so
+   * Shift+Enter stays the plain activation the footer already advertises.
+   */
+  const interceptUnusableModifiedEnter = useCallback(
+    (event: KeyboardEvent<HTMLElement>): boolean => {
+      if (event.key !== "Enter" || event.defaultPrevented) return false;
+      if (!event.altKey && !event.metaKey && !event.ctrlKey) return false;
+      event.preventDefault();
+      return true;
+    },
+    []
+  );
+
   const handleInputKeyDown = useCallback<KeyboardEventHandler<HTMLInputElement>>(
     (event) => {
       // Park first: it is the one Enter variant that also carries a modifier
       // the drill checks, so letting the drill run first would let Alt+Cmd+
       // Enter regroup a project instead of parking the run under the cursor.
-      if (interceptParkKey(event)) return;
-      if (interceptDrillKey(event)) return;
-      if (interceptScopeBackKey(event)) return;
-      navigation.handleInputKeyDown(event);
+      if (
+        !interceptParkKey(event) &&
+        !interceptDrillKey(event) &&
+        !interceptScopeBackKey(event) &&
+        !interceptUnusableModifiedEnter(event)
+      ) {
+        navigation.handleInputKeyDown(event);
+      }
+      // Released after every path, not only the delegated one. A key an
+      // intercept consumed ended the pointer's turn at the list as surely as an
+      // arrow does, and the early returns this replaced left the held order
+      // alive until the next keystroke — the stale ranking the hold exists to
+      // prevent, arriving through the one gesture that was supposed to end it.
       releaseOnConsumedKey(event);
     },
-    [interceptParkKey, interceptDrillKey, interceptScopeBackKey, navigation, releaseOnConsumedKey]
+    [
+      interceptParkKey,
+      interceptDrillKey,
+      interceptScopeBackKey,
+      interceptUnusableModifiedEnter,
+      navigation,
+      releaseOnConsumedKey,
+    ]
   );
 
   const handleBodyKeyDown = useCallback<KeyboardEventHandler<HTMLElement>>(
@@ -1133,12 +1186,27 @@ export function PilotView() {
       // entirely: its selection is live underneath, and an Enter bubbling out
       // of the note input would otherwise OPEN the highlighted run.
       if (parkEditing) return;
-      if (interceptParkKey(event)) return;
-      if (interceptDrillKey(event)) return;
-      navigation.handleBodyKeyDown(event);
+      // Backspace is unambiguous here in a way it is not in the search box:
+      // the scroller holds no caret, so there is nothing to arbitrate against.
+      if (
+        !interceptParkKey(event) &&
+        !interceptDrillKey(event) &&
+        !interceptScopeBackKey(event) &&
+        !interceptUnusableModifiedEnter(event)
+      ) {
+        navigation.handleBodyKeyDown(event);
+      }
       releaseOnConsumedKey(event);
     },
-    [parkEditing, interceptParkKey, interceptDrillKey, navigation, releaseOnConsumedKey]
+    [
+      parkEditing,
+      interceptParkKey,
+      interceptDrillKey,
+      interceptScopeBackKey,
+      interceptUnusableModifiedEnter,
+      navigation,
+      releaseOnConsumedKey,
+    ]
   );
 
   /**
@@ -1279,12 +1347,13 @@ export function PilotView() {
 
   return (
     // Dismissal is layered, innermost first: the park editor, then the project
-    // scope, then the dialog. The palette's Escape runs through a
-    // document-level backstop that fires before any inner listener can, so the
-    // only reliable way to put anything under Escape is to redirect what
-    // closing DOES — not to race the key. Backdrop clicks follow the same rule,
-    // which is also the right gesture reading each time: dismiss the thing on
-    // top, not the surface under it.
+    // scope, then the dialog. Escape is not handled here at all — it arrives
+    // through the shared escape stack and `AppPaletteDialog`'s document-bubble
+    // backstop, both of which know only how to call `onClose`. So the only way
+    // to put anything under it is to redirect what closing DOES rather than to
+    // race the key with a listener of our own. Backdrop clicks follow the same
+    // rule, which is also the right gesture reading each time: dismiss the
+    // thing on top, not the surface under it.
     <AppPaletteDialog
       isOpen={isOpen}
       onClose={

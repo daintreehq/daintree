@@ -79,6 +79,15 @@ export interface PilotGroupCore {
   groupId: string;
   axis: "workspace" | "worktree";
   name: string;
+  /**
+   * A second name a query may match to admit the whole group.
+   *
+   * The worktree axis needs one. Drilling in replaces the project heading with
+   * worktree labels, so a query matching the PROJECT — which is how the user
+   * found the project to drill into in the first place — would suddenly match
+   * nothing and empty the very list the drill just opened.
+   */
+  parentName?: string;
   rows: PilotRow[];
   /** Runs in this group that constitute a demand on the user. */
   demandCount: number;
@@ -402,9 +411,41 @@ const NO_WORKTREE_LABEL = "No worktree";
  * and separators, and this string becomes a DOM id. `encodeURIComponent` is
  * reversible, which keeps two different worktrees from ever colliding into one
  * group the way a lossy sanitiser would.
+ *
+ * Namespaced under `path:` so a real id can never spell the sentinel above. The
+ * wire type is a bare `string` — nothing on the way in enforces the
+ * absolute-path convention — and a worktree literally called `none` sharing an
+ * id with the absent bucket would collide their DOM ids, React keys and
+ * order-hold entries into one.
  */
 function worktreeGroupId(worktreeId: string): string {
-  return `wt:${encodeURIComponent(worktreeId)}`;
+  return `wt:path:${escapeForId(worktreeId)}`;
+}
+
+/**
+ * A string reduced to characters a DOM id can hold, injectively.
+ *
+ * Not `encodeURIComponent`, which THROWS a `URIError` on an unpaired surrogate:
+ * one malformed row would take the whole palette down on the way into a scope,
+ * and this is a display path with no business rejecting data. Escaping per code
+ * unit cannot throw on any string, and escaping the marker itself keeps two
+ * different paths from ever encoding to the same id.
+ */
+function escapeForId(value: string): string {
+  return value.replace(/[^A-Za-z0-9._-]/g, (ch) => `~${ch.charCodeAt(0).toString(16)}`);
+}
+
+/**
+ * The bucket a run belongs to on the worktree axis.
+ *
+ * An empty id folds in with the absent one. It identifies no worktree, and the
+ * wire type does not stop one arriving — bucketing it on its own would draw a
+ * section under a blank heading, which is worse than filing it with the runs
+ * whose worktree is equally unknown.
+ */
+function worktreeKey(run: Pick<FleetRunRow, "worktreeId">): string | null {
+  const id = run.worktreeId;
+  return id !== undefined && id.trim() !== "" ? id : null;
 }
 
 function pathSegments(id: string): string[] {
@@ -465,7 +506,9 @@ function worktreeLabels(ids: readonly string[]): Map<string, string> {
  */
 function countWorktreeBuckets(runs: readonly Pick<FleetRunRow, "worktreeId">[]): number {
   const seen = new Set<string | null>();
-  for (const run of runs) seen.add(run.worktreeId ?? null);
+  // Through the same key function the grouping uses, or the gate would promise
+  // an axis the regrouping then declines to cut.
+  for (const run of runs) seen.add(worktreeKey(run));
   return seen.size;
 }
 
@@ -516,7 +559,7 @@ export function hasWorktreeAxis(runs: readonly Pick<FleetRunRow, "worktreeId">[]
 export function buildPilotWorktreeGroups(project: PilotProjectGroup): PilotWorktreeGroup[] {
   const byWorktree = new Map<string | null, PilotRow[]>();
   for (const row of project.rows) {
-    const key = row.run.worktreeId ?? null;
+    const key = worktreeKey(row.run);
     const bucket = byWorktree.get(key);
     if (bucket) bucket.push(row);
     else byWorktree.set(key, [row]);
@@ -538,6 +581,9 @@ export function buildPilotWorktreeGroups(project: PilotProjectGroup): PilotWorkt
           groupId: worktreeId === null ? NO_WORKTREE_GROUP_ID : worktreeGroupId(worktreeId),
           axis: "worktree",
           name: worktreeId === null ? NO_WORKTREE_LABEL : (labels.get(worktreeId) ?? worktreeId),
+          // The project this was cut out of, so a query naming it still admits
+          // these rows once its own heading is gone from the list.
+          parentName: project.name,
           worktreeId,
           rows,
           demandCount: 0,
@@ -579,6 +625,11 @@ export function buildPilotWorktreeGroups(project: PilotProjectGroup): PilotWorkt
  * IS the answer — demoting a blocked agent because a fresher one matched the
  * query better would defeat the surface.
  *
+ * A hit on the group's own name — or on the project a worktree group was cut
+ * out of — admits every row under it. The second half is what stops a query
+ * that named the PROJECT from emptying the list the moment the user drills into
+ * it, which is how they found that project to begin with.
+ *
  * That is exactly why the fields are gated on {@link isFilterMatch} rather than
  * a bare subsequence test. Keeping band order means a weak match is not sorted
  * away from a strong one, it is interleaved with it, so match quality has to be
@@ -594,10 +645,12 @@ export function filterPilotGroups<T extends PilotGroupCore>(
 
   const out: T[] = [];
   for (const group of groups) {
-    const projectMatches = isFilterMatch(needle, group.name);
+    const groupMatches =
+      isFilterMatch(needle, group.name) ||
+      (group.parentName !== undefined && isFilterMatch(needle, group.parentName));
     const rows = group.rows.filter(
       (row) =>
-        projectMatches ||
+        groupMatches ||
         isFilterMatch(needle, row.title) ||
         (row.worktreeLabel !== null && isFilterMatch(needle, row.worktreeLabel)) ||
         // The agent's name is on the row as an icon rather than as text, but

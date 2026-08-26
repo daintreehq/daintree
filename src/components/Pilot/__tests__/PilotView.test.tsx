@@ -1941,6 +1941,10 @@ describe("PilotView worktree scope", () => {
     });
 
     it("leaves the chord inert where there is no worktree axis", () => {
+      // Inert means inert. The navigation model reads `Enter` and nothing else
+      // about the event, so a chord the drill declines falls straight through
+      // to "open the highlighted run" — acting on a verb the user did not ask
+      // for is a worse answer than doing nothing.
       seed([run({ runId: "a", worktreeId: "/repo/wt/alpha", agentState: "working" })]);
       render(<PilotView />);
 
@@ -1950,6 +1954,61 @@ describe("PilotView worktree scope", () => {
       });
 
       expect(usePilotStore.getState().scope).toEqual({ kind: "fleet" });
+      expect(dispatchMock).not.toHaveBeenCalled();
+    });
+
+    it("leaves a repeat of the chord inert once it has already drilled", () => {
+      // Holding the chord repeats it. The second event arrives in the scoped
+      // view where there is nothing left to drill into, and must not turn into
+      // an activation of whatever row the reset selection landed on.
+      seedSpread();
+      render(<PilotView />);
+      const search = screen.getByTestId("pilot-search");
+
+      fireEvent.keyDown(search, { key: "Enter", ...DRILL_MODIFIER });
+      fireEvent.keyDown(search, { key: "Enter", ...DRILL_MODIFIER, repeat: true });
+
+      expect(usePilotStore.getState().scope).toEqual({ kind: "project", workspaceId: "p1" });
+      expect(dispatchMock).not.toHaveBeenCalled();
+    });
+
+    it("drills into the project the arrows are on, not the first one listed", () => {
+      // With one project in the fixture a regression that always took the top
+      // group would pass. The selection has to be what decides.
+      // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test carrier: only id/name/lastOpened are read
+      useProjectStore.setState({
+        projects: [
+          { id: "p1", name: "daintree", lastOpened: NOW },
+          { id: "p2", name: "atlas", lastOpened: NOW - 60_000 },
+        ],
+      } as Partial<ReturnType<typeof useProjectStore.getState>>);
+      seed([
+        run({ runId: "d-a", worktreeId: "/d/alpha", agentState: "working", since: NOW - 60_000 }),
+        run({ runId: "d-b", worktreeId: "/d/beta", agentState: "working", since: NOW - 60_000 }),
+        run({
+          runId: "a-a",
+          workspaceId: "p2",
+          worktreeId: "/a/alpha",
+          agentState: "working",
+          since: NOW - 60_000,
+        }),
+        run({
+          runId: "a-b",
+          workspaceId: "p2",
+          worktreeId: "/a/beta",
+          agentState: "working",
+          since: NOW - 60_000,
+        }),
+      ]);
+      render(<PilotView />);
+      const search = screen.getByTestId("pilot-search");
+
+      // Past daintree's two runs and onto the first of atlas's.
+      fireEvent.keyDown(search, { key: "ArrowDown" });
+      fireEvent.keyDown(search, { key: "ArrowDown" });
+      fireEvent.keyDown(search, { key: "Enter", ...DRILL_MODIFIER });
+
+      expect(usePilotStore.getState().scope).toEqual({ kind: "project", workspaceId: "p2" });
     });
 
     it("still parks when the park modifier rides along with the drill one", () => {
@@ -1976,6 +2035,40 @@ describe("PilotView worktree scope", () => {
 
       fireEvent.change(screen.getByTestId("pilot-search"), { target: { value: "auth" } });
       expect(screen.queryByTestId("pilot-drill-hint")).toBeNull();
+    });
+  });
+
+  describe("opening straight into a scope", () => {
+    it("renders by worktree on the first render when the scope preceded the mount", () => {
+      // `PilotView` is lazy-mounted on `isOpen`, so the shortcut records its
+      // destination in the store and this component has to honour it before any
+      // drill gesture exists to fall back on.
+      seedSpread();
+      usePilotStore.setState({ isOpen: true, scope: { kind: "project", workspaceId: "p1" } });
+      render(<PilotView />);
+
+      expect(sections()).toEqual(["No worktree", "alpha", "beta"]);
+      expect(screen.getByTestId("pilot-scope-name").textContent).toBe("daintree");
+    });
+
+    it("scopes off retained data without dropping the staleness", () => {
+      // A degraded feed still holds real rows, so the scoped view is honest —
+      // as long as it keeps saying how old they are.
+      seed(
+        [
+          run({ runId: "alpha-1", worktreeId: "/repo/wt/alpha", agentState: "working" }),
+          run({ runId: "beta-1", worktreeId: "/repo/wt/beta", agentState: "working" }),
+        ],
+        { degraded: true, lastSuccessfulAt: NOW - 12 * 60_000 }
+      );
+      usePilotStore.setState({ isOpen: true, scope: { kind: "project", workspaceId: "p1" } });
+      render(<PilotView />);
+
+      expect(sections()).toEqual(["alpha", "beta"]);
+      expect(screen.getByTestId("pilot-stale")).toBeTruthy();
+      // Parking needs a snapshot Main can validate against, so the hint goes
+      // with the data that would back it — scoped or not.
+      expect(screen.queryByTestId("pilot-park-hint")).toBeNull();
     });
   });
 
@@ -2096,16 +2189,71 @@ describe("PilotView worktree scope", () => {
     });
 
     it("keeps the arrows walking runs and never stopping on a worktree", () => {
+      // Resolved to the ELEMENT rather than matched against the id prefix the
+      // implementation happens to use: what must hold is that the active
+      // descendant names a rendered option, never a heading or the role-less
+      // group container — the dangling reference #11071 was about.
       drillIn();
       const search = screen.getByTestId("pilot-search");
+      const list = screen.getByRole("listbox");
+      const options = new Set([...list.querySelectorAll('[role="option"]')]);
+      expect(options.size).toBeGreaterThan(1);
 
-      const seen: (string | null)[] = [];
       for (let i = 0; i < 4; i++) {
-        seen.push(search.getAttribute("aria-activedescendant"));
+        const id = search.getAttribute("aria-activedescendant");
+        expect(id).not.toBeNull();
+        const active = document.getElementById(id!);
+        expect(active).not.toBeNull();
+        expect(options.has(active!)).toBe(true);
         fireEvent.keyDown(search, { key: "ArrowDown" });
       }
+    });
 
-      expect(seen.every((id) => id !== null && id.startsWith("pilot-option-run-"))).toBe(true);
+    it("drops the highlight back to the top when the scope changes", () => {
+      // Drilling replaces the whole population, so a highlight carried across
+      // would land on whatever row inherited its position rather than on the
+      // one the user can see is selected.
+      seed([
+        run({
+          runId: "waiting",
+          worktreeId: "/repo/wt/alpha",
+          agentState: "waiting",
+          since: NOW - 600_000,
+        }),
+        run({ runId: "root", agentState: "working", since: NOW - 600_000 }),
+        run({ runId: "beta", worktreeId: "/repo/wt/beta", agentState: "working", since: NOW }),
+      ]);
+      render(<PilotView />);
+      const search = screen.getByTestId("pilot-search");
+
+      // End lands on the fleet's LAST row, which the drill then files under
+      // the last section — so inheriting the selection is visibly different
+      // from resetting it.
+      fireEvent.keyDown(search, { key: "End" });
+      const beforeDrill = search.getAttribute("aria-activedescendant");
+
+      fireEvent.click(drillHeader());
+
+      const firstRow = screen.getAllByTestId("pilot-row")[0]!;
+      expect(search.getAttribute("aria-activedescendant")).toBe(firstRow.id);
+      expect(search.getAttribute("aria-activedescendant")).not.toBe(beforeDrill);
+    });
+
+    it("lets the pointer take a fresh hold after a scope change", () => {
+      // The hold is a set of ids from ONE axis. Carried across, it ranks every
+      // incoming group against ids none of them have and strands them all at
+      // the tail — the stale order the hold exists to prevent, arriving through
+      // the scope instead of through time.
+      seedSpread();
+      render(<PilotView />);
+
+      // Take a hold on the fleet axis, then drill out from under it.
+      fireEvent.pointerMove(screen.getAllByTestId("pilot-row")[0]!);
+      fireEvent.click(drillHeader());
+
+      // Every scoped section still renders in its own order, not swept to the
+      // tail behind a snapshot that never saw it.
+      expect(sections()).toEqual(["No worktree", "alpha", "beta"]);
     });
 
     it("holds nothing but options, drillable heading or not", () => {
@@ -2148,6 +2296,9 @@ describe("PilotView worktree scope", () => {
       // workspace would send every scoped run through a switch to a project
       // that does not exist.
       drillIn();
+      // Proving we are on the axis where the group id is a worktree, or the
+      // assertion below would hold for the wrong reason.
+      expect(sections()).toEqual(["alpha", "beta"]);
 
       fireEvent.click(screen.getAllByTestId("pilot-row")[0]!);
 
@@ -2155,6 +2306,55 @@ describe("PilotView worktree scope", () => {
         runId: "alpha-1",
         workspaceId: "p1",
       });
+    });
+
+    it("dismisses a park editor when the scope changes under it", () => {
+      // The target resolves against every project's rows, so it survives a
+      // re-scope on its own — and the scoped shortcut fires from outside the
+      // dialog, while the editor owns the body. Without this the user lands in
+      // one project's worktrees with another project's note open on top.
+      seedSpread();
+      render(<PilotView />);
+      fireEvent.keyDown(screen.getByTestId("pilot-search"), { key: "Enter", altKey: true });
+      expect(screen.getByTestId("pilot-park-editor")).toBeTruthy();
+
+      act(() => {
+        usePilotStore.getState().openProject("p1");
+      });
+
+      expect(screen.queryByTestId("pilot-park-editor")).toBeNull();
+      expect(sections()).toEqual(["No worktree", "alpha", "beta"]);
+    });
+
+    it("keeps saying the scope is empty while other projects are still running", () => {
+      // The empty state and the filter bar both describe the SCOPE. Reading
+      // the fleet behind it would leave a bar filtering nothing, over a list
+      // insisting there are agents to find.
+      drillIn();
+
+      act(() => {
+        seed([
+          run({
+            runId: "elsewhere",
+            workspaceId: "s1",
+            agentState: "waiting",
+            since: NOW - 60_000,
+          }),
+        ]);
+      });
+
+      expect(screen.getByText("Start an agent in daintree")).toBeTruthy();
+      expect(screen.queryByTestId("pilot-filter-bar")).toBeNull();
+    });
+
+    it("keeps the filter bar as the way back out of a narrowing that emptied", () => {
+      // A scope with rows in it must keep the control that undoes the
+      // constraint the user cannot otherwise see, even with nothing on screen.
+      drillIn();
+
+      fireEvent.change(screen.getByTestId("pilot-search"), { target: { value: "zzzz" } });
+
+      expect(screen.getByTestId("pilot-filter-bar")).toBeTruthy();
     });
 
     it("names the project when the scoped list drains", () => {

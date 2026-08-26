@@ -136,7 +136,7 @@ Plugin code's own `console.log`s go to the main-process terminal for code runnin
 ### DevTools
 
 - **Main process:** attach with `--inspect-brk` flag on Daintree. Use Chrome DevTools at `chrome://inspect`.
-- **Renderer:** open Daintree's DevTools with Cmd+Opt+I (macOS) or Ctrl+Shift+I (Windows/Linux). Your panel view shows up in the Sources panel under `daintree-plugin:{pluginId}/...`.
+- **Renderer:** open Daintree's DevTools from View → Toggle Developer Tools, or run the Toggle DevTools command from the command palette. Your panel view shows up in the Sources panel under `daintree-plugin:{pluginId}/...`.
 - **MCP subprocess:** the spawn command can be prefixed with `node --inspect` (or Python's `debugpy`, etc.) and you attach however you normally would for that runtime.
 
 ### Common issues

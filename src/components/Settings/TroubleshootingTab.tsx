@@ -639,8 +639,16 @@ export function TroubleshootingTab() {
 
       <div className="space-y-2">
         <h4 className="text-sm font-medium text-daintree-text">Keyboard Shortcuts</h4>
+        {/*
+          Named by route, not by chord. The dev-only Alt+Cmd+I accelerator this
+          used to advertise was removed when that chord became the fleet
+          overview's scoped shortcut (#11950), and a settings page promising a
+          key that now does something else entirely is worse than one that does
+          not mention a key at all.
+        */}
         <p className="text-xs text-daintree-text/50 select-text">
-          Use Cmd+Option+I (Mac) or Ctrl+Shift+I (Windows/Linux) to open DevTools.
+          Open DevTools from View → Toggle Developer Tools, or run the Toggle DevTools command from
+          the command palette.
         </p>
       </div>
     </div>

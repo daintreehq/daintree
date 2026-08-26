@@ -103,8 +103,7 @@ describe("pilot.openProject", () => {
 
     await openProject();
 
-    expect(usePilotStore.getState().scope).toEqual({ kind: "fleet" });
-    expect(usePilotStore.getState().isOpen).toBe(true);
+    expect(usePilotStore.getState()).toMatchObject({ isOpen: true, scope: { kind: "fleet" } });
   });
 
   it("falls back to the whole fleet when every run shares one worktree", async () => {
@@ -127,7 +126,9 @@ describe("pilot.openProject", () => {
 
     await openProject();
 
-    expect(usePilotStore.getState().scope).toEqual({ kind: "fleet" });
+    // `isOpen` too: the scope starts on the fleet, so asserting it alone would
+    // pass for an action that did nothing whatsoever.
+    expect(usePilotStore.getState()).toMatchObject({ isOpen: true, scope: { kind: "fleet" } });
   });
 
   it("falls back in a scratch view", async () => {
@@ -141,7 +142,7 @@ describe("pilot.openProject", () => {
 
     await openProject();
 
-    expect(usePilotStore.getState().scope).toEqual({ kind: "fleet" });
+    expect(usePilotStore.getState()).toMatchObject({ isOpen: true, scope: { kind: "fleet" } });
   });
 
   it("falls back when the project has no runs", async () => {
