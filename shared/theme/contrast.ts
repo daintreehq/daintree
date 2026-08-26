@@ -570,7 +570,7 @@ export function getThemeContrastWarnings(scheme: AppColorScheme): AppThemeValida
     }
   }
 
-  // Palette selected-row indicator (#11686) — the outline is the whole non-text
+  // Palette selected-row indicator (#11686) — the rail is the whole non-text
   // signal there, so it carries 1.4.11 on its own.
   warnings.push(...getPaletteSelectionWarnings(scheme));
   warnings.push(...getRecentActivityDotWarnings(scheme));
@@ -601,7 +601,7 @@ const ACCENT_OUTLINE_MIN_CONTRAST = 3.0;
 // sidebar is the flattering end of the range, not the conservative one. The
 // backdrop isn't knowable here, so we score against all of them and keep the
 // worst: a lighter backdrop lifts the surface and the fill together and closes
-// the gap the outline has to hold.
+// the gap the rail has to hold.
 const DARK_PALETTE_BACKDROPS: AppThemeTokenKey[] = [
   "surface-grid",
   "surface-canvas",
@@ -628,9 +628,9 @@ function resolvePaletteSurfaces(scheme: AppColorScheme): string[] | null {
   ];
 }
 
-const SELECTION_OUTLINE_MIN_CONTRAST = 3.0;
+const SELECTION_RAIL_MIN_CONTRAST = 3.0;
 
-/** WCAG 1.4.11's non-text floor, same basis as the selection outline above. */
+/** WCAG 1.4.11's non-text floor, same basis as the selection rail above. */
 const RECENT_ACTIVITY_DOT_MIN_CONTRAST = 3.0;
 
 // The pixel a token actually paints when it lands on `backdrop`. Tokens reach us
@@ -674,9 +674,11 @@ function splitHexAlpha(hex: string): { hex: string; opacity: number } | null {
 // WCAG 1.4.11 for the palette selected row. The raised fill clears barely
 // 1.1-1.2:1 against the surface in every built-in theme, so it cannot be the
 // indicator; `selection-outline` is, and it has to hold 3:1 against BOTH
-// neighbours it touches. The fill is the binding one — on dark the row lifts
-// *towards* the outline, so the pair that looks safe against the surrounding
-// surface can still fail against the row it encloses.
+// neighbours it touches. The token paints a leading rail sitting on the row's
+// boundary, so it really does touch both: the fill on one side, the surrounding
+// surface on the other. The fill is the binding one — on dark the row lifts
+// *towards* the rail, so the pair that looks safe against the surrounding
+// surface can still fail against the row it marks.
 /**
  * The switcher's "agents will resume" dot is a filled `text-secondary` disc
  * drawn in the project row's status slot (#11791, re-pointed by #11801).
@@ -756,7 +758,7 @@ function getRecentActivityDotWarnings(scheme: AppColorScheme): AppThemeValidatio
 
 function getPaletteSelectionWarnings(scheme: AppColorScheme): AppThemeValidationWarning[] {
   const warnings: AppThemeValidationWarning[] = [];
-  const outlineToken = scheme.tokens["selection-outline"];
+  const railToken = scheme.tokens["selection-outline"];
   const fillToken = scheme.tokens["overlay-raised"];
 
   const surfaces = resolvePaletteSurfaces(scheme);
@@ -785,11 +787,11 @@ function getPaletteSelectionWarnings(scheme: AppColorScheme): AppThemeValidation
       return warnings;
     }
 
-    const outline = resolveOverBackdrop(outlineToken, fill);
-    if (outline === null) {
+    const rail = resolveOverBackdrop(railToken, fill);
+    if (rail === null) {
       warnings.push({
         kind: "unevaluable",
-        message: `Cannot evaluate palette selection contrast: selection-outline="${outlineToken}" is neither hex nor rgba()`,
+        message: `Cannot evaluate palette selection contrast: selection-outline="${railToken}" is neither hex nor rgba()`,
       });
       return warnings;
     }
@@ -798,17 +800,17 @@ function getPaletteSelectionWarnings(scheme: AppColorScheme): AppThemeValidation
       ["the selected row fill", fill],
       ["the surrounding palette surface", surface],
     ] as const) {
-      const ratio = contrastRatio(outline, against);
+      const ratio = contrastRatio(rail, against);
       const seen = worstByLabel.get(label);
       if (seen === undefined || ratio < seen) worstByLabel.set(label, ratio);
     }
   }
 
   for (const [label, ratio] of worstByLabel) {
-    if (ratio < SELECTION_OUTLINE_MIN_CONTRAST) {
+    if (ratio < SELECTION_RAIL_MIN_CONTRAST) {
       warnings.push({
         kind: "low-contrast",
-        message: `selection-outline against ${label} is ${ratio.toFixed(2)}:1; target is ${SELECTION_OUTLINE_MIN_CONTRAST.toFixed(1)}:1 (WCAG 1.4.11 Non-text Contrast)`,
+        message: `selection-outline against ${label} is ${ratio.toFixed(2)}:1; target is ${SELECTION_RAIL_MIN_CONTRAST.toFixed(1)}:1 (WCAG 1.4.11 Non-text Contrast)`,
       });
     }
   }

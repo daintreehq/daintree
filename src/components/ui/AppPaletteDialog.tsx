@@ -473,6 +473,14 @@ interface AppPaletteBodyProps {
   /** Accessible name for the focusable results region. */
   ariaLabel: string;
   /**
+   * Overrides the scroller's own padding and child spacing. The default suits a
+   * palette whose list is a flat run of rows; a palette that draws its own bands
+   * needs the vertical gaps to come from the band padding alone, so that the
+   * space above and below a divider is symmetrical instead of the band padding
+   * on one side and band padding plus `space-y` on the other.
+   */
+  scrollClassName?: string;
+  /**
    * The same active-descendant IDREF the query input carries. Mirrored here so
    * the active option keeps being announced once focus moves off the input —
    * only the element holding DOM focus acts as the active-descendant owner, so
@@ -498,6 +506,7 @@ AppPaletteDialog.Body = function AppPaletteBody({
   ariaLabel,
   activeDescendant,
   onNavigationKeyDown,
+  scrollClassName = "p-2 space-y-1",
 }: AppPaletteBodyProps) {
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent<HTMLDivElement>) => {
@@ -535,7 +544,7 @@ AppPaletteDialog.Body = function AppPaletteBody({
         transitionDuration: `${UI_PALETTE_ENTER_DURATION}ms`,
         transitionTimingFunction: "ease-out",
       }}
-      scrollClassName="p-2 space-y-1"
+      scrollClassName={scrollClassName}
     >
       {children}
     </ScrollShadow>

@@ -21,11 +21,16 @@ import {
   X,
   AppWindow,
 } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 import { Moon } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { getProjectGradient } from "@/lib/colorUtils";
 import { AppPaletteDialog, KBD_CLASS } from "@/components/ui/AppPaletteDialog";
-import { PALETTE_ROW_CLASS, PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
+import {
+  PALETTE_ROW_CLASS,
+  PALETTE_ROW_FOCUS_CLASS,
+  PALETTE_SECTION_LABEL_CLASS,
+} from "@/components/ui/paletteRowStyles";
 import { KbdChord } from "@/components/ui/Kbd";
 import { AppPalettePopover } from "@/components/ui/AppPalettePopover";
 import {
@@ -619,7 +624,7 @@ function ProjectListItem({
       aria-current={project.isActive ? "true" : undefined}
       className={cn(
         PALETTE_ROW_CLASS,
-        "group w-full flex items-center gap-2 px-3 py-1 rounded-[var(--radius-md)] text-left cursor-pointer",
+        "group w-full flex items-center gap-2 px-2 py-1 rounded-[var(--radius-md)] text-left cursor-pointer",
         project.isActive
           ? // Hover still has to answer: the band wash used to sit under this
             // row permanently, which both marked it and made it look hovered
@@ -644,7 +649,7 @@ function ProjectListItem({
       <div
         className={cn(
           // Wash/shadow var fallbacks keep themes without the overrides byte-identical.
-          "flex items-center justify-center rounded-[var(--radius-lg)] shadow-[var(--project-tile-shadow,inset_0_1px_2px_rgba(0,0,0,0.3))] shrink-0 transition duration-150",
+          "flex items-center justify-center rounded-[var(--radius-lg)] shadow-[var(--project-tile-shadow,inset_0_1px_2px_rgba(0,0,0,0.3))] shrink-0",
           "h-8 w-8 text-base"
         )}
         style={{
@@ -661,7 +666,11 @@ function ProjectListItem({
           <span
             className={cn(
               "truncate text-sm font-semibold leading-tight",
-              project.isActive || isSelected ? "text-daintree-text" : "text-daintree-text/85"
+              project.isMissing
+                ? "text-daintree-text/50"
+                : project.isActive || isSelected
+                  ? "text-daintree-text"
+                  : "text-daintree-text/85"
             )}
           >
             {project.name}
@@ -839,7 +848,7 @@ function ScratchListItem({
       aria-current={scratch.isActive ? "true" : undefined}
       className={cn(
         PALETTE_ROW_CLASS,
-        "group w-full flex items-center gap-2 px-3 py-1 rounded-[var(--radius-md)] text-left cursor-pointer",
+        "group w-full flex items-center gap-2 px-2 py-1 rounded-[var(--radius-md)] text-left cursor-pointer",
         scratch.isActive
           ? "text-daintree-text hover:bg-overlay-subtle"
           : "text-daintree-text/70 hover:bg-overlay-subtle hover:text-daintree-text"
@@ -848,9 +857,7 @@ function ScratchListItem({
     >
       <StatusDot status={status} showResumeDot={showResumeDot} />
 
-      <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] bg-tint/[0.04] text-muted-foreground shrink-0">
-        <FileText className="h-4 w-4" aria-hidden="true" />
-      </div>
+      <CommandTile icon={FileText} tone="manage" />
       <div className="flex-1 min-w-0">
         {/*
          * Origin rides the name, not the status line. In the ranked list a
@@ -861,7 +868,14 @@ function ScratchListItem({
          * is the second line #11692 is trying to give back.
          */}
         <div className="flex items-baseline gap-1 min-w-0">
-          <span className="truncate text-sm font-semibold leading-tight">{scratch.name}</span>
+          <span
+            className={cn(
+              "truncate text-sm font-semibold leading-tight",
+              scratch.isActive || isSelected ? "text-daintree-text" : "text-daintree-text/85"
+            )}
+          >
+            {scratch.name}
+          </span>
           <span className="text-[11px] leading-none text-daintree-text/50 shrink-0">· Scratch</span>
           {scratch.isActive && <span className="sr-only">, current</span>}
           {showResumeDot && <ResumableAgentsLabel count={scratch.resumableAgentCount ?? 0} />}
@@ -1045,7 +1059,7 @@ function OtherProjectsHeader({
           role="presentation"
           className={cn(
             PALETTE_SECTION_LABEL_CLASS,
-            "flex items-center justify-between gap-2 py-1 normal-case tracking-normal"
+            "flex items-center justify-between gap-2 px-2 py-1 normal-case tracking-normal"
           )}
         >
           {collapsible ? (
@@ -1140,8 +1154,21 @@ interface ProjectListContentProps {
   query: string;
   onSelect: (row: ProjectSwitcherRow) => void;
   listRef: React.RefObject<HTMLDivElement | null>;
-  /** Whether this surface offers "Add Project…" — decides what the empty state can name. */
+  /** Whether this surface offers "Add project…" — decides what the empty state can name. */
   canAddProject: boolean;
+  /**
+   * Whether the Scratch band below this list offers a create row. It decides
+   * which action an empty list is allowed to name — the modal mounts without
+   * the project commands but keeps Scratch, so pointing at the File menu there
+   * sent the reader out of the app past a button two rows down.
+   */
+  canCreateScratch: boolean;
+  /**
+   * True when browse has scratches but no projects, which makes the Scratch
+   * band the palette's first content. The instructional empty state stands down
+   * for it — printed above real rows it contradicts them.
+   */
+  scratchesStandAlone: boolean;
   onStopProject?: (projectId: string) => void;
   onCloseProject?: (projectId: string) => void;
   onSleepProject?: (projectId: string) => void;
@@ -1164,6 +1191,8 @@ function ProjectListContent({
   onSelect,
   listRef,
   canAddProject,
+  canCreateScratch,
+  scratchesStandAlone,
   onStopProject,
   onCloseProject,
   onSleepProject,
@@ -1309,7 +1338,6 @@ function ProjectListContent({
       <div ref={listRef} id="project-list" role="listbox" aria-label="Workspaces">
         {sections && sections.length > 0 ? (
           sections.map((section, sectionIdx) => {
-            const isLast = sectionIdx === sections.length - 1;
             const headerId = `project-section-${section.key}`;
             const listId = bandListId(section.key);
             const toggle = () => setBandCollapsed(section.key, !section.collapsed);
@@ -1325,7 +1353,14 @@ function ProjectListContent({
                 <div
                   role="group"
                   aria-labelledby={headerId}
-                  className={cn("px-2 py-1.5", sectionIdx === 0 && "pt-2", isLast && "pb-2")}
+                  /*
+                   * One value on all four bands. The first/last overrides used
+                   * to buy the run of bands some end padding, but the scroller
+                   * carries that now — and while they were here a folded last
+                   * band sat 8px below its own label and 4px above it, which is
+                   * exactly the lopsided gap a collapsed band makes obvious.
+                   */
+                  className="px-1 py-1"
                 >
                   {section.key === "other" ? (
                     <OtherProjectsHeader
@@ -1341,10 +1376,11 @@ function ProjectListContent({
                     <div
                       className={cn(
                         PALETTE_SECTION_LABEL_CLASS,
-                        // No `px-*`: the wrapper's `px-2` above is the inset the
-                        // row cards below are drawn from, so any padding here
-                        // would push the label off the line they share (#11943).
-                        "flex items-center justify-between gap-2 py-1"
+                        // `px-2` matches the row padding below rather than the
+                        // wrapper's old inset: both now start from the bare band
+                        // edge, so the label and the rows' status column share
+                        // the palette's 12px rail (#11943).
+                        "flex items-center justify-between gap-2 px-2 py-1"
                       )}
                     >
                       {section.collapsible ? (
@@ -1374,28 +1410,34 @@ function ProjectListContent({
             );
           })
         ) : results.length === 0 ? (
-          <div className="p-2">
-            <div
-              className="px-3 py-8 text-center text-daintree-text/50 text-sm"
-              data-testid="project-empty-state"
-            >
-              {query.trim() ? (
-                // "Workspaces", not "projects": scratches are ranked into this
-                // same list now, so naming only half of what was searched would
-                // read as a scratch still being findable somewhere else.
-                <div>{`No workspaces match "${query}"`}</div>
-              ) : canAddProject ? (
-                // Names the button sitting directly below this list.
-                "Add a project to get started"
-              ) : (
-                // The modal mounts without the add/clone callbacks, so naming
-                // them here would point at an action this surface can't run.
-                "Open a project from the File menu to get started"
-              )}
+          scratchesStandAlone ? null : (
+            <div className="px-1 py-1">
+              <div
+                className="px-2 py-8 text-center text-daintree-text/50 text-sm"
+                data-testid="project-empty-state"
+              >
+                {query.trim() ? (
+                  // "Workspaces", not "projects": scratches are ranked into this
+                  // same list now, so naming only half of what was searched would
+                  // read as a scratch still being findable somewhere else.
+                  <div>{`No workspaces match "${query}"`}</div>
+                ) : canAddProject ? (
+                  // Names the button sitting directly below this list.
+                  "Add a project to get started"
+                ) : canCreateScratch ? (
+                  // No project commands on this surface, but Scratch is still
+                  // here — so the nearest action is the create row, not a menu.
+                  "Create a scratch workspace to get started"
+                ) : (
+                  // Nothing on this surface can open anything, so the only honest
+                  // instruction points outside it.
+                  "Open a project from the File menu to get started"
+                )}
+              </div>
             </div>
-          </div>
+          )
         ) : (
-          <div className="p-2" role="presentation">
+          <div className="px-1 py-1" role="presentation">
             {results.map((project) => renderItem(project))}
           </div>
         )}
@@ -1427,6 +1469,13 @@ interface ScratchNameEditorProps {
   onCommit: (name: string) => void;
   onCancel: () => void;
   testId: string;
+  /**
+   * Spacing the editor inherits from whatever it stands in for. A rename editor
+   * replaces a row in the run and takes nothing; the create editor replaces the
+   * separated create action and takes its `mt-1`, so starting to type doesn't
+   * shunt the list by 4px.
+   */
+  className?: string;
 }
 
 /**
@@ -1442,6 +1491,7 @@ function ScratchNameEditor({
   onCommit,
   onCancel,
   testId,
+  className,
 }: ScratchNameEditorProps) {
   const [value, setValue] = useState(initialValue);
   const inputRef = useRef<HTMLInputElement>(null);
@@ -1485,10 +1535,14 @@ function ScratchNameEditor({
   );
 
   return (
-    <div className="w-full flex items-center gap-3 px-3 py-2 mt-1 rounded-[var(--radius-md)]">
-      <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] bg-tint/[0.04] text-muted-foreground shrink-0">
-        <FileText className="h-4 w-4" />
-      </div>
+    <div
+      className={cn(
+        "w-full flex items-center gap-2 px-2 py-1 rounded-[var(--radius-md)] border border-transparent",
+        className
+      )}
+    >
+      <StatusSlotSpacer />
+      <CommandTile icon={FileText} tone="manage" />
       <input
         ref={inputRef}
         data-scratch-name-input=""
@@ -1605,7 +1659,7 @@ function ScratchSection({
   const isCreating = editor?.kind === "create";
 
   return (
-    <div className="px-2 py-1.5" hidden={isSearching}>
+    <div className="px-1 py-1" hidden={isSearching}>
       {/*
        * The trigger stays mounted at zero scratches — only the menu content is
        * conditional. Swapping the button in and out of a ContextMenu as the last
@@ -1620,10 +1674,11 @@ function ScratchSection({
             onClick={() => setBandCollapsed(PROJECT_SWITCHER_SCRATCH_BAND_KEY, !collapsed)}
             className={cn(
               PALETTE_SECTION_LABEL_CLASS,
-              // No `px-*` — the wrapper's `px-2` is the inset the rows below are
-              // drawn from, and a second one here floats the label off it
-              // (#11943).
-              "w-full flex items-center justify-between gap-2 py-1 hover:text-daintree-text/60 transition-colors"
+              // `px-2` like the project bands' labels: the wrapper no longer
+              // carries the inset, so the label draws its own and lands on the
+              // same rail as the rows below it (#11943).
+              "w-full flex items-center justify-between gap-2 px-2 py-1 hover:text-daintree-text/60 transition-colors",
+              PALETTE_ROW_FOCUS_CLASS
             )}
             aria-expanded={!collapsed}
             aria-controls="scratch-section-list"
@@ -1649,10 +1704,10 @@ function ScratchSection({
         )}
       </ContextMenu>
       {!collapsed && (
-        <div id="scratch-section-list" className="mt-1">
+        <div id="scratch-section-list">
           {scratches.length === 0 ? (
-            <div className="px-3 py-2 text-xs text-daintree-text/40">
-              No scratch workspaces yet. Create one for a quick one-off task.
+            <div className="px-2 py-1 text-xs text-daintree-text/40">
+              Create a scratch workspace for a quick one-off task
             </div>
           ) : (
             <div role="listbox" aria-label="Scratch workspaces">
@@ -1686,8 +1741,19 @@ function ScratchSection({
                         type="button"
                         onClick={() => onSelect?.(scratch)}
                         className={cn(
-                          "w-full flex items-center gap-2 px-3 py-1 rounded-[var(--radius-md)] text-left transition-colors",
-                          scratch.isActive ? "bg-overlay-subtle" : "hover:bg-overlay-subtle"
+                          "w-full flex items-center gap-2 px-2 py-1 rounded-[var(--radius-md)] text-left transition-colors",
+                          scratch.isActive
+                            ? "text-daintree-text"
+                            : "text-daintree-text/70 hover:text-daintree-text",
+                          // Reserved like `PALETTE_ROW_CLASS` does, though this
+                          // row never draws one: the ranked scratch rows carry a
+                          // border, and without it here the same scratch shifted
+                          // 1px sideways between browse and search.
+                          "border border-transparent",
+                          PALETTE_ROW_FOCUS_CLASS,
+                          scratch.isActive
+                            ? "bg-overlay-subtle hover:bg-overlay-medium"
+                            : "hover:bg-overlay-subtle"
                         )}
                         role="option"
                         // No `aria-current` here, unlike the ranked rows above.
@@ -1698,11 +1764,14 @@ function ScratchSection({
                         aria-selected={scratch.isActive}
                       >
                         <StatusDot status={status} showResumeDot={showResumeDot} />
-                        <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] bg-tint/[0.04] text-muted-foreground shrink-0">
-                          <FileText className="h-4 w-4" aria-hidden="true" />
-                        </div>
+                        <CommandTile icon={FileText} tone="manage" />
                         <div className="flex-1 min-w-0">
-                          <div className="text-sm font-medium truncate leading-tight">
+                          <div
+                            className={cn(
+                              "truncate text-sm font-semibold leading-tight",
+                              scratch.isActive ? "text-daintree-text" : "text-daintree-text/85"
+                            )}
+                          >
                             {scratch.name}
                             {/*
                              * Inside the name element, not after it: this row
@@ -1789,6 +1858,7 @@ function ScratchSection({
                 initialValue={defaultScratchName(new Date())}
                 ariaLabel="Name for the new scratch workspace"
                 testId="scratch-create-input"
+                className="mt-1"
                 onCommit={handleCreateCommit}
                 onCancel={closeEditor}
               />
@@ -1796,15 +1866,17 @@ function ScratchSection({
               <button
                 type="button"
                 onClick={() => setEditor({ kind: "create" })}
-                className="w-full flex items-center gap-3 px-3 py-2 mt-1 rounded-[var(--radius-md)] text-left transition-colors hover:bg-overlay-subtle"
+                className={cn(
+                  "w-full flex items-center gap-2 px-2 py-1 mt-1 rounded-[var(--radius-md)] text-left transition-colors",
+                  "border border-transparent text-daintree-text/70 hover:bg-overlay-subtle hover:text-daintree-text",
+                  PALETTE_ROW_FOCUS_CLASS
+                )}
                 data-testid="scratch-create-button"
               >
-                <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] border border-dashed border-muted-foreground/30 bg-muted/20 text-muted-foreground">
-                  <Plus className="h-4 w-4" />
-                </div>
-                <span className="font-medium text-sm text-muted-foreground">
-                  New scratch workspace
-                </span>
+                {/* Keeps the tile on the workspace column the scratches above use. */}
+                <StatusSlotSpacer />
+                <CommandTile icon={Plus} tone="create" />
+                <span className="font-medium text-sm leading-tight">New scratch workspace…</span>
               </button>
             ))}
           {/*
@@ -1817,11 +1889,21 @@ function ScratchSection({
             <button
               type="button"
               onClick={onDeleteAll}
-              className="w-full flex items-center gap-2 px-3 py-1.5 mt-1 rounded-[var(--radius-md)] text-left text-xs font-medium text-status-error transition-colors hover:bg-status-error/10"
+              className={cn(
+                // A grid, not a flex run: the row is deliberately shorter than
+                // the ones above it, so it has no 32px tile to push its label
+                // out to their text column. The middle track stands in for the
+                // tile and centres the smaller glyph inside it.
+                "w-full grid grid-cols-[0.5rem_2rem_minmax(0,1fr)] items-center gap-x-2",
+                "px-2 py-1.5 mt-1 rounded-[var(--radius-md)] border border-transparent text-left",
+                "text-xs font-medium text-status-error transition-colors hover:bg-status-error/10",
+                PALETTE_ROW_FOCUS_CLASS
+              )}
               data-testid="scratch-delete-all-button"
             >
-              <Trash2 className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-              Delete all scratch workspaces
+              <span aria-hidden="true" />
+              <Trash2 className="h-3.5 w-3.5 justify-self-center" aria-hidden="true" />
+              <span className="truncate">Delete all scratch workspaces</span>
             </button>
           )}
         </div>
@@ -1927,8 +2009,89 @@ function ProjectSwitcherFooter({
  * global `outline-offset: 2px !important` would otherwise push the ring back
  * out past that same edge.
  */
-const PROJECT_ACTION_ROW_CLASS =
-  "palette-command-row w-full flex items-center gap-3 px-3 py-2 text-left transition-colors hover:bg-overlay-subtle focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-daintree-accent";
+/**
+ * The 32x32 icon tile every non-workspace row wears.
+ *
+ * Two treatments, and the split is semantic rather than decorative: `manage`
+ * acts on something that already exists, `create` brings something new in and
+ * wears the dashed outline that has always marked an add affordance here. Both
+ * ride the audited overlay ladder rather than a raw tint/muted alpha, so they
+ * hold their separation from the row underneath in every theme.
+ */
+function CommandTile({ icon: Icon, tone }: { icon: LucideIcon; tone: "manage" | "create" }) {
+  return (
+    <div
+      className={cn(
+        "flex h-8 w-8 shrink-0 items-center justify-center rounded-[var(--radius-lg)] text-daintree-text/50",
+        tone === "create"
+          ? "border border-dashed border-border-strong bg-overlay-soft"
+          : "bg-overlay-medium"
+      )}
+    >
+      <Icon className="h-4 w-4" aria-hidden="true" />
+    </div>
+  );
+}
+
+/**
+ * A palette-level command: the actions under the divider, which act on the
+ * project list rather than on a workspace in it.
+ *
+ * Full-bleed rather than a card, because the cards above it are the arrow-key
+ * domain and these rows are reached by Tab. That distinction is carried by the
+ * focus ring, not by the shape — the shape only says which half of the palette
+ * a row belongs to.
+ */
+function ProjectCommandRow({
+  icon,
+  tone,
+  label,
+  onClick,
+  testId,
+}: {
+  icon: LucideIcon;
+  tone: "manage" | "create";
+  label: string;
+  onClick: () => void;
+  testId?: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={PROJECT_ACTION_ROW_CLASS}
+      data-testid={testId}
+    >
+      <StatusSlotSpacer />
+      <CommandTile icon={icon} tone={tone} />
+      <span className="font-medium text-sm leading-tight">{label}</span>
+    </button>
+  );
+}
+
+/**
+ * The empty stand-in for `StatusDot` on a row that has no status to report.
+ *
+ * Every row in this palette puts its tile on one column, and on a workspace row
+ * that column is reached across an 8px status mark. A create/command row has no
+ * mark, so without this its tile climbed 16px left and the palette grew a
+ * second icon column for its actions (#11947).
+ */
+function StatusSlotSpacer() {
+  return <div className="w-2 h-2 shrink-0" aria-hidden="true" />;
+}
+
+const PROJECT_ACTION_ROW_CLASS = cn(
+  "palette-command-row w-full flex items-center gap-2 px-3 py-2 text-left transition-colors",
+  // Horizontal only. The rows above reserve a full border for their selected
+  // state, and matching it here keeps the two families' content boxes on the
+  // same pixel — but nothing ever draws a border on a command row, so the
+  // vertical halves were 2px of pure height, pushing the block off the 48px
+  // its tile and `py-2` add up to.
+  "border-x border-transparent",
+  "text-daintree-text/70 hover:bg-overlay-subtle hover:text-daintree-text",
+  PALETTE_ROW_FOCUS_CLASS
+);
 
 interface ProjectPaletteInnerProps {
   inputRef: React.RefObject<HTMLInputElement | null>;
@@ -2101,6 +2264,10 @@ function ProjectPaletteInner({
   // that frame — and for a user whose only workspaces are scratches, that frame
   // reads as "no matches".
   const isRankedSearch = rankedSearch ?? query.trim().length > 0;
+  const hasProjectPresentation =
+    (browseBands?.length ?? 0) > 0 || results.some((row) => row.kind === "project");
+  const scratchesStandAlone =
+    !isRankedSearch && !hasProjectPresentation && (scratchResults?.length ?? 0) > 0;
 
   useWaitAgeTick(results.length > 0 || (scratchResults?.length ?? 0) > 0);
 
@@ -2134,7 +2301,38 @@ function ProjectPaletteInner({
       </AppPaletteDialog.Header>
 
       <AppPaletteDialog.Body
-        className="p-0"
+        /*
+         * The shell's 144px floor is a stability device for typing: it seats
+         * three rows so a narrowing result list doesn't resize the palette on
+         * every keystroke. Browse never narrows, and there the floor only
+         * propped the body open past its content — a fully folded list left its
+         * last band a hundred-odd pixels above the rule below it, which is the
+         * one gap in the palette the band padding couldn't answer for.
+         */
+        className={cn(
+          // The shell transitions `height`, but the property that actually
+          // changes between these two states is `min-height` — left off the
+          // list, clearing the query dropped the floor in one frame.
+          "p-0 transition-[height,min-height]",
+          !isRankedSearch && "min-h-0"
+        )}
+        /*
+         * No padding of its own — the bands carry all of it. Both halves matter.
+         *
+         * Horizontally, the band dividers are children of this scroller while
+         * the header and footer rules are not, so any inset here drew the
+         * palette's internal rules 4px shorter than its chrome rules. They are
+         * the same hairline doing the same job and have to be the same width.
+         *
+         * Vertically, this padding stacked on top of the first and last band's
+         * own, leaving the first band 4px lower than every band after it — the
+         * one rule-to-label gap in the palette that didn't match the rest.
+         *
+         * `space-y-0` for the same reason: the inherited 4px landed on one side
+         * of each divider only, so every rule sat off centre between the two
+         * bands it separates.
+         */
+        scrollClassName="space-y-0"
         ariaLabel="Workspaces"
         activeDescendant={activeDescendant}
         onNavigationKeyDown={handleKeyDown}
@@ -2147,6 +2345,8 @@ function ProjectPaletteInner({
           onSelect={onSelect}
           listRef={listRef}
           canAddProject={Boolean(onAddProject)}
+          canCreateScratch={Boolean(onCreateScratch)}
+          scratchesStandAlone={scratchesStandAlone}
           onStopProject={onStopProject}
           onCloseProject={onCloseProject}
           onSleepProject={onSleepProject}
@@ -2161,7 +2361,8 @@ function ProjectPaletteInner({
         />
         {(onCreateScratch || (scratchResults && scratchResults.length > 0)) && (
           <>
-            <AppPaletteDialog.Divider hidden={isRankedSearch} />
+            {/* Nothing above it to separate from once Scratch is the first content. */}
+            <AppPaletteDialog.Divider hidden={isRankedSearch || scratchesStandAlone} />
             <ScratchSection
               scratches={scratchResults ?? []}
               isSearching={isRankedSearch}
@@ -2179,58 +2380,40 @@ function ProjectPaletteInner({
       {(onOpenProjectSettings || onAddProject || onCloneRepo || onCreateFolder) && (
         <>
           <AppPaletteDialog.Divider />
-          <div className="py-2">
+          <div>
             {onOpenProjectSettings && (
-              <button
-                type="button"
-                onClick={() => onOpenProjectSettings()}
-                className={PROJECT_ACTION_ROW_CLASS}
-              >
-                <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] bg-tint/[0.04] text-muted-foreground">
-                  <Settings2 className="h-4 w-4" />
-                </div>
-                <span className="font-medium text-sm text-muted-foreground">Project Settings…</span>
-              </button>
+              <ProjectCommandRow
+                icon={Settings2}
+                tone="manage"
+                label="Project settings…"
+                onClick={onOpenProjectSettings}
+              />
             )}
             {onAddProject && (
-              <button
-                type="button"
-                onClick={() => onAddProject()}
-                className={PROJECT_ACTION_ROW_CLASS}
-                data-testid="project-add-button"
-              >
-                <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] border border-dashed border-muted-foreground/30 bg-muted/20 text-muted-foreground">
-                  <Plus className="h-4 w-4" />
-                </div>
-                <span className="font-medium text-sm text-muted-foreground">Add Project…</span>
-              </button>
+              <ProjectCommandRow
+                icon={Plus}
+                tone="create"
+                label="Add project…"
+                onClick={onAddProject}
+                testId="project-add-button"
+              />
             )}
             {onCloneRepo && (
-              <button
-                type="button"
-                onClick={() => onCloneRepo()}
-                className={PROJECT_ACTION_ROW_CLASS}
-                data-testid="project-clone-button"
-              >
-                <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] border border-dashed border-muted-foreground/30 bg-muted/20 text-muted-foreground">
-                  <Download className="h-4 w-4" />
-                </div>
-                <span className="font-medium text-sm text-muted-foreground">Clone Repository…</span>
-              </button>
+              <ProjectCommandRow
+                icon={Download}
+                tone="create"
+                label="Clone repository…"
+                onClick={onCloneRepo}
+                testId="project-clone-button"
+              />
             )}
             {onCreateFolder && (
-              <button
-                type="button"
-                onClick={() => onCreateFolder()}
-                className={PROJECT_ACTION_ROW_CLASS}
-              >
-                <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] border border-dashed border-muted-foreground/30 bg-muted/20 text-muted-foreground">
-                  <FolderPlus className="h-4 w-4" />
-                </div>
-                <span className="font-medium text-sm text-muted-foreground">
-                  Create New Folder…
-                </span>
-              </button>
+              <ProjectCommandRow
+                icon={FolderPlus}
+                tone="create"
+                label="Create new folder…"
+                onClick={onCreateFolder}
+              />
             )}
           </div>
         </>
