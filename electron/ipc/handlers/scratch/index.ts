@@ -17,6 +17,7 @@ import { defineIpcNamespace, op } from "../../define.js";
 import { SCRATCH_METHOD_CHANNELS } from "./preload.js";
 import { getWindowForWebContents } from "../../../window/webContentsRegistry.js";
 import { distributePortsToView } from "../../../window/portDistribution.js";
+import { scheduleOpenWindowsSave } from "../../../window/openWindowsTracker.js";
 import { scratchStore } from "../../../services/ScratchStore.js";
 import { projectStore } from "../../../services/ProjectStore.js";
 import { getProjectHistory } from "../../../services/ProjectHistoryService.js";
@@ -156,6 +157,19 @@ export function registerScratchHandlers(deps: HandlerDependencies): () => void {
           // renderer's `getCurrentProject` does not race-restore the previous project.
           const updated = scratchStore.setCurrentScratch(scratchId);
           projectStore.clearCurrentProject();
+
+          // Re-persist which workspace each window is showing (#11492), the
+          // same call `project:switch` makes after its own commit. Placed after
+          // the PVM swap because the manifest is built from
+          // `getActiveProjectId()` across every window — it has to read the
+          // committed state, not the switch that is still landing.
+          //
+          // Best-effort for an abrupt exit, not a guarantee: the write is
+          // trailing-debounced, so a crash inside that window still relaunches
+          // into the workspace the user had left. A graceful quit is covered
+          // regardless — `freezeAndSnapshotOpenWindows()` captures whatever the
+          // pending debounce still owed (#11958).
+          scheduleOpenWindowsSave();
 
           // A scratch is not a project: the window's PVM now holds a scratch id
           // with no project row, so the File-menu project gates must drop.
