@@ -49,6 +49,17 @@ export interface DriveResult {
   frames: unknown[];
   stderr: string;
   exitCode: number | null;
+  /**
+   * The run asked for shutdown on the BACKSTOP TIMER rather than on a frame.
+   *
+   * Worth reporting because the two shutdowns are not equivalent evidence. Teardown
+   * cancels an in-flight slow command and only THEN seals the output transport
+   * (`teardown` / `sendPriority` in the engine's `internal/host`), so a command the
+   * engine never stopped on its own can still post a `command:result` on the way out.
+   * A test that reads a result as proof of something the engine did while running has
+   * to know the run did not reach the timer, or it is reading teardown's work.
+   */
+  backstopFired: boolean;
 }
 
 export interface DriveOptions {
@@ -91,8 +102,42 @@ export interface DriveOptions {
    * embedded host's command loop must keep servicing everything else. A loop that ran
    * them inline would post nothing and answer nothing until they finished — the panel
    * would simply freeze — so a shutdown that lands promptly IS the assertion.
+   *
+   * A command the engine REFUSES (`host:error` with `command-busy`) settles here too:
+   * it never produces a `command:result`, so counting it would leave the run waiting on
+   * the backstop timer for an answer that is never coming.
    */
   awaitCommandResults?: boolean;
+  /**
+   * Where the engine's backend lives, replacing the default dead loopback port.
+   *
+   * The default is REFUSED, not silent, and the difference decides whether a command
+   * that talks to the backend is slow: a connection to a closed loopback port comes
+   * back with ECONNREFUSED in under a millisecond, so `/account` against it answers
+   * about as fast as a command that does no I/O at all. A test about what the host does
+   * WHILE a command is outstanding needs a socket that accepts and then never answers,
+   * which the caller supplies.
+   *
+   * A LOOPBACK FIXTURE, never a real endpoint. The default is unreachable so that this
+   * suite can never do billable work, and an option that pointed somewhere real would
+   * quietly undo that for every test after it.
+   *
+   * Named rather than folded into an env bag for the reason `environmentTier` gives:
+   * the two variables `stopSupervisor` reads back must stay where this harness put
+   * them, or a run leaves a live supervisor behind a deleted temp tree.
+   */
+  backendUrl?: string;
+  /**
+   * Send an `interrupt` frame the moment the engine reports a command already in flight.
+   *
+   * Gated on that refusal rather than on a delay, for the reason the shutdown below is
+   * gated on `host:ready`: the interesting moment is "the command is outstanding", and
+   * a timer only guesses at when that is. The engine's `command-busy` refusal is the
+   * one frame that STATES it — it is emitted from the branch that found `cmdBusy` still
+   * set — so a second command in `commands` doubles as the probe that says when to stop
+   * the first one.
+   */
+  interruptOnCommandBusy?: boolean;
 }
 
 /** Boots the engine, sends a descriptor then a shutdown, and collects stdout frames. */
@@ -122,7 +167,7 @@ export async function driveEngine(
         DAINTREE_PROJECT_ID: CONFORMANCE_PROJECT_ID,
         // Deliberately unreachable. The handshake must not depend on a backend, and
         // pointing at a real one would make this test do billable work.
-        DAINTREE_BACKEND_URL: "http://127.0.0.1:59999",
+        DAINTREE_BACKEND_URL: opts.backendUrl ?? "http://127.0.0.1:59999",
         DAINTREE_ASSISTANT_PROJECT: projectDir,
         // Both halves of the binding are stated EXPLICITLY, never inherited. The engine
         // compares the descriptor against these, and a developer with either of them
@@ -130,6 +175,14 @@ export async function driveEngine(
         // regression — or, worse, a mismatch test that passed on the wrong field.
         DAINTREE_WINDOW_ID: String(DESCRIPTOR_WINDOW_ID),
         DAINTREE_ASSISTANT_TIER: opts.environmentTier ?? descriptorTier,
+        // BLANKED, for the same reason the binding fields are stated explicitly: this
+        // one is read from the real environment only, and a developer who has it
+        // exported gets a materially different engine. A caller key overrides account
+        // identity for every request, so the engine builds NO account manager beside
+        // one — `/account` then answers from memory without touching a backend at all,
+        // and a test about what the host does while a backend command is outstanding
+        // would be driving a command that does no I/O.
+        DAINTREE_API_KEY: "",
       },
       stdio: ["pipe", "pipe", "pipe"],
     });
@@ -142,6 +195,7 @@ export async function driveEngine(
     let stderr = "";
     let onReady: (() => void) | undefined;
     let onCommandResult: (() => void) | undefined;
+    let onCommandBusy: (() => void) | undefined;
 
     child.stdout.setEncoding("utf8");
     child.stdout.on("data", (chunk: string) => {
@@ -156,6 +210,9 @@ export async function driveEngine(
         const type = (frame as { type?: string }).type;
         if (type === "host:ready") onReady?.();
         if (type === "command:result") onCommandResult?.();
+        if (type === "host:error" && (frame as { code?: string }).code === "command-busy") {
+          onCommandBusy?.();
+        }
       }
     });
     child.stderr.setEncoding("utf8");
@@ -174,12 +231,18 @@ export async function driveEngine(
       })}\n`
     );
 
+    let backstopFired = false;
     const exitCode = await new Promise<number | null>((resolve) => {
       const kill = setTimeout(() => child.kill("SIGKILL"), 25_000);
       const requestShutdown = () => {
         if (child.stdin.writable) {
           child.stdin.write(`${JSON.stringify({ type: "shutdown", sessionId })}\n`);
         }
+      };
+      const settleOne = () => {
+        if (!awaitResults) return;
+        outstandingResults -= 1;
+        if (outstandingResults <= 0) requestShutdown();
       };
       // Shut down on the READY FRAME, not on a timer. A fixed grace period is a guess
       // about how long a 15MB Go binary takes to spawn and reach ready, and that guess
@@ -199,12 +262,20 @@ export async function driveEngine(
         }
         if (commands.length === 0 || !awaitResults) requestShutdown();
       };
-      onCommandResult = () => {
-        if (!awaitResults) return;
-        outstandingResults -= 1;
-        if (outstandingResults <= 0) requestShutdown();
+      onCommandResult = settleOne;
+      onCommandBusy = () => {
+        // Interrupt FIRST, settle after: the refusal may be the last thing this run was
+        // waiting on, and a shutdown written ahead of the interrupt would test teardown
+        // again rather than the stop path.
+        if (opts.interruptOnCommandBusy && child.stdin.writable) {
+          child.stdin.write(`${JSON.stringify({ type: "interrupt", sessionId })}\n`);
+        }
+        settleOne();
       };
-      const shutdown = setTimeout(requestShutdown, 20_000);
+      const shutdown = setTimeout(() => {
+        backstopFired = true;
+        requestShutdown();
+      }, 20_000);
       child.on("exit", (code) => {
         clearTimeout(kill);
         clearTimeout(shutdown);
@@ -212,7 +283,7 @@ export async function driveEngine(
       });
     });
 
-    return { frames, stderr, exitCode };
+    return { frames, stderr, exitCode, backstopFired };
   } finally {
     // Stop the supervisor BEFORE deleting the directory it lives in.
     //
