@@ -8,11 +8,11 @@ The goal it was written to serve, which was met: the in-app assistant stops bein
 
 ## Superseded in these specific ways
 
-Phases 0–3 landed. Read the rest of this document with these corrections in hand:
+Phases 0–3 landed, with one exception: the Windows lock port §5 Phase 0 called for was never done, and the built-in engine is macOS/Linux only as a result — see [Platform scope](./assistant-native-host.md#platform-scope). Read the rest of this document with these corrections in hand:
 
 - **Ownership.** §5 Phase 5 says _"today there is no sign-in at all"_ and puts account state and sign-in in Daintree as "native work". That is not what happened, and the opposite is now a hard constraint. The CLI — including the copy embedded in Daintree — owns sign-in, sign-out, account status and backend selection, as the engine commands `/login`, `/logout`, `/account` and `/backend`. The website owns browser sign-in, consent, checkout and billing. The backend verifies tokens and enforces entitlements. Daintree hosts and renders, and holds no credential, no plan and no endpoint. Daintree's own assistant account settings, IPC and service were built and then removed to get here; **do not add a login button, token field, account card, plan cache or backend URL field back to Settings.**
 - **Process shape.** §4 and the older boundary doc both specify `utilityProcess.fork()`. The engine is a Go binary and `utilityProcess.fork` runs a Node script, so the runtime is a `child_process.spawn` speaking NDJSON over stdio. See `AssistantHostProcess.ts`.
-- **Binary resolution.** §1.4 Bundling lists a `PATH` fallback as the third resolution step, "so CLI developers can test their own build inside the app". There is deliberately no `PATH` fallback: `DAINTREE_ASSISTANT_BIN` covers that case explicitly, and a silent bind to whatever version is installed would reintroduce the exact skew the submodule pin exists to prevent.
+- **Binary resolution.** §4 Bundling lists a `PATH` fallback as the third resolution step, "so CLI developers can test their own build inside the app". There is deliberately no `PATH` fallback: `DAINTREE_ASSISTANT_BIN` covers that case explicitly, and a silent bind to whatever version is installed would reintroduce the exact skew the submodule pin exists to prevent.
 - **Staging.** `assistant.daintree.org` is the staging backend and `staging.daintree.org` is the staging website. Which of them a session talks to is the engine's decision, reported on `host:ready`; Daintree never infers it from a hostname.
 
 ## 1. The decision
@@ -182,6 +182,8 @@ The only piece with any pull is `useChat` with a custom `ChatTransport` mapping 
 
 ### Process shape
 
+**Obsolete — this section is history, not a plan.** The engine is spawned by the main process with `child_process.spawn` and speaks NDJSON over stdio; the option-(b) Node utility process chosen below, which would itself have spawned the Go binary, never shipped. See [Superseded in these specific ways](#superseded-in-these-specific-ways), and `AssistantHostProcess.ts`, where the reasoning is restated in place.
+
 Not `utilityProcess.fork` of the binary — that runs a Node script and cannot execute a Go binary. Two viable shapes:
 
 **(a)** main process `child_process.spawn` + bridge to the renderer over `MessagePort`. **(b)** a thin Node `utilityProcess` (`assistant-host`) that spawns the Go binary, parses NDJSON, and forwards validated structured events over a `MessageChannelMain` port to the pinned renderer.
@@ -199,6 +201,8 @@ Two mechanics to get right at the seam: **coalesce token deltas per animation fr
 - **Ship stripped.** Measured: 33.3MB default, **23.9MB with `-ldflags="-s -w"`** — 5.8% of the 410MB installed app, one binary per installer. If the cockpit later moves behind a build tag, the whole TUI stack is a further ~2.13MB of symbols.
 
 **Vendor as a git submodule pinned by SHA**, built by a Makefile target the Daintree build calls. Not a release-artifact download: the whole lesson of §2 is that the engine and the host contract must move atomically, and a submodule SHA _is_ that atomicity. A download-and-verify pipeline adds a release cycle between "change the protocol" and "test the protocol", which is exactly the gap that let v1 and v2 drift apart.
+
+**Obsolete — the resolution order below has no `PATH` step.** `DAINTREE_ASSISTANT_BIN` covers local engine development explicitly, and a silent bind to whatever version is installed is the skew the submodule pin exists to prevent. See [Superseded in these specific ways](#superseded-in-these-specific-ways), and [`assistant-native-host.md`](./assistant-native-host.md) for the order that shipped.
 
 Resolution order at runtime, most specific first: `DAINTREE_ASSISTANT_BIN` (local dev, points at `make build` output) → bundled binary under `process.resourcesPath` → `PATH` lookup (so CLI developers can test their own build inside the app). The `PATH` fallback also covers the case where a user has a newer CLI than the app ships.
 
@@ -248,6 +252,8 @@ Exit criterion is **not** parity with the cockpit. It is: everything the cockpit
 The reason the transition is worth doing at all. Candidates, in rough value order: run cards joined with the worktree dashboard; inline diff and PR previews from `forge` reads; the attention inbox as a real Daintree inbox surface rather than a digest paragraph; drag-and-drop and paste of files, images and terminal selections into the composer; `@`-referencing worktrees, terminals, issues and PRs with completion; jump-to-source from any object the assistant names.
 
 ### Phase 5 — Monetization
+
+**Obsolete — this section is history, not a plan.** Daintree-owned sign-in was built and then removed; it is not part of the shipped design. The CLI, including the copy embedded in Daintree, owns sign-in, sign-out, account status and backend selection; Daintree hosts and renders, and holds no account credential, no plan and no endpoint. See [Superseded in these specific ways](#superseded-in-these-specific-ways) for the correction in full, and [`assistant-native-host.md`](./assistant-native-host.md) for what was actually built.
 
 Deliberately after the surface is good. The panel presents; **the backend enforces** — never gate in the client.
 
