@@ -50,11 +50,46 @@ function isContained(root: string, candidate: string): boolean {
 }
 
 /**
+ * Normalize a `readlink` result that came back in Win32 extended-length form.
+ *
+ * A Windows junction's stored target is an NT-namespace path: `readlink`
+ * returns `\\?\C:\repo\target`, not `C:\repo\target`. Left as-is,
+ * `path.relative` reads it as a different root and every in-root junction is
+ * classified external — the very thing the issue says must not be
+ * special-cased away from POSIX symlinks.
+ *
+ * This is not the `fs.realpath` prefix-stripping that no other call site in
+ * this codebase does, and shouldn't be: it normalizes `readlink` output, which
+ * genuinely carries the prefix for junctions, and it happens before any
+ * containment decision rather than after one.
+ *
+ * `\\?\UNC\server\share` is the trap. It is a network path wearing the
+ * prefix, and dropping four characters would leave `UNC\server\share` — a
+ * RELATIVE path, which then resolves inside the root and would let a remote
+ * share pass as local. It maps back to `\\server\share`, which stays a
+ * distinct root and is rejected. Anything else keeps the prefix and is
+ * rejected too; only the drive-letter form is an ordinary path in disguise.
+ */
+export function _normalizeWin32LinkTarget(target: string): string {
+  if (!target.startsWith("\\\\?\\")) return target;
+  const rest = target.slice(4);
+  if (/^UNC\\/i.test(rest)) return `\\\\${rest.slice(4)}`;
+  return /^[A-Za-z]:\\/.test(rest) ? rest : target;
+}
+
+function normalizeLinkTarget(target: string): string {
+  // Split from the logic above only so the Windows behaviour is testable off
+  // Windows — the rule itself has no business running on POSIX, where a file
+  // may legitimately be named `\\?\C:\x` and rewriting it would invent a path.
+  return path.sep === "\\" ? _normalizeWin32LinkTarget(target) : target;
+}
+
+/**
  * Resolve one symlink entry into the metadata the browser needs (#11939).
  *
- * What this guarantees, exactly: nothing outside the workspace root is ever
- * *reported*. `realpath` resolves the entire chain and the canonical result is
- * checked against the canonical root before any kind, size or mtime is read —
+ * What this guarantees, exactly: no out-of-root target's kind, size or mtime
+ * is ever reported. `realpath` resolves the entire chain and the canonical
+ * result is checked against the canonical root before any of them is read —
  * so an escaping link comes back `"external"` with no metadata attached, and
  * `isDirectory` stays false, which is what keeps it non-descendable.
  *
@@ -82,7 +117,7 @@ async function describeSymlink(
   resolvedBasePath: string,
   resolvedBaseRealPath: string
 ): Promise<{ symlink: FileTreeSymlink; targetStat?: Stats }> {
-  const raw = await fs.readlink(linkPath);
+  const raw = normalizeLinkTarget(await fs.readlink(linkPath));
   // Against the CANONICAL directory this entry was listed from, not the
   // lexical one. When the listed directory is itself reached through a link,
   // the two are different places, and only the canonical one interprets a
@@ -105,12 +140,14 @@ async function describeSymlink(
   try {
     realTarget = await fs.realpath(linkPath);
   } catch (error: unknown) {
-    // ENOENT is a dangling link — the one failure specific enough to show.
-    // ELOOP (a cycle, or the OS depth limit) and EACCES/EPERM are equally
-    // non-actionable, and reporting them as `"external"` would tell the user
-    // something false about where their link points.
+    // A dangling link is the one failure specific enough to show. ENOTDIR
+    // counts as dangling too: it means a component of the target is a file, so
+    // the target cannot exist either — reporting that as merely "unreadable"
+    // would hide a broken link behind a vaguer word. ELOOP (a cycle, or the OS
+    // depth limit) and EACCES/EPERM say nothing about existence, and calling
+    // any of them `"external"` would assert a location we never established.
     const code = (error as NodeJS.ErrnoException).code;
-    return unresolved(code === "ENOENT" ? "broken" : "unknown");
+    return unresolved(code === "ENOENT" || code === "ENOTDIR" ? "broken" : "unknown");
   }
 
   // The authoritative check. A target can be lexically inside the root and
@@ -144,10 +181,11 @@ async function describeSymlink(
  * disagreed with the one that builds the bundle, so it is gone.
  *
  * Symbolic links are entries too (#11939). Listing a link is not dereferencing
- * it, so containment governs descent rather than visibility: a link is always
- * shown, a link resolving inside the root reports its target's kind and can be
- * expanded like the real thing, and a link resolving outside is a terminal
- * node carrying where it points. `node_modules/.bin` is nothing but relative
+ * it, so containment governs descent rather than visibility: a link is shown
+ * whatever it points at (only an unreadable entry drops, as for any other
+ * dirent lost to a race), a link resolving inside the root reports its
+ * target's kind and can be expanded like the real thing, and a link resolving
+ * outside is a terminal node carrying where it points. `node_modules/.bin` is nothing but relative
  * in-root links, and it used to render as an empty folder.
  */
 export class FileTreeService {
@@ -180,7 +218,7 @@ export class FileTreeService {
       const resolvedBaseRealPath = await _getBaseRealpath(resolvedBasePath);
       const targetRealPath = await fs.realpath(targetPath).catch(() => targetPath);
       // Still the guard that makes an out-of-root link non-expandable: the
-      // listing marks such a node `insideRoot: false` so the renderer never
+      // listing leaves such a node `isDirectory: false` so the renderer never
       // asks, but this is what holds if something asks anyway.
       if (!isContained(resolvedBaseRealPath, targetRealPath)) {
         throw new Error("Invalid directory path: path traversal not allowed");

@@ -2,7 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import fs from "fs/promises";
 import os from "os";
 import path from "path";
-import { FileTreeService } from "../FileTreeService.js";
+import { FileTreeService, _normalizeWin32LinkTarget } from "../FileTreeService.js";
 
 // The temp dirs created below are NOT git repos, and that is no longer a
 // special case: this service is a raw listing with no git dependency at all.
@@ -150,7 +150,7 @@ describe("FileTreeService", () => {
     expect(nodes.map((node) => node.name).sort()).toEqual([".git", ".gitignore", "app.ts", "dist"]);
   });
 
-  it("blocks dirPath values that resolve through symlinks outside base path", async () => {
+  it("blocks dirPath values that resolve through symlinks outside base path", async (ctx) => {
     const outsideDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-file-tree-outside-"));
     await fs.writeFile(path.join(outsideDir, "outside.txt"), "outside");
 
@@ -160,11 +160,11 @@ describe("FileTreeService", () => {
       try {
         await fs.symlink(outsideDir, linkPath, "dir");
       } catch (error) {
-        // Some environments disallow symlink creation; skip instead of failing unrelated behavior.
+        // Some environments disallow symlink creation. Skipped, not returned:
+        // a returning test reports green with no assertions, which reads as
+        // coverage this suite would not actually have.
         const code = (error as NodeJS.ErrnoException).code;
-        if (code === "EPERM" || code === "EACCES") {
-          return;
-        }
+        if (code === "EPERM" || code === "EACCES") ctx.skip();
         throw error;
       }
 
@@ -494,5 +494,41 @@ describe("FileTreeService mtimeMs (#11620)", () => {
 
     expect(node).toMatchObject({ size: 5 });
     expect(node?.mtimeMs).toBeGreaterThan(0);
+  });
+});
+
+/**
+ * Windows junctions store their target in the NT namespace, so `readlink`
+ * hands back an extended-length path. The rule runs only on Windows, but the
+ * logic is pure and its failure mode — an in-root junction classified as
+ * external, or worse a remote share classified as local — is worth pinning on
+ * every platform rather than waiting for a Windows run to find it (#11939).
+ */
+describe("_normalizeWin32LinkTarget", () => {
+  it("unwraps the drive-letter form so an in-root junction stays in-root", () => {
+    expect(_normalizeWin32LinkTarget(String.raw`\\?\C:\repo\target`)).toBe(
+      String.raw`C:\repo\target`
+    );
+  });
+
+  it("maps the UNC form back to a share path instead of a relative one", () => {
+    // The trap: dropping four characters would leave `UNC\server\share`,
+    // which is RELATIVE — it would resolve under the workspace root and let a
+    // remote share pass as local. It has to become a real UNC path, which
+    // stays a distinct root and is rejected by containment.
+    const unwrapped = _normalizeWin32LinkTarget(String.raw`\\?\UNC\server\share\x`);
+    expect(unwrapped).toBe(String.raw`\\server\share\x`);
+    expect(path.win32.isAbsolute(unwrapped)).toBe(true);
+  });
+
+  it("leaves any other namespace path wearing its prefix, so it cannot be mistaken for local", () => {
+    const volumeGuid = String.raw`\\?\Volume{b75e2c83}\x`;
+    expect(_normalizeWin32LinkTarget(volumeGuid)).toBe(volumeGuid);
+  });
+
+  it("passes ordinary targets through untouched", () => {
+    expect(_normalizeWin32LinkTarget(String.raw`..\target`)).toBe(String.raw`..\target`);
+    expect(_normalizeWin32LinkTarget(String.raw`C:\repo\target`)).toBe(String.raw`C:\repo\target`);
+    expect(_normalizeWin32LinkTarget("../acorn/bin/acorn")).toBe("../acorn/bin/acorn");
   });
 });

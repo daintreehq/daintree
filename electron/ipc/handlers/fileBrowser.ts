@@ -287,10 +287,18 @@ export function buildFileBrowserNamespace(deps: HandlerDependencies) {
     // now (#11939), so a reference in terminal output pointing through an
     // in-root link has to resolve rather than read as a non-existent file.
     //
-    // Note this is final-target containment: a chain that leaves the root and
-    // comes back inside is accepted, matching how `FileTreeService` decides
-    // what may be descended into. `path.relative` rather than a string prefix
-    // so a sibling root like `/workspace-other` can't pass.
+    // Note this is final-target containment only: a chain that leaves the root
+    // and comes back inside is accepted here. `FileTreeService` is slightly
+    // stricter — it also rejects a target that NAMES an outside path before
+    // resolving it — so an exotic leave-and-return link can resolve as a
+    // reference here while the browser row for it reads external. Both answers
+    // are safe (neither reports anything out of root); they differ because the
+    // listing has a second job this handler doesn't: classifying thousands of
+    // entries per directory without dereferencing each one. Unifying them
+    // wants a shared resolve-beneath primitive that doesn't exist yet.
+    //
+    // `path.relative` rather than a string prefix so a sibling root like
+    // `/workspace-other` can't pass.
     const rootRealPath = await fs.realpath(root.path).catch(() => null);
     if (rootRealPath === null) {
       return payload.paths.map(() => null);
