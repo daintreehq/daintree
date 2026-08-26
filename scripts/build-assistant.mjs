@@ -26,6 +26,10 @@ import { existsSync, mkdirSync, rmSync, statSync } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
+import enginePin from "./assistantEnginePin.cjs";
+
+const { readEnginePin } = enginePin;
+
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const SUBMODULE = path.join(ROOT, "vendor", "daintree-assistant");
 const OUT_DIR = path.join(ROOT, "resources", "assistant");
@@ -114,23 +118,19 @@ function buildTarget({ platform, arch, goos, goarch }, { version }) {
  * reports the SHA it was branched from, and two binaries that behave differently claim
  * to be the same build — which is exactly the confusion this whole vendoring scheme
  * exists to prevent.
+ *
+ * Resolved through `assistantEnginePin.cjs` rather than formatted here, because
+ * `afterPack.cjs` reads this same string back out of the binary it is about to package
+ * and refuses a mismatch. Two copies of the format would eventually disagree, and the
+ * disagreement would read as a stale engine on a build that was perfectly current.
  */
 function resolveVersion() {
-  try {
-    const sha = execFileSync("git", ["rev-parse", "--short", "HEAD"], {
-      cwd: SUBMODULE,
-      encoding: "utf8",
-    }).trim();
-    // `--porcelain` is empty exactly when the tree is clean. Untracked files count:
-    // a new `.go` file changes the build.
-    const dirty = execFileSync("git", ["status", "--porcelain"], {
-      cwd: SUBMODULE,
-      encoding: "utf8",
-    }).trim();
-    return dirty ? `daintree-${sha}-dirty` : `daintree-${sha}`;
-  } catch {
-    return "daintree-dev";
-  }
+  const pin = readEnginePin({ root: ROOT, spawnSync });
+  // A pin that cannot be read is not fatal here — `--dev` builds from a submodule that
+  // is legitimately ahead of the gitlink all day. It is fatal at PACK time, where
+  // afterPack says so with the actionable message. `daintree-dev` keeps that build
+  // honest in the masthead meanwhile: it names no commit, so it cannot claim one.
+  return pin.version ?? "daintree-dev";
 }
 
 function main() {
@@ -186,11 +186,21 @@ function main() {
     targets = TARGETS;
   } else {
     const platform = argv.includes("--platform") ? platformArg : process.platform;
-    const arch = argv.includes("--arch") ? archArg : process.arch;
-    targets = TARGETS.filter((t) => t.platform === platform && t.arch === arch);
+    // `--platform` alone means EVERY arch that platform ships, because that is what
+    // packaging one platform needs: `--mac` builds arm64, x64 and the universal merge of
+    // both, and `--win nsis` builds x64 and arm64. Naming only the host arch there would
+    // leave electron-builder to fail on a missing `from:` for the other one — or worse,
+    // for `package` to be the only script that ever built the engine, which is how a
+    // stale binary reached a release branch. `--arch` narrows it back to one target.
+    const arch = argv.includes("--arch")
+      ? archArg
+      : argv.includes("--platform")
+        ? null
+        : process.arch;
+    targets = TARGETS.filter((t) => t.platform === platform && (arch === null || t.arch === arch));
     if (targets.length === 0) {
       fail(
-        `no assistant target for ${platform}/${arch}. Supported: ` +
+        `no assistant target for ${platform}/${arch ?? "*"}. Supported: ` +
           TARGETS.map((t) => `${t.platform}/${t.arch}`).join(", ")
       );
     }

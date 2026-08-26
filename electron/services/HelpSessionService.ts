@@ -1929,8 +1929,11 @@ export class HelpSessionService {
       docSearch: typeof stored.docSearch === "boolean" ? stored.docSearch : DEFAULT_DOC_SEARCH,
       tier,
       bypassPermissions,
-      debugLogging:
-        typeof stored.debugLogging === "boolean" ? stored.debugLogging : defaultDebugLogging(),
+      // Build-driven, with no stored preference behind it any more: the engine's own
+      // settings left Daintree with the account and the endpoint, and a trace switch
+      // that only one of three assistant backends reads went with them. Developers
+      // still get the trace automatically — see `defaultDebugLogging`.
+      debugLogging: defaultDebugLogging(),
     };
   }
 

@@ -95,7 +95,7 @@ vi.mock("electron", () => ({
 }));
 
 vi.mock("../../../ipc/handlers/helpAssistant.js", () => ({
-  getHelpAssistantSettings: () => ({ tier: "action", backendEnvironment: "local" }),
+  getHelpAssistantSettings: () => ({ tier: "action" }),
 }));
 
 vi.mock("../../HelpSessionService.js", () => ({

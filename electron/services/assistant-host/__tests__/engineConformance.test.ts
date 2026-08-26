@@ -138,3 +138,46 @@ describe.skipIf(!binary)("assistant engine wire conformance", () => {
     }
   }, 40_000);
 });
+
+/**
+ * The engine advertises the account commands, so the panel can offer them.
+ *
+ * This is the cross-repo half of sign-in, and it is the one that can rot silently.
+ * Daintree renders its slash palette from the catalog the engine hands over in
+ * `host:ready` — it keeps no list of its own, deliberately, so that the two cannot
+ * drift. The consequence is that `/login` working in the panel is entirely a claim
+ * about the ENGINE, and nothing in Daintree's own tree can verify it.
+ *
+ * The failure this guards is concrete and was real until the engine gained these
+ * commands: Daintree removed its Settings account surface on the understanding that
+ * sign-in had moved into the session, while a `/login` typed into the panel took the
+ * unknown-command path and came back as "/login isn't a command" — leaving an install
+ * with no way to sign in at all, and a complete OAuth implementation sitting one
+ * registry row out of reach.
+ */
+describe.skipIf(!binary)("assistant engine account commands", () => {
+  it("advertises the sign-in commands in the ready catalog", async () => {
+    const { frames, stderr } = await driveEngine(binary!, "ses_account_commands");
+    const ready = frames.map(parseAssistantHostEvent).find((e) => e?.type === "host:ready") as
+      { commands?: { name: string }[] } | undefined;
+
+    expect(ready, `the engine never became ready.\n${stderr}`).toBeDefined();
+
+    const names = (ready?.commands ?? []).map((c) => c.name);
+    expect(
+      names.length,
+      "the engine advertised no commands at all — the panel's palette would be empty"
+    ).toBeGreaterThan(0);
+
+    // Asserted WITH the leading slash, because that is what the engine puts on the wire
+    // and what the panel renders verbatim. Matching on the bare word would pass on a
+    // catalog whose entries the panel cannot display as typed.
+    for (const command of ["/login", "/logout", "/account"]) {
+      expect(
+        names,
+        `the engine does not advertise ${command}, so the panel cannot offer it — ` +
+          `advertised: ${names.join(", ")}`
+      ).toContain(command);
+    }
+  }, 40_000);
+});

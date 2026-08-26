@@ -85,8 +85,6 @@ describe("registerHelpAssistantHandlers", () => {
       modelId: "",
       customArgs: "",
       idleHibernateMinutes: 5,
-      debugLogging: false,
-      backendEnvironment: "local",
     });
   });
 
@@ -109,8 +107,6 @@ describe("registerHelpAssistantHandlers", () => {
       modelId: "",
       customArgs: "",
       idleHibernateMinutes: 5,
-      debugLogging: false,
-      backendEnvironment: "local",
     });
   });
 
@@ -162,68 +158,6 @@ describe("registerHelpAssistantHandlers", () => {
   });
 
   /**
-   * The two halves of retiring a backend name, at the boundary that actually decides it.
-   *
-   * Read and write are DELIBERATELY asymmetric: a value already sitting in someone's
-   * settings file has to keep resolving, or the id fails validation, the stored choice
-   * is discarded as unrecognised, and a remote install silently falls back to
-   * `127.0.0.1`. Writing it back is a different question, and the answer is no — that
-   * would put the install onto a name this build no longer offers, which the next read
-   * would only have to undo.
-   */
-  describe("backendEnvironment", () => {
-    it("reads a retired stored value back as the name that replaced it", async () => {
-      storeMock.get.mockReturnValue({ backendEnvironment: "production" });
-      registerHelpAssistantHandlers();
-      const handler = ipcMainMock._handlers.get(GET_CHANNEL)!;
-
-      // Canonicalised on the way out, so the picker is handed an id it has an option
-      // for. Both names resolve to the same endpoint, so nobody's prompts move.
-      expect(await handler(null)).toMatchObject({ backendEnvironment: "staging" });
-    });
-
-    it("leaves the disk value alone, so an older build still understands it", async () => {
-      storeMock.get.mockReturnValue({ backendEnvironment: "production" });
-      registerHelpAssistantHandlers();
-      await ipcMainMock._handlers.get(GET_CHANNEL)!(null);
-
-      // Reading must not rewrite. A downgrade has to find the name it knows.
-      expect(storeMock.set).not.toHaveBeenCalled();
-    });
-
-    it("falls back to local for a stored value this build does not know", async () => {
-      storeMock.get.mockReturnValue({
-        backendEnvironment: "somewhere-else",
-      } as unknown as Partial<HelpAssistantSettings>);
-      registerHelpAssistantHandlers();
-      const handler = ipcMainMock._handlers.get(GET_CHANNEL)!;
-
-      expect(await handler(null)).toMatchObject({ backendEnvironment: "local" });
-    });
-
-    it("persists the environments a user can actually choose", async () => {
-      registerHelpAssistantHandlers();
-      const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
-
-      await handler(null, { backendEnvironment: "local" });
-      await handler(null, { backendEnvironment: "staging" });
-
-      expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.backendEnvironment", "local");
-      expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.backendEnvironment", "staging");
-    });
-
-    it("refuses to write a retired name back", async () => {
-      registerHelpAssistantHandlers();
-      const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
-
-      await handler(null, { backendEnvironment: "production" });
-      await handler(null, { backendEnvironment: "somewhere-else" });
-
-      expect(storeMock.set).not.toHaveBeenCalled();
-    });
-  });
-
-  /**
    * `setSettings` answers with the settings as they now stand, not with the patch.
    *
    * The two differ exactly when it matters — a rejected field, a sanitised value, a
@@ -232,31 +166,31 @@ describe("registerHelpAssistantHandlers", () => {
    * reconcile against and went on displaying a value nothing had saved.
    */
   describe("setSettings readback", () => {
-    it("answers with the value that was actually written", async () => {
-      storeMock.get.mockReturnValue({ backendEnvironment: "local" });
+    it("answers with the stored settings, not with the patch it was handed", async () => {
+      // A stored value that is NOT the default, and a patch that does not mention it:
+      // the reply can only carry `tier: "system"` if it was read back from the store.
+      // An echo of the request would carry `docSearch` and nothing else.
+      storeMock.get.mockReturnValue({ tier: "system" });
       registerHelpAssistantHandlers();
       const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
 
-      // The read-back reflects the store, which the mock reports as `local` regardless.
-      // What is being asserted is that a full settings object comes back at all — the
-      // caller can no longer be told "fine" and left to assume its own request.
       const result = (await handler(null, { docSearch: false })) as HelpAssistantSettings;
-      expect(result).toMatchObject({ backendEnvironment: "local", tier: "action" });
+      expect(result.tier).toBe("system");
     });
 
     it("does not echo a field it refused to write", async () => {
-      storeMock.get.mockReturnValue({ backendEnvironment: "local" });
+      storeMock.get.mockReturnValue({ tier: "system" });
       registerHelpAssistantHandlers();
       const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
 
       const result = (await handler(null, {
-        backendEnvironment: "production",
+        tier: "godmode" as unknown as HelpAssistantSettings["tier"],
       })) as HelpAssistantSettings;
 
       // Refused — and the answer says so by reporting what is still true, which is the
       // whole reason this returns the settings rather than nothing.
       expect(storeMock.set).not.toHaveBeenCalled();
-      expect(result.backendEnvironment).toBe("local");
+      expect(result.tier).toBe("system");
     });
   });
 
@@ -269,27 +203,6 @@ describe("registerHelpAssistantHandlers", () => {
     expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.docSearch", false);
     expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.bypassPermissions", true);
     expect(storeMock.set).toHaveBeenCalledTimes(2);
-  });
-
-  it("persists debugLogging and rejects a non-boolean value", async () => {
-    registerHelpAssistantHandlers();
-    const handler = ipcMainMock._handlers.get(SET_CHANNEL)!;
-
-    await handler(null, { debugLogging: true });
-    expect(storeMock.set).toHaveBeenCalledWith("helpAssistant.debugLogging", true);
-
-    storeMock.set.mockClear();
-    await handler(null, { debugLogging: "yes" as unknown as boolean });
-    expect(storeMock.set).not.toHaveBeenCalled();
-  });
-
-  it("returns a stored debugLogging=true over the default", async () => {
-    storeMock.get.mockReturnValue({ debugLogging: true });
-    registerHelpAssistantHandlers();
-    const handler = ipcMainMock._handlers.get(GET_CHANNEL)!;
-
-    const result = await handler(null);
-    expect(result).toMatchObject({ debugLogging: true });
   });
 
   it("persists tier when set to a valid value", async () => {
@@ -447,8 +360,6 @@ describe("registerHelpAssistantHandlers", () => {
       modelId: "",
       customArgs: "",
       idleHibernateMinutes: 5,
-      debugLogging: false,
-      backendEnvironment: "local",
     });
   });
 
