@@ -281,12 +281,12 @@ export function RecipeEditor({
               />
             </FormRow>
 
-            <FormRow label="Scope" htmlFor="recipe-scope">
+            {/* No `for` when editing: scope is then a read-only display with no
+                control to name, and `output` — the one labelable element that
+                fits — is a live region, which would announce static text. */}
+            <FormRow label="Scope" htmlFor={recipe ? undefined : "recipe-scope"}>
               {recipe ? (
-                // `output` rather than a div: a label can only name a labelable
-                // element, and the rail's label is a real `for`.
-                <output
-                  id="recipe-scope"
+                <div
                   className={cn(
                     FIELD_SURFACE,
                     "flex h-8 items-center px-2.5 text-sm text-daintree-text opacity-75"
@@ -295,7 +295,7 @@ export function RecipeEditor({
                   {isInRepoRecipeId(recipe) || recipe.projectId !== undefined
                     ? "Project"
                     : "Global (all projects)"}
-                </output>
+                </div>
               ) : (
                 <select
                   id="recipe-scope"
@@ -661,7 +661,7 @@ export function RecipeEditor({
           </FormGrid>
 
           {error && (
-            <div className="mb-4 p-3 bg-status-error/10 border border-status-error/30 rounded-[var(--radius-md)] text-status-error text-sm">
+            <div className="mt-4 mb-4 p-3 bg-status-error/10 border border-status-error/30 rounded-[var(--radius-md)] text-status-error text-sm">
               {error}
             </div>
           )}

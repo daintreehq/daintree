@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { describe, it, expect } from "vitest";
 import { render, screen } from "@testing-library/react";
-import { FormGrid, FormRow } from "../WorktreeFormLayout";
+import { FormGrid, FormRow, FormSection } from "../WorktreeFormLayout";
 
 describe("FormRow label semantics", () => {
   it("names a single control with a real label association", () => {
@@ -68,6 +68,24 @@ describe("FormRow label semantics", () => {
     // An always-rendered hint cell would eat a grid row and space every field apart.
     expect(gridWithout.children).toHaveLength(2);
     expect(gridWith.children).toHaveLength(3);
+  });
+
+  it("spans a section header across both columns instead of taking a rail cell", () => {
+    const { container } = render(
+      <FormGrid>
+        <FormSection title="Branch">
+          <FormRow label="Name" htmlFor="n">
+            <input id="n" />
+          </FormRow>
+        </FormSection>
+      </FormGrid>
+    );
+
+    // Header, then the row's two cells — a wrapper element around the section
+    // would give its rows their own columns and break the shared rail.
+    const cells = container.firstElementChild!.children;
+    expect(cells).toHaveLength(3);
+    expect(cells[0]?.textContent).toContain("Branch");
   });
 
   it("still occupies the label column when a row has no label", () => {

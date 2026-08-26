@@ -117,7 +117,12 @@ describe("CommandBuilder field rendering", () => {
     fireEvent.click(screen.getByLabelText("Open as draft"));
     fireEvent.click(screen.getByRole("button", { name: "Execute" }));
 
-    await vi.waitFor(() => expect(onExecute).toHaveBeenCalledTimes(1));
+    // Settle on the success state, not on the call: `onExecute` is invoked
+    // before its promise resolves, so waiting on the spy would leave the
+    // resulting state update to land outside React's act boundary.
+    await screen.findByText("Command completed.");
+
+    expect(onExecute).toHaveBeenCalledTimes(1);
     expect(onExecute.mock.calls[0]?.[0]).toMatchObject({
       title: "Crash on open",
       priority: "high",

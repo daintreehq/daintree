@@ -160,8 +160,8 @@ export function WorktreeSettingsTab() {
     }
   };
 
-  // One hint slot, so validation and save failures can't stack two error rows
-  // under the field. Validation wins: it blocks the save that would report the other.
+  // A failed load leaves the pattern empty, which trips validation too — so
+  // these are reported together rather than one masking the other's cause.
   const patternError = !isLoading && !validation.valid ? validation.error : undefined;
 
   const handleReset = () => {
@@ -196,11 +196,15 @@ export function WorktreeSettingsTab() {
                 (patternError || error) && (
                   <div
                     id="path-pattern-error"
-                    className="flex items-start gap-2 text-xs text-status-error"
+                    className="space-y-1 text-xs text-status-error"
                     role="alert"
                   >
-                    <AlertCircle className="w-3 h-3 mt-0.5 flex-shrink-0" aria-hidden="true" />
-                    <span>{patternError ?? error}</span>
+                    {[patternError, error].filter(Boolean).map((message) => (
+                      <div key={message} className="flex items-start gap-2">
+                        <AlertCircle className="w-3 h-3 mt-0.5 flex-shrink-0" aria-hidden="true" />
+                        <span>{message}</span>
+                      </div>
+                    ))}
                   </div>
                 )
               }
