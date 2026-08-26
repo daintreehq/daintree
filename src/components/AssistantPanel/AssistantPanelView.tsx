@@ -6,6 +6,7 @@ import { DaintreeIcon } from "@/components/icons/DaintreeIcon";
 import { AssistantMessage, type AssistantReference } from "./AssistantMessage";
 import { AssistantToolRow, AssistantToolGroupHeader } from "./AssistantToolRow";
 import { AssistantApprovalCard } from "./AssistantApprovalCard";
+import { NoticeText } from "./noticeText";
 import type {
   AssistantApproval,
   AssistantToolCall,
@@ -184,6 +185,9 @@ function formatCost(total: number, complete: boolean): string {
  *
  * `break-words` alongside it: pre-wrap cannot break inside an unbroken token, and these
  * lines carry URLs and absolute log paths longer than the panel is wide.
+ *
+ * Those URLs go through `NoticeText`, which turns the admissible ones into real links
+ * without touching a single other character — see the contract in `noticeText.tsx`.
  */
 function NoticeRow({ notice }: { notice: AssistantNotice }) {
   const Icon = notice.level === "info" ? Info : notice.level === "warning" ? TriangleAlert : ZapOff;
@@ -200,7 +204,7 @@ function NoticeRow({ notice }: { notice: AssistantNotice }) {
         data-testid="assistant-notice"
         className="min-w-0 flex-1 whitespace-pre-wrap break-words text-[var(--assistant-fg-secondary)]"
       >
-        {notice.message}
+        <NoticeText message={notice.message} />
       </p>
     </div>
   );
