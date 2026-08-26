@@ -245,7 +245,7 @@ export function Sidebar({
         {projectId != null && (
           <ContextMenuActionItem actionId="project.settings.open">
             <Settings className={ICON_CLASS} />
-            Project Settings…
+            Project settings…
           </ContextMenuActionItem>
         )}
         <ContextMenuSeparator />

@@ -2354,6 +2354,70 @@ label:focus-within .brand-mark,
   will-change: transform;
 }
 
+/* The palette's selected-row mark.
+ *
+ * A leading rail rather than the 1px ring this used to be. The ring was never a
+ * free choice: `overlay-raised` clears about 1.1:1 against the palette surface,
+ * so the fill cannot be the WCAG 1.4.11 indicator and `selection-outline` has to
+ * be — and an indicator that must hold 3:1 against both the surface and the fill
+ * lands on a mid-grey stroke. Drawn around all four sides of a row that is not
+ * the DOM focus target, that reads as an empty form field: a strong edge with no
+ * body. No shipping palette does it (VS Code leaves `list.focusOutline` unset in
+ * quick pick; Linear, Raycast, Spotlight, Arc and Slack are fill-led).
+ *
+ * Making the fill carry 3:1 instead is not the way out — it needs roughly 33%
+ * white on these surfaces, a light-grey block far heavier than the ring it
+ * replaces. A rail keeps the same token and the same 3:1 pair while spending a
+ * fraction of the ink on it, which is what 1.4.11 allows: the indicator has to
+ * meet the ratio, not enclose the component.
+ *
+ * Inset and separately rounded rather than an inset box-shadow, which would
+ * follow the card's own radius and taper to a crescent at both ends.
+ *
+ * Not stated in `forced-colors`, where `background-color` is stripped: the
+ * system-outline fallback further down already marks the row there.
+ */
+.palette-row::before {
+  content: "";
+  position: absolute;
+  /* On the card's outer edge, not inside its padding. An absolutely positioned
+     child is offset from the padding box, so an inset here would have started
+     the rail past the reserved border and landed it about 2px from the status
+     mark — two small marks clustered in one gutter, which is the collision that
+     makes leading rails a bad idea on rows that already carry a status dot.
+     Pulled back onto the boundary, the rail belongs to the card and the dot
+     belongs to the content grid, with 6px of clear space between them.
+
+     Logical, not `left`: this is the leading edge, which flips under RTL. */
+  inset-inline-start: -1px;
+  inset-block: 6px;
+  width: 3px;
+  /* A pill, not a scale step: the rail is 3px wide, so any radius above 1.5px
+     is the same shape and the scale would only make it theme-dependent. */
+  border-radius: 9999px;
+  background: var(--color-selection-outline);
+  opacity: 0;
+  pointer-events: none;
+  /* The same slot the row's fill fades in on. Cross-fading one and popping the
+     other put the mark on the new row while the surface behind it was still
+     arriving. */
+  transition: opacity var(--duration-150) ease-out;
+}
+
+.palette-row[aria-selected="true"]::before {
+  opacity: 1;
+}
+
+/* Both triggers, and both signals. The bare media query would honour the OS
+   preference but not Daintree's own "Reduce UI animations" toggle, and dropping
+   only the rail's transition would leave the fill still fading under it. */
+@variant reduce-motion {
+  .palette-row,
+  .palette-row::before {
+    transition: none;
+  }
+}
+
 /* Success fade - scale in then fade out */
 @keyframes forge-status-success-fade {
   0% {
@@ -2680,7 +2744,7 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     outline-offset: -2px;
   }
 
-  /* The palette selected row is a raised fill plus a neutral outline, both
+  /* The palette selected row is a raised fill plus a neutral leading rail, both
      stripped here, so it falls back to a system outline like the Radix rule
      above. Deliberately an outline and not a SelectedItem fill: these rows carry
      independently surfaced children (theme "Active" badges, action category

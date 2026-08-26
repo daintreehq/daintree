@@ -385,7 +385,7 @@ describe("getThemeContrastWarnings", () => {
       const selectionFailures = warnings.filter((w) => w.message.includes("selection-outline"));
       expect(
         selectionFailures,
-        `${scheme.id}: selection-outline is the palette row's only non-text indicator and must hit 3:1`
+        `${scheme.id}: selection-outline is the palette row's only non-text indicator (a leading rail) and must hit 3:1`
       ).toHaveLength(0);
     }
   });
@@ -404,10 +404,10 @@ describe("getThemeContrastWarnings", () => {
     });
   }
 
-  it("fails an outline that clears the surrounding surface but not the row fill it encloses", () => {
-    // The row lifts towards the outline on dark, so the surface pair is the
-    // permissive one — an outline can pass it while vanishing into the fill it
-    // actually borders. #5A5A5A is 3.04:1 on black and 1.52:1 on #767676.
+  it("fails a rail that clears the surrounding surface but not the row fill it touches", () => {
+    // The row lifts towards the rail on dark, so the surface pair is the
+    // permissive one — a rail can pass it while vanishing into the fill it
+    // touches. #5A5A5A is 3.04:1 on black and 1.52:1 on #767676.
     const scheme = makeFlatDarkScheme({
       "overlay-raised": "#767676" as AppColorSchemeTokens["overlay-raised"],
       "selection-outline": "#5A5A5A" as AppColorSchemeTokens["selection-outline"],
@@ -434,7 +434,7 @@ describe("getThemeContrastWarnings", () => {
     expect(messages.some((m) => m.includes("the surrounding palette surface"))).toBe(true);
   });
 
-  it("composites an rgba outline over the row fill rather than reading its raw alpha", () => {
+  it("composites an rgba rail token over the row fill rather than reading its raw alpha", () => {
     // Opaque white would score 16.67:1 on this fill and sail through; at 10%
     // alpha the pixel that actually renders is #353535, which is 1.36:1.
     const scheme = makeFlatDarkScheme({
@@ -447,7 +447,7 @@ describe("getThemeContrastWarnings", () => {
     expect(failures).toHaveLength(1);
   });
 
-  it("composites an alpha-hex outline instead of reading it as opaque", () => {
+  it("composites an alpha-hex rail token instead of reading it as opaque", () => {
     // `#FFFFFF10` is 6% white. Read as opaque it would score 19.30:1 and pass;
     // the pixel that renders is #1D1D1D on this fill.
     const scheme = makeFlatDarkScheme({
@@ -460,7 +460,7 @@ describe("getThemeContrastWarnings", () => {
     expect(failures).toHaveLength(1);
   });
 
-  it("reports the palette selection check as unevaluable when the outline is not hex or rgba", () => {
+  it("reports the palette selection check as unevaluable when the rail token is not hex or rgba", () => {
     const scheme = makeScheme({
       "selection-outline":
         "color-mix(in oklab, #ffffff 42%, transparent)" as AppColorSchemeTokens["selection-outline"],

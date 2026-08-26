@@ -360,7 +360,15 @@ function AppPalettePopoverContent({
       // palette on a given tier is the same box whichever host it opens in.
       // `cn` merges, so a palette that genuinely needs another width can still
       // pass one.
-      className={cn(PALETTE_SURFACE_WIDTHS[tier], className)}
+      className={cn(
+        PALETTE_SURFACE_WIDTHS[tier],
+        // Palette tier, not the popover tier `PopoverContent` defaults to. The
+        // same palette opens as this and as `AppPaletteDialog`, and at the
+        // inherited 200/120 the anchored one felt heavier than the modal for no
+        // reason a user could name.
+        "data-[state=open]:duration-150 data-[state=closed]:duration-100",
+        className
+      )}
       aria-label={ariaLabel}
       // Radix does not set this itself. `aria-modal="false"` is noise, so the
       // non-modal form carries nothing rather than a negation.

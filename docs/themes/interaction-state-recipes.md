@@ -72,19 +72,23 @@ This document maps each interactive component role to its canonical Tailwind cla
 
 ### Selected State (List Item)
 
-**Role:** Selected list item in a picker. A raised neutral fill plus a neutral hairline — no accent, no rail.
+**Role:** Selected list item in a picker. A raised neutral fill plus a neutral leading rail — no accent.
 
 ```tsx
-"palette-row border border-transparent transition-colors aria-selected:bg-overlay-raised aria-selected:border-selection-outline aria-selected:text-daintree-text";
+"palette-row relative border border-transparent transition-colors aria-selected:bg-overlay-raised aria-selected:text-daintree-text";
 ```
 
-**Usage:** Do not respell this — import `PALETTE_ROW_CLASS` from `src/components/ui/paletteRowStyles.ts`, which 16 palette surfaces already share. Selected items do not add hover overlay; unselected items get `hover:bg-overlay-subtle`.
+**Usage:** Do not respell this — import `PALETTE_ROW_CLASS` from `src/components/ui/paletteRowStyles.ts`, which 15 production component files and 17 rendered row definitions already share. Selected items do not add hover overlay; unselected items get `hover:bg-overlay-subtle`.
 
-`selection-outline` is its own semantic token, not a member of the resting border ladder, because it is the row's only non-text indicator and so carries WCAG 1.4.11 alone: `overlay-raised` clears only ~1.1-1.2:1 against the palette surface, far short of 3:1. It is derived from each theme's `text-primary` (42% dark / 53% light) and gated at 3:1 against _both_ the selected fill and the surrounding surface by `getThemeContrastWarnings`. The fill is the binding pair — on dark the row lifts toward the outline, so an outline that looks safe against the surface can still vanish into the row it encloses.
+`selection-outline` is its own semantic token, not a member of the resting border ladder, because it is the row's only non-text indicator and so carries WCAG 1.4.11 alone: `overlay-raised` clears only ~1.1-1.2:1 against the palette surface, far short of 3:1. It is derived from each theme's `text-primary` (42% dark / 53% light) and gated at 3:1 against _both_ the selected fill and the surrounding surface by `getThemeContrastWarnings`. The fill is the binding pair — on dark the row lifts toward the rail, so a rail that looks safe against the surface can still vanish into the row it marks.
 
-The accent border and the 2px accent rail this recipe used to prescribe were removed in #11686: they put accent on the row, its rail and the focused input at once, breaking the one-load-bearing-signal rule. The palette input's focus lift draws the same `selection-outline` (ring at half strength), so the field and the selected row stay one treatment — change them together.
+The token paints a **leading rail**, drawn as `.palette-row::before` in `src/index.css`: 3px wide, `inset-block: 6px`, `inset-inline-start: -1px` so it sits on the card's outer boundary rather than inside its padding. Anything further in lands about 2px from the status mark these rows carry, and the two read as one cluttered gutter. It fades on the same 150ms slot as the fill — cross-fading one and popping the other put the mark on the new row while the surface behind it was still arriving — and `@variant reduce-motion` drops both together, covering the OS preference and Daintree's own toggle.
 
-`palette-row` is a forced-colors hook, not styling. Under `forced-colors: active` both the fill and the outline are stripped, so `src/index.css` falls back to a 2px `SelectedItem` outline. Deliberately an outline rather than a `SelectedItem` fill: these rows carry independently surfaced children (theme "Active" badges, action category chips, panel-kind icons with inline colour) that the engine maps to the forced palette on their own, and a fill would leave them painting `CanvasText` on `SelectedItem` — a pair with no contrast guarantee. The marker scopes the rule to palette rows, since `[role="option"]` is also used by the file pane, the settings selectors and the agent/forge dropdowns.
+Not four sides. The token has to hold 3:1 against both its neighbours, which lands it on a mid-grey stroke; drawn all the way round a row that is _not_ the DOM focus target, that reads as an empty form field. No shipping palette does it — VS Code leaves `list.focusOutline` unset in Quick Open, and Linear, Raycast, Spotlight, Arc and Slack are all fill-led. Making the fill carry 3:1 instead and dropping the mark entirely is not the escape: it needs ~33% white on these surfaces, far heavier than the stroke it replaces. WCAG 1.4.11 sets a ratio, not an area, so spending the same token on a rail is the cheaper way to buy the same guarantee. The reserved transparent border stays — it holds the row's content box on the palette's shared column, and the forced-colors fallback still draws an outline there.
+
+The accent border and the 2px **accent** rail this recipe used to prescribe were removed in #11686: they put accent on the row, its rail and the focused input at once, breaking the one-load-bearing-signal rule. The rail is back, but neutral — accent stays on the focused input alone. The palette input's focus lift draws the same `selection-outline` (ring at half strength), so the field and the selected row stay one treatment — change them together.
+
+`palette-row` is a forced-colors hook, not styling. Under `forced-colors: active` both the fill and the rail are stripped, so `src/index.css` falls back to a 2px `SelectedItem` outline. Deliberately an outline rather than a `SelectedItem` fill: these rows carry independently surfaced children (theme "Active" badges, action category chips, panel-kind icons with inline colour) that the engine maps to the forced palette on their own, and a fill would leave them painting `CanvasText` on `SelectedItem` — a pair with no contrast guarantee. The marker scopes the rule to palette rows, since `[role="option"]` is also used by the file pane, the settings selectors and the agent/forge dropdowns.
 
 ---
 
@@ -245,7 +249,7 @@ Each recipe is a class fragment to apply to a suitable base component, not a sta
 
 | Component | File | Key Pattern |
 | --- | --- | --- |
-| Quick Switcher Item | `QuickSwitcherItem.tsx` | Selected state with accent rail via `before:` |
+| Quick Switcher Item | `QuickSwitcherItem.tsx` | Selected state with neutral rail via `PALETTE_ROW_CLASS` |
 | Settings Input | `SettingsInput.tsx` | Input focus with outline ring |
 | Settings Textarea | `SettingsTextarea.tsx` | Input focus with outline ring |
 | Button Ghost | `button.tsx` (`ghost` variant) | Ghost button hover with overlay-soft |

@@ -800,7 +800,7 @@ describe("ProjectSwitcherPalette clone repo button", () => {
       <ProjectSwitcherPalette {...baseProps} onCloneRepo={vi.fn()} results={[makeProject()]} />
     );
     expect(screen.getByTestId("project-clone-button")).toBeTruthy();
-    expect(screen.getByText("Clone Repository…")).toBeTruthy();
+    expect(screen.getByText("Clone repository…")).toBeTruthy();
   });
 
   it("calls onCloneRepo when Clone Repository button is clicked", () => {
@@ -1028,23 +1028,23 @@ describe("ProjectSwitcherPalette modal mode", () => {
 
   it("names an action the surface it is rendered in can actually perform", () => {
     // The modal mounts without the add/clone callbacks, so an empty state that
-    // pointed at "Add Project…" would name a button that isn't there.
+    // pointed at "Add project…" would name a button that isn't there.
     const { unmount } = render(<ProjectSwitcherPalette {...modalProps} results={[]} />);
     const modalCopy = screen.getByTestId("project-empty-state").textContent;
-    expect(screen.queryByText("Add Project…")).toBeNull();
+    expect(screen.queryByText("Add project…")).toBeNull();
     unmount();
 
     render(<ProjectSwitcherPalette {...dropdownProps} results={[]} />);
-    expect(screen.getByText("Add Project…")).toBeTruthy();
+    expect(screen.getByText("Add project…")).toBeTruthy();
     expect(screen.getByTestId("project-empty-state").textContent).not.toBe(modalCopy);
   });
 
   it("does not show management action buttons in modal mode", () => {
     render(<ProjectSwitcherPalette {...modalProps} results={multiProjects} />);
-    expect(screen.queryByText("Project Settings…")).toBeNull();
-    expect(screen.queryByText("Add Project…")).toBeNull();
-    expect(screen.queryByText("Clone Repository…")).toBeNull();
-    expect(screen.queryByText("Create New Folder…")).toBeNull();
+    expect(screen.queryByText("Project settings…")).toBeNull();
+    expect(screen.queryByText("Add project…")).toBeNull();
+    expect(screen.queryByText("Clone repository…")).toBeNull();
+    expect(screen.queryByText("Create new folder…")).toBeNull();
   });
 
   it("shows Right-click hint but not Remove shortcut in modal mode footer", () => {

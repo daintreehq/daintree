@@ -28,12 +28,15 @@ export const APP_THEME_TOKEN_KEYS = [
   "border-strong",
   "border-divider",
   "border-interactive",
-  // The hairline that marks "this is the row Enter will act on" in the palettes.
+  // The ink of the leading rail that marks "this is the row Enter will act on"
+  // in the palettes. Named for the outline it used to draw around all four sides
+  // of the row; the geometry moved to a rail, the job did not.
+  //
   // Its own key rather than a reuse of `border-strong` because it is the only
-  // border in the app that has to satisfy WCAG 1.4.11 on its own: the raised
-  // fill it sits on clears barely 1.1-1.2:1 against the palette surface, so the
-  // outline is the whole non-text indicator and carries the full 3:1. That puts
-  // it 2-3x above the resting border ladder, which is tuned for separation
+  // mark of its kind in the app that has to satisfy WCAG 1.4.11 on its own: the
+  // raised fill it sits on clears barely 1.1-1.2:1 against the palette surface,
+  // so the rail is the whole non-text indicator and carries the full 3:1. That
+  // puts it 2-3x above the resting border ladder, which is tuned for separation
   // rather than for being the sole signal.
   "selection-outline",
 

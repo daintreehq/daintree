@@ -470,7 +470,7 @@ const SCENES: TourScene[] = [
   {
     id: "action-palette",
     label: "Action palette",
-    note: "Selected row = raised fill + selection-outline, no accent. Is the selected row unambiguous?",
+    note: "Selected row = raised fill + neutral leading rail (`selection-outline`), no accent. Is the selected row unambiguous?",
     run: async (page) => {
       const dialog = page.locator(SEL.actionPalette.dialog);
       // Double-Shift is the only route to THIS palette. The Cmd/Ctrl+K fallback
