@@ -29,6 +29,7 @@ import {
 } from "./startupWorktreeLoad.js";
 import { logError, logInfo, logWarn } from "../utils/logger.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
+import { resolveRestoreWorkspace } from "./restoreWorkspaceBinding.js";
 import { extractRestorePanelCwds } from "./restorePanelCwds.js";
 import { mergeProjectEnv } from "./restoreProjectEnv.js";
 import { store } from "../store.js";
@@ -562,11 +563,31 @@ export async function setupWindowServices(
     console.error("[MAIN] Unexpected error during service initialization:", error);
   }
 
-  // Per-window project binding: use opts.initialProjectId/initialProjectPath
+  // Per-window workspace binding: use opts.initialProjectId/initialProjectPath
   // instead of the global current project (which belongs to another window).
-  const restoreProject = opts.initialProjectId
-    ? projectStore.getProjectById(opts.initialProjectId)
-    : undefined;
+  //
+  // `restoreWorkspace` is a project OR a scratch and drives everything the view
+  // itself needs; `restoreProject` is set only for a project and stays the sole
+  // input to the worktree load below, which scratches must never reach (#11958).
+  const { project: restoreProject, workspace: restoreWorkspace } = resolveRestoreWorkspace(
+    opts.initialProjectId,
+    {
+      getProjectById: (id) => projectStore.getProjectById(id),
+      getScratchById: (id) => {
+        // The scratch lookup opens the shared DB; a failure there must leave
+        // the window unbound, not abort the boot.
+        try {
+          return scratchStore.getScratchById(id);
+        } catch (error) {
+          logWarn("[MAIN] Could not resolve a scratch for the restored window", {
+            scratchId: id,
+            error: formatErrorMessage(error, "Unknown error"),
+          });
+          return null;
+        }
+      },
+    }
+  );
 
   // A Linux file manager launching a cold Daintree via "Open With" on a folder
   // puts a `file://` directory URI in argv. Classified here — outside the PTY
@@ -595,11 +616,11 @@ export async function setupWindowServices(
       createAndDistributePorts(win, ctx);
     }
 
-    if (restoreProject) {
+    if (restoreWorkspace) {
       pty.setActiveProject(
         win.id,
-        restoreProject.id,
-        restoreProject.path,
+        restoreWorkspace.id,
+        restoreWorkspace.path,
         restorePanelCwds,
         restoreProjectEnv
       );
@@ -618,7 +639,7 @@ export async function setupWindowServices(
       opts.initialProjectPath ||
       processArgvCli ||
       getPendingCliPath() ||
-      restoreProject ||
+      restoreWorkspace ||
       getPendingOpenDirPaths().length > 0;
     if (skipDefaultSpawn) {
       console.log(
@@ -642,24 +663,31 @@ export async function setupWindowServices(
   }
 
   // Register the initial view with ProjectViewManager — only when this window
-  // has a project binding (startup restore). Unbound windows (Cmd+N) start
+  // has a workspace binding (startup restore). Unbound windows (Cmd+N) start
   // with the project picker and get their view registered on project open.
   //
-  // Skipped once the manager has already activated a project: a switch can land
-  // while the rest of this boot is still awaiting, and the manager will have
-  // swapped in its own view for it. Registering the restored project on top of
-  // that would point `activeProjectId` and the view map at a project the window
-  // is no longer showing.
+  // This is the only caller of `registerProjectView` for the startup view, so
+  // skipping it leaves `ctx.projectId` null for every IPC call that view sends
+  // for the rest of its life — no panel restore, no assistant, a file browser
+  // that throws. A restored scratch has to register here for the same reason a
+  // project does; the manager is keyed on opaque workspace ids and has no
+  // project-row assumption of its own (#11958).
+  //
+  // Skipped once the manager has already activated a workspace: a switch can
+  // land while the rest of this boot is still awaiting, and the manager will
+  // have swapped in its own view for it. Registering the restored one on top of
+  // that would point `activeProjectId` and the view map at a workspace the
+  // window is no longer showing.
   if (
     opts.projectViewManager &&
     opts.initialAppView &&
-    restoreProject &&
+    restoreWorkspace &&
     !opts.projectViewManager.getActiveProjectId()
   ) {
     opts.projectViewManager.registerInitialView(
       opts.initialAppView,
-      restoreProject.id,
-      restoreProject.path
+      restoreWorkspace.id,
+      restoreWorkspace.path
     );
     // The menu was built before this binding existed, so its project gates
     // resolved against a PVM with no active project. Converge them now (#11136).
@@ -669,6 +697,12 @@ export async function setupWindowServices(
 
   // Load worktrees — prefer initialProjectPath, else restoreProject for
   // startup windows. Unbound windows (no project) skip worktree loading.
+  //
+  // Deliberately `restoreProject`, never `restoreWorkspace`: a scratch is a
+  // non-git directory that must never invoke `WorktreeService`, and the
+  // renderer's no-port watchdog in `WorktreeStoreContext` intentionally stays
+  // disarmed for one. A restored scratch therefore falls through this block
+  // with no path, exactly as an unbound window does (#11958).
   const projectPathForWorktrees = opts.initialProjectPath ?? restoreProject?.path;
   // Skipped outright while the app is quitting: the captured client may already
   // be disposed, and a banner on a window that is going away helps nobody.

@@ -39,13 +39,22 @@ const manifestJson = (windows: unknown[]): string =>
   JSON.stringify({ version: OPEN_WINDOWS_MANIFEST_VERSION, windows });
 
 /**
- * Wire the two queries the reader issues: the app_state lookup and the batched
- * project-existence check.
+ * Wire the queries the reader issues: the app_state lookup, the batched
+ * project-existence check, and the batched scratch-existence check.
+ *
+ * The scratch branch models a real `scratches` table — tombstoned rows are
+ * present in it, and only a query that filters on `deleted_at` excludes them.
+ * That way the soft-delete predicate is exercised by behaviour rather than
+ * restated as a string assertion.
  */
 function withDb(opts: {
   manifest?: string | undefined;
   existingProjectIds?: string[];
+  liveScratchIds?: string[];
+  tombstonedScratchIds?: string[];
   onProjectQuery?: (sql: string, ids: unknown[]) => void;
+  onScratchQuery?: (sql: string, ids: unknown[]) => void;
+  scratchQueryThrows?: boolean;
 }) {
   prepare.mockImplementation((sql: string) => {
     if (sql.includes("app_state")) {
@@ -55,6 +64,19 @@ function withDb(opts: {
             ? { value: opts.manifest }
             : undefined,
         all: () => [],
+      };
+    }
+    if (sql.includes("scratches")) {
+      if (opts.scratchQueryThrows) throw new Error("no such table: scratches");
+      return {
+        get: () => undefined,
+        all: (...ids: unknown[]) => {
+          opts.onScratchQuery?.(sql, ids);
+          const rows = /deleted_at\s+IS\s+NULL/i.test(sql)
+            ? (opts.liveScratchIds ?? [])
+            : [...(opts.liveScratchIds ?? []), ...(opts.tombstonedScratchIds ?? [])];
+          return rows.filter((id) => ids.includes(id)).map((id) => ({ id }));
+        },
       };
     }
     return {
@@ -68,6 +90,11 @@ function withDb(opts: {
     };
   });
 }
+
+/** Scratch ids are dashed UUIDv4s; project ids are 64 hex characters. */
+const SCRATCH_A = "11111111-1111-4111-8111-111111111111";
+const SCRATCH_B = "22222222-2222-4222-9222-222222222222";
+const SCRATCH_GONE = "33333333-3333-4333-a333-333333333333";
 
 const ids = (records: OpenWindowRecord[]) => records.map((r) => r.projectId);
 
@@ -187,6 +214,108 @@ describe("readOpenWindowsManifestSync", () => {
     expect(seenSql.match(/\?/g)).toHaveLength(seenIds.length);
   });
 
+  // A scratch is a workspace with no `projects` row (#11484). Validating one
+  // against `projects` read it as a deleted project and dropped its window,
+  // which relaunched structurally unbound (#11958).
+  it("restores a window whose only workspace is a live scratch", () => {
+    withDb({ manifest: manifestJson([{ projectId: SCRATCH_A }]), liveScratchIds: [SCRATCH_A] });
+    const result = readOpenWindowsManifestSync();
+    expect(result.hadManifest).toBe(true);
+    expect(ids(result.records)).toEqual([SCRATCH_A]);
+  });
+
+  it("restores projects, scratches and pickers together, preserving order", () => {
+    withDb({
+      manifest: manifestJson([
+        { projectId: SCRATCH_A },
+        { projectId: "a" },
+        { projectId: null },
+        { projectId: SCRATCH_B },
+      ]),
+      existingProjectIds: ["a"],
+      liveScratchIds: [SCRATCH_A, SCRATCH_B],
+    });
+    expect(ids(readOpenWindowsManifestSync().records)).toEqual([SCRATCH_A, "a", null, SCRATCH_B]);
+  });
+
+  it("drops a scratch that no longer exists, keeping the surviving windows", () => {
+    withDb({
+      manifest: manifestJson([{ projectId: SCRATCH_GONE }, { projectId: "a" }]),
+      existingProjectIds: ["a"],
+      liveScratchIds: [SCRATCH_A],
+    });
+    expect(ids(readOpenWindowsManifestSync().records)).toEqual(["a"]);
+  });
+
+  it("drops a tombstoned scratch — the cleanup sweep already retired it", () => {
+    withDb({
+      manifest: manifestJson([{ projectId: SCRATCH_A }, { projectId: SCRATCH_B }]),
+      liveScratchIds: [SCRATCH_A],
+      tombstonedScratchIds: [SCRATCH_B],
+    });
+    expect(ids(readOpenWindowsManifestSync().records)).toEqual([SCRATCH_A]);
+  });
+
+  it("routes each id to the one table that could hold it", () => {
+    let projectIds: unknown[] = [];
+    let scratchIds: unknown[] = [];
+    withDb({
+      manifest: manifestJson([{ projectId: SCRATCH_A }, { projectId: "a" }, { projectId: null }]),
+      existingProjectIds: ["a"],
+      liveScratchIds: [SCRATCH_A],
+      onProjectQuery: (_sql, bound) => (projectIds = bound),
+      onScratchQuery: (_sql, bound) => (scratchIds = bound),
+    });
+
+    readOpenWindowsManifestSync();
+
+    expect(projectIds).toEqual(["a"]);
+    expect(scratchIds).toEqual([SCRATCH_A]);
+  });
+
+  it("skips the scratch query entirely when no record names a scratch", () => {
+    const onScratchQuery = vi.fn();
+    withDb({
+      manifest: manifestJson([{ projectId: "a" }, { projectId: null }]),
+      existingProjectIds: ["a"],
+      onScratchQuery,
+    });
+    readOpenWindowsManifestSync();
+    expect(onScratchQuery).not.toHaveBeenCalled();
+  });
+
+  it("binds scratch ids as parameters rather than interpolating them", () => {
+    let seenSql = "";
+    let seenIds: unknown[] = [];
+    withDb({
+      manifest: manifestJson([{ projectId: SCRATCH_A }, { projectId: SCRATCH_A }]),
+      liveScratchIds: [SCRATCH_A],
+      onScratchQuery: (sql, bound) => {
+        seenSql = sql;
+        seenIds = bound;
+      },
+    });
+
+    readOpenWindowsManifestSync();
+
+    expect(seenIds).toEqual([SCRATCH_A]);
+    expect(seenSql.match(/\?/g)).toHaveLength(seenIds.length);
+  });
+
+  // This reader runs before migrations, so a database written by a build that
+  // predates the scratches table has to degrade to "no scratches" rather than
+  // strand every project window on the picker.
+  it("still restores project windows when the scratches table is missing", () => {
+    withDb({
+      manifest: manifestJson([{ projectId: SCRATCH_A }, { projectId: "a" }]),
+      existingProjectIds: ["a"],
+      scratchQueryThrows: true,
+    });
+    const result = readOpenWindowsManifestSync();
+    expect(result.hadManifest).toBe(true);
+    expect(ids(result.records)).toEqual(["a"]);
+  });
+
   it("closes the connection it opened", () => {
     withDb({ manifest: manifestJson([{ projectId: "a" }]), existingProjectIds: ["a"] });
     readOpenWindowsManifestSync();
@@ -239,5 +368,11 @@ describe("the launch a stored manifest produces", () => {
 
   it("opens the manifest's own project when it still exists", () => {
     expect(primaryProjectFor(manifestJson([{ projectId: "a" }]))).toBe("a");
+  });
+
+  it("opens the manifest's own scratch rather than collapsing to a picker", () => {
+    withDb({ manifest: manifestJson([{ projectId: SCRATCH_A }]), liveScratchIds: [SCRATCH_A] });
+    const { hadManifest, records } = readOpenWindowsManifestSync();
+    expect(resolvePrimaryRestoreProjectId(records, hadManifest, "last-active")).toBe(SCRATCH_A);
   });
 });

@@ -42,6 +42,11 @@ vi.mock("../../../../services/ProjectStore.js", () => ({
   projectStore: projectStoreMock,
 }));
 
+const scheduleOpenWindowsSaveMock = vi.hoisted(() => vi.fn());
+vi.mock("../../../../window/openWindowsTracker.js", () => ({
+  scheduleOpenWindowsSave: scheduleOpenWindowsSaveMock,
+}));
+
 const refreshProjectMenuStateMock = vi.hoisted(() => vi.fn());
 vi.mock("../../../../projectMenuState.js", () => ({
   refreshProjectMenuState: refreshProjectMenuStateMock,
@@ -216,6 +221,60 @@ describe("scratch:switch refreshes the File-menu project gates", () => {
     await expect(getHandler(CHANNELS.SCRATCH_SWITCH)(fakeEvent, "ghost")).rejects.toThrow();
 
     expect(refreshProjectMenuStateMock).not.toHaveBeenCalled();
+  });
+});
+
+// The open-window manifest is what a relaunch reads to decide which workspace
+// each window comes back on. `project:switch` re-persists it after committing;
+// `scratch:switch` did not, so a hard crash straight after entering a scratch
+// relaunched into the workspace the user had left (#11958).
+describe("scratch:switch re-persists the open-window manifest", () => {
+  beforeEach(() => {
+    vi.clearAllMocks();
+    webContentsRegistryMock.getProjectForWebContents.mockReturnValue(null);
+    webContentsRegistryMock.getWindowForWebContents.mockReturnValue(null);
+    enterScratch(SCRATCH_ONE);
+  });
+
+  it("schedules a save once the pointers name the scratch", async () => {
+    registerScratchHandlers({ mainWindow: {} } as unknown as HandlerDependencies);
+
+    await getHandler(CHANNELS.SCRATCH_SWITCH)(fakeEvent, SCRATCH_ONE);
+
+    expect(scheduleOpenWindowsSaveMock).toHaveBeenCalled();
+    // The manifest is built from every window's committed active id, so saving
+    // before the pointers move would persist the workspace being left.
+    expect(scheduleOpenWindowsSaveMock.mock.invocationCallOrder[0]!).toBeGreaterThan(
+      scratchStoreMock.setCurrentScratch.mock.invocationCallOrder[0]!
+    );
+  });
+
+  it("schedules no save when the view swap fails", async () => {
+    const deps = {
+      mainWindow: { id: 91 },
+      projectViewManager: {
+        setPendingFocusIntent: vi.fn(),
+        switchTo: vi.fn().mockRejectedValue(new Error("swap failed")),
+      },
+    } as unknown as HandlerDependencies;
+    registerScratchHandlers(deps);
+
+    await expect(getHandler(CHANNELS.SCRATCH_SWITCH)(fakeEvent, SCRATCH_ONE)).rejects.toThrow(
+      "swap failed"
+    );
+
+    // Persisting a switch that threw would relaunch into a workspace this
+    // window never reached.
+    expect(scheduleOpenWindowsSaveMock).not.toHaveBeenCalled();
+  });
+
+  it("schedules no save when the scratch does not exist", async () => {
+    scratchStoreMock.getScratchById.mockReturnValue(null);
+    registerScratchHandlers({ mainWindow: {} } as unknown as HandlerDependencies);
+
+    await expect(getHandler(CHANNELS.SCRATCH_SWITCH)(fakeEvent, "ghost")).rejects.toThrow();
+
+    expect(scheduleOpenWindowsSaveMock).not.toHaveBeenCalled();
   });
 });
 

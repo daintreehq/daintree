@@ -17,6 +17,7 @@ import { app } from "electron";
 import fs from "node:fs";
 import path from "path";
 import type { Project } from "../../../shared/types/project.js";
+import { isScratchWorkspaceId } from "../../../shared/utils/workspaceIds.js";
 import {
   OPEN_WINDOWS_KEY,
   filterRestorableWindows,
@@ -95,10 +96,16 @@ export function readLastActiveProjectIdentitySync(
  * record's project id chooses that window's session partition — it has to be
  * known before the BrowserWindow is built, not corrected afterwards.
  *
- * Project existence is validated here, in one batched `IN (...)` query rather
- * than a query per record, so a deleted project is dropped before any window is
- * constructed around it. Records for the project picker (`projectId: null`)
+ * Workspace existence is validated here, in batched `IN (...)` queries rather
+ * than a query per record, so a deleted workspace is dropped before any window
+ * is constructed around it. Records for the project picker (`projectId: null`)
  * always survive.
+ *
+ * A record's id names a project OR a scratch — the two are disjoint id spaces
+ * and each lives in its own table, so the shape routes the id to the one table
+ * that could hold it (#11958). Validating scratches against `projects` treated
+ * every one of them as a deleted project, which dropped the window and
+ * restored it unbound: no panels, no assistant, no file browser.
  *
  * `hadManifest` is reported separately from `records` on purpose: a manifest
  * that named windows whose every project has since been deleted filters down to
@@ -146,17 +153,47 @@ export function readOpenWindowsManifestSync(): OpenWindowsManifestRead {
       const records = parseOpenWindowsManifest(row?.value ?? null);
       if (records.length === 0) return NO_MANIFEST;
 
-      const projectIds = [...new Set(records.map((r) => r.projectId).filter((id) => id !== null))];
-      if (projectIds.length === 0) return { hadManifest: true, records };
+      const workspaceIds = [
+        ...new Set(records.map((r) => r.projectId).filter((id) => id !== null)),
+      ];
+      if (workspaceIds.length === 0) return { hadManifest: true, records };
 
-      const placeholders = projectIds.map(() => "?").join(",");
-      const rows = sqlite
-        .prepare(`SELECT id FROM projects WHERE id IN (${placeholders})`)
-        .all(...projectIds) as { id: string }[];
+      const scratchIds = workspaceIds.filter((id) => isScratchWorkspaceId(id));
+      const projectIds = workspaceIds.filter((id) => !isScratchWorkspaceId(id));
+      const existingWorkspaceIds = new Set<string>();
+
+      if (projectIds.length > 0) {
+        const placeholders = projectIds.map(() => "?").join(",");
+        const rows = sqlite
+          .prepare(`SELECT id FROM projects WHERE id IN (${placeholders})`)
+          .all(...projectIds) as { id: string }[];
+        for (const row of rows) existingWorkspaceIds.add(row.id);
+      }
+
+      if (scratchIds.length > 0) {
+        // Scoped try, unlike the projects query above: this runs before
+        // migrations, so a database written by a build that predates the
+        // `scratches` table throws here — and an unscoped throw would take the
+        // whole read down and strand every *project* window on the picker too.
+        // A missing table means no scratch exists, which is the answer an empty
+        // result would have given anyway.
+        try {
+          const placeholders = scratchIds.map(() => "?").join(",");
+          const rows = sqlite
+            .prepare(
+              `SELECT id FROM scratches WHERE id IN (${placeholders}) AND deleted_at IS NULL`
+            )
+            .all(...scratchIds) as { id: string }[];
+          for (const row of rows) existingWorkspaceIds.add(row.id);
+        } catch {
+          // Leaves every scratch id unvalidated, dropping its window exactly as
+          // this reader did before scratches were routed at all.
+        }
+      }
 
       return {
         hadManifest: true,
-        records: filterRestorableWindows(records, new Set(rows.map((r) => r.id))),
+        records: filterRestorableWindows(records, existingWorkspaceIds),
       };
     } finally {
       sqlite.close();
