@@ -11,11 +11,20 @@ import type { AssistantHostEvent, AssistantHostReadyEvent } from "./assistantHos
 /**
  * Environment the engine is started with. Secrets travel here, never in a message.
  *
+ * Documentation of the shape, not the enforced one: the spawn takes a plain
+ * `Record<string, string>` (`AssistantHostProcess`), and the real bag also carries the
+ * tier and log-directory variables. What is load-bearing is the rule below, not this
+ * list.
+ *
  * Assembled in the MAIN process and deliberately absent from the start payload below:
- * this bag carries the backend URL, the MCP token and the auto-approve switch, so a
- * renderer-supplied copy would let a compromised view repoint the engine at another
- * backend or grant itself standing approval. Main owns it because main is where the
- * MCP session that the token belongs to is issued.
+ * this bag carries the MCP URL, the MCP token and the auto-approve switch, so a
+ * renderer-supplied copy would let a compromised view point the engine at an MCP control
+ * plane main never provisioned, or grant itself standing approval. Main owns it because
+ * main is where the MCP session that the token belongs to is issued.
+ *
+ * No backend URL travels here, on purpose: the engine resolves and remembers its own
+ * endpoint, and Daintree setting the variable would pin it — see the
+ * `DAINTREE_BACKEND_URL` note in `AssistantHostService.startLocked`.
  */
 export interface AssistantHostSessionEnv {
   DAINTREE_MCP_URL?: string;
