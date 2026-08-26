@@ -158,9 +158,13 @@ export function BulkCreateWorktreeDialog({
   // Viewer identity through the forge identity capability — drives the
   // "assign to me" affordance and the run-loop assignment below.
   const [viewer, setViewer] = useState<{ login: string; avatarUrl?: string } | null>(null);
+  // A null viewer means two different things — still looking, and looked and
+  // found nothing — and only the second one should read as a dead end.
+  const [viewerResolved, setViewerResolved] = useState(false);
   const viewerRef = useRef<{ login: string; avatarUrl?: string } | null>(null);
   const currentUser = viewer?.login;
   const currentUserAvatar = viewer?.avatarUrl;
+  const assignUnavailable = viewerResolved && !currentUser;
 
   const { projectSettings } = useNewWorktreeProjectSettings({ isOpen });
   const persistedDefaultRecipeId = projectSettings?.defaultWorktreeRecipeId;
@@ -192,11 +196,12 @@ export function BulkCreateWorktreeDialog({
     if (!isOpen || !projectPath) return;
     let cancelled = false;
     // Clear stale identity up front: until this fetch resolves the run loop
-    // must not assign to the previous project's viewer. A null viewer skips
-    // self-assignment (visible: the "assign to me" row stays disabled and
-    // unchecked) rather than assigning the wrong account.
+    // must not assign to the previous project's viewer. A viewer that resolves
+    // to nothing skips self-assignment (visible: the "assign to me" row goes
+    // disabled and unchecked) rather than assigning the wrong account.
     setViewer(null);
     viewerRef.current = null;
+    setViewerResolved(false);
     void forgeClient
       .getCurrentUser(projectPath)
       .then((user) => {
@@ -204,11 +209,13 @@ export function BulkCreateWorktreeDialog({
         const next = user ? { login: user.login, avatarUrl: user.avatarUrl } : null;
         setViewer(next);
         viewerRef.current = next;
+        setViewerResolved(true);
       })
       .catch(() => {
         if (!cancelled) {
           setViewer(null);
           viewerRef.current = null;
+          setViewerResolved(true);
         }
       });
     return () => {
@@ -1144,9 +1151,11 @@ export function BulkCreateWorktreeDialog({
             <FormSection title="Setup">
               {/* Rendered for every issue-mode batch, not just once identity
                   resolves: the row is the same height either way, so a viewer
-                  arriving mid-open populates it instead of inserting it. It
-                  stays unchecked while disabled because the run loop skips
-                  assignment without a login. */}
+                  arriving mid-open populates it instead of inserting it. The
+                  toggle keeps tracking the preference while the lookup is in
+                  flight — the run loop reads the viewer per item, so identity
+                  landing mid-run still assigns — and only goes dead once the
+                  lookup has come back with no account to assign to. */}
               {mode === "issue" && (
                 <FormRow label="Assign to me" htmlFor="bulk-assign-to-self">
                   <div className="flex items-center gap-2 text-xs text-text-secondary">
@@ -1154,23 +1163,23 @@ export function BulkCreateWorktreeDialog({
                       <input
                         id="bulk-assign-to-self"
                         type="checkbox"
-                        checked={assignWorktreeToSelf && !!currentUser}
+                        checked={assignWorktreeToSelf && !assignUnavailable}
                         onChange={(e) => setAssignWorktreeToSelf(e.target.checked)}
-                        disabled={!currentUser}
+                        disabled={assignUnavailable}
                         className={cn(
                           "h-4 w-7 appearance-none rounded-full border transition-colors duration-150 ease-out",
                           "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
-                          assignWorktreeToSelf && currentUser
+                          assignWorktreeToSelf && !assignUnavailable
                             ? "border-daintree-text bg-daintree-text"
                             : "border-border-strong bg-surface-inset",
-                          !currentUser && "cursor-not-allowed opacity-50"
+                          assignUnavailable && "cursor-not-allowed opacity-50"
                         )}
                       />
                       <span
                         className={cn(
                           "pointer-events-none absolute top-1/2 h-3 w-3 -translate-y-1/2 rounded-full",
                           "transition-[left] duration-150 ease-out",
-                          assignWorktreeToSelf && currentUser
+                          assignWorktreeToSelf && !assignUnavailable
                             ? "left-[0.875rem] bg-text-inverse"
                             : "left-0.5 bg-text-secondary"
                         )}
@@ -1186,9 +1195,13 @@ export function BulkCreateWorktreeDialog({
                     ) : (
                       <UserPlus className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                     )}
-                    <span className="truncate">
-                      {currentUser ? `@${currentUser}` : "Account unavailable"}
-                    </span>
+                    {/* Blank while the lookup is still out: naming a failure
+                        before there is one is worse than naming nothing. */}
+                    {(currentUser || assignUnavailable) && (
+                      <span className="truncate">
+                        {currentUser ? `@${currentUser}` : "Account unavailable"}
+                      </span>
+                    )}
                   </div>
                 </FormRow>
               )}
