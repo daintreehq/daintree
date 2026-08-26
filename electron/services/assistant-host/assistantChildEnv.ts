@@ -42,12 +42,23 @@ export const ENGINE_CONTROLLED_ENV = [
   "DAINTREE_ASSISTANT_LOG_DIR",
   "DAINTREE_PROJECT_ID",
   "DAINTREE_WINDOW_ID",
-  // The engine's UPSTREAM credential (internal/config/config.go), sent as the backend
-  // bearer. There is no sign-in here and Daintree mints nothing, so the only way this
-  // can be set is by inheritance — and an inherited key does not fail, it succeeds:
-  // turns go through, billed to whoever the key belongs to, with nothing on screen to
-  // say the session stopped being anonymous. Stripped and never re-set, which is what
-  // "zero authentication" has to mean if it is to mean anything.
+  // A DEPRECATED caller bearer (`APIKey` in internal/config/config.go), not the upstream
+  // credential that funds a turn — the backend holds its own, and the doctor row spells
+  // the distinction out: "it identifies the CALLER; the backend still funds the turn"
+  // (internal/cli/run.go). What it does now is OVERRIDE sign-in, and it does so at app
+  // construction: a set key makes `NewAccountManager` return nil
+  // (internal/app/backendclient.go), so the account token source is never built and
+  // every turn goes out under the key rather than the account `/login` established. The
+  // engine says as much itself — `doctor` reports the key "is overriding account
+  // sign-in", `auth status` warns it "will stop overriding" (internal/cli/auth.go).
+  // Daintree never sets this, so without the strip its only route into the child is
+  // inheritance — and the dangerous case is not the key that gets rejected, it is the one
+  // the backend accepts: `ValidateKeyShape` (internal/backend/endpoint.go) checks shape,
+  // not credentials, so a stale key passes startup either way and only the request finds
+  // out. An accepted one displaces the signed-in account for the whole session with
+  // nothing raised unprompted to say so — the deprecation notice is on `doctor` and
+  // `auth status`, which nobody runs mid-turn. Stripped and never re-set, which is what
+  // keeps the CLI's own sign-in authoritative.
   "DAINTREE_API_KEY",
   // The endpoint.
   //

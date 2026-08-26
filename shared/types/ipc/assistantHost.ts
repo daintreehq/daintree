@@ -127,12 +127,18 @@ export interface AssistantHostReadyEvent extends AssistantHostEventBase {
    * routing policy is the default, what a tier permits. Re-deriving them here would
    * mean a second copy of all of it, wrong the first time any of it changes. Absent
    * means "the default, which needs no announcement" — except `logFile`, where absent
-   * means debug logging is off.
+   * means debug logging is off, and `backend`, which has its own rule below.
    */
   tier?: string;
   /** Plain-language reading of `tier`, e.g. "terminals, projects, external". */
   tierGloss?: string;
-  /** A NON-DEFAULT backend endpoint, already named and sanitized. */
+  /** The backend endpoint, already named and sanitized. Sent for every session whose
+   *  endpoint can be rendered safely, the deployed default included: the engine used to
+   *  announce only a deviation and stopped once the endpoint became the session's own,
+   *  because that made "talks to localhost" and "ships the conversation off the box"
+   *  look identical on screen (`TestMastheadNamesEveryBackendIncludingTheDeployedOne`).
+   *  It is omitted only when it sanitizes to empty, which is a misconfiguration — so
+   *  read an absent one as UNKNOWN, never as the deployed default (internal/host/events.go). */
   backend?: string;
   /** A NON-DEFAULT endpoint-routing policy, as one compact line. */
   routing?: string;
