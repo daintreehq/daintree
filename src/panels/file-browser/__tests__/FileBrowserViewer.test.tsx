@@ -610,7 +610,7 @@ describe("FileBrowserViewer PDF preview (#11427)", () => {
   });
 });
 
-describe("FileBrowserViewer Refresh control (#11586)", () => {
+describe("FileBrowserViewer Refresh control (#11586, #11938)", () => {
   it("leaves Refresh to the tree header while the tree column is mounted and nothing is open", () => {
     renderViewer(null, { sidebarCollapsed: false });
     // Two identical Refresh buttons in one panel would read as two different
@@ -618,20 +618,17 @@ describe("FileBrowserViewer Refresh control (#11586)", () => {
     expect(screen.queryByRole("button", { name: "Refresh" })).toBeNull();
   });
 
-  it("offers Refresh beside the open file's actions even with the tree column mounted", async () => {
-    // With a file open this is the file's own re-read, sitting among the file's
-    // controls. The tree header hands it over for this layout (asserted from
-    // the pane, which is the only place both headers exist at once).
-    const onRefresh = vi.fn();
-    renderViewer("/repo/src/notes.txt", { sidebarCollapsed: false, onRefresh });
+  it("leaves Refresh to the tree header while the tree column is mounted and a file is open", async () => {
+    // Opening a file used to move Refresh into this toolbar. It doesn't any
+    // more, and this is the only place that can be checked from the viewer's
+    // own side: the case above would still pass if the `filePath` half of the
+    // old gate came back, since it renders nothing at all.
+    renderViewer("/repo/src/notes.txt", { sidebarCollapsed: false });
     await screen.findByTestId("code-viewer-mock");
 
-    await act(async () => {
-      screen
-        .getByRole("button", { name: "Refresh" })
-        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
-    });
-    expect(onRefresh).toHaveBeenCalledTimes(1);
+    expect(screen.queryByRole("button", { name: "Refresh" })).toBeNull();
+    // The group doesn't go empty in exchange — the file keeps its own actions.
+    expect(screen.getByRole("button", { name: "Open in editor" })).toBeTruthy();
   });
 
   it("offers Refresh once the tree column is collapsed away, even with nothing selected", async () => {
@@ -639,8 +636,28 @@ describe("FileBrowserViewer Refresh control (#11586)", () => {
     renderViewer(null, { sidebarCollapsed: true, onRefresh });
 
     // Nothing selected still needs it: Refresh re-reads the tree too, and a
-    // workspace-rooted browser has no change tick to fall back on (#11482).
+    // workspace root has only the polled reconcile to fall back on (#11590).
     expect(screen.getByText("Nothing selected")).toBeTruthy();
+    const button = screen.getByRole("button", { name: "Refresh" });
+    await act(async () => {
+      button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(onRefresh).toHaveBeenCalledTimes(1);
+  });
+
+  it("offers Refresh over a folder listing once the tree is collapsed away", async () => {
+    // The third selection state. Refresh re-reads the browser whatever the
+    // viewer happens to be showing, so a listing must not be the one surface
+    // that loses it — the sort menu beside it orders rows, it can't re-read.
+    const onRefresh = vi.fn();
+    renderViewer(null, {
+      sidebarCollapsed: true,
+      folderPath: "src",
+      folderRows: [],
+      folderStatus: "ready",
+      onRefresh,
+    });
+
     const button = screen.getByRole("button", { name: "Refresh" });
     await act(async () => {
       button.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -834,15 +851,14 @@ describe("sort menu (#11620)", () => {
   it("stays available for a selected folder, whose listing it orders", () => {
     renderViewer(null, { folderPath: "src", folderRows: [], folderStatus: "ready" });
     expect(screen.getByRole("button", { name: /^Sort files \(/ })).toBeTruthy();
-    // The other half of the swap: no Refresh crowding it while the tree header
-    // still owns that one.
+    // No Refresh crowding it: the mounted tree header still owns that one.
     expect(screen.queryByRole("button", { name: "Refresh" })).toBeNull();
   });
 
   it("gives its slot up once a file is open, having nothing left to order", async () => {
     // A single document has no order, so the control that describes one would
-    // be describing the tree it can no longer be reached from — Refresh, the
-    // gesture a reader of an agent-rewritten file actually wants, takes it.
+    // be describing the tree it can no longer be reached from. Reveal and Open
+    // in editor take the room; Refresh stays in the mounted tree header.
     renderViewer("/repo/src/notes.txt");
     await screen.findByTestId("code-viewer-mock");
     expect(screen.queryByRole("button", { name: /^Sort files \(/ })).toBeNull();

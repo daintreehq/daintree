@@ -1140,19 +1140,16 @@ export function FileBrowserPane({
               >
                 <EyeOff className="h-4 w-4" />
               </FileViewerToolbar.IconButton>
-              {/* Refresh follows what's on screen rather than sitting in both
-                  headers: with a file open the viewer's toolbar owns it, beside
-                  that file's own actions, and two buttons named "Refresh" wired
-                  to this same handler would read as two different actions to
-                  anyone who can't see which column they're in (#11496). Every
-                  other layout leaves it here — a collapsed viewer has no toolbar
-                  to hand it to, and with nothing open there is no file for the
-                  viewer's copy to be about. */}
-              {(viewerCollapsed || selectedFilePath === null) && (
-                <FileViewerToolbar.IconButton label="Refresh" onClick={handleRefresh}>
-                  <SpinningIcon icon={RefreshCw} active={isRefreshing} className="h-4 w-4" />
-                </FileViewerToolbar.IconButton>
-              )}
+              {/* Refresh stays here for as long as the tree is mounted. It
+                  re-reads the whole browser rather than just the open file, so
+                  letting a selection hand it to the viewer put it at the far
+                  edge of a column the eye isn't on — at grid width that reads
+                  as no Refresh at all (#11938). The viewer grows its own only
+                  once this header is collapsed away, so there is still exactly
+                  one in every layout (#11496). */}
+              <FileViewerToolbar.IconButton label="Refresh" onClick={handleRefresh}>
+                <SpinningIcon icon={RefreshCw} active={isRefreshing} className="h-4 w-4" />
+              </FileViewerToolbar.IconButton>
               {/* The viewer's disclosure, homed here rather than in the viewer —
                   the mirror of where the tree's toggle lives (#11496). That
                   placement is also what makes "both collapsed" unreachable:

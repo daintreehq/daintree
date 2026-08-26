@@ -2074,10 +2074,12 @@ describe("FileBrowserPane row activation (#11496)", () => {
   });
 });
 
-describe("FileBrowserPane Refresh reachability and media wiring (#11586)", () => {
-  // Refresh used to live only in the tree header, which unmounts with the tree
+describe("FileBrowserPane Refresh reachability and media wiring (#11586, #11938)", () => {
+  // Refresh once lived only in the tree header, which unmounts with the tree
   // column — so the viewer-only layout had no way to refresh at all. The viewer
-  // now grows its own, gated so exactly one is reachable in every layout.
+  // grows its own for exactly that layout. What decides which one is on screen
+  // is whether the tree is mounted, and nothing else: selection used to move it
+  // too, which is what made it read as missing at panel width (#11938).
   const AUDIO_ROW = {
     path: "media/track.mp3",
     name: "track.mp3",
@@ -2116,30 +2118,44 @@ describe("FileBrowserPane Refresh reachability and media wiring (#11586)", () =>
     expect(refreshButtons()).toHaveLength(1);
   });
 
-  it("hands its Refresh to the viewer while a file is open, rather than showing two", () => {
-    // The one layout where both headers are on screen at once. The viewer's
-    // copy sits beside that file's own actions and takes the slot the sort menu
-    // holds in the list layouts; the tree header stands down so the panel never
-    // offers two buttons named "Refresh" wired to the same handler.
+  it("keeps Refresh in the tree header while a file is open, without showing two", async () => {
+    // The one layout where both headers are on screen at once, and the one this
+    // suite used to assert the other way round: opening a file handed Refresh
+    // to the viewer, putting it at the far edge of a grid-width panel. It stays
+    // in the tree header now, and the viewer must not add a second button named
+    // "Refresh" wired to the same handler beside it.
     mockPanel.browserSelectedPath = "src/app.ts";
     renderPane();
+
+    // Wait for the file to actually be on screen. Asserting placement while the
+    // selection is still unresolved would pass for the wrong reason — the tree
+    // header owns Refresh with nothing open too.
+    await screen.findByTestId("code-viewer");
 
     const treeColumn = document.getElementById(
       screen.getByTestId("file-browser-sidebar-toggle").getAttribute("aria-controls")!
     )!;
     expect(refreshButtons()).toHaveLength(1);
-    expect(treeColumn.contains(refreshButtons()[0]!)).toBe(false);
+    expect(treeColumn.contains(refreshButtons()[0]!)).toBe(true);
+
+    // And it works from here. Every other Refresh press in this file collapses
+    // the sidebar first, so without this the layout Refresh now lives in by
+    // default could go inert — visible, unwired — with the suite still green.
+    act(() => {
+      fireEvent.click(refreshButtons()[0]!);
+    });
+    expect(treeState.refresh).toHaveBeenCalledWith({ manual: true });
   });
 
-  it("keeps the tree's Refresh when the viewer that would own it is collapsed", () => {
-    // A file is selected, but there is no viewer toolbar to hand it to — the
-    // handoff above must not strand the layout with no Refresh at all.
+  it("keeps the tree's Refresh when a selected file's viewer is collapsed", () => {
+    // A file is selected and the viewer that would once have owned Refresh is
+    // gone. The tree header is mounted, so it owns it — the same answer as the
+    // layout above, reached from the other direction.
     mockPanel.browserSelectedPath = "src/app.ts";
     mockPanel.browserViewerCollapsed = true;
     renderPane();
 
     // The viewer column is unmounted — its tree toggle is the tell — so the
-    // toolbar that would own Refresh for the open file doesn't exist, and the
     // tree column is the only place the remaining one can be.
     expect(screen.queryByTestId("file-browser-sidebar-toggle")).toBeNull();
     expect(screen.getByTestId("file-tree-view")).toBeTruthy();
@@ -2148,8 +2164,8 @@ describe("FileBrowserPane Refresh reachability and media wiring (#11586)", () =>
 
   it("runs the pane's manual refresh from the viewer with nothing selected", () => {
     // Nothing selected is not a dead layout: Refresh re-reads the tree, and a
-    // browser whose source reports no change tick (a workspace root, #11482)
-    // has no other freshness signal at all.
+    // browser whose source has no worktree tick (a workspace root) is left with
+    // just the polled reconcile (#11590) until someone asks.
     mockPanel.browserSidebarCollapsed = true;
     renderPane();
 
