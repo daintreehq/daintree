@@ -6,7 +6,11 @@
 // from the module under test.
 
 import { describe, it, expect } from "vitest";
-import { classifyBaselineEntries, coverageShortfall } from "./check-compiler-budget.mjs";
+import {
+  classifyBaselineEntries,
+  coverageShortfall,
+  regressedStrictCategories,
+} from "./check-compiler-budget.mjs";
 import { isInScanSurface, toPosixRelative } from "./lib/compiler-scan-surface.mjs";
 
 function makeScan({ scanned = [], filtered = [] } = {}) {
@@ -123,6 +127,26 @@ describe("coverageShortfall", () => {
         fileExists: () => true,
       })
     ).toBe(0);
+  });
+});
+
+describe("regressedStrictCategories", () => {
+  const bailout = (category) => ({ category, severity: "Error", reason: "x", line: 1 });
+
+  // The count-neutral case the strict gate exists for: the total is unchanged,
+  // so anything comparing lengths reads it as a wash.
+  it("reports a same-count swap to a different category as a regression", () => {
+    const regressed = regressedStrictCategories(
+      { errorBailouts: [bailout("Hooks")] },
+      { errorBailouts: [bailout("Refs")] }
+    );
+    expect(regressed).toEqual([{ category: "Hooks", from: 0, to: 1 }]);
+  });
+
+  it("reports nothing when the category counts are unchanged", () => {
+    const entry = { errorBailouts: [bailout("Refs"), bailout("Hooks")] };
+    const base = { errorBailouts: [bailout("Hooks"), bailout("Refs")] };
+    expect(regressedStrictCategories(entry, base)).toEqual([]);
   });
 });
 

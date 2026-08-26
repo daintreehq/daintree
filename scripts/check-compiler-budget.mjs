@@ -90,7 +90,9 @@ function strictCategoryCounts(entry) {
 
 // Returns the strict categories whose per-file count increased (or newly
 // appeared) in `entry` relative to `base`. Empty array = no strict regression.
-function regressedStrictCategories(entry, base) {
+// Exported for tests: this is the count-neutral swap gate, and nothing else
+// distinguishes a wash from a taxonomy change.
+export function regressedStrictCategories(entry, base) {
   const current = strictCategoryCounts(entry);
   const prior = strictCategoryCounts(base);
   const regressed = [];
@@ -310,7 +312,7 @@ function assertScanLiveness(scan) {
 // deletions and would have accepted a 9% silent loss.
 const COVERAGE_COLLAPSE_THRESHOLD = 0.1;
 
-function assertCoverageHolds(baseline, scan, { isUpdate }) {
+function assertCoverageHolds(baseline, scan, { isUpdate, acceptCoverageDrop }) {
   const drop = coverageShortfall({
     baselineFiles: baseline?.files,
     baselineCoverage: baseline?.coverage,
@@ -318,6 +320,17 @@ function assertCoverageHolds(baseline, scan, { isUpdate }) {
     fileExists: (file) => existsSync(path.join(ROOT, file)),
   });
   if (drop <= COVERAGE_COLLAPSE_THRESHOLD) return;
+  // The shortfall is measured against the baseline's *scanned* count, but only
+  // files that had diagnostics are named in it, so deleting a large directory
+  // of clean files reads as a collapse the guard cannot attribute. Without an
+  // escape, the only way through is hand-editing `coverage.scanned` — the
+  // exact incentive this gate exists to remove. Check mode stays fail-closed.
+  if (isUpdate && acceptCoverageDrop) {
+    console.warn(
+      `[check-compiler-budget] coverage is ${(drop * 100).toFixed(1)}% short of what the baseline implies, accepted via --accept-coverage-drop.`
+    );
+    return;
+  }
   console.error(
     `::error::compiler scan coverage collapsed — scanned ${scan.scanned.length} file(s), ${(drop * 100).toFixed(1)}% short of what the baseline implies should still be there.`
   );
@@ -325,6 +338,11 @@ function assertCoverageHolds(baseline, scan, { isUpdate }) {
     "   That is a scan-set or collector problem, not a code change. Fix the scan before" +
       (isUpdate ? " writing a baseline over the good one." : " trusting this result.")
   );
+  if (isUpdate) {
+    console.error(
+      "   If the shortfall is an honest bulk deletion of clean files, re-run with --accept-coverage-drop."
+    );
+  }
   process.exit(1);
 }
 
@@ -342,16 +360,18 @@ function assertScanComplete(scan) {
   process.exit(1);
 }
 
-// Every CompileError event is either a Hint or a strict bailout, so the two
-// buckets must account for exactly the raw count. A mismatch means the severity
-// split dropped something, which would silently retire debt.
+// Every CompileError event must be accounted for by the two severity buckets.
+// Only a shortfall is a violation: a multi-location diagnostic legitimately
+// expands one event into several bucketed entries (one per `options.details`
+// child), so `bucketed > error` is expected. `bucketed < error` means the
+// severity split dropped something, which would silently retire debt.
 function assertScanInvariants(scan) {
   for (const [file, e] of Object.entries(scan.files)) {
     const bucketed =
       getHintCount(e) + (Array.isArray(e.errorBailouts) ? e.errorBailouts.length : 0);
-    if (e.error !== bucketed) {
+    if (bucketed < e.error) {
       console.error(
-        `::error file=${file}::scan invariant violated — ${e.error} CompileError event(s) but ${bucketed} bucketed by severity`
+        `::error file=${file}::scan invariant violated — ${e.error} CompileError event(s) but only ${bucketed} bucketed by severity`
       );
       process.exit(1);
     }
@@ -487,14 +507,16 @@ function emitSummary(
   writeSummary(SUMMARY_FILE, markdown);
 }
 
-const USAGE = `Usage: node scripts/check-compiler-budget.mjs [--update]
+const USAGE = `Usage: node scripts/check-compiler-budget.mjs [--update] [--accept-coverage-drop]
 
-  (no flags)  Scan the source tree and diff it against the committed baseline.
-  --update    Scan the source tree and write the result as the new baseline.
+  (no flags)              Scan the source tree and diff it against the committed baseline.
+  --update                Scan the source tree and write the result as the new baseline.
+  --accept-coverage-drop  With --update only: write the baseline even though coverage fell
+                          more than 10% short, for an honest bulk deletion of clean files.
 `;
 
 function parseArgs(argv) {
-  const known = new Set(["--update", "--help", "-h"]);
+  const known = new Set(["--update", "--accept-coverage-drop", "--help", "-h"]);
   const unknown = argv.filter((a) => !known.has(a));
   if (unknown.length > 0) {
     // Silently ignoring an unknown flag is how `--force` kept looking like it
@@ -507,11 +529,14 @@ function parseArgs(argv) {
     console.log(USAGE);
     process.exit(0);
   }
-  return { isUpdate: argv.includes("--update") };
+  return {
+    isUpdate: argv.includes("--update"),
+    acceptCoverageDrop: argv.includes("--accept-coverage-drop"),
+  };
 }
 
 async function main() {
-  const { isUpdate } = parseArgs(process.argv.slice(2));
+  const { isUpdate, acceptCoverageDrop } = parseArgs(process.argv.slice(2));
 
   // Read the baseline BEFORE the scan. Everything below takes ~20 seconds, and
   // failing on a missing or unreadable baseline afterwards wastes all of it.
@@ -537,7 +562,7 @@ async function main() {
   assertScanLiveness(scan);
   assertScanInvariants(scan);
   if (priorBaseline?.version === BASELINE_VERSION) {
-    assertCoverageHolds(priorBaseline, scan, { isUpdate });
+    assertCoverageHolds(priorBaseline, scan, { isUpdate, acceptCoverageDrop });
   }
   const report = scan.files;
 
