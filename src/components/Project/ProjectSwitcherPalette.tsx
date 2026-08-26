@@ -1684,6 +1684,21 @@ function ProjectSwitcherFooter({
   );
 }
 
+/**
+ * The plain commands under the divider — Project Settings, Add Project, Clone,
+ * Create Folder. Full-bleed on purpose: they never take the roving cursor, so
+ * they must not wear the ranked rows' card shape, which is what marks the
+ * arrow-key domain (`PALETTE_ROW_CLASS`). Losing the inset means `px-3` is now
+ * the row's own edge, landing its content on the header's and footer's column
+ * instead of an inset nothing else in the palette shares.
+ *
+ * The focus ring is inset for the same reason. The palette clips to
+ * `overflow-hidden`, so a ring drawn outside a full-width row loses its left
+ * and right sides at the dialog edge; `-outline-offset-2` keeps all four.
+ */
+const PROJECT_ACTION_ROW_CLASS =
+  "w-full flex items-center gap-3 px-3 py-2 text-left transition-colors hover:bg-overlay-subtle focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-daintree-accent";
+
 interface ProjectPaletteInnerProps {
   inputRef: React.RefObject<HTMLInputElement | null>;
   listRef: React.RefObject<HTMLDivElement | null>;
@@ -1930,12 +1945,12 @@ function ProjectPaletteInner({
       {(onOpenProjectSettings || onAddProject || onCloneRepo || onCreateFolder) && (
         <>
           <AppPaletteDialog.Divider />
-          <div className="px-2 pt-1 pb-2">
+          <div className="py-2">
             {onOpenProjectSettings && (
               <button
                 type="button"
                 onClick={() => onOpenProjectSettings()}
-                className="w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors hover:bg-overlay-subtle"
+                className={PROJECT_ACTION_ROW_CLASS}
               >
                 <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] bg-tint/[0.04] text-muted-foreground">
                   <Settings2 className="h-4 w-4" />
@@ -1947,7 +1962,7 @@ function ProjectPaletteInner({
               <button
                 type="button"
                 onClick={() => onAddProject()}
-                className="w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors hover:bg-overlay-subtle"
+                className={PROJECT_ACTION_ROW_CLASS}
                 data-testid="project-add-button"
               >
                 <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] border border-dashed border-muted-foreground/30 bg-muted/20 text-muted-foreground">
@@ -1960,7 +1975,7 @@ function ProjectPaletteInner({
               <button
                 type="button"
                 onClick={() => onCloneRepo()}
-                className="w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors hover:bg-overlay-subtle"
+                className={PROJECT_ACTION_ROW_CLASS}
                 data-testid="project-clone-button"
               >
                 <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] border border-dashed border-muted-foreground/30 bg-muted/20 text-muted-foreground">
@@ -1973,7 +1988,7 @@ function ProjectPaletteInner({
               <button
                 type="button"
                 onClick={() => onCreateFolder()}
-                className="w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors hover:bg-overlay-subtle"
+                className={PROJECT_ACTION_ROW_CLASS}
               >
                 <div className="flex h-8 w-8 items-center justify-center rounded-[var(--radius-lg)] border border-dashed border-muted-foreground/30 bg-muted/20 text-muted-foreground">
                   <FolderPlus className="h-4 w-4" />
