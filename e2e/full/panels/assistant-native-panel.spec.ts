@@ -1455,4 +1455,154 @@ test.describe.serial("Assistant: the account journey", () => {
       await expect(dialog.getByRole("textbox", { name: control })).toHaveCount(0);
     }
   });
+
+  /**
+   * Replaces `shell.openExternal` in the MAIN process with a recorder.
+   *
+   * Works because `electron/utils/openExternal.ts` reads `shell.openExternal` at CALL
+   * time rather than capturing it at import, so a replacement installed after boot is
+   * still the one a click reaches. Same technique as the loopback OAuth spec.
+   *
+   * Recording rather than asserting inside the page is the point: a unit test can prove
+   * an `<a href>` was rendered, and nothing short of the real main process can prove
+   * that clicking it is routed out to the system browser instead of navigating the app.
+   */
+  async function recordExternalOpens(app: AppContext["app"]) {
+    await app.evaluate(({ shell, app: electronApp }) => {
+      const g = globalThis as unknown as { __opened: string[]; __spawned: string[] };
+      g.__opened = [];
+      g.__spawned = [];
+      shell.openExternal = async (url: string): Promise<void> => {
+        g.__opened.push(url);
+      };
+      // Handing the URL to the browser is only half of what must happen — the in-app
+      // popup has to be DENIED. A handler that opened externally AND allowed the window
+      // would satisfy every assertion about the recorder while a stray Electron window
+      // appeared over the panel, so the windows are watched too. Event-based rather
+      // than a count afterwards, because a popup that opens and closes again inside the
+      // click would leave no trace in a count.
+      electronApp.on("web-contents-created", (_e, contents) => {
+        g.__spawned.push(contents.getType());
+      });
+    });
+    return {
+      /** Clears both records. Call immediately before the activation under test. */
+      reset: () =>
+        app.evaluate(() => {
+          const g = globalThis as unknown as { __opened: string[]; __spawned: string[] };
+          g.__opened.length = 0;
+          g.__spawned.length = 0;
+        }),
+      opened: () =>
+        app.evaluate(() => (globalThis as unknown as { __opened: string[] }).__opened ?? []),
+      spawned: () =>
+        app.evaluate(() => (globalThis as unknown as { __spawned: string[] }).__spawned ?? []),
+    };
+  }
+
+  /**
+   * Where each line's value column starts, for the lines that have one.
+   *
+   * The engine pads a label column so values line up, and the panel preserves that
+   * whitespace rather than reflowing it. Asserting the ALIGNMENT rather than a literal
+   * run of spaces is what makes this independent of the fake's exact padding — a check
+   * for `/plan {2,}/` passes just as happily when every column has collapsed to two
+   * spaces and nothing lines up any more.
+   */
+  function valueColumns(rendered: string): number[] {
+    return rendered
+      .split("\n")
+      .map((line) => /^\S+ {2,}\S/.exec(line)?.[0].lastIndexOf(" "))
+      .filter((i): i is number => i !== undefined && i >= 0);
+  }
+
+  /** The one link inside the last notice that has one. */
+  function noticeLink(window: AppContext["window"]) {
+    return window
+      .locator("#daintree-assistant-panel")
+      .getByTestId("assistant-notice")
+      .filter({ has: window.locator("a[href]") })
+      .last()
+      .locator("a[href]");
+  }
+
+  test("an address the engine printed is a link, and clicking it leaves the app", async () => {
+    // The whole point of the linkifier, end to end. Everything below the render — that
+    // `target="_blank"` is denied in-app and handed to `openExternalUrl` instead — lives
+    // in the main process, so this is the only tier that can see it happen.
+    const PLAN_URL = "https://staging.daintree.test/subscribe";
+    const window = await launchWithAccount({
+      FAKE_ENGINE_SIGNED_IN: "1",
+      FAKE_ENGINE_PLAN: "standard",
+      FAKE_ENGINE_ACCOUNT_URL: PLAN_URL,
+    });
+    const external = await recordExternalOpens(accountCtx.app);
+    await openAssistant(window);
+    const panel = window.locator("#daintree-assistant-panel");
+
+    await ask(window, "/account");
+    const link = noticeLink(window);
+    await expect(link).toBeVisible({ timeout: T_MEDIUM });
+
+    // The href is the engine's string, not a normalised reconstruction of it.
+    await expect(link).toHaveAttribute("href", PLAN_URL);
+    await expect(link).toHaveText(PLAN_URL);
+
+    // Inserting an element into the text is exactly the change that would collapse the
+    // engine's padding, so the columns are checked WITH the link present. `innerText`
+    // rather than `textContent`, for the reason the command-output test above gives:
+    // only the rendered form can show that whitespace actually survived.
+    const rendered = await panel
+      .getByTestId("assistant-notice")
+      .filter({ hasText: /plan/ })
+      .last()
+      .evaluate((el: HTMLElement) => el.innerText);
+    const columns = valueColumns(rendered);
+    expect(columns.length).toBeGreaterThan(1);
+    expect(new Set(columns).size).toBe(1);
+
+    // Nothing has opened yet, so a link that navigated on render rather than on click
+    // cannot masquerade as a working one.
+    await external.reset();
+    await link.click();
+
+    // Routed OUT, and NOT opened in the app: the handler must deny the window as well
+    // as hand the address over.
+    await expect.poll(external.opened, { timeout: T_MEDIUM }).toEqual([PLAN_URL]);
+    expect(await external.spawned()).toEqual([]);
+    await expect(panel).toBeVisible();
+  });
+
+  test("a refused turn's guidance is navigable too, not just a command's answer", async () => {
+    // A command result and a refused turn arrive as different events and are stored by
+    // different branches of the store. A host that linkified only the command path would
+    // pass the test above and still leave every turn-level refusal unrendered.
+    //
+    // The URL here is SYNTHETIC: at this pin the engine's `accountFailureAdvice` prints
+    // no address on the error path (it names `auth status --refresh` instead), so the
+    // fake carries a neutral one purely to exercise the shape. The claim being tested is
+    // the host's, not the engine's.
+    const SUPPORT_URL = "https://staging.daintree.test/status";
+    const window = await launchWithAccount({
+      FAKE_ENGINE_REQUIRE_ACCOUNT: "1",
+      FAKE_ENGINE_ACCOUNT_URL: SUPPORT_URL,
+    });
+    const external = await recordExternalOpens(accountCtx.app);
+    await openAssistant(window);
+    const panel = window.locator("#daintree-assistant-panel");
+
+    await ask(window, "/scenario simple");
+    await expect(panel.getByText(/Account problem:/)).toBeVisible({ timeout: T_MEDIUM });
+
+    const link = noticeLink(window);
+    await expect(link).toHaveAttribute("href", SUPPORT_URL);
+
+    // From the keyboard, because a refusal is exactly the moment someone is being told
+    // to go somewhere else, and a mouse must not be the only way to get there.
+    await external.reset();
+    await link.focus();
+    await window.keyboard.press("Enter");
+    await expect.poll(external.opened, { timeout: T_MEDIUM }).toEqual([SUPPORT_URL]);
+    expect(await external.spawned()).toEqual([]);
+  });
 });
