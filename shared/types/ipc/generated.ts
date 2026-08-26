@@ -906,8 +906,8 @@ export interface GeneratedIpcInvokeMap {
     result: import("./mcpServer.js").McpServerStatusSnapshot;
   };
   "mcp-server:set-session-tier": {
-    args: [payload: { sessionId: string; tier: "workbench" | "action" | "system" }];
-    result: { sessionId: string; tier: "workbench" | "action" | "system" };
+    args: [payload: { sessionId: string; tier: "action" | "workbench" | "system" }];
+    result: { sessionId: string; tier: "action" | "workbench" | "system" };
   };
   "menu:show-application": {
     args: [payload?: import("../menu.js").ShowApplicationMenuPayload | undefined];
@@ -1823,7 +1823,7 @@ export interface GeneratedIpcInvokeMap {
           sourcePrNumber?: number | undefined;
           sourcePrTitle?: string | undefined;
           sourcePrUrl?: string | undefined;
-          sourcePrState?: "open" | "closed" | "merged" | undefined;
+          sourcePrState?: "merged" | "open" | "closed" | undefined;
           sourcePrLinkedIssueNumber?: number | undefined;
         };
       },
