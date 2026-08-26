@@ -540,15 +540,17 @@ function FileTreeRow({ row, isSelected, isOpen, context }: FileTreeRowProps) {
     : row.isDirectory
       ? FolderIcon
       : getFileTypeIcon(row.name).Icon;
-  // What the link points at, and why it is inert when it is. Out-of-root
-  // targets are deliberately never dereferenced, so "unknown" is the honest
-  // word for what is on the other side rather than a failure to look.
+  // Wording keys off the resolved kind, never off a bare "not inside" bit: a
+  // link we could not read at all must not be announced as pointing outside
+  // the workspace, which would be a claim we never verified.
   const symlinkDescription = row.symlink
     ? row.symlink.targetKind === "broken"
       ? `Broken symlink to ${row.symlink.target}`
-      : !row.symlink.insideRoot
+      : row.symlink.targetKind === "external"
         ? `Symlink to ${row.symlink.target}, outside this folder`
-        : `Symlink to ${row.symlink.target}`
+        : row.symlink.targetKind === "unknown"
+          ? `Symlink to ${row.symlink.target}, unreadable`
+          : `Symlink to ${row.symlink.target}`
     : null;
 
   // A file's own status; a folder's is the worst thing anywhere beneath it, so a

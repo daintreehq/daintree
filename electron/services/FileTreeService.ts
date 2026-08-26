@@ -1,4 +1,5 @@
 import * as fs from "fs/promises";
+import type { Stats } from "node:fs";
 import * as path from "path";
 import type { FileTreeNode, FileTreeSymlink } from "../../shared/types/ipc.js";
 
@@ -49,63 +50,81 @@ function isContained(root: string, candidate: string): boolean {
 }
 
 /**
- * Resolve one symlink entry into the metadata the browser needs, without ever
- * dereferencing a target that points outside the root (#11939).
+ * Resolve one symlink entry into the metadata the browser needs (#11939).
  *
- * The order matters and is the whole safety argument. `readlink` reads the
- * stored target string and follows nothing, so it is the only call safe to
- * make first. Its result is checked lexically before `realpath` — the first
- * call that would actually traverse — because dereferencing an arbitrary
- * absolute target turns any symlink in a cloned repository into two things we
- * refuse to offer: an existence-and-kind probe for paths outside the
- * workspace, and a `stat` that blocks forever on a dead network mount, which
- * would hang this entry's whole `Promise.all` and with it the directory
- * listing.
+ * What this guarantees, exactly: nothing outside the workspace root is ever
+ * *reported*. `realpath` resolves the entire chain and the canonical result is
+ * checked against the canonical root before any kind, size or mtime is read —
+ * so an escaping link comes back `"external"` with no metadata attached, and
+ * `isDirectory` stays false, which is what keeps it non-descendable.
  *
- * So an out-of-root link costs exactly one extra syscall and reports
- * `"unknown"` — honest, since we genuinely did not look. Only a link that
- * survives both the lexical and the canonical containment checks is stat'd.
+ * What it does NOT guarantee: that the kernel never *traverses* outside during
+ * that resolution. The cheap `readlink` gate below rejects a target that
+ * directly names an outside path, which covers the ordinary case — a link to
+ * another checkout — and spares it a `realpath` that would block on a dead
+ * network mount. But a chain that only escapes on a later hop (`a → ./b`,
+ * `b → /elsewhere`), or one written to leave and return (`/elsewhere/../in`),
+ * passes that gate lexically and is resolved by the OS before the canonical
+ * check can refuse it. Two consequences worth naming rather than papering
+ * over: an out-of-root path's existence is observable through `"external"`
+ * (resolved, then refused) versus `"broken"` (did not resolve), and a dead
+ * mount reachable through such a chain can still stall this listing.
+ *
+ * Closing those would take component-by-component resolution validated at
+ * every hop, which is a shared containment primitive this codebase does not
+ * have yet — and inventing a private one here is exactly what `.lessons/10971`
+ * exists to prevent. The boundary that matters for disclosure is the canonical
+ * check, and it holds.
  */
 async function describeSymlink(
   linkPath: string,
+  listingRealDirPath: string,
   resolvedBasePath: string,
   resolvedBaseRealPath: string
-): Promise<{ symlink: FileTreeSymlink; targetStat?: Awaited<ReturnType<typeof fs.lstat>> }> {
+): Promise<{ symlink: FileTreeSymlink; targetStat?: Stats }> {
   const raw = await fs.readlink(linkPath);
-  const target = path.resolve(path.dirname(linkPath), raw);
+  // Against the CANONICAL directory this entry was listed from, not the
+  // lexical one. When the listed directory is itself reached through a link,
+  // the two are different places, and only the canonical one interprets a
+  // relative target the way the kernel will.
+  const target = path.resolve(listingRealDirPath, raw);
   const unresolved = (targetKind: FileTreeSymlink["targetKind"]) => ({
-    symlink: { target, targetKind, insideRoot: false },
+    symlink: { target, targetKind },
   });
 
-  if (!isContained(resolvedBasePath, target)) return unresolved("unknown");
+  // Either spelling of the root counts as inside it. A root reached through a
+  // symlink (macOS `/tmp` and `/var` both are) has two absolute names, and an
+  // absolute target written in whichever one the link's author had is still
+  // pointing at the same workspace — rejecting it would hide a genuinely
+  // in-root link. The canonical check below is what actually decides.
+  if (!isContained(resolvedBaseRealPath, target) && !isContained(resolvedBasePath, target)) {
+    return unresolved("external");
+  }
 
   let realTarget: string;
   try {
     realTarget = await fs.realpath(linkPath);
   } catch (error: unknown) {
-    // ENOENT is a dangling link — the one failure that means something
-    // specific enough to show. ELOOP (a cycle, or the OS depth limit) and
-    // EACCES/EPERM are indistinguishable to a user and equally non-actionable.
+    // ENOENT is a dangling link — the one failure specific enough to show.
+    // ELOOP (a cycle, or the OS depth limit) and EACCES/EPERM are equally
+    // non-actionable, and reporting them as `"external"` would tell the user
+    // something false about where their link points.
     const code = (error as NodeJS.ErrnoException).code;
     return unresolved(code === "ENOENT" ? "broken" : "unknown");
   }
 
-  // A target can be lexically inside the root and still canonically outside it
-  // — `link → ./sub/escape/etc` where `sub/escape → /`. The canonical check is
-  // what keeps `insideRoot` honest, so the renderer never draws a disclosure
-  // triangle on a row whose listing would be refused.
-  if (!isContained(resolvedBaseRealPath, realTarget)) return unresolved("unknown");
+  // The authoritative check. A target can be lexically inside the root and
+  // canonically outside it — `link → ./sub/escape/etc` where `sub/escape → /`
+  // — and this is what keeps such a link from ever reporting a kind, a size,
+  // or a disclosure triangle.
+  if (!isContained(resolvedBaseRealPath, realTarget)) return unresolved("external");
 
   try {
     // `lstat`, not `stat`: `realTarget` is fully resolved, so there is no link
     // left to follow and the cheaper call answers the same question.
     const targetStat = await fs.lstat(realTarget);
     return {
-      symlink: {
-        target,
-        targetKind: targetStat.isDirectory() ? "directory" : "file",
-        insideRoot: true,
-      },
+      symlink: { target, targetKind: targetStat.isDirectory() ? "directory" : "file" },
       targetStat,
     };
   } catch {
@@ -194,6 +213,7 @@ export class FileTreeService {
             }
             const { symlink, targetStat } = await describeSymlink(
               absolutePath,
+              targetRealPath,
               resolvedBasePath,
               resolvedBaseRealPath
             );

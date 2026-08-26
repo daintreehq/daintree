@@ -363,35 +363,31 @@ export interface CopyTreeProgress {
  */
 export interface FileTreeSymlink {
   /**
-   * Absolute path the link points at, resolved against the link's own
-   * directory (a raw target like `../acorn/bin/acorn` is relative to where the
-   * link lives, not to the process cwd). This is the lexical resolution, not
-   * the canonical one: it is the only form available for a target the listing
-   * deliberately refuses to dereference, so carrying it uniformly keeps the
-   * field present on every symlink node.
+   * Absolute path the link points at, resolved the way the kernel resolves it
+   * — against the canonical directory the entry was listed from, since a raw
+   * target like `../acorn/bin/acorn` is relative to where the link lives. That
+   * matters when the listed directory is itself reached through a link: the
+   * lexical parent and the real parent are different directories, and only the
+   * second one gives the target the OS would actually open.
    */
   target: string;
   /**
-   * What the target turned out to be.
+   * What the target turned out to be, and the single field the browser reads
+   * to decide what a link row can do.
    *
-   * `"broken"` means the target genuinely does not exist. `"unknown"` covers
-   * both "not dereferenced on purpose" (the target resolves outside the root)
-   * and "could not be dereferenced" (permission denied, symlink loop) — the
-   * two are distinguishable through `insideRoot`, and neither is a state the
-   * browser can act on.
-   */
-  targetKind: "file" | "directory" | "broken" | "unknown";
-  /**
-   * Whether the target canonically resolves inside the workspace root — i.e.
-   * whether descending through this link is allowed at all.
+   * `"file"` and `"directory"` are the resolved, contained cases — the only
+   * two where `isDirectory` reflects the target and descent is allowed.
+   * `"broken"` is a target that does not exist. `"external"` is a target that
+   * resolves outside the workspace root. `"unknown"` is a target that could
+   * not be classified at all (a symlink loop, permission denied) — kept
+   * distinct from `"external"` so the UI never tells someone a link points
+   * outside their workspace when the truth is that it could not be read.
    *
-   * The listing only ever reports `isDirectory: true` for a symlink whose
-   * target it verified is a contained directory, so `isDirectory` already
-   * implies this. It is carried separately because "is a directory" and "may
-   * be descended into" are different questions, and the renderer needs the
-   * second one answered before it asks for a listing it would be refused.
+   * There is deliberately no separate "may I descend" flag. It would be fully
+   * derivable from this one, and two fields that must agree are two fields
+   * that can disagree.
    */
-  insideRoot: boolean;
+  targetKind: "file" | "directory" | "broken" | "external" | "unknown";
 }
 
 /** File tree node for file picker */
@@ -422,6 +418,11 @@ export interface FileTreeNode {
    * Present only on symbolic links (#11939). Absence means the entry is a
    * plain file or directory, which is why every consumer can keep reading
    * `isDirectory` and ignore this field entirely.
+   *
+   * `isDirectory` is true for a link only when `targetKind` is `"directory"`,
+   * so a consumer routing on `isDirectory` alone — the CopyTree verdict
+   * overlay, the tree's chevron, the expansion fetch — stays correct without
+   * ever reading this field.
    *
    * Not carried by the persisted tree snapshot, which stores structure only —
    * a restored out-of-root link comes back as `isDirectory: false` and is

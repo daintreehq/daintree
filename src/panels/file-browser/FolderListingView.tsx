@@ -182,12 +182,17 @@ function FolderListingRowView({ row, context }: FolderListingRowViewProps) {
     : row.isDirectory
       ? Folder
       : getFileTypeIcon(row.name).Icon;
+  // Wording keys off the resolved kind, never off a bare "not inside" bit: a
+  // link we could not read at all must not be announced as pointing outside
+  // the workspace, which would be a claim we never verified.
   const symlinkDescription = row.symlink
     ? row.symlink.targetKind === "broken"
       ? `Broken symlink to ${row.symlink.target}`
-      : !row.symlink.insideRoot
+      : row.symlink.targetKind === "external"
         ? `Symlink to ${row.symlink.target}, outside this folder`
-        : `Symlink to ${row.symlink.target}`
+        : row.symlink.targetKind === "unknown"
+          ? `Symlink to ${row.symlink.target}, unreadable`
+          : `Symlink to ${row.symlink.target}`
     : null;
 
   const menuItems = context.rowContextMenu?.(row);

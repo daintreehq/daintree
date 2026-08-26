@@ -51,6 +51,22 @@ describe("CopyTreeService.getFileTree", () => {
     };
   }
 
+  /** See the note in `FileTreeService.test.ts`: skip, never silently return. */
+  async function symlinkOrSkip(
+    ctx: { skip: () => void },
+    target: string,
+    linkPath: string,
+    type?: "file" | "dir"
+  ): Promise<void> {
+    try {
+      await fs.symlink(target, linkPath, type);
+    } catch (error) {
+      const code = (error as NodeJS.ErrnoException).code;
+      if (code === "EPERM" || code === "EACCES") ctx.skip();
+      throw error;
+    }
+  }
+
   beforeEach(async () => {
     tempDir = await fs.mkdtemp(path.join(os.tmpdir(), "daintree-context-tree-"));
     vi.clearAllMocks();
@@ -93,7 +109,7 @@ describe("CopyTreeService.getFileTree", () => {
     expect(nodes.map((node) => node.name)).toEqual(["a.ts", "b.lock", "c.png", "d.md"]);
   });
 
-  it("routes a symlink by the kind the raw listing reports (#11939)", async () => {
+  it("routes a symlink by the kind the raw listing reports (#11939)", async (ctx) => {
     // The verdict overlay branches on `isDirectory` to choose between the
     // manifest's file set and the derived populated-directory set. Now that
     // the raw listing surfaces symlinks — reporting the TARGET's kind — a link
@@ -102,14 +118,8 @@ describe("CopyTreeService.getFileTree", () => {
     await fs.mkdir(path.join(tempDir, "real"), { recursive: true });
     await fs.writeFile(path.join(tempDir, "real", "inner.ts"), "");
     await fs.writeFile(path.join(tempDir, "app.ts"), "");
-    try {
-      await fs.symlink(path.join(tempDir, "app.ts"), path.join(tempDir, "app-link.ts"));
-      await fs.symlink(path.join(tempDir, "real"), path.join(tempDir, "dir-link"), "dir");
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code === "EPERM" || code === "EACCES") return;
-      throw error;
-    }
+    await symlinkOrSkip(ctx, path.join(tempDir, "app.ts"), path.join(tempDir, "app-link.ts"));
+    await symlinkOrSkip(ctx, path.join(tempDir, "real"), path.join(tempDir, "dir-link"), "dir");
     // What the SDK walker would report having followed both links.
     copyMock.mockResolvedValue(
       dryRunResult(
@@ -122,22 +132,31 @@ describe("CopyTreeService.getFileTree", () => {
     expect(nodes.map((node) => node.name)).toEqual(["dir-link", "real", "app-link.ts", "app.ts"]);
   });
 
-  it("drops a symlink the dry run excluded, exactly like any other entry", async () => {
+  it("drops a symlink the dry run excluded, exactly like any other entry", async (ctx) => {
     // CopyTree owns the bundling policy — `symlinkEscape` is one of its own
     // exclusion reasons. The picker preview must inherit that verdict rather
     // than acquire an opinion of its own now that links are listed.
+    //
+    // Asserted through `includeExcluded` rather than by absence: a plain
+    // `["app.ts"]` expectation would hold just as well if the listing
+    // regressed to hiding every symlink, which is the bug this PR fixes.
     await fs.writeFile(path.join(tempDir, "app.ts"), "");
-    try {
-      await fs.symlink(path.join(tempDir, "app.ts"), path.join(tempDir, "escaping.ts"));
-    } catch (error) {
-      const code = (error as NodeJS.ErrnoException).code;
-      if (code === "EPERM" || code === "EACCES") return;
-      throw error;
-    }
+    await symlinkOrSkip(ctx, path.join(tempDir, "app.ts"), path.join(tempDir, "escaping.ts"));
     copyMock.mockResolvedValue(dryRunResult(manifest([["app.ts"]])));
 
-    const nodes = await copyTreeService.getFileTree(tempDir);
+    const withExcluded = await copyTreeService.getFileTree(
+      tempDir,
+      "",
+      {},
+      { includeExcluded: true }
+    );
+    expect(withExcluded.map((node) => [node.name, node.excluded ?? false])).toEqual([
+      ["app.ts", false],
+      ["escaping.ts", true],
+    ]);
 
+    // ...and the default listing, which the picker uses, omits it entirely.
+    const nodes = await copyTreeService.getFileTree(tempDir);
     expect(nodes.map((node) => node.name)).toEqual(["app.ts"]);
   });
 

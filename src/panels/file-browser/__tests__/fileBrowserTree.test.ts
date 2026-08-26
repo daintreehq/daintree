@@ -159,7 +159,7 @@ describe("flattenTree", () => {
       name: "aliased",
       path: "aliased",
       isDirectory: true,
-      symlink: { target: "/repo/real", targetKind: "directory", insideRoot: true },
+      symlink: { target: "/repo/real", targetKind: "directory" },
     };
     const listings = listingsOf({ "": [link, file("README.md")] });
 
@@ -696,6 +696,36 @@ describe("listingsFromSnapshot", () => {
       pathsOf(flattenTree(listings, new Set(["src"]), new Set()))
     );
   });
+
+  it("drops symlink metadata but keeps the bit that decides expandability (#11939)", () => {
+    // The snapshot is structure-only by design — no sizes, no timestamps, no
+    // symlink detail. What must survive is `isDirectory`, because that alone
+    // is what stops a restored external link from being fetched: the listing
+    // never sets it true for a link it could not resolve inside the root.
+    const external: FileTreeNode = {
+      name: "outward",
+      path: "outward",
+      isDirectory: false,
+      symlink: { target: "/elsewhere", targetKind: "external" },
+    };
+    const inRoot: FileTreeNode = {
+      name: "aliased",
+      path: "aliased",
+      isDirectory: true,
+      symlink: { target: "/repo/real", targetKind: "directory" },
+    };
+
+    const snapshot = snapshotFromListings(listingsOf({ "": [external, inRoot] }), WT_SOURCE, "");
+    const restored = listingsFromSnapshot(snapshot!)?.get("");
+
+    expect(restored?.map((node) => ({ name: node.name, isDirectory: node.isDirectory }))).toEqual([
+      { name: "outward", isDirectory: false },
+      { name: "aliased", isDirectory: true },
+    ]);
+    // Degraded to a plain row, not a wrong one: the glyph and the description
+    // come back with the next live listing.
+    expect(restored?.every((node) => node.symlink === undefined)).toBe(true);
+  });
 });
 
 describe("sortFileNodes", () => {
@@ -839,7 +869,7 @@ describe("buildFolderListingRows", () => {
       name: "acorn",
       path: ".bin/acorn",
       isDirectory: false,
-      symlink: { target: "/repo/acorn/bin/acorn", targetKind: "file", insideRoot: true },
+      symlink: { target: "/repo/acorn/bin/acorn", targetKind: "file" },
     };
     const rows = buildFolderListingRows(listingsOf({ ".bin": [link] }), ".bin");
 

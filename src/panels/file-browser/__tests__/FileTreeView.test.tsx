@@ -107,15 +107,10 @@ function renderTree(overrides: Partial<Parameters<typeof FileTreeView>[0]> = {})
 }
 
 describe("FileTreeView symlink rows (#11939)", () => {
-  function symlinkRow(overrides: Partial<FlatTreeRow["symlink"]> = {}): FlatTreeRow {
+  function symlinkRow(overrides: Partial<NonNullable<FlatTreeRow["symlink"]>> = {}): FlatTreeRow {
     return {
       ...row("aliased", true),
-      symlink: {
-        target: "/repo/real",
-        targetKind: "directory",
-        insideRoot: true,
-        ...overrides,
-      } as NonNullable<FlatTreeRow["symlink"]>,
+      symlink: { target: "/repo/real", targetKind: "directory", ...overrides },
     };
   }
 
@@ -144,7 +139,7 @@ describe("FileTreeView symlink rows (#11939)", () => {
 
   it("says a link points outside the folder, since that is why it is inert", () => {
     const { container } = renderTree({
-      rows: [symlinkRow({ targetKind: "unknown", insideRoot: false })],
+      rows: [symlinkRow({ targetKind: "external" })],
     });
 
     expect(describedText(container, "aliased")).toBe("Symlink to /repo/real, outside this folder");
@@ -154,10 +149,19 @@ describe("FileTreeView symlink rows (#11939)", () => {
     // Broken outranks the containment wording: the target not existing is the
     // more specific answer, and both states are non-actionable.
     const { container } = renderTree({
-      rows: [symlinkRow({ targetKind: "broken", insideRoot: false })],
+      rows: [symlinkRow({ targetKind: "broken" })],
     });
 
     expect(describedText(container, "aliased")).toBe("Broken symlink to /repo/real");
+  });
+
+  it("refuses to guess where an unreadable link points", () => {
+    // A loop or a permission error tells us nothing about location, so the
+    // copy must not borrow the external wording — that would state as fact
+    // something the listing deliberately never established.
+    const { container } = renderTree({ rows: [symlinkRow({ targetKind: "unknown" })] });
+
+    expect(describedText(container, "aliased")).toBe("Symlink to /repo/real, unreadable");
   });
 
   it("describes an ordinary row with no link wording at all", () => {
@@ -165,6 +169,11 @@ describe("FileTreeView symlink rows (#11939)", () => {
     // must gain no description from this change.
     const { container } = renderTree({ rows: [row("README.md")] });
 
+    // The row has to exist first — `describedText` also returns "" for a row
+    // that never rendered, which would pass for entirely the wrong reason.
+    const treeitem = container.querySelector('[role="treeitem"][aria-label="README.md"]');
+    expect(treeitem).toBeTruthy();
+    expect(treeitem?.hasAttribute("aria-describedby")).toBe(false);
     expect(describedText(container, "README.md")).toBe("");
   });
 });
