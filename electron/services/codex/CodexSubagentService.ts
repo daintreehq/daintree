@@ -38,16 +38,10 @@ const PARENT_CANDIDATE_LIMIT = 25;
 const SUBAGENT_LIMIT = 50;
 /**
  * A session whose last activity is older than this at the moment the terminal
- * launched cannot be the one the terminal is running — it went quiet before
- * the terminal existed. Small slack absorbs clock skew between the two.
+ * launched cannot be the one the terminal is running — it went quiet before the
+ * terminal existed. Small slack absorbs clock skew between the two.
  */
 const STALE_ACTIVITY_SLACK_SECONDS = 5 * 60;
-/**
- * Two roots whose start times sit this close to the terminal's own launch are
- * indistinguishable. Rather than pick one, the lookup reports
- * `ambiguous-session` — a wrong list is indistinguishable from a right one.
- */
-const AMBIGUITY_MARGIN_SECONDS = 5 * 60;
 
 /** Protocol timestamps are Unix seconds; the renderer works in milliseconds. */
 function secondsToMs(seconds: unknown): number {
@@ -101,6 +95,17 @@ export function toSubagentStatus(raw: unknown): CodexSubagentStatus {
   return { type: "notLoaded" };
 }
 
+function numberOf(value: unknown): number | null {
+  return typeof value === "number" && Number.isFinite(value) ? value : null;
+}
+
+/** Most recent sign of life, preferring the field that only a turn advances. */
+function activityOf(thread: RawThread): number {
+  return (
+    numberOf(thread.recencyAt) ?? numberOf(thread.updatedAt) ?? numberOf(thread.createdAt) ?? 0
+  );
+}
+
 function asString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
@@ -129,20 +134,24 @@ export type ParentSelection =
   | { parentThreadId: null; reason: "no-session" | "ambiguous-session" };
 
 /**
- * Pick the root thread this terminal is running.
+ * Identify the root thread this terminal is running, or refuse to.
  *
- * An exact `agentSessionId` wins outright. Otherwise the signal is *when the
- * terminal started*, not which thread is newest: a second Codex session in the
- * same folder is usually the more recently active one, so ranking by recency
- * hands terminal A the children of terminal B with nothing to show for it.
- * Ranking by |thread start − terminal start| separates them, because a session
- * a terminal launched begins when that terminal does.
+ * Folder plus timestamps is all we have, and it is not an identity. Two Codex
+ * sessions live in one worktree are genuinely indistinguishable from outside:
+ * ranking them by recency hands terminal A the children of terminal B, and
+ * ranking by proximity to launch does the same whenever A's session was started
+ * by hand some time after A itself. Either way the wrong list looks exactly
+ * like the right one, and the user has nothing to check it against.
  *
- * Two filters keep the field honest. A root that had already gone quiet before
- * the terminal launched is dropped — whatever this terminal is running, it
- * isn't that. And when the two closest roots start within
- * `AMBIGUITY_MARGIN_SECONDS` of each other, nothing distinguishes them, so the
- * lookup reports ambiguity instead of guessing.
+ * So the rule is a filter, not a ranking. Drop every root that had already gone
+ * quiet before this terminal launched — whatever the terminal is running, it
+ * isn't one of those. If exactly one survives, that is the session. If more
+ * than one does, say so and show nothing.
+ *
+ * The cost is real: two concurrent Codex terminals in one worktree both lose
+ * the list. That is the correct trade for a feature whose whole value is
+ * telling you what *your* agent delegated. An exact `agentSessionId` bypasses
+ * all of this.
  */
 export function selectParentThread(
   threads: RawThread[],
@@ -157,51 +166,26 @@ export function selectParentThread(
       ? Math.floor(input.spawnedAtMs / 1000)
       : null;
 
-  const numberOf = (value: unknown): number | null =>
-    typeof value === "number" && Number.isFinite(value) ? value : null;
-
-  const activityOf = (thread: RawThread): number =>
-    numberOf(thread.recencyAt) ?? numberOf(thread.updatedAt) ?? numberOf(thread.createdAt) ?? 0;
-
   const roots = threads.filter(
     (thread) => asString(thread.id) !== null && asString(thread.parentThreadId) === null
   );
 
-  if (spawnedAtSeconds === null) {
-    // With no launch time there is nothing to correlate against, so a single
-    // root is the only answer we can give honestly.
-    if (roots.length === 0) return { parentThreadId: null, reason: "no-session" };
-    if (roots.length > 1) return { parentThreadId: null, reason: "ambiguous-session" };
-    const only = asString(roots[0]?.id);
-    return only
-      ? { parentThreadId: only, matchedBy: "spawn-time" }
-      : { parentThreadId: null, reason: "no-session" };
-  }
+  // Without a launch time there is nothing to filter on, so every root stays a
+  // candidate and only a solitary one can be answered for.
+  const live =
+    spawnedAtSeconds === null
+      ? roots
+      : roots.filter(
+          (thread) => activityOf(thread) >= spawnedAtSeconds - STALE_ACTIVITY_SLACK_SECONDS
+        );
 
-  const live = roots.filter(
-    (thread) => activityOf(thread) >= spawnedAtSeconds - STALE_ACTIVITY_SLACK_SECONDS
-  );
+  if (live.length === 0) return { parentThreadId: null, reason: "no-session" };
+  if (live.length > 1) return { parentThreadId: null, reason: "ambiguous-session" };
 
-  const ranked = live
-    .map((thread) => ({
-      id: asString(thread.id),
-      // A resumed session keeps its original `createdAt`, so it ranks far from
-      // the terminal's launch — that path is served by `agentSessionId`, and
-      // when it isn't, the liveness filter usually leaves it as the sole root.
-      distance: Math.abs((numberOf(thread.createdAt) ?? activityOf(thread)) - spawnedAtSeconds),
-    }))
-    .filter((entry): entry is { id: string; distance: number } => entry.id !== null)
-    .sort((a, b) => a.distance - b.distance);
-
-  const best = ranked[0];
-  if (!best) return { parentThreadId: null, reason: "no-session" };
-
-  const runnerUp = ranked[1];
-  if (runnerUp && runnerUp.distance - best.distance <= AMBIGUITY_MARGIN_SECONDS) {
-    return { parentThreadId: null, reason: "ambiguous-session" };
-  }
-
-  return { parentThreadId: best.id, matchedBy: "spawn-time" };
+  const only = asString(live[0]?.id);
+  return only
+    ? { parentThreadId: only, matchedBy: "spawn-time" }
+    : { parentThreadId: null, reason: "no-session" };
 }
 
 interface RawTurnItem {
@@ -342,22 +326,32 @@ async function listChildren(
 }
 
 /**
- * Confirm a launch-recorded session id really names a Codex thread for this
- * folder before trusting it. `agentSessionId` is generic launch metadata — a
- * pane launched as another agent carries that agent's id, and a Codex pane
- * whose agent exited can be reused for a fresh session the recorded id no
- * longer describes. One cheap `thread/read` on an already-spawned server tells
- * us which it is; anything unexpected falls back to spawn-time correlation.
+ * Confirm a launch-recorded session id really names a live Codex thread for
+ * this folder before trusting it. `agentSessionId` is generic launch metadata:
+ * a pane launched as another agent carries that agent's id, and a reused pane
+ * carries the id of a session that has since been replaced. One cheap
+ * `thread/read` on an already-spawned server settles both.
  */
 async function verifySessionThread(
   call: CodexAppServerCall,
   threadId: string,
-  cwds: string[]
+  terminal: ResolvedTerminal
 ): Promise<boolean> {
   try {
     const response = await call<{ thread?: RawThread }>("thread/read", { threadId });
-    const cwd = response?.thread?.cwd;
-    return typeof cwd === "string" && cwds.includes(cwd);
+    const thread = response?.thread;
+    if (!thread || typeof thread.cwd !== "string" || !terminal.cwds.includes(thread.cwd)) {
+      return false;
+    }
+    // A pane whose agent exited can be reused for a fresh session the recorded
+    // id no longer describes. The prior session is in the right folder but went
+    // quiet before this launch, so liveness is what separates the two.
+    const spawnedAtSeconds =
+      typeof terminal.spawnedAtMs === "number" && terminal.spawnedAtMs > 0
+        ? Math.floor(terminal.spawnedAtMs / 1000)
+        : null;
+    if (spawnedAtSeconds === null) return true;
+    return activityOf(thread) >= spawnedAtSeconds - STALE_ACTIVITY_SLACK_SECONDS;
   } catch {
     // No such thread, or a server that won't answer — either way, don't trust it.
     return false;
@@ -369,7 +363,7 @@ async function resolveParent(
   terminal: ResolvedTerminal
 ): Promise<ParentSelection> {
   if (terminal.agentSessionId) {
-    if (await verifySessionThread(call, terminal.agentSessionId, terminal.cwds)) {
+    if (await verifySessionThread(call, terminal.agentSessionId, terminal)) {
       return selectParentThread([], terminal);
     }
   }

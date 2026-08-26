@@ -102,6 +102,7 @@ export interface CodexAppServerSessionOptions {
   /** Overridable so tests don't depend on a `codex` binary being installed. */
   command?: string;
   timeoutMs?: number;
+  requestTimeoutMs?: number;
 }
 
 function classifySpawnError(error: NodeJS.ErrnoException): CodexAppServerError {
@@ -158,6 +159,7 @@ async function spawnCodexAppServerSession<T>(
 ): Promise<T> {
   const command = options.command ?? "codex";
   const timeoutMs = options.timeoutMs ?? SESSION_TIMEOUT_MS;
+  const requestTimeoutMs = options.requestTimeoutMs ?? REQUEST_TIMEOUT_MS;
   // POSIX process groups let the deadline reap a grandchild that inherited the
   // stdout pipe. Windows has none here, so it falls back to `taskkill /T`.
   const useGroup = process.platform !== "win32";
@@ -257,9 +259,18 @@ async function spawnCodexAppServerSession<T>(
     child.stderr?.destroy();
   };
 
+  let onDeadline: (() => void) | null = null;
+  const deadline = new Promise<never>((_resolve, reject) => {
+    onDeadline = () => reject(new CodexAppServerError("timeout", "Codex app-server timed out"));
+  });
+  // Nothing awaits `deadline` unless the race below does, and an unawaited
+  // rejection is fatal in the main process.
+  deadline.catch(() => {});
+
   sessionTimer = setTimeout(() => {
     failAll(new CodexAppServerError("timeout", "Codex app-server timed out"));
     dispose(true);
+    onDeadline?.();
   }, timeoutMs);
   sessionTimer.unref?.();
 
@@ -364,7 +375,7 @@ async function spawnCodexAppServerSession<T>(
       const timer = setTimeout(() => {
         if (!pending.delete(id)) return;
         reject(new CodexAppServerError("timeout", `Codex app-server timed out on ${method}`));
-      }, REQUEST_TIMEOUT_MS);
+      }, requestTimeoutMs);
       timer.unref?.();
       pending.set(id, { resolve: resolve as (value: unknown) => void, reject, timer });
       try {
@@ -401,7 +412,10 @@ async function spawnCodexAppServerSession<T>(
         `Codex app-server handshake failed: ${String(error)}`
       );
     }
-    return await run(call);
+    // Raced rather than awaited: `run` may be waiting on something this
+    // transport cannot see, and a callback that never settles would hold its
+    // concurrency slot for the life of the process.
+    return await Promise.race([run(call), deadline]);
   } finally {
     // Reap unconditionally: a session that returned normally still leaves the
     // server running, since it only exits when its stdin closes.

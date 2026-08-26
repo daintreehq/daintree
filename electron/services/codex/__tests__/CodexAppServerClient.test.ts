@@ -35,6 +35,8 @@ class FakeStdin extends EventEmitter {
 }
 
 class FakeChild extends EventEmitter {
+  /** Request ids already answered, so a polling helper can't double-respond. */
+  readonly answered = new Set<number>();
   readonly stdout = new FakeStream();
   readonly stderr = new FakeStream();
   readonly stdin = new FakeStdin();
@@ -59,6 +61,9 @@ class FakeChild extends EventEmitter {
     this.emitLines(JSON.stringify({ id: request.id, result }));
   }
 }
+
+/** Injected rather than mirrored, so the test doesn't restate the default. */
+const REQUEST_BUDGET_MS = 250;
 
 let child: FakeChild;
 
@@ -268,8 +273,8 @@ describe("runCodexAppServerSession", () => {
         await vi.advanceTimersByTimeAsync(0);
         const staleId = child.requests.filter((entry) => entry.id !== undefined).at(-1)?.id;
 
-        // Blow the per-request budget on the first call only.
-        await vi.advanceTimersByTimeAsync(10_001);
+        // Blow the injected per-request budget on the first call only.
+        await vi.advanceTimersByTimeAsync(REQUEST_BUDGET_MS + 1);
         const staleOutcome = await stale;
 
         const live = call<{ tag: string }>("thread/read");
@@ -282,7 +287,7 @@ describe("runCodexAppServerSession", () => {
 
         return { staleOutcome, live: await live };
       },
-      { command: "codex-test", timeoutMs: 60_000 }
+      { command: "codex-test", timeoutMs: 60_000, requestTimeoutMs: REQUEST_BUDGET_MS }
     );
 
     await vi.advanceTimersByTimeAsync(0);
@@ -304,7 +309,7 @@ describe("runCodexAppServerSession", () => {
     await expect(escaped!("thread/list")).rejects.toBeInstanceOf(CodexAppServerError);
   });
 
-  it("caps how many app-servers run at once so a project restore can't burst", async () => {
+  it("holds a third app-server back until a running one finishes", async () => {
     // Every Codex pane asks for its own subagents when a project restores;
     // ungated that is one child process per pane, all at the same instant.
     const children: FakeChild[] = [];
@@ -318,21 +323,19 @@ describe("runCodexAppServerSession", () => {
     const handshakeAll = async () => {
       await flush();
       for (const spawned of children) {
-        if (
-          spawned.requests.some((entry) => entry.method === "initialize" && entry.id !== undefined)
-        ) {
-          try {
-            spawned.respondTo("initialize", {});
-          } catch {
-            // Already answered on an earlier pass.
-          }
+        const initialize = spawned.requests.find(
+          (entry) => entry.method === "initialize" && entry.id !== undefined
+        );
+        if (initialize && !spawned.answered.has(initialize.id!)) {
+          spawned.answered.add(initialize.id!);
+          spawned.emitLines(JSON.stringify({ id: initialize.id, result: {} }));
         }
       }
       await flush();
     };
 
     const release: Array<() => void> = [];
-    const sessions = Array.from({ length: 5 }, () =>
+    const sessions = Array.from({ length: 3 }, () =>
       runCodexAppServerSession(
         () => new Promise<string>((resolve) => release.push(() => resolve("done"))),
         { command: "codex-test" }
@@ -340,19 +343,18 @@ describe("runCodexAppServerSession", () => {
     );
 
     await handshakeAll();
-    // The gate is what keeps this below the number of callers.
-    const spawnedWhileGated = children.length;
+    // Two run; the third must not have spawned anything yet.
+    expect(children.length).toBe(2);
 
-    // Drain: each completion frees a slot, which spawns and handshakes the next.
+    release.shift()?.();
+    await handshakeAll();
+    expect(children.length).toBe(3);
+
     while (release.length > 0) {
       release.shift()?.();
       await handshakeAll();
     }
     await Promise.all(sessions);
-
-    expect(spawnedWhileGated).toBeLessThan(sessions.length);
-    // Every queued session still runs once a slot frees.
-    expect(children.length).toBe(sessions.length);
   });
 
   it("times the whole session out and reaps rather than hanging on a silent server", async () => {

@@ -43,17 +43,33 @@ interface CachedLookup {
 }
 
 const lookupCache = new Map<string, CachedLookup>();
+/** Terminal keys with a request in flight, shared across hook instances. */
+const inFlightKeys = new Set<string>();
 
-/** Bound the map so a long session cycling through terminals can't grow it. */
+/** Hard bound on the cache — a long session cycles through many terminals. */
 const MAX_CACHED_TERMINALS = 64;
 
-function rememberLookup(terminalId: string, result: CodexSubagentsResult, at: number): void {
-  lookupCache.set(terminalId, { at, result });
+/**
+ * A reused panel id is not the same session. Folding the PTY's start time into
+ * the key means a respawned terminal looks up its own subagents instead of
+ * adopting the answer for the process that used to live there.
+ */
+function cacheKey(terminalId: string, generation: number | undefined): string {
+  return `${terminalId}:${generation ?? 0}`;
+}
+
+function rememberLookup(key: string, result: CodexSubagentsResult, at: number): void {
+  lookupCache.set(key, { at, result });
   if (lookupCache.size <= MAX_CACHED_TERMINALS) return;
-  for (const [key, entry] of lookupCache) {
-    if (lookupCache.size <= MAX_CACHED_TERMINALS) break;
-    // Anything past its throttle window is free to refetch anyway.
-    if (at - entry.at > CODEX_SUBAGENT_REFRESH_THROTTLE_MS) lookupCache.delete(key);
+  // Expired entries first — they would be refetched anyway — then oldest-first
+  // until the cap actually holds, since every entry can be fresh at once.
+  for (const [entryKey, entry] of lookupCache) {
+    if (lookupCache.size <= MAX_CACHED_TERMINALS) return;
+    if (at - entry.at > CODEX_SUBAGENT_REFRESH_THROTTLE_MS) lookupCache.delete(entryKey);
+  }
+  for (const entryKey of lookupCache.keys()) {
+    if (lookupCache.size <= MAX_CACHED_TERMINALS) return;
+    lookupCache.delete(entryKey);
   }
 }
 
@@ -63,14 +79,14 @@ function rememberLookup(terminalId: string, result: CodexSubagentsResult, at: nu
  */
 export function useCodexSubagents(
   terminalId: string,
-  options: { enabled: boolean; agentState?: AgentState }
+  options: { enabled: boolean; agentState?: AgentState; generation?: number }
 ): UseCodexSubagentsResult {
-  const { enabled, agentState } = options;
+  const { enabled, agentState, generation } = options;
+  const key = cacheKey(terminalId, generation);
   const [result, setResult] = useState<CodexSubagentsResult | null>(
-    () => lookupCache.get(terminalId)?.result ?? null
+    () => lookupCache.get(key)?.result ?? null
   );
   const [isLoading, setIsLoading] = useState(false);
-  const inFlightRef = useRef<string | null>(null);
   const mountedRef = useRef(true);
 
   useEffect(() => {
@@ -83,37 +99,35 @@ export function useCodexSubagents(
   const fetchSubagents = useCallback(
     (force: boolean) => {
       if (!enabled || !isElectronAvailable()) return;
-      if (inFlightRef.current === terminalId) return;
+      // Module-scoped, so two panes remounting the same terminal at once issue
+      // one lookup rather than one each.
+      if (inFlightKeys.has(key)) return;
       const now = Date.now();
-      const cached = lookupCache.get(terminalId);
+      const cached = lookupCache.get(key);
       if (!force && cached && now - cached.at < CODEX_SUBAGENT_REFRESH_THROTTLE_MS) {
         // Still fresh: adopt it so a remount inside the window shows the same
         // list it had before, without spawning anything.
         setResult(cached.result);
         return;
       }
-      inFlightRef.current = terminalId;
+      inFlightKeys.add(key);
       setIsLoading(true);
       void codexClient
         .listSubagents({ terminalId })
         .then((next) => {
-          rememberLookup(terminalId, next, Date.now());
-          // A hook whose terminal changed mid-flight must not adopt the old
-          // one's answer.
-          if (mountedRef.current && inFlightRef.current === terminalId) setResult(next);
+          rememberLookup(key, next, Date.now());
+          if (mountedRef.current) setResult(next);
         })
         .catch((error: unknown) => {
           logWarn(`[useCodexSubagents] list failed: ${formatErrorMessage(error, "unknown error")}`);
-          if (mountedRef.current && inFlightRef.current === terminalId) {
-            setResult({ status: "unavailable", reason: "protocol-error" });
-          }
+          if (mountedRef.current) setResult({ status: "unavailable", reason: "protocol-error" });
         })
         .finally(() => {
-          if (inFlightRef.current === terminalId) inFlightRef.current = null;
+          inFlightKeys.delete(key);
           if (mountedRef.current) setIsLoading(false);
         });
     },
-    [enabled, terminalId]
+    [enabled, key, terminalId]
   );
 
   // First look. Throttled like any other automatic fetch — a restore remounts
@@ -135,4 +149,5 @@ export function useCodexSubagents(
 /** Test-only: the lookup cache is module state and outlives a render tree. */
 export function __resetCodexSubagentThrottle(): void {
   lookupCache.clear();
+  inFlightKeys.clear();
 }

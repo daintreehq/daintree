@@ -184,7 +184,7 @@ function SubagentRow({ terminalId, subagent }: { terminalId: string; subagent: C
  * ever reads them.
  */
 export function CodexSubagentChip({ terminalId }: { terminalId: string }) {
-  const { isCodex, agentState, hasPty } = usePanelStore(
+  const { isCodex, agentState, hasPty, generation } = usePanelStore(
     useShallow((state) => {
       const panel = state.panelsById[terminalId];
       const pty = panel && isPtyPanel(panel) ? panel : undefined;
@@ -194,12 +194,19 @@ export function CodexSubagentChip({ terminalId }: { terminalId: string }) {
         isCodex: pty?.runtimeIdentity?.agentId === "codex" || pty?.launchAgentId === "codex",
         agentState: pty?.agentState,
         hasPty: pty?.hasPty !== false,
+        // Distinguishes a respawn from the process that held this panel id
+        // before it, so a reused pane can't inherit the old session's list.
+        generation: pty?.startedAt,
       };
     })
   );
 
   const enabled = isCodex && hasPty;
-  const { result, isLoading, refresh } = useCodexSubagents(terminalId, { enabled, agentState });
+  const { result, isLoading, refresh } = useCodexSubagents(terminalId, {
+    enabled,
+    agentState,
+    generation,
+  });
 
   if (!enabled || result?.status !== "ok" || result.subagents.length === 0) return null;
 

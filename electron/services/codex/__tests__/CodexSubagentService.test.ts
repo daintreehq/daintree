@@ -119,37 +119,25 @@ describe("selectParentThread", () => {
       ],
       { spawnedAtMs }
     );
+    // A subagent is never a parent, so one root remains and it is answerable.
     expect(selection.parentThreadId).toBe("root");
   });
 
-  it("picks the session that started with this terminal, not the newest one", () => {
-    // The regression this guards: terminal A launches, then two hours later a
-    // second Codex session starts in the same folder and becomes the most
-    // recently active. Ranking by recency would hand A the other session.
+  it("refuses to choose whenever two sessions were live in this folder", () => {
+    // The regression this guards: any ranking — by recency, or by closeness to
+    // launch — picks one of these, and the wrong list is indistinguishable
+    // from the right one.
     const selection = selectParentThread(
       [
+        { id: "mine", createdAt: spawnedAt + 2, recencyAt: spawnedAt + 30 * 60 },
         {
           id: "other-terminal",
           createdAt: spawnedAt + 2 * 60 * 60,
           recencyAt: spawnedAt + 2 * 60 * 60,
         },
-        { id: "mine", createdAt: spawnedAt + 2, recencyAt: spawnedAt + 30 * 60 },
       ],
       { spawnedAtMs }
     );
-    expect(selection.parentThreadId).toBe("mine");
-    expect(selection).toMatchObject({ matchedBy: "spawn-time" });
-  });
-
-  it("refuses to choose between two sessions that started together", () => {
-    const selection = selectParentThread(
-      [
-        { id: "a", createdAt: spawnedAt + 1, recencyAt: spawnedAt + 60 },
-        { id: "b", createdAt: spawnedAt + 3, recencyAt: spawnedAt + 60 },
-      ],
-      { spawnedAtMs }
-    );
-    // Guessing here is indistinguishable from being right, so it doesn't guess.
     expect(selection).toEqual({ parentThreadId: null, reason: "ambiguous-session" });
   });
 
@@ -161,18 +149,31 @@ describe("selectParentThread", () => {
       ],
       { spawnedAtMs }
     );
-    // `abandoned` starts closer to launch, but nothing has touched it since —
-    // whatever this terminal is running, it isn't that.
-    expect(selection.parentThreadId).toBe("mine");
+    // Yesterday's session in the same folder must not make today's ambiguous.
+    expect(selection).toEqual({ parentThreadId: "mine", matchedBy: "spawn-time" });
   });
 
   it("keeps a lone live session even when it started long before the terminal", () => {
-    // A hand-typed `codex resume` carries an old createdAt and no session id.
+    // A hand-typed `codex resume` carries an old createdAt and no session id;
+    // its liveness is what identifies it.
     const selection = selectParentThread(
       [{ id: "resumed", createdAt: spawnedAt - 3 * 24 * 60 * 60, recencyAt: spawnedAt + 60 }],
       { spawnedAtMs }
     );
     expect(selection.parentThreadId).toBe("resumed");
+  });
+
+  it("falls back to updatedAt then createdAt when recencyAt is absent", () => {
+    const quiet = selectParentThread(
+      [{ id: "stale", recencyAt: null, updatedAt: spawnedAt - 60 * 60 }],
+      { spawnedAtMs }
+    );
+    expect(quiet.parentThreadId).toBeNull();
+
+    const live = selectParentThread([{ id: "live", recencyAt: null, updatedAt: spawnedAt + 60 }], {
+      spawnedAtMs,
+    });
+    expect(live.parentThreadId).toBe("live");
   });
 
   it("will not pick between roots when the terminal's launch time is unknown", () => {
@@ -314,9 +315,7 @@ describe("listCodexSubagents", () => {
     scriptSession((method, params) => {
       methods.push(method);
       if (method === "thread/list" && params.cwd) {
-        return {
-          data: [rootThread, { ...rootThread, id: "rival", createdAt: rootThread.createdAt + 2 }],
-        };
+        return { data: [rootThread, { ...rootThread, id: "rival" }] };
       }
       return { data: [] };
     });
@@ -346,9 +345,7 @@ describe("readCodexSubagentTranscript", () => {
     scriptSession((method, params) => {
       methods.push(method);
       if (method === "thread/list" && params.cwd) {
-        return {
-          data: [rootThread, { ...rootThread, id: "rival", createdAt: rootThread.createdAt + 2 }],
-        };
+        return { data: [rootThread, { ...rootThread, id: "rival" }] };
       }
       return { data: [] };
     });
@@ -359,6 +356,38 @@ describe("readCodexSubagentTranscript", () => {
       reason: "ambiguous-session",
     });
     expect(methods).not.toContain("thread/turns/list");
+  });
+
+  it("rejects a recorded session id whose thread went quiet before this launch", async () => {
+    // A pane whose agent exited and was reused carries the previous session's
+    // id — right folder, wrong session.
+    getTerminalAsync.mockResolvedValue({ ...codexTerminal, agentSessionId: "previous-session" });
+    const methods: string[] = [];
+    scriptSession((method, params) => {
+      methods.push(method);
+      if (method === "thread/read") {
+        return {
+          thread: {
+            id: params.threadId,
+            cwd: "/repo",
+            recencyAt: codexTerminal.spawnedAt / 1000 - 60 * 60,
+          },
+        };
+      }
+      if (method === "thread/list" && params.cwd) return { data: [rootThread] };
+      if (method === "thread/list") return { data: [{ id: "mine" }] };
+      if (method === "thread/turns/list") {
+        return { data: [{ id: "t", items: [{ type: "agentMessage", text: "done" }] }] };
+      }
+      return {};
+    });
+
+    const result = await readCodexSubagentTranscript("t1", "mine");
+
+    // The recorded id was in the right folder, so only liveness rules it out;
+    // resolution then falls through to the folder's live root.
+    expect(result).toMatchObject({ status: "ok" });
+    expect(methods.filter((method) => method === "thread/list")).toHaveLength(2);
   });
 
   it("falls back to spawn-time matching when a recorded session id names no thread here", async () => {
