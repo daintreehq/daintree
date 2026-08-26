@@ -13,12 +13,6 @@ const LazyIssuePickerDialog = lazy(() =>
   import("../IssuePickerDialog").then((m) => ({ default: m.IssuePickerDialog }))
 );
 
-// This was the last static path to CodeViewer's CodeMirror closure
-// (vendor-editor, ~443KB raw) — lazy keeps it out of the eager entry chunk.
-const LazyPlanFileViewer = lazy(() =>
-  import("@/components/FileViewer/PlanFileViewer").then((m) => ({ default: m.PlanFileViewer }))
-);
-
 export interface WorktreeDialogsProps {
   worktree: WorktreeState;
   confirmDialog: ConfirmDialogState;
@@ -29,8 +23,6 @@ export interface WorktreeDialogsProps {
   onCloseIssuePicker: () => void;
   onAttachIssue: (issue: Issue) => void;
   onDetachIssue: () => void;
-  showPlanViewer: boolean;
-  onClosePlanViewer: () => void;
 }
 
 export function WorktreeDialogs({
@@ -43,12 +35,9 @@ export function WorktreeDialogs({
   onCloseIssuePicker,
   onAttachIssue,
   onDetachIssue,
-  showPlanViewer,
-  onClosePlanViewer,
 }: WorktreeDialogsProps) {
   // Keep-mounted is NOT for a close animation — it avoids re-suspending on
   // reopen of a lazily-loaded dialog.
-  const planViewerMounted = useKeepMounted(showPlanViewer);
   const deleteDialogMounted = useKeepMounted(showDeleteDialog);
   const issuePickerMounted = useKeepMounted(showIssuePicker);
   return (
@@ -84,17 +73,6 @@ export function WorktreeDialogs({
             currentIssueNumber={worktree.issueNumber}
             onAttach={onAttachIssue}
             onDetach={onDetachIssue}
-          />
-        </Suspense>
-      )}
-
-      {planViewerMounted && (
-        <Suspense fallback={null}>
-          <LazyPlanFileViewer
-            isOpen={showPlanViewer}
-            filePath={worktree.planFilePath}
-            rootPath={worktree.path}
-            onClose={onClosePlanViewer}
           />
         </Suspense>
       )}
