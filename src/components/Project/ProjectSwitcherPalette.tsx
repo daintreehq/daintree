@@ -880,6 +880,13 @@ interface ProjectSection {
   /** Projects the band holds whether or not they are on screen. */
   itemCount: number;
   collapsed: boolean;
+  /**
+   * Whether this band's header offers the fold control. False for bands read
+   * off `results` rather than declared by a host: folding those would have to
+   * drop rows the arrow keys can still address, so the affordance would be a
+   * lie at best and #11071 at worst.
+   */
+  collapsible: boolean;
 }
 
 /**
@@ -901,6 +908,14 @@ interface ProjectSection {
  * the band and nothing else — the chevron is `aria-hidden`, but the id has to
  * sit on the text either way or a later sibling would join the computed name.
  */
+function BandLabel({ label, labelId }: { label: string; labelId: string }) {
+  return (
+    <span id={labelId} className="truncate tracking-wider uppercase">
+      {label}
+    </span>
+  );
+}
+
 function BandCollapseToggle({
   collapsed,
   label,
@@ -928,9 +943,7 @@ function BandCollapseToggle({
       className="flex items-center gap-1.5 min-w-0 hover:text-daintree-text/60 transition-colors"
     >
       <Chevron className="w-3 h-3 shrink-0" aria-hidden="true" />
-      <span id={labelId} className="truncate tracking-wider uppercase">
-        {label}
-      </span>
+      <BandLabel label={label} labelId={labelId} />
     </button>
   );
 }
@@ -994,6 +1007,7 @@ function OtherProjectsHeader({
   label,
   itemCount,
   collapsed,
+  collapsible,
   onToggleCollapsed,
   onReturnFocus,
 }: {
@@ -1001,6 +1015,7 @@ function OtherProjectsHeader({
   label: string;
   itemCount: number;
   collapsed: boolean;
+  collapsible: boolean;
   onToggleCollapsed: () => void;
   onReturnFocus?: () => void;
 }) {
@@ -1024,14 +1039,18 @@ function OtherProjectsHeader({
             "flex items-center justify-between gap-2 py-1 normal-case tracking-normal"
           )}
         >
-          <BandCollapseToggle
-            collapsed={collapsed}
-            label={label}
-            labelId={headerId}
-            controlsId={bandListId("other")}
-            testId="band-collapse-toggle-other"
-            onToggle={onToggleCollapsed}
-          />
+          {collapsible ? (
+            <BandCollapseToggle
+              collapsed={collapsed}
+              label={label}
+              labelId={headerId}
+              controlsId={bandListId("other")}
+              testId="band-collapse-toggle-other"
+              onToggle={onToggleCollapsed}
+            />
+          ) : (
+            <BandLabel label={label} labelId={headerId} />
+          )}
           {collapsed && <BandCollapsedCount count={itemCount} />}
           {!collapsed && itemCount >= OTHER_PROJECTS_SORT_CONTROL_MIN_ROWS && (
             <DropdownMenu>
@@ -1185,17 +1204,17 @@ function ProjectListContent({
           items: [row],
           itemCount: 1,
           collapsed: false,
+          collapsible: false,
         });
       }
     }
 
     if (!browseBands || browseBands.length === 0) return bands.length > 0 ? bands : null;
 
-    // The declared bands own the order and the headers; the runs above own the
-    // rows. Merging the two rather than trusting either alone is what keeps a
-    // folded band's header on screen without ever dropping a row of `results`:
-    // anything the declared list doesn't account for is appended rather than
-    // discarded, since a row that renders nowhere is the #11071 failure again.
+    // The declared bands own the ORDER, the HEADERS and the counts; the runs
+    // above own the rows, and they keep owning them — metadata never removes a
+    // row. A band declared folded is expected to have contributed nothing to
+    // `results` in the first place, so its items come out empty on their own.
     const byKey = new Map(bands.map((band) => [band.key, band]));
     const merged: ProjectSection[] = browseBands.map((band) => {
       const rendered = byKey.get(band.key);
@@ -1203,12 +1222,21 @@ function ProjectListContent({
       return {
         key: band.key,
         label: band.label,
-        items: band.collapsed ? [] : (rendered?.items ?? []),
+        items: rendered?.items ?? [],
         itemCount: band.itemCount,
         collapsed: band.collapsed,
+        collapsible: true,
       };
     });
-    merged.push(...byKey.values());
+
+    // Skew between the two props — a row belonging to no declared band, or a
+    // band declaring itself folded while its rows are still in `results`. Both
+    // mean the declared list cannot render every row in the order the arrow
+    // keys walk, so drop the bands entirely rather than reordering rows or
+    // hiding one: a flat list of everything is worse-looking and correct, where
+    // a stranded row is #11071 all over again.
+    if (byKey.size > 0) return null;
+    if (merged.some((band) => band.collapsed && band.items.length > 0)) return null;
     return merged;
   }, [results, isSearching, browseBands]);
 
@@ -1282,6 +1310,7 @@ function ProjectListContent({
                       label={section.label}
                       itemCount={section.itemCount}
                       collapsed={section.collapsed}
+                      collapsible={section.collapsible}
                       onToggleCollapsed={toggle}
                       onReturnFocus={onReturnFocus}
                     />
@@ -1295,14 +1324,18 @@ function ProjectListContent({
                         "flex items-center justify-between gap-2 py-1"
                       )}
                     >
-                      <BandCollapseToggle
-                        collapsed={section.collapsed}
-                        label={section.label}
-                        labelId={headerId}
-                        controlsId={listId}
-                        testId={`band-collapse-toggle-${section.key}`}
-                        onToggle={toggle}
-                      />
+                      {section.collapsible ? (
+                        <BandCollapseToggle
+                          collapsed={section.collapsed}
+                          label={section.label}
+                          labelId={headerId}
+                          controlsId={listId}
+                          testId={`band-collapse-toggle-${section.key}`}
+                          onToggle={toggle}
+                        />
+                      ) : (
+                        <BandLabel label={section.label} labelId={headerId} />
+                      )}
                       {section.collapsed && <BandCollapsedCount count={section.itemCount} />}
                     </div>
                   )}
@@ -1780,9 +1813,16 @@ function ScratchSection({
  * switch, and a search-mode scratch row carries no context menu.
  */
 function ProjectSwitcherFooter({
+  hasSelection,
   isScratchSelected,
   onOpenPilot,
 }: {
+  /**
+   * False when nothing is highlighted — an empty list, or every band folded
+   * (#11943). Enter no-ops there, so naming it would be the footer promising an
+   * action the keypress does not perform.
+   */
+  hasSelection: boolean;
   isScratchSelected: boolean;
   onOpenPilot: () => void;
 }) {
@@ -1791,8 +1831,9 @@ function ProjectSwitcherFooter({
   // wrong for anyone who rebound or removed the binding.
   const pilotShortcut = useEffectiveCombo("pilot.toggle");
 
-  const hint =
-    modifiers.meta && !isScratchSelected
+  const hint = !hasSelection
+    ? null
+    : modifiers.meta && !isScratchSelected
       ? { keys: "⌘↵", label: "New window" }
       : { keys: "↵", label: "Switch" };
 
@@ -1810,10 +1851,16 @@ function ProjectSwitcherFooter({
     // width fix should decide. Remove stays reachable from the row's context
     // menu and from ⌘⌫ itself, and both open the same confirmation.
     <div className="@container/switcher-footer w-full flex items-center justify-between gap-3">
-      <span className="shrink-0">
-        <kbd className={KBD_CLASS}>{hint.keys}</kbd>
-        <span className="ml-1.5">{hint.label}</span>
-      </span>
+      {hint ? (
+        <span className="shrink-0">
+          <kbd className={KBD_CLASS}>{hint.keys}</kbd>
+          <span className="ml-1.5">{hint.label}</span>
+        </span>
+      ) : (
+        // Holds the rail's left slot so "All agents" stays put rather than
+        // sliding across as the last band folds.
+        <span className="shrink-0" />
+      )}
       <div className="flex items-center gap-3 min-w-0">
         {/*
           The switcher answers "which project", so the fleet-wide view belongs
@@ -1831,7 +1878,7 @@ function ProjectSwitcherFooter({
           {pilotShortcut && <KbdChord shortcut={pilotShortcut} />}
           <span className={pilotShortcut ? "ml-1.5" : undefined}>All agents</span>
         </button>
-        {!isScratchSelected && (
+        {hasSelection && !isScratchSelected && (
           <span className="text-daintree-text/50 shrink-0 @max-[520px]/switcher-footer:hidden">
             Right-click for more
           </span>
@@ -2168,6 +2215,7 @@ function ProjectPaletteInner({
 
       <AppPaletteDialog.Footer>
         <ProjectSwitcherFooter
+          hasSelection={activeResult !== undefined}
           isScratchSelected={activeResult?.kind === "scratch"}
           onOpenPilot={() => {
             onClose();

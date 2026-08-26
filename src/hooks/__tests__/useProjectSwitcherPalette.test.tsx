@@ -3228,9 +3228,14 @@ describe("useProjectSwitcherPalette", () => {
           result.current.setQuery("Background");
         });
 
+        // Settle first. The deferred-query frame serves the unfolded browse list
+        // by design, so asserting straight away would pass even if the ranking
+        // itself only ever saw the visible rows.
         await waitFor(() => {
-          expect(result.current.results.map((row) => row.name)).toContain(hidden);
+          expect(result.current.isRankedSearch).toBe(true);
+          expect(result.current.isFiltering).toBe(false);
         });
+        expect(result.current.results.map((row) => row.name)).toContain(hidden);
 
         act(() => {
           result.current.setQuery("");

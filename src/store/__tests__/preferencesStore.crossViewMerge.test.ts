@@ -265,6 +265,25 @@ describe("preferencesStore cross-view write merge (#11351)", () => {
     expect(written.state.projectSwitcherCollapsedBands).toEqual({ other: false, pinned: true });
   });
 
+  it("does not write a stale copy of a band a sibling has since unfolded", async () => {
+    // The one a two-way `{ ...onDisk, ...incoming }` merge would fail: this
+    // view still holds `running: true` from hydration, so folding an unrelated
+    // band carries that stale value along and would undo the sibling's unfold.
+    const backing = installLocalStorage({});
+    const { usePreferencesStore: store } = await import("../preferencesStore");
+
+    store.getState().setProjectSwitcherBandCollapsed("running", true);
+
+    const disk = readBlob(backing);
+    disk.state.projectSwitcherCollapsedBands = { running: false };
+    backing.set(STORAGE_KEY, JSON.stringify(disk));
+
+    store.getState().setProjectSwitcherBandCollapsed("other", true);
+
+    const written = readBlob(backing);
+    expect(written.state.projectSwitcherCollapsedBands).toEqual({ running: false, other: true });
+  });
+
   it("keeps a sibling's fold through an unrelated preference write", async () => {
     const backing = installLocalStorage({});
     const { usePreferencesStore: store } = await import("../preferencesStore");
