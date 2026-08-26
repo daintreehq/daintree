@@ -796,13 +796,14 @@ export function AgentSetupWizard({
                 </Button>
               ))}
             {state.step.type === "appearance" && (
-              <Button onClick={handleAppearanceContinue} disabled={isSaving}>
+              <Button variant="contrast" onClick={handleAppearanceContinue} disabled={isSaving}>
                 Continue
                 <ArrowRight className="w-4 h-4 ml-1" />
               </Button>
             )}
             {state.step.type === "agents" && (
               <Button
+                variant="contrast"
                 onClick={handleAgentsContinue}
                 disabled={
                   selectedAgentIds.length === 0 ||
@@ -816,24 +817,28 @@ export function AgentSetupWizard({
               </Button>
             )}
             {state.step.type === "privacy" && (
-              <Button onClick={handlePrivacyContinue} disabled={isSaving}>
+              <Button variant="contrast" onClick={handlePrivacyContinue} disabled={isSaving}>
                 Continue
                 <ArrowRight className="w-4 h-4 ml-1" />
               </Button>
             )}
             {state.step.type === "cli" && (
-              <Button onClick={handleCliContinue}>
+              <Button variant="contrast" onClick={handleCliContinue}>
                 Continue
                 <ChevronRight className="w-4 h-4 ml-1" />
               </Button>
             )}
             {state.step.type === "permissions" && (
-              <Button onClick={handlePermissionsContinue} disabled={isSaving}>
+              <Button variant="contrast" onClick={handlePermissionsContinue} disabled={isSaving}>
                 Continue
                 <ArrowRight className="w-4 h-4 ml-1" />
               </Button>
             )}
-            {state.step.type === "complete" && <Button onClick={handleFinish}>Finish setup</Button>}
+            {state.step.type === "complete" && (
+              <Button variant="contrast" onClick={handleFinish}>
+                Finish setup
+              </Button>
+            )}
           </div>
         </div>
       </AppDialog.Footer>

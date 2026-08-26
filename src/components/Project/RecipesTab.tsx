@@ -511,7 +511,7 @@ export function RecipesTab({
           >
             Cancel
           </Button>
-          <Button onClick={handleImportRecipe} disabled={!importJson.trim()}>
+          <Button variant="contrast" onClick={handleImportRecipe} disabled={!importJson.trim()}>
             Import
           </Button>
         </AppDialog.Footer>

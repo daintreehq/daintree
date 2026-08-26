@@ -940,3 +940,48 @@ describe("terminal/syntax validation", () => {
     expect(unevaluable).toHaveLength(0);
   });
 });
+
+// The high-contrast neutral CTA (`variant="contrast"`) is the standard dialog primary
+// action: it fills itself with the theme's body-text colour and paints its label in the
+// inverse. Every other text-primary pair puts that token on a *surface*, so nothing else
+// in the matrix notices when a theme collapses the fill against its own label.
+describe("contrast-CTA pair (text-inverse on text-primary)", () => {
+  const findWarning = (scheme: AppColorScheme) =>
+    getThemeContrastWarnings(scheme).find(
+      (w) => w.kind === "low-contrast" && w.message.startsWith("text-inverse on text-primary")
+    );
+
+  it("flags a theme whose inverse label collapses against the fill", () => {
+    const scheme = makeScheme({
+      "text-primary": "#767676" as AppColorSchemeTokens["text-primary"],
+      "text-inverse": "#8a8a8a" as AppColorSchemeTokens["text-inverse"],
+    });
+    const warning = findWarning(scheme);
+    expect(warning).toBeDefined();
+    // The message carries the measured ratio, so a regression says how far off it is.
+    expect(warning!.message).toMatch(/is \d+\.\d\d:1; target is 4\.5:1/);
+  });
+
+  it("flags a near-miss that still reads as two distinct colours", () => {
+    // ~4.3:1 — visibly different, but under the AA floor for a normal-sized label.
+    const scheme = makeScheme({
+      "text-primary": "#7a7a7a" as AppColorSchemeTokens["text-primary"],
+      "text-inverse": "#ffffff" as AppColorSchemeTokens["text-inverse"],
+    });
+    expect(contrastRatio("#ffffff", "#7a7a7a")).toBeLessThan(4.5);
+    expect(findWarning(scheme)).toBeDefined();
+  });
+
+  it("stays quiet for a legible inverse pair in either polarity", () => {
+    const dark = makeScheme({
+      "text-primary": "#e8e8e8" as AppColorSchemeTokens["text-primary"],
+      "text-inverse": "#141414" as AppColorSchemeTokens["text-inverse"],
+    });
+    const light = makeScheme({
+      "text-primary": "#141414" as AppColorSchemeTokens["text-primary"],
+      "text-inverse": "#e8e8e8" as AppColorSchemeTokens["text-inverse"],
+    });
+    expect(findWarning(dark)).toBeUndefined();
+    expect(findWarning(light)).toBeUndefined();
+  });
+});

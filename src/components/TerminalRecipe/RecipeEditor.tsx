@@ -666,7 +666,7 @@ export function RecipeEditor({
           <Button variant="outline" onClick={handleCancel} disabled={isSaving}>
             Cancel
           </Button>
-          <Button onClick={handleSave} disabled={isSaving}>
+          <Button variant="contrast" onClick={handleSave} disabled={isSaving}>
             {isSaving ? "Saving…" : recipe ? "Update Recipe" : "Create Recipe"}
           </Button>
         </AppDialog.Footer>

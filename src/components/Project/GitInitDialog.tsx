@@ -368,7 +368,7 @@ export function GitInitDialog({
 
       <AppDialog.Footer>
         {isComplete ? (
-          <Button onClick={handleClose} className="gap-2">
+          <Button variant="contrast" onClick={handleClose} className="gap-2">
             <Check className="h-4 w-4" />
             Continue
           </Button>
@@ -378,6 +378,7 @@ export function GitInitDialog({
               Cancel
             </Button>
             <Button
+              variant="contrast"
               onClick={() => void startInitialization()}
               disabled={isInitializing || !canStart}
             >
@@ -390,6 +391,7 @@ export function GitInitDialog({
               Cancel
             </Button>
             <Button
+              variant="contrast"
               onClick={() => void startInitialization()}
               disabled={isInitializing || !canStart}
               loading={isInitializing}

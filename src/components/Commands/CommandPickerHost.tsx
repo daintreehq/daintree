@@ -138,7 +138,9 @@ export function CommandPickerHost({ context, onCommandExecuted }: CommandPickerH
             </div>
           </AppDialog.Body>
           <AppDialog.Footer>
-            <Button onClick={handleBuilderCancel}>Close</Button>
+            <Button variant="contrast" onClick={handleBuilderCancel}>
+              Close
+            </Button>
           </AppDialog.Footer>
         </AppDialog>
       )}

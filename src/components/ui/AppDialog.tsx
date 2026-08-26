@@ -559,11 +559,16 @@ AppDialog.Footer = function AppDialogFooter({
   const context = useContext(AppDialogContext);
   const dialogVariant = context?.variant ?? "default";
 
+  // The standard dialog primary action is the high-contrast neutral button, not the
+  // accent fill: its fill is the theme's own body-text colour, so it resolves near-white
+  // on dark themes and near-black on light ones and stays legible whatever the accent is
+  // (a bright accent made the old CTA label hard to read). `intent` stays a semantic
+  // danger flag — destructive wins first and is unaffected.
   const getPrimaryVariant = () => {
     if (primaryAction?.intent === "destructive" || dialogVariant === "destructive") {
       return "destructive";
     }
-    return "default";
+    return "contrast";
   };
 
   return (

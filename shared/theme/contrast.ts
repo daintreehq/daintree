@@ -106,6 +106,14 @@ const CONTRAST_PAIRS: Array<{
   { foreground: "status-info", background: "surface-canvas", minimum: 3.0 },
   { foreground: "status-info", background: "surface-panel-elevated", minimum: 3.0 },
   ACCENT_CONTRAST_PAIR,
+  // The high-contrast neutral CTA — the standard dialog primary action (#11963) — fills
+  // itself with the theme's own body-text colour and paints its label in the inverse.
+  // That is the one pair where those two roles meet as foreground and background, and no
+  // other entry covers it: every other text-primary pair puts it on a surface. Both
+  // polarities, because the button renders in both and its label is normal-sized text,
+  // so AA 4.5:1 is the right floor. The built-ins clear it by a wide margin (weakest
+  // ~12:1); a theme that fails here cannot carry a legible primary button.
+  { foreground: "text-inverse", background: "text-primary", minimum: 4.5 },
   { foreground: "search-highlight-text", background: "search-highlight-background", minimum: 3.0 },
 ];
 
