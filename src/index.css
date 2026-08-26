@@ -2760,6 +2760,30 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     outline-offset: -2px;
   }
 
+  /* The forge issue/PR rows draw the same leading rail, but from a `data-active`
+     attribute rather than `aria-selected` — that grid spends `aria-selected` on
+     bulk membership, so the two marks have to be keyed apart. The rail is a
+     `background-color`, stripped here like every other, and the `.palette-row`
+     rule above is deliberately scoped away from `[role="row"]`, so without this
+     the keyboard cursor vanishes entirely in Windows High Contrast. Highlight
+     rather than SelectedItem: this is the cursor, not the selection. */
+  .forge-row[aria-selected="true"] {
+    outline: 2px solid SelectedItem;
+    outline-offset: -2px;
+  }
+
+  /* Two independent states on one row — the keyboard cursor and bulk
+     membership — so they cannot both be an outline: the later rule would
+     simply overwrite the earlier one and a selected row under the cursor would
+     lose the cursor. Membership keeps the outline (above); the cursor keeps
+     its leading rail, redrawn here from a system colour because the
+     `background-color` it normally paints with is stripped in this mode. */
+  .forge-row[data-active="true"]::before {
+    background: Highlight;
+    forced-color-adjust: none;
+    opacity: 1;
+  }
+
   /* The project switcher's command rows run full-bleed, so their border box
      reaches the palette's own clipped edge. The blanket `outline-offset: 2px`
      above would draw their focus ring outside that clip and lose its left and

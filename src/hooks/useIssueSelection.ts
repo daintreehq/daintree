@@ -1,12 +1,20 @@
-import { useCallback } from "react";
-import { useIssueSelectionStore, EMPTY_SELECTED_IDS } from "@/store/issueSelectionStore";
+import { useCallback, useMemo } from "react";
+import {
+  useIssueSelectionStore,
+  EMPTY_SELECTED_ITEMS,
+  type SelectableItem,
+} from "@/store/issueSelectionStore";
 
 export interface UseIssueSelectionReturn {
+  /** The selected items, keyed by number. The selection itself. */
+  selectedItems: Map<number, SelectableItem>;
+  /** The selected numbers, for membership checks in row rendering. */
   selectedIds: Set<number>;
   isSelectionActive: boolean;
-  toggle: (id: number, index: number) => void;
-  toggleRange: (toIndex: number, getIdAt: (index: number) => number) => void;
-  selectAll: (ids: number[]) => void;
+  toggle: (item: SelectableItem) => void;
+  toggleRange: (toItem: SelectableItem, ordered: readonly SelectableItem[]) => void;
+  selectAll: (items: readonly SelectableItem[]) => void;
+  reconcile: (latest: readonly SelectableItem[]) => void;
   clear: () => void;
 }
 
@@ -20,35 +28,46 @@ export function useIssueSelection(
 ): UseIssueSelectionReturn {
   const key = `${type}:${projectPath}`;
 
-  const selectedIds = useIssueSelectionStore(
-    (s) => s.selections.get(key)?.selectedIds ?? EMPTY_SELECTED_IDS
+  const selectedItems = useIssueSelectionStore(
+    (s) => s.selections.get(key)?.items ?? EMPTY_SELECTED_ITEMS
   );
   const toggleAction = useIssueSelectionStore((s) => s.toggle);
   const toggleRangeAction = useIssueSelectionStore((s) => s.toggleRange);
   const selectAllAction = useIssueSelectionStore((s) => s.selectAll);
+  const reconcileAction = useIssueSelectionStore((s) => s.reconcile);
   const clearAction = useIssueSelectionStore((s) => s.clear);
 
+  // Derived, never stored: a second container holding the same membership is
+  // exactly what used to drift out of step with the items.
+  const selectedIds = useMemo(() => new Set(selectedItems.keys()), [selectedItems]);
+
   const toggle = useCallback(
-    (id: number, index: number) => toggleAction(key, id, index),
+    (item: SelectableItem) => toggleAction(key, item),
     [toggleAction, key]
   );
   const toggleRange = useCallback(
-    (toIndex: number, getIdAt: (index: number) => number) =>
-      toggleRangeAction(key, toIndex, getIdAt),
+    (toItem: SelectableItem, ordered: readonly SelectableItem[]) =>
+      toggleRangeAction(key, toItem, ordered),
     [toggleRangeAction, key]
   );
   const selectAll = useCallback(
-    (ids: number[]) => selectAllAction(key, ids),
+    (items: readonly SelectableItem[]) => selectAllAction(key, items),
     [selectAllAction, key]
+  );
+  const reconcile = useCallback(
+    (latest: readonly SelectableItem[]) => reconcileAction(key, latest),
+    [reconcileAction, key]
   );
   const clear = useCallback(() => clearAction(key), [clearAction, key]);
 
   return {
+    selectedItems,
     selectedIds,
-    isSelectionActive: selectedIds.size > 0,
+    isSelectionActive: selectedItems.size > 0,
     toggle,
     toggleRange,
     selectAll,
+    reconcile,
     clear,
   };
 }

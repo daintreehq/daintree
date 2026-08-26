@@ -1,4 +1,12 @@
-import { useState, useEffect, useMemo, useCallback, useRef, type KeyboardEvent } from "react";
+import {
+  useState,
+  useEffect,
+  useMemo,
+  useCallback,
+  useContext,
+  useRef,
+  type KeyboardEvent,
+} from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import {
   Search,
@@ -8,7 +16,7 @@ import {
   Plus,
   Settings,
   X,
-  Filter,
+  ArrowUpDown,
   Clock,
 } from "lucide-react";
 import { GitHubIcon } from "@/components/icons/brands";
@@ -16,6 +24,7 @@ import { isTokenRelatedError, isTransientNetworkError } from "@/lib/forgeErrors"
 import { Button } from "@/components/ui/button";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { cn } from "@/lib/utils";
 import { actionService } from "@/services/ActionService";
 import { notify } from "@/lib/notify";
@@ -43,8 +52,47 @@ import {
 import { LiveTimeAgo } from "@/components/Worktree/LiveTimeAgo";
 import { LiveRateLimitCountdown } from "@/components/Layout/RateLimitDetails";
 import { useGitHubResourceListSWR } from "../hooks/useGitHubResourceListSWR";
+import { forgeClient } from "@/clients/forgeClient";
+import { useScrollShadowOverlays } from "@/components/ui/ScrollShadow";
+import { FixedDropdownVisibleContext } from "@/components/ui/fixed-dropdown";
+import { useGlobalMinuteClock } from "@/hooks/useGlobalMinuteTicker";
+import { UI_DOHERTY_THRESHOLD, UI_SKELETON_FLOOR_MS } from "@/lib/animationUtils";
+import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 
 type StateFilter = IssueStateFilter | PRStateFilter;
+
+/**
+ * How old the loaded page has to be before the footer says so out loud.
+ *
+ * Freshness used to occupy a permanent centre slot that read "Updated now" on
+ * essentially every open — a whole column spent restating that nothing was
+ * wrong. It lives in the refresh control's tooltip now, where it answers the
+ * question that control raises, and only comes back onto the surface once the
+ * answer is worth interrupting for. Five minutes is the point at which the
+ * 30s stats poll and the on-open revalidation have both plainly not landed.
+ */
+const FRESHNESS_VISIBLE_AFTER_MS = 5 * 60_000;
+
+/**
+ * Spinner onset for a background revalidation — the standard Doherty gate.
+ * Work that finishes inside it is invisible, which is the whole point.
+ */
+const REVALIDATE_SPINNER_GATE_MS = UI_DOHERTY_THRESHOLD;
+
+/** Past this, a wait stops being a wait and starts needing acknowledgement. */
+const STILL_WORKING_AFTER_MS = 5_000;
+
+/**
+ * Spinner onset for an explicit click on Refresh. Also the Doherty gate — a
+ * press does not buy an exemption from it. The acknowledgement a press needs
+ * is already there without any spinner: the button takes its own press state
+ * and the results container flips `aria-busy` immediately. A sub-400ms refresh
+ * should resolve with no chrome having appeared at all.
+ */
+const MANUAL_REFRESH_SPINNER_GATE_MS = UI_DOHERTY_THRESHOLD;
+
+/** Minimum on-screen dwell once the spinner has crossed either gate. */
+const SPINNER_DWELL_MS = UI_SKELETON_FLOOR_MS * 2;
 
 function sanitizeIpcError(message: string): string {
   const cleaned = message.replace(/^Error invoking remote method '[^']+': (?:Error: )?/, "").trim();
@@ -54,63 +102,93 @@ function sanitizeIpcError(message: string): string {
 interface LoadMoreFooterContext {
   hasMore: boolean;
   loadingMore: boolean;
+  /** `loadingMore` past the Doherty gate — before it, the button says nothing. */
+  showLoadingMoreSpinner: boolean;
+  /** Past five seconds, where the wait needs acknowledging in words. */
+  isSlowLoadingMore: boolean;
   isLoadMoreActive: boolean;
   loadMoreError: string | null;
   type: "issue" | "pr";
+  /** One-based grid position — always the row after the last item. */
+  rowIndex: number;
   onLoadMore: () => void;
   onOpenSettings: () => void;
 }
 
+/**
+ * The list's last row, semantically as well as visually.
+ *
+ * It lives in Virtuoso's `Footer` slot, which puts it outside the virtualized
+ * row set — but it is still the thing the down-arrow reaches after the last
+ * item, so it has to BE a row: a bare `<div>` there left
+ * `aria-activedescendant` dangling the moment the cursor arrived on it.
+ */
 function LoadMoreFooter({ context }: { context?: LoadMoreFooterContext }) {
   if (!context || !context.hasMore) return null;
-  const { loadingMore, isLoadMoreActive, loadMoreError, type, onLoadMore, onOpenSettings } =
-    context;
+  const {
+    loadingMore,
+    showLoadingMoreSpinner,
+    isSlowLoadingMore,
+    isLoadMoreActive,
+    loadMoreError,
+    type,
+    rowIndex,
+    onLoadMore,
+    onOpenSettings,
+  } = context;
+  const isTokenError = loadMoreError !== null && isTokenRelatedError(loadMoreError);
   return (
-    <div className="p-3 space-y-2">
-      {loadMoreError && (
-        <div className="p-2 rounded-[var(--radius-md)] bg-overlay-soft border border-[var(--border-divider)]">
-          <p className="text-xs text-muted-foreground">{sanitizeIpcError(loadMoreError)}</p>
-          {isTokenRelatedError(loadMoreError) ? (
+    <div role="row" aria-rowindex={rowIndex} className="p-3">
+      <div role="gridcell">
+        {loadMoreError ? (
+          // ONE way out, not two. This used to render Retry-or-Settings AND
+          // the ordinary Load more button underneath, so a token failure
+          // offered a button guaranteed to fail again right below the one
+          // that could actually fix it.
+          <div className="p-2 rounded-[var(--radius-md)] bg-overlay-soft border border-[var(--border-divider)]">
+            <p className="text-xs text-text-secondary">{sanitizeIpcError(loadMoreError)}</p>
             <Button
+              id={`github-${type}-load-more`}
               variant="ghost"
               size="sm"
-              onClick={onOpenSettings}
-              className="mt-1 text-muted-foreground hover:text-daintree-text h-6 text-xs"
+              onClick={isTokenError ? onOpenSettings : onLoadMore}
+              className={cn("mt-1 h-6 text-xs", isLoadMoreActive && "bg-overlay-soft")}
             >
-              <Settings className="h-3 w-3" />
-              Open GitHub Settings
+              {isTokenError ? (
+                <>
+                  <Settings className="h-3 w-3" />
+                  Open GitHub settings
+                </>
+              ) : (
+                "Retry"
+              )}
             </Button>
-          ) : (
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={onLoadMore}
-              className="mt-1 text-muted-foreground hover:text-daintree-text h-6 text-xs"
-            >
-              Retry
-            </Button>
-          )}
-        </div>
-      )}
-      <Button
-        id={`github-${type}-load-more`}
-        variant="ghost"
-        onClick={onLoadMore}
-        disabled={loadingMore}
-        className={cn(
-          "w-full text-muted-foreground hover:text-daintree-text",
-          isLoadMoreActive && "ring-1 ring-daintree-accent text-daintree-text"
-        )}
-      >
-        {loadingMore ? (
-          <>
-            <RefreshCw className="animate-spin" />
-            Loading...
-          </>
+          </div>
         ) : (
-          "Load More"
+          <Button
+            id={`github-${type}-load-more`}
+            variant="ghost"
+            onClick={onLoadMore}
+            disabled={loadingMore}
+            className={cn(
+              "w-full",
+              // Neutral, not accent: the keyboard cursor uses the same neutral
+              // lift here that it uses on a row, so the two can never both claim
+              // the accent at once.
+              isLoadMoreActive && "bg-overlay-soft text-daintree-text"
+            )}
+          >
+            {showLoadingMoreSpinner ? (
+              <>
+                <RefreshCw className="animate-spin" />
+                {isSlowLoadingMore ? "Still working…" : "Loading…"}
+              </>
+            ) : (
+              "Load more"
+            )}
+          </Button>
         )}
-      </Button>
+      </div>
     </div>
   );
 }
@@ -207,9 +285,11 @@ export function GitHubResourceList({
   const inputRef = useRef<HTMLInputElement>(null);
   const virtuosoRef = useRef<VirtuosoHandle>(null);
 
-  // Doherty Threshold gate for the refresh spinner. Sub-400ms background
-  // revalidations stay invisible (250ms for explicit clicks); once visible the
-  // spinner dwells ≥500ms so it never flashes on fast networks.
+  // Doherty Threshold gate for the refresh spinner: both an explicit click and
+  // a background revalidation stay invisible below 400ms, and once visible the
+  // spinner dwells so it never flashes on fast networks. A press does not buy
+  // an exemption — the button's own press state and the results grid's
+  // immediate `aria-busy` flip are the acknowledgement.
   const [showSpinner, setShowSpinner] = useState(false);
   const showSpinnerTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const spinnerDwellTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -235,7 +315,9 @@ export function GitHubResourceList({
       }
       if (spinnerVisibleSinceRef.current !== null) return;
       if (showSpinnerTimerRef.current !== null) return;
-      const delay = isManualRefreshRef.current ? 250 : 400;
+      const delay = isManualRefreshRef.current
+        ? MANUAL_REFRESH_SPINNER_GATE_MS
+        : REVALIDATE_SPINNER_GATE_MS;
       isManualRefreshRef.current = false;
       showSpinnerTimerRef.current = setTimeout(() => {
         if (!mountedRef.current) return;
@@ -251,7 +333,7 @@ export function GitHubResourceList({
     }
     if (spinnerVisibleSinceRef.current !== null) {
       const elapsed = Date.now() - spinnerVisibleSinceRef.current;
-      const remaining = Math.max(0, 500 - elapsed);
+      const remaining = Math.max(0, SPINNER_DWELL_MS - elapsed);
       if (remaining === 0) {
         setShowSpinner(false);
         spinnerVisibleSinceRef.current = null;
@@ -272,8 +354,6 @@ export function GitHubResourceList({
   }, [handleManualRefresh]);
 
   const selection = useIssueSelection(type, projectPath);
-  const [issueCache, setIssueCache] = useState<Map<number, Issue>>(() => new Map());
-  const [prCache, setPrCache] = useState<Map<number, PR>>(() => new Map());
 
   // The toolbar reuses one keepMounted GitHubResourceList per type across
   // every project — switching projects only updates `projectPath`, it doesn't
@@ -287,37 +367,9 @@ export function GitHubResourceList({
     const prevProjectPath = prevProjectPathRef.current;
     if (prevProjectPath === projectPath) return;
     prevProjectPathRef.current = projectPath;
+    // Clearing the outgoing key drops its snapshots with it.
     useIssueSelectionStore.getState().clear(`${type}:${prevProjectPath}`);
-    setIssueCache(new Map());
-    setPrCache(new Map());
   }, [projectPath, type]);
-
-  // Accumulate item objects into the session cache whenever data changes
-  useEffect(() => {
-    const newIssues: Issue[] = [];
-    const newPRs: PR[] = [];
-    for (const item of data) {
-      if ("isDraft" in item) {
-        newPRs.push(item);
-      } else {
-        newIssues.push(item);
-      }
-    }
-    if (newIssues.length > 0) {
-      setIssueCache((prev) => {
-        const next = new Map(prev);
-        for (const issue of newIssues) next.set(issue.number, issue);
-        return next;
-      });
-    }
-    if (newPRs.length > 0) {
-      setPrCache((prev) => {
-        const next = new Map(prev);
-        for (const pr of newPRs) next.set(pr.number, pr);
-        return next;
-      });
-    }
-  }, [data]);
 
   const stateTabs = useMemo(() => {
     if (type === "pr") {
@@ -337,7 +389,7 @@ export function GitHubResourceList({
     onClose?.();
   }, [onClose]);
 
-  const handleOpenInGitHub = () => {
+  const handleOpenInGitHub = useCallback(() => {
     const query = searchQuery.trim() || undefined;
     const state = filterState as string;
     // dispatch() never throws — failures come back as { ok: false }, so they
@@ -383,13 +435,59 @@ export function GitHubResourceList({
     };
     open();
     handleClose();
-  };
+  }, [searchQuery, filterState, type, projectPath, handleClose]);
 
-  const handleCreateNew = () => {
-    // Use openIssues/openPRs with /new path would require a new IPC
-    // For now, just open the GitHub page
-    handleOpenInGitHub();
-  };
+  /**
+   * Open the forge's compose page. This used to call `handleOpenInGitHub()`,
+   * so "New" and "GitHub" were the same button wearing two labels — the
+   * control promised a compose form and delivered the list you were already
+   * looking at.
+   *
+   * The repo's web root is derived from an item URL rather than assumed: every
+   * `Issue`/`PR` carries an absolute `url` (`…/owner/repo/issues/123`), and
+   * `getIssueUrl` produces one on demand when the list is empty. That keeps the
+   * derivation inside the GitHub plugin, where GitHub's URL shapes are legal,
+   * without teaching the host about them.
+   */
+  const handleCreateNew = useCallback(() => {
+    const repoRootFrom = (url: string): string | null => {
+      const match = /^(https?:\/\/[^/]+\/[^/]+\/[^/]+)\/(?:issues|pull)\//.exec(url);
+      return match ? match[1]! : null;
+    };
+    void (async () => {
+      let root = data.length > 0 ? repoRootFrom(data[0]!.url) : null;
+      if (!root) {
+        try {
+          root = repoRootFrom(await forgeClient.getIssueUrl(projectPath, 1));
+        } catch {
+          root = null;
+        }
+      }
+      if (!root) {
+        // No web root to compose against — fall back to the list rather than
+        // leaving the click silently dead.
+        handleOpenInGitHub();
+        return;
+      }
+      const target = type === "issue" ? `${root}/issues/new` : `${root}/compare`;
+      // dispatch() resolves `{ ok: false }` rather than throwing, so an ignored
+      // result is a button that silently does nothing.
+      void actionService
+        .dispatch("system.openExternal", { url: target }, { source: "user" })
+        .then((result) => {
+          if (!result.ok) {
+            notify({
+              type: "error",
+              title:
+                type === "issue" ? "Couldn't open new issue" : "Couldn't open new pull request",
+              message: `Daintree couldn't hand off to the browser. Open ${target} manually, or try again.`,
+              action: { label: "Try again", onClick: () => handleCreateNew() },
+            });
+          }
+        });
+      handleClose();
+    })();
+  }, [data, projectPath, type, handleOpenInGitHub, handleClose]);
 
   const openCreateDialog = useWorktreeSelectionStore((s) => s.openCreateDialog);
   const openCreateDialogForPR = useWorktreeSelectionStore((s) => s.openCreateDialogForPR);
@@ -415,16 +513,193 @@ export function GitHubResourceList({
     [selectWorktree, handleClose]
   );
 
+  /**
+   * Opening an item hands off to the browser, so the dropdown has nothing left
+   * to show — closing it matches every other hand-off in the app and stops the
+   * panel hanging over the window the user just switched away to.
+   */
+  const handleOpenUrlExternal = useCallback(
+    (url: string) => {
+      // dispatch() resolves `{ ok: false }` instead of throwing, so an
+      // unchecked result is a row that silently does nothing. Same recovery
+      // shape the footer's "View on GitHub" uses.
+      void actionService
+        .dispatch("system.openExternal", { url }, { source: "user" })
+        .then((result) => {
+          if (!result.ok) {
+            notify({
+              type: "error",
+              title: "Couldn't open GitHub",
+              message: `Daintree couldn't hand off to the browser. Open ${url} manually, or try again.`,
+              coalesce: {
+                key: `forge-open-item-failed:${projectPath}`,
+                buildMessage: () => "Daintree couldn't hand off to the browser.",
+              },
+              action: { label: "Try again", onClick: () => handleOpenUrlExternal(url) },
+            });
+          }
+        });
+      handleClose();
+    },
+    [handleClose, projectPath]
+  );
+
+  /**
+   * The grid keeps DOM focus in the search input at all times — that is what
+   * makes `aria-activedescendant` legal. Anything that takes focus away
+   * (the row actions menu, the sort popover) has to hand it back here.
+   */
+  const focusSearchInput = useCallback(() => {
+    inputRef.current?.focus();
+  }, []);
+
+  // `autoFocus` only fires on the first mount, and this panel is `keepMounted`
+  // — every reopen after the first is an `<Activity>` reveal of a subtree that
+  // never unmounted, so without this the second open landed with focus
+  // wherever the click left it and none of the grid's keys worked.
+  // `open`, not "still painted" — see the provider in `fixed-dropdown.tsx`.
+  // The distinction matters here: this panel's overlays have to be torn down
+  // on the way out, not after the exit animation has already hidden the
+  // subtree that owns their effects.
+  const isDropdownOpen = useContext(FixedDropdownVisibleContext);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const wasDropdownOpenRef = useRef(isDropdownOpen);
+  useEffect(() => {
+    if (isDropdownOpen) return;
+    // Closing — nothing of ours may stay portaled on `document.body`.
+    setSortPopoverOpen(false);
+    setOpenRowMenuNumber(null);
+  }, [isDropdownOpen]);
+
+  useEffect(() => {
+    const wasOpen = wasDropdownOpenRef.current;
+    wasDropdownOpenRef.current = isDropdownOpen;
+    // Only on the hidden → visible edge. `autoFocus` already covers the first
+    // mount; this covers every reopen after it, which under `keepMounted` is
+    // an `<Activity>` reveal of a subtree that never unmounted. Running it on
+    // the initial pass too would let a late frame yank focus back off whatever
+    // the user had already reached inside the panel.
+    if (!isDropdownOpen || wasOpen) return;
+    // A frame late on purpose: the reveal un-hides the subtree in the same
+    // commit, and focusing a still-`display:none` input is a no-op.
+    const raf = requestAnimationFrame(() => {
+      // Never take focus off a child overlay that has since earned it — the
+      // sort popover and the row menus portal to `document.body`, outside
+      // `rootRef`, so they need naming explicitly.
+      const active = document.activeElement;
+      if (
+        active &&
+        active !== document.body &&
+        (rootRef.current?.contains(active) ||
+          active.closest('[role="menu"],[data-radix-popper-content-wrapper]'))
+      ) {
+        return;
+      }
+      focusSearchInput();
+    });
+    return () => cancelAnimationFrame(raf);
+  }, [isDropdownOpen, focusSearchInput]);
+
   const handleClearSearch = useCallback(() => {
     setSearchQuery("");
-    inputRef.current?.focus();
-  }, [setSearchQuery]);
+    focusSearchInput();
+  }, [setSearchQuery, focusSearchInput]);
+
+  const { ref: scrollShadowRef, topShadow, bottomShadow } = useScrollShadowOverlays();
+  // Virtuoso hands back `HTMLElement | Window | null`; the shadow hook only
+  // ever wants the element.
+  const handleScrollerRef = useCallback(
+    (el: HTMLElement | Window | null) => {
+      scrollShadowRef(el instanceof HTMLElement ? el : null);
+    },
+    [scrollShadowRef]
+  );
+
+  /**
+   * True when the list is empty for the plainest possible reason: nothing is
+   * open and nothing is narrowing the view. That state owns the create CTA —
+   * the footer's copy of it stands down so the panel never shows the same
+   * action twice, 100px apart, in two different weights.
+   */
+  const isZeroData =
+    !loading &&
+    !error &&
+    !isRateLimited &&
+    data.length === 0 &&
+    exactNumberNotFound === null &&
+    numberQuery === null &&
+    debouncedSearch.trim().length === 0 &&
+    filterState === "open";
+
+  /**
+   * Which row's actions menu is open, if any.
+   *
+   * Controlled rather than left to Radix so the panel can take its child
+   * overlays down with it. `FixedDropdown`'s documented invariant is that
+   * portaled content escapes the `<Activity>` subtree entirely: a menu still
+   * open when the panel hides stays mounted on `document.body`, with stale
+   * state and, once Floating UI loses its anchor, at (0,0).
+   */
+  const [openRowMenuNumber, setOpenRowMenuNumber] = useState<number | null>(null);
+
+  // A background revalidation can rename an issue or move a PR's head ref
+  // under a selection made minutes ago. This refreshes the stored copies —
+  // membership and the range anchor are deliberately untouched.
+  const reconcileSelection = selection.reconcile;
+  useEffect(() => {
+    reconcileSelection(data);
+  }, [data, reconcileSelection]);
+
+  /** The selection as an array — the objects the bulk action will act on. */
+  const selectedItems = useMemo(
+    () => Array.from(selection.selectedItems.values()),
+    [selection.selectedItems]
+  );
+
+  /**
+   * Selected items the current search or state tab is not showing. Selection
+   * deliberately survives both, so the bulk bar has to say when it is about to
+   * act on rows that are not on screen.
+   */
+  const hiddenSelectedCount = useMemo(() => {
+    if (selection.selectedItems.size === 0) return 0;
+    const visible = new Set(data.map((item) => item.number));
+    let hidden = 0;
+    for (const id of selection.selectedItems.keys()) {
+      if (!visible.has(id)) hidden += 1;
+    }
+    return hidden;
+  }, [selection.selectedItems, data]);
+
+  // Silent while the list is fresh; speaks up once it plainly is not. The
+  // shared minute clock drives the flip. It has to be the CLOCK, not the bare
+  // ticker: React Compiler memoizes this body, so a `Date.now()` read here can
+  // be cached and freeze, and the note would only ever appear if something
+  // unrelated happened to re-render the panel.
+  const nowMs = useGlobalMinuteClock();
+  const showStaleFreshness =
+    !error &&
+    !loading &&
+    !debouncedSearch &&
+    lastUpdatedAt != null &&
+    nowMs - lastUpdatedAt >= FRESHNESS_VISIBLE_AFTER_MS;
 
   const listId = `github-${type}-list`;
-  const maxIndex = data.length - 1 + (hasMore ? 1 : 0);
+  // Rate-limited means `handleLoadMore` returns without fetching, so an
+  // enabled Load more button and a cursor stop on it were both promising
+  // something the hook would not do.
+  const canLoadMore = hasMore && !isRateLimited;
+  const maxIndex = data.length - 1 + (canLoadMore ? 1 : 0);
   const activeItem = activeIndex >= 0 && activeIndex < data.length ? data[activeIndex] : null;
-  const activeItemId = activeItem ? `github-${type}-option-${activeItem.number}` : undefined;
-  const isLoadMoreActive = hasMore && activeIndex === data.length;
+  const isLoadMoreActive = canLoadMore && activeIndex === data.length;
+  // The cursor can sit on Load more, and when it does `aria-activedescendant`
+  // has to name it — leaving the attribute undefined told assistive tech the
+  // cursor had left the grid entirely.
+  const activeItemId = activeItem
+    ? `github-${type}-option-${activeItem.number}`
+    : isLoadMoreActive
+      ? `github-${type}-load-more`
+      : undefined;
 
   useEffect(() => {
     setActiveIndex(-1);
@@ -443,6 +718,11 @@ export function GitHubResourceList({
 
   const handleInputKeyDown = useCallback(
     (e: KeyboardEvent<HTMLInputElement>) => {
+      // During IME composition the browser owns the event lifecycle — an
+      // Enter that commits a candidate must not also activate a row. The
+      // keyCode check covers Safari/WebKit, where `isComposing` is not yet set
+      // on the first keydown. Mirrors `useGlobalKeybindings`.
+      if (e.nativeEvent.isComposing || e.nativeEvent.keyCode === 229) return;
       switch (e.key) {
         case "ArrowDown":
           e.preventDefault();
@@ -461,11 +741,7 @@ export function GitHubResourceList({
             handleLoadMore();
           } else if (activeItem) {
             if (e.metaKey || e.ctrlKey) {
-              void actionService.dispatch(
-                "system.openExternal",
-                { url: activeItem.url },
-                { source: "user" }
-              );
+              handleOpenUrlExternal(activeItem.url);
             } else {
               const worktrees = getCurrentViewStore().getState().worktrees;
               let matchedWt: { id: string } | undefined;
@@ -483,9 +759,36 @@ export function GitHubResourceList({
                 handleSwitchToWorktree(matchedWt.id);
               } else if (activeItem.state === "open") {
                 handleCreateWorktree(activeItem);
+              } else {
+                // Closed issue, merged PR — nothing to make locally, so Enter
+                // falls through to the forge rather than doing nothing. Same
+                // fallback the row's click path takes.
+                handleOpenUrlExternal(activeItem.url);
               }
             }
           }
+          break;
+        }
+        case " ": {
+          // DOM focus never leaves the search input, so a bare Space belongs to
+          // the query — "fix crash" must stay typeable with a row under the
+          // cursor. Membership takes the modifier instead.
+          if (!e.shiftKey || activeIndex < 0 || !activeItem) break;
+          e.preventDefault();
+          e.stopPropagation();
+          selection.toggle(activeItem);
+          break;
+        }
+        case "F10":
+        case "ContextMenu": {
+          // The row's actions menu, opened without a pointer. The menu is
+          // controlled, so this is a state change rather than a synthesized
+          // click on a `tabIndex={-1}` trigger.
+          if (e.key === "F10" && !e.shiftKey) break;
+          if (!activeItem) break;
+          e.preventDefault();
+          e.stopPropagation();
+          setOpenRowMenuNumber(activeItem.number);
           break;
         }
         case "Escape":
@@ -506,10 +809,12 @@ export function GitHubResourceList({
     [
       maxIndex,
       isLoadMoreActive,
+      activeIndex,
       activeItem,
       handleLoadMore,
       handleSwitchToWorktree,
       handleCreateWorktree,
+      handleOpenUrlExternal,
       handleClose,
       type,
       searchQuery,
@@ -527,44 +832,62 @@ export function GitHubResourceList({
     handleClose();
   }, [handleClose]);
 
+  // Pagination gets the same Doherty gate as everything else: a page that
+  // arrives inside 400ms should not have flashed a spinner on the way, and one
+  // that takes longer than five seconds should say so rather than spin
+  // silently. `useDeferredLoading` owns the gate.
+  const showLoadingMoreSpinner = useDeferredLoading(loadingMore, UI_DOHERTY_THRESHOLD);
+  const isSlowLoadingMore = useDeferredLoading(loadingMore, STILL_WORKING_AFTER_MS);
+
   const footerContext = useMemo<LoadMoreFooterContext>(
     () => ({
-      hasMore,
+      hasMore: canLoadMore,
       loadingMore,
+      showLoadingMoreSpinner,
+      isSlowLoadingMore,
       isLoadMoreActive,
       loadMoreError,
       type,
+      rowIndex: data.length + 1,
       onLoadMore: handleLoadMore,
       onOpenSettings: handleOpenGitHubSettings,
     }),
     [
-      hasMore,
+      canLoadMore,
       loadingMore,
+      showLoadingMoreSpinner,
+      isSlowLoadingMore,
       isLoadMoreActive,
       loadMoreError,
       type,
+      data.length,
       handleLoadMore,
       handleOpenGitHubSettings,
     ]
   );
 
+  /**
+   * Empty states name the way out, not the absence. Each of the three ways a
+   * list can come back empty has a different next action, so each gets its own
+   * — a single "No issues found" made the search miss, the state filter and a
+   * genuinely empty tracker look like one indistinguishable dead end.
+   */
   const renderEmpty = () => {
     const trimmedSearch = debouncedSearch.trim();
-    const isFilterActive =
-      exactNumberNotFound !== null ||
-      numberQuery !== null ||
-      trimmedSearch.length > 0 ||
-      filterState !== "open";
     const resourceLabel = type === "issue" ? "issues" : "pull requests";
+    const singular = type === "issue" ? "issue" : "pull request";
 
-    if (isFilterActive) {
+    // 1. A query that matched nothing — the way out is clearing the query, and
+    //    the state tab too when that is also narrowing the view. The label says
+    //    which, so the button never undoes more than it claims to.
+    if (exactNumberNotFound !== null || numberQuery !== null || trimmedSearch.length > 0) {
+      const stateAlsoNarrows = filterState !== "open";
       const title =
         exactNumberNotFound !== null
-          ? `No ${type === "issue" ? "issue" : "PR"} #${exactNumberNotFound} in this view`
+          ? `No ${singular} #${exactNumberNotFound} in this view`
           : trimmedSearch.length > 0
-            ? `No ${resourceLabel} match "${trimmedSearch}"`
+            ? `No matches for "${trimmedSearch}"`
             : `No ${resourceLabel} in this view`;
-
       return (
         <EmptyState
           variant="filtered-empty"
@@ -575,11 +898,11 @@ export function GitHubResourceList({
               variant="ghost"
               size="sm"
               onClick={() => {
-                setSearchQuery("");
-                setFilterState("open" as StateFilter);
+                if (stateAlsoNarrows) setFilterState("open" as StateFilter);
+                handleClearSearch();
               }}
             >
-              Clear filters
+              {stateAlsoNarrows ? "Clear search and filters" : "Clear search"}
             </Button>
           }
           className="flex-1 justify-center"
@@ -587,11 +910,40 @@ export function GitHubResourceList({
       );
     }
 
+    // 2. A state tab with nothing in it — the way out is the tab that has data.
+    if (filterState !== "open") {
+      return (
+        <EmptyState
+          variant="filtered-empty"
+          scale="canvas"
+          title={`No ${filterState} ${resourceLabel}`}
+          action={
+            <Button variant="ghost" size="sm" onClick={() => setFilterState("open" as StateFilter)}>
+              {`Show open ${resourceLabel}`}
+            </Button>
+          }
+          className="flex-1 justify-center"
+        />
+      );
+    }
+
+    // 3. Genuinely nothing open — the way out is creating the first one.
     return (
       <EmptyState
         variant="zero-data"
         scale="canvas"
-        title={`No ${resourceLabel} found`}
+        title={`No open ${resourceLabel}`}
+        description={
+          type === "issue"
+            ? "Open an issue to track the next piece of work."
+            : "Open a pull request when a branch is ready to review."
+        }
+        action={
+          <Button variant="outline" size="sm" onClick={handleCreateNew}>
+            <Plus className="h-3.5 w-3.5" />
+            {type === "issue" ? "New issue" : "New pull request"}
+          </Button>
+        }
         className="flex-1 justify-center"
       />
     );
@@ -622,24 +974,28 @@ export function GitHubResourceList({
   }
 
   return (
-    <div className="relative w-[450px] flex flex-col h-[500px]">
-      <div className="p-3 border-b border-[var(--border-divider)] space-y-3 shrink-0">
+    <div ref={rootRef} className="relative w-[450px] flex flex-col h-[500px]">
+      <div className="p-3 border-b border-[var(--border-divider)] space-y-2 shrink-0">
         <div className="flex items-center gap-2">
           <div
             className={cn(
-              "flex items-center gap-1.5 px-2 py-1.5 rounded-[var(--radius-md)] flex-1 min-w-0",
+              "flex items-center gap-1.5 px-2.5 h-8 rounded-[var(--radius-md)] flex-1 min-w-0",
               "bg-overlay-soft border border-[var(--border-overlay)]",
-              "focus-within:border-daintree-accent/40 focus-within:ring-1 focus-within:ring-daintree-accent/20"
+              // Full-strength accent, and only here: the search input is the
+              // single focus anchor for this region, so it gets the whole
+              // accent budget rather than two washed-out fractions of it.
+              "transition-[border-color] duration-150 ease-out",
+              "focus-within:border-daintree-accent"
             )}
           >
             <Search
-              className="w-3.5 h-3.5 shrink-0 text-daintree-text/40 pointer-events-none"
+              className="w-3.5 h-3.5 shrink-0 text-text-secondary pointer-events-none"
               aria-hidden="true"
             />
             <input
               ref={inputRef}
               type="text"
-              placeholder={`Search ${type === "issue" ? "issues" : "pull requests"}...`}
+              placeholder={`Search ${type === "issue" ? "issues" : "pull requests"}…`}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyDown={handleInputKeyDown}
@@ -647,46 +1003,67 @@ export function GitHubResourceList({
               role="combobox"
               aria-autocomplete="list"
               aria-expanded={true}
-              aria-haspopup="listbox"
+              aria-haspopup="grid"
               aria-controls={listId}
               aria-activedescendant={activeItemId}
               aria-label={`Search ${type === "issue" ? "issues" : "pull requests"}`}
-              className="flex-1 min-w-0 text-sm bg-transparent text-daintree-text placeholder:text-muted-foreground focus:outline-hidden"
+              aria-keyshortcuts="ArrowDown ArrowUp Enter Meta+Enter Control+Enter Shift+Space Shift+F10"
+              /* Claims Shift+F10 / ContextMenu for the row under the cursor.
+                 Without this the app's capture-phase global handler consumes
+                 them first and the row menu stays pointer-only. */
+              data-row-menu=""
+              className="flex-1 min-w-0 text-sm bg-transparent text-daintree-text placeholder:text-text-secondary focus:outline-hidden"
             />
             {searchQuery && (
               <button
                 type="button"
                 onClick={handleClearSearch}
                 aria-label="Clear search"
-                className="flex items-center justify-center w-5 h-5 rounded shrink-0 text-daintree-text/40 hover:text-daintree-text"
+                className={cn(
+                  "flex items-center justify-center w-5 h-5 rounded shrink-0",
+                  "text-text-secondary hover:text-daintree-text",
+                  "transition-colors duration-150 ease-out"
+                )}
               >
                 <X className="w-3 h-3" />
               </button>
             )}
           </div>
-          <button
-            type="button"
-            onClick={handleManualRefreshClick}
-            disabled={loading || refreshing}
-            aria-label={
-              showSpinner
-                ? "Refreshing…"
-                : `Refresh ${type === "issue" ? "issues" : "pull requests"}`
-            }
-            title={
-              showSpinner
-                ? "Refreshing…"
-                : `Refresh ${type === "issue" ? "issues" : "pull requests"}`
-            }
-            className={cn(
-              "flex items-center justify-center w-7 h-7 rounded shrink-0",
-              "text-daintree-text/60 hover:text-daintree-text hover:bg-tint/[0.06]",
-              "transition-colors disabled:cursor-default",
-              showSpinner && "text-status-info"
-            )}
-          >
-            <RefreshCw className={cn("w-3.5 h-3.5", showSpinner && "animate-spin")} />
-          </button>
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <button
+                type="button"
+                onClick={handleManualRefreshClick}
+                disabled={loading || refreshing}
+                aria-label={
+                  showSpinner
+                    ? "Refreshing…"
+                    : `Refresh ${type === "issue" ? "issues" : "pull requests"}`
+                }
+                className={cn(
+                  "flex items-center justify-center w-8 h-8 rounded-[var(--radius-md)] shrink-0",
+                  "text-text-secondary hover:text-daintree-text hover:bg-overlay-medium",
+                  "transition-[background-color,color] duration-150 ease-out disabled:cursor-default",
+                  showSpinner && "text-status-info"
+                )}
+              >
+                <RefreshCw className={cn("w-3.5 h-3.5", showSpinner && "animate-spin")} />
+              </button>
+            </TooltipTrigger>
+            <TooltipContent side="bottom">
+              {showSpinner ? (
+                "Refreshing…"
+              ) : /* When a banner or the footer is already stating freshness,
+                     the tooltip stays out of it — one occurrence, not three. */
+              lastUpdatedAt != null && !error && !isRateLimited && !showStaleFreshness ? (
+                <>
+                  Refresh &middot; updated <LiveTimeAgo timestamp={lastUpdatedAt} />
+                </>
+              ) : (
+                "Refresh"
+              )}
+            </TooltipContent>
+          </Tooltip>
           <Popover open={sortPopoverOpen} onOpenChange={setSortPopoverOpen}>
             <PopoverTrigger asChild>
               <button
@@ -698,16 +1075,18 @@ export function GitHubResourceList({
                 }
                 aria-haspopup="dialog"
                 aria-expanded={sortPopoverOpen}
+                title={sortOrder === "created" ? "Sort" : "Sort: recently updated"}
                 className={cn(
-                  "relative flex items-center justify-center w-7 h-7 rounded shrink-0",
-                  "text-daintree-text/60 hover:text-daintree-text hover:bg-tint/[0.06]",
-                  "transition-colors"
+                  "flex items-center justify-center w-8 h-8 rounded-[var(--radius-md)] shrink-0",
+                  "text-text-secondary hover:text-daintree-text hover:bg-overlay-medium",
+                  "transition-[background-color,color] duration-150 ease-out",
+                  // A non-default sort is a neutral lifted state, not a badge.
+                  // The old blue dot read as unread activity and said nothing
+                  // about which order was in force.
+                  sortOrder !== "created" && "bg-overlay-soft text-daintree-text"
                 )}
               >
-                <Filter className="w-3.5 h-3.5" />
-                {sortOrder !== "created" && (
-                  <span className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-status-info" />
-                )}
+                <ArrowUpDown className="w-3.5 h-3.5" />
               </button>
             </PopoverTrigger>
             <PopoverContent
@@ -723,9 +1102,7 @@ export function GitHubResourceList({
                 }
               }}
             >
-              <div className="text-[10px] font-medium text-daintree-text/50 uppercase tracking-wide mb-2">
-                Sort by
-              </div>
+              <div className="text-xs font-medium text-text-secondary mb-2">Sort by</div>
               <div className="flex flex-col gap-1" role="radiogroup" aria-label="Sort order">
                 {(() => {
                   const sortOptions = [
@@ -759,9 +1136,12 @@ export function GitHubResourceList({
                       }}
                       className={cn(
                         "flex items-center gap-2 px-2 py-1 text-xs rounded",
+                        "transition-[background-color,color] duration-150 ease-out",
+                        "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2",
+                        "focus-visible:outline-daintree-accent",
                         sortOrder === option.value
                           ? "bg-overlay-soft text-daintree-text"
-                          : "text-daintree-text/70 hover:bg-overlay-medium"
+                          : "text-text-secondary hover:bg-overlay-medium hover:text-daintree-text"
                       )}
                     >
                       <div
@@ -806,10 +1186,10 @@ export function GitHubResourceList({
                     if (allSelected) {
                       selection.clear();
                     } else {
-                      selection.selectAll(data.map((item) => item.number));
+                      selection.selectAll(data);
                     }
                   }}
-                  className="text-xs text-daintree-text/50 hover:text-daintree-text focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-accent transition-colors px-1 py-0.5 rounded"
+                  className="text-xs text-text-secondary hover:text-daintree-text focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-accent transition-colors duration-150 ease-out px-1 py-0.5 rounded"
                 >
                   {allSelected ? "Deselect all" : `Select all (${data.length})`}
                 </button>
@@ -817,9 +1197,9 @@ export function GitHubResourceList({
                   <button
                     type="button"
                     onClick={() => {
-                      selection.selectAll(unassigned.map((item) => item.number));
+                      selection.selectAll(unassigned);
                     }}
-                    className="text-xs text-daintree-text/50 hover:text-daintree-text focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-accent transition-colors px-1 py-0.5 rounded"
+                    className="text-xs text-text-secondary hover:text-daintree-text focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-accent transition-colors duration-150 ease-out px-1 py-0.5 rounded"
                   >
                     {`Select unassigned (${unassigned.length})`}
                   </button>
@@ -860,10 +1240,13 @@ export function GitHubResourceList({
                   });
                 }}
                 className={cn(
-                  "flex-1 px-3 py-1 text-xs font-medium rounded transition-colors",
+                  "flex-1 px-3 py-1 text-xs font-medium rounded",
+                  "transition-[background-color,color] duration-150 ease-out",
+                  "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2",
+                  "focus-visible:outline-daintree-accent",
                   isActive
                     ? "bg-overlay-medium text-daintree-text"
-                    : "text-muted-foreground hover:text-daintree-text"
+                    : "text-text-secondary hover:text-daintree-text"
                 )}
               >
                 {tab.label}
@@ -896,14 +1279,50 @@ export function GitHubResourceList({
               label = `Showing #${numberQuery.from} and above`;
             }
             return (
-              <p className="bg-overlay-soft border border-[var(--border-divider)] rounded px-2 py-1 text-xs text-muted-foreground">
+              <p className="bg-overlay-soft border border-[var(--border-divider)] rounded px-2 py-1 text-xs text-text-secondary">
                 {label}
               </p>
             );
           })()}
       </div>
 
-      <div className="flex-1 min-h-0 flex flex-col relative">
+      {/* The combobox points `aria-controls` here, so this element exists in
+          every state — loading, empty, errored, rate-limited. It used to be
+          rendered only alongside data, which left an expanded combobox
+          controlling nothing at exactly the moments a screen-reader user most
+          needs to be told what happened. The per-state announcements live
+          inside it. */}
+      <div
+        id={listId}
+        role="grid"
+        aria-label={type === "issue" ? "Issues" : "Pull requests"}
+        /* Capability, not current state: these rows can always be
+           multi-selected, whether or not any are right now. */
+        aria-multiselectable
+        aria-busy={loading || refreshing || loadingMore}
+        /* -1 while more pages exist — the true total is unknown, and claiming
+           the loaded count is a lie a screen reader reads out as "row 20 of
+           20" on a list that keeps growing. */
+        aria-rowcount={hasMore ? -1 : data.length}
+        className="flex-1 min-h-0 flex flex-col relative"
+      >
+        {/* Covers only the states with no visible announcement of their own.
+            Errors are NOT in here: the banner below carries the message and is
+            an `alert`, so repeating it would announce it twice and put the
+            same string in the accessibility tree in two places. */}
+        <span role="status" aria-live="polite" className="sr-only">
+          {loading
+            ? `Loading ${type === "issue" ? "issues" : "pull requests"}…`
+            : isRateLimited
+              ? // Nothing here, but deliberately ahead of the zero-results
+                // branch: a paused list is empty for a reason, and "No issues"
+                // is the wrong thing to be told. The paused surface below is
+                // its own `status`, so it does the announcing.
+                ""
+              : !error && data.length === 0
+                ? `No ${type === "issue" ? "issues" : "pull requests"}`
+                : ""}
+        </span>
         {/* Plain conditional render — AnimatePresence is unsafe here because
             this subtree lives inside a `keepMounted` dropdown wrapped in
             <Activity mode="hidden">. Exit lifecycles get stuck under Activity,
@@ -917,25 +1336,31 @@ export function GitHubResourceList({
         ) : data.length > 0 ? (
           <div key="github-content" className="flex-1 min-h-0 flex flex-col">
             {isRateLimited && !error && (
-              <div className="px-3 py-2 border-b border-[var(--border-divider)] flex items-center gap-2 text-muted-foreground bg-overlay-soft shrink-0">
+              <div
+                role="status"
+                className="px-3 py-2 border-b border-[var(--border-divider)] flex items-center gap-2 text-text-secondary bg-overlay-soft shrink-0"
+              >
                 <Clock className="h-3.5 w-3.5 shrink-0" />
                 <span className="text-xs truncate">
                   GitHub requests are paused. Showing last known results.
                 </span>
                 {rateLimitResetAt != null && rateLimitResetAt > Date.now() && (
-                  <span className="text-xs text-muted-foreground/70 shrink-0 whitespace-nowrap tabular-nums">
+                  <span className="text-xs text-text-secondary shrink-0 whitespace-nowrap tabular-nums">
                     · Resumes in <LiveRateLimitCountdown resetAt={rateLimitResetAt} />
                   </span>
                 )}
                 {lastUpdatedAt != null && !debouncedSearch && (
-                  <span className="text-xs text-muted-foreground/70 shrink-0 whitespace-nowrap">
+                  <span className="text-xs text-text-secondary shrink-0 whitespace-nowrap">
                     · Updated <LiveTimeAgo timestamp={lastUpdatedAt} />
                   </span>
                 )}
               </div>
             )}
             {error && (
-              <div className="px-3 py-2 border-b border-[var(--border-divider)] flex items-center gap-2 text-muted-foreground bg-overlay-soft shrink-0">
+              <div
+                role="alert"
+                className="px-3 py-2 border-b border-[var(--border-divider)] flex items-center gap-2 text-text-secondary bg-overlay-soft shrink-0"
+              >
                 <WifiOff className="h-3.5 w-3.5 shrink-0" />
                 <span className="text-xs truncate">
                   {isTransientNetworkError(error)
@@ -943,7 +1368,7 @@ export function GitHubResourceList({
                     : sanitizeIpcError(error)}
                 </span>
                 {lastUpdatedAt != null && !debouncedSearch && (
-                  <span className="text-xs text-muted-foreground/70 shrink-0 whitespace-nowrap">
+                  <span className="text-xs text-text-secondary shrink-0 whitespace-nowrap">
                     · Updated <LiveTimeAgo timestamp={lastUpdatedAt} />
                   </span>
                 )}
@@ -952,7 +1377,7 @@ export function GitHubResourceList({
                     variant="ghost"
                     size="sm"
                     onClick={handleOpenGitHubSettings}
-                    className="ml-auto h-6 text-xs text-muted-foreground hover:text-daintree-text shrink-0"
+                    className="ml-auto h-6 text-xs shrink-0"
                   >
                     <Settings className="h-3 w-3" />
                     Settings
@@ -962,7 +1387,7 @@ export function GitHubResourceList({
                     variant="ghost"
                     size="sm"
                     onClick={handleRetry}
-                    className="ml-auto h-6 text-xs text-muted-foreground hover:text-daintree-text shrink-0"
+                    className="ml-auto h-6 text-xs shrink-0"
                   >
                     <RefreshCw className="h-3 w-3" />
                     Retry
@@ -970,15 +1395,17 @@ export function GitHubResourceList({
                 )}
               </div>
             )}
-            <div
-              id={listId}
-              role="listbox"
-              aria-multiselectable={selection.isSelectionActive}
-              aria-busy={loading || refreshing}
-              className="flex-1 min-h-0"
-            >
+            <div role="rowgroup" className="relative flex-1 min-h-0">
+              {/* The panel is a fixed 500px and rows are a fixed 64px, so the
+                  list almost never divides evenly — the bottom row was being
+                  guillotined through its own metadata line. The shared scroll
+                  shadow turns that cut into a fade, and doubles as the "more
+                  below" cue the fixed height otherwise hides. */}
+              {topShadow}
+              {bottomShadow}
               <Virtuoso
                 ref={virtuosoRef}
+                scrollerRef={handleScrollerRef}
                 data={data}
                 context={footerContext}
                 style={{ height: "100%" }}
@@ -986,7 +1413,7 @@ export function GitHubResourceList({
                 computeItemKey={(_, item) => item.number}
                 increaseViewportBy={{ top: 0, bottom: 200 }}
                 endReached={() => {
-                  if (!loadingMore && !loading && hasMore) handleLoadMore();
+                  if (!loadingMore && !loading && canLoadMore) handleLoadMore();
                 }}
                 components={{ Footer: LoadMoreFooter }}
                 itemContent={(index, item) => (
@@ -996,14 +1423,22 @@ export function GitHubResourceList({
                     onCreateWorktree={handleCreateWorktree}
                     onSwitchToWorktree={handleSwitchToWorktree}
                     optionId={`github-${type}-option-${item.number}`}
+                    menuTriggerId={`github-${type}-row-menu-${item.number}`}
+                    rowIndex={index + 1}
+                    menuOpen={openRowMenuNumber === item.number}
+                    onMenuOpenChange={(next: boolean) =>
+                      setOpenRowMenuNumber(next ? item.number : null)
+                    }
+                    onMenuClose={focusSearchInput}
+                    onOpenExternalUrl={handleOpenUrlExternal}
                     isActive={activeIndex === index}
                     isSelected={selection.selectedIds.has(item.number)}
                     isSelectionActive={selection.isSelectionActive}
                     onToggleSelect={(e: React.MouseEvent) => {
                       if (e.shiftKey) {
-                        selection.toggleRange(index, (i) => data[i]!.number);
+                        selection.toggleRange(item, data);
                       } else {
-                        selection.toggle(item.number, index);
+                        selection.toggle(item);
                       }
                     }}
                   />
@@ -1013,93 +1448,112 @@ export function GitHubResourceList({
           </div>
         ) : null}
         {!loading && !data.length && error && !isTokenError && !isRateLimited && (
-          <div className="p-8 text-center text-muted-foreground">
+          /* An alert, like the stale-data banner: the shared status node stays
+             quiet whenever an error is showing, so without this a cold-start
+             failure was announced by nothing at all. */
+          <div role="alert" className="p-8 text-center text-text-secondary">
             <WifiOff className="h-5 w-5 mx-auto mb-2 opacity-50" />
             <p className="text-sm">{sanitizeIpcError(error)}</p>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleRetry}
-              className="mt-2 text-muted-foreground hover:text-daintree-text"
-            >
+            <Button variant="ghost" size="sm" onClick={handleRetry} className="mt-2">
               <RefreshCw className="h-3.5 w-3.5" />
               Retry
             </Button>
           </div>
         )}
         {!loading && !data.length && error && isTokenError && (
-          <div className="p-8 text-center text-muted-foreground">
+          <div role="alert" className="p-8 text-center text-text-secondary">
             <WifiOff className="h-5 w-5 mx-auto mb-2 opacity-50" />
             <p className="text-sm">{sanitizeIpcError(error)}</p>
-            <Button
-              variant="ghost"
-              size="sm"
-              onClick={handleOpenGitHubSettings}
-              className="mt-2 text-muted-foreground hover:text-daintree-text"
-            >
+            <Button variant="ghost" size="sm" onClick={handleOpenGitHubSettings} className="mt-2">
               <Settings className="h-3.5 w-3.5" />
-              Open GitHub Settings
+              Open GitHub settings
             </Button>
           </div>
         )}
         {!loading && !data.length && isRateLimited && !isTokenError && (
-          <EmptyState
-            variant="zero-data"
-            scale="canvas"
-            icon={<Clock />}
-            title="GitHub requests are paused"
-            description="The current rate-limit window has been exhausted. The dropdown will resume automatically once GitHub clears the quota."
-            className="flex-1 justify-center"
-          />
+          /* Its own status, like the error surfaces are their own alerts —
+             the shared announcer stays quiet here rather than reading the
+             same sentence out a second time. */
+          <div role="status" className="contents">
+            <EmptyState
+              variant="zero-data"
+              scale="canvas"
+              icon={<Clock />}
+              title="GitHub requests are paused"
+              /* One node shape either way: EmptyState keys its fade-through on
+               the description, so switching between a string and JSX made the
+               copy re-animate the moment a reset time arrived. */
+              description={
+                <>
+                  GitHub is holding new requests. This list resumes{" "}
+                  {rateLimitResetAt != null && rateLimitResetAt > Date.now() ? (
+                    <>
+                      in <LiveRateLimitCountdown resetAt={rateLimitResetAt} />
+                    </>
+                  ) : (
+                    "on its own once they're allowed again"
+                  )}
+                  .
+                </>
+              }
+              className="flex-1 justify-center"
+            />
+          </div>
         )}
         {!loading && !error && !isRateLimited && !data.length && renderEmpty()}
       </div>
 
-      <div className="p-3 border-t border-[var(--border-divider)] grid grid-cols-[1fr_auto_1fr] items-center shrink-0">
+      {/* Freshness is no longer a permanent third column here — it moved into
+          the refresh control's tooltip, where it answers the question the
+          control itself raises. A footer that reads "Updated now" on every
+          open spends a whole slot restating that nothing is wrong.
+
+          Hidden entirely while a selection is live: `BulkActionBar` takes over
+          this band at the same height, so the panel never grows a second
+          bottom bar or loses a row of list to one. */}
+      <div
+        className={cn(
+          "px-2 py-1.5 border-t border-[var(--border-divider)] grid grid-cols-[1fr_auto_1fr] items-center shrink-0",
+          selection.selectedItems.size > 0 && "hidden"
+        )}
+      >
         <Button
           variant="ghost"
           size="sm"
           onClick={handleOpenInGitHub}
-          className="text-muted-foreground hover:text-daintree-text gap-1.5 justify-self-start"
+          className="gap-1.5 justify-self-start"
         >
           <ExternalLink className="h-3.5 w-3.5" />
-          GitHub
+          View on GitHub
         </Button>
-        {!error && !loading && lastUpdatedAt != null && !debouncedSearch ? (
-          <p className="text-[10px] text-muted-foreground/60 whitespace-nowrap text-center">
-            Updated <LiveTimeAgo timestamp={lastUpdatedAt} />
+        {showStaleFreshness ? (
+          <p className="text-xs text-text-secondary whitespace-nowrap text-center">
+            Updated <LiveTimeAgo timestamp={lastUpdatedAt!} />
           </p>
         ) : (
           <span aria-hidden="true" />
         )}
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={handleCreateNew}
-          className="text-muted-foreground hover:text-daintree-text gap-1.5 justify-self-end"
-        >
-          <Plus className="h-3.5 w-3.5" />
-          New
-        </Button>
+        {isZeroData ? (
+          <span aria-hidden="true" />
+        ) : (
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={handleCreateNew}
+            className="gap-1.5 justify-self-end"
+          >
+            <Plus className="h-3.5 w-3.5" />
+            {type === "issue" ? "New issue" : "New pull request"}
+          </Button>
+        )}
       </div>
 
       <BulkActionBar
         mode={type === "issue" ? "issue" : "pr"}
-        selectedIssues={
-          type === "issue"
-            ? Array.from(selection.selectedIds)
-                .map((id) => issueCache.get(id))
-                .filter((issue): issue is Issue => issue !== undefined)
-            : []
-        }
-        selectedPRs={
-          type === "pr"
-            ? Array.from(selection.selectedIds)
-                .map((id) => prCache.get(id))
-                .filter((pr): pr is PR => pr !== undefined)
-            : []
-        }
-        selectedCount={selection.selectedIds.size}
+        hiddenCount={hiddenSelectedCount}
+        selectedIssues={type === "issue" ? (selectedItems as Issue[]) : []}
+        selectedPRs={type === "pr" ? (selectedItems as PR[]) : []}
+        selectedCount={selectedItems.length}
         onClear={selection.clear}
         onCloseDropdown={onClose}
       />

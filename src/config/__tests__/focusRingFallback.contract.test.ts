@@ -485,9 +485,12 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
   {
     file: "plugins/builtin/github/renderer/components/GitHubResourceList.tsx",
     fragment:
-      "flex-1 min-w-0 text-sm bg-transparent text-daintree-text placeholder:text-muted-foreground focus:outline-hidden",
+      "flex-1 min-w-0 text-sm bg-transparent text-daintree-text placeholder:text-text-secondary focus:outline-hidden",
     reason:
-      "PRE-EXISTING #8940: autoFocus issue/PR search input lacks a focus indicator — follow-up",
+      "RESOLVED, not deferred: the input is a bare transparent field inside a bordered shell, " +
+      "and the shell owns the indicator — `focus-within:border-daintree-accent` at full strength, " +
+      "the one accent signal this focus region is allowed. A same-element ring would draw a second " +
+      "indicator inside the first. Was the #8940 follow-up.",
   },
   {
     file: "src/components/Layout/ChordIndicator.tsx",

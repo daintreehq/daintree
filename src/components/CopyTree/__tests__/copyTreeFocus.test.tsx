@@ -97,6 +97,17 @@ describe("copy-tree dropdown focus restoration", () => {
     vi.useFakeTimers();
     vi.stubGlobal("requestAnimationFrame", (cb: FrameRequestCallback) => frames.push(cb));
     vi.stubGlobal("cancelAnimationFrame", () => {});
+    // `unstubAllGlobals` below also clears the setup file's ResizeObserver
+    // shim, which the scroll-shadow hook constructs on every render after the
+    // first — reinstate it here rather than leaking the teardown.
+    vi.stubGlobal(
+      "ResizeObserver",
+      class ResizeObserverStub {
+        observe() {}
+        unobserve() {}
+        disconnect() {}
+      }
+    );
     render(<Harness />);
   });
 
