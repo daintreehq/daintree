@@ -6,6 +6,7 @@ import {
   ExitedCircle,
   CircleCheck,
   CircleDashed,
+  CircleDot,
   CirclePause,
   CircleSlash,
 } from "@/components/icons";
@@ -18,7 +19,9 @@ interface PilotRunStateProps {
 }
 
 /**
- * The neutral tone the quiet states carry.
+ * The neutral tone the settled states carry.
+ *
+ * "Settled", not "quiet" — `quiet` is a band now, and it is hued.
  *
  * `done` and `idle` are finished business: nothing is in flight and nothing is
  * being asked, so they read as ordinary text. Deliberately `text-text-secondary`
@@ -44,20 +47,49 @@ const NEUTRAL_TONE = "text-text-secondary";
  * channel separating "the agent errored" from "the agent asked you a question";
  * with that word gone, the shapes have to carry it. Same circle family as every
  * other glyph here, so it still reads as one of the set.
+ *
+ * Three of these marks are the app's own standards and are not this surface's
+ * to reinterpret: the green spinner is working, the amber hollow circle is
+ * waiting, and the blue circle-with-a-check is finished. The sidebar, the dock,
+ * the assistant header and the panel chrome all say the same three things the
+ * same three ways.
+ *
+ * So the invariant here is NOT that every band draws a different shape — it is
+ * that no two bands share a shape AND a tone, and that among the bands wearing
+ * the SAME tone, every shape differs. Hue does the work where the vocabulary
+ * already assigns it; geometry does the work everywhere hue cannot.
+ *
+ * - `quiet` is the working spinner in the waiting hue, and no new glyph at all.
+ *   A silent run IS working — that is the whole difficulty with it — so it
+ *   keeps working's mark and takes the colour of the thing that may need a
+ *   hand. It does not animate, which is the other half of what it means. The
+ *   row spells "quiet 12m" beside it in words, so the pair is never separated
+ *   by colour alone.
+ * - `done` is the finished mark in the settled tone: the same check the app
+ *   uses for finished work, greyed because an acknowledged completion has left
+ *   the attention model.
+ * - `idle` takes the dotted circle — alive, at rest, nothing running. It used
+ *   to share the hollow circle with `needs-you`, which is the one collision
+ *   worth removing: it left the amber hollow circle meaning waiting while a
+ *   grey one meant something else entirely. Now the hollow circle means
+ *   waiting and only waiting. The exited refinement below keeps the
+ *   struck-through circle, so a dead shell and a resting one stay tellable
+ *   apart too.
  */
 export const BAND_GLYPH: Record<FleetBand, ComponentType<{ className?: string }>> = {
   blocked: CircleSlash,
   "needs-you": HollowCircle,
+  quiet: SpinnerCircle,
   review: CircleCheck,
   running: SpinnerCircle,
   done: CircleCheck,
   parked: CirclePause,
-  // Dashed rather than paused: a park is held, a snooze is merely quiet for
+  // Dashed rather than paused: a park is held, a snooze is merely silent for
   // now, and the two must not share a shape when the row's only other
   // difference between them is a word. The dash is the same signal the project
   // switcher's snoozed dot uses, so one vocabulary covers both surfaces.
   snoozed: CircleDashed,
-  idle: HollowCircle,
+  idle: CircleDot,
 };
 
 /**
@@ -87,6 +119,11 @@ export const BAND_GLYPH: Record<FleetBand, ComponentType<{ className?: string }>
 export const BAND_GLYPH_TONE: Record<FleetBand, string> = {
   blocked: "text-status-danger",
   "needs-you": "text-state-waiting",
+  // Amber, and the same amber a demand wears. A stall is not a demand — nobody
+  // is asking — but it is the other thing on this surface that may need a hand,
+  // and inventing a third hue for it would spend a colour on a distinction the
+  // shape already carries.
+  quiet: "text-state-waiting",
   review: "text-category-blue",
   running: "text-state-working",
   done: NEUTRAL_TONE,

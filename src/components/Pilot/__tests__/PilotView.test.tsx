@@ -250,8 +250,11 @@ describe("PilotView", () => {
     ]);
     render(<PilotView />);
 
+    // The age arrives as the phrase its band chose, not a bare "2m ago" — a
+    // demand's duration is how long it has been left, and that is the half a
+    // screen reader would otherwise have to infer.
     expect(screen.getByTestId("pilot-row").getAttribute("aria-label")).toBe(
-      "Fix auth, Claude, Waiting, 2m ago"
+      "Fix auth, Claude, Waiting, waiting for 2m"
     );
   });
 
@@ -844,7 +847,7 @@ describe("PilotView", () => {
       render(<PilotView />);
       expect(rowTitles()).toHaveLength(4);
 
-      fireEvent.click(segment(/Waiting/));
+      fireEvent.click(segment(/Attention/));
 
       expect(rowTitles()).toHaveLength(2);
       expect(rowTitles().join(" ")).toContain("auth blocked");
@@ -859,7 +862,7 @@ describe("PilotView", () => {
       fireEvent.change(screen.getByTestId("pilot-search"), { target: { value: "auth" } });
       expect(rowTitles()).toHaveLength(2);
 
-      fireEvent.click(segment(/Waiting/));
+      fireEvent.click(segment(/Attention/));
 
       expect(rowTitles()).toHaveLength(1);
       expect(rowTitles()[0]).toContain("auth blocked");
@@ -875,7 +878,9 @@ describe("PilotView", () => {
       fireEvent.change(screen.getByTestId("pilot-search"), { target: { value: "auth" } });
 
       expect(segment(/^All/).getAttribute("aria-label")).toBe("All, 2 agents");
-      expect(segment(/Waiting/).getAttribute("aria-label")).toBe("Waiting, 1 agent");
+      expect(segment(/Attention/).getAttribute("aria-label")).toBe(
+        "Attention, 1 agent, including 1 blocked"
+      );
       expect(segment(/Working/).getAttribute("aria-label")).toBe("Working, 1 agent");
     });
 
@@ -886,14 +891,14 @@ describe("PilotView", () => {
       render(<PilotView />);
       const before = screen.getAllByRole("radio").map((el) => el.getAttribute("aria-label"));
 
-      fireEvent.click(segment(/Waiting/));
+      fireEvent.click(segment(/Attention/));
 
       expect(screen.getAllByRole("radio").map((el) => el.getAttribute("aria-label"))).toEqual(
         before
       );
     });
 
-    it("sorts review into Finished and out of Waiting", () => {
+    it("sorts review into Finished and out of Attention", () => {
       // The asymmetry worth pinning: `review` IS a demand band, so it counts
       // toward `demandCount`, but the Needs-you segment is blocked + needs-you
       // only. A review row must land in exactly one of the two segments.
@@ -903,8 +908,10 @@ describe("PilotView", () => {
       ]);
       render(<PilotView />);
 
-      expect(segment(/Waiting/).getAttribute("aria-label")).toBe("Waiting, 1 agent");
-      expect(segment(/Finished/).getAttribute("aria-label")).toBe("Finished, 1 agent");
+      expect(segment(/Attention/).getAttribute("aria-label")).toBe("Attention, 1 agent");
+      expect(segment(/Finished/).getAttribute("aria-label")).toBe(
+        "Finished, 1 agent, all ready for review"
+      );
 
       fireEvent.click(segment(/Finished/));
       expect(rowTitles()).toHaveLength(1);
@@ -1090,7 +1097,7 @@ describe("PilotView", () => {
           }),
         ]);
       });
-      fireEvent.click(screen.getByRole("radio", { name: /Waiting/ }));
+      fireEvent.click(screen.getByRole("radio", { name: /Attention/ }));
       // Asserted WHILE narrowed, not only after returning to All: a filter that
       // re-derived the order would be invisible if the check waited until the
       // held order had been restored anyway.
@@ -1118,7 +1125,7 @@ describe("PilotView", () => {
     it("starts every opening back at All", () => {
       seedMixedFleet();
       const view = render(<PilotView />);
-      fireEvent.click(segment(/Waiting/));
+      fireEvent.click(segment(/Attention/));
       expect(rowTitles()).toHaveLength(2);
 
       usePilotStore.setState({ isOpen: false });
@@ -1552,6 +1559,85 @@ describe("PilotView", () => {
     });
   });
 
+  describe("where the cursor opens", () => {
+    /** The row `aria-activedescendant` currently names, by its title. */
+    function selectedTitle(): string | undefined {
+      const id = screen.getByTestId("pilot-search").getAttribute("aria-activedescendant");
+      return screen
+        .getAllByTestId("pilot-row")
+        .find((row) => row.id === id)
+        ?.getAttribute("aria-label")
+        ?.split(",")[0];
+    }
+
+    it("seats on the fleet's worst run, not on the top of the most recent project", () => {
+      // Groups are ordered most-recently-opened first, which answers "where
+      // was I". The cursor answers the other question.
+      seed([
+        run({ runId: "a", workspaceId: "p1", agentState: "working", title: "busy", since: NOW }),
+        run({
+          runId: "b",
+          workspaceId: "s1",
+          agentState: "waiting",
+          waitingReason: "error",
+          title: "broken",
+          since: NOW - 60_000,
+        }),
+      ]);
+      render(<PilotView />);
+
+      expect(screen.getAllByTestId("pilot-row")[0]!.getAttribute("aria-label")).toContain("busy");
+      expect(selectedTitle()).toBe("broken");
+    });
+
+    it("breaks a cross-project tie on the clock the rows are actually showing", () => {
+      // Two silent runs in two projects. The one that has WORKED longest is not
+      // the one that has been SILENT longest, and the column shows the silence
+      // — so a cursor ranking on `since` would point at the row whose visible
+      // age is the smaller of the two.
+      seed([
+        run({
+          runId: "long-work",
+          workspaceId: "p1",
+          agentState: "working",
+          title: "long work",
+          since: NOW - 5 * 3_600_000,
+          quietSince: NOW - 60_000,
+        }),
+        run({
+          runId: "long-silence",
+          workspaceId: "s1",
+          agentState: "working",
+          title: "long silence",
+          since: NOW - 20 * 60_000,
+          quietSince: NOW - 15 * 60_000,
+        }),
+      ]);
+      render(<PilotView />);
+
+      expect(selectedTitle()).toBe("long silence");
+    });
+
+    it("stays a starting point — the user's own selection outranks it", () => {
+      seed([
+        run({ runId: "a", workspaceId: "p1", agentState: "working", title: "busy", since: NOW }),
+        run({
+          runId: "b",
+          workspaceId: "s1",
+          agentState: "waiting",
+          title: "asking",
+          since: NOW - 60_000,
+        }),
+      ]);
+      render(<PilotView />);
+      expect(selectedTitle()).toBe("asking");
+
+      fireEvent.keyDown(screen.getByTestId("pilot-search"), { key: "ArrowUp" });
+
+      expect(selectedTitle()).toBe("busy");
+    });
+  });
+
   describe("group demand chips", () => {
     it("summarises each project's demand on its header, worst band first", () => {
       seed([
@@ -1567,8 +1653,9 @@ describe("PilotView", () => {
       expect(chips).toHaveLength(1);
       expect(chips[0]!.textContent).toContain("1");
 
-      // The group's accessible name says the same thing in words.
-      expect(screen.getByRole("group", { name: /daintree, Agent needs you/ })).toBeTruthy();
+      // The group's accessible name says the same thing in words, band by band
+      // — never a total under one band's noun.
+      expect(screen.getByRole("group", { name: /daintree, 1 waiting/ })).toBeTruthy();
     });
 
     it("drops the chip when the query filters the demand away", () => {
@@ -1600,7 +1687,10 @@ describe("PilotView", () => {
       expect(screen.queryByRole("group", { name: /needs you/ })).toBeNull();
     });
 
-    it("counts every demand band, not just waiting", () => {
+    it("counts each band separately rather than totalling them under one glyph", () => {
+      // One blocked, one waiting and one handed back is three facts, and the
+      // old single chip drew the worst glyph beside "3" — which reads as
+      // "three blocked". Three ones, worst first, is the only honest form.
       seed([
         run({
           runId: "a",
@@ -1614,12 +1704,16 @@ describe("PilotView", () => {
       ]);
       render(<PilotView />);
 
-      expect(screen.getByTestId("pilot-group-demand").textContent).toContain("3");
+      expect(screen.getByTestId("pilot-group-demand").textContent).toBe("111");
+      // The words are on the group, where they are not colour-and-digit alone.
+      expect(
+        screen.getByRole("group", { name: /1 blocked, 1 waiting, 1 ready for review/ })
+      ).toBeTruthy();
     });
   });
 
-  describe("stall cue", () => {
-    it("marks a working run that main flagged as quiet", () => {
+  describe("quiet runs", () => {
+    it("gives a flagged run one labelled clock instead of two unlabelled ones", () => {
       seed([
         run({
           agentState: "working",
@@ -1630,10 +1724,34 @@ describe("PilotView", () => {
       ]);
       render(<PilotView />);
 
-      expect(screen.getByText("quiet 12m")).toBeTruthy();
-      // And the fact reaches the accessible name, since the cue itself is
-      // decoration.
-      expect(screen.getByRole("option", { name: /quiet for 12m/ })).toBeTruthy();
+      // The silence is the row's clock, in the column clocks live in, with the
+      // word that says which clock it is. The working duration is NOT drawn —
+      // two durations on the row is what made "how long has this been silent"
+      // a question the reader had to answer twice.
+      expect(screen.getByTestId("pilot-row-age").textContent).toBe("quiet 12m");
+      expect(screen.queryByText("1h")).toBeNull();
+      // Both facts still reach the accessible name, which has room for them.
+      expect(screen.getByRole("option", { name: /quiet for 12m, working for 1h/ })).toBeTruthy();
+    });
+
+    it("says so in the footer, and the sentence isolates them", () => {
+      seed([
+        run({
+          runId: "a",
+          agentState: "working",
+          since: NOW - 3_600_000,
+          quietSince: NOW - 12 * 60_000,
+        }),
+        run({ runId: "b", agentState: "working", since: NOW }),
+      ]);
+      render(<PilotView />);
+
+      const action = screen.getByTestId("pilot-demand-action");
+      expect(action.textContent).toBe("Agent has gone quiet");
+
+      fireEvent.click(action);
+
+      expect(screen.getAllByTestId("pilot-row")).toHaveLength(1);
     });
   });
 
@@ -2267,10 +2385,11 @@ describe("PilotView worktree scope", () => {
       }
     });
 
-    it("drops the highlight back to the top when the scope changes", () => {
+    it("re-seats the highlight on the scope's own worst row", () => {
       // Drilling replaces the whole population, so a highlight carried across
       // would land on whatever row inherited its position rather than on the
-      // one the user can see is selected.
+      // one the user can see is selected. It re-seats where every fresh
+      // population seats it: on the thing that needs somebody.
       seed([
         run({
           runId: "waiting",
@@ -2292,9 +2411,14 @@ describe("PilotView worktree scope", () => {
 
       fireEvent.click(drillHeader());
 
-      const firstRow = screen.getAllByTestId("pilot-row")[0]!;
-      expect(search.getAttribute("aria-activedescendant")).toBe(firstRow.id);
+      const waitingRow = screen
+        .getAllByTestId("pilot-row")
+        .find((row) => row.getAttribute("aria-label")?.includes("Waiting"))!;
+      expect(search.getAttribute("aria-activedescendant")).toBe(waitingRow.id);
       expect(search.getAttribute("aria-activedescendant")).not.toBe(beforeDrill);
+      // And not merely the first row it happens to sit above — the no-worktree
+      // bucket sorts first on this axis and holds a plain working run.
+      expect(screen.getAllByTestId("pilot-row")[0]!.id).not.toBe(waitingRow.id);
     });
 
     it("lets the pointer take a fresh hold after a scope change", () => {

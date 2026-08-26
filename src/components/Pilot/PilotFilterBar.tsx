@@ -22,16 +22,29 @@ const NEUTRAL_TONE_FADED = "text-text-secondary/40";
  * the faded variant is spelled out rather than derived — the same constraint
  * `QuickStateFilterBar` documents.
  *
- * `working` is hued unconditionally — see `segmentIsHued`. The other two carry
- * the hue of the demand they can reveal, and only while they are actually
- * holding one; see `bandFilterHasDemand`.
+ * `working` and `quiet` are hued unconditionally — see `segmentIsHued`. The
+ * others carry the hue of the demand they can reveal, and only while they are
+ * actually holding one; see `bandFilterHasDemand`. A mixed segment's glyph is
+ * resolved at render time by `segmentVisual`, not read straight from here.
  */
-const SEGMENT_TONE: Record<
-  Exclude<PilotBandFilter, "all">,
-  { Icon: ComponentType<{ className?: string }>; tone: string; toneFaded: string }
-> = {
+interface SegmentVisual {
+  Icon: ComponentType<{ className?: string }> | null;
+  tone: string;
+  toneFaded: string;
+}
+
+const SEGMENT_TONE: Record<Exclude<PilotBandFilter, "all">, SegmentVisual> = {
   "needs-you": {
     Icon: BAND_GLYPH["needs-you"],
+    tone: "text-state-waiting",
+    toneFaded: "text-state-waiting/40",
+  },
+  // The working mark in the waiting hue, and static — the same pairing the row
+  // draws, because a silent run is a working run that may need a hand. No new
+  // glyph: the spinner means working everywhere in this app and does not stop
+  // meaning it here.
+  quiet: {
+    Icon: BAND_GLYPH.quiet,
     tone: "text-state-waiting",
     toneFaded: "text-state-waiting/40",
   },
@@ -45,10 +58,19 @@ const SEGMENT_TONE: Record<
     tone: "text-category-blue",
     toneFaded: "text-category-blue/40",
   },
-  // Parked never earns a hue: it is the user's own quiet, and a coloured
+  // Parked never earns a hue: it is the user's own silence, and a coloured
   // segment would re-demand the attention parking just released.
   parked: {
     Icon: BAND_GLYPH.parked,
+    tone: NEUTRAL_TONE,
+    toneFaded: NEUTRAL_TONE_FADED,
+  },
+  // No glyph at all. "Other" holds a snooze and an exited shell, which share
+  // nothing but their absence from the four questions this bar asks — any mark
+  // would have to stand for one of them and misdescribe the rest. It exists so
+  // the counts add up to All, and it is drawn as quietly as that job allows.
+  other: {
+    Icon: null,
     tone: NEUTRAL_TONE,
     toneFaded: NEUTRAL_TONE_FADED,
   },
@@ -68,10 +90,80 @@ function segmentIsHued(
   bands: Readonly<FleetBandCounts>,
   segment: Exclude<PilotBandFilter, "all">
 ): boolean {
-  return segment === "working" || bandFilterHasDemand(bands, segment);
+  // `quiet` joins `working` in the exemption for the mirror-image reason: it
+  // is not a demand either — nobody is asking — but a run that has gone silent
+  // is a live fact about the fleet, which is exactly what this surface hues.
+  // The empty-bucket fade below still mutes it when it holds nothing.
+  return segment === "working" || segment === "quiet" || bandFilterHasDemand(bands, segment);
+}
+
+/**
+ * The glyph a mixed segment wears, which is the band it is currently ABOUT.
+ *
+ * "Attention" admits `blocked` as well as `needs-you`, and drawing it with the
+ * amber hollow circle while it held an errored run said the calmer of the two
+ * things it was holding. A segment whose glyph never moves can only ever
+ * describe one of its members.
+ *
+ * Only `needs-you` escalates, and only because it has somewhere to escalate
+ * TO: `blocked` has a mark of its own. `finished` holds `review` and `done`,
+ * which are the same app-standard check circle at two tones — that mark is not
+ * this surface's to reinterpret, so its distinction rides the hue
+ * (`bandFilterHasDemand` already owns that) and, for anyone the hue cannot
+ * reach, `segmentQualifier` below puts it into the segment's spoken name.
+ *
+ * Escalation is also why the first segment could not stay called "Waiting": a
+ * red prohibition sign beside that word contradicted itself, where beside
+ * "Attention" it reads correctly — two runs want you, and the worse of them is
+ * blocked. The accessible name says the same thing in words.
+ */
+function segmentVisual(
+  bands: Readonly<FleetBandCounts>,
+  segment: Exclude<PilotBandFilter, "all">
+): SegmentVisual {
+  if (segment === "needs-you" && bands.blocked > 0) {
+    return {
+      Icon: BAND_GLYPH.blocked,
+      tone: "text-status-danger",
+      toneFaded: "text-status-danger/40",
+    };
+  }
+  return SEGMENT_TONE[segment];
+}
+
+/**
+ * The part of a mixed segment its glyph encodes, in words.
+ *
+ * Colour and shape carry it visually; this is the same fact in the channel a
+ * screen reader can reach. Null for a segment holding one kind of thing, so a
+ * pure bucket is never padded with a clause that adds nothing.
+ */
+function segmentQualifier(
+  bands: Readonly<FleetBandCounts>,
+  segment: PilotBandFilter
+): string | null {
+  if (segment === "needs-you" && bands.blocked > 0) return `including ${bands.blocked} blocked`;
+  if (segment === "finished" && bands.review > 0) {
+    // "all", not "including", when the bucket is pure. Qualifying only the
+    // MIXED case left a segment holding three hand-backs and one holding three
+    // acknowledged completions with the same accessible name — the glyph tells
+    // them apart, and a glyph is not a channel a screen reader can reach.
+    return bands.done > 0 ? `including ${bands.review} ready for review` : `all ready for review`;
+  }
+  return null;
 }
 
 const SEGMENTS: readonly PilotBandFilter[] = ["all", ...PILOT_BAND_FILTERS];
+
+function agents(count: number): string {
+  return `${count} ${count === 1 ? "agent" : "agents"}`;
+}
+
+/** A segment's spoken name, carrying whatever its glyph choice encodes. */
+function segmentName(label: string, count: number, qualifier: string | null): string {
+  const base = `${label}, ${agents(count)}`;
+  return qualifier === null ? base : `${base}, ${qualifier}`;
+}
 
 export interface PilotFilterBarProps {
   value: PilotBandFilter;
@@ -185,10 +277,11 @@ export function PilotFilterBar({
       {SEGMENTS.map((segment, idx) => {
         const isActive = segment === value;
         const count = counts[segment];
-        const visual = segment === "all" ? null : SEGMENT_TONE[segment];
+        const visual = segment === "all" ? null : segmentVisual(bands, segment);
         const label = PILOT_BAND_FILTER_LABEL[segment];
         const Icon = visual?.Icon;
         const isSpinning = segment === "working" && count > 0;
+        const qualifier = segmentQualifier(bands, segment);
         const isHued = segment !== "all" && segmentIsHued(bands, segment);
         const tone = isHued ? visual?.tone : NEUTRAL_TONE;
         // An empty bucket keeps its glyph and its "0" but mutes the glyph, so
@@ -205,7 +298,11 @@ export function PilotFilterBar({
             // stop, so Tab from the search box lands on the active filter
             // rather than walking four controls to reach the list.
             tabIndex={isActive ? 0 : -1}
-            aria-label={`${label}, ${count} ${count === 1 ? "agent" : "agents"}`}
+            // What the glyph encodes is named, not left in the drawing. A
+            // segment that escalates to the danger mark and then announces a
+            // flat "Needs you, 2 agents" has put the worse half of what it
+            // holds into a channel a screen reader cannot reach.
+            aria-label={segmentName(label, count, qualifier)}
             ref={(el) => {
               refs.current.set(segment, el);
             }}
@@ -213,7 +310,12 @@ export function PilotFilterBar({
               onChange(segment);
             }}
             className={cn(
-              "inline-flex min-w-0 flex-1 items-center justify-center gap-1 px-2 py-1.5 transition-colors",
+              // `grow`, not `flex-1`: a zero basis divides the bar into equal
+              // shares, and seven equal shares of a 608px palette truncated
+              // "Needs you" and "Finished" into "Need…" and "Finis…". Sizing
+              // from content and sharing only the SLACK keeps every label whole
+              // and still fills the bar edge to edge.
+              "inline-flex min-w-0 grow items-center justify-center gap-1 px-1.5 py-1.5 transition-colors",
               "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-daintree-accent",
               idx > 0 && "border-l border-border-default",
               isActive

@@ -56,9 +56,17 @@ export const PALETTE_ROW_CLASS = cn(
  * same structural element read as two different things depending on which
  * palette you opened. Padding stays out of it where a palette's list inset
  * differs; the type treatment is what has to match.
+ *
+ * `text-text-secondary`, not a percentage of the body colour. At 10px this is
+ * small text under WCAG's ordinary 4.5:1 rule, and `text-daintree-text/40`
+ * measured about 3.3:1 on the palette surface in the dark themes — below the
+ * floor for a label that names which project every row beneath it belongs to.
+ * The token is the theme's own answer to "muted but readable" (6.57:1 in
+ * Daintree) and it is defined in all fifteen; the treatment is unchanged
+ * otherwise, because the size and the tracking were never the problem.
  */
 export const PALETTE_SECTION_LABEL_CLASS =
-  "text-[10px] font-medium tracking-wider uppercase text-daintree-text/40 select-none";
+  "text-[10px] font-medium tracking-wider uppercase text-text-secondary select-none";
 
 /**
  * The keyboard-focus ring every palette control wears.

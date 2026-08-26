@@ -5,10 +5,27 @@ import { HollowCircle, SpinnerCircle } from "@/components/icons";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { STATE_COLORS } from "./terminalStateConfig";
 
+/**
+ * "Attention", not "Waiting", for the bucket that filters on a waiting agent.
+ *
+ * `agentState === "waiting"` covers an agent stopped on an error as well as one
+ * asking a question, so this bucket has always been wider than the word — and
+ * Pilot's matching segment, which can tell the two apart, ended up drawing an
+ * errored run's glyph beside it. "Attention" is what both members want — a
+ * look — without claiming anything about why, which is the only thing true of
+ * an errored run and a polite question at once. Renamed on both surfaces at
+ * once rather than on one: `PILOT_BAND_FILTER_LABEL` carries the same string,
+ * and one bucket with two names across two surfaces is a vocabulary to learn
+ * twice.
+ *
+ * The worktree filter popover's session checkbox keeps "Waiting", because there
+ * it sits beside "Completed" and "Exited" as one state among states rather than
+ * as a bucket over them.
+ */
 const FILTER_OPTIONS: { value: QuickStateFilter; label: string }[] = [
   { value: "all", label: "All" },
   { value: "working", label: "Working" },
-  { value: "waiting", label: "Waiting" },
+  { value: "waiting", label: "Attention" },
   { value: "finished", label: "Finished" },
 ];
 

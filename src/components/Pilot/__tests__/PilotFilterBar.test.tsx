@@ -7,7 +7,16 @@ import type { PilotBandFilter, PilotBandFilterCounts } from "../pilotRows";
 import { emptyBandCounts, type FleetBandCounts } from "@/lib/fleetAttention";
 
 function counts(overrides: Partial<PilotBandFilterCounts> = {}): PilotBandFilterCounts {
-  return { all: 0, "needs-you": 0, working: 0, finished: 0, parked: 0, ...overrides };
+  return {
+    all: 0,
+    "needs-you": 0,
+    quiet: 0,
+    working: 0,
+    finished: 0,
+    parked: 0,
+    other: 0,
+    ...overrides,
+  };
 }
 
 function bands(overrides: Partial<FleetBandCounts> = {}): FleetBandCounts {
@@ -66,7 +75,7 @@ describe("PilotFilterBar", () => {
     renderBar();
 
     expect(screen.getByRole("radiogroup")).toBeTruthy();
-    expect(screen.getAllByRole("radio")).toHaveLength(5);
+    expect(screen.getAllByRole("radio")).toHaveLength(7);
   });
 
   it("reports exactly one checked segment", () => {
@@ -91,21 +100,28 @@ describe("PilotFilterBar", () => {
   });
 
   it("carries the count in each segment's name, so it is never colour-and-digit alone", () => {
-    renderBar("all", counts({ all: 7, "needs-you": 2, working: 4, finished: 1, parked: 3 }));
+    renderBar(
+      "all",
+      counts({ all: 12, "needs-you": 2, quiet: 1, working: 4, finished: 1, parked: 3, other: 1 })
+    );
 
+    // The narrowing segments partition the fleet, so their counts sum to All —
+    // a bar that leaves runs unaccounted for asks a question it can't answer.
     expect(segmentNames()).toEqual([
-      "All, 7 agents",
-      "Waiting, 2 agents",
+      "All, 12 agents",
+      "Attention, 2 agents",
+      "Quiet, 1 agent",
       "Working, 4 agents",
       "Finished, 1 agent",
       "Parked, 3 agents",
+      "Other, 1 agent",
     ]);
   });
 
   it("selects a segment on click", () => {
     const { onChange } = renderBar();
 
-    fireEvent.click(screen.getByRole("radio", { name: /Waiting/ }));
+    fireEvent.click(screen.getByRole("radio", { name: /Attention/ }));
 
     expect(onChange).toHaveBeenCalledWith("needs-you");
   });
@@ -122,6 +138,69 @@ describe("PilotFilterBar", () => {
     expect(onChange).not.toHaveBeenCalledWith("all");
   });
 
+  describe("mixed segments", () => {
+    // Two segments hold two bands each, and a glyph that never moves makes a
+    // claim about every run it counts. They resolve in opposite directions:
+    // the demands escalate to the worst member, the completions fall back to
+    // the quiet one when nothing is outstanding.
+    const glyphOfSegment = (name: RegExp) =>
+      screen.getByRole("radio", { name }).querySelector("svg")?.getAttribute("class") ?? "";
+
+    it("escalates Needs you to the blocked mark, and names the blocked runs", () => {
+      renderBar("all", counts({ all: 2, "needs-you": 2 }), bands({ blocked: 1, "needs-you": 1 }));
+
+      expect(glyphOfSegment(/Attention/)).toContain("text-status-danger");
+      expect(screen.getByRole("radio", { name: /Attention/ }).getAttribute("aria-label")).toBe(
+        "Attention, 2 agents, including 1 blocked"
+      );
+    });
+
+    it("leaves Needs you on the waiting mark when nothing has errored", () => {
+      renderBar("all", counts({ all: 2, "needs-you": 2 }), bands({ "needs-you": 2 }));
+
+      expect(glyphOfSegment(/Attention/)).toContain("text-state-waiting");
+      expect(screen.getByRole("radio", { name: /Attention/ }).getAttribute("aria-label")).toBe(
+        "Attention, 2 agents"
+      );
+    });
+
+    it("drops Finished's hue once nothing is outstanding", () => {
+      // Review and done are the same app-standard check circle, so the hue is
+      // what separates them here — and the accessible name below is what
+      // carries the same fact to a reader the hue cannot reach.
+      renderBar("all", counts({ all: 3, finished: 3 }), bands({ review: 3 }));
+      const withReview = glyphOfSegment(/Finished/);
+
+      cleanup();
+      renderBar("all", counts({ all: 3, finished: 3 }), bands({ done: 3 }));
+      const acknowledged = glyphOfSegment(/Finished/);
+
+      expect(withReview).toContain("text-category-blue");
+      expect(acknowledged).not.toContain("text-category-blue");
+    });
+
+    it("names the outstanding work whether the Finished bucket is mixed or pure", () => {
+      // The glyph tells a pure review bucket from a pure acknowledged one; a
+      // screen reader cannot see a glyph, so the two must not share a name.
+      renderBar("all", counts({ all: 3, finished: 3 }), bands({ review: 1, done: 2 }));
+      expect(screen.getByRole("radio", { name: /Finished/ }).getAttribute("aria-label")).toBe(
+        "Finished, 3 agents, including 1 ready for review"
+      );
+
+      cleanup();
+      renderBar("all", counts({ all: 3, finished: 3 }), bands({ review: 3 }));
+      const pureReview = screen.getByRole("radio", { name: /Finished/ }).getAttribute("aria-label");
+
+      cleanup();
+      renderBar("all", counts({ all: 3, finished: 3 }), bands({ done: 3 }));
+      const pureDone = screen.getByRole("radio", { name: /Finished/ }).getAttribute("aria-label");
+
+      expect(pureReview).toBe("Finished, 3 agents, all ready for review");
+      expect(pureDone).toBe("Finished, 3 agents");
+      expect(pureReview).not.toBe(pureDone);
+    });
+  });
+
   describe("keyboard", () => {
     /** Arrows are bound on the group, so they are dispatched there. */
     function press(key: string): void {
@@ -136,16 +215,16 @@ describe("PilotFilterBar", () => {
 
       press("ArrowRight");
       expect(liveState()).toEqual({
-        checked: "Working",
-        tabbable: "Working",
-        focused: "Working",
+        checked: "Quiet",
+        tabbable: "Quiet",
+        focused: "Quiet",
       });
 
       press("ArrowLeft");
       expect(liveState()).toEqual({
-        checked: "Waiting",
-        tabbable: "Waiting",
-        focused: "Waiting",
+        checked: "Attention",
+        tabbable: "Attention",
+        focused: "Attention",
       });
     });
 
@@ -154,11 +233,11 @@ describe("PilotFilterBar", () => {
 
       press("ArrowLeft");
 
-      expect(liveState().checked).toBe("Parked");
+      expect(liveState().checked).toBe("Other");
     });
 
     it("wraps forwards off the last segment", () => {
-      render(<StatefulBar initial="parked" />);
+      render(<StatefulBar initial="other" />);
 
       press("ArrowRight");
 
@@ -172,7 +251,7 @@ describe("PilotFilterBar", () => {
       expect(liveState().checked).toBe("All");
 
       press("End");
-      expect(liveState().checked).toBe("Parked");
+      expect(liveState().checked).toBe("Other");
     });
 
     it("keeps exactly one tab stop through every move", () => {
@@ -221,8 +300,8 @@ describe("PilotFilterBar", () => {
       // fleet moved, and take away the control that proves the bucket is empty.
       const { onChange } = renderBar("all", counts({ all: 2, working: 2 }));
 
-      const empty = screen.getByRole("radio", { name: /Waiting/ });
-      expect(empty.getAttribute("aria-label")).toBe("Waiting, 0 agents");
+      const empty = screen.getByRole("radio", { name: /Attention/ });
+      expect(empty.getAttribute("aria-label")).toBe("Attention, 0 agents");
 
       fireEvent.click(empty);
       expect(onChange).toHaveBeenCalledWith("needs-you");
@@ -233,12 +312,12 @@ describe("PilotFilterBar", () => {
       // proved nothing — their base tones already differ, so deleting the fade
       // rule entirely would still have passed.
       renderBar("all", counts({ all: 0 }), bands());
-      const empty = glyphOf(/Waiting/)?.getAttribute("class") ?? "";
+      const empty = glyphOf(/Attention/)?.getAttribute("class") ?? "";
 
       cleanup();
 
       renderBar("all", counts({ all: 1, "needs-you": 1 }), bands({ "needs-you": 1 }));
-      const populated = glyphOf(/Waiting/)?.getAttribute("class") ?? "";
+      const populated = glyphOf(/Attention/)?.getAttribute("class") ?? "";
 
       expect(empty).not.toBe("");
       expect(empty).not.toBe(populated);

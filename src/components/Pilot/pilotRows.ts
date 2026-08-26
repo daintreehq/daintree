@@ -3,12 +3,14 @@ import type { FleetBand, FleetBandCounts } from "@/lib/fleetAttention";
 import {
   bandForRun,
   bandLabel,
+  bandTimestamp,
   compareWithinBand,
   emptyBandCounts,
   FLEET_BANDS,
+  isAttentionBand,
   isDemandBand,
 } from "@/lib/fleetAttention";
-import { formatWaitAge } from "@/lib/projectRowStatus";
+import { agoPhrase, formatWaitAge } from "@/lib/projectRowStatus";
 import { isFilterMatch } from "@/lib/projectSwitcherSearch";
 import { composeTitledPanel } from "@/utils/terminalTitleDisplay";
 import { deriveTerminalChrome, type TerminalChromeDescriptor } from "@/utils/terminalChrome";
@@ -40,8 +42,36 @@ export interface PilotRow {
    * to find a run is useful whether or not the label is on screen.
    */
   worktreeLabel: string | null;
-  /** Compact age of the current state, or null when the run never recorded one. */
+  /**
+   * The row's ONE clock, compact, for the right-hand column.
+   *
+   * Which duration it measures depends on the band, because the useful
+   * question does: a parked row is dated from the park, a quiet row from the
+   * silence, everything else from its last transition. Null when the run
+   * recorded nothing to measure.
+   *
+   * A quiet row used to draw two clocks — a mid-row `quiet 12m` chip and a
+   * right-hand `47m` — with only the chip labelled, so the reader had to work
+   * out which of the two the surface wanted them to act on. One column, one
+   * number, and {@link ageLabel} names it where naming is what disambiguates.
+   */
   age: string | null;
+  /**
+   * The word the age column wears in front of the number, or null when the
+   * number needs no qualifier. Only `quiet` takes one: it is the one band
+   * whose clock measures something other than "how long has it been like
+   * this", and an unlabelled 12m beside a working glyph is the ambiguity the
+   * chip was invented to solve in the first place.
+   */
+  ageLabel: string | null;
+  /**
+   * The age as a sentence, for the row's accessible name.
+   *
+   * Spelled out per band rather than left as a bare "2m ago": "waiting for 38
+   * minutes" and "finished 38 minutes ago" are different facts, and a screen
+   * reader given only the second half has to infer which one it just heard.
+   */
+  agePhrase: string | null;
   /**
    * The park's note, drawn on the row: a parked run's one line of intent is
    * the whole reason to look at it. Null for everything unparked, and also on
@@ -50,11 +80,13 @@ export interface PilotRow {
    */
   parkNote: string | null;
   /**
-   * How long a working run has been silent, once main judged the silence
-   * worth reporting. Null for a healthy busy agent — so the row only ever
-   * says "quiet 12m" when there is genuinely something to look at.
+   * How long the run has been WORKING, on a row whose clock is measuring
+   * something else. Only a quiet row has one, and it exists purely for the
+   * accessible name: the column can hold one number, and the silence is the
+   * one worth drawing, but "quiet for 12 minutes, working for 47" is the whole
+   * fact and a screen reader has room for it.
    */
-  quietFor: string | null;
+  secondaryPhrase: string | null;
 }
 
 export type PilotWorkspaceKind = "project" | "scratch" | "unknown";
@@ -91,6 +123,17 @@ export interface PilotGroupCore {
   rows: PilotRow[];
   /** Runs in this group that constitute a demand on the user. */
   demandCount: number;
+  /**
+   * Per-band counts for the bands worth pointing at, worst first and empty
+   * bands omitted.
+   *
+   * The header used to draw the WORST band's glyph beside the TOTAL demand
+   * count, which reads as a claim about every run it counts: a project holding
+   * one blocked run and one waiting one rendered as a red prohibition sign
+   * beside "2", and the only honest reading of that is "2 blocked". Counting
+   * each band separately is the only version of this chip that cannot lie.
+   */
+  attention: readonly { band: FleetBand; count: number }[];
   /**
    * Worst band among the rows below, recomputed rather than inherited whenever
    * the group is narrowed. A derived summary of the group's contents only —
@@ -237,12 +280,15 @@ export function composePilotRunTitle(run: FleetRunRow, chrome?: TerminalChromeDe
  * guaranteed to be the worst one present. Inheriting either field would put a
  * group's derived facts at odds with the rows directly underneath it.
  */
-function narrowGroup<T extends PilotGroupCore>(group: T, rows: PilotRow[]): T {
+function summarizeRows(
+  rows: readonly PilotRow[]
+): Pick<PilotGroupCore, "demandCount" | "topBand" | "attention"> {
   let topBand: FleetBand = "idle";
   // Annotated: `FLEET_BANDS` is a const tuple, so its `length` narrows to a
   // literal and the accumulator would refuse every rank assigned below it.
   let best: number = FLEET_BANDS.length;
   let demandCount = 0;
+  const perBand = new Map<FleetBand, number>();
   for (const row of rows) {
     const rowRank = rank(row.band);
     if (rowRank < best) {
@@ -250,11 +296,22 @@ function narrowGroup<T extends PilotGroupCore>(group: T, rows: PilotRow[]): T {
       topBand = row.band;
     }
     if (isDemandBand(row.band)) demandCount++;
+    if (isAttentionBand(row.band)) perBand.set(row.band, (perBand.get(row.band) ?? 0) + 1);
   }
+  // Worst first, which is the order the rows themselves are in, so the chip
+  // reads left-to-right as the same ranking the list below it uses.
+  const attention = FLEET_BANDS.filter((band) => perBand.has(band)).map((band) => ({
+    band,
+    count: perBand.get(band) ?? 0,
+  }));
+  return { demandCount, topBand, attention };
+}
+
+function narrowGroup<T extends PilotGroupCore>(group: T, rows: PilotRow[]): T {
   // `Object.assign` rather than a spread: spreading a generic widens it to an
   // intersection the return type will not accept, and the alternative is a cast
   // that would stop the compiler from checking this at all.
-  return Object.assign({}, group, { rows, demandCount, topBand });
+  return Object.assign({}, group, { rows }, summarizeRows(rows));
 }
 
 /**
@@ -296,6 +353,68 @@ function openedAt(value: number | undefined): number {
  * first, then oldest `since`. A project's demands still surface at the top of
  * its own rows — they just no longer move the project itself.
  */
+/**
+ * The row's clock, in every form the row needs it: the number, the word in
+ * front of it, and the sentence a screen reader gets.
+ *
+ * One function because the three must agree. They were three expressions in
+ * three places, which is how the drawn row came to say `47m` while the
+ * accessible name said "quiet for 12m" about the same run.
+ *
+ * A parked row is dated from the PARK, not from `since`. Dating it from the
+ * state read "Parked · 3h" the moment a three-hour-old waiting run was parked,
+ * which answers "how long has it waited" when the row is now about "how long
+ * ago did I shelve this". A quiet row is dated from the silence for the same
+ * reason: the silence is the thing that might need a hand.
+ */
+function ageOf(
+  run: FleetRunRow,
+  band: FleetBand,
+  nowMs: number
+): Pick<PilotRow, "age" | "ageLabel" | "agePhrase" | "secondaryPhrase"> {
+  const at = bandTimestamp(run, band);
+  if (at === undefined) {
+    return { age: null, ageLabel: null, agePhrase: null, secondaryPhrase: null };
+  }
+  const age = formatWaitAge(at, nowMs);
+
+  // The one band whose column needs a word: its clock is measuring something
+  // other than "how long has it been like this", and an unlabelled 12m beside
+  // a run that is nominally working is exactly the ambiguity this exists to
+  // remove. The working duration goes to the accessible name, which has room.
+  if (band === "quiet") {
+    return {
+      age,
+      ageLabel: "quiet",
+      agePhrase: `quiet for ${age}`,
+      secondaryPhrase:
+        run.since === undefined ? null : `working for ${formatWaitAge(run.since, nowMs)}`,
+    };
+  }
+
+  return { age, ageLabel: null, agePhrase: AGE_VERB[band](age), secondaryPhrase: null };
+}
+
+/**
+ * How each band says its own age.
+ *
+ * The verb is what makes the duration mean something: a demand's age is how
+ * long it has been left, a completion's is how long ago it landed, and a
+ * running agent's is how long it has been at it. `agoPhrase` keeps "just now"
+ * from becoming "just now ago".
+ */
+const AGE_VERB: Record<FleetBand, (age: string) => string> = {
+  blocked: (age) => `blocked for ${age}`,
+  "needs-you": (age) => `waiting for ${age}`,
+  quiet: (age) => `quiet for ${age}`,
+  review: (age) => `finished ${agoPhrase(age)}`,
+  running: (age) => `working for ${age}`,
+  done: (age) => `finished ${agoPhrase(age)}`,
+  parked: (age) => `parked ${agoPhrase(age)}`,
+  snoozed: (age) => `snoozed ${agoPhrase(age)}`,
+  idle: (age) => agoPhrase(age),
+};
+
 export function buildPilotGroups(
   runs: readonly FleetRunRow[],
   ctx: PilotRowContext
@@ -319,14 +438,11 @@ export function buildPilotGroups(
       const bandA = bandForRun(a, acknowledgedAt);
       const byBand = rank(bandA) - rank(bandForRun(b, acknowledgedAt));
       if (byBand !== 0) return byBand;
-      // Parked rows order on the park, not the underlying state: `since` is
-      // whenever the agent last transitioned, which predates the decision the
-      // band is actually about. Oldest park first, same anti-starvation rule.
-      if (bandA === "parked" && a.park !== undefined && b.park !== undefined) {
-        if (a.park.parkedAt !== b.park.parkedAt) return a.park.parkedAt - b.park.parkedAt;
-        return a.runId < b.runId ? -1 : a.runId > b.runId ? 1 : 0;
-      }
-      return compareWithinBand(a, b);
+      // Same band, so one clock governs the pair — and which clock that is
+      // belongs to the band, not to this call site. `bandTimestamp` is what the
+      // row's own age reads too, so a list ordered oldest-first can't put a
+      // smaller number above a larger one.
+      return compareWithinBand(a, b, bandA);
     });
 
     const rows: PilotRow[] = sorted.map((run) => {
@@ -342,21 +458,8 @@ export function buildPilotGroups(
         presetColor: run.agentPresetColor,
         statusLabel: bandLabel(band, run),
         worktreeLabel: disambiguatingLabel(directoryLabel(run.cwd), name),
-        // A parked row's age is the age of the PARK. Dating it from `since`
-        // read "Parked · 3h" the moment a three-hour-old waiting run was
-        // parked, which answers "how long has it waited" when the row is now
-        // about "how long ago did I shelve this".
-        age:
-          band === "parked" && run.park !== undefined
-            ? formatWaitAge(run.park.parkedAt, ctx.nowMs)
-            : run.since !== undefined
-              ? formatWaitAge(run.since, ctx.nowMs)
-              : null,
+        ...ageOf(run, band, ctx.nowMs),
         parkNote: run.park?.note ?? null,
-        quietFor:
-          band === "running" && run.quietSince !== undefined
-            ? formatWaitAge(run.quietSince, ctx.nowMs)
-            : null,
       };
     });
 
@@ -372,8 +475,7 @@ export function buildPilotGroups(
       color: meta?.color ?? null,
       isCurrent: workspaceId === ctx.currentWorkspaceId,
       rows,
-      demandCount: rows.filter((r) => isDemandBand(r.band)).length,
-      topBand: rows[0]?.band ?? "idle",
+      ...summarizeRows(rows),
       lastOpened: openedAt(meta?.lastOpened),
     });
   }
@@ -633,6 +735,7 @@ export function buildPilotWorktreeGroups(
           rows,
           demandCount: 0,
           topBand: "idle",
+          attention: [],
         },
         rows
       )
@@ -725,16 +828,19 @@ export function filterPilotGroups<T extends PilotGroupCore>(
  * The state filter's vocabulary, declared beside the bands so a segment and the
  * count under it can never drift apart.
  */
-export type PilotBandFilter = "all" | "needs-you" | "working" | "finished" | "parked";
+export type PilotBandFilter =
+  "all" | "needs-you" | "quiet" | "working" | "finished" | "parked" | "other";
 
 /**
  * Which bands each segment admits.
  *
- * `idle` is deliberately in no bucket but All: an exited terminal isn't
- * working, isn't finished, and isn't asking for anything, so putting it
- * anywhere else would make that segment lie about what it holds.
+ * The narrowing segments PARTITION the fleet: every band is in exactly one, so
+ * their counts sum to All. That is not decoration — a bar reading "All 12"
+ * over segments totalling ten invites the reader to work out which two runs
+ * the surface is not telling them about, and there is no answer they can reach
+ * from the bar.
  *
- * "Needs you" is `blocked` + `needs-you` and NOT `review`, even though
+ * "Attention" is `blocked` + `needs-you` and NOT `review`, even though
  * `isDemandBand` counts review as a demand. Review is a hand-back, not a
  * block — folding it in would make the footer's demand count promise more
  * agents than applying the filter actually reveals.
@@ -746,17 +852,32 @@ export type PilotBandFilter = "all" | "needs-you" | "working" | "finished" | "pa
  */
 const BAND_FILTER_SETS: Record<Exclude<PilotBandFilter, "all">, ReadonlySet<FleetBand>> = {
   "needs-you": new Set<FleetBand>(["blocked", "needs-you"]),
+  // Its own segment rather than a corner of Working, and the segments stay
+  // disjoint so the four counts still add up under All. "Which of my agents
+  // has gone silent" is the second question this surface answers, and before
+  // this it had no control, no count and no summary — only an annotation on
+  // whichever row you happened to scroll past.
+  quiet: new Set<FleetBand>(["quiet"]),
   working: new Set<FleetBand>(["running"]),
   finished: new Set<FleetBand>(["review", "done"]),
   parked: new Set<FleetBand>(["parked"]),
+  // The remainder, and the only reason it exists: `snoozed` and `idle` are the
+  // two bands that belong to none of the questions above. An exited shell is
+  // not working, not finished and not asking; a snooze is the user's own
+  // silence and must not read as a demand. Named for what it is rather than
+  // given a state's name it would then misapply to the other member, and given
+  // no glyph and no hue, because nothing in it is news.
+  other: new Set<FleetBand>(["snoozed", "idle"]),
 };
 
 /** The narrowing segments, in the order the bar renders them after All. */
 export const PILOT_BAND_FILTERS: readonly Exclude<PilotBandFilter, "all">[] = [
   "needs-you",
+  "quiet",
   "working",
   "finished",
   "parked",
+  "other",
 ];
 
 /**
@@ -764,16 +885,33 @@ export const PILOT_BAND_FILTERS: readonly Exclude<PilotBandFilter, "all">[] = [
  * say it: the segment itself, and the empty state that has to name which filter
  * produced no rows.
  *
- * "Waiting", not "Needs you", so the four segments read the same here as they
- * do in the sidebar's `QuickStateFilterBar`. The key stays `needs-you` — it
- * names the band set, which has not changed.
+ * "Attention", not "Waiting". This bucket holds `blocked` as well as `needs-you`,
+ * and calling the pair by the name of one of its members made the segment
+ * contradict itself the moment it drew the blocked glyph: a red prohibition
+ * sign beside the word "Waiting" is two different claims about the same two
+ * runs. The sidebar's `QuickStateFilterBar` bucket is the same union — it
+ * filters on `agentState === "waiting"`, which is where an errored agent lives
+ * too — so it carries the same word rather than being left to drift. The ROW
+ * still says "Blocked" or "Waiting"; only the bucket that holds both takes a
+ * name wide enough to cover them.
+ *
+ * One word, and a calm one. "Stuck" was tried first and reads as a fault: an
+ * agent holding for your approval is not broken, and a bucket that says it is
+ * teaches the reader to flinch at the ordinary case. "Attention" says what the
+ * bucket wants — a look — without claiming anything about why, which is the
+ * only thing true of both an errored run and a polite question.
  */
 export const PILOT_BAND_FILTER_LABEL: Record<PilotBandFilter, string> = {
   all: "All",
-  "needs-you": "Waiting",
+  "needs-you": "Attention",
+  // Observed, not inferred. The fleet knows the agent has said nothing for
+  // twelve minutes; it does not know the agent is stuck, and a segment called
+  // "Stalled" would be the surface guessing on the user's behalf.
+  quiet: "Quiet",
   working: "Working",
   finished: "Finished",
   parked: "Parked",
+  other: "Other",
 };
 
 export type PilotBandFilterCounts = Record<PilotBandFilter, number>;
@@ -791,9 +929,11 @@ export function countPilotBands(groups: readonly PilotGroupCore[]): PilotBandFil
   const counts: PilotBandFilterCounts = {
     all: 0,
     "needs-you": 0,
+    quiet: 0,
     working: 0,
     finished: 0,
     parked: 0,
+    other: 0,
   };
   for (const group of groups) {
     for (const row of group.rows) {
@@ -813,7 +953,7 @@ export function countPilotBands(groups: readonly PilotGroupCore[]): PilotBandFil
  * alongside `done`, which is not. Colouring the segment on membership alone
  * would paint a project whose every completion has been acknowledged in the
  * hue reserved for work still waiting to be looked at — putting back one of the
- * false signals this surface exists to remove. "Needs you" holds only demands,
+ * false signals this surface exists to remove. "Attention" holds only demands,
  * so it is hued whenever it holds anything at all, which this returns for free.
  */
 export function bandFilterHasDemand(

@@ -912,8 +912,8 @@ describe("parked rows", () => {
   });
 });
 
-describe("stalled runs", () => {
-  it("carries the quiet duration only for a working run main flagged", () => {
+describe("quiet runs", () => {
+  it("clocks a flagged run from its silence and a healthy one from its state", () => {
     const [group] = buildPilotGroups(
       [
         run({
@@ -928,13 +928,25 @@ describe("stalled runs", () => {
     );
 
     const byId = new Map(group!.rows.map((r) => [r.run.runId, r]));
-    expect(byId.get("stalled")?.quietFor).toBe("12m");
-    expect(byId.get("busy")?.quietFor).toBeNull();
+    // One clock per row: the flagged run's column measures the silence and
+    // names it, the healthy one's measures the work and does not.
+    expect(byId.get("stalled")?.band).toBe("quiet");
+    expect(byId.get("stalled")?.age).toBe("12m");
+    expect(byId.get("stalled")?.ageLabel).toBe("quiet");
+    expect(byId.get("stalled")?.agePhrase).toBe("quiet for 12m");
+    // The working duration survives into the accessible name, where there is
+    // room for the second fact the column had to drop.
+    expect(byId.get("stalled")?.secondaryPhrase).toBe("working for 1h");
+
+    expect(byId.get("busy")?.band).toBe("running");
+    expect(byId.get("busy")?.ageLabel).toBeNull();
+    expect(byId.get("busy")?.agePhrase).toBe("working for 1h");
+    expect(byId.get("busy")?.secondaryPhrase).toBeNull();
   });
 
   it("drops the cue when the run is no longer in the running band", () => {
     // A stale quietSince arriving alongside a state change (one poll of skew)
-    // must not paint a waiting or parked row as a stalled worker.
+    // must not paint a waiting or parked row as a silent worker.
     const [group] = buildPilotGroups(
       [
         run({
@@ -947,7 +959,8 @@ describe("stalled runs", () => {
       ctx()
     );
 
-    expect(group!.rows[0]!.quietFor).toBeNull();
+    expect(group!.rows[0]!.band).toBe("parked");
+    expect(group!.rows[0]!.ageLabel).toBeNull();
   });
 });
 
@@ -982,13 +995,16 @@ describe("bandFilterHasDemand", () => {
 });
 
 describe("state vocabulary", () => {
-  it("calls a waiting run the same thing on the row as on the segment that filters to it", () => {
-    // The segment and the row's status word are two surfaces naming one state.
-    // They drifted once — "Needs you" here against the sidebar's "Waiting" —
-    // and one state with two names is a vocabulary the user has to learn twice.
+  it("names the bucket wider than the states inside it, never after one of them", () => {
+    // The segment holds `blocked` AND `needs-you`, so it cannot borrow either
+    // one's word: "Waiting 2" over an errored run and a waiting one is a claim
+    // about both that is only true of one. The ROW keeps the exact state.
     const waiting = run({ agentState: "waiting", waitingReason: "question" });
+    const blocked = run({ agentState: "waiting", waitingReason: "error" });
 
-    expect(bandLabel(bandForRun(waiting), waiting)).toBe(PILOT_BAND_FILTER_LABEL["needs-you"]);
+    expect(bandLabel(bandForRun(waiting), waiting)).toBe("Waiting");
+    expect(bandLabel(bandForRun(blocked), blocked)).toBe("Blocked");
+    expect(PILOT_BAND_FILTER_LABEL["needs-you"]).toBe("Attention");
   });
 });
 

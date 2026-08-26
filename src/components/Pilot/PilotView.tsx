@@ -14,7 +14,7 @@ import { actionService } from "@/services/ActionService";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 import { agoPhrase, formatWaitAge } from "@/lib/projectRowStatus";
-import { isDemandBand } from "@/lib/fleetAttention";
+import { bandTimestamp, FLEET_BANDS, isAttentionBand, type FleetBand } from "@/lib/fleetAttention";
 import {
   buildPilotGroups,
   buildPilotWorktreeGroups,
@@ -146,9 +146,55 @@ function agentCount(count: number): string {
   return count === 1 ? "1 agent" : `${count} agents`;
 }
 
+/**
+ * The group's attention chips, in words, for the heading's accessible name.
+ *
+ * Built from the same per-band array the chips are drawn from, so the two
+ * cannot say different things. It used to collapse to "2 agents need you",
+ * which folded a blocked run in with a waiting one, dropped `quiet` entirely,
+ * and described a review hand-back as somebody needing you.
+ *
+ * Empty string rather than null, because it is concatenated into a label.
+ */
+function attentionPhrase(attention: PilotGroupCore["attention"]): string {
+  if (attention.length === 0) return "";
+  return `, ${attention.map(({ band, count }) => `${count} ${ATTENTION_WORD[band]}`).join(", ")}`;
+}
+
+/**
+ * One word per band, in the band's own vocabulary.
+ *
+ * Only the four `isAttentionBand` admits can reach a chip; the rest are here
+ * so the map is total and a new band cannot silently fall through to nothing.
+ */
+const ATTENTION_WORD: Record<FleetBand, string> = {
+  blocked: "blocked",
+  "needs-you": "waiting",
+  quiet: "quiet",
+  review: "ready for review",
+  running: "working",
+  done: "finished",
+  parked: "parked",
+  snoozed: "snoozed",
+  idle: "idle",
+};
+
 /** Work handed back, plural-aware. The footer's sentence when nothing is asking. */
 function reviewPhrase(count: number): string {
   return count === 1 ? "Ready for review" : `${count} agents ready for review`;
+}
+
+/**
+ * Silence, plural-aware — the footer's sentence when nothing is asking but
+ * something has stopped talking.
+ *
+ * "Gone quiet", not "stalled": the fleet observes the silence and infers
+ * nothing about the cause. An agent mid-way through a long compile and one
+ * wedged on a dead socket look identical from here, and only one of them is a
+ * problem.
+ */
+function quietPhrase(count: number): string {
+  return count === 1 ? "Agent has gone quiet" : `${count} agents have gone quiet`;
 }
 
 /** The resting tone. Selected is the shared row class's to own, off the attribute. */
@@ -215,30 +261,41 @@ function WorkspaceTile({ group }: { group: PilotProjectGroup }) {
  * The header's whole job now is to file the rows underneath it.
  */
 /**
- * The group's demand, at a glance: glyph and hue come from the worst row
- * beneath (which is always a demand band whenever the count is non-zero, since
- * demands outrank everything else), so five headers answer "which one is on
- * fire" without reading a single row. Hidden with the rest of the header — the
- * group's aria-label carries the same fact in words.
+ * What is worth pointing at in this group, counted per band, worst first — so
+ * five headers answer "which one is on fire" without reading a single row.
  *
- * Shared by both axes so a worktree's chip cannot come to mean something
- * different from a project's.
+ * One chip per band rather than one chip for the group. The old form drew the
+ * WORST band's glyph beside the TOTAL demand count, which for a project holding
+ * one blocked run and one waiting one rendered as a red prohibition sign beside
+ * "2" — and there is no reading of that which isn't "two blocked". A pair of
+ * chips costs about twenty pixels and says the true thing.
+ *
+ * Two is the realistic ceiling and three the absolute one (blocked, waiting,
+ * quiet, review is four bands but review only reaches a header that has no
+ * demand above it), so this never grows into a strip that outweighs the name
+ * beside it.
+ *
+ * Hidden from the accessibility tree — the group's `aria-label` carries the
+ * same counts in words. Shared by both axes so a worktree's chip cannot come to
+ * mean something different from a project's.
  */
 function GroupDemandChip({ group }: { group: PilotGroupCore }) {
-  if (group.demandCount === 0) return null;
-  const chipBand = isDemandBand(group.topBand) ? group.topBand : "needs-you";
-  const ChipGlyph = BAND_GLYPH[chipBand];
+  if (group.attention.length === 0) return null;
   return (
     <span
       aria-hidden="true"
       data-testid="pilot-group-demand"
-      className={cn(
-        "flex shrink-0 items-center gap-1 text-[10px] leading-none tabular-nums",
-        BAND_GLYPH_TONE[chipBand]
-      )}
+      className="flex shrink-0 items-center gap-2 text-[10px] leading-none tabular-nums"
     >
-      <ChipGlyph className="h-2.5 w-2.5" />
-      {group.demandCount}
+      {group.attention.map(({ band, count }) => {
+        const ChipGlyph = BAND_GLYPH[band];
+        return (
+          <span key={band} className={cn("flex items-center gap-1", BAND_GLYPH_TONE[band])}>
+            <ChipGlyph className="h-2.5 w-2.5" />
+            {count}
+          </span>
+        );
+      })}
     </span>
   );
 }
@@ -303,7 +360,7 @@ function GroupHeader({
           textual — membership is never an accent signal.
         */}
         {group.isCurrent && (
-          <span className="shrink-0 text-[10px] leading-none text-daintree-text/30">Current</span>
+          <span className="shrink-0 text-[10px] leading-none text-text-secondary">Current</span>
         )}
       </div>
 
@@ -398,8 +455,9 @@ function RunRow({
    *
    * The row's own spans are inline, so a computed name concatenates them with
    * no separators at all: "Fix auth2m". Naming the parts here is what turns the
-   * row back into a sentence, and it lets the age be announced as an age
-   * ("2m ago") instead of a bare token a screen reader reads as "two em".
+   * row back into a sentence, and the age arrives as a phrase its band chose
+   * ("waiting for 38m", "finished 6m ago") rather than a bare token a screen
+   * reader would read as "two em".
    *
    * The state is here and nowhere else on the row now. The worktree is neither:
    * it is a scratch project's UUID as often as it is a branch, and dropping it
@@ -411,8 +469,8 @@ function RunRow({
     agentLabel,
     row.statusLabel,
     row.parkNote,
-    row.quietFor !== null ? `quiet for ${row.quietFor}` : null,
-    row.age !== null ? agoPhrase(row.age) : null,
+    row.agePhrase,
+    row.secondaryPhrase,
   ]
     .filter((part): part is string => part !== null)
     .join(", ");
@@ -470,52 +528,92 @@ function RunRow({
       {row.parkNote !== null && (
         <span
           aria-hidden="true"
-          className="max-w-[45%] min-w-0 shrink truncate text-xs leading-tight text-daintree-text/45"
+          className="max-w-[45%] min-w-0 shrink truncate text-xs leading-tight text-text-secondary"
         >
           {row.parkNote}
         </span>
       )}
 
       {/*
-        The stall cue: a working glyph beside ten minutes of silence is the
-        one combination the age column cannot express — "Working · 47m" and
-        "working but wedged" render identically without it. Amber because it
-        is a live fact that may need a hand, worded because the hue alone
-        must never carry it (the accessible name says "quiet for 12m").
-      */}
-      {row.quietFor !== null && (
-        <span
-          aria-hidden="true"
-          className="shrink-0 text-[11px] leading-none text-state-waiting/80"
-        >
-          quiet {row.quietFor}
-        </span>
-      )}
+        The scan column, and the row's only clock.
 
-      {/*
-        The scan column, now a single fact wide.
-
-        `aria-hidden` — the row's own label above says this in order and with
-        separators, so announcing it here would read the age twice. Right-
-        aligned, tabular, and given a floor width so "just now" and "2h 15m"
-        start at the same x: without that the ages sit at eight different
-        offsets and "how long has this been stuck" goes back to being eight
-        separate reads instead of one scan.
+        `aria-hidden` — the row's own label above says this as a phrase, in
+        order and with separators, so announcing it here would read the age
+        twice. Right-aligned, tabular, and given a floor width so "just now"
+        and "2h 15m" start at the same x: without that the ages sit at eight
+        different offsets and "how long has this been stuck" goes back to being
+        eight separate reads instead of one scan.
 
         The status word and the worktree used to sit to its left. The glyph in
-        the chevron column already says the state, and the worktree was as often
+        the state column already says the state, and the worktree was as often
         a scratch project's UUID as a branch name — both were charging the
         truncating title for width to say nothing it needed.
+
+        A quiet row draws its qualifier HERE rather than as a separate chip
+        further left. It used to carry both — an amber "quiet 12m" mid-row and
+        a plain "47m" at the edge — which put two unlabelled-looking durations
+        on the one row whose whole question is "how long has this been silent".
+        One number, in the one column clocks live in, with the word that says
+        which clock it is. Amber for the same reason the glyph is: it is a live
+        fact that may need a hand, and the word is there because hue may never
+        carry it alone.
       */}
       {row.age !== null && (
         <span
           aria-hidden="true"
-          className="min-w-[3.5rem] shrink-0 text-right text-[11px] leading-none tabular-nums text-daintree-text/50"
+          data-testid="pilot-row-age"
+          className={cn(
+            "shrink-0 text-right text-[11px] leading-none tabular-nums",
+            row.ageLabel === null ? "min-w-[3.5rem] text-text-secondary" : "text-state-waiting"
+          )}
         >
-          {row.age}
+          {row.ageLabel === null ? row.age : `${row.ageLabel} ${row.age}`}
         </span>
       )}
     </div>
+  );
+}
+
+/**
+ * The footer's key hints, which are also its buttons.
+ *
+ * They were `<span>`s carrying a keycap, which made Park and Worktrees
+ * keyboard-only in practice: a user driving the palette with the mouse could
+ * open a run by clicking it and had no way at all to park one, and the drill
+ * gesture's only pointer form was an undiscoverable click on a heading that
+ * gives no sign of being a control. A `<button>` costs nothing visually — the
+ * keycap and the verb are unchanged — and it makes the hint the thing it was
+ * already describing.
+ *
+ * The keycap stays inside the button rather than beside it, so the accessible
+ * name is "⌥↵ Park" and voice control's "click Park" still matches on the
+ * visible word.
+ */
+function FooterHint({
+  keys,
+  label,
+  onClick,
+  testId,
+}: {
+  keys: string;
+  label: string;
+  onClick: () => void;
+  testId: string;
+}) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      data-testid={testId}
+      className={cn(
+        "flex shrink-0 items-center rounded-[var(--radius-sm)] px-1 py-0.5 transition-colors",
+        "hover:bg-overlay-subtle hover:text-daintree-text",
+        "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-daintree-accent"
+      )}
+    >
+      <kbd className={KBD_CLASS}>{keys}</kbd>
+      <span className="ml-1.5">{label}</span>
+    </button>
   );
 }
 
@@ -528,19 +626,23 @@ function RunRow({
  * keys moving a selection is a convention every list already teaches, so the
  * footer no longer spends a slot restating it.
  *
- * `onShowDemand` turns the demand sentence into the control it was already
+ * `onShowSummary` turns the summary sentence into the control it was already
  * implying. "2 agents need you" stated a fact the surface gave no way to act
- * on; as a button it isolates exactly the two agents it counted. Present only
- * when there is a demand to isolate, so the footer never grows a control that
- * would filter to nothing.
+ * on; as a button it isolates exactly the agents it counted. Present only when
+ * the sentence names a population one segment reproduces EXACTLY — the demand
+ * and the quiet — so pressing it can never reveal a different number to the
+ * one that was read. The review sentence stays inert for that reason: its
+ * segment, "Finished", also admits acknowledged completions.
  */
 function PilotFooter({
   actionLabel,
   parkLabel,
   drillLabel,
   summary,
-  demandCount,
-  onShowDemand,
+  onOpen,
+  onPark,
+  onDrill,
+  onShowSummary,
 }: {
   actionLabel: string | null;
   /** The park verb for the highlighted row, or null while no row is selected. */
@@ -552,36 +654,40 @@ function PilotFooter({
    */
   drillLabel: string | null;
   summary: string;
-  demandCount: number;
-  onShowDemand: () => void;
+  onOpen: () => void;
+  onPark: () => void;
+  onDrill: () => void;
+  /** Null when the sentence names nothing a single segment reproduces exactly. */
+  onShowSummary: (() => void) | null;
 }) {
   return (
     <div className="flex w-full items-center justify-between gap-3">
-      <div className="flex items-center gap-3">
+      <div className="-ml-1 flex items-center gap-2">
         {actionLabel !== null && (
-          <span>
-            <kbd className={KBD_CLASS}>↵</kbd>
-            <span className="ml-1.5">{actionLabel}</span>
-          </span>
+          <FooterHint keys="↵" label={actionLabel} onClick={onOpen} testId="pilot-open-hint" />
         )}
         {parkLabel !== null && (
-          <span data-testid="pilot-park-hint">
-            <kbd className={KBD_CLASS}>{isMac() ? "⌥↵" : "Alt+↵"}</kbd>
-            <span className="ml-1.5">{parkLabel}</span>
-          </span>
+          <FooterHint
+            keys={isMac() ? "⌥↵" : "Alt+↵"}
+            label={parkLabel}
+            onClick={onPark}
+            testId="pilot-park-hint"
+          />
         )}
         {drillLabel !== null && (
-          <span data-testid="pilot-drill-hint">
-            <kbd className={KBD_CLASS}>{isMac() ? "⌘↵" : "Ctrl+↵"}</kbd>
-            <span className="ml-1.5">{drillLabel}</span>
-          </span>
+          <FooterHint
+            keys={isMac() ? "⌘↵" : "Ctrl+↵"}
+            label={drillLabel}
+            onClick={onDrill}
+            testId="pilot-drill-hint"
+          />
         )}
       </div>
       {summary &&
-        (demandCount > 0 ? (
+        (onShowSummary !== null ? (
           <button
             type="button"
-            onClick={onShowDemand}
+            onClick={onShowSummary}
             data-testid="pilot-demand-action"
             // No `aria-label`. An action-phrased one ("Show 2 agents that need
             // you") would not contain the visible sentence, which is a
@@ -598,7 +704,7 @@ function PilotFooter({
             {summary}
           </button>
         ) : (
-          <span data-testid="pilot-summary" className="truncate text-daintree-text/50">
+          <span data-testid="pilot-summary" className="truncate text-text-secondary">
             {summary}
           </span>
         ))}
@@ -978,6 +1084,57 @@ export function PilotView() {
   );
 
   /**
+   * The run the highlight starts on: the worst thing on the list, oldest first.
+   *
+   * Project groups are ordered most-recently-opened first, which answers "where
+   * was I" — the right question for finding a project and the wrong one for
+   * finding a fire. Left alone, opening the palette put the cursor on whatever
+   * happened to be top of the project you were last in, so the surface built to
+   * answer "is anything asking me for something" opened with Enter aimed at
+   * something that wasn't.
+   *
+   * Moving the GROUPS by severity would answer it too, and was considered and
+   * rejected: `lastOpened` is the one ordering that doesn't move while the
+   * palette is open (#11678), and buying triage with a list that reshuffles
+   * under a reader costs more than it returns. Moving the cursor costs nothing
+   * — the rows are already ranked worst-first inside every group, so the worst
+   * row in the fleet is just the best of those firsts, and the surface scrolls
+   * to it on open.
+   *
+   * A starting point only. `usePaletteTreeNavigation` drops it the moment the
+   * user arrows, so a run that blocks while they are reading cannot pull the
+   * highlight off the row they are on.
+   */
+  const urgentRowId = useMemo(() => {
+    let best: { rowId: string; rank: number; since: number } | null = null;
+    for (const group of visibleGroups) {
+      // Rows are sorted worst-first within a group, so only the first can win.
+      const row = group.rows[0];
+      if (row === undefined || !isAttentionBand(row.band)) continue;
+      const candidate = {
+        rowId: row.run.runId,
+        rank: FLEET_BANDS.indexOf(row.band),
+        // Oldest outstanding first, the same anti-starvation tiebreak the rows
+        // inside a group already use — and off `bandTimestamp`, so it measures
+        // whatever the row's own clock is showing. Reading `since` here instead
+        // ranked two silent runs by how long they had been WORKING while the
+        // column beside them counted the silence, which is the surface picking
+        // one row and pointing at another. An unknown age never outranks a
+        // known one.
+        since: bandTimestamp(row.run, row.band) ?? Number.MAX_SAFE_INTEGER,
+      };
+      if (
+        best === null ||
+        candidate.rank < best.rank ||
+        (candidate.rank === best.rank && candidate.since < best.since)
+      ) {
+        best = candidate;
+      }
+    }
+    return best?.rowId ?? null;
+  }, [visibleGroups]);
+
+  /**
    * The run whose park is being edited, held by id so the pane always renders
    * live data: titles, bands and the candidate list keep updating underneath
    * the editor exactly as they do under the list.
@@ -1080,6 +1237,7 @@ export function PilotView() {
     // scope belongs here for the same reason, since drilling in replaces the
     // whole population rather than narrowing it.
     selectionScopeKey: `${scope.kind === "project" ? scope.workspaceId : "fleet"}|${query}|${bandFilter}`,
+    preferredInitialRowId: urgentRowId,
     onActivate: activate,
     shouldPreserveInputCaretKey: () => query.length > 0,
   });
@@ -1373,23 +1531,45 @@ export function PilotView() {
    * instead of being folded into somebody else's.
    */
   const needsYou = filterCounts["needs-you"];
+  const quiet = fleet.bands.quiet;
   const review = fleet.bands.review;
 
   // Counted by band, never off the raw row total: a fleet holding two working
   // agents and six exited ones is not "8 agents running".
   const live = fleet.bands.running;
-  const fleetPhrase =
+
+  /**
+   * The one thing the footer says, and which segment reproduces it exactly.
+   *
+   * Ordered the way the bands are, so the sentence and the list agree about
+   * what is most urgent: something asking, then something that has stopped
+   * talking, then work handed back, then the all-clear. The silence earns a
+   * place above review for the reason the band does — an unnoticed stall costs
+   * the rest of the morning, an unread hand-back costs a minute.
+   *
+   * `filter` is what makes the sentence pressable, and it is null wherever no
+   * segment holds exactly the population the sentence counted. Review is the
+   * case that matters: "Finished" admits acknowledged completions too, so a
+   * button there would answer "3 ready for review" with a list of five.
+   */
+  const fleetSummary: { phrase: string; filter: PilotBandFilter | null } =
     status.kind === "loading" || status.kind === "unavailable"
-      ? ""
+      ? { phrase: "", filter: null }
       : needsYou > 0
-        ? demandPhrase(needsYou)
-        : review > 0
-          ? reviewPhrase(review)
-          : live > 0
-            ? `Nothing needs you · ${live} ${live === 1 ? "agent" : "agents"} working`
-            : fleet.total > 0
-              ? `Nothing needs you · ${agentCount(fleet.total)}`
-              : "";
+        ? { phrase: demandPhrase(needsYou), filter: "needs-you" }
+        : quiet > 0
+          ? { phrase: quietPhrase(quiet), filter: "quiet" }
+          : review > 0
+            ? { phrase: reviewPhrase(review), filter: null }
+            : live > 0
+              ? {
+                  phrase: `Nothing needs you · ${live} ${live === 1 ? "agent" : "agents"} working`,
+                  filter: null,
+                }
+              : fleet.total > 0
+                ? { phrase: `Nothing needs you · ${agentCount(fleet.total)}`, filter: null }
+                : { phrase: "", filter: null };
+  const fleetPhrase = fleetSummary.phrase;
 
   /**
    * The same sentence, qualified when the feed is dead.
@@ -1402,6 +1582,17 @@ export function PilotView() {
    */
   const summary =
     status.kind === "stale" && fleetPhrase !== "" ? `Last known: ${fleetPhrase}` : fleetPhrase;
+
+  /**
+   * Null over stale data as well as over a sentence no segment reproduces.
+   *
+   * "Last known: 2 agents need you" describes retained rows; pressing it would
+   * narrow the list to a live filter over data the banner above has just said
+   * it cannot see. The sentence is allowed to be historical — a control acting
+   * on it is not.
+   */
+  const summaryFilter =
+    status.kind === "stale" || fleetSummary.filter === bandFilter ? null : fleetSummary.filter;
 
   const hasTree = renderGroups.length > 0;
 
@@ -1480,7 +1671,7 @@ export function PilotView() {
         parkEditing ? () => closeParkEditor(false) : scope.kind === "project" ? showFleet : close
       }
       ariaLabel={scopedName === null ? "All agents" : `Agents in ${scopedName}`}
-      tier="command"
+      tier="overview"
     >
       <AppPaletteDialog.Header
         label={scopedName === null ? "All agents" : "Agents by worktree"}
@@ -1515,7 +1706,7 @@ export function PilotView() {
                   onClick={showFleet}
                   className={cn(
                     "flex shrink-0 items-center gap-0.5 rounded-[var(--radius-sm)] py-0.5 pr-1.5 pl-0.5",
-                    "text-daintree-text/60 transition-colors",
+                    "text-text-secondary transition-colors",
                     "hover:bg-overlay-subtle hover:text-daintree-text",
                     "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-daintree-accent"
                   )}
@@ -1528,7 +1719,7 @@ export function PilotView() {
                 </span>
                 <span
                   data-testid="pilot-scope-name"
-                  className="min-w-0 truncate text-daintree-text/70"
+                  className="min-w-0 truncate text-daintree-text/85"
                 >
                   {scopedName}
                 </span>
@@ -1644,7 +1835,7 @@ export function PilotView() {
               so a control that does what the app is doing anyway would be a
               promise the user has to keep pressing.
             */}
-            <p className="mt-1 text-xs text-daintree-text/40">
+            <p className="mt-1 text-xs text-text-secondary">
               Agents keep running. This reconnects on its own.
             </p>
           </div>
@@ -1761,7 +1952,7 @@ export function PilotView() {
                 key={header.domId}
                 id={header.domId}
                 role="group"
-                aria-label={`${group.name}${group.axis === "workspace" && group.isCurrent ? ", current workspace" : ""}${group.demandCount > 0 ? `, ${demandPhrase(group.demandCount)}` : ""}`}
+                aria-label={`${group.name}${group.axis === "workspace" && group.isCurrent ? ", current workspace" : ""}${attentionPhrase(group.attention)}`}
                 // The scroller spaces siblings equally, so after a long run list
                 // the next group arrives with no more separation than one more
                 // agent. Only between groups — a leading gap would push the list
@@ -1805,16 +1996,32 @@ export function PilotView() {
             parkLabel={parkLabel}
             drillLabel={drillLabel}
             summary={summary}
-            demandCount={needsYou}
-            onShowDemand={() => {
-              setBandFilter("needs-you");
-              // This button leaves focus on itself, where the body's handler
-              // bails on events that did not come from the scroller — so the
-              // arrows stop moving the selection until focus goes back. The
-              // Clear-filter button in the empty state already makes exactly
-              // this handoff.
+            onOpen={() => {
+              if (selectedRow !== null) navigation.activateRow(selectedRow.rowId);
+            }}
+            onPark={() => {
+              if (selectedRow?.kind === "item") setParkTargetId(selectedRow.item.run.runId);
+              // Every footer control hands focus back for the same reason: it
+              // leaves focus on itself, where the body's handler bails on
+              // events that did not come from the scroller, so the arrows
+              // would stop moving the selection until focus went back.
               searchRef.current?.focus();
             }}
+            onDrill={() => {
+              if (drillTarget !== null) openProject(drillTarget);
+              // Scoping unmounts this button, so the handoff matters more here
+              // than anywhere else in the footer: without it focus is left on
+              // the document body over a list the arrows can no longer drive.
+              searchRef.current?.focus();
+            }}
+            onShowSummary={
+              summaryFilter === null
+                ? null
+                : () => {
+                    setBandFilter(summaryFilter);
+                    searchRef.current?.focus();
+                  }
+            }
           />
         </AppPaletteDialog.Footer>
       )}

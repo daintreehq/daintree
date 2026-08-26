@@ -127,9 +127,10 @@ function formatButtonTitle(label: string, shortcut?: string | null): string {
 
 const NO_MATCH_QUERY_MAX = 40;
 
+/** Mirrors `QuickStateFilterBar`'s own labels — see the rationale there. */
 const QUICK_STATE_LABELS: Record<"working" | "waiting" | "finished", string> = {
   working: "Working",
-  waiting: "Waiting",
+  waiting: "Attention",
   finished: "Finished",
 };
 

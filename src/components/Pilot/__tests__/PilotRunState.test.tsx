@@ -43,14 +43,14 @@ function shapeOf(band: FleetBand, agentState?: AgentState): string {
 
 const DEMAND_BANDS = FLEET_BANDS.filter(isDemandBand);
 /** Nothing in flight and nothing being asked — the states that stay grey. */
-const QUIET_BANDS: FleetBand[] = ["done", "parked", "idle"];
+const SETTLED_BANDS: FleetBand[] = ["done", "parked", "idle"];
 
 describe("PilotRunState", () => {
   it("paints one shared neutral tone across the states that are not news", () => {
     // An acknowledged completion and an exited shell are finished business.
     // Hueing them would put back the competing signals that made two waiting
     // agents invisible among five working ones.
-    const tones = new Set(QUIET_BANDS.map((band) => toneOf(band)));
+    const tones = new Set(SETTLED_BANDS.map((band) => toneOf(band)));
 
     expect(tones.size).toBe(1);
     // A set of one is also what "no tone at all" produces, and an uncoloured
@@ -91,7 +91,36 @@ describe("PilotRunState", () => {
     expect(new Set(DEMAND_BANDS.map((band) => toneOf(band))).size).toBe(DEMAND_BANDS.length);
   });
 
-  it("keeps shape as a second channel, so the quiet states stay tellable apart", () => {
+  it("never draws two bands the same way", () => {
+    // The pair, not the shape alone: three of these marks are the app's own
+    // standards — green spinner, amber hollow circle, blue check circle — and
+    // this surface does not get to reinterpret them to buy itself a distinct
+    // silhouette. What it may not do is render two bands identically.
+    const drawn = [
+      ...FLEET_BANDS.map((band) => `${shapeOf(band)}|${toneOf(band)}`),
+      `${shapeOf("running", "directing")}|${toneOf("running", "directing")}`,
+      `${shapeOf("idle", "exited")}|${toneOf("idle", "exited")}`,
+    ];
+
+    expect(new Set(drawn).size).toBe(drawn.length);
+  });
+
+  it("separates every band that shares a tone by shape alone", () => {
+    // Where hue is doing the work, geometry may repeat — `quiet` is the working
+    // spinner in the waiting hue on purpose. Where hue is NOT available to
+    // separate two bands, shape has to, or forced colours collapses them.
+    const byTone = new Map<string, string[]>();
+    for (const band of FLEET_BANDS) {
+      const tone = toneOf(band);
+      byTone.set(tone, [...(byTone.get(tone) ?? []), shapeOf(band)]);
+    }
+
+    for (const [tone, shapes] of byTone) {
+      expect(new Set(shapes).size, `bands sharing ${tone}`).toBe(shapes.length);
+    }
+  });
+
+  it("keeps shape as a second channel, so the settled states stay tellable apart", () => {
     // Working, finished and exited carry no demand between them, so geometry is
     // what separates them — never colour alone, and never its absence.
     const shapes = [
