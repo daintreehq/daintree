@@ -315,4 +315,4 @@ export const WAIT_UNTIL_IDLE_BATCH_OUTPUT_SCHEMA: Record<string, unknown> = {
 
 export const WAIT_UNTIL_IDLE_BATCH_DESCRIPTION =
   // Kept under the 400-byte tool-description budget (mcpWireBudget.test.ts).
-  "Block until the first of several agents stops working, or all of them do; the fan-out primitive when agents finish at different speeds. Use this rather than waiting on each in turn, or a status snapshot with `includeOutput` to poll without blocking; both can report `lastOutputChangeAt`, not a hang verdict. Timing out means not met yet; a gone terminal settles too, so read `trackingState`.";
+  "Block until the first of several agents stops working, or all do; the fan-out primitive when agents finish at different speeds. Prefer it to waiting on each in turn, or a status snapshot with `includeOutput` to poll without blocking; both report `lastOutputChangeAt`, not a hang verdict. Timing out means not met yet; a gone terminal settles too, `closed` if user-closed; read `trackingState`.";

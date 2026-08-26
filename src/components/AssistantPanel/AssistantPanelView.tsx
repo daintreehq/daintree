@@ -168,6 +168,23 @@ function formatCost(total: number, complete: boolean): string {
   return `${complete ? "" : "≥ "}$${value}`;
 }
 
+/**
+ * A notice — most often the output of a slash command the engine ran.
+ *
+ * `whitespace-pre-wrap` is load-bearing, not cosmetic. The engine composes command
+ * output as TERMINAL text — padded columns, indented continuation lines, and a leading
+ * `→ ` on the live entry — and every command result shares this row, so `/backend`,
+ * `/status`, `/doctor` and `/audit` were all collapsed into single paragraphs of prose
+ * by ordinary HTML whitespace folding, markers and all.
+ *
+ * Column alignment holds for any row that FITS: the panel root is already the terminal
+ * font (`assistant-panel.css`) and everything here inherits it. A row too wide for a
+ * docked panel still wraps, and its continuation line does not stay aligned — acceptable,
+ * and the same thing a narrow terminal does.
+ *
+ * `break-words` alongside it: pre-wrap cannot break inside an unbroken token, and these
+ * lines carry URLs and absolute log paths longer than the panel is wide.
+ */
 function NoticeRow({ notice }: { notice: AssistantNotice }) {
   const Icon = notice.level === "info" ? Info : notice.level === "warning" ? TriangleAlert : ZapOff;
   const tone =
@@ -179,7 +196,12 @@ function NoticeRow({ notice }: { notice: AssistantNotice }) {
   return (
     <div className="flex items-start gap-2 px-1 py-1 text-[1em]">
       <Icon aria-hidden="true" className={cn("mt-px size-3.5 shrink-0", tone)} />
-      <p className="min-w-0 flex-1 text-[var(--assistant-fg-secondary)]">{notice.message}</p>
+      <p
+        data-testid="assistant-notice"
+        className="min-w-0 flex-1 whitespace-pre-wrap break-words text-[var(--assistant-fg-secondary)]"
+      >
+        {notice.message}
+      </p>
     </div>
   );
 }
