@@ -16,15 +16,22 @@ import { assistantChildEnv } from "../assistantChildEnv.js";
  * would both repoint every prompt and disable the command that could move it back.
  */
 describe("assistantChildEnv", () => {
-  const added: string[] = [];
+  const overwritten = new Map<string, string | undefined>();
 
   function setEnv(name: string, value: string) {
-    added.push(name);
+    if (!overwritten.has(name)) overwritten.set(name, process.env[name]);
     process.env[name] = value;
   }
 
   afterEach(() => {
-    for (const name of added.splice(0)) delete process.env[name];
+    // Restored, not deleted. Several of these are variables a developer or a CI runner may
+    // genuinely have exported; deleting them would silently unset the real value for every
+    // later test sharing this vitest fork.
+    for (const [name, previous] of overwritten) {
+      if (previous === undefined) delete process.env[name];
+      else process.env[name] = previous;
+    }
+    overwritten.clear();
   });
 
   it("strips the variables that steer the engine, and keeps everything else", () => {
