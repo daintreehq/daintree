@@ -2072,6 +2072,89 @@ describe("ProjectSwitcherPalette band collapse", () => {
     }
   });
 
+  it("refuses the pointer focus that would take the keyboard off the search box", () => {
+    render(<ProjectSwitcherPalette {...modalProps} results={banded} browseBands={bandsFor()} />);
+
+    // `tabIndex={-1}` keeps the chevron out of the tab order but does not stop a
+    // press from focusing it, and the header outlives the fold — so a click
+    // would otherwise leave typing, arrow-stepping and Enter all pointed at a
+    // chevron instead of the palette. `fireEvent` returns false when the
+    // handler cancelled the event.
+    expect(fireEvent.mouseDown(toggleFor("running"))).toBe(false);
+
+    // The veto must not cost the click itself.
+    fireEvent.click(toggleFor("running"));
+    expect(usePreferencesStore.getState().projectSwitcherCollapsedBands).toEqual({
+      running: true,
+    });
+  });
+
+  it("keeps arrow-key order when a band's rows arrive in two separate runs", () => {
+    // The map from key to run keeps only the last run, so honouring this
+    // metadata would render the first `current` row nowhere while the arrow
+    // keys could still reach it.
+    const split = [
+      makeProject({ id: "a", name: "First Current", section: "current" }),
+      makeProject({ id: "b", name: "Middle Running", section: "running" }),
+      makeProject({ id: "c", name: "Second Current", section: "current" }),
+    ];
+    render(
+      <ProjectSwitcherPalette
+        {...modalProps}
+        results={split}
+        browseBands={[
+          { key: "current", label: "Current project", itemCount: 2, collapsed: false },
+          { key: "running", label: "Running", itemCount: 1, collapsed: false },
+        ]}
+      />
+    );
+
+    const rendered = screen.getAllByRole("option").map((option) => option.textContent ?? "");
+    expect(rendered).toHaveLength(3);
+    expect(rendered[0]).toContain("First Current");
+    expect(rendered[1]).toContain("Middle Running");
+    expect(rendered[2]).toContain("Second Current");
+  });
+
+  it("keeps arrow-key order when the declared bands are ordered differently", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...modalProps}
+        results={banded}
+        browseBands={[
+          { key: "other", label: "Other projects", itemCount: 1, collapsed: false },
+          { key: "current", label: "Current project", itemCount: 1, collapsed: false },
+          { key: "running", label: "Running", itemCount: 1, collapsed: false },
+        ]}
+      />
+    );
+
+    const rendered = screen.getAllByRole("option").map((option) => option.textContent ?? "");
+    expect(rendered[0]).toContain("Active Project");
+    expect(rendered[1]).toContain("Running One");
+    expect(rendered[2]).toContain("Other One");
+  });
+
+  it("refuses a duplicated band key rather than colliding on its ids", () => {
+    render(
+      <ProjectSwitcherPalette
+        {...modalProps}
+        results={banded}
+        browseBands={[
+          { key: "current", label: "Current project", itemCount: 1, collapsed: false },
+          { key: "current", label: "Current project", itemCount: 1, collapsed: false },
+          { key: "running", label: "Running", itemCount: 1, collapsed: false },
+          { key: "other", label: "Other projects", itemCount: 1, collapsed: false },
+        ]}
+      />
+    );
+
+    // One id per band or `aria-labelledby` and `aria-controls` both go
+    // ambiguous, so the whole band layout stands down.
+    expect(document.querySelectorAll("#project-section-current")).toHaveLength(0);
+    expect(screen.getAllByRole("option")).toHaveLength(3);
+  });
+
   it("records the fold in the preference the palette reads back on reopen", () => {
     render(<ProjectSwitcherPalette {...modalProps} results={banded} browseBands={bandsFor()} />);
 

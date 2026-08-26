@@ -291,8 +291,9 @@ export interface UseProjectSwitcherPaletteReturn {
   results: ProjectSwitcherRow[];
   /**
    * Every browse band in render order, including ones holding no visible rows
-   * because the user collapsed them. Empty while searching, where the ranked
-   * list has no bands. See {@link ProjectSwitcherBrowseBand}.
+   * because the user collapsed them. Always describes the BROWSE layout — a
+   * surface rendering the ranked search list ignores it, since search has no
+   * bands. See {@link ProjectSwitcherBrowseBand}.
    */
   browseBands: ProjectSwitcherBrowseBand[];
   /** True while `deferredQuery` has not yet caught up to `query` — the results shown are from the previous query. */

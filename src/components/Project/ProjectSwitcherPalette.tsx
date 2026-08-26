@@ -904,6 +904,14 @@ interface ProjectSection {
  * deliberately ignores it, so no band can fold a project out of a keyboard
  * user's reach, and there is nothing here they cannot get to by typing.
  *
+ * `tabIndex={-1}` keeps it out of the tab order but does NOT stop a pointer
+ * press from focusing it, and the header outlives the fold — so without the
+ * mousedown veto below, one click would leave focus on a chevron: typing would
+ * stop reaching the search box, arrows would stop stepping rows, and Enter
+ * would re-toggle the band instead of committing the highlighted project. The
+ * sort trigger beside it solves the same problem by handing focus back after
+ * its menu closes; refusing the focus outright is cheaper and never blinks.
+ *
  * The label is its own leaf so `aria-labelledby` on the surrounding group names
  * the band and nothing else — the chevron is `aria-hidden`, but the id has to
  * sit on the text either way or a later sibling would join the computed name.
@@ -937,6 +945,7 @@ function BandCollapseToggle({
       type="button"
       tabIndex={-1}
       data-testid={testId}
+      onMouseDown={(event) => event.preventDefault()}
       onClick={onToggle}
       aria-expanded={!collapsed}
       aria-controls={controlsId}
@@ -1211,6 +1220,12 @@ function ProjectListContent({
 
     if (!browseBands || browseBands.length === 0) return bands.length > 0 ? bands : null;
 
+    // A repeated key passes the order walk below — the second copy simply draws
+    // no rows — but React keys, the `aria-labelledby` leaf id and the
+    // `aria-controls` target are all derived from it, so the duplicate would
+    // collide on all three.
+    if (new Set(browseBands.map((band) => band.key)).size !== browseBands.length) return null;
+
     // The declared bands own the ORDER, the HEADERS and the counts; the runs
     // above own the rows, and they keep owning them — metadata never removes a
     // row. A band declared folded is expected to have contributed nothing to
@@ -1229,14 +1244,22 @@ function ProjectListContent({
       };
     });
 
-    // Skew between the two props — a row belonging to no declared band, or a
-    // band declaring itself folded while its rows are still in `results`. Both
-    // mean the declared list cannot render every row in the order the arrow
-    // keys walk, so drop the bands entirely rather than reordering rows or
-    // hiding one: a flat list of everything is worse-looking and correct, where
-    // a stranded row is #11071 all over again.
-    if (byKey.size > 0) return null;
-    if (merged.some((band) => band.collapsed && band.items.length > 0)) return null;
+    // The one check that makes the bands a VIEW over `results` rather than a
+    // claim about it: walked in order, they must reproduce `results` exactly.
+    // Enumerating the ways two props can disagree misses some — a section key
+    // appearing in two non-adjacent runs, a declared order that differs from
+    // the row order, a stale count — and each of those either hides a row or
+    // puts the DOM in an order the arrow keys don't follow, which is #11071
+    // again. Any mismatch drops to the flat branch: a list with no headers
+    // looks worse and is correct.
+    let cursor = 0;
+    for (const band of merged) {
+      for (const row of band.items) {
+        if (results[cursor] !== row) return null;
+        cursor += 1;
+      }
+    }
+    if (cursor !== results.length) return null;
     return merged;
   }, [results, isSearching, browseBands]);
 
