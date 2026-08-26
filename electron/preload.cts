@@ -54,6 +54,7 @@ import { buildForgeAuditPreloadBindings } from "./ipc/handlers/forgeAudit.preloa
 import { buildRunHistoryPreloadBindings } from "./ipc/handlers/runHistory.preload.js";
 import { buildCopyTreeHistoryPreloadBindings } from "./ipc/handlers/copyTreeHistory.preload.js";
 import { buildGeminiPreloadBindings } from "./ipc/handlers/gemini.preload.js";
+import { buildCodexPreloadBindings } from "./ipc/handlers/codex.preload.js";
 import { buildMilestonesPreloadBindings } from "./ipc/handlers/milestones.preload.js";
 import { buildOnboardingPreloadBindings } from "./ipc/handlers/onboarding.preload.js";
 import { buildShortcutHintsPreloadBindings } from "./ipc/handlers/shortcutHints.preload.js";
@@ -2540,6 +2541,7 @@ function buildElectronApi(): ElectronAPI {
 
     // Gemini API
     gemini: buildGeminiPreloadBindings(_unwrappingInvoke),
+    codex: buildCodexPreloadBindings(_unwrappingInvoke),
 
     // Daintree CLI install API
     cli: buildCliPreloadBindings(_unwrappingInvoke),

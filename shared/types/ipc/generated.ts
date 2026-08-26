@@ -146,6 +146,14 @@ export interface GeneratedIpcInvokeMap {
     args: [text: string];
     result: void;
   };
+  "codex:list-subagents": {
+    args: [__0: { terminalId: string }];
+    result: import("./codexSubagents.js").CodexSubagentsResult;
+  };
+  "codex:read-subagent-transcript": {
+    args: [__0: { terminalId: string; threadId: string }];
+    result: import("./codexSubagents.js").CodexSubagentTranscriptResult;
+  };
   "commands:execute": {
     args: [payload: import("../commands.js").CommandExecutePayload];
     result: import("../commands.js").CommandResult<unknown>;
