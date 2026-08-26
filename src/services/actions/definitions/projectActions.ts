@@ -160,16 +160,24 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
       // excluded outright — it is not a git repository, so no count of its
       // worktrees can be anything but zero, whatever a store happens to hold.
       const projectRuns = runs.filter((run) => run.workspaceId === workspaceId);
-      const knownWorktreeCount = isScratchWorkspaceId(workspaceId)
-        ? undefined
-        : getWorktreeIdSet()?.size;
+      const isScratch = isScratchWorkspaceId(workspaceId);
+      const knownWorktreeCount = isScratch ? 0 : (getWorktreeIdSet()?.size ?? 0);
+
+      // A project carries its own root as a first-class entry the moment its
+      // view store hydrates, so a zero there is "not told yet" rather than "no
+      // worktrees" — and a decision taken on an answer nobody gave has no
+      // business explaining itself. A scratch IS a real answer: it is not a git
+      // repository, so its none is a none.
+      const topologyIsKnown = isScratch || knownWorktreeCount > 0;
 
       if (!hasWorktreeAxis(projectRuns, knownWorktreeCount)) {
         // The unscoped fleet is the honest fallback — still the surface the
         // user asked for, just without a narrowing it cannot support — but it
-        // is byte for byte what the unscoped chord already gives, so it goes
-        // through the fallback opening, which carries the reason with it.
-        pilot.openFleetFallback(workspaceId);
+        // is byte for byte what the unscoped chord already gives, so where the
+        // refusal is informed it goes through the fallback opening, which
+        // carries the reason with it.
+        if (topologyIsKnown) pilot.openFleetFallback(workspaceId);
+        else pilot.open();
         return;
       }
 

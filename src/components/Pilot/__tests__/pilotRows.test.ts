@@ -1182,22 +1182,16 @@ describe("hasWorktreeAxis", () => {
       expect(hasWorktreeAxis([], 0)).toBe(false);
     });
 
-    it("still passes on the runs alone when no count is available", () => {
-      // The count is `undefined` for a scratch, and for any view whose store
-      // has not mounted — neither may take an axis the runs already proved.
+    it("never lets an absent or zero count veto an axis the runs proved", () => {
+      // The count is `undefined` for a view whose store has not mounted and
+      // zero for one that has not hydrated. Neither is evidence AGAINST an
+      // axis, so neither may take one the runs already established.
       expect(
         hasWorktreeAxis([{ worktreeId: "/repo/wt/a" }, { worktreeId: "/repo/wt/b" }], undefined)
       ).toBe(true);
       expect(hasWorktreeAxis([{ worktreeId: "/repo/wt/a" }, { worktreeId: "/repo/wt/b" }], 0)).toBe(
         true
       );
-    });
-
-    it("never joins the two sources, so unrelated spellings still count", () => {
-      // The one rule the fix has to keep: two mint sites can spell the same
-      // worktree differently, so the counts are OR'd and the ids never meet.
-      // Runs in one worktree, a store describing two entirely different ones.
-      expect(hasWorktreeAxis([{ worktreeId: "/private/repo/wt/a" }], 2)).toBe(true);
     });
   });
 });

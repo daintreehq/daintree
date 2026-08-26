@@ -332,10 +332,11 @@ describe("pilot.openProject against the project's own worktrees", () => {
     });
   });
 
-  it("counts rather than joins, so unrelated spellings still scope", async () => {
+  it("scopes even where the store and the runs spell the same worktree differently", async () => {
     // The rule the fix has to keep: a worktree id has two mint sites that can
-    // spell one directory differently, so the two sources are OR'd as counts
-    // and their ids never meet.
+    // spell one directory differently (`realpath` at creation, `pathResolve`
+    // over porcelain at enumeration), so the two sources are OR'd as counts and
+    // their ids never meet. A join here would find nothing and refuse.
     seedWorktrees(["/private/repo", "/private/repo/wt/alpha"]);
     seedFleet([run({ runId: "a", worktreeId: "/repo/wt/alpha" })]);
 
@@ -368,6 +369,33 @@ describe("pilot.openProject fallback explanation", () => {
     await openProject();
 
     expect(usePilotStore.getState().fellBackFrom).toBe(PROJECT_HERE);
+  });
+
+  it("says nothing when the project's own worktrees have not been read yet", async () => {
+    // A project carries its own root the moment its view store hydrates, so a
+    // zero is "not told yet". Claiming a project has nothing to group on the
+    // strength of an answer nobody gave is the explanation lying.
+    seedWorktrees([]);
+    seedFleet([run({ runId: "a", worktreeId: ROOT })]);
+
+    await openProject();
+
+    expect(usePilotStore.getState()).toMatchObject({
+      isOpen: true,
+      scope: { kind: "fleet" },
+      fellBackFrom: null,
+    });
+  });
+
+  it("still explains itself for a scratch, whose none is a real none", async () => {
+    // A scratch is not a git repository, so zero worktrees there is an answer
+    // rather than a silence — and the user still pressed a key.
+    seedView(SCRATCH_HERE);
+    seedFleet([run({ runId: "a", workspaceId: SCRATCH_HERE })]);
+
+    await openProject();
+
+    expect(usePilotStore.getState().fellBackFrom).toBe(SCRATCH_HERE);
   });
 
   it("says nothing when the fleet has not been read yet", async () => {

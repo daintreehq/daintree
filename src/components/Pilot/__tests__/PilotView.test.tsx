@@ -2476,6 +2476,9 @@ describe("PilotView worktree axis from the project's own store", () => {
     seedOneBucket();
     renderWithWorktrees([worktree(ZEBRA_ROOT, true), worktree("/repo/wt/alpha")]);
 
+    // Both halves asserted, or this passes for a chord that works beside a
+    // heading drawing nothing — which is the disagreement under test.
+    expect(screen.getByTestId("pilot-group-drill")).toBeTruthy();
     fireEvent.keyDown(screen.getByTestId("pilot-search"), { key: "Enter", ...DRILL_MODIFIER });
 
     expect(usePilotStore.getState().scope).toEqual({ kind: "project", workspaceId: "p1" });
@@ -2483,7 +2486,10 @@ describe("PilotView worktree axis from the project's own store", () => {
 
   it("withholds the drill where the project has only its own root", () => {
     seedViewWorkspace("p1");
-    seedOneBucket();
+    seed([
+      run({ runId: "a", worktreeId: ZEBRA_ROOT, agentState: "working", since: NOW - 60_000 }),
+      run({ runId: "b", worktreeId: ZEBRA_ROOT, agentState: "working", since: NOW - 60_000 }),
+    ]);
     renderWithWorktrees([worktree(ZEBRA_ROOT, true)]);
 
     expect(screen.queryByTestId("pilot-group-drill")).toBeNull();
@@ -2495,6 +2501,56 @@ describe("PilotView worktree axis from the project's own store", () => {
     seedViewWorkspace("s1");
     seedOneBucket();
     renderWithWorktrees([worktree(ZEBRA_ROOT, true), worktree("/repo/wt/alpha")]);
+
+    expect(screen.queryByTestId("pilot-group-drill")).toBeNull();
+  });
+
+  it("never lends them to the current workspace either, when that is a scratch", () => {
+    // A scratch is not a git repository, so no count of its worktrees can be
+    // anything but zero. `pilot.openProject` refuses one on those grounds, and
+    // a chevron drawn here would be the chord and the affordance disagreeing.
+    seedViewWorkspace("s1");
+    seed([
+      run({
+        runId: "a",
+        workspaceId: "s1",
+        worktreeId: "/scratch/one",
+        agentState: "working",
+        since: NOW - 60_000,
+      }),
+    ]);
+    renderWithWorktrees([worktree(ZEBRA_ROOT, true), worktree("/repo/wt/alpha")]);
+
+    expect(screen.queryByTestId("pilot-group-drill")).toBeNull();
+    fireEvent.keyDown(screen.getByTestId("pilot-search"), { key: "Enter", ...DRILL_MODIFIER });
+    expect(usePilotStore.getState().scope).toEqual({ kind: "fleet" });
+  });
+
+  it("withdraws the drill when a query narrows the project to one worktree", () => {
+    // #11955's rule survives the enrichment: the affordance is computed from
+    // the rows actually drawn, so a narrowing that hides the axis takes the
+    // chevron with it even where the project's own topology could prove one.
+    seedViewWorkspace("p1");
+    seed([
+      run({
+        runId: "a",
+        worktreeId: "/repo/wt/alpha",
+        title: "auth refactor",
+        agentState: "working",
+        since: NOW - 60_000,
+      }),
+      run({
+        runId: "b",
+        worktreeId: "/repo/wt/beta",
+        title: "docs pass",
+        agentState: "working",
+        since: NOW - 60_000,
+      }),
+    ]);
+    renderWithWorktrees([worktree(ZEBRA_ROOT, true), worktree("/repo/wt/alpha")]);
+
+    expect(screen.getByTestId("pilot-group-drill")).toBeTruthy();
+    fireEvent.change(screen.getByTestId("pilot-search"), { target: { value: "auth" } });
 
     expect(screen.queryByTestId("pilot-group-drill")).toBeNull();
   });
@@ -2516,6 +2572,47 @@ describe("PilotView worktree axis from the project's own store", () => {
     });
 
     expect(screen.getByTestId("pilot-group-drill")).toBeTruthy();
+  });
+
+  it("withdraws it again when the worktree goes away under the open surface", () => {
+    // The other direction of the same subscription. A chevron surviving the
+    // last worktree's deletion would offer a regrouping the drill then declines.
+    seedViewWorkspace("p1");
+    seedOneBucket();
+    const store = renderWithWorktrees([worktree(ZEBRA_ROOT, true), worktree("/repo/wt/alpha")]);
+
+    expect(screen.getByTestId("pilot-group-drill")).toBeTruthy();
+
+    act(() => {
+      store.getState().applySnapshot([worktree(ZEBRA_ROOT, true)], { epoch: "test", seq: 2 });
+    });
+
+    expect(screen.queryByTestId("pilot-group-drill")).toBeNull();
+    fireEvent.keyDown(screen.getByTestId("pilot-search"), { key: "Enter", ...DRILL_MODIFIER });
+    expect(usePilotStore.getState().scope).toEqual({ kind: "fleet" });
+  });
+
+  it("renders the named empty state when a proven axis scopes a project with no agents", () => {
+    // Newly reachable: the old gate made an empty scoped list impossible, so
+    // this is the first opening that can land straight on one. It has to name
+    // the project and leave the way back on screen rather than look broken.
+    seedViewWorkspace("p1");
+    seed([
+      run({
+        runId: "elsewhere",
+        workspaceId: "s1",
+        worktreeId: "/scratch/one",
+        agentState: "working",
+        since: NOW - 60_000,
+      }),
+    ]);
+    usePilotStore.setState({ isOpen: true, scope: { kind: "project", workspaceId: "p1" } });
+    renderWithWorktrees([worktree(ZEBRA_ROOT, true), worktree("/repo/wt/alpha")]);
+
+    expect(screen.getByText("Start an agent in daintree")).toBeTruthy();
+    expect(screen.getByTestId("pilot-scope-back")).toBeTruthy();
+    // The scratch's run belongs to the fleet behind this scope, not in it.
+    expect(screen.queryAllByTestId("pilot-row")).toHaveLength(0);
   });
 
   it("leads the scoped list with the root even where its name sorts last", () => {
@@ -2563,6 +2660,17 @@ describe("PilotView fallback explanation", () => {
     expect(screen.getByTestId("pilot-fallback-note").textContent).toContain("daintree");
   });
 
+  it("announces itself rather than riding only the dialog's label", () => {
+    // The whole point is that this is NOT the surface that was asked for, and
+    // the dialog announces "All agents" either way — the same thing the
+    // unscoped chord says.
+    seed([run({ runId: "a", worktreeId: "/repo/wt/alpha", agentState: "working" })]);
+    usePilotStore.setState({ isOpen: true, scope: { kind: "fleet" }, fellBackFrom: "p1" });
+    render(<PilotView />);
+
+    expect(screen.getByRole("status")).toBe(screen.getByTestId("pilot-fallback-note"));
+  });
+
   it("stays out of an ordinary fleet opening", () => {
     seed([run({ runId: "a", worktreeId: "/repo/wt/alpha", agentState: "working" })]);
     render(<PilotView />);
@@ -2571,16 +2679,59 @@ describe("PilotView fallback explanation", () => {
   });
 
   it("goes away when the user scopes somewhere from the fleet", () => {
+    // Seeded with a project that IS drillable, so the note is on screen before
+    // the click — otherwise this passes for a component that never drew it.
     seed([
       run({ runId: "a", worktreeId: "/repo/wt/alpha", agentState: "working", since: NOW - 60_000 }),
       run({ runId: "b", worktreeId: "/repo/wt/beta", agentState: "working", since: NOW - 60_000 }),
     ]);
-    usePilotStore.setState({ isOpen: true, scope: { kind: "fleet" }, fellBackFrom: "p1" });
+    usePilotStore.setState({ isOpen: true, scope: { kind: "fleet" }, fellBackFrom: "s1" });
     render(<PilotView />);
+    expect(screen.getByTestId("pilot-fallback-note")).toBeTruthy();
 
     fireEvent.click(screen.getAllByTestId("pilot-group-header")[0]!);
 
+    expect(usePilotStore.getState().scope).toEqual({ kind: "project", workspaceId: "p1" });
     expect(screen.queryByTestId("pilot-fallback-note")).toBeNull();
+  });
+
+  it("withdraws itself once the project it names gains an axis", () => {
+    // The explanation describes a decision taken at press time. Create a
+    // worktree while the surface is open and the same press would scope — a
+    // chevron beside a line saying there is nothing to group is one screen
+    // giving two answers.
+    seedViewWorkspace("p1");
+    seed([
+      run({ runId: "a", worktreeId: "/repo/zebra", agentState: "working", since: NOW - 60_000 }),
+    ]);
+    usePilotStore.setState({ isOpen: true, scope: { kind: "fleet" }, fellBackFrom: "p1" });
+
+    const store = createWorktreeStore();
+    const snap = (id: string): WorktreeSnapshot => ({
+      id,
+      worktreeId: id,
+      path: id,
+      name: id.split("/").pop() ?? id,
+      isCurrent: false,
+      isMainWorktree: id === "/repo/zebra",
+    });
+    store.getState().applySnapshot([snap("/repo/zebra")], { epoch: "test", seq: 1 });
+    render(
+      <WorktreeStoreContext.Provider value={store}>
+        <PilotView />
+      </WorktreeStoreContext.Provider>
+    );
+
+    expect(screen.getByTestId("pilot-fallback-note")).toBeTruthy();
+
+    act(() => {
+      store
+        .getState()
+        .applySnapshot([snap("/repo/zebra"), snap("/repo/wt/alpha")], { epoch: "test", seq: 2 });
+    });
+
+    expect(screen.queryByTestId("pilot-fallback-note")).toBeNull();
+    expect(screen.getByTestId("pilot-group-drill")).toBeTruthy();
   });
 
   it("says nothing when the workspace cannot be named", () => {

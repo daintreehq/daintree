@@ -633,23 +633,26 @@ function findParkTarget(
  * query that narrows a project down to a single worktree also withdraws the
  * affordance rather than offering a regrouping that would change nothing.
  *
- * `currentViewWorktreeCount` is the enrichment, and the `isCurrent` check is
- * what keeps it honest: it is the count for the ONE project this renderer view
+ * `currentViewWorktreeCount` is the enrichment, and two checks keep it honest.
+ * `isCurrent`, because it is the count for the ONE project this renderer view
  * owns, and lending it to a neighbouring project's group would draw a chevron
  * on a heading using a number about somewhere else entirely (#11950 — worktree
- * metadata exists for the view's own project and for no other). Every foreign
- * project stays on the run-derived answer, which is all this view can prove
- * about them. The scoped chord only ever asks about this view's own workspace,
- * so the chevron and the chord still agree everywhere both are offered.
+ * metadata exists for the view's own project and for no other). And `kind`,
+ * because a scratch is not a git repository: no count of its worktrees can be
+ * anything but zero, whatever an unparameterized current-view accessor happens
+ * to be holding. `pilot.openProject` refuses a scratch on the same grounds, and
+ * the two have to refuse it the same way or the chevron and the chord disagree
+ * about a workspace — the one property #11955 established by construction.
  */
 function canDrill(
   group: PilotDisplayGroup,
   currentViewWorktreeCount: number
 ): group is PilotProjectGroup {
   if (group.axis !== "workspace") return false;
+  const enriched = group.isCurrent && group.kind !== "scratch";
   return hasWorktreeAxis(
     group.rows.map((row) => row.run),
-    group.isCurrent ? currentViewWorktreeCount : undefined
+    enriched ? currentViewWorktreeCount : undefined
   );
 }
 
@@ -834,9 +837,29 @@ export function PilotView() {
    * different gesture. Null too when the map cannot name the workspace: a line
    * that says something has no worktree axis without saying WHICH something is
    * worse than the silence it replaces.
+   *
+   * And null once the premise stops holding. The explanation describes a
+   * decision taken at press time, and the world moves under it — create a
+   * worktree, or launch an agent in a second one, and the same press would now
+   * scope. Left up, it would put a chevron offering the drill beside a sentence
+   * saying there is nothing to group: one screen, two answers. Recomputed
+   * through the same predicates the affordance reads, on the UNNARROWED groups,
+   * so the line answers "would a fresh press scope now" rather than "is the
+   * chevron drawn under this query". Where the workspace has no runs at all
+   * there is no group to ask, and its own worktrees are the whole answer —
+   * safe to consult unguarded here because the only writer of `fellBackFrom`
+   * passes this view's own workspace, and refuses a scratch before it does.
    */
+  const fallbackGroup =
+    fellBackFrom === null
+      ? null
+      : (liveGroups.find((group) => group.workspaceId === fellBackFrom) ?? null);
+  const fallbackHasAxis =
+    fallbackGroup !== null
+      ? canDrill(fallbackGroup, viewWorktreeCount)
+      : hasWorktreeAxis([], viewWorktreeCount);
   const fallbackName =
-    scope.kind === "fleet" && fellBackFrom !== null
+    scope.kind === "fleet" && fellBackFrom !== null && !fallbackHasAxis
       ? (workspaces.get(fellBackFrom)?.name ?? null)
       : null;
 
@@ -1111,6 +1134,30 @@ export function PilotView() {
   }, []);
 
   /**
+   * Whether either narrowing is in play, which is what an empty list means.
+   *
+   * A query or a filter turning up nothing is a true statement about the
+   * narrowing. A fleet with nothing in it at all is a statement about the
+   * fleet, and only live data can make that one.
+   *
+   * Declared up here rather than beside the empty state because the drill reads
+   * it too: the affordance is computed from the rows actually drawn, so a
+   * narrowing that hides most of a project has to withdraw the enrichment along
+   * with them.
+   */
+  const hasNarrowing = query.trim().length > 0 || bandFilter !== "all";
+
+  /**
+   * The project's own worktree count, as the drill may use it.
+   *
+   * Zeroed under a narrowing, which keeps #11955's rule intact: a query that
+   * cuts a project down to one visible worktree withdraws the chevron rather
+   * than offering a regrouping of what is already one section. Unnarrowed, the
+   * project's real topology decides, which is the whole point of #11957.
+   */
+  const drillWorktreeCount = hasNarrowing ? 0 : viewWorktreeCount;
+
+  /**
    * Alt+Enter on the highlighted row opens the park editor — a second verb on
    * the same selection, so it lives beside Enter in both key paths rather
    * than in the navigation model, which owns structure and not actions.
@@ -1140,7 +1187,7 @@ export function PilotView() {
    */
   const drillTarget =
     scope.kind === "fleet" && selectedRow !== null && selectedRow.kind === "item"
-      ? canDrill(selectedRow.group, viewWorktreeCount)
+      ? canDrill(selectedRow.group, drillWorktreeCount)
         ? selectedRow.group.workspaceId
         : null
       : null;
@@ -1346,15 +1393,6 @@ export function PilotView() {
     status.kind === "stale" && fleetPhrase !== "" ? `Last known: ${fleetPhrase}` : fleetPhrase;
 
   const hasTree = renderGroups.length > 0;
-
-  /**
-   * Whether either narrowing is in play, which is what an empty list means.
-   *
-   * A query or a filter turning up nothing is a true statement about the
-   * narrowing. A fleet with nothing in it at all is a statement about the
-   * fleet, and only live data can make that one.
-   */
-  const hasNarrowing = query.trim().length > 0 || bandFilter !== "all";
 
   // Stale narrows honestly — retained runs are real rows, so a query matching
   // none of them says something true — but a retained EMPTY fleet may not
@@ -1693,7 +1731,7 @@ export function PilotView() {
             // Bound to a const so the discriminant narrows inside the drill
             // handler's closure as well as at the branch.
             const group = header.group;
-            const drillTo = canDrill(group, viewWorktreeCount) ? group.workspaceId : null;
+            const drillTo = canDrill(group, drillWorktreeCount) ? group.workspaceId : null;
             return (
               // `role="group"` is a permitted listbox child and carries the
               // group's name as the label for every option inside it, which is
