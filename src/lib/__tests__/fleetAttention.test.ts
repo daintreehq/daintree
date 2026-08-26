@@ -2,9 +2,11 @@ import { describe, it, expect } from "vitest";
 import {
   bandForRun,
   bandLabel,
+  bandTimestamp,
   compareWithinBand,
   emptyBandCounts,
   FLEET_BANDS,
+  isAttentionBand,
   isDemandBand,
 } from "../fleetAttention";
 import type { FleetRunRow } from "@shared/types/ipc/fleet";
@@ -154,6 +156,67 @@ describe("band presentation", () => {
   });
 });
 
+describe("band timestamps", () => {
+  it("dates each band from the decision it is actually about", () => {
+    const parked = run({ since: NOW - 3 * 3_600_000, park: { parkedAt: NOW - 60_000 } });
+    expect(bandTimestamp(parked, "parked")).toBe(NOW - 60_000);
+
+    const snoozed = run({ since: NOW - 3 * 3_600_000, snooze: { snoozedAt: NOW - 60_000 } });
+    expect(bandTimestamp(snoozed, "snoozed")).toBe(NOW - 60_000);
+
+    const silent = run({ since: NOW - 3 * 3_600_000, quietSince: NOW - 60_000 });
+    expect(bandTimestamp(silent, "quiet")).toBe(NOW - 60_000);
+
+    expect(bandTimestamp(run({ since: NOW - 60_000 }), "needs-you")).toBe(NOW - 60_000);
+  });
+
+  it("orders two silent runs by their silence, not by how long they have worked", () => {
+    // The one that has been quiet longest is the one worth looking at, even if
+    // it is the one that started most recently.
+    const longWorkShortSilence = run({
+      runId: "a",
+      since: NOW - 5 * 3_600_000,
+      quietSince: NOW - 60_000,
+    });
+    const shortWorkLongSilence = run({
+      runId: "b",
+      since: NOW - 20 * 60_000,
+      quietSince: NOW - 15 * 60_000,
+    });
+
+    expect(
+      [longWorkShortSilence, shortWorkLongSilence]
+        .sort((x, y) => compareWithinBand(x, y, "quiet"))
+        .map((r) => r.runId)
+    ).toEqual(["b", "a"]);
+  });
+});
+
+describe("quiet runs", () => {
+  it("splits a silent worker out of running, on presence of the stamp alone", () => {
+    // Main only puts `quietSince` on the wire once the silence has crossed its
+    // stall threshold, so this needs no clock of its own.
+    expect(bandForRun(run({ agentState: "working", quietSince: NOW - 12 * 60_000 }))).toBe("quiet");
+    expect(bandForRun(run({ agentState: "working" }))).toBe("running");
+    expect(bandForRun(run({ agentState: "directing", quietSince: NOW - 60_000 }))).toBe("quiet");
+  });
+
+  it("keeps a park or a snooze above it, so a shelved run cannot resurface as quiet", () => {
+    const silent = { agentState: "working" as const, quietSince: NOW - 12 * 60_000 };
+    expect(bandForRun(run({ ...silent, park: { parkedAt: NOW } }))).toBe("parked");
+    expect(bandForRun(run({ ...silent, snooze: { snoozedAt: NOW } }))).toBe("snoozed");
+  });
+
+  it("outranks finished work but is never counted as a demand", () => {
+    // A stall nobody sees costs the rest of the morning; an unread hand-back
+    // costs a minute. But nothing is asking, so the demand count stays honest.
+    expect(FLEET_BANDS.indexOf("quiet")).toBeLessThan(FLEET_BANDS.indexOf("review"));
+    expect(FLEET_BANDS.indexOf("quiet")).toBeGreaterThan(FLEET_BANDS.indexOf("needs-you"));
+    expect(isDemandBand("quiet")).toBe(false);
+    expect(isAttentionBand("quiet")).toBe(true);
+  });
+});
+
 describe("isDemandBand", () => {
   it("classifies at least one band as a demand and at least one as not", () => {
     const demands = FLEET_BANDS.filter(isDemandBand);
@@ -163,51 +226,52 @@ describe("isDemandBand", () => {
 });
 
 describe("compareWithinBand", () => {
+  /** These cases are all about the ordering itself, so they bind one band. */
+  const byNeed = (a: FleetRunRow, b: FleetRunRow) => compareWithinBand(a, b, "needs-you");
+
   it("orders oldest demand first so fresh work cannot starve a stuck run", () => {
     const old = run({ runId: "a", since: NOW - 40 * 60_000 });
     const fresh = run({ runId: "b", since: NOW - 60_000 });
-    expect([fresh, old].sort(compareWithinBand).map((r) => r.runId)).toEqual(["a", "b"]);
+    expect([fresh, old].sort(byNeed).map((r) => r.runId)).toEqual(["a", "b"]);
   });
 
   it("sorts an unknown age last, never first", () => {
     const unknown = run({ runId: "a" });
     const known = run({ runId: "b", since: NOW - 60_000 });
-    expect([unknown, known].sort(compareWithinBand).map((r) => r.runId)).toEqual(["b", "a"]);
+    expect([unknown, known].sort(byNeed).map((r) => r.runId)).toEqual(["b", "a"]);
   });
 
   it("is a total order: reflexive on identity and antisymmetric", () => {
     const x = run({ runId: "a", since: NOW });
     const y = run({ runId: "b", since: NOW - 1000 });
-    expect(compareWithinBand(x, x)).toBe(0);
-    expect(Math.sign(compareWithinBand(x, y))).toBe(-Math.sign(compareWithinBand(y, x)));
+    expect(byNeed(x, x)).toBe(0);
+    expect(Math.sign(byNeed(x, y))).toBe(-Math.sign(byNeed(y, x)));
   });
 
   it("ranks unknown ages consistently from either argument position", () => {
     const unknown = run({ runId: "a" });
     const other = run({ runId: "b" });
     const known = run({ runId: "c", since: NOW });
-    expect(compareWithinBand(unknown, known)).toBeGreaterThan(0);
-    expect(compareWithinBand(known, unknown)).toBeLessThan(0);
+    expect(byNeed(unknown, known)).toBeGreaterThan(0);
+    expect(byNeed(known, unknown)).toBeLessThan(0);
     // Two unknowns must still rank against each other rather than tying.
-    expect(Math.sign(compareWithinBand(unknown, other))).toBe(
-      -Math.sign(compareWithinBand(other, unknown))
-    );
+    expect(Math.sign(byNeed(unknown, other))).toBe(-Math.sign(byNeed(other, unknown)));
   });
 
   it("is transitive across known, equal and unknown ages", () => {
     const oldest = run({ runId: "a", since: NOW - 10_000 });
     const newer = run({ runId: "b", since: NOW });
     const unknown = run({ runId: "c" });
-    expect(compareWithinBand(oldest, newer)).toBeLessThan(0);
-    expect(compareWithinBand(newer, unknown)).toBeLessThan(0);
-    expect(compareWithinBand(oldest, unknown)).toBeLessThan(0);
+    expect(byNeed(oldest, newer)).toBeLessThan(0);
+    expect(byNeed(newer, unknown)).toBeLessThan(0);
+    expect(byNeed(oldest, unknown)).toBeLessThan(0);
   });
 
   it("breaks ties by run id so equal ages produce a stable order", () => {
     const first = run({ runId: "a", since: NOW });
     const second = run({ runId: "b", since: NOW });
-    expect([second, first].sort(compareWithinBand).map((r) => r.runId)).toEqual(["a", "b"]);
-    expect([first, second].sort(compareWithinBand).map((r) => r.runId)).toEqual(["a", "b"]);
+    expect([second, first].sort(byNeed).map((r) => r.runId)).toEqual(["a", "b"]);
+    expect([first, second].sort(byNeed).map((r) => r.runId)).toEqual(["a", "b"]);
   });
 });
 
