@@ -2,6 +2,11 @@
  * Resolves which Codex thread a live terminal is running, then reads that
  * thread's spawned subagents. Read-only throughout — see CodexAppServerClient.
  *
+ * Everything leaves here in the provider-neutral shape from
+ * `shared/types/ipc/agentSubagents`, so the renderer's list and transcript are
+ * the same code that renders Claude's children. The protocol below is the only
+ * Codex-specific part, which is the whole point of the split.
+ *
  * Attribution is the hard part. Daintree only learns a Codex session id from
  * the `codex resume` footer during post-quit teardown, so a *running* terminal
  * has no id to key off. The fallback is the terminal's own cwd plus recency,
@@ -20,22 +25,29 @@ import {
   type CodexAppServerCall,
 } from "./CodexAppServerClient.js";
 import {
-  CODEX_SUBAGENT_MESSAGE_MAX_CHARS,
-  CODEX_SUBAGENT_TRANSCRIPT_TURN_LIMIT,
-  type CodexSubagent,
-  type CodexSubagentMatch,
-  type CodexSubagentMessage,
-  type CodexSubagentStatus,
-  type CodexSubagentTurn,
-  type CodexSubagentUnavailableReason,
-  type CodexSubagentsResult,
-  type CodexSubagentTranscriptResult,
-} from "../../../shared/types/ipc/codexSubagents.js";
+  SUBAGENT_LIST_LIMIT,
+  SUBAGENT_MESSAGE_MAX_CHARS,
+  SUBAGENT_TRANSCRIPT_MESSAGE_LIMIT,
+  type AgentSubagent,
+  type AgentSubagentMessage,
+  type AgentSubagentStatus,
+  type AgentSubagentUnavailableReason,
+  type AgentSubagentsResult,
+  type AgentSubagentTranscriptResult,
+} from "../../../shared/types/ipc/agentSubagents.js";
+
+/**
+ * Turns fetched per transcript read. A turn carries a prompt and an answer, so
+ * this is the page size behind the shared per-message cap rather than a second
+ * limit on top of it.
+ */
+const CODEX_SUBAGENT_TRANSCRIPT_TURN_LIMIT = 12;
+
+/** How Codex settled on a parent. Never crosses IPC — it steers the read, not the UI. */
+type CodexSubagentMatch = "session-id" | "spawn-time";
 
 /** How many root threads in the cwd are considered as parent candidates. */
 const PARENT_CANDIDATE_LIMIT = 25;
-/** Cap on children returned for one parent. */
-const SUBAGENT_LIMIT = 50;
 /**
  * A session whose last activity is older than this at the moment the terminal
  * launched cannot be the one the terminal is running — it went quiet before the
@@ -46,12 +58,6 @@ const STALE_ACTIVITY_SLACK_SECONDS = 5 * 60;
 /** Protocol timestamps are Unix seconds; the renderer works in milliseconds. */
 function secondsToMs(seconds: unknown): number {
   return typeof seconds === "number" && Number.isFinite(seconds) ? Math.round(seconds * 1000) : 0;
-}
-
-function nullableSecondsToMs(seconds: unknown): number | null {
-  return typeof seconds === "number" && Number.isFinite(seconds)
-    ? Math.round(seconds * 1000)
-    : null;
 }
 
 /** Shape of the protocol's `Thread`, narrowed to the fields this feature reads. */
@@ -72,27 +78,33 @@ interface RawThread {
 const ACTIVE_FLAGS = new Set(["waitingOnApproval", "waitingOnUserInput"]);
 
 /**
- * `ThreadStatus` is a tagged union, not a string enum. Unknown arms collapse to
- * `notLoaded` rather than throwing: a protocol that grows a new status should
- * degrade to "nothing to report", not blank the whole list.
+ * `ThreadStatus` is a tagged union, not a string enum. A malformed or
+ * newly-invented arm lands on `unknown` rather than throwing: a protocol that
+ * grows a status should degrade to "nothing to report", not blank the list.
+ *
+ * The two are told apart on the way out. `notLoaded` is the protocol declining
+ * to hydrate a thread, which is what Daintree sees for nearly every child;
+ * anything unrecognised is a shape this build does not know. Collapsing them
+ * would hide a schema change behind a state we expect to see constantly.
  */
-export function toSubagentStatus(raw: unknown): CodexSubagentStatus {
-  if (!raw || typeof raw !== "object") return { type: "notLoaded" };
+export function toSubagentStatus(raw: unknown): AgentSubagentStatus {
+  if (!raw || typeof raw !== "object") return { type: "unknown", reason: "unrecognized" };
   const type = (raw as { type?: unknown }).type;
+  if (type === "notLoaded") return { type: "unknown", reason: "not-loaded" };
   if (type === "idle") return { type: "idle" };
-  if (type === "systemError") return { type: "systemError" };
+  if (type === "systemError") return { type: "error" };
   if (type === "active") {
     const flags = (raw as { activeFlags?: unknown }).activeFlags;
-    return {
-      type: "active",
-      activeFlags: Array.isArray(flags)
-        ? flags.filter((flag): flag is "waitingOnApproval" | "waitingOnUserInput" =>
-            ACTIVE_FLAGS.has(flag as string)
-          )
-        : [],
-    };
+    const known = Array.isArray(flags)
+      ? flags.filter((flag) => ACTIVE_FLAGS.has(flag as string))
+      : [];
+    // Approval outranks input: a child held at a permission prompt cannot be
+    // unblocked by typing at it, so that is the one worth naming.
+    if (known.includes("waitingOnApproval")) return { type: "blocked", reason: "approval" };
+    if (known.includes("waitingOnUserInput")) return { type: "blocked", reason: "input" };
+    return { type: "working" };
   }
-  return { type: "notLoaded" };
+  return { type: "unknown", reason: "unrecognized" };
 }
 
 function numberOf(value: unknown): number | null {
@@ -110,22 +122,24 @@ function asString(value: unknown): string | null {
   return typeof value === "string" && value.length > 0 ? value : null;
 }
 
-export function toSubagent(raw: RawThread): CodexSubagent | null {
+export function toSubagent(raw: RawThread): AgentSubagent | null {
   const threadId = asString(raw.id);
   if (!threadId) return null;
   return {
-    threadId,
-    parentThreadId: asString(raw.parentThreadId),
-    nickname: asString(raw.agentNickname),
+    id: threadId,
+    // Codex's nickname is the handle its own transcript uses for the child, so
+    // it lands in the same slot as Claude's description of the delegated task.
+    label: asString(raw.agentNickname),
     role: asString(raw.agentRole),
     preview: typeof raw.preview === "string" ? raw.preview : "",
-    cwd: typeof raw.cwd === "string" ? raw.cwd : "",
+    // Neither is on the wire: `thread/list` reports no model, and Codex's
+    // children are all one level down, so a depth here would be a constant
+    // dressed up as an observation.
+    model: null,
+    depth: null,
     status: toSubagentStatus(raw.status),
     createdAt: secondsToMs(raw.createdAt),
     updatedAt: secondsToMs(raw.updatedAt),
-    // Fail closed: the protocol reports `null` for unloaded threads, which is
-    // every child Daintree sees, and `false` for parent-owned subagents.
-    acceptsDirectInput: raw.canAcceptDirectInput === true,
   };
 }
 
@@ -208,48 +222,32 @@ function itemText(item: RawTurnItem): string {
 }
 
 /**
- * Flatten a turn's items to the user/agent messages worth reading. Reasoning
- * items are dropped: they are the child's scratchpad, not its output, and they
- * dwarf the answer.
+ * Flatten a turn's items to the messages worth reading. Reasoning items are
+ * dropped: they are the child's scratchpad, not its output, and they dwarf the
+ * answer.
  */
-export function toSubagentTurn(raw: unknown): CodexSubagentTurn | null {
-  if (!raw || typeof raw !== "object") return null;
-  const turn = raw as {
-    id?: unknown;
-    items?: unknown;
-    status?: unknown;
-    startedAt?: unknown;
-    completedAt?: unknown;
-  };
-  const turnId = asString(turn.id);
-  if (!turnId) return null;
+export function toSubagentMessages(raw: unknown): AgentSubagentMessage[] {
+  if (!raw || typeof raw !== "object") return [];
+  const items = (raw as { items?: unknown }).items;
+  if (!Array.isArray(items)) return [];
 
-  const messages: CodexSubagentMessage[] = [];
-  if (Array.isArray(turn.items)) {
-    for (const item of turn.items as RawTurnItem[]) {
-      if (!item || typeof item !== "object") continue;
-      const role =
-        item.type === "userMessage" ? "user" : item.type === "agentMessage" ? "agent" : null;
-      if (!role) continue;
-      const text = itemText(item).trim();
-      if (!text) continue;
-      messages.push({ role, text: text.slice(0, CODEX_SUBAGENT_MESSAGE_MAX_CHARS) });
-    }
+  const messages: AgentSubagentMessage[] = [];
+  for (const item of items as RawTurnItem[]) {
+    if (!item || typeof item !== "object") continue;
+    const role =
+      item.type === "userMessage" ? "task" : item.type === "agentMessage" ? "reply" : null;
+    if (!role) continue;
+    const text = itemText(item).trim();
+    if (!text) continue;
+    messages.push({ role, text: text.slice(0, SUBAGENT_MESSAGE_MAX_CHARS) });
   }
-
-  return {
-    turnId,
-    status: asString(turn.status),
-    startedAt: nullableSecondsToMs(turn.startedAt),
-    completedAt: nullableSecondsToMs(turn.completedAt),
-    messages,
-  };
+  return messages;
 }
 
 function unavailable(
-  reason: CodexSubagentUnavailableReason,
+  reason: AgentSubagentUnavailableReason,
   detail?: string
-): { status: "unavailable"; reason: CodexSubagentUnavailableReason; detail?: string } {
+): { status: "unavailable"; reason: AgentSubagentUnavailableReason; detail?: string } {
   return detail
     ? { status: "unavailable", reason, detail: scrubSecrets(detail) }
     : { status: "unavailable", reason };
@@ -273,11 +271,11 @@ interface ResolvedTerminal {
  */
 async function resolveTerminal(
   terminalId: string
-): Promise<ResolvedTerminal | { status: "unavailable"; reason: CodexSubagentUnavailableReason }> {
+): Promise<ResolvedTerminal | { status: "unavailable"; reason: AgentSubagentUnavailableReason }> {
   const info = await getPtyClient().getTerminalAsync(terminalId);
   if (!info) return { status: "unavailable", reason: "terminal-unknown" };
   if (info.launchAgentId !== "codex" && info.detectedAgentId !== "codex") {
-    return { status: "unavailable", reason: "not-codex" };
+    return { status: "unavailable", reason: "provider-mismatch" };
   }
   if (!info.cwd) return { status: "unavailable", reason: "terminal-unknown" };
 
@@ -319,7 +317,7 @@ async function listChildren(
   // participate in the spawn-edge lifecycle this filter walks.
   const response = await call<{ data?: unknown }>("thread/list", {
     parentThreadId,
-    limit: SUBAGENT_LIMIT,
+    limit: SUBAGENT_LIST_LIMIT,
     useStateDbOnly: true,
   });
   return Array.isArray(response?.data) ? (response.data as RawThread[]) : [];
@@ -372,7 +370,7 @@ async function resolveParent(
   });
 }
 
-export async function listCodexSubagents(terminalId: string): Promise<CodexSubagentsResult> {
+export async function listCodexSubagents(terminalId: string): Promise<AgentSubagentsResult> {
   const resolved = await resolveTerminal(terminalId);
   if ("status" in resolved) return resolved;
 
@@ -384,11 +382,11 @@ export async function listCodexSubagents(terminalId: string): Promise<CodexSubag
       const children = await listChildren(call, selection.parentThreadId);
       return {
         status: "ok" as const,
-        parentThreadId: selection.parentThreadId,
-        matchedBy: selection.matchedBy,
+        provider: "codex" as const,
+        parentId: selection.parentThreadId,
         subagents: children
           .map(toSubagent)
-          .filter((child): child is CodexSubagent => child !== null)
+          .filter((child): child is AgentSubagent => child !== null)
           .sort((a, b) => b.updatedAt - a.updatedAt),
       };
     });
@@ -399,8 +397,8 @@ export async function listCodexSubagents(terminalId: string): Promise<CodexSubag
 
 export async function readCodexSubagentTranscript(
   terminalId: string,
-  threadId: string
-): Promise<CodexSubagentTranscriptResult> {
+  subagentId: string
+): Promise<AgentSubagentTranscriptResult> {
   const resolved = await resolveTerminal(terminalId);
   if ("status" in resolved) return resolved;
 
@@ -415,12 +413,12 @@ export async function readCodexSubagentTranscript(
       // without this a wrong or hostile id would read an unrelated Codex
       // conversation that has nothing to do with this terminal.
       const children = await listChildren(call, selection.parentThreadId);
-      if (!children.some((child) => asString(child.id) === threadId)) {
-        return unavailable("no-session");
+      if (!children.some((child) => asString(child.id) === subagentId)) {
+        return unavailable("subagent-not-found");
       }
 
       const response = await call<{ data?: unknown }>("thread/turns/list", {
-        threadId,
+        threadId: subagentId,
         limit: CODEX_SUBAGENT_TRANSCRIPT_TURN_LIMIT,
         sortDirection: "desc",
         // `summary` carries the user prompt and the agent's answer without the
@@ -429,14 +427,18 @@ export async function readCodexSubagentTranscript(
         itemsView: "summary",
       });
       const turns = Array.isArray(response?.data) ? response.data : [];
+      // The page arrives newest-first; the shared transcript reads oldest-first
+      // so a child shows the task it was given above the answer it gave.
+      const messages = [...turns].reverse().flatMap(toSubagentMessages);
       return {
         status: "ok" as const,
-        threadId,
-        // A turn whose only items were reasoning has nothing to show, and an
-        // all-empty page would still read as "loaded" to the renderer.
-        turns: turns
-          .map(toSubagentTurn)
-          .filter((turn): turn is CodexSubagentTurn => turn !== null && turn.messages.length > 0),
+        subagentId,
+        messages: messages.slice(-SUBAGENT_TRANSCRIPT_MESSAGE_LIMIT),
+        // A full page means the protocol had at least this much and older turns
+        // were never asked for, which is the same thing to whoever is reading.
+        truncated:
+          turns.length >= CODEX_SUBAGENT_TRANSCRIPT_TURN_LIMIT ||
+          messages.length > SUBAGENT_TRANSCRIPT_MESSAGE_LIMIT,
       };
     });
   } catch (error) {

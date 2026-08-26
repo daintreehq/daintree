@@ -114,6 +114,14 @@ export interface GeneratedIpcInvokeMap {
     args: [options: import("./agent.js").SaveArtifactOptions];
     result: import("./agent.js").SaveArtifactResult | null;
   };
+  "claude:list-subagents": {
+    args: [__0: { terminalId: string }];
+    result: import("./agentSubagents.js").AgentSubagentsResult;
+  };
+  "claude:read-subagent-transcript": {
+    args: [__0: { terminalId: string; subagentId: string }];
+    result: import("./agentSubagents.js").AgentSubagentTranscriptResult;
+  };
   "cli:get-status": {
     args: [];
     result: import("./system.js").CliInstallStatus;
@@ -148,11 +156,11 @@ export interface GeneratedIpcInvokeMap {
   };
   "codex:list-subagents": {
     args: [__0: { terminalId: string }];
-    result: import("./codexSubagents.js").CodexSubagentsResult;
+    result: import("./agentSubagents.js").AgentSubagentsResult;
   };
   "codex:read-subagent-transcript": {
-    args: [__0: { terminalId: string; threadId: string }];
-    result: import("./codexSubagents.js").CodexSubagentTranscriptResult;
+    args: [__0: { terminalId: string; subagentId: string }];
+    result: import("./agentSubagents.js").AgentSubagentTranscriptResult;
   };
   "commands:execute": {
     args: [payload: import("../commands.js").CommandExecutePayload];
@@ -898,8 +906,8 @@ export interface GeneratedIpcInvokeMap {
     result: import("./mcpServer.js").McpServerStatusSnapshot;
   };
   "mcp-server:set-session-tier": {
-    args: [payload: { sessionId: string; tier: "action" | "workbench" | "system" }];
-    result: { sessionId: string; tier: "action" | "workbench" | "system" };
+    args: [payload: { sessionId: string; tier: "workbench" | "action" | "system" }];
+    result: { sessionId: string; tier: "workbench" | "action" | "system" };
   };
   "menu:show-application": {
     args: [payload?: import("../menu.js").ShowApplicationMenuPayload | undefined];
@@ -1815,7 +1823,7 @@ export interface GeneratedIpcInvokeMap {
           sourcePrNumber?: number | undefined;
           sourcePrTitle?: string | undefined;
           sourcePrUrl?: string | undefined;
-          sourcePrState?: "merged" | "open" | "closed" | undefined;
+          sourcePrState?: "open" | "closed" | "merged" | undefined;
           sourcePrLinkedIssueNumber?: number | undefined;
         };
       },

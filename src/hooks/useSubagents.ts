@@ -1,21 +1,22 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { codexClient } from "@/clients/codexClient";
+import { SUBAGENT_PROVIDERS } from "@/clients/subagentProviders";
 import { isElectronAvailable } from "./useElectron";
 import { logWarn } from "@/utils/logger";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import type { AgentState } from "@/types";
-import type { CodexSubagentsResult } from "@shared/types/ipc/codexSubagents";
+import type { AgentSubagentsResult, SubagentProvider } from "@shared/types/ipc/agentSubagents";
 
 /**
- * Floor between automatic refreshes. Each one spawns a short-lived
- * `codex app-server`, so a terminal that flickers between states can't turn
- * into a spawn storm. Manual refresh bypasses it — the user asked.
+ * Floor between automatic refreshes. A Codex lookup spawns a short-lived
+ * `codex app-server` and a Claude one opens every child's transcript, so a
+ * terminal that flickers between states can't turn either into a storm. Manual
+ * refresh bypasses it — the user asked.
  */
-export const CODEX_SUBAGENT_REFRESH_THROTTLE_MS = 20_000;
+export const SUBAGENT_REFRESH_THROTTLE_MS = 20_000;
 
 /**
  * States where the parent has stopped producing output, so any subagent it
- * spawned has had a chance to be written to Codex's thread store.
+ * spawned has had a chance to reach the provider's store.
  */
 const SETTLED_STATES: ReadonlySet<AgentState> = new Set<AgentState>([
   "idle",
@@ -23,8 +24,8 @@ const SETTLED_STATES: ReadonlySet<AgentState> = new Set<AgentState>([
   "completed",
 ]);
 
-export interface UseCodexSubagentsResult {
-  result: CodexSubagentsResult | null;
+export interface UseSubagentsResult {
+  result: AgentSubagentsResult | null;
   isLoading: boolean;
   refresh: () => void;
 }
@@ -39,7 +40,7 @@ export interface UseCodexSubagentsResult {
  */
 interface CachedLookup {
   at: number;
-  result: CodexSubagentsResult;
+  result: AgentSubagentsResult;
 }
 
 const lookupCache = new Map<string, CachedLookup>();
@@ -52,20 +53,25 @@ const MAX_CACHED_TERMINALS = 64;
 /**
  * A reused panel id is not the same session. Folding the PTY's start time into
  * the key means a respawned terminal looks up its own subagents instead of
- * adopting the answer for the process that used to live there.
+ * adopting the answer for the process that used to live there, and folding in
+ * the provider keeps a pane that switched agents from reading the old one's.
  */
-function cacheKey(terminalId: string, generation: number | undefined): string {
-  return `${terminalId}:${generation ?? 0}`;
+function cacheKey(
+  provider: SubagentProvider,
+  terminalId: string,
+  generation: number | undefined
+): string {
+  return `${provider}:${terminalId}:${generation ?? 0}`;
 }
 
-function rememberLookup(key: string, result: CodexSubagentsResult, at: number): void {
+function rememberLookup(key: string, result: AgentSubagentsResult, at: number): void {
   lookupCache.set(key, { at, result });
   if (lookupCache.size <= MAX_CACHED_TERMINALS) return;
   // Expired entries first — they would be refetched anyway — then oldest-first
   // until the cap actually holds, since every entry can be fresh at once.
   for (const [entryKey, entry] of lookupCache) {
     if (lookupCache.size <= MAX_CACHED_TERMINALS) return;
-    if (at - entry.at > CODEX_SUBAGENT_REFRESH_THROTTLE_MS) lookupCache.delete(entryKey);
+    if (at - entry.at > SUBAGENT_REFRESH_THROTTLE_MS) lookupCache.delete(entryKey);
   }
   for (const entryKey of lookupCache.keys()) {
     if (lookupCache.size <= MAX_CACHED_TERMINALS) return;
@@ -74,16 +80,21 @@ function rememberLookup(key: string, result: CodexSubagentsResult, at: number): 
 }
 
 /**
- * Poll-free view of a Codex terminal's spawned subagents: one query on mount,
- * one whenever the parent settles, and one per manual refresh.
+ * Poll-free view of a terminal's spawned subagents: one query on mount, one
+ * whenever the parent settles, and one per manual refresh. Which store gets
+ * asked is the provider adapter's business, not this hook's.
  */
-export function useCodexSubagents(
+export function useSubagents(
   terminalId: string,
-  options: { enabled: boolean; agentState?: AgentState; generation?: number }
-): UseCodexSubagentsResult {
-  const { enabled, agentState, generation } = options;
-  const key = cacheKey(terminalId, generation);
-  const [result, setResult] = useState<CodexSubagentsResult | null>(
+  options: {
+    provider: SubagentProvider | null;
+    agentState?: AgentState;
+    generation?: number;
+  }
+): UseSubagentsResult {
+  const { provider, agentState, generation } = options;
+  const key = cacheKey(provider ?? "codex", terminalId, generation);
+  const [result, setResult] = useState<AgentSubagentsResult | null>(
     () => lookupCache.get(key)?.result ?? null
   );
   const [isLoading, setIsLoading] = useState(false);
@@ -98,36 +109,39 @@ export function useCodexSubagents(
 
   const fetchSubagents = useCallback(
     (force: boolean) => {
-      if (!enabled || !isElectronAvailable()) return;
+      if (!provider || !isElectronAvailable()) return;
       // Module-scoped, so two panes remounting the same terminal at once issue
       // one lookup rather than one each.
       if (inFlightKeys.has(key)) return;
       const now = Date.now();
       const cached = lookupCache.get(key);
-      if (!force && cached && now - cached.at < CODEX_SUBAGENT_REFRESH_THROTTLE_MS) {
+      if (!force && cached && now - cached.at < SUBAGENT_REFRESH_THROTTLE_MS) {
         // Still fresh: adopt it so a remount inside the window shows the same
         // list it had before, without spawning anything.
         setResult(cached.result);
         return;
       }
+      const adapter = SUBAGENT_PROVIDERS[provider];
       inFlightKeys.add(key);
       setIsLoading(true);
-      void codexClient
-        .listSubagents({ terminalId })
+      void adapter
+        .list({ terminalId })
         .then((next) => {
           rememberLookup(key, next, Date.now());
           if (mountedRef.current) setResult(next);
         })
         .catch((error: unknown) => {
-          logWarn(`[useCodexSubagents] list failed: ${formatErrorMessage(error, "unknown error")}`);
-          if (mountedRef.current) setResult({ status: "unavailable", reason: "protocol-error" });
+          logWarn(`[useSubagents] list failed: ${formatErrorMessage(error, "unknown error")}`);
+          if (mountedRef.current) {
+            setResult({ status: "unavailable", reason: adapter.fallbackReason });
+          }
         })
         .finally(() => {
           inFlightKeys.delete(key);
           if (mountedRef.current) setIsLoading(false);
         });
     },
-    [enabled, key, terminalId]
+    [provider, key, terminalId]
   );
 
   // First look. Throttled like any other automatic fetch — a restore remounts
@@ -147,7 +161,7 @@ export function useCodexSubagents(
 }
 
 /** Test-only: the lookup cache is module state and outlives a render tree. */
-export function __resetCodexSubagentThrottle(): void {
+export function __resetSubagentThrottle(): void {
   lookupCache.clear();
   inFlightKeys.clear();
 }
