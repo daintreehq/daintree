@@ -98,7 +98,7 @@ function SubagentRow({
   const showSpinner = useDohertyGate(isLoading);
   const subtitle = subagentSubtitle(subagent);
   const tone = subagentStatusTone(subagent.status);
-  const panelId = `subagent-${provider}-${subagent.id}`;
+  const panelId = `subagent-${terminalId}-${provider}-${subagent.id}`;
 
   const load = useCallback(() => {
     if (isLoading) return;
@@ -223,7 +223,10 @@ export function SubagentChip({ terminalId }: { terminalId: string }) {
     generation,
   });
 
-  if (!active || result?.status !== "ok" || result.subagents.length === 0) return null;
+  // The provider check is belt-and-braces over the hook's own key guard: a list
+  // read from one agent's store must never be rendered as another's.
+  if (!active || result?.status !== "ok" || result.provider !== active) return null;
+  if (result.subagents.length === 0) return null;
 
   const { subagents } = result;
   const label = SUBAGENT_PROVIDERS[result.provider].label;
@@ -256,7 +259,7 @@ export function SubagentChip({ terminalId }: { terminalId: string }) {
         <ul className="max-h-80 overflow-y-auto">
           {subagents.map((subagent) => (
             <SubagentRow
-              key={subagent.id}
+              key={`${result.provider}:${subagent.id}`}
               terminalId={terminalId}
               provider={result.provider}
               subagent={subagent}

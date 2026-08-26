@@ -91,7 +91,7 @@ export function subagentUnavailableMessage(
     case "no-session":
       return `Couldn't match this terminal to a ${provider} session`;
     case "ambiguous-session":
-      return `More than one ${provider} session ran in this folder, so we can't tell which is this terminal's`;
+      return `More than one ${provider} session ran in this folder, so this terminal's can't be identified`;
     case "subagent-not-found":
       return "That subagent isn't one of this terminal's";
     case "timeout":

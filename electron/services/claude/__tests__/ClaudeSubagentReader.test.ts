@@ -1,5 +1,5 @@
 import { describe, expect, it, beforeEach, afterEach } from "vitest";
-import { mkdtemp, mkdir, rm, writeFile, utimes } from "fs/promises";
+import { chmod, mkdtemp, mkdir, rm, symlink, writeFile, utimes } from "fs/promises";
 import { tmpdir } from "os";
 import path from "path";
 import {
@@ -130,9 +130,24 @@ describe("findSubagentsDir", () => {
   });
 
   it("refuses a session id that could climb out of the projects root", async () => {
-    await mkdir(path.join(root, "projects"), { recursive: true });
+    // Baited: the traversal target exists, so only the guard can be what stops it.
+    const escape = path.join(root, "etc", "subagents");
+    await mkdir(escape, { recursive: true });
+    await mkdir(path.join(root, "projects", "slug"), { recursive: true });
     await expect(
       findSubagentsDir("/Users/x/Projects/demo", "../../etc", { configDir: root })
+    ).resolves.toBeNull();
+  });
+
+  it("refuses a session directory that is a symlink out of the store", async () => {
+    const outside = path.join(root, "outside", SESSION, "subagents");
+    await mkdir(outside, { recursive: true });
+    const slugDir = path.join(root, "projects", deriveProjectSlug("/Users/x/Projects/demo"));
+    await mkdir(slugDir, { recursive: true });
+    await symlink(path.join(root, "outside", SESSION), path.join(slugDir, SESSION));
+
+    await expect(
+      findSubagentsDir("/Users/x/Projects/demo", SESSION, { configDir: root })
     ).resolves.toBeNull();
   });
 });
@@ -140,9 +155,12 @@ describe("findSubagentsDir", () => {
 describe("isSafeSubagentId", () => {
   it("accepts a real agent id and refuses anything that could steer a path", () => {
     expect(isSafeSubagentId("a20ff1d9e5d1d0eaa")).toBe(true);
-    for (const hostile of ["../secret", "a/b", "a\\b", "", "a.jsonl", "a\0b", "a".repeat(129)]) {
+    for (const hostile of ["../secret", "a/b", "a\\b", "", "a.jsonl", "a\0b"]) {
       expect(isSafeSubagentId(hostile)).toBe(false);
     }
+    // Bounded rather than a specific length: an id long enough to be a
+    // filename attack is refused wherever the boundary sits.
+    expect(isSafeSubagentId("a".repeat(4096))).toBe(false);
   });
 });
 
@@ -190,7 +208,21 @@ describe("parseSubagentMeta", () => {
 
   it("drops a depth that is not a finite number rather than passing it through", () => {
     expect(parseSubagentMeta(JSON.stringify({ spawnDepth: "1" }), null).depth).toBeNull();
-    expect(parseSubagentMeta(JSON.stringify({ spawnDepth: Number.NaN }), null).depth).toBeNull();
+    // Written as raw JSON: `JSON.stringify` turns both NaN and Infinity into
+    // `null`, so a stringified fixture would never exercise this at all.
+    expect(parseSubagentMeta('{"spawnDepth":1e400}', null).depth).toBeNull();
+  });
+
+  it("takes nothing from a sidecar that parsed into something other than an object", () => {
+    expect(parseSubagentMeta("[1,2,3]", 5).agentType).toBeNull();
+    expect(parseSubagentMeta("42", 5).agentType).toBeNull();
+    // The spawn time came from the file, not its contents, so it survives.
+    expect(parseSubagentMeta("[1,2,3]", 5).createdAt).toBe(5);
+  });
+
+  it("reads a sidecar the editor left a byte-order mark on", () => {
+    const meta = parseSubagentMeta('\uFEFF{"agentType":"general-purpose"}', null);
+    expect(meta.agentType).toBe("general-purpose");
   });
 });
 
@@ -250,6 +282,26 @@ describe("inferStatus", () => {
 
   it("separates an unreadable record from an idle one", () => {
     expect(inferStatus(null, now, now)).toEqual({ type: "unknown", reason: "unrecognized" });
+  });
+
+  it("does not promote a stop reason nobody has seen into a completion", () => {
+    // `max_tokens` and `pause_turn` mean the turn was cut short, and an
+    // unfamiliar value is not evidence of anything.
+    for (const stop of ["max_tokens", "pause_turn", "something_new", ""]) {
+      const last = { type: "assistant", message: { stop_reason: stop }, timestamp: null };
+      expect(inferStatus(last, now, now).type).not.toBe("completed");
+    }
+  });
+
+  it("will not read past a half-written line to an older completion", () => {
+    const older = { type: "assistant", message: { stop_reason: "end_turn" }, timestamp: null };
+    // A child that finished one turn and is streaming the next: the older
+    // end_turn is real, it is just not this child's last word any more.
+    expect(inferStatus(older, now, now, true)).toEqual({ type: "working" });
+    expect(inferStatus(older, now - CLAUDE_SUBAGENT_ACTIVE_WINDOW_MS - 1, now, true)).toEqual({
+      type: "unknown",
+      reason: "stale",
+    });
   });
 });
 
@@ -312,6 +364,73 @@ describe("listSubagentsInDir", () => {
 
   it("returns nothing for a directory that is not there", async () => {
     await expect(listSubagentsInDir(path.join(root, "absent"))).resolves.toEqual([]);
+  });
+
+  it("raises a directory it cannot read rather than reporting it as empty", async () => {
+    const dir = await makeSubagentsDir("/Users/x/Projects/demo");
+    await writeChild(dir, "aaa1", [userRecord("go")]);
+    await chmod(dir, 0o000);
+    try {
+      // "No children" and "no permission" are different answers, and only one
+      // of them is something we observed.
+      await expect(listSubagentsInDir(dir)).rejects.toThrow();
+    } finally {
+      await chmod(dir, 0o700);
+    }
+  });
+
+  it("does not report a child as done when its last line is still being written", async () => {
+    const dir = await makeSubagentsDir("/Users/x/Projects/demo");
+    await writeChild(dir, "aaa1", [
+      userRecord("go"),
+      assistantRecord("finished the first turn", "end_turn"),
+      '{"type":"assistant","message":{"role":"assistant","content":[{"type":"tex',
+    ]);
+
+    const [child] = await listSubagentsInDir(dir);
+    expect(child?.status).toEqual({ type: "working" });
+  });
+
+  it("reads a lone record that was never terminated with a newline", async () => {
+    const dir = await makeSubagentsDir("/Users/x/Projects/demo");
+    await writeFile(path.join(dir, "agent-aaa1.jsonl"), userRecord("the only task"), "utf8");
+
+    const [child] = await listSubagentsInDir(dir);
+    expect(child?.preview).toBe("the only task");
+  });
+
+  it("skips a transcript name that is a symlink to another session's history", async () => {
+    const dir = await makeSubagentsDir("/Users/x/Projects/demo");
+    const outside = path.join(root, "elsewhere.jsonl");
+    await writeFile(outside, userRecord("someone else's work") + "\n", "utf8");
+    await symlink(outside, path.join(dir, "agent-aaa1.jsonl"));
+
+    await expect(listSubagentsInDir(dir)).resolves.toEqual([]);
+  });
+
+  it("breaks a tie on activity deterministically rather than by directory order", async () => {
+    const dir = await makeSubagentsDir("/Users/x/Projects/demo");
+    const a = await writeChild(dir, "bbb2", [userRecord("second")]);
+    const b = await writeChild(dir, "aaa1", [userRecord("first")]);
+    const same = new Date(1_700_000_000_000);
+    await utimes(a, same, same);
+    await utimes(b, same, same);
+
+    expect((await listSubagentsInDir(dir)).map((c) => c.id)).toEqual(["aaa1", "bbb2"]);
+  });
+
+  it("survives a record whose message is not an object", async () => {
+    const dir = await makeSubagentsDir("/Users/x/Projects/demo");
+    await writeChild(dir, "aaa1", [
+      record({ type: "user", message: null }),
+      record({ type: "user", message: "a bare string" }),
+      '["not","a","record"]',
+      assistantRecord("done", "end_turn"),
+    ]);
+
+    const [child] = await listSubagentsInDir(dir);
+    expect(child?.status).toEqual({ type: "completed" });
+    expect(child?.preview).toBe("");
   });
 
   it("reads status from the real last record, not a stale one further up", async () => {

@@ -32,7 +32,7 @@
  */
 
 import { createReadStream } from "fs";
-import { open, readdir, stat } from "fs/promises";
+import { lstat, open, readdir, realpath, stat } from "fs/promises";
 import { createInterface } from "readline";
 import os from "os";
 import path from "path";
@@ -40,6 +40,7 @@ import {
   SUBAGENT_LIST_LIMIT,
   SUBAGENT_MESSAGE_MAX_CHARS,
   SUBAGENT_TRANSCRIPT_MESSAGE_LIMIT,
+  trimPreservingTask,
   type AgentSubagent,
   type AgentSubagentMessage,
   type AgentSubagentStatus,
@@ -61,6 +62,14 @@ const LIST_PROBE_BYTES = 128 * 1024;
 const META_MAX_BYTES = 64 * 1024;
 /** Lines walked in one full transcript read, so a pathological file still terminates. */
 const TRANSCRIPT_MAX_LINES = 50_000;
+/**
+ * Bytes streamed in one full transcript read. A line cap alone is not a bound:
+ * a tool result can carry a whole file on a single line, and `readline` has to
+ * hold that line entire before anything gets to skip it.
+ */
+const TRANSCRIPT_MAX_BYTES = 8 * 1024 * 1024;
+/** Cap on any one string lifted out of a sidecar, so a bloated field can't ride to the renderer. */
+const META_FIELD_MAX_CHARS = 500;
 /** Concurrent per-child reads. A session can hold dozens of children; opening them all at once helps nobody. */
 const LIST_CONCURRENCY = 8;
 /** Parsed-probe entries retained across calls, keyed by file identity. */
@@ -76,6 +85,12 @@ export interface ClaudeSubagentReaderOptions {
  * `CLAUDE_CONFIG_DIR` is a real override the CLI honours, and this repo already
  * treats it as one when discovering commands and skills. Never sourced from the
  * renderer — the process environment is the only input.
+ *
+ * Known limitation: this reads Daintree's own environment, not the terminal's.
+ * A project preset or the user's shell can export a different
+ * `CLAUDE_CONFIG_DIR` to the agent alone, and that store is invisible here —
+ * the list comes back empty rather than wrong. Closing it means recording the
+ * effective value on the pty-host terminal record at spawn.
  */
 export function resolveClaudeConfigDir(env: NodeJS.ProcessEnv = process.env): string {
   const override = env.CLAUDE_CONFIG_DIR?.trim();
@@ -96,6 +111,17 @@ export function resolveClaudeConfigDir(env: NodeJS.ProcessEnv = process.env): st
  */
 export function deriveProjectSlug(cwd: string): string {
   return cwd.replace(/[\\/]/g, "-");
+}
+
+/**
+ * Absence is normal here — a session that never delegated has no directory, and
+ * a child can be removed between the readdir and the read. Everything else
+ * (a permission wall, a failing disk) is a real failure, and reporting it as
+ * "no children" would be indistinguishable from the ordinary case.
+ */
+function isAbsence(error: unknown): boolean {
+  const code = (error as { code?: unknown })?.code;
+  return code === "ENOENT" || code === "ENOTDIR";
 }
 
 function isSafeSessionId(value: string): boolean {
@@ -123,9 +149,13 @@ export async function findSubagentsDir(
 ): Promise<string | null> {
   if (!isSafeSessionId(parentSessionId)) return null;
   const projectsRoot = path.join(options.configDir ?? resolveClaudeConfigDir(), "projects");
+  // Resolved once so a user who symlinks their whole config dir still matches,
+  // while a symlink planted *inside* it cannot point the read somewhere else.
+  const rootReal = await realpathOrNull(projectsRoot);
+  if (!rootReal) return null;
 
   const direct = path.join(projectsRoot, deriveProjectSlug(cwd), parentSessionId, "subagents");
-  if (await isDirectory(direct)) return direct;
+  if (await isContainedDirectory(direct, rootReal)) return direct;
 
   let entries: string[];
   try {
@@ -138,14 +168,33 @@ export async function findSubagentsDir(
     // traversal-shaped name is skipped rather than resolved.
     if (entry === "." || entry === ".." || entry.includes(path.sep)) continue;
     const candidate = path.join(projectsRoot, entry, parentSessionId, "subagents");
-    if (await isDirectory(candidate)) return candidate;
+    if (await isContainedDirectory(candidate, rootReal)) return candidate;
   }
   return null;
 }
 
-async function mtimeOf(target: string): Promise<number | null> {
+async function realpathOrNull(target: string): Promise<string | null> {
   try {
-    return Math.round((await stat(target)).mtimeMs);
+    return await realpath(target);
+  } catch {
+    return null;
+  }
+}
+
+/** True only for a real directory that resolves to somewhere under `rootReal`. */
+async function isContainedDirectory(target: string, rootReal: string): Promise<boolean> {
+  if (!(await isDirectory(target))) return false;
+  const real = await realpathOrNull(target);
+  if (!real) return false;
+  const relative = path.relative(rootReal, real);
+  return relative !== "" && !relative.startsWith("..") && !path.isAbsolute(relative);
+}
+
+async function regularFileMtime(target: string): Promise<number | null> {
+  try {
+    // `lstat` for the same reason as the transcript: a sidecar is a plain file.
+    const stats = await lstat(target);
+    return stats.isFile() ? Math.round(stats.mtimeMs) : null;
   } catch {
     return null;
   }
@@ -176,7 +225,9 @@ const EMPTY_META: SubagentMeta = {
 };
 
 function asText(value: unknown): string | null {
-  return typeof value === "string" && value.trim().length > 0 ? value.trim() : null;
+  if (typeof value !== "string") return null;
+  const trimmed = value.trim();
+  return trimmed.length > 0 ? trimmed.slice(0, META_FIELD_MAX_CHARS) : null;
 }
 
 /**
@@ -195,12 +246,16 @@ export function humanizeAgentType(value: string | null): string | null {
 export function parseSubagentMeta(raw: string, createdAt: number | null): SubagentMeta {
   let parsed: unknown;
   try {
-    parsed = JSON.parse(raw);
+    // A BOM is not JSON; strip it rather than lose every field to it.
+    parsed = JSON.parse(raw.replace(/^\uFEFF/, ""));
   } catch {
     // The sidecar is uncontracted; a malformed one costs its fields, not the row.
     return { ...EMPTY_META, createdAt };
   }
-  if (!parsed || typeof parsed !== "object") return { ...EMPTY_META, createdAt };
+  // An array is an object to `typeof`, and its indices are not the fields we want.
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    return { ...EMPTY_META, createdAt };
+  }
   const meta = parsed as Record<string, unknown>;
   const depth = meta.spawnDepth;
   return {
@@ -228,7 +283,8 @@ function parseRecord(line: string): ParsedRecord | null {
   } catch {
     return null;
   }
-  if (!parsed || typeof parsed !== "object") return null;
+  // An array parses fine and is an object, but it is not a record.
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return null;
   const record = parsed as Record<string, unknown>;
   const message = record.message;
   const timestamp = typeof record.timestamp === "string" ? Date.parse(record.timestamp) : NaN;
@@ -265,32 +321,60 @@ export function recordText(message: ParsedRecord["message"]): string {
 }
 
 /**
+ * Stop reasons that actually end a turn.
+ *
+ * An allowlist rather than "anything but `tool_use`", because the field is
+ * uncontracted and the values that are not here argue against completion, not
+ * for it: `max_tokens` and `pause_turn` mean the turn was cut off mid-thought.
+ * A value nobody has seen before falls through to the activity check instead of
+ * being promoted to "Done" on the strength of being unfamiliar.
+ */
+const TERMINAL_STOP_REASONS: ReadonlySet<string> = new Set([
+  "end_turn",
+  "stop_sequence",
+  "refusal",
+]);
+
+/**
  * Decide what a child is doing from its last record and when the file last
  * changed.
  *
  * There is no completion record — the file simply stops. A finished turn is an
- * `assistant` record whose `stop_reason` settled on something other than
- * `tool_use`; anything else is either still in flight or an unfinished step
- * nobody can account for. The third case is reported as unknown, never as an
- * error: the disk offers no evidence that a quiet child failed.
+ * `assistant` record whose `stop_reason` is one that ends a turn; anything else
+ * is either still in flight or an unfinished step nobody can account for. The
+ * third case is reported as unknown, never as an error: the disk offers no
+ * evidence that a quiet child failed.
+ *
+ * `partialTail` is its own input because a half-written final line is evidence,
+ * not noise. Reading past it to the last *parseable* record is how a child that
+ * finished one turn and is streaming the next gets reported as finished.
  */
 export function inferStatus(
   last: ParsedRecord | null,
   updatedAt: number,
-  now: number
+  now: number,
+  partialTail = false
 ): AgentSubagentStatus {
+  const recentlyActive = now - updatedAt <= CLAUDE_SUBAGENT_ACTIVE_WINDOW_MS;
+  // Something was mid-write when we looked, so whatever came before it is not
+  // this child's last word.
+  if (partialTail) {
+    return recentlyActive ? { type: "working" } : { type: "unknown", reason: "stale" };
+  }
   if (!last) return { type: "unknown", reason: "unrecognized" };
   if (last.type === "assistant") {
     const stop = last.message?.stop_reason;
-    if (typeof stop === "string" && stop !== "tool_use") return { type: "completed" };
+    if (typeof stop === "string" && TERMINAL_STOP_REASONS.has(stop)) return { type: "completed" };
   }
-  if (now - updatedAt <= CLAUDE_SUBAGENT_ACTIVE_WINDOW_MS) return { type: "working" };
+  if (recentlyActive) return { type: "working" };
   return { type: "unknown", reason: "stale" };
 }
 
 interface Probe {
   first: ParsedRecord | null;
   last: ParsedRecord | null;
+  /** The final line was mid-write, so `last` is not the child's last word. */
+  partialTail: boolean;
 }
 
 interface CachedProbe extends Probe {
@@ -323,47 +407,63 @@ export function __resetClaudeSubagentProbeCache(): void {
  *
  * Listing has to stay cheap across every child of a session, and the two ends
  * are all it needs: the opening record carries the delegated task, the closing
- * one carries the status. A partial line at either boundary is dropped rather
- * than repaired — an older line could claim a completion that the real last
- * record does not support.
+ * one carries the status.
  */
 async function probeTranscript(file: string, size: number): Promise<Probe> {
   const handle = await open(file, "r");
   try {
-    const head = Buffer.alloc(Math.min(size, LIST_PROBE_BYTES));
-    await handle.read(head, 0, head.length, 0);
-    const headText = head.toString("utf8");
+    const headBytes = Buffer.alloc(Math.min(size, LIST_PROBE_BYTES));
+    // Short reads happen; the unwritten tail of the buffer is NUL, not content.
+    const head = await handle.read(headBytes, 0, headBytes.length, 0);
+    const headText = headBytes.subarray(0, head.bytesRead).toString("utf8");
     const firstBreak = headText.indexOf("\n");
-    // No newline in the probe means the first record is longer than the window,
-    // so there is no complete line to trust.
-    const first = firstBreak === -1 ? null : parseRecord(headText.slice(0, firstBreak));
+    // A file of one record and no trailing newline is still one whole record,
+    // as long as the probe reached the end of it.
+    const firstLine =
+      firstBreak === -1
+        ? head.bytesRead < LIST_PROBE_BYTES
+          ? headText
+          : ""
+        : headText.slice(0, firstBreak);
+    const first = parseRecord(firstLine);
 
-    let last: ParsedRecord | null = null;
-    if (size <= LIST_PROBE_BYTES) {
-      last = lastCompleteRecord(headText, true);
-    } else {
-      const tail = Buffer.alloc(LIST_PROBE_BYTES);
-      await handle.read(tail, 0, tail.length, size - LIST_PROBE_BYTES);
-      last = lastCompleteRecord(tail.toString("utf8"), false);
-    }
-    return { first, last };
+    if (size <= LIST_PROBE_BYTES) return { first, ...finalRecord(headText, true) };
+
+    const tailBytes = Buffer.alloc(LIST_PROBE_BYTES);
+    const tail = await handle.read(tailBytes, 0, tailBytes.length, size - LIST_PROBE_BYTES);
+    const tailText = tailBytes.subarray(0, tail.bytesRead).toString("utf8");
+    return { first, ...finalRecord(tailText, false) };
   } finally {
     await handle.close();
   }
 }
 
 /**
- * Last parseable whole line in a chunk. When the chunk starts mid-file its
- * first line is a fragment, so it is never considered.
+ * The final record in a chunk, and whether it was whole.
+ *
+ * Only the newest non-blank line is considered. Walking further back to find
+ * something parseable is what would let a child that finished one turn and is
+ * midway through writing the next be reported as finished — the older
+ * `end_turn` is real, it just isn't this child's last word any more. When the
+ * newest line won't parse, that is reported as a partial tail so the caller can
+ * fall back to file activity instead of to stale evidence.
+ *
+ * A chunk that starts mid-file opens on a fragment, so a chunk of one line has
+ * no whole record in it at all.
  */
-function lastCompleteRecord(chunk: string, fromStart: boolean): ParsedRecord | null {
+function finalRecord(
+  chunk: string,
+  fromStart: boolean
+): { last: ParsedRecord | null; partialTail: boolean } {
   const lines = chunk.split("\n");
   const floor = fromStart ? 0 : 1;
   for (let index = lines.length - 1; index >= floor; index -= 1) {
-    const record = parseRecord(lines[index] ?? "");
-    if (record) return record;
+    const line = lines[index] ?? "";
+    if (line.trim().length === 0) continue;
+    const record = parseRecord(line);
+    return record ? { last: record, partialTail: false } : { last: null, partialTail: true };
   }
-  return null;
+  return { last: null, partialTail: false };
 }
 
 async function mapPool<T, R>(items: T[], limit: number, fn: (item: T) => Promise<R>): Promise<R[]> {
@@ -396,8 +496,11 @@ export async function listSubagentsInDir(
   let entries: string[];
   try {
     entries = await readdir(dir);
-  } catch {
-    return [];
+  } catch (error) {
+    // A directory that isn't there is an empty list. A directory that refuses
+    // to be read is a failure, and the caller says so rather than showing zero.
+    if (isAbsence(error)) return [];
+    throw error;
   }
 
   const ids: string[] = [];
@@ -410,21 +513,34 @@ export async function listSubagentsInDir(
     const file = path.join(dir, `agent-${id}.jsonl`);
     let size: number;
     let updatedAt: number;
+    let ino: number;
+    let ctime: number;
     try {
-      const stats = await stat(file);
+      // `lstat`, not `stat`: `stat` follows the link and reports the target,
+      // so a symlink pointing at another session's transcript would pass an
+      // `isFile` check on the thing it points at. A real transcript is a plain
+      // file that Claude Code wrote here.
+      const stats = await lstat(file);
+      if (!stats.isFile()) return null;
       size = stats.size;
       updatedAt = Math.round(stats.mtimeMs);
+      ino = stats.ino;
+      ctime = Math.round(stats.ctimeMs);
     } catch {
+      // One child vanishing mid-list costs its row; the directory read below is
+      // what decides whether the store as a whole is readable.
       return null;
     }
 
     const meta = await readMeta(path.join(dir, `agent-${id}.meta.json`));
 
-    const fingerprint = `${updatedAt}:${size}`;
+    // Size and mtime alone can repeat across an atomic replace; the inode and
+    // ctime are what make the fingerprint about *this* file.
+    const fingerprint = `${updatedAt}:${size}:${ino}:${ctime}`;
     const cached = probeCache.get(file);
     let probe: Probe;
     if (cached && cached.fingerprint === fingerprint) {
-      probe = { first: cached.first, last: cached.last };
+      probe = { first: cached.first, last: cached.last, partialTail: cached.partialTail };
     } else {
       try {
         probe = await probeTranscript(file, size);
@@ -444,7 +560,7 @@ export async function listSubagentsInDir(
       preview: recordText(probe.first?.message ?? null).slice(0, SUBAGENT_MESSAGE_MAX_CHARS),
       model: meta.model,
       depth: meta.depth,
-      status: inferStatus(probe.last, updatedAt, now),
+      status: inferStatus(probe.last, updatedAt, now, probe.partialTail),
       // The sidecar is written once at spawn and never rewritten, so its mtime
       // is a clean birth time; the transcript's own first record is the
       // fallback when there is no sidecar.
@@ -460,7 +576,7 @@ export async function listSubagentsInDir(
 }
 
 async function readMeta(file: string): Promise<SubagentMeta> {
-  const createdAt = await mtimeOf(file);
+  const createdAt = await regularFileMtime(file);
   // No sidecar at all is normal for a child spawned without one.
   if (createdAt === null) return EMPTY_META;
   try {
@@ -486,12 +602,13 @@ export interface TranscriptRead {
  * Fold a child's whole transcript into the task it was given and what it said
  * back, streamed a line at a time so a large file never lands in memory whole.
  *
- * When the cap bites, the first message survives and the oldest replies go:
- * the delegated task is the one message that makes the rest legible, and the
- * newest reply is the one the reader came for.
+ * Bounded three ways: by bytes at the stream, because one tool-result line can
+ * carry an entire file and `readline` has to hold it whole before anything gets
+ * to skip it; by line count, against a file that is all short records; and by
+ * message count on the way out.
  */
 export async function readTranscriptFile(file: string): Promise<TranscriptRead> {
-  const stream = createReadStream(file, { encoding: "utf8" });
+  const stream = createReadStream(file, { encoding: "utf8", end: TRANSCRIPT_MAX_BYTES - 1 });
   const lines = createInterface({ input: stream, crlfDelay: Infinity });
   const messages: AgentSubagentMessage[] = [];
   let dropped = false;
@@ -513,9 +630,8 @@ export async function readTranscriptFile(file: string): Promise<TranscriptRead> 
       messages.push({ role, text: text.slice(0, SUBAGENT_MESSAGE_MAX_CHARS) });
 
       if (messages.length > SUBAGENT_TRANSCRIPT_MESSAGE_LIMIT) {
-        // Index 1, so the delegated task at index 0 is never the one evicted.
-        messages.splice(1, 1);
         dropped = true;
+        trimPreservingTask(messages, SUBAGENT_TRANSCRIPT_MESSAGE_LIMIT);
       }
     }
   } finally {
@@ -523,5 +639,7 @@ export async function readTranscriptFile(file: string): Promise<TranscriptRead> 
     stream.destroy();
   }
 
+  // The byte ceiling cuts the tail off rather than the head, so say so.
+  if (stream.bytesRead >= TRANSCRIPT_MAX_BYTES - 1) dropped = true;
   return { messages, truncated: dropped };
 }

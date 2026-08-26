@@ -12,7 +12,11 @@ vi.mock("@/clients/claudeClient", () => ({
   claudeClient: { listSubagents: listClaudeSubagents, readSubagentTranscript: vi.fn() },
 }));
 
-import { __resetSubagentThrottle, useSubagents } from "../useSubagents";
+import {
+  SUBAGENT_REFRESH_THROTTLE_MS,
+  __resetSubagentThrottle,
+  useSubagents,
+} from "../useSubagents";
 import type { AgentSubagentsResult } from "@shared/types/ipc/agentSubagents";
 
 function ok(id: string): AgentSubagentsResult {
@@ -45,6 +49,7 @@ beforeEach(() => {
 
 afterEach(() => {
   Reflect.deleteProperty(window, "electron");
+  vi.restoreAllMocks();
   vi.useRealTimers();
 });
 
@@ -115,8 +120,11 @@ describe("useSubagents", () => {
     await waitFor(() => expect(listClaudeSubagents).toHaveBeenCalledTimes(1));
   });
 
-  it("looks again once the parent settles, but not while it is still working", async () => {
+  it("holds the settle refetch inside the throttle window and takes it once past", async () => {
     listSubagents.mockResolvedValue(ok("child-1"));
+    const nowSpy = vi.spyOn(Date, "now");
+    nowSpy.mockReturnValue(1_000_000);
+
     const { rerender } = renderHook(
       ({ agentState }: { agentState: "working" | "completed" }) =>
         useSubagents("t1", { provider: "codex", agentState }),
@@ -124,9 +132,76 @@ describe("useSubagents", () => {
     );
     await waitFor(() => expect(listSubagents).toHaveBeenCalledTimes(1));
 
-    // The settle refetch is still throttled — the mount lookup was moments ago.
+    // Moments after the mount lookup: the settle is absorbed by the throttle.
     rerender({ agentState: "completed" });
     await waitFor(() => expect(listSubagents).toHaveBeenCalledTimes(1));
+
+    // Past the window, the same transition is worth a query.
+    nowSpy.mockReturnValue(1_000_000 + SUBAGENT_REFRESH_THROTTLE_MS + 1);
+    rerender({ agentState: "working" });
+    rerender({ agentState: "completed" });
+    await waitFor(() => expect(listSubagents).toHaveBeenCalledTimes(2));
+  });
+
+  it("does not leave a respawned pane showing the list of the process before it", async () => {
+    let releaseCodex: ((value: AgentSubagentsResult) => void) | undefined;
+    listSubagents.mockResolvedValueOnce(ok("old-child")).mockImplementationOnce(
+      () =>
+        new Promise<AgentSubagentsResult>((resolve) => {
+          releaseCodex = resolve;
+        })
+    );
+
+    const { result, rerender } = renderHook(
+      ({ generation }: { generation: number }) =>
+        useSubagents("t1", { provider: "codex", generation }),
+      { initialProps: { generation: 1 } }
+    );
+    await waitFor(() => expect(result.current.result?.status).toBe("ok"));
+
+    rerender({ generation: 2 });
+    // The dead process's children must not stand in for the new one's.
+    expect(result.current.result).toBeNull();
+
+    await act(async () => {
+      releaseCodex?.(ok("new-child"));
+    });
+    await waitFor(() =>
+      expect(result.current.result?.status === "ok" && result.current.result.subagents[0]?.id).toBe(
+        "new-child"
+      )
+    );
+  });
+
+  it("ignores a lookup that lands after the pane has moved to another agent", async () => {
+    let releaseCodex: ((value: AgentSubagentsResult) => void) | undefined;
+    listSubagents.mockImplementation(
+      () =>
+        new Promise<AgentSubagentsResult>((resolve) => {
+          releaseCodex = resolve;
+        })
+    );
+    listClaudeSubagents.mockResolvedValue({
+      status: "ok",
+      provider: "claude",
+      parentId: "root",
+      subagents: [],
+    });
+
+    const { result, rerender } = renderHook(
+      ({ provider }: { provider: "codex" | "claude" }) => useSubagents("t1", { provider }),
+      { initialProps: { provider: "codex" } as { provider: "codex" | "claude" } }
+    );
+    await waitFor(() => expect(listSubagents).toHaveBeenCalled());
+
+    rerender({ provider: "claude" });
+    await waitFor(() => expect(result.current.result?.status).toBe("ok"));
+
+    // The stale Codex answer arrives last and must not overwrite Claude's.
+    await act(async () => {
+      releaseCodex?.(ok("stale-codex-child"));
+    });
+    expect(result.current.result?.status === "ok" && result.current.result.provider).toBe("claude");
   });
 
   it("names the provider's own failure when the lookup itself rejects", async () => {

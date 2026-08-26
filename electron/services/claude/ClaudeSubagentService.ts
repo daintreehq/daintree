@@ -12,6 +12,7 @@
 import path from "path";
 import { getPtyClient } from "../PtyClient.js";
 import { scrubSecrets } from "../../../shared/utils/secretScrubber.js";
+import { sanitizePath } from "../../utils/pathScrubber.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
 import {
   findSubagentsDir,
@@ -29,8 +30,11 @@ function unavailable(
   reason: AgentSubagentUnavailableReason,
   detail?: string
 ): { status: "unavailable"; reason: AgentSubagentUnavailableReason; detail?: string } {
+  // A filesystem error message names the file it failed on, and that path is
+  // the user's home. Scrubbed for both, since only one of the two utilities
+  // knows about paths and only the other knows about secrets.
   return detail
-    ? { status: "unavailable", reason, detail: scrubSecrets(detail) }
+    ? { status: "unavailable", reason, detail: sanitizePath(scrubSecrets(detail)) }
     : { status: "unavailable", reason };
 }
 
@@ -50,7 +54,10 @@ async function resolveTerminal(
 ): Promise<ResolvedTerminal | { status: "unavailable"; reason: AgentSubagentUnavailableReason }> {
   const info = await getPtyClient().getTerminalAsync(terminalId);
   if (!info) return { status: "unavailable", reason: "terminal-unknown" };
-  if (info.launchAgentId !== "claude" && info.detectedAgentId !== "claude") {
+  // Live detection wins over the launch hint, matching the renderer. A pane
+  // relaunched onto another agent keeps its original `launchAgentId`, and an
+  // `||` here would let a direct IPC call read the previous agent's children.
+  if ((info.detectedAgentId ?? info.launchAgentId) !== "claude") {
     return { status: "unavailable", reason: "provider-mismatch" };
   }
   if (!info.cwd || !path.isAbsolute(info.cwd)) {

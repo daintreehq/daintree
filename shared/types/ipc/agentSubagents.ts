@@ -142,3 +142,21 @@ export const SUBAGENT_MESSAGE_MAX_CHARS = 4000;
 
 /** Children returned for one parent. */
 export const SUBAGENT_LIST_LIMIT = 50;
+
+/**
+ * Trim a transcript to `limit`, dropping the oldest replies but keeping the
+ * delegated task wherever it sits.
+ *
+ * The task is what makes every reply below it legible, so it is the one message
+ * that must not be the thing evicted to make room. Shared rather than written
+ * per provider, because both trim and both promised the same thing.
+ */
+export function trimPreservingTask(messages: AgentSubagentMessage[], limit: number): void {
+  if (limit <= 0 || messages.length <= limit) return;
+  const taskIndex = messages.findIndex((message) => message.role === "task");
+  while (messages.length > limit) {
+    // Evict the oldest message that isn't the task. With no task present at
+    // all, index 0 is simply the oldest.
+    messages.splice(taskIndex === 0 ? 1 : 0, 1);
+  }
+}

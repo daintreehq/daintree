@@ -28,6 +28,7 @@ import {
   SUBAGENT_LIST_LIMIT,
   SUBAGENT_MESSAGE_MAX_CHARS,
   SUBAGENT_TRANSCRIPT_MESSAGE_LIMIT,
+  trimPreservingTask,
   type AgentSubagent,
   type AgentSubagentMessage,
   type AgentSubagentStatus,
@@ -274,7 +275,10 @@ async function resolveTerminal(
 ): Promise<ResolvedTerminal | { status: "unavailable"; reason: AgentSubagentUnavailableReason }> {
   const info = await getPtyClient().getTerminalAsync(terminalId);
   if (!info) return { status: "unavailable", reason: "terminal-unknown" };
-  if (info.launchAgentId !== "codex" && info.detectedAgentId !== "codex") {
+  // Live detection wins over the launch hint, matching the renderer. A pane
+  // relaunched onto another agent keeps its original `launchAgentId`, and an
+  // `||` here would let a direct IPC call read the previous agent's children.
+  if ((info.detectedAgentId ?? info.launchAgentId) !== "codex") {
     return { status: "unavailable", reason: "provider-mismatch" };
   }
   if (!info.cwd) return { status: "unavailable", reason: "terminal-unknown" };
@@ -430,15 +434,17 @@ export async function readCodexSubagentTranscript(
       // The page arrives newest-first; the shared transcript reads oldest-first
       // so a child shows the task it was given above the answer it gave.
       const messages = [...turns].reverse().flatMap(toSubagentMessages);
+      const overflowed = messages.length > SUBAGENT_TRANSCRIPT_MESSAGE_LIMIT;
+      // A plain tail slice would drop the delegated task whenever one page
+      // carried more readable items than the cap.
+      trimPreservingTask(messages, SUBAGENT_TRANSCRIPT_MESSAGE_LIMIT);
       return {
         status: "ok" as const,
         subagentId,
-        messages: messages.slice(-SUBAGENT_TRANSCRIPT_MESSAGE_LIMIT),
+        messages,
         // A full page means the protocol had at least this much and older turns
         // were never asked for, which is the same thing to whoever is reading.
-        truncated:
-          turns.length >= CODEX_SUBAGENT_TRANSCRIPT_TURN_LIMIT ||
-          messages.length > SUBAGENT_TRANSCRIPT_MESSAGE_LIMIT,
+        truncated: turns.length >= CODEX_SUBAGENT_TRANSCRIPT_TURN_LIMIT || overflowed,
       };
     });
   } catch (error) {

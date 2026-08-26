@@ -242,6 +242,8 @@ describe("toSubagentMessages", () => {
     const kept =
       toSubagentMessages({ id: "turn-2", items: [{ type: "agentMessage", text }] })[0]?.text ?? "";
     expect(kept.length).toBeLessThan(text.length);
+    // Without this the assertion below is vacuous: every string starts with "".
+    expect(kept.startsWith("START")).toBe(true);
     expect(text.startsWith(kept)).toBe(true);
   });
 

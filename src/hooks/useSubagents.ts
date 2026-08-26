@@ -94,11 +94,16 @@ export function useSubagents(
 ): UseSubagentsResult {
   const { provider, agentState, generation } = options;
   const key = cacheKey(provider ?? "codex", terminalId, generation);
-  const [result, setResult] = useState<AgentSubagentsResult | null>(
-    () => lookupCache.get(key)?.result ?? null
-  );
+  const [entry, setEntry] = useState<{ key: string; result: AgentSubagentsResult } | null>(() => {
+    const cached = lookupCache.get(key)?.result;
+    return cached ? { key, result: cached } : null;
+  });
   const [isLoading, setIsLoading] = useState(false);
   const mountedRef = useRef(true);
+  // The key a settling request was issued under. A respawn or an agent switch
+  // moves the key, and the old request must not land on the new one.
+  const keyRef = useRef(key);
+  keyRef.current = key;
 
   useEffect(() => {
     mountedRef.current = true;
@@ -118,7 +123,7 @@ export function useSubagents(
       if (!force && cached && now - cached.at < SUBAGENT_REFRESH_THROTTLE_MS) {
         // Still fresh: adopt it so a remount inside the window shows the same
         // list it had before, without spawning anything.
-        setResult(cached.result);
+        setEntry({ key, result: cached.result });
         return;
       }
       const adapter = SUBAGENT_PROVIDERS[provider];
@@ -128,12 +133,15 @@ export function useSubagents(
         .list({ terminalId })
         .then((next) => {
           rememberLookup(key, next, Date.now());
-          if (mountedRef.current) setResult(next);
+          // Answers the key it was asked under. Without this an in-flight
+          // lookup that outlives an agent switch overwrites the new agent's
+          // list with the old one's, and stays wrong until something refetches.
+          if (mountedRef.current && keyRef.current === key) setEntry({ key, result: next });
         })
         .catch((error: unknown) => {
           logWarn(`[useSubagents] list failed: ${formatErrorMessage(error, "unknown error")}`);
-          if (mountedRef.current) {
-            setResult({ status: "unavailable", reason: adapter.fallbackReason });
+          if (mountedRef.current && keyRef.current === key) {
+            setEntry({ key, result: { status: "unavailable", reason: adapter.fallbackReason } });
           }
         })
         .finally(() => {
@@ -157,7 +165,10 @@ export function useSubagents(
 
   const refresh = useCallback(() => fetchSubagents(true), [fetchSubagents]);
 
-  return { result, isLoading, refresh };
+  // An answer for a key that is no longer current is not this session's answer.
+  // Reporting null rather than the stale list is what keeps a respawned pane
+  // from showing the dead process's children until the new lookup returns.
+  return { result: entry?.key === key ? entry.result : null, isLoading, refresh };
 }
 
 /** Test-only: the lookup cache is module state and outlives a render tree. */
