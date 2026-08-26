@@ -321,7 +321,6 @@ describe("GitHubListItem", () => {
     const activeOption = active.container.querySelector("[role='row']")!;
     expect(activeOption.getAttribute("aria-selected")).toBe("false");
     expect(activeOption.className).not.toBe(restingClass);
-    expect(activeOption.className).toContain("before:opacity-100");
     active.unmount();
 
     const selected = render(

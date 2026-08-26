@@ -2708,8 +2708,14 @@ describe("GitHubResourceList polish (#7202)", () => {
 
   it("marks a non-default sort with a neutral lift, never a status badge", async () => {
     mockListIssues.mockResolvedValue(makeResponse([makeIssue(1)]));
-    useGitHubFilterStore.getState().setIssueSortOrder("updated");
 
+    // The default order is the baseline: whatever the lift is, it has to be a
+    // difference from this, not a fixed class.
+    const defaultView = render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+    const defaultSortClass = (await screen.findByRole("button", { name: /^sort/i })).className;
+    defaultView.unmount();
+
+    useGitHubFilterStore.getState().setIssueSortOrder("updated");
     render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
 
     const sortButton = await screen.findByRole("button", { name: /^sort/i });
@@ -2717,7 +2723,7 @@ describe("GitHubResourceList polish (#7202)", () => {
     // and said nothing about which order was in force.
     expect(sortButton.querySelector("span.bg-status-info")).toBeNull();
     expect(sortButton.classList.contains("text-status-info")).toBe(false);
-    expect(sortButton.className).toContain("bg-overlay-soft");
+    expect(sortButton.className).not.toBe(defaultSortClass);
     // ...and the order itself is now stated, not implied.
     expect(sortButton.getAttribute("title")).toMatch(/recently updated/i);
   });

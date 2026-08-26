@@ -306,7 +306,11 @@ export function GitHubListItem({
                   return (
                     <Tooltip>
                       <TooltipTrigger asChild>
-                        <span className={cn(RAIL_SLOT, "w-3.5 h-3.5")} aria-label={ciTooltip}>
+                        <span
+                          className={cn(RAIL_SLOT, "w-3.5 h-3.5")}
+                          role="img"
+                          aria-label={ciTooltip}
+                        >
                           {ciVisual.kind === "icon" ? (
                             <ciVisual.Icon className={cn("w-3.5 h-3.5", ciVisual.colorClass)} />
                           ) : (
@@ -362,6 +366,7 @@ export function GitHubListItem({
                             "text-status-info border-current"
                           : "text-text-secondary border-transparent"
                       )}
+                      role="img"
                       aria-label={worktreeTooltip}
                     >
                       <FolderGit2 className="w-3 h-3" />

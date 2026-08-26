@@ -191,11 +191,16 @@ async function snap(page: Page, slug: string, locator?: Locator): Promise<void> 
 }
 
 const ONLY = (process.env.DAINTREE_SHOT_ONLY ?? "").split(",").filter(Boolean);
+/* A step failure must not abort the remaining captures, but it must not pass
+   silently either — a run where every step blew up would otherwise report PASS
+   and write no PNGs. Failures are collected and rethrown at the end. */
+const stepFailures: string[] = [];
 async function step(name: string, fn: () => Promise<void>): Promise<void> {
   if (ONLY.length > 0 && !ONLY.includes(name)) return;
   try {
     await fn();
   } catch (error) {
+    stepFailures.push(`${name}: ${String(error).slice(0, 300)}`);
     console.warn(`[forge-shots] step "${name}" skipped:`, String(error).slice(0, 300));
   }
 }
@@ -325,5 +330,11 @@ test("forge dropdown review — issues and pull requests", async () => {
   } finally {
     if (ctx) await closeApp(ctx);
     repo.cleanup();
+  }
+
+  if (stepFailures.length > 0) {
+    throw new Error(
+      `[forge-shots] ${stepFailures.length} step(s) failed:\n${stepFailures.join("\n")}`
+    );
   }
 });

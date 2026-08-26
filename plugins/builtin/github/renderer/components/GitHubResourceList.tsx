@@ -995,7 +995,7 @@ export function GitHubResourceList({
             <input
               ref={inputRef}
               type="text"
-              placeholder={`Search ${type === "issue" ? "issues" : "pull requests"}...`}
+              placeholder={`Search ${type === "issue" ? "issues" : "pull requests"}…`}
               value={searchQuery}
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyDown={handleInputKeyDown}
