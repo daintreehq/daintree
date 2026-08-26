@@ -142,6 +142,7 @@ describe("TurnEndcap", () => {
             message: "Rate limited; retrying.",
             at: 1_010_000,
             turnId: "t1",
+            afterTurnId: "t1",
           },
         ]
       )

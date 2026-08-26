@@ -883,9 +883,32 @@ export function AssistantPanelView({
   const starting = state.connection === "starting" || state.connection === "ready";
   const booting = empty && starting && splashedGen !== bootGen;
 
-  // Notices the engine attributed to a turn are drawn with that turn; the rest are
-  // session-level and sit at the end of the transcript.
-  const sessionNotices = useMemo(() => state.notices.filter((n) => !n.turnId), [state.notices]);
+  // Notices the engine attributed to a turn are drawn INSIDE that turn; a turn-less one
+  // is drawn AFTER the turn it arrived behind. Only the ones with nothing to sit behind
+  // — they arrived before the first turn, or their turn has since been cleared — fall
+  // through to the end of the transcript.
+  //
+  // Command results are what makes the distinction matter. A slash line is not part of a
+  // turn, so every result carried no attribution and every one of them landed at the
+  // end. With one command that is invisible; with three it puts the questions up the
+  // transcript and the answers in a block at the bottom, and the only way to pair them
+  // is to read the command echoed in each. `/login` then `/account` is a two-command
+  // sequence in ordinary use, so this is the normal case, not an edge one.
+  const anchoredNotices = useMemo(() => {
+    const live = new Set(state.turns.map((t) => t.turnId));
+    const byAnchor = new Map<string, AssistantNotice[]>();
+    for (const n of state.notices) {
+      if (n.turnId || !n.afterTurnId || !live.has(n.afterTurnId)) continue;
+      const list = byAnchor.get(n.afterTurnId);
+      if (list) list.push(n);
+      else byAnchor.set(n.afterTurnId, [n]);
+    }
+    return byAnchor;
+  }, [state.notices, state.turns]);
+  const sessionNotices = useMemo(() => {
+    const live = new Set(state.turns.map((t) => t.turnId));
+    return state.notices.filter((n) => !n.turnId && (!n.afterTurnId || !live.has(n.afterTurnId)));
+  }, [state.notices, state.turns]);
   const noticesByTurn = useMemo(() => {
     const byTurn = new Map<string, AssistantNotice[]>();
     for (const n of state.notices) {
@@ -1129,6 +1152,13 @@ export function AssistantPanelView({
                       it landed above them, so a five-second turn with a warning read as
                       "answer, end of turn, then an unattached warning". */}
                   <TurnEndcap turn={turn} />
+                  {/* AFTER the endcap, because these did not happen inside the turn —
+                      they arrived behind it. A command result belongs under the command
+                      that produced it, and for a slash line that command IS the user
+                      turn immediately above. */}
+                  {anchoredNotices.get(turn.turnId)?.map((notice) => (
+                    <NoticeRow key={notice.id} notice={notice} />
+                  ))}
                 </div>
               ))}
             </div>

@@ -172,7 +172,14 @@ describe.skipIf(!binary)("assistant engine account commands", () => {
     // Asserted WITH the leading slash, because that is what the engine puts on the wire
     // and what the panel renders verbatim. Matching on the bare word would pass on a
     // catalog whose entries the panel cannot display as typed.
-    for (const command of ["/login", "/logout", "/account"]) {
+    //
+    // `/backend` sits with the three sign-in commands rather than with `/status`: it is
+    // the OTHER half of the same ownership move. Daintree removed its backend-URL
+    // setting on the understanding that the endpoint became the engine's own business,
+    // chosen in-session and remembered across restarts — so an engine that stopped
+    // advertising it would leave an install signed in to an endpoint with no way to
+    // change it, which is the same dead end `/login` going missing produced.
+    for (const command of ["/login", "/logout", "/account", "/backend"]) {
       expect(
         names,
         `the engine does not advertise ${command}, so the panel cannot offer it — ` +
@@ -180,4 +187,59 @@ describe.skipIf(!binary)("assistant engine account commands", () => {
       ).toContain(command);
     }
   }, 40_000);
+
+  it("answers an account command with a structured result, not prose in a turn", async () => {
+    // What the panel does with a slash line: sends `{type:"command"}` and renders the
+    // `command:result` it gets back. The distinction being pinned is that the answer
+    // arrives as its OWN event with the command echoed on it — not as an assistant turn,
+    // and not as text the host would have to interpret.
+    //
+    // The backend is unreachable here by construction (the harness pins
+    // DAINTREE_BACKEND_URL at a dead loopback port), so this also covers the case the
+    // account contract most needs to get right: a dependency that cannot answer must
+    // come back as a typed result the host can render, never as a hang and never as
+    // silence. Daintree renders whatever text this carries; it must not read it.
+    const { frames, stderr } = await driveEngine(binary!, "ses_account_result", {
+      commands: ["/account"],
+    });
+    const results = frames
+      .map(parseAssistantHostEvent)
+      .filter((e) => e?.type === "command:result") as {
+      command: string;
+      text: string;
+      unknown?: boolean;
+    }[];
+
+    expect(results.length, `no command:result came back for /account.\n${stderr}`).toBe(1);
+    expect(
+      results[0].unknown,
+      "the engine did not recognise /account, so the panel would have sent it as a prompt"
+    ).toBeFalsy();
+    expect(results[0].command).toBe("/account");
+    expect(
+      results[0].text.length,
+      "an empty result renders as a blank line in the panel"
+    ).toBeGreaterThan(0);
+  }, 60_000);
+
+  it("keeps servicing the host loop while a slow account command is still working", async () => {
+    // The property `Slow` exists for (internal/commands/registry.go): `/login`,
+    // `/logout` and `/account` can wait on a browser or a backend round trip, and the
+    // embedded host runs commands on its command loop. Run inline, those minutes are
+    // minutes in which the loop services no interrupt, no approval and no shutdown and
+    // posts nothing — the panel freezes with no way out. The engine dispatches them to a
+    // worker instead.
+    //
+    // So: send the command and the shutdown together, without waiting. A prompt, clean
+    // exit is the assertion — a loop blocked on the command would sit until the harness
+    // killed it, and the kill shows up as a null exit code.
+    const { exitCode, stderr } = await driveEngine(binary!, "ses_slow_command", {
+      commands: ["/account"],
+      awaitCommandResults: false,
+    });
+
+    expect(exitCode, `the engine did not exit cleanly while a slow command ran.\n${stderr}`).toBe(
+      0
+    );
+  }, 60_000);
 });

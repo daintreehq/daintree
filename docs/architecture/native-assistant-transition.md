@@ -1,8 +1,19 @@
 # Native Daintree Assistant — transition strategy
 
-Status: strategy, pre-implementation. Supersedes the runtime half of [`assistant-native-host.md`](./assistant-native-host.md), whose contract is stale in three specific ways documented in §2. The assistant's own side of the boundary is `daintreehq/assistant` `internal/host/` and [`docs/DAINTREE_HOST.md`](https://github.com/daintreehq/assistant/blob/main/docs/DAINTREE_HOST.md).
+Status: **historical.** This is the strategy the transition was planned against, kept because the reasoning behind the decisions is still load-bearing — why the Go engine was kept, why it is vendored by SHA rather than downloaded, why protocol v3 was designed rather than reconciled to v2. It is **not** a description of the current system, and where the two disagree the code wins.
 
-The goal: the in-app assistant stops being a TUI rendered inside an xterm pane and becomes a native React surface that looks and behaves like Daintree — its theme, its confirm dialogs, its notification tiers, its motion timings — and can reference Daintree's own objects (worktrees, runs, terminals, PRs) as clickable things rather than as text about things. It is the primary monetization surface, so the presentation of account, quota, and upgrade lives here too.
+For what is actually built, read [`assistant-native-host.md`](./assistant-native-host.md) — it was the stale document when this one was written and is now the current one. The assistant's own side of the boundary is `daintreehq/assistant` `internal/host/` and [`docs/DAINTREE_HOST.md`](https://github.com/daintreehq/assistant/blob/main/docs/DAINTREE_HOST.md).
+
+The goal it was written to serve, which was met: the in-app assistant stops being a TUI rendered inside an xterm pane and becomes a native React surface that looks and behaves like Daintree — its theme, its confirm dialogs, its notification tiers, its motion timings — and can reference Daintree's own objects (worktrees, runs, terminals, PRs) as clickable things rather than as text about things.
+
+## Superseded in these specific ways
+
+Phases 0–3 landed. Read the rest of this document with these corrections in hand:
+
+- **Ownership.** §5 Phase 5 says _"today there is no sign-in at all"_ and puts account state and sign-in in Daintree as "native work". That is not what happened, and the opposite is now a hard constraint. The CLI — including the copy embedded in Daintree — owns sign-in, sign-out, account status and backend selection, as the engine commands `/login`, `/logout`, `/account` and `/backend`. The website owns browser sign-in, consent, checkout and billing. The backend verifies tokens and enforces entitlements. Daintree hosts and renders, and holds no credential, no plan and no endpoint. Daintree's own assistant account settings, IPC and service were built and then removed to get here; **do not add a login button, token field, account card, plan cache or backend URL field back to Settings.**
+- **Process shape.** §4 and the older boundary doc both specify `utilityProcess.fork()`. The engine is a Go binary and `utilityProcess.fork` runs a Node script, so the runtime is a `child_process.spawn` speaking NDJSON over stdio. See `AssistantHostProcess.ts`.
+- **Binary resolution.** §1.4 Bundling lists a `PATH` fallback as the third resolution step, "so CLI developers can test their own build inside the app". There is deliberately no `PATH` fallback: `DAINTREE_ASSISTANT_BIN` covers that case explicitly, and a silent bind to whatever version is installed would reintroduce the exact skew the submodule pin exists to prevent.
+- **Staging.** `assistant.daintree.org` is the staging backend and `staging.daintree.org` is the staging website. Which of them a session talks to is the engine's decision, reported on `host:ready`; Daintree never infers it from a hostname.
 
 ## 1. The decision
 

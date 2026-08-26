@@ -159,6 +159,24 @@ export interface AssistantNotice {
    * repeated tool calls.
    */
   turnId: string | null;
+  /**
+   * The turn this notice arrived AFTER, for the ones the engine attributed to no turn.
+   *
+   * Command results are the reason. A slash line typed into the composer is not part of
+   * any turn — the engine answers it on the command path and the result carries no
+   * `turnId` — so without an anchor every one of them collected at the end of the
+   * transcript instead of under the command that produced it. One is fine; a run of
+   * them is not, and the account commands are exactly where people run several: sign
+   * in, read the plan, check the backend. All three chips appeared up the transcript
+   * and all three answers below them, in a block, and matching answer to question meant
+   * reading the echoed command in each.
+   *
+   * Recorded at arrival rather than derived from `at` afterwards, because the two clocks
+   * are different — a notice is stamped with the renderer's `Date.now()` and a turn with
+   * the engine's `startedAt` — and sorting a merged list by them would reorder the
+   * transcript whenever they disagreed.
+   */
+  afterTurnId: string | null;
 }
 
 /** An outstanding multiple-choice question. The turn is blocked until it settles. */
@@ -413,6 +431,23 @@ function noticeId(): string {
 const MAX_NOTICES = 50;
 
 /**
+ * Appends a notice, stamping where in the transcript it arrived.
+ *
+ * One function rather than the literal repeated at each call site, because the anchor is
+ * only correct if it is taken from the state the notice is landing in — a site that
+ * forgot it would put that notice back at the end of the transcript, which is the exact
+ * bug `afterTurnId` exists to fix and would be invisible in every other notice.
+ */
+function appendNotice(
+  s: Pick<AssistantSessionState, "notices" | "turns">,
+  notice: Omit<AssistantNotice, "afterTurnId">
+): AssistantNotice[] {
+  return [...s.notices, { ...notice, afterTurnId: s.turns.at(-1)?.turnId ?? null }].slice(
+    -MAX_NOTICES
+  );
+}
+
+/**
  * Finds the open assistant turn, if any. Only one can be open at a time — the engine
  * runs a single-flight turn loop — so scanning from the end is both correct and cheap.
  */
@@ -583,27 +618,21 @@ export const useAssistantStore = create<AssistantStore>((set, get) => ({
 
   pushNotice: (level, message) =>
     set((s) => ({
-      notices: [
-        ...s.notices,
-        { id: noticeId(), level, message, at: Date.now(), turnId: null },
-      ].slice(-MAX_NOTICES),
+      notices: appendNotice(s, { id: noticeId(), level, message, at: Date.now(), turnId: null }),
     })),
 
   recordGap: (missing) =>
     set((s) => ({
       droppedFrames: s.droppedFrames + missing,
-      notices: [
-        ...s.notices,
-        {
-          id: noticeId(),
-          level: "warning" as const,
-          message:
-            `${missing} update${missing === 1 ? "" : "s"} were lost in transit. ` +
-            `This part of the conversation may be incomplete.`,
-          at: Date.now(),
-          turnId: null,
-        },
-      ].slice(-MAX_NOTICES),
+      notices: appendNotice(s, {
+        id: noticeId(),
+        level: "warning" as const,
+        message:
+          `${missing} update${missing === 1 ? "" : "s"} were lost in transit. ` +
+          `This part of the conversation may be incomplete.`,
+        at: Date.now(),
+        turnId: null,
+      }),
     })),
 
   appendUserTurn: (text) => {
@@ -690,16 +719,13 @@ export const useAssistantStore = create<AssistantStore>((set, get) => ({
 
       case "host:error":
         set((s) => ({
-          notices: [
-            ...s.notices,
-            {
-              id: noticeId(),
-              level: "error" as const,
-              message: event.message,
-              at: Date.now(),
-              turnId: null,
-            },
-          ].slice(-MAX_NOTICES),
+          notices: appendNotice(s, {
+            id: noticeId(),
+            level: "error" as const,
+            message: event.message,
+            at: Date.now(),
+            turnId: null,
+          }),
         }));
         return;
 
@@ -1045,16 +1071,13 @@ export const useAssistantStore = create<AssistantStore>((set, get) => ({
 
       case "notice":
         set((s) => ({
-          notices: [
-            ...s.notices,
-            {
-              id: noticeId(),
-              level: event.level,
-              message: event.message,
-              at: Date.now(),
-              turnId: event.turnId ?? null,
-            },
-          ].slice(-MAX_NOTICES),
+          notices: appendNotice(s, {
+            id: noticeId(),
+            level: event.level,
+            message: event.message,
+            at: Date.now(),
+            turnId: event.turnId ?? null,
+          }),
         }));
         return;
 
@@ -1129,6 +1152,9 @@ export const useAssistantStore = create<AssistantStore>((set, get) => ({
             // line says so). Keeping the last reading would show work that has just
             // been deleted, as though it were still running.
             operations: null,
+            // The transcript it would have anchored to is exactly what /clear just
+            // removed, so this one starts the new transcript rather than trailing the
+            // old one.
             notices: [
               {
                 id: noticeId(),
@@ -1136,6 +1162,7 @@ export const useAssistantStore = create<AssistantStore>((set, get) => ({
                 message: `${event.command}\n${event.text}`.trimEnd(),
                 at: Date.now(),
                 turnId: null,
+                afterTurnId: null,
               },
             ],
             // The spend so far is still true and still the user's money; only the
@@ -1145,20 +1172,17 @@ export const useAssistantStore = create<AssistantStore>((set, get) => ({
           return;
         }
         set((s) => ({
-          notices: [
-            ...s.notices,
-            {
-              id: noticeId(),
-              // An unknown command is the user's typo, not an engine fault: say so
-              // without dressing it as an error.
-              level: event.unknown ? ("warning" as const) : ("info" as const),
-              message: event.unknown
-                ? `${event.command} isn't a command. Type /help to see what is.`
-                : `${event.command}\n${event.text}`.trimEnd(),
-              at: Date.now(),
-              turnId: event.turnId ?? null,
-            },
-          ].slice(-MAX_NOTICES),
+          notices: appendNotice(s, {
+            id: noticeId(),
+            // An unknown command is the user's typo, not an engine fault: say so
+            // without dressing it as an error.
+            level: event.unknown ? ("warning" as const) : ("info" as const),
+            message: event.unknown
+              ? `${event.command} isn't a command. Type /help to see what is.`
+              : `${event.command}\n${event.text}`.trimEnd(),
+            at: Date.now(),
+            turnId: event.turnId ?? null,
+          }),
         }));
         return;
 
