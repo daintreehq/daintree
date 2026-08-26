@@ -647,8 +647,8 @@ export function TroubleshootingTab() {
           not mention a key at all.
         */}
         <p className="text-xs text-daintree-text/50 select-text">
-          Open DevTools from View → Toggle Developer Tools, or run the Toggle DevTools command from
-          the command palette.
+          In development builds, open DevTools from View → Toggle Developer Tools, or run the Toggle
+          DevTools command from the command palette.
         </p>
       </div>
     </div>

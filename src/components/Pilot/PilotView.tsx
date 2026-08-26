@@ -1098,6 +1098,13 @@ export function PilotView() {
     (event: KeyboardEvent<HTMLElement>): boolean => {
       if (event.key !== "Enter" || event.defaultPrevented) return false;
       if (!(isMac() ? event.metaKey : event.ctrlKey)) return false;
+      // Alt belongs to the park chord, whether or not parking is available
+      // right now. Without this, Alt+Cmd+Enter over a snapshot too degraded to
+      // park against falls past the park intercept and REGROUPS the project —
+      // the surface quietly doing a different verb because the one the user
+      // asked for was unavailable, which is the failure this whole ordering
+      // exists to prevent.
+      if (event.altKey) return false;
       if (drillTarget === null) return false;
       event.preventDefault();
       openProject(drillTarget);
@@ -1186,8 +1193,10 @@ export function PilotView() {
       // entirely: its selection is live underneath, and an Enter bubbling out
       // of the note input would otherwise OPEN the highlighted run.
       if (parkEditing) return;
-      // Backspace is unambiguous here in a way it is not in the search box:
-      // the scroller holds no caret, so there is nothing to arbitrate against.
+      // Backspace keeps its empty-box rule here even though the scroller holds
+      // no caret to protect. One rule for the key beats a better one per
+      // region: a user should not have to know where focus currently sits to
+      // predict whether Backspace leaves the scope or does nothing.
       if (
         !interceptParkKey(event) &&
         !interceptDrillKey(event) &&

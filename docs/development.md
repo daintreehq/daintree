@@ -103,7 +103,7 @@ Tests live in `__tests__/` directories adjacent to source. Use Vitest. Mock IPC 
 
 ## Debugging
 
-**Renderer**: DevTools (Cmd+Opt+I). Console, Network, React DevTools.
+**Renderer**: DevTools (View → Toggle Developer Tools, or the Toggle DevTools command; dev builds only). Console, Network, React DevTools.
 
 **Main**: Logs to terminal running `npm run dev`. Use logger:
 

@@ -428,11 +428,18 @@ function worktreeGroupId(worktreeId: string): string {
  * Not `encodeURIComponent`, which THROWS a `URIError` on an unpaired surrogate:
  * one malformed row would take the whole palette down on the way into a scope,
  * and this is a display path with no business rejecting data. Escaping per code
- * unit cannot throw on any string, and escaping the marker itself keeps two
- * different paths from ever encoding to the same id.
+ * unit cannot throw on any string, and the marker escapes itself.
+ *
+ * The width is FIXED at four hex digits, which is what actually makes this
+ * injective. Variable-width does not: `~` + `2f` is `/`, but it is equally
+ * `U+0002` followed by a literal `f`, so two different paths encode to one id
+ * and their sections collapse into each other. Four digits is every code unit.
  */
 function escapeForId(value: string): string {
-  return value.replace(/[^A-Za-z0-9._-]/g, (ch) => `~${ch.charCodeAt(0).toString(16)}`);
+  return value.replace(
+    /[^A-Za-z0-9._-]/g,
+    (ch) => `~${ch.charCodeAt(0).toString(16).padStart(4, "0")}`
+  );
 }
 
 /**

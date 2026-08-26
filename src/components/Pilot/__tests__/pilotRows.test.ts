@@ -1304,6 +1304,19 @@ describe("buildPilotWorktreeGroups", () => {
     expect(groups.map((g) => g.name).sort()).toEqual(["/repos/one/Feature", "/repos/one/feature"]);
   });
 
+  it("gives two worktrees distinct ids where a variable-width escape would not", () => {
+    // The escape marker plus `2f` spells `/`, and equally spells U+0002 then a
+    // literal `f`. Encoded to one id, these two worktrees would share a DOM id,
+    // a React key and an order-hold entry — one section swallowing the other.
+    const groups = worktreeGroups([
+      run({ runId: "slash", worktreeId: "/" }),
+      run({ runId: "pair", worktreeId: `${String.fromCharCode(2)}f` }),
+    ]);
+
+    expect(groups).toHaveLength(2);
+    expect(new Set(groups.map((g) => g.groupId)).size).toBe(2);
+  });
+
   it("survives worktree ids the wire type allows but the app never mints", () => {
     // A display path has no business rejecting data. Every one of these is
     // type-valid, and the failure to avoid is a thrown palette rather than an

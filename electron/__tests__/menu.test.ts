@@ -347,10 +347,13 @@ describe("createApplicationMenu", () => {
       expect(item!.accelerator).toBeUndefined();
       // The invariant, not just this item's property: no menu item anywhere may
       // claim the chord, or the same collision comes back under another label.
-      const claimants = flattenMenuItems(capturedTemplate).filter(
-        (entry) => entry.accelerator === "Alt+CommandOrControl+I"
+      const flattened = flattenMenuItems(capturedTemplate);
+      // Proof the walk actually reached into the submenus — an empty result
+      // below would otherwise be true of a recursion that found nothing.
+      expect(flattened).toContain(item);
+      expect(flattened.filter((entry) => entry.accelerator === "Alt+CommandOrControl+I")).toEqual(
+        []
       );
-      expect(claimants).toEqual([]);
       item!.click!(
         {} as Electron.MenuItem,
         mockBrowserWindow as unknown as Electron.BaseWindow,

@@ -2028,6 +2028,42 @@ describe("PilotView worktree scope", () => {
       expect(screen.getByTestId("pilot-park-editor")).toBeTruthy();
     });
 
+    it("does not turn an unavailable park into a drill", () => {
+      // Alt+Enter is the park chord, and parking needs a snapshot Main can
+      // validate against. Over a degraded one it has to stay inert — falling
+      // through to the drill would make the surface do the OTHER verb that
+      // happens to share the keystroke, purely because the asked-for one was
+      // unavailable.
+      seed(
+        [
+          run({
+            runId: "alpha-1",
+            worktreeId: "/repo/wt/alpha",
+            agentState: "working",
+            since: NOW - 60_000,
+          }),
+          run({
+            runId: "beta-1",
+            worktreeId: "/repo/wt/beta",
+            agentState: "working",
+            since: NOW - 60_000,
+          }),
+        ],
+        { degraded: true, lastSuccessfulAt: NOW - 12 * 60_000 }
+      );
+      render(<PilotView />);
+
+      fireEvent.keyDown(screen.getByTestId("pilot-search"), {
+        key: "Enter",
+        altKey: true,
+        ...DRILL_MODIFIER,
+      });
+
+      expect(usePilotStore.getState().scope).toEqual({ kind: "fleet" });
+      expect(screen.queryByTestId("pilot-park-editor")).toBeNull();
+      expect(dispatchMock).not.toHaveBeenCalled();
+    });
+
     it("advertises the chord only while the highlighted run can use it", () => {
       seedSpread();
       render(<PilotView />);
