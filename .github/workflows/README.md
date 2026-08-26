@@ -28,17 +28,13 @@ Add these secrets in **Settings → Secrets and variables → Actions**:
 | `R2_ACCESS_KEY_ID` | R2 API token access key | (from step 2) |
 | `R2_SECRET_ACCESS_KEY` | R2 API token secret | (from step 2) |
 
-### 4. Update package.json
+### 4. Update the builder config
 
-Ensure the `publish` URL matches your R2 public URL:
+The `publish` URL must match your R2 public URL. It lives in `electron-builder.config.cjs`, not `package.json`, which carries no top-level electron-builder `build` field — the config is a function, because the nightly channel picks a different URL from the same version string:
 
-```json
-"publish": [
-  {
-    "provider": "generic",
-    "url": "https://your-r2-public-url/releases/"
-  }
-]
+```js
+const PUBLISH_URL = "https://updates.daintree.org/releases/";
+const NIGHTLY_PUBLISH_URL = "https://updates.daintree.org/nightly/";
 ```
 
 ## Releasing
@@ -56,36 +52,51 @@ The workflow will:
 - Upload binaries to R2 with long cache headers
 - Upload metadata files with no-cache headers
 
-## Known Limitations
+## Code Signing
 
-### macOS Auto-Updates
+### macOS
 
-**macOS builds are currently unsigned.** macOS auto-updates require:
+macOS builds are signed with a Developer ID Application certificate and notarized by Apple. Signing is mandatory on every `release-macos.yml` path, dry runs included; local packaging is the exception, since `scripts/package-local-dmg.mjs` writes an override with `identity: null` and `forceCodeSigning: false` when no local certificate is available. Notarization is mandatory on a tag push, which cannot set `skip_notarization` — that input exists only under `workflow_dispatch`.
 
-- Code signing certificate from Apple Developer account
-- Notarization with Apple
+Builder configuration lives in the `mac` block of `electron-builder.config.cjs`:
 
-**What this means:**
+- `forceCodeSigning: true` — packaging fails rather than emitting an unsigned bundle
+- `hardenedRuntime: true`, `gatekeeperAssess: false`, and `entitlements` / `entitlementsInherit` both pointing at `build/entitlements.mac.plist`
+- `binaries` lists the nested executables that must be signed in their own right — node-pty's `spawn-helper`, the PTY supervisor, and the vendored `assistant/daintree-assistant` engine. Notarization rejects the whole app if a nested executable is missing the hardened runtime.
+- `notarize: false` — electron-builder's built-in notarizer is disabled on purpose, because the `afterSign` hook (`scripts/notarize-macos.cjs`) owns notarization. It drives `xcrun notarytool submit` / `wait` and staples the ticket with `xcrun stapler`, per arch.
 
-- macOS users will see "unidentified developer" warnings
-- Auto-updates may not work on macOS until signing is configured
+Signing and notarization secrets (`release-macos.yml` consumes others for Sentry, publishing and the online E2E gate):
 
-**To enable macOS auto-updates:**
+| Secret | Used for |
+| --- | --- |
+| `MAC_CERTS` | Base64-encoded .p12, imported by `apple-actions/import-codesign-certs` and passed to electron-builder as `CSC_LINK` |
+| `MAC_CERTS_PASSWORD` | Certificate password (`CSC_KEY_PASSWORD`) |
+| `APPLE_API_KEY` | App Store Connect API key (.p8 contents), written to a temp file whose path becomes the `APPLE_API_KEY` env var |
+| `APPLE_API_KEY_ID` | Key ID for `notarytool` |
+| `APPLE_API_ISSUER` | Issuer UUID for `notarytool` |
+| `APPLE_TEAM_ID` | Expected TeamIdentifier, checked by the signing audit |
 
-1. Obtain Apple Developer certificates
-2. Add secrets to GitHub:
-   - `MAC_CERTS` - Base64-encoded .p12 certificate
-   - `MAC_CERTS_PASSWORD` - Certificate password
-   - `APPLE_ID` - Apple ID email
-   - `APPLE_APP_SPECIFIC_PASSWORD` - App-specific password
-   - `APPLE_TEAM_ID` - Team ID from developer account
+Notarization authenticates with an App Store Connect API key, not an Apple ID plus app-specific password.
 
-3. The cert import + notarize steps already run unconditionally in `release-macos.yml`; once the secrets above are set they take effect on the next tagged release (no workflow edit needed)
-4. Set `forceCodeSigning: true` in `package.json`
+Three verification steps gate the macOS build, and each one fails the run:
 
-### Windows Code Signing
+- **Verify macOS notarization staple** — `stapler validate` for the offline ticket, then `codesign -R="notarized" --check-notarization` to ask Apple whether the notarization is still acknowledged. Every nonzero result retries except exit 3 (signature valid, notarization not acknowledged), which is treated as definitive. This is the only verification step that `skip_notarization` turns off.
+- **Verify macOS signing audit** — `codesign --verify --deep --strict` plus TeamIdentifier, hardened-runtime, and helper-entitlement checks. Deliberately not gated on `skip_notarization`: signing is a code-signing property that must hold even when notarization is manually disabled.
+- **Verify shipped macOS archives** — re-extracts each shipped `.zip` and re-runs the audit on what comes out. The audit above inspects `release/mac*/Daintree.app` on disk, not the bytes users download.
 
-Windows builds are also unsigned. Users will see SmartScreen warnings until signing is configured.
+On the default path a missing secret fails the release rather than quietly downgrading it. If the certificate import does not leave a usable identity in the keychain, `forceCodeSigning` fails packaging rather than emitting an unsigned bundle. With `APPLE_TEAM_ID` empty, both signing audits error out before they can vacuously pass. With `APPLE_API_KEY_ID` or `APPLE_API_ISSUER` empty, the notarize hook warns "Apple API credentials not set" and returns without notarizing — and the staple verification then fails the job. `APPLE_API_KEY` is the exception that does not fail early: the workflow writes the secret to a temp file unconditionally, so an empty secret yields an empty key file and a valid-looking path, and the failure surfaces from `notarytool` itself.
+
+`release-macos.yml` takes a `skip_notarization` `workflow_dispatch` input for when Apple's notary service is down. It is the one hole in the above, so use it sparingly: the build is still signed and still audited, but it carries no notarization ticket, and Gatekeeper blocks a downloaded copy of an un-notarized app under default policy. Note that the publish job gates on the **ref**, not the event — `if: startsWith(github.ref, 'refs/tags/v')` — so a manual dispatch against a `v*` tag with `skip_notarization` set will publish a signed but un-notarized release. Dispatching against a branch cannot publish.
+
+### Windows
+
+Every Windows artifact this workflow produces is unsigned — the NSIS installers (`*-setup.exe`, x64 and arm64) and the `.appx` alike. The `win` block of `electron-builder.config.cjs` carries no Authenticode certificate and `release-windows.yml` has no signing step. Users who download an installer directly are likely to hit a SmartScreen warning; how often depends on the file's reputation and the machine's policy.
+
+The AppX takes a different route to users: `release-windows.yml` submits it to Partner Center with `msstore publish`, and Microsoft signs the package it distributes once it passes Store certification, so no Authenticode certificate of ours is involved. The `.appx` archived to R2 alongside the installers is the unsigned input to that submission, not the signed Store artifact. See [`docs/distribution/microsoft-store.md`](../../docs/distribution/microsoft-store.md).
+
+The submission itself is non-gating: it is skipped with a notice when the `PARTNER_CENTER_*` and `STORE_PRODUCT_ID` secrets are unset, and the `Submit to Microsoft Store` step is `continue-on-error`, so a failed submission still lets the R2 publish proceed. The `Install Microsoft Store CLI` step before it is **not** `continue-on-error` — if that action fails while the Store secrets are configured, it fails the job and the release with it.
+
+The full signing and release runbook is [`docs/release.md`](../../docs/release.md).
 
 ## Troubleshooting
 
@@ -100,7 +111,7 @@ If you see "Tag version does not match package.json version":
 
 If builds fail with "Missing release/latest\*.yml":
 
-- Check electron-builder configuration in `package.json`
+- Check electron-builder configuration in `electron-builder.config.cjs`
 - Ensure targets include both installers and update-friendly formats (zip for macOS, nsis for Windows)
 
 ### AWS CLI errors
