@@ -20,9 +20,10 @@ interface RecipePickerPopoverProps {
   disabled?: boolean;
   listId: string;
   /**
-   * Renders a stacked label above the trigger. The create-worktree dialog omits
-   * it — that form carries labels on its own rail — while the bulk-create
-   * dialog still stacks them.
+   * Renders a stacked label above the trigger. The create-worktree dialog — the
+   * only caller today — omits it, since that form carries labels on its own
+   * rail. Reserved for the bulk-create dialog (issue #11964), which stacks
+   * them.
    */
   label?: string;
 }

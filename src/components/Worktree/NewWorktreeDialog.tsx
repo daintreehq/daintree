@@ -993,7 +993,9 @@ export function NewWorktreeDialog({
         <GitBranch className="w-3 h-3 shrink-0" aria-hidden="true" />
         <span className="truncate font-mono">{selectedExistingBranch}</span>
       </>
-    ) : null
+    ) : (
+      <span className="truncate">Pick a branch to continue</span>
+    )
   ) : parsedBranch.fullBranchName && baseBranch ? (
     <>
       <span className="truncate font-mono">{baseBranch}</span>
@@ -1006,7 +1008,11 @@ export function NewWorktreeDialog({
     // Submit stays enabled on purpose — clicking it names what is missing,
     // which beats a disabled button that explains nothing. This is what keeps
     // the not-yet-ready state from looking identical to the ready one.
-    <span className="truncate">Name the branch to continue</span>
+    <span className="truncate">
+      {parsedBranch.fullBranchName
+        ? "Pick a base branch to continue"
+        : "Name the branch to continue"}
+    </span>
   );
 
   const showIssueRow = !initialPR && !!forgeEntry?.contribution.slots?.issueSelector;

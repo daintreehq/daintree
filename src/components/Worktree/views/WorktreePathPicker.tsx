@@ -21,8 +21,8 @@ interface WorktreePathPickerProps {
  *
  * Input and browse action are one compound control rather than a field with a
  * detached button beside it: they are a single decision, and the seam made the
- * row read as assembled parts. The focus ring is hoisted to the wrapper via
- * `focus-within` so the whole control lights up as one object.
+ * row read as assembled parts. The focus ring is hoisted to the wrapper, scoped
+ * to the input, so the whole control lights up as one object.
  */
 export function WorktreePathPicker({
   value,
