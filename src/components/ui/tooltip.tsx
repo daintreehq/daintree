@@ -59,11 +59,12 @@ const Tooltip = ({
   ...props
 }: TooltipProps) => {
   const radix = useRadixPrimitives();
-  // When the surrounding keepMounted FixedDropdown has transitioned to the
-  // Activity-hidden state, force `open={false}` on the Radix Root so any
-  // tooltip whose dismiss path was skipped by the synchronous `display:none`
-  // gets explicitly closed before its portaled content can strand at (0,0)
-  // on document.body (issue #8001). Outside that subtree the context default
+  // When the surrounding keepMounted FixedDropdown closes, force
+  // `open={false}` on the Radix Root so any tooltip whose dismiss path was
+  // skipped by the synchronous `display:none` gets explicitly closed before
+  // its portaled content can strand at (0,0) on document.body (issue #8001).
+  // The context reports `open`, which flips a frame before the subtree is
+  // actually hidden — so the teardown lands while effects still run. Outside that subtree the context default
   // (`true`) preserves the caller's `open` value, so uncontrolled tooltips
   // and any explicit `open={true}` callers keep working unchanged.
   const dropdownVisible = React.useContext(FixedDropdownVisibleContext);

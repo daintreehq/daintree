@@ -1,4 +1,5 @@
 import type React from "react";
+import { useId } from "react";
 import { Button } from "@/components/ui/button";
 import { FixedDropdown } from "@/components/ui/fixed-dropdown";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
@@ -59,6 +60,15 @@ export function ForgeStatPill({
   onPointerLeave,
   activityChip,
 }: ForgeStatPillProps) {
+  // A disclosure, and modelled as one. The panel is non-modal — focus is not
+  // trapped, the rest of the app stays reachable — so `dialog` was the wrong
+  // shape twice over: it promises modality this panel does not have, and a
+  // `keepMounted` dropdown leaves that dialog permanently in the tree, where it
+  // collided with the app's real modals (Settings stopped opening from this
+  // pill entirely). A `region` labelled by its own trigger says what this
+  // actually is, and only exists while it is open.
+  const dropdownId = useId();
+  const triggerId = useId();
   return (
     <>
       <Tooltip>
@@ -85,7 +95,10 @@ export function ForgeStatPill({
                   openRingClassName
                 )
             )}
+            id={triggerId}
             aria-label={ariaLabel}
+            aria-expanded={open}
+            aria-controls={open ? dropdownId : undefined}
             data-testid={testId}
           >
             <Icon className={cn("h-4 w-4", iconClassName)} />
@@ -111,7 +124,19 @@ export function ForgeStatPill({
         persistThroughChildOverlays={persistThroughChildOverlays}
         keepMounted={keepMounted}
       >
-        {dropdownContent}
+        <div
+          id={dropdownId}
+          role={open ? "region" : undefined}
+          aria-labelledby={open ? triggerId : undefined}
+          // `keepMounted` keeps this subtree in the DOM between opens. Hidden
+          // content that is still reachable by a screen reader's virtual
+          // cursor is worse than no content, so it is taken out of the tree
+          // and out of the tab order whenever the panel is not open.
+          aria-hidden={open ? undefined : true}
+          inert={!open}
+        >
+          {dropdownContent}
+        </div>
       </FixedDropdown>
     </>
   );

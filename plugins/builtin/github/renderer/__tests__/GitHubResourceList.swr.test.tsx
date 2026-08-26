@@ -13,6 +13,17 @@ import { BUILTIN_GITHUB_PROVIDER_ID } from "@shared/utils/forgeProviderIds";
 import { useSystemWakeStore } from "@/store/systemWakeStore";
 import { FixedDropdownVisibleContext } from "@/components/ui/fixed-dropdown";
 
+// The header's refresh control is a real tooltip trigger now (it carries the
+// list's freshness). The shared `Tooltip` lazy-loads its Radix primitives, so
+// an unmocked provider swaps component types mid-test and remounts the subtree
+// under it — same flattening mock GitHubListItem's suite uses.
+vi.mock("@/components/ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipContent: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
+}));
+
 const mockListIssues = vi.fn();
 const mockListPRs = vi.fn();
 const mockGetIssueByNumber = vi.fn();
@@ -26,6 +37,7 @@ vi.mock("@/clients/forgeClient", () => ({
     listPRs: (cwd: string, opts?: ListOptions) => mockListPRs({ cwd, ...opts }),
     getIssue: (cwd: string, issueNumber: number) => mockGetIssueByNumber(cwd, issueNumber),
     getPR: (cwd: string, prNumber: number) => mockGetPRByNumber(cwd, prNumber),
+    getIssueUrl: vi.fn().mockResolvedValue("https://github.com/acme/repo/issues/1"),
     getIssuesByNumbers: vi.fn().mockResolvedValue([]),
     getPRsByNumbers: vi.fn().mockResolvedValue([]),
   },
@@ -71,6 +83,9 @@ vi.mock("@/lib/notify", () => ({
 
 let mockIsSelectionActive = false;
 const mockSelectionClear = vi.fn();
+// Stable identities — the component memoizes and effects off these.
+const EMPTY_ITEMS = new Map();
+const mockReconcile = vi.fn();
 
 vi.mock("@/hooks/useIssueSelection", () => ({
   useIssueSelection: () => ({
@@ -78,9 +93,11 @@ vi.mock("@/hooks/useIssueSelection", () => ({
     get isSelectionActive() {
       return mockIsSelectionActive;
     },
+    selectedItems: EMPTY_ITEMS,
     toggle: vi.fn(),
     toggleRange: vi.fn(),
     selectAll: vi.fn(),
+    reconcile: mockReconcile,
     clear: mockSelectionClear,
   }),
 }));
@@ -564,8 +581,9 @@ describe("GitHubResourceList SWR behavior", () => {
       expect(screen.getByTestId("item-31")).toBeTruthy();
     });
     expect(screen.queryByText(/Network blip/)).toBeNull();
-    // The success-path freshness sub-row continues to surface lastUpdatedAt.
-    expect(screen.getByText(/^Updated/)).toBeTruthy();
+    // Freshness stays off the surface while the data is fresh — the retry just
+    // landed, so there is nothing for the footer to warn about.
+    expect(screen.queryByText(/^Updated/)).toBeNull();
   });
 
   it("does not bleed stale timestamp across filter changes", async () => {
@@ -1468,56 +1486,71 @@ describe("GitHubResourceList no-token empty state", () => {
 });
 
 describe("GitHubResourceList empty state branching", () => {
-  it("renders zero-data variant (no Clear filters button) when no filters are active and the list is empty", async () => {
+  it("renders zero-data with a create CTA (no clear action) when nothing is filtered and the list is empty", async () => {
     mockListIssues.mockResolvedValue(makeResponse([]));
 
     render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
 
     await waitFor(() => {
-      expect(screen.getByText("No issues found")).toBeTruthy();
+      expect(screen.getByText("No open issues")).toBeTruthy();
     });
-    expect(screen.queryByRole("button", { name: /clear filters/i })).toBeNull();
+    // Nothing is narrowing the view, so the way out is creating the first item,
+    // not undoing a filter that was never applied.
+    expect(screen.queryByRole("button", { name: /clear/i })).toBeNull();
+    expect(screen.getByRole("button", { name: /new issue/i })).toBeTruthy();
   });
 
-  it("renders filtered-empty with a Clear filters action when a search query is active", async () => {
+  it("renders filtered-empty with a Clear search action when only a search query is active", async () => {
     mockListIssues.mockResolvedValue(makeResponse([]));
     useGitHubFilterStore.getState().setIssueSearchQuery("nonexistent");
 
     render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
 
     await waitFor(() => {
-      expect(screen.getByText(/No issues match "nonexistent"/)).toBeTruthy();
+      expect(screen.getByText(/No matches for "nonexistent"/)).toBeTruthy();
     });
-    const clearButton = screen.getByRole("button", { name: /clear filters/i });
+    // The state tab is still the default, so the action names only what it
+    // actually undoes.
+    // The search field's X carries the same accessible name, so pick the one
+    // whose label is its own text content.
+    const clearButton = screen
+      .getAllByRole("button", { name: "Clear search" })
+      .find((b) => b.textContent === "Clear search");
     expect(clearButton).toBeTruthy();
     // CLAUDE.md popover/palette empty-state rule: never render primary-weight
     // buttons. The Clear filters CTA must use the ghost variant — locking the
     // class signature catches a regression to outline (ring-border-strong) or
     // any other heavier variant.
-    expect(clearButton.className).toContain("text-text-secondary");
-    expect(clearButton.className).not.toContain("ring-border-strong");
+    expect(clearButton!.className).toContain("text-text-secondary");
+    expect(clearButton!.className).not.toContain("ring-border-strong");
   });
 
-  it("renders filtered-empty when a non-default state filter is active", async () => {
+  it("routes an empty non-default state tab back to the tab that has data", async () => {
     mockListIssues.mockResolvedValue(makeResponse([]));
     useGitHubFilterStore.getState().setIssueFilter("closed");
 
     render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
 
     await waitFor(() => {
-      expect(screen.getByText("No issues in this view")).toBeTruthy();
+      expect(screen.getByText("No closed issues")).toBeTruthy();
     });
-    expect(screen.getByRole("button", { name: /clear filters/i })).toBeTruthy();
+    const showOpen = screen.getByRole("button", { name: /show open issues/i });
+    act(() => {
+      showOpen.click();
+    });
+    expect(useGitHubFilterStore.getState().issueFilter).toBe("open");
   });
 
-  it("Clear filters action resets search and state filter to defaults", async () => {
+  it("resets both search and state filter when both are narrowing the view", async () => {
     mockListIssues.mockResolvedValue(makeResponse([]));
     useGitHubFilterStore.getState().setIssueSearchQuery("foo");
     useGitHubFilterStore.getState().setIssueFilter("closed");
 
-    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
-
-    const clearButton = await screen.findByRole("button", { name: /clear filters/i });
+    // Both narrow, so the one action covers both — and says so.
+    const clearButton = await (async () => {
+      render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+      return screen.findByRole("button", { name: "Clear search and filters" });
+    })();
     act(() => {
       clearButton.click();
     });
@@ -1536,7 +1569,11 @@ describe("GitHubResourceList empty state branching", () => {
     await waitFor(() => {
       expect(screen.getByText(/No issue #999 in this view/)).toBeTruthy();
     });
-    expect(screen.getByRole("button", { name: /clear filters/i })).toBeTruthy();
+    expect(
+      screen
+        .getAllByRole("button", { name: "Clear search" })
+        .some((b) => b.textContent === "Clear search")
+    ).toBe(true);
   });
 
   it("renders filtered-empty for PRs with the right resource label", async () => {
@@ -1546,7 +1583,7 @@ describe("GitHubResourceList empty state branching", () => {
     render(<GitHubResourceList type="pr" projectPath="/test/proj" />);
 
     await waitFor(() => {
-      expect(screen.getByText(/No pull requests match "nonexistent"/)).toBeTruthy();
+      expect(screen.getByText(/No matches for "nonexistent"/)).toBeTruthy();
     });
   });
 
@@ -1556,9 +1593,10 @@ describe("GitHubResourceList empty state branching", () => {
     render(<GitHubResourceList type="pr" projectPath="/test/proj" />);
 
     await waitFor(() => {
-      expect(screen.getByText("No pull requests found")).toBeTruthy();
+      expect(screen.getByText("No open pull requests")).toBeTruthy();
     });
-    expect(screen.queryByRole("button", { name: /clear filters/i })).toBeNull();
+    expect(screen.queryByRole("button", { name: /clear/i })).toBeNull();
+    expect(screen.getByRole("button", { name: /new pull request/i })).toBeTruthy();
   });
 
   it("Clear filters action on PR view resets PR-specific store slice, not issue slice", async () => {
@@ -1569,7 +1607,7 @@ describe("GitHubResourceList empty state branching", () => {
 
     render(<GitHubResourceList type="pr" projectPath="/test/proj" />);
 
-    const clearButton = await screen.findByRole("button", { name: /clear filters/i });
+    const clearButton = await screen.findByRole("button", { name: "Clear search and filters" });
     act(() => {
       clearButton.click();
     });
@@ -2142,7 +2180,7 @@ describe("GitHubResourceList Activity reveal vs filter change — PR #6288", () 
     await waitFor(() => {
       expect(screen.queryByTestId("skeleton")).toBeNull();
     });
-    expect(screen.getByText("No issues in this view")).toBeTruthy();
+    expect(screen.getByText("No closed issues")).toBeTruthy();
   });
 
   it("clears rows and shows the skeleton when the filter changes while keepMounted", async () => {
@@ -2185,7 +2223,7 @@ describe("GitHubResourceList Activity reveal vs filter change — PR #6288", () 
 });
 
 describe("GitHubResourceList aria-busy placement (#6867)", () => {
-  it("sets aria-busy on the listbox during background revalidation, not on the refresh button", async () => {
+  it("sets aria-busy on the results grid during background revalidation, not on the refresh button", async () => {
     const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
     setCache(cacheKey, {
       items: [makeIssue(1)],
@@ -2198,7 +2236,7 @@ describe("GitHubResourceList aria-busy placement (#6867)", () => {
 
     render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
 
-    const listbox = screen.getByRole("listbox");
+    const listbox = screen.getByRole("grid");
     await waitFor(() => {
       expect(listbox.getAttribute("aria-busy")).toBe("true");
     });
@@ -2209,7 +2247,7 @@ describe("GitHubResourceList aria-busy placement (#6867)", () => {
 });
 
 describe("GitHubResourceList success-path freshness (#6867)", () => {
-  it("renders 'Updated …' below the header when data is fresh and no search is active", async () => {
+  it("keeps the footer quiet while the loaded page is fresh", async () => {
     const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
     setCache(cacheKey, {
       items: [makeIssue(1)],
@@ -2218,6 +2256,26 @@ describe("GitHubResourceList success-path freshness (#6867)", () => {
       timestamp: Date.now(),
     });
     mockListIssues.mockResolvedValue(makeResponse([makeIssue(1)]));
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+
+    await waitFor(() => {
+      expect(screen.getByTestId("item-1")).toBeTruthy();
+    });
+    expect(screen.queryByText(/^Updated/)).toBeNull();
+  });
+
+  it("surfaces freshness in the footer once the loaded page goes stale", async () => {
+    // A cache entry old enough to cross FRESHNESS_VISIBLE_AFTER_MS, with the
+    // revalidation left pending so `lastUpdatedAt` keeps the stale timestamp.
+    const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
+    setCache(cacheKey, {
+      items: [makeIssue(1)],
+      nextCursor: null,
+      hasMore: false,
+      timestamp: Date.now() - 10 * 60_000,
+    });
+    mockListIssues.mockReturnValue(new Promise(() => {}));
 
     render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
 
@@ -2483,7 +2541,7 @@ describe("GitHubResourceList spinner gate (#6867)", () => {
     expect(refreshIcon?.classList.contains("animate-spin")).toBe(false);
   });
 
-  it("uses the shorter 250ms gate when the user clicks refresh", async () => {
+  it("holds an explicit refresh to the same 400ms gate as a background one", async () => {
     const cacheKey = buildCacheKey("/test/proj", "issue", "open", "created");
     setCache(cacheKey, {
       items: [makeIssue(1)],
@@ -2514,11 +2572,14 @@ describe("GitHubResourceList spinner gate (#6867)", () => {
       expect(mockListIssues).toHaveBeenCalledTimes(2);
     });
 
-    await vi.advanceTimersByTimeAsync(200);
+    // A press buys no exemption from the Doherty gate — the button's press
+    // state and the grid's `aria-busy` flip are the acknowledgement, so a
+    // refresh that resolves inside 400ms shows no spinner at all.
+    await vi.advanceTimersByTimeAsync(350);
     const refreshIconBefore = refreshButton.querySelector("svg");
     expect(refreshIconBefore?.classList.contains("animate-spin")).toBe(false);
 
-    await vi.advanceTimersByTimeAsync(150);
+    await vi.advanceTimersByTimeAsync(100);
     await waitFor(() => {
       const icon = refreshButton.querySelector("svg");
       expect(icon?.classList.contains("animate-spin")).toBe(true);
@@ -2645,35 +2706,36 @@ describe("GitHubResourceList polish (#7202)", () => {
     });
   });
 
-  it("sort trigger drops the accent tint when sort is non-default; only the dot remains", async () => {
+  it("marks a non-default sort with a neutral lift, never a status badge", async () => {
     mockListIssues.mockResolvedValue(makeResponse([makeIssue(1)]));
     useGitHubFilterStore.getState().setIssueSortOrder("updated");
 
     render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
 
     const sortButton = await screen.findByRole("button", { name: /^sort/i });
+    // The old signal was a `bg-status-info` dot, which read as unread activity
+    // and said nothing about which order was in force.
+    expect(sortButton.querySelector("span.bg-status-info")).toBeNull();
     expect(sortButton.classList.contains("text-status-info")).toBe(false);
-
-    // The dot is the sole signal — find the absolutely-positioned status-info span inside the button.
-    const dot = sortButton.querySelector("span.bg-status-info");
-    expect(dot).not.toBeNull();
+    expect(sortButton.className).toContain("bg-overlay-soft");
+    // ...and the order itself is now stated, not implied.
+    expect(sortButton.getAttribute("title")).toMatch(/recently updated/i);
   });
 
-  it("listbox aria-multiselectable tracks selection.isSelectionActive", async () => {
+  it("declares aria-multiselectable as a capability, not as current state", async () => {
     mockListIssues.mockResolvedValue(makeResponse([makeIssue(1)]));
+    // It used to flip with `isSelectionActive`, which told a screen-reader user
+    // the grid could not be multi-selected right up until it already was.
     mockIsSelectionActive = false;
 
     const { unmount } = render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
-
-    const listbox = await screen.findByRole("listbox");
-    expect(listbox.getAttribute("aria-multiselectable")).toBe("false");
+    expect((await screen.findByRole("grid")).getAttribute("aria-multiselectable")).toBe("true");
 
     unmount();
 
     mockIsSelectionActive = true;
     render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
-    const activeListbox = await screen.findByRole("listbox");
-    expect(activeListbox.getAttribute("aria-multiselectable")).toBe("true");
+    expect((await screen.findByRole("grid")).getAttribute("aria-multiselectable")).toBe("true");
   });
 
   it("refresh button aria-label flips to 'Refreshing…' once the spinner fires", async () => {
@@ -2735,21 +2797,23 @@ describe("GitHubResourceList dismissal preserves bulk selection", () => {
     // Bulk selection is keyed by `${type}:${projectPath}` in useIssueSelectionStore
     // so it survives the toolbar's lazy/direct remount. On a real project switch
     // the component must still clear the project it's leaving, otherwise a stale
-    // selection outlives the issue cache reset and the bulk bar shows a count
-    // with no backing objects.
+    // selection outlives the switch and the bulk bar offers to act on another
+    // project's issues.
     mockListIssues.mockResolvedValue(makeResponse([makeIssue(1)]));
-    useIssueSelectionStore.getState().selectAll("issue:/test/proj-a", [1, 2, 3]);
+    useIssueSelectionStore
+      .getState()
+      .selectAll("issue:/test/proj-a", [makeIssue(1), makeIssue(2), makeIssue(3)]);
 
     const { rerender } = render(<GitHubResourceList type="issue" projectPath="/test/proj-a" />);
-    expect(
-      useIssueSelectionStore.getState().selections.get("issue:/test/proj-a")?.selectedIds.size
-    ).toBe(3);
+    expect(useIssueSelectionStore.getState().selections.get("issue:/test/proj-a")?.items.size).toBe(
+      3
+    );
 
     rerender(<GitHubResourceList type="issue" projectPath="/test/proj-b" />);
 
-    expect(
-      useIssueSelectionStore.getState().selections.get("issue:/test/proj-a")?.selectedIds.size ?? 0
-    ).toBe(0);
+    // Cleared, and the entry is gone entirely — a visited project should not
+    // leave a resident empty entry behind.
+    expect(useIssueSelectionStore.getState().selections.has("issue:/test/proj-a")).toBe(false);
   });
 
   it("surfaces a failed open-in-GitHub dispatch as an error toast with retry", async () => {
@@ -2761,7 +2825,7 @@ describe("GitHubResourceList dismissal preserves bulk selection", () => {
 
     render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
 
-    screen.getByRole("button", { name: "GitHub" }).click();
+    screen.getByRole("button", { name: "View on GitHub" }).click();
 
     await waitFor(() => expect(notifyMock).toHaveBeenCalledTimes(1));
     expect(dispatchMock).toHaveBeenCalledWith(
@@ -2798,7 +2862,7 @@ describe("GitHubResourceList dismissal preserves bulk selection", () => {
 
     render(<GitHubResourceList type="pr" projectPath="/test/proj" />);
 
-    screen.getByRole("button", { name: "GitHub" }).click();
+    screen.getByRole("button", { name: "View on GitHub" }).click();
 
     await waitFor(() =>
       expect(dispatchMock).toHaveBeenCalledWith(

@@ -156,8 +156,6 @@ const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
   "#5978-5986-pre-existing": [
     "plugins/builtin/github/renderer/components/BulkCreateWorktreeDialog.tsx",
     "plugins/builtin/github/renderer/components/CommitList.tsx",
-    "plugins/builtin/github/renderer/components/GitHubListItem.tsx",
-    "plugins/builtin/github/renderer/components/GitHubResourceList.tsx",
     "src/components/Browser/WebviewDialog.tsx",
     "src/components/Commands/CommandBuilder.tsx",
     "src/components/Commands/CommandPicker.tsx",

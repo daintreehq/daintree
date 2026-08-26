@@ -69,7 +69,7 @@ describe("BulkActionBar", () => {
       />
     );
 
-    expect(screen.getByRole("toolbar", { name: /bulk actions/i })).toBeTruthy();
+    expect(screen.getByRole("group", { name: /bulk actions/i })).toBeTruthy();
     expect(screen.getByText("2")).toBeTruthy();
   });
 
@@ -88,7 +88,7 @@ describe("BulkActionBar", () => {
       />
     );
 
-    expect(screen.queryByRole("toolbar", { name: /bulk actions/i })).toBeNull();
+    expect(screen.queryByRole("group", { name: /bulk actions/i })).toBeNull();
     expect(container.firstChild).toBeNull();
   });
 
@@ -121,7 +121,7 @@ describe("BulkActionBar", () => {
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /create worktrees/i }));
+    fireEvent.click(screen.getByRole("button", { name: /create worktree/i }));
     expect(openBulkCreateDialog).toHaveBeenCalledWith(issues, onClear);
     expect(openBulkCreateDialogForPRs).not.toHaveBeenCalled();
   });
@@ -141,7 +141,7 @@ describe("BulkActionBar", () => {
 
     expect(screen.getByText("3")).toBeTruthy();
 
-    fireEvent.click(screen.getByRole("button", { name: /create worktrees/i }));
+    fireEvent.click(screen.getByRole("button", { name: /create worktree/i }));
     expect(openBulkCreateDialogForPRs).toHaveBeenCalledWith(prs, onClear);
     expect(openBulkCreateDialog).not.toHaveBeenCalled();
   });
@@ -159,7 +159,7 @@ describe("BulkActionBar", () => {
       />
     );
 
-    fireEvent.click(screen.getByRole("button", { name: /create worktrees/i }));
+    fireEvent.click(screen.getByRole("button", { name: /create worktree/i }));
     expect(onCloseDropdown).toHaveBeenCalledTimes(1);
   });
 });

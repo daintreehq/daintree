@@ -26,6 +26,12 @@ const OVERLAY_RACE_GRACE_MS = 300;
 // caused by portaled overlay content escaping Activity's `display:none`
 // (issue #8001). Default `true` keeps non-keepMounted dropdowns and any
 // tooltip rendered outside a FixedDropdown unaffected.
+/**
+ * Whether the dropdown this subtree belongs to is OPEN — not whether it is
+ * still painted. Under `keepMounted` the two diverge for the exit animation;
+ * consumers that need to close something of their own want the intent, which
+ * is `open`. See the provider below.
+ */
 export const FixedDropdownVisibleContext = React.createContext<boolean>(true);
 
 interface FixedDropdownProps {
@@ -243,7 +249,16 @@ export function FixedDropdown({
     <div className="fixed inset-0 z-[var(--z-popover)] pointer-events-none">
       {keepMounted ? (
         <Activity mode={shouldRender ? "visible" : "hidden"}>
-          <FixedDropdownVisibleContext.Provider value={shouldRender}>
+          {/* The context carries `open`, NOT `shouldRender`.
+              `shouldRender` stays true for the whole 120ms exit so the
+              close can animate — which is exactly the window in which a
+              descendant needs to have already torn its portaled overlays
+              down. A consumer told "still visible" during the exit either
+              leaves a menu stranded on `document.body`, or races the
+              same-commit flip to hidden, where `<Activity>` defers effect
+              cleanups and the teardown never runs at all. `open` is the
+              intent, and it changes one frame earlier than the presence. */}
+          <FixedDropdownVisibleContext.Provider value={open}>
             {inner}
           </FixedDropdownVisibleContext.Provider>
         </Activity>

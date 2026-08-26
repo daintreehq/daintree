@@ -423,7 +423,7 @@ export const SEL = {
     noTokenEmptyState: 'text="GitHub not connected"',
     rateLimitedEmptyState: 'text="GitHub requests are paused"',
     // Bulk selection action bar + dialog
-    bulkActionBar: '[role="toolbar"][aria-label="Bulk actions"]',
+    bulkActionBar: '[role="group"][aria-label="Bulk actions"]',
     bulkCreateButton: '[data-testid="bulk-action-create-worktrees-button"]',
     bulkClearButton: '[aria-label="Clear selection"]',
     bulkCreateDialog: '[data-testid="bulk-create-worktree-dialog"]',

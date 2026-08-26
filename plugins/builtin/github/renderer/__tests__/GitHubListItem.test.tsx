@@ -7,6 +7,7 @@ import { Activity, type ReactNode } from "react";
 import { GitHubListItem } from "../components/GitHubListItem";
 import type { Issue, PR } from "@shared/types/forge";
 import { actionService } from "@/services/ActionService";
+import { UI_ACTION_SUCCESS_DWELL_MS } from "@/lib/animationUtils";
 
 vi.mock("react-dom", async () => {
   const actual = await vi.importActual<typeof import("react-dom")>("react-dom");
@@ -117,7 +118,7 @@ describe("GitHubListItem", () => {
       linkedPR: { number: 55, state: "open", url: "https://github.com/test/repo/pull/55" },
     };
     render(<GitHubListItem item={issueWithPR} type="issue" />);
-    fireEvent.click(screen.getByRole("button", { name: "Linked PR #55" }));
+    fireEvent.click(screen.getByRole("button", { name: "Open linked pull request #55" }));
     expect(actionService.dispatch).toHaveBeenCalledWith(
       "system.openExternal",
       { url: "https://github.com/test/repo/pull/55" },
@@ -144,9 +145,14 @@ describe("GitHubListItem", () => {
         { name: "enhancement", color: "a2eeef" },
       ],
     };
-    render(<GitHubListItem item={issueWithLabels} type="issue" />);
+    const { container } = render(<GitHubListItem item={issueWithLabels} type="issue" />);
+    // One label rendered whole plus a count — clipping the second to
+    // "enhanceme…" read as broken data, and anything past it used to vanish
+    // with nothing to say so.
     expect(screen.getByText("bug")).toBeTruthy();
-    expect(screen.getByText("enhancement")).toBeTruthy();
+    expect(screen.getByText("+1")).toBeTruthy();
+    // Every label is still reachable, in the tooltip (flattened by the mock).
+    expect(container.textContent).toContain("bug, enhancement");
   });
 
   it("clicking #number copies to clipboard", async () => {
@@ -173,7 +179,7 @@ describe("GitHubListItem", () => {
     expect(checkIcon).not.toBeNull();
 
     act(() => {
-      vi.advanceTimersByTime(1500);
+      vi.advanceTimersByTime(UI_ACTION_SUCCESS_DWELL_MS);
     });
 
     // Check icon should be gone
@@ -208,21 +214,21 @@ describe("GitHubListItem", () => {
     expect(checkIconAfter).toBeNull();
   });
 
-  it("renders ellipsis menu trigger button", () => {
+  it("names the row actions trigger per item so two rows never share a label", () => {
     render(<GitHubListItem item={baseIssue} type="issue" />);
-    expect(screen.getByLabelText("More actions")).toBeTruthy();
+    expect(screen.getByLabelText("Actions for #42")).toBeTruthy();
   });
 
-  it("ellipsis button is visible when isActive", () => {
+  it("keeps the row actions trigger in the DOM and rendered whether or not the row is active", () => {
+    // It used to be `opacity-0` until hover, which made it findable only by
+    // people who already knew it was there.
+    const { unmount } = render(<GitHubListItem item={baseIssue} type="issue" isActive={false} />);
+    const resting = screen.getByLabelText("Actions for #42");
+    expect(resting.className).not.toContain("opacity-0");
+    unmount();
+
     render(<GitHubListItem item={baseIssue} type="issue" isActive />);
-    const btn = screen.getByLabelText("More actions");
-    expect(btn.className).toContain("opacity-100");
-  });
-
-  it("ellipsis button is hidden when not active", () => {
-    render(<GitHubListItem item={baseIssue} type="issue" isActive={false} />);
-    const btn = screen.getByLabelText("More actions");
-    expect(btn.className).toContain("opacity-0");
+    expect(screen.getByLabelText("Actions for #42")).toBeTruthy();
   });
 
   it("renders CI status check icon for successful PRs", () => {
@@ -273,7 +279,7 @@ describe("GitHubListItem", () => {
       linkedPR: { number: 55, state: "open", url: "https://github.com/test/repo/pull/55" },
     };
     render(<GitHubListItem item={issueWithPR} type="issue" />);
-    const prButton = screen.getByRole("button", { name: "Linked PR #55" });
+    const prButton = screen.getByRole("button", { name: "Open linked pull request #55" });
     expect(prButton).toBeTruthy();
     expect(prButton.querySelector("svg")).not.toBeNull();
   });
@@ -288,10 +294,11 @@ describe("GitHubListItem", () => {
       linkedPR: { number: 55, state: "open", url: "https://github.com/test/repo/pull/55" },
       assignees: [{ login: "alice", avatarUrl: "https://example.com/alice.png", rawData: null }],
     };
-    render(<GitHubListItem item={issueWithBoth} type="issue" />);
+    const { container } = render(<GitHubListItem item={issueWithBoth} type="issue" />);
     expect(screen.getByText("bug")).toBeTruthy();
-    expect(screen.getByText("high-priority")).toBeTruthy();
-    expect(screen.getByRole("button", { name: "Linked PR #55" })).toBeTruthy();
+    expect(screen.getByText("+1")).toBeTruthy();
+    expect(container.textContent).toContain("bug, high-priority");
+    expect(screen.getByRole("button", { name: "Open linked pull request #55" })).toBeTruthy();
     expect(screen.getByAltText("alice")).toBeTruthy();
   });
 
@@ -301,15 +308,23 @@ describe("GitHubListItem", () => {
     expect(copyButton.textContent).toBe("#42");
   });
 
-  it("applies active highlight when isActive but not selected", () => {
-    const { container } = render(<GitHubListItem item={baseIssue} type="issue" isActive />);
-    const option = container.querySelector("[role='option']");
-    expect(option?.getAttribute("aria-selected")).toBe("false");
-    expect(option?.className).toContain("bg-muted/50");
-  });
+  it("separates the keyboard cursor from membership, and spends no accent on either", () => {
+    // Three distinct states have to stay distinguishable: resting, the row
+    // Enter would act on, and the rows bulk actions would act on. The cursor
+    // gets the leading rail; membership gets the heavier fill. Accent is
+    // reserved for the one focus anchor in the region (the search field).
+    const resting = render(<GitHubListItem item={baseIssue} type="issue" />);
+    const restingClass = resting.container.querySelector("[role='row']")!.className;
+    resting.unmount();
 
-  it("applies selected styling and aria-selected when isSelected", () => {
-    const { container } = render(
+    const active = render(<GitHubListItem item={baseIssue} type="issue" isActive />);
+    const activeOption = active.container.querySelector("[role='row']")!;
+    expect(activeOption.getAttribute("aria-selected")).toBe("false");
+    expect(activeOption.className).not.toBe(restingClass);
+    expect(activeOption.className).toContain("before:opacity-100");
+    active.unmount();
+
+    const selected = render(
       <GitHubListItem
         item={baseIssue}
         type="issue"
@@ -318,12 +333,17 @@ describe("GitHubListItem", () => {
         onToggleSelect={vi.fn()}
       />
     );
-    const option = container.querySelector("[role='option']");
-    expect(option?.getAttribute("aria-selected")).toBe("true");
-    expect(option?.className).toContain("bg-muted/80");
+    const selectedOption = selected.container.querySelector("[role='row']")!;
+    expect(selectedOption.getAttribute("aria-selected")).toBe("true");
+    expect(selectedOption.className).not.toBe(restingClass);
+    expect(selectedOption.className).not.toBe(activeOption.className);
+
+    for (const cls of [restingClass, activeOption.className, selectedOption.className]) {
+      expect(cls).not.toMatch(/daintree-accent/);
+    }
   });
 
-  it("shows checked checkbox when selected", () => {
+  it("fills the checkbox with neutral ink, never the accent", () => {
     const { container } = render(
       <GitHubListItem
         item={baseIssue}
@@ -334,10 +354,9 @@ describe("GitHubListItem", () => {
       />
     );
     const checkboxes = container.querySelectorAll("[aria-hidden='true']");
-    const checked = Array.from(checkboxes).find((el) =>
-      (el.getAttribute("class") ?? "").includes("bg-daintree-accent")
-    );
-    expect(checked).not.toBeUndefined();
+    const classes = Array.from(checkboxes).map((el) => el.getAttribute("class") ?? "");
+    expect(classes.some((c) => c.includes("bg-daintree-text"))).toBe(true);
+    expect(classes.some((c) => c.includes("bg-daintree-accent"))).toBe(false);
   });
 
   it("scopes checkbox hover to icon area via named group", () => {
@@ -428,34 +447,43 @@ describe("GitHubListItem", () => {
     expect(images).toHaveLength(0);
   });
 
-  it("shows create worktree button on open issues without worktree", () => {
+  it("makes creating a worktree the row's primary click, not a hover-only glyph", async () => {
     const onCreateWorktree = vi.fn();
-    render(<GitHubListItem item={baseIssue} type="issue" onCreateWorktree={onCreateWorktree} />);
-    const createBtn = screen.getByLabelText("Create worktree");
-    expect(createBtn).toBeTruthy();
-    expect(createBtn.className).toContain("opacity-0");
-  });
+    const { container } = render(
+      <GitHubListItem item={baseIssue} type="issue" onCreateWorktree={onCreateWorktree} />
+    );
+    // The old affordance was an `opacity-0` icon button that only appeared on
+    // hover, duplicating a menu item nobody needed twice.
+    expect(screen.queryByLabelText("Create worktree")).toBeNull();
 
-  it("create worktree button calls onCreateWorktree on click", async () => {
-    const onCreateWorktree = vi.fn();
-    render(<GitHubListItem item={baseIssue} type="issue" onCreateWorktree={onCreateWorktree} />);
-    const createBtn = screen.getByLabelText("Create worktree");
     await act(async () => {
-      fireEvent.click(createBtn);
+      fireEvent.click(container.querySelector("[role='row']")!);
     });
     expect(onCreateWorktree).toHaveBeenCalledWith(baseIssue);
   });
 
-  it("does not show create worktree for closed issues", () => {
+  it("does not create a worktree from a closed issue", async () => {
+    const onCreateWorktree = vi.fn();
     const closedIssue: Issue = { ...baseIssue, state: "closed" };
-    render(<GitHubListItem item={closedIssue} type="issue" onCreateWorktree={vi.fn()} />);
-    expect(screen.queryByLabelText("Create worktree")).toBeNull();
+    const { container } = render(
+      <GitHubListItem item={closedIssue} type="issue" onCreateWorktree={onCreateWorktree} />
+    );
+    await act(async () => {
+      fireEvent.click(container.querySelector("[role='row']")!);
+    });
+    expect(onCreateWorktree).not.toHaveBeenCalled();
   });
 
-  it("shows create worktree for fork PRs", () => {
+  it("creates a worktree from a fork PR row", async () => {
+    const onCreateWorktree = vi.fn();
     const forkPR: PR = { ...basePR, rawData: { isFork: true } };
-    render(<GitHubListItem item={forkPR} type="pr" onCreateWorktree={vi.fn()} />);
-    expect(screen.getByLabelText("Create worktree")).toBeTruthy();
+    const { container } = render(
+      <GitHubListItem item={forkPR} type="pr" onCreateWorktree={onCreateWorktree} />
+    );
+    await act(async () => {
+      fireEvent.click(container.querySelector("[role='row']")!);
+    });
+    expect(onCreateWorktree).toHaveBeenCalledWith(forkPR);
   });
 
   it("shows comment count for issues with commentCount >= 1", () => {
@@ -532,7 +560,8 @@ describe("GitHubListItem", () => {
     // After copy: Check icon replaces #
     const checkIcon = copyButton.querySelector(".text-status-success");
     expect(checkIcon).not.toBeNull();
-    // The # should not be visible during copied state
+    // The # yields to the check during the copied state, and the digits stay
+    // put so the row does not reflow.
     expect(copyButton.textContent).toBe("42");
   });
 });

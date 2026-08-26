@@ -1,6 +1,8 @@
 import {
   forwardRef,
   useRef,
+  useMemo,
+  useState,
   useCallback,
   useEffect,
   type ReactNode,
@@ -68,8 +70,14 @@ export const ScrollShadow = forwardRef<HTMLDivElement, ScrollShadowProps>(
 ScrollShadow.displayName = "ScrollShadow";
 
 export function useScrollShadowOverlays(externalRef?: Ref<HTMLElement>) {
-  const internalRef = useRef<HTMLElement>(null);
-  const { canScrollUp, canScrollDown } = useVerticalScrollShadows(internalRef);
+  // State, not a plain ref: `useVerticalScrollShadows` keys its observer effect
+  // on the ref OBJECT, so a node that arrives later — or is swapped for a new
+  // one — never gets observed if the object identity never changes. Callers
+  // that mount their scroller behind a loading or empty branch (the forge
+  // dropdown's virtualized list) hit exactly that.
+  const [node, setNode] = useState<HTMLElement | null>(null);
+  const nodeRef = useMemo(() => ({ current: node }), [node]);
+  const { canScrollUp, canScrollDown } = useVerticalScrollShadows(nodeRef);
 
   // Indirect the externalRef via a ref so the callback below doesn't mutate a
   // hook argument directly — the React Compiler rejects that pattern.
@@ -79,7 +87,7 @@ export function useScrollShadowOverlays(externalRef?: Ref<HTMLElement>) {
   }, [externalRef]);
 
   const ref = useCallback((el: HTMLElement | null) => {
-    (internalRef as React.MutableRefObject<HTMLElement | null>).current = el;
+    setNode(el);
     const ext = externalRefHolder.current;
     if (typeof ext === "function") {
       ext(el);
