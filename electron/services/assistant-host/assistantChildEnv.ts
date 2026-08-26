@@ -22,16 +22,25 @@
  * source, or deliberately left unset.
  *
  * The list is not assembled from what Daintree happens to set. It is the engine's OWN
- * definition of the surface, which it states in one place: `trustedGet` in the vendored
- * `internal/config/config.go`, whose whole contract is "real env only — the injecting
- * host may set this, a bound project's `.env` may not". Every name the engine reads
- * through that door belongs here, because for each of them the engine has already
- * decided the value is too dangerous to accept from a repository it opened, and an
- * unexported-then-inherited shell variable is a strictly less trustworthy source than
- * the repository. Reading half the door and leaving the rest is what produced the two
- * gaps this list closed last: the endpoint was stripped while the switch that authorizes
- * an unsafe endpoint was not, and the tier was stripped while the state directory that
- * decides whose session it is was not.
+ * definition of the surface, and the engine has two doors. The first it states in one
+ * place: `trustedGet` / `trustedOrOwnGet` in the vendored `internal/config/config.go`,
+ * whose whole contract is "real env only — the injecting host may set this, a bound
+ * project's `.env` may not". Every name the engine reads through that door belongs here,
+ * because for each of them the engine has already decided the value is too dangerous to
+ * accept from a repository it opened, and an unexported-then-inherited shell variable is
+ * a strictly less trustworthy source than the repository.
+ *
+ * The second door is `os.Getenv` called outside config resolution altogether — the
+ * control-socket root, the daemon switches, the boot trace. Those never pass the trust
+ * tiering at all, because the engine documents them as test-only or operator-only and
+ * both of those set their own environment deliberately; nothing about that stops one
+ * reaching a real session from a shell that exported it months ago.
+ *
+ * Reading half a door and leaving the rest is the shape of every gap this list has
+ * closed: the endpoint was stripped while the switch that authorizes an unsafe endpoint
+ * was not, the tier was stripped while the state directory that decides whose session it
+ * is was not, and the state directory was stripped while the socket the session has to
+ * find its supervisor over was not.
  */
 export const ENGINE_CONTROLLED_ENV = [
   "DAINTREE_MCP_URL",
@@ -97,6 +106,46 @@ export const ENGINE_CONTROLLED_ENV = [
   "DAINTREE_ROUTING_SORT",
   "DAINTREE_ROUTING_ONLY",
   "DAINTREE_ROUTING_IGNORE",
+  // Where the engine looks for control sockets (`internal/ipc/socket.go`). Daintree spawns
+  // `host --stdio`, and the embedded host takes the project owner lease exactly as an
+  // interactive session does: find the supervisor daemon over its socket and ask it to
+  // yield, THEN flock (`acquireOwnership` in internal/cli/host.go, `AcquireOwnership` in
+  // internal/supervisor/attach.go). The lease itself is `owner.lock` inside the state dir,
+  // so a wrong socket root cannot split it — it does something more boring and more
+  // total: the host cannot find the daemon holding that lock, so nothing tells it to stand
+  // down and the flock is waited out to the 60s deadline and fails `ErrProjectBusy`. The
+  // panel does not start, and the reason is a variable nobody remembers exporting.
+  "DAINTREE_ASSISTANT_SOCKET_DIR",
+  // Daemon auto-spawn, off. The engine calls this an operator kill switch as well as a
+  // test knob, and stripping it does mean the embedded engine will not honour it — that is
+  // the trade: the flock is correctness and the daemon is durability, so an ambient `=1`
+  // corrupts nothing, it just removes the supervisor that carries watchers, timers and
+  // async work after the panel detaches. An operator who wants that has the standalone
+  // CLI, where the variable is theirs to set deliberately.
+  "DAINTREE_ASSISTANT_NO_DAEMON",
+  // The daemon's TEST-ONLY cadences (`internal/cli/daemon.go`, `internal/supervisor/
+  // runtime.go`): `FAST` compresses the monitor tick, the MCP-blocked threshold and the
+  // reconnect budget to sub-second values, so the engine's e2e suite can watch an outage
+  // happen without minute-scale sleeps. Inherited into a real session, a momentary MCP
+  // hiccup is declared blocked half a second in and the reconnect budget burns out in
+  // seconds. `IDLE_EXIT_MS` shortens the window after which the supervisor exits once
+  // nothing is left to supervise — background work outliving the panel is what it is for.
+  "DAINTREE_ASSISTANT_DAEMON_FAST",
+  "DAINTREE_ASSISTANT_DAEMON_IDLE_EXIT_MS",
+  // Names a file the engine appends boot timings to, opened before any config exists
+  // (`internal/debuglog/boottrace.go`). Not a safety control like the rest of this list —
+  // it is here because it is the one variable that makes the engine write to a path taken
+  // from the environment, on every launch, for a benchmark nobody is running.
+  "DAINTREE_ASSISTANT_BOOT_TRACE",
+  // A capability flag, read through `trustedOrOwnGet` and surfaced as one
+  // (`internal/app/capabilityref.go`): with it off the engine registers none of the
+  // execution-graph tools, so the runbooks written against them announce a plan and then
+  // find nothing to build it with. It is a supported compatibility switch for an older
+  // backend, which is why stripping it is a decision and not a bug fix — the embedded
+  // engine takes its capability set from Daintree's default, not from the shell Electron
+  // happened to be launched from, and the engine has already ruled that a bound repository
+  // may not decide this either.
+  "DAINTREE_WORKFLOW_INTELLIGENCE",
 ] as const;
 
 /**
