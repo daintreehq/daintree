@@ -17,7 +17,7 @@ import { app } from "electron";
 import fs from "node:fs";
 import path from "path";
 import type { Project } from "../../../shared/types/project.js";
-import { isScratchWorkspaceId } from "../../../shared/utils/workspaceIds.js";
+import { isProjectWorkspaceId, isScratchWorkspaceId } from "../../../shared/utils/workspaceIds.js";
 import {
   OPEN_WINDOWS_KEY,
   filterRestorableWindows,
@@ -26,6 +26,57 @@ import {
   type OpenWindowRecord,
 } from "./windowManifest.js";
 
+/**
+ * Which of `scratchIds` name a scratch that still exists.
+ *
+ * The schema is probed rather than assumed, because these readers run BEFORE
+ * migrations: `scratches` arrives in 0001 and its `deleted_at` column in 0002,
+ * so an upgrading install can present either partial shape. A missing table
+ * means no scratch exists; a table without the tombstone column cannot hold a
+ * tombstone, so every row in it is live.
+ *
+ * Probing rather than catching is deliberate. A blanket `catch` here would read
+ * a corrupt or locked database as "the user has no scratches", quietly drop
+ * their windows, and let the successful boot rewrite the manifest without them.
+ * Anything other than a shape the probe explains has to surface to the caller's
+ * own handler, exactly as a failure of the `projects` query does.
+ */
+function readExistingScratchIds(
+  sqlite: InstanceType<typeof Database>,
+  scratchIds: string[]
+): Set<string> {
+  const existing = new Set<string>();
+  if (scratchIds.length === 0) return existing;
+
+  // `PRAGMA table_info` on a table that does not exist returns no rows rather
+  // than throwing, which is what makes it usable as the presence check.
+  const columns = sqlite.prepare("PRAGMA table_info(scratches)").all() as { name: string }[];
+  if (columns.length === 0) return existing;
+
+  const tombstoneFilter = columns.some((column) => column.name === "deleted_at")
+    ? " AND deleted_at IS NULL"
+    : "";
+  const placeholders = scratchIds.map(() => "?").join(",");
+  const rows = sqlite
+    .prepare(`SELECT id FROM scratches WHERE id IN (${placeholders})${tombstoneFilter}`)
+    .all(...scratchIds) as { id: string }[];
+  for (const row of rows) existing.add(row.id);
+
+  return existing;
+}
+
+/**
+ * The workspace to fall back to when there is no manifest to restore — the last
+ * project switched to, or the current scratch when the user was in one.
+ *
+ * Both pointers have to be consulted because they are mutually exclusive:
+ * `scratch:switch` deletes `currentProjectId` outright, so a session that ended
+ * inside a scratch leaves only `currentScratchId` behind. Reading the project
+ * pointer alone answered "nothing" for that session, and closing the last
+ * window — the quit gesture on Windows and Linux, which persists a manifest
+ * naming zero windows — relaunched onto the project picker with the scratch
+ * gone even from the label (#11958).
+ */
 export function readLastActiveProjectIdSync(): string | null {
   try {
     const dbPath = path.join(app.getPath("userData"), "daintree.db");
@@ -36,10 +87,25 @@ export function readLastActiveProjectIdSync(): string | null {
 
     const sqlite = new Database(dbPath, { readonly: true });
     try {
-      const row = sqlite
-        .prepare("SELECT value FROM app_state WHERE key = ?")
-        .get("currentProjectId") as { value: string } | undefined;
-      return row?.value ?? null;
+      const readPointer = (key: string): string | null =>
+        (
+          sqlite.prepare("SELECT value FROM app_state WHERE key = ?").get(key) as
+            { value: string } | undefined
+        )?.value ?? null;
+
+      const projectId = readPointer("currentProjectId");
+      if (projectId) return projectId;
+
+      // Only a scratch that still exists: a tombstoned or reaped one would send
+      // the launch at a workspace whose directory is gone, and the manifest
+      // path already refuses exactly that.
+      const scratchId = readPointer("currentScratchId");
+      if (scratchId && isScratchWorkspaceId(scratchId)) {
+        const live = readExistingScratchIds(sqlite, [scratchId]);
+        if (live.has(scratchId)) return scratchId;
+      }
+
+      return null;
     } finally {
       sqlite.close();
     }
@@ -158,9 +224,13 @@ export function readOpenWindowsManifestSync(): OpenWindowsManifestRead {
       ];
       if (workspaceIds.length === 0) return { hadManifest: true, records };
 
+      // Positively shaped on both sides, so an id that is neither reaches no
+      // query at all. Sending it to `projects` would find nothing today, but it
+      // would also be the one route by which a hand-edited or corrupt manifest
+      // could put an unvalidated string on the project side of the boot.
       const scratchIds = workspaceIds.filter((id) => isScratchWorkspaceId(id));
-      const projectIds = workspaceIds.filter((id) => !isScratchWorkspaceId(id));
-      const existingWorkspaceIds = new Set<string>();
+      const projectIds = workspaceIds.filter((id) => isProjectWorkspaceId(id));
+      const existingWorkspaceIds = readExistingScratchIds(sqlite, scratchIds);
 
       if (projectIds.length > 0) {
         const placeholders = projectIds.map(() => "?").join(",");
@@ -168,27 +238,6 @@ export function readOpenWindowsManifestSync(): OpenWindowsManifestRead {
           .prepare(`SELECT id FROM projects WHERE id IN (${placeholders})`)
           .all(...projectIds) as { id: string }[];
         for (const row of rows) existingWorkspaceIds.add(row.id);
-      }
-
-      if (scratchIds.length > 0) {
-        // Scoped try, unlike the projects query above: this runs before
-        // migrations, so a database written by a build that predates the
-        // `scratches` table throws here — and an unscoped throw would take the
-        // whole read down and strand every *project* window on the picker too.
-        // A missing table means no scratch exists, which is the answer an empty
-        // result would have given anyway.
-        try {
-          const placeholders = scratchIds.map(() => "?").join(",");
-          const rows = sqlite
-            .prepare(
-              `SELECT id FROM scratches WHERE id IN (${placeholders}) AND deleted_at IS NULL`
-            )
-            .all(...scratchIds) as { id: string }[];
-          for (const row of rows) existingWorkspaceIds.add(row.id);
-        } catch {
-          // Leaves every scratch id unvalidated, dropping its window exactly as
-          // this reader did before scratches were routed at all.
-        }
       }
 
       return {

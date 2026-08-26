@@ -162,10 +162,13 @@ export function registerScratchHandlers(deps: HandlerDependencies): () => void {
           // same call `project:switch` makes after its own commit. Placed after
           // the PVM swap because the manifest is built from
           // `getActiveProjectId()` across every window — it has to read the
-          // committed state, not the switch that is still landing. A graceful
-          // quit snapshots this anyway; what this covers is the hard crash
-          // right after entering a scratch, which otherwise relaunches into
-          // the workspace the user had left (#11958).
+          // committed state, not the switch that is still landing.
+          //
+          // Best-effort for an abrupt exit, not a guarantee: the write is
+          // trailing-debounced, so a crash inside that window still relaunches
+          // into the workspace the user had left. A graceful quit is covered
+          // regardless — `freezeAndSnapshotOpenWindows()` captures whatever the
+          // pending debounce still owed (#11958).
           scheduleOpenWindowsSave();
 
           // A scratch is not a project: the window's PVM now holds a scratch id

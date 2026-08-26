@@ -72,3 +72,21 @@ export function resolveRestoreWorkspace(
 
   return NOTHING_TO_RESTORE;
 }
+
+/**
+ * The project path the startup worktree load runs against, or undefined when
+ * this window has none to load.
+ *
+ * Lives here rather than inline at the call site so the "a scratch loads no
+ * worktrees" rule is one importable expression instead of a condition a test
+ * has to re-type. It reads {@link RestoreWorkspaceBinding.project}, never
+ * `.workspace`: a scratch is a non-git directory that must not reach
+ * `WorktreeService`, and an explicit path (CLI open, Dock drop) still wins
+ * because that window was opened by path in the first place.
+ */
+export function resolveWorktreeLoadPath(
+  initialProjectPath: string | undefined,
+  binding: RestoreWorkspaceBinding
+): string | undefined {
+  return initialProjectPath ?? binding.project?.path;
+}

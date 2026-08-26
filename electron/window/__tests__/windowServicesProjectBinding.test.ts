@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { resolveRestoreWorkspace } from "../restoreWorkspaceBinding.js";
+import { resolveRestoreWorkspace, resolveWorktreeLoadPath } from "../restoreWorkspaceBinding.js";
 
 /**
  * Tests the per-window workspace binding logic from windowServices.ts (#5492).
@@ -32,7 +32,7 @@ const bind = (opts: Opts, stores: Stores) =>
 
 function simulateBootstrap(opts: Opts, stores: Stores) {
   const actions: { action: string; args?: Record<string, unknown> }[] = [];
-  const { project: restoreProject, workspace: restoreWorkspace } = bind(opts, stores);
+  const { workspace: restoreWorkspace } = bind(opts, stores);
 
   // PTY active project (explicit null for unbound windows)
   if (restoreWorkspace) {
@@ -59,9 +59,12 @@ function simulateBootstrap(opts: Opts, stores: Stores) {
     });
   }
 
-  // Worktree loading — projects only. A scratch is a non-git directory that
-  // must never invoke WorktreeService.
-  const projectPathForWorktrees = opts.initialProjectPath ?? restoreProject?.path;
+  // Worktree loading — the production resolver, so "a scratch loads no
+  // worktrees" is asserted against the expression the app actually evaluates.
+  const projectPathForWorktrees = resolveWorktreeLoadPath(
+    opts.initialProjectPath,
+    bind(opts, stores)
+  );
   if (projectPathForWorktrees) {
     actions.push({ action: "loadWorktrees", args: { path: projectPathForWorktrees } });
   }
@@ -80,7 +83,12 @@ function simulateWorkspaceInit(opts: Opts, stores: Stores, prewarmThrows = false
 
   actions.push({ action: "getWorkspaceClient" });
 
-  const prewarmPath = opts.initialProjectPath ?? bind(opts, stores).project?.path;
+  // Mirrors windowServices.ts exactly: the prewarm runs long before the binding
+  // resolver is in scope and reads projectStore directly, so a scratch id finds
+  // no row and no host is prewarmed for it.
+  const prewarmPath =
+    opts.initialProjectPath ??
+    (opts.initialProjectId ? stores.getProjectById(opts.initialProjectId)?.path : undefined);
   if (prewarmPath) {
     try {
       if (prewarmThrows) throw new Error("synchronous prewarm failure");
@@ -96,7 +104,9 @@ function simulateWorkspaceInit(opts: Opts, stores: Stores, prewarmThrows = false
   return actions;
 }
 
-const PROJECT_A: Project = { id: "proj-a", name: "Project A", path: "/projects/a" };
+// Real shapes: production routes a scratch id to the scratch store by its
+// UUID form, and a project id is 64 hex characters.
+const PROJECT_A: Project = { id: "a".repeat(64), name: "Project A", path: "/projects/a" };
 
 const SCRATCH: Scratch = { id: "11111111-1111-4111-8111-111111111111", path: "/scratches/one" };
 
@@ -120,15 +130,15 @@ const storeWithScratch: Stores = {
 describe("windowServices project binding (#5492)", () => {
   describe("startup restore window (initialProjectId set)", () => {
     it("sets PTY active project, registers view, loads worktrees", () => {
-      const actions = simulateBootstrap({ initialProjectId: "proj-a" }, storeWithProjectA);
+      const actions = simulateBootstrap({ initialProjectId: PROJECT_A.id }, storeWithProjectA);
 
       expect(actions).toContainEqual({
         action: "ptySetActiveProject",
-        args: { id: "proj-a", path: "/projects/a" },
+        args: { id: PROJECT_A.id, path: PROJECT_A.path },
       });
       expect(actions).toContainEqual({
         action: "registerInitialView",
-        args: { id: "proj-a", path: "/projects/a" },
+        args: { id: PROJECT_A.id, path: PROJECT_A.path },
       });
       expect(actions).toContainEqual({
         action: "loadWorktrees",
@@ -137,12 +147,12 @@ describe("windowServices project binding (#5492)", () => {
     });
 
     it("skips default terminal spawn", () => {
-      const actions = simulateBootstrap({ initialProjectId: "proj-a" }, storeWithProjectA);
+      const actions = simulateBootstrap({ initialProjectId: PROJECT_A.id }, storeWithProjectA);
       expect(actions.find((a) => a.action === "spawnDefaultTerminal")).toBeUndefined();
     });
 
     it("handles missing project in store gracefully — clears PTY and spawns default terminal", () => {
-      const actions = simulateBootstrap({ initialProjectId: "proj-missing" }, emptyStore);
+      const actions = simulateBootstrap({ initialProjectId: "f".repeat(64) }, emptyStore);
       expect(actions).toContainEqual({
         action: "ptySetActiveProject",
         args: { id: null },
@@ -277,13 +287,13 @@ describe("windowServices project binding (#5492)", () => {
   });
 
   describe("both initialProjectId and initialProjectPath set", () => {
-    const opts: Opts = { initialProjectId: "proj-a", initialProjectPath: "/override/path" };
+    const opts: Opts = { initialProjectId: PROJECT_A.id, initialProjectPath: "/override/path" };
 
     it("sets PTY active project from initialProjectId", () => {
       const actions = simulateBootstrap(opts, storeWithProjectA);
       expect(actions).toContainEqual({
         action: "ptySetActiveProject",
-        args: { id: "proj-a", path: "/projects/a" },
+        args: { id: PROJECT_A.id, path: PROJECT_A.path },
       });
     });
 
@@ -302,7 +312,7 @@ describe("windowServices workspace prewarm ordering (#8828)", () => {
     actions.findIndex((a) => a.action === name);
 
   it("prewarms before awaiting PTY-ready for a restore window (initialProjectId)", () => {
-    const actions = simulateWorkspaceInit({ initialProjectId: "proj-a" }, storeWithProjectA);
+    const actions = simulateWorkspaceInit({ initialProjectId: PROJECT_A.id }, storeWithProjectA);
     expect(actions).toContainEqual({ action: "prewarmProject", args: { path: "/projects/a" } });
     expect(order(actions, "prewarmProject")).toBeLessThan(order(actions, "ptyWaitForReady"));
   });
@@ -315,7 +325,7 @@ describe("windowServices workspace prewarm ordering (#8828)", () => {
 
   it("prefers initialProjectPath over the store lookup when both are set", () => {
     const actions = simulateWorkspaceInit(
-      { initialProjectId: "proj-a", initialProjectPath: "/override/path" },
+      { initialProjectId: PROJECT_A.id, initialProjectPath: "/override/path" },
       storeWithProjectA
     );
     expect(actions).toContainEqual({ action: "prewarmProject", args: { path: "/override/path" } });
@@ -327,25 +337,29 @@ describe("windowServices workspace prewarm ordering (#8828)", () => {
   });
 
   it("does NOT prewarm when the store has no matching project", () => {
-    const actions = simulateWorkspaceInit({ initialProjectId: "proj-missing" }, emptyStore);
+    const actions = simulateWorkspaceInit({ initialProjectId: "f".repeat(64) }, emptyStore);
     expect(actions.find((a) => a.action === "prewarmProject")).toBeUndefined();
   });
 
   it("constructs the workspace client before prewarming and PTY-ready", () => {
-    const actions = simulateWorkspaceInit({ initialProjectId: "proj-a" }, storeWithProjectA);
+    const actions = simulateWorkspaceInit({ initialProjectId: PROJECT_A.id }, storeWithProjectA);
     expect(order(actions, "getWorkspaceClient")).toBeLessThan(order(actions, "prewarmProject"));
     expect(order(actions, "getWorkspaceClient")).toBeLessThan(order(actions, "ptyWaitForReady"));
   });
 
   it("only sets the IPC-visible ref after PTY-ready, never before", () => {
-    const actions = simulateWorkspaceInit({ initialProjectId: "proj-a" }, storeWithProjectA);
+    const actions = simulateWorkspaceInit({ initialProjectId: PROJECT_A.id }, storeWithProjectA);
     expect(order(actions, "setWorkspaceClientRef")).toBeGreaterThan(
       order(actions, "ptyWaitForReady")
     );
   });
 
   it("continues startup when prewarm throws synchronously (PTY-ready and ref still happen)", () => {
-    const actions = simulateWorkspaceInit({ initialProjectId: "proj-a" }, storeWithProjectA, true);
+    const actions = simulateWorkspaceInit(
+      { initialProjectId: PROJECT_A.id },
+      storeWithProjectA,
+      true
+    );
     expect(actions.find((a) => a.action === "prewarmProject")).toBeUndefined();
     expect(actions).toContainEqual({ action: "prewarmFailedSync" });
     expect(actions.find((a) => a.action === "ptyWaitForReady")).toBeDefined();

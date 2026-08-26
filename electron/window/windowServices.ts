@@ -29,7 +29,7 @@ import {
 } from "./startupWorktreeLoad.js";
 import { logError, logInfo, logWarn } from "../utils/logger.js";
 import { formatErrorMessage } from "../../shared/utils/errorMessage.js";
-import { resolveRestoreWorkspace } from "./restoreWorkspaceBinding.js";
+import { resolveRestoreWorkspace, resolveWorktreeLoadPath } from "./restoreWorkspaceBinding.js";
 import { extractRestorePanelCwds } from "./restorePanelCwds.js";
 import { mergeProjectEnv } from "./restoreProjectEnv.js";
 import { store } from "../store.js";
@@ -569,25 +569,15 @@ export async function setupWindowServices(
   // `restoreWorkspace` is a project OR a scratch and drives everything the view
   // itself needs; `restoreProject` is set only for a project and stays the sole
   // input to the worktree load below, which scratches must never reach (#11958).
-  const { project: restoreProject, workspace: restoreWorkspace } = resolveRestoreWorkspace(
-    opts.initialProjectId,
-    {
-      getProjectById: (id) => projectStore.getProjectById(id),
-      getScratchById: (id) => {
-        // The scratch lookup opens the shared DB; a failure there must leave
-        // the window unbound, not abort the boot.
-        try {
-          return scratchStore.getScratchById(id);
-        } catch (error) {
-          logWarn("[MAIN] Could not resolve a scratch for the restored window", {
-            scratchId: id,
-            error: formatErrorMessage(error, "Unknown error"),
-          });
-          return null;
-        }
-      },
-    }
-  );
+  // Neither lookup is wrapped: a store that throws here is a failed boot, not a
+  // window to open unbound. Swallowing it would register nothing, still report
+  // "ok", and let the restore's `resumeSaves(true)` rewrite the manifest with a
+  // null workspace — destroying the very id this fix exists to preserve.
+  const binding = resolveRestoreWorkspace(opts.initialProjectId, {
+    getProjectById: (id) => projectStore.getProjectById(id),
+    getScratchById: (id) => scratchStore.getScratchById(id),
+  });
+  const { project: restoreProject, workspace: restoreWorkspace } = binding;
 
   // A Linux file manager launching a cold Daintree via "Open With" on a folder
   // puts a `file://` directory URI in argv. Classified here — outside the PTY
@@ -696,14 +686,11 @@ export async function setupWindowServices(
   }
 
   // Load worktrees — prefer initialProjectPath, else restoreProject for
-  // startup windows. Unbound windows (no project) skip worktree loading.
-  //
-  // Deliberately `restoreProject`, never `restoreWorkspace`: a scratch is a
-  // non-git directory that must never invoke `WorktreeService`, and the
-  // renderer's no-port watchdog in `WorktreeStoreContext` intentionally stays
-  // disarmed for one. A restored scratch therefore falls through this block
-  // with no path, exactly as an unbound window does (#11958).
-  const projectPathForWorktrees = opts.initialProjectPath ?? restoreProject?.path;
+  // startup windows. Unbound windows (no project) skip worktree loading, and so
+  // does a restored scratch: a non-git directory must never invoke
+  // `WorktreeService`, and the renderer's no-port watchdog in
+  // `WorktreeStoreContext` intentionally stays disarmed for one (#11958).
+  const projectPathForWorktrees = resolveWorktreeLoadPath(opts.initialProjectPath, binding);
   // Skipped outright while the app is quitting: the captured client may already
   // be disposed, and a banner on a window that is going away helps nobody.
   if (projectPathForWorktrees && !isCleaningUp()) {

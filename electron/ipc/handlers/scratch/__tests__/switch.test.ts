@@ -249,6 +249,34 @@ describe("scratch:switch re-persists the open-window manifest", () => {
     );
   });
 
+  it("waits for the view swap to resolve before scheduling", async () => {
+    // The manifest reads each window's ProjectViewManager, so a save that
+    // landed while `switchTo` was still in flight would snapshot the outgoing
+    // workspace. Held open deliberately to pin that ordering — asserting it
+    // against the pointer writes alone cannot see it.
+    let releaseSwitch: (() => void) | undefined;
+    const switchTo = vi.fn(
+      () =>
+        new Promise<{ view: null; isNew: boolean }>((resolve) => {
+          releaseSwitch = () => resolve({ view: null, isNew: false });
+        })
+    );
+    registerScratchHandlers({
+      mainWindow: {},
+      projectViewManager: { setPendingFocusIntent: vi.fn(), switchTo },
+    } as unknown as HandlerDependencies);
+
+    const pending = getHandler(CHANNELS.SCRATCH_SWITCH)(fakeEvent, SCRATCH_ONE);
+    await Promise.resolve();
+    expect(switchTo).toHaveBeenCalled();
+    expect(scheduleOpenWindowsSaveMock).not.toHaveBeenCalled();
+
+    releaseSwitch?.();
+    await pending;
+
+    expect(scheduleOpenWindowsSaveMock).toHaveBeenCalled();
+  });
+
   it("schedules no save when the view swap fails", async () => {
     const deps = {
       mainWindow: { id: 91 },
