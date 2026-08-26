@@ -1,6 +1,8 @@
 import { describe, expect, it, afterEach } from "vitest";
 import { readFileSync, readdirSync } from "node:fs";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
+import ts from "typescript";
 
 import { CHANNELS } from "../../../ipc/channels.js";
 import { ASSISTANT_HOST_METHOD_CHANNELS } from "../../../ipc/handlers/assistantHost.preload.js";
@@ -28,19 +30,44 @@ import { assistantChildEnv, ENGINE_CONTROLLED_ENV } from "../assistantChildEnv.j
  * renamed while a credential still has to arrive through a channel, be persisted under a
  * key, or be handed over as a variable.
  *
- * ## What this does NOT catch, so nobody reads a pass as more than it is
+ * ## The scanners fail closed
+ *
+ * The source-reading checks parse the TypeScript AST rather than counting brackets, and
+ * they THROW on any shape they cannot account for — a spread, a computed key, an
+ * unexpected declaration form. That is the difference between a guard and a decoration:
+ * the first version of this file counted brackets, and both of these slipped past it while
+ * still returning a non-empty key list, so the "did the scan find anything" health check
+ * stayed green while the boundary was broken.
+ *
+ *     const EMPTY: AssistantSessionState = {
+ *       sessionId: null,
+ *       // } fields continued below
+ *       accessToken: null,        // never seen: the comment closed the block
+ *     };
+ *
+ *     const EMPTY: AssistantSessionState = {
+ *       sessionId: null,
+ *       ...ACCOUNT_STATE,         // never seen: the spread was skipped
+ *     };
+ *
+ * `scanner fail-closed fixtures` below feeds both shapes, and several others, back through
+ * the scanners and asserts they now fail. A scanner that cannot be trusted to see
+ * everything must not be trusted to report nothing.
+ *
+ * ## What this still does NOT catch, so nobody reads a pass as more than it is
  *
  * - A credential smuggled through an EXISTING channel's payload. `assistant-host:send`
  *   already carries arbitrary engine commands and `host:ready` already carries masthead
  *   facts; neither is inspected here.
- * - An account field added to `AssistantSessionState` but not to the `EMPTY` literal, or
- *   nested inside one of its objects — the parser reads top-level keys only.
+ * - An account field added to `AssistantSessionState` but never to the `EMPTY` literal, or
+ *   one nested inside a field that IS on it — the key scan reads the top level and does
+ *   not descend.
  * - A Settings control that drives the engine's own `/login` over the existing transport.
  *   That one is deliberate rather than a hole: the boundary is about who OWNS the account,
  *   and an affordance that hands the question to the engine owns nothing. Whether such a
  *   control belongs in Settings is a UI question, and it stays guarded where it happens —
  *   `e2e/full/panels/assistant-native-panel.spec.ts`.
- * - Anything a new store or service does. The scans below are scoped to the modules the
+ * - Anything a new store or service does. The scans are scoped to the modules the
  *   assistant owns today.
  *
  * ## Out of scope on purpose
@@ -52,8 +79,9 @@ import { assistantChildEnv, ENGINE_CONTROLLED_ENV } from "../assistantChildEnv.j
  * borrowing rather than by being built.
  */
 
-const REPO_ROOT = path.resolve(__dirname, "../../../..");
-const HOST_DIR = path.resolve(__dirname, "..");
+const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
+const REPO_ROOT = path.resolve(TEST_DIR, "../../../..");
+const HOST_DIR = path.resolve(TEST_DIR, "..");
 
 /**
  * The whole renderer↔main surface the assistant has, and what each channel is for.
@@ -124,9 +152,9 @@ const OWNERSHIP_DECIDING_ENV = new Map<string, string>([
  * from here: both key lists describe a TypeScript type, erased before any test can see it,
  * and the runtime objects that would answer instead (`ASSISTANT_EMPTY_STATE`, the settings
  * defaults) live under `src/` and in a module that opens the electron-store on import —
- * neither reachable from the electron TypeScript project. So the declaration IS the
- * artifact. It reads keys, not the prose around them: a comment mentioning tokens does not
- * fail it, and a field called `accessToken` does.
+ * `tsc -p electron/tsconfig.json` rejects the first outright (TS6307). So the declaration
+ * IS the artifact. It reads keys, not the prose around them: a comment mentioning tokens
+ * does not fail it, and a field called `accessToken` does.
  *
  * `backend` and `endpoint` are in the list because a REMEMBERED endpoint is the deleted
  * design's other half; the renderer's transient `backend` string is excused by name below,
@@ -145,6 +173,7 @@ const ACCOUNT_WORDS = new Set([
   "endpoint",
   "entitlement",
   "entitlements",
+  "identity",
   "license",
   "logged",
   "login",
@@ -152,6 +181,7 @@ const ACCOUNT_WORDS = new Set([
   "oauth",
   "password",
   "plan",
+  "principal",
   "quota",
   "secret",
   "sign",
@@ -164,7 +194,7 @@ const ACCOUNT_WORDS = new Set([
 ]);
 
 /** Spellings that survive camel-case splitting as one run of letters. */
-const ACCOUNT_SUBSTRINGS = ["apikey", "supporthash", "baseurl", "serverurl"];
+const ACCOUNT_SUBSTRINGS = ["apikey", "supporthash", "baseurl", "serverurl", "userid", "accountid"];
 
 /** Session-state fields that carry an account word and are allowed anyway, with why. */
 const SESSION_STATE_ALLOWED = new Map<string, string>([
@@ -196,7 +226,226 @@ function read(relative: string): string {
 }
 
 /**
- * Source with comment lines removed, so prose about a variable is never read as code.
+ * The scanner met a shape it cannot account for.
+ *
+ * Always a hard stop, never a shorter list. Everything below reasons from "these are the
+ * keys" / "these are the variables", and a scanner that quietly drops what it did not
+ * understand turns every one of those into a claim it has not checked.
+ */
+function outgrew(what: string, detail: string): never {
+  throw new Error(
+    `${what}: ${detail}. The source has outgrown this scanner — teach it the new shape ` +
+      `rather than narrowing what it looks at.`
+  );
+}
+
+function parseText(text: string, name = "fixture.ts"): ts.SourceFile {
+  return ts.createSourceFile(name, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+}
+
+function parseSource(relativePath: string): ts.SourceFile {
+  return parseText(read(relativePath), relativePath);
+}
+
+/** `x as const`, `x satisfies T`, `(x)` — the wrappers a declaration may be dressed in. */
+function unwrap(expression: ts.Expression): ts.Expression {
+  let current = expression;
+  for (;;) {
+    if (
+      ts.isAsExpression(current) ||
+      ts.isSatisfiesExpression(current) ||
+      ts.isParenthesizedExpression(current) ||
+      ts.isTypeAssertionExpression(current)
+    ) {
+      current = current.expression;
+      continue;
+    }
+    return current;
+  }
+}
+
+/** The initializer of a top-level `const <name> = …`, or a hard stop. */
+function declarationInitializer(source: ts.SourceFile, name: string): ts.Expression {
+  const found: ts.Expression[] = [];
+  for (const statement of source.statements) {
+    if (!ts.isVariableStatement(statement)) continue;
+    for (const declaration of statement.declarationList.declarations) {
+      if (!ts.isIdentifier(declaration.name) || declaration.name.text !== name) continue;
+      if (!declaration.initializer) {
+        outgrew(name, "the declaration has no initializer");
+      }
+      found.push(declaration.initializer);
+    }
+  }
+  if (found.length === 0) {
+    outgrew(name, `no top-level \`const ${name}\` in ${source.fileName}`);
+  }
+  if (found.length > 1) {
+    outgrew(name, `declared ${found.length} times, so which one this reads is ambiguous`);
+  }
+  return unwrap(found[0] as ts.Expression);
+}
+
+/**
+ * Top-level keys of an object literal. Nested objects are not descended into — but a
+ * spread, a computed key or an accessor stops the scan rather than being skipped, because
+ * each of those is a way for a field to exist without appearing here.
+ */
+function objectLiteralKeys(expression: ts.Expression, what: string): string[] {
+  if (!ts.isObjectLiteralExpression(expression)) {
+    outgrew(what, `expected an object literal, found ${ts.SyntaxKind[expression.kind]}`);
+  }
+  const keys: string[] = [];
+  for (const property of expression.properties) {
+    if (ts.isSpreadAssignment(property)) {
+      outgrew(what, "a spread hides whatever it carries from a key scan");
+    }
+    if (ts.isShorthandPropertyAssignment(property)) {
+      keys.push(property.name.text);
+      continue;
+    }
+    if (!ts.isPropertyAssignment(property)) {
+      outgrew(what, `a ${ts.SyntaxKind[property.kind]} member is not a plain field`);
+    }
+    const { name } = property;
+    if (ts.isIdentifier(name) || ts.isStringLiteral(name) || ts.isNumericLiteral(name)) {
+      keys.push(name.text);
+      continue;
+    }
+    outgrew(what, "a computed key cannot be read statically");
+  }
+  return keys;
+}
+
+/** Every element of a string-literal array, or a hard stop. */
+function stringArrayElements(expression: ts.Expression, what: string): string[] {
+  if (!ts.isArrayLiteralExpression(expression)) {
+    outgrew(what, `expected an array literal, found ${ts.SyntaxKind[expression.kind]}`);
+  }
+  return expression.elements.map((element) => {
+    if (ts.isStringLiteral(element) || ts.isNoSubstitutionTemplateLiteral(element)) {
+      return element.text;
+    }
+    return outgrew(what, `a ${ts.SyntaxKind[element.kind]} element is not a literal name`);
+  });
+}
+
+/** The one spread the child-environment literal is allowed to carry. */
+const INHERITED_ENV_HELPER = "assistantChildEnv";
+
+/**
+ * `DAINTREE_*` names written into a child-environment object literal.
+ *
+ * Modelled shape by shape rather than pattern-matched out of the text: the literal is
+ * built from conditional spreads, so anything this does not recognise is a new way of
+ * putting a variable into the child and has to be read by a human before the check below
+ * can mean anything.
+ */
+function envObjectNames(expression: ts.Expression, what: string, into: Set<string>): void {
+  if (!ts.isObjectLiteralExpression(expression)) {
+    outgrew(what, `expected an object literal, found ${ts.SyntaxKind[expression.kind]}`);
+  }
+  for (const property of expression.properties) {
+    if (ts.isPropertyAssignment(property)) {
+      const { name } = property;
+      if (ts.isIdentifier(name) || ts.isStringLiteral(name)) {
+        if (name.text.startsWith("DAINTREE_")) into.add(name.text);
+        continue;
+      }
+      outgrew(what, "a computed key could name any variable at all");
+    }
+    if (!ts.isSpreadAssignment(property)) {
+      outgrew(what, `a ${ts.SyntaxKind[property.kind]} member is not a plain field`);
+    }
+    const spread = unwrap(property.expression);
+    if (
+      ts.isCallExpression(spread) &&
+      ts.isIdentifier(spread.expression) &&
+      spread.expression.text === INHERITED_ENV_HELPER
+    ) {
+      // The inherited environment minus the strip list. Its contents are the subject of
+      // `assistantChildEnv.test.ts` and of the inheritance check below.
+      continue;
+    }
+    if (ts.isConditionalExpression(spread)) {
+      envObjectNames(unwrap(spread.whenTrue), what, into);
+      envObjectNames(unwrap(spread.whenFalse), what, into);
+      continue;
+    }
+    if (ts.isObjectLiteralExpression(spread)) {
+      envObjectNames(spread, what, into);
+      continue;
+    }
+    outgrew(what, "a spread of something this cannot read could carry any variable");
+  }
+}
+
+/** Every `env: { … }` literal in the host's own modules, read shape by shape. */
+function envLiteralNames(): Set<string> {
+  const names = new Set<string>();
+  let literals = 0;
+  for (const file of hostSourceFiles()) {
+    const source = parseText(readFileSync(file, "utf8"), file);
+    const visit = (node: ts.Node): void => {
+      if (
+        ts.isPropertyAssignment(node) &&
+        ts.isIdentifier(node.name) &&
+        node.name.text === "env" &&
+        ts.isObjectLiteralExpression(unwrap(node.initializer))
+      ) {
+        literals += 1;
+        envObjectNames(unwrap(node.initializer), `${relative(file)} env literal`, names);
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+  }
+  if (literals === 0) {
+    outgrew("child environment", "no `env: { … }` literal in the host — it has moved");
+  }
+  return names;
+}
+
+/**
+ * `DAINTREE_*` names assigned anywhere in the host, as a supplement to the modelled
+ * literal above — a field key or an `env.DAINTREE_X = …` write outside it.
+ */
+function daintreeNamesAnywhere(): Set<string> {
+  const names = new Set<string>();
+  for (const file of hostSourceFiles()) {
+    const source = parseText(readFileSync(file, "utf8"), file);
+    const visit = (node: ts.Node): void => {
+      if (ts.isPropertyAssignment(node) || ts.isShorthandPropertyAssignment(node)) {
+        const { name } = node;
+        if (
+          (ts.isIdentifier(name) || ts.isStringLiteral(name)) &&
+          name.text.startsWith("DAINTREE_")
+        ) {
+          names.add(name.text);
+        }
+      }
+      if (ts.isBinaryExpression(node) && node.operatorToken.kind === ts.SyntaxKind.EqualsToken) {
+        const target = node.left;
+        if (ts.isPropertyAccessExpression(target) && target.name.text.startsWith("DAINTREE_")) {
+          names.add(target.name.text);
+        }
+        if (
+          ts.isElementAccessExpression(target) &&
+          ts.isStringLiteral(target.argumentExpression) &&
+          target.argumentExpression.text.startsWith("DAINTREE_")
+        ) {
+          names.add(target.argumentExpression.text);
+        }
+      }
+      ts.forEachChild(node, visit);
+    };
+    visit(source);
+  }
+  return names;
+}
+
+/**
+ * Source with comment lines removed, for the one text scan left.
  *
  * Line-based, not a lexer: an inline trailing comment survives. That is the right way for
  * it to be wrong — it can produce a false FAILURE a human resolves in a minute, never a
@@ -212,64 +461,11 @@ function withoutComments(source: string): string {
     .join("\n");
 }
 
-/**
- * The block a named declaration opens, from its first bracket to the matching one.
- *
- * Fails loudly rather than returning empty when the declaration has moved or been renamed:
- * a silently empty block turns every assertion below it into a pass, which is what makes a
- * source-reading contract worthless. Anchored to the start of a line so a mention in prose
- * cannot be mistaken for the declaration.
- */
-function declarationBlock(source: string, declaration: string, open: "{" | "["): string {
-  const anchored = new RegExp(`^${declaration.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}`, "m");
-  const match = anchored.exec(source);
-  expect(
-    match,
-    `\`${declaration}\` no longer starts a line here — repoint this contract at whatever ` +
-      `replaced it rather than deleting the check`
-  ).not.toBeNull();
-  const from = source.indexOf(open, match?.index ?? 0);
-  expect(from, `\`${declaration}\` opens no \`${open}\``).toBeGreaterThanOrEqual(0);
-  const close = open === "{" ? "}" : "]";
-  let depth = 0;
-  for (let i = from; i < source.length; i++) {
-    const ch = source[i];
-    if (ch === open) depth += 1;
-    else if (ch === close) {
-      depth -= 1;
-      if (depth === 0) return source.slice(from + 1, i);
-    }
-  }
-  throw new Error(`unterminated ${declaration}`);
-}
-
-/** Top-level keys of an object literal block. Nested objects are NOT descended into. */
-function topLevelKeys(block: string): string[] {
-  const keys: string[] = [];
-  let depth = 0;
-  for (const line of block.split("\n")) {
-    const trimmed = line.trim();
-    if (depth === 0) {
-      const match = /^["']?([A-Za-z_$][\w$]*)["']?\s*:/.exec(trimmed);
-      if (match?.[1]) keys.push(match[1]);
-    }
-    for (const ch of line) {
-      if (ch === "{" || ch === "[" || ch === "(") depth += 1;
-      else if (ch === "}" || ch === "]" || ch === ")") depth -= 1;
-    }
-  }
-  return keys;
-}
-
-function tsFilesIn(dir: string): string[] {
-  return readdirSync(dir)
-    .filter((file) => file.endsWith(".ts") && !file.endsWith(".d.ts"))
-    .map((file) => path.join(dir, file));
-}
-
 /** The host's own modules — everything that assembles or passes the child environment. */
 function hostSourceFiles(): string[] {
-  return tsFilesIn(HOST_DIR);
+  return readdirSync(HOST_DIR)
+    .filter((file) => file.endsWith(".ts") && !file.endsWith(".d.ts"))
+    .map((file) => path.join(HOST_DIR, file));
 }
 
 /** Every non-test module the assistant owns, main and renderer, by absolute path. */
@@ -285,7 +481,7 @@ function assistantSourceFiles(): string[] {
       "shared/types/ipc/assistantHost.ts",
       "src/store/assistantStore.ts",
       "src/components/Settings/DaintreeAssistantSettingsTab.tsx",
-    ].map((relative) => path.join(REPO_ROOT, relative)),
+    ].map((file) => path.join(REPO_ROOT, file)),
     ...readdirSync(panelDir, { recursive: true })
       .map(String)
       .filter((file) => file.endsWith(".ts") || file.endsWith(".tsx"))
@@ -293,7 +489,20 @@ function assistantSourceFiles(): string[] {
   ].filter((file) => !file.includes("__tests__"));
 }
 
-const relative = (file: string) => path.relative(REPO_ROOT, file).split(path.sep).join("/");
+function relative(file: string): string {
+  return path.relative(REPO_ROOT, file).split(path.sep).join("/");
+}
+
+function sessionStateKeys(source: ts.SourceFile): string[] {
+  return objectLiteralKeys(declarationInitializer(source, "EMPTY"), "assistant session state");
+}
+
+function persistedSettingKeys(source: ts.SourceFile): string[] {
+  return stringArrayElements(
+    declarationInitializer(source, "HELP_ASSISTANT_KEYS"),
+    "persisted assistant settings"
+  );
+}
 
 describe("assistant account-ownership boundary", () => {
   describe("the IPC surface", () => {
@@ -352,10 +561,21 @@ describe("assistant account-ownership boundary", () => {
   });
 
   describe("the child environment", () => {
-    const added: string[] = [];
+    const restore = new Map<string, string | undefined>();
+
+    function pollute(name: string, value: string) {
+      if (!restore.has(name)) restore.set(name, process.env[name]);
+      process.env[name] = value;
+    }
 
     afterEach(() => {
-      for (const name of added.splice(0)) delete process.env[name];
+      // Restore rather than delete: a developer or CI runner with one of these genuinely
+      // exported would otherwise have it removed for every later test in this fork.
+      for (const [name, previous] of restore) {
+        if (previous === undefined) delete process.env[name];
+        else process.env[name] = previous;
+      }
+      restore.clear();
     });
 
     it("sets nothing that decides the account or the endpoint", () => {
@@ -363,24 +583,15 @@ describe("assistant account-ownership boundary", () => {
       // inside `startSession` from a live window, an MCP binding and a resolved binary,
       // none of which a unit test has. What matters is not what one launch computes but
       // which variables the host is in the business of setting at all.
-      //
-      // It sees literal assignment — `DAINTREE_X:`, `"DAINTREE_X":`, `env.DAINTREE_X =`.
-      // A computed key would slip past, and no rewrite of this makes it not so; the
-      // narrower claim it can honestly support is that the host does not name one.
-      const assigned = new Set<string>();
-      for (const file of hostSourceFiles()) {
-        const source = withoutComments(readFileSync(file, "utf8"));
-        for (const match of source.matchAll(/["']?\b(DAINTREE_[A-Z0-9_]+)["']?\s*(?::|=[^=])/g)) {
-          if (match[1]) assigned.add(match[1]);
-        }
-      }
-      // The scanner's own canary, from two artifacts that move independently: the host
-      // re-sets several of the names it strips (the tier, the MCP pair) from authoritative
-      // sources, so an empty intersection means the scan has stopped matching code rather
-      // than that the host stopped setting anything.
+      const assigned = new Set([...envLiteralNames(), ...daintreeNamesAnywhere()]);
+
+      // A cross-check between two artifacts that move independently: the host re-sets
+      // several of the names it strips (the tier, the MCP pair) from authoritative
+      // sources. This is a corroboration, not the health signal — the scanners above throw
+      // rather than return short, which is what makes an empty result trustworthy.
       expect(
         ENGINE_CONTROLLED_ENV.filter((name) => assigned.has(name)),
-        "the host sets none of the variables it strips — the source scan has gone blind"
+        "the host sets none of the variables it strips, which no longer describes it"
       ).not.toEqual([]);
 
       const overreach = [...OWNERSHIP_DECIDING_ENV.keys()].filter((name) => assigned.has(name));
@@ -393,8 +604,7 @@ describe("assistant account-ownership boundary", () => {
 
     it("lets none of them through from the environment Daintree was launched in", () => {
       for (const name of OWNERSHIP_DECIDING_ENV.keys()) {
-        added.push(name);
-        process.env[name] = "inherited-from-a-shell-profile";
+        pollute(name, "inherited-from-a-shell-profile");
       }
 
       const env = assistantChildEnv();
@@ -415,14 +625,7 @@ describe("assistant account-ownership boundary", () => {
       // `HELP_ASSISTANT_KEYS` is the write gate: `setSettings` drops any field not in it,
       // so it is the complete set of assistant preferences that can reach disk. A backend
       // URL preference or a stored token has to appear here to survive a restart.
-      const block = declarationBlock(
-        read("electron/ipc/handlers/helpAssistant.ts"),
-        "const HELP_ASSISTANT_KEYS",
-        "["
-      );
-      const keys = [...block.matchAll(/"([^"]+)"/g)].map((match) => match[1] ?? "");
-      expect(keys.length, "the persisted-settings key list came back empty").toBeGreaterThan(0);
-
+      const keys = persistedSettingKeys(parseSource("electron/ipc/handlers/helpAssistant.ts"));
       const offenders = keys.filter(isAccountKey);
       expect(
         offenders,
@@ -434,9 +637,7 @@ describe("assistant account-ownership boundary", () => {
       // `EMPTY` is the shape every session starts from, so it is the store's declared field
       // set — a plan, a subject or a support hash has to be a field on it to be rendered
       // from.
-      const keys = sessionStateKeys();
-      expect(keys.length, "the session-state field list came back empty").toBeGreaterThan(0);
-
+      const keys = sessionStateKeys(parseSource("src/store/assistantStore.ts"));
       const offenders = keys.filter((key) => isAccountKey(key) && !SESSION_STATE_ALLOWED.has(key));
       expect(
         offenders,
@@ -445,15 +646,112 @@ describe("assistant account-ownership boundary", () => {
     });
 
     it("has no stale exception in its session-state allowlist", () => {
-      const keys = new Set(sessionStateKeys());
+      const keys = new Set(sessionStateKeys(parseSource("src/store/assistantStore.ts")));
       const stale = [...SESSION_STATE_ALLOWED.keys()].filter((key) => !keys.has(key));
       expect(stale, `exceptions for fields that no longer exist: ${stale.join(", ")}`).toEqual([]);
     });
   });
-});
 
-function sessionStateKeys(): string[] {
-  return topLevelKeys(
-    declarationBlock(read("src/store/assistantStore.ts"), "const EMPTY: AssistantSessionState", "{")
-  );
-}
+  /**
+   * The scanners, fed the shapes that would hide a regression from them.
+   *
+   * Every case here PASSED the bracket-counting version this file shipped with, which is
+   * the reason the fixtures exist: the checks above are only worth their word if a scanner
+   * that cannot see everything refuses to report nothing.
+   */
+  describe("scanner fail-closed fixtures", () => {
+    it("stops when a comment would close the object early", () => {
+      const source = parseText(
+        `const EMPTY: AssistantSessionState = {\n` +
+          `  sessionId: null,\n` +
+          `  // } fields continued below\n` +
+          `  accessToken: null,\n` +
+          `};\n`
+      );
+      // The AST reads the comment as a comment, so this one does not fail — it SEES the
+      // field the bracket counter missed, which is the stronger outcome.
+      expect(sessionStateKeys(source)).toContain("accessToken");
+    });
+
+    it("stops at a spread rather than skipping what it carries", () => {
+      const source = parseText(
+        `const ACCOUNT_STATE = { accessToken: null };\n` +
+          `const EMPTY: AssistantSessionState = {\n` +
+          `  sessionId: null,\n` +
+          `  ...ACCOUNT_STATE,\n` +
+          `};\n`
+      );
+      expect(() => sessionStateKeys(source)).toThrow(/spread/i);
+    });
+
+    it("stops at a computed key", () => {
+      const source = parseText(
+        `const EMPTY: AssistantSessionState = { [FIELD]: null, sessionId: null };\n`
+      );
+      expect(() => sessionStateKeys(source)).toThrow(/computed/i);
+    });
+
+    it("stops when the declaration is gone rather than reporting no fields", () => {
+      const source = parseText(`const SOMETHING_ELSE = { sessionId: null };\n`);
+      expect(() => sessionStateKeys(source)).toThrow(/no top-level/i);
+    });
+
+    it("stops when the declaration is no longer an object literal", () => {
+      const source = parseText(`const EMPTY: AssistantSessionState = buildEmptyState();\n`);
+      expect(() => sessionStateKeys(source)).toThrow(/expected an object literal/i);
+    });
+
+    it("reads a key list through `as const satisfies`, and stops on a non-literal element", () => {
+      const good = parseText(
+        `const HELP_ASSISTANT_KEYS = ["docSearch", "tier"] as const satisfies readonly string[];\n`
+      );
+      expect(persistedSettingKeys(good)).toEqual(["docSearch", "tier"]);
+
+      const bad = parseText(`const HELP_ASSISTANT_KEYS = ["docSearch", ...EXTRA_KEYS] as const;\n`);
+      expect(() => persistedSettingKeys(bad)).toThrow(/element is not a literal name/i);
+    });
+
+    it("stops at an environment spread it cannot read", () => {
+      const names = new Set<string>();
+      const source = parseText(
+        `const options = { env: { ...assistantChildEnv(), ...buildAccountEnvironment() } };\n`
+      );
+      const literal = declarationInitializer(source, "options");
+      const envProperty = ts.isObjectLiteralExpression(literal)
+        ? literal.properties.find(
+            (property): property is ts.PropertyAssignment =>
+              ts.isPropertyAssignment(property) &&
+              ts.isIdentifier(property.name) &&
+              property.name.text === "env"
+          )
+        : undefined;
+      expect(envProperty, "the fixture no longer contains an env literal").toBeDefined();
+      expect(() =>
+        envObjectNames(unwrap(envProperty!.initializer), "fixture env literal", names)
+      ).toThrow(/spread of something this cannot read/i);
+    });
+
+    it("reads the conditional spreads the real environment literal is built from", () => {
+      const names = new Set<string>();
+      const source = parseText(
+        `const options = { env: {\n` +
+          `  ...assistantChildEnv(),\n` +
+          `  DAINTREE_PROJECT_ID: id,\n` +
+          `  ...(on ? { DAINTREE_API_KEY: key } : {}),\n` +
+          `} };\n`
+      );
+      const literal = declarationInitializer(source, "options");
+      const envProperty = ts.isObjectLiteralExpression(literal)
+        ? literal.properties.find(
+            (property): property is ts.PropertyAssignment =>
+              ts.isPropertyAssignment(property) &&
+              ts.isIdentifier(property.name) &&
+              property.name.text === "env"
+          )
+        : undefined;
+      envObjectNames(unwrap(envProperty!.initializer), "fixture env literal", names);
+      // The conditional branch is exactly where a credential would be tucked away.
+      expect([...names].sort()).toEqual(["DAINTREE_API_KEY", "DAINTREE_PROJECT_ID"]);
+    });
+  });
+});
