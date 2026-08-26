@@ -114,26 +114,6 @@ export interface GeneratedIpcInvokeMap {
     args: [options: import("./agent.js").SaveArtifactOptions];
     result: import("./agent.js").SaveArtifactResult | null;
   };
-  "assistant-account:cancel-login": {
-    args: [];
-    result: { cancelled: boolean };
-  };
-  "assistant-account:get-status": {
-    args: [payload: { refresh: boolean }];
-    result: import("./assistantAccount.js").AssistantAccountStatusResult;
-  };
-  "assistant-account:login": {
-    args: [];
-    result: import("./assistantAccount.js").AssistantAccountLoginResult;
-  };
-  "assistant-account:logout": {
-    args: [];
-    result: { signedOut: boolean; message?: string | undefined };
-  };
-  "assistant-host:diagnostics": {
-    args: [];
-    result: import("./assistantHostIpc.js").AssistantDiagnostics;
-  };
   "assistant-host:send": {
     args: [raw: unknown];
     result: { delivered: boolean };

@@ -1,17 +1,6 @@
 import { app } from "electron";
 
 /**
- * Defaults shared by the two places that answer "is debug logging on?".
- *
- * `helpAssistant` settings are read on two independent paths — the IPC handler that
- * fills the settings screen, and `HelpSessionService` that decides what a spawning
- * engine is told. Each carried its own default literal, which is fine while both say
- * `false` and silently wrong the moment either moves: the switch would read OFF while
- * the engine wrote a trace, or read ON while it wrote nothing. One answer, asked by
- * both.
- */
-
-/**
  * Debug logging is ON in development and OFF in a packaged build.
  *
  * The trace is the only way to see what the engine actually did — the model requests,
@@ -25,8 +14,11 @@ import { app } from "electron";
  * not content), so it is an owner-only artifact somebody opts into rather than something
  * an install starts writing on its own.
  *
- * A DEFAULT, not an override. A stored preference wins in both directions, so switching
- * it off in a dev build sticks.
+ * The ONLY answer, not a default with a preference over it. There was a settings switch
+ * behind this; it read only on the built-in engine, so it left the other two assistant
+ * backends with a control that did nothing, and it went when the engine's own settings
+ * left Daintree. A stale stored value is deliberately ignored — see the test in
+ * `HelpSessionService.test.ts`.
  *
  * ## Why this is a function, and why it swallows
  *
