@@ -8,6 +8,7 @@ import { usePilotStore } from "@/store/pilotStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
+import { isScratchWorkspaceId } from "@shared/utils/workspaceIds";
 import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
 import { actionService } from "@/services/ActionService";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
@@ -637,19 +638,26 @@ function findParkTarget(
  * `isCurrent`, because it is the count for the ONE project this renderer view
  * owns, and lending it to a neighbouring project's group would draw a chevron
  * on a heading using a number about somewhere else entirely (#11950 — worktree
- * metadata exists for the view's own project and for no other). And `kind`,
- * because a scratch is not a git repository: no count of its worktrees can be
- * anything but zero, whatever an unparameterized current-view accessor happens
- * to be holding. `pilot.openProject` refuses a scratch on the same grounds, and
- * the two have to refuse it the same way or the chevron and the chord disagree
- * about a workspace — the one property #11955 established by construction.
+ * metadata exists for the view's own project and for no other). And the scratch
+ * check, because a scratch is not a git repository: no count of its worktrees
+ * can be anything but zero, whatever an unparameterized current-view accessor
+ * happens to be holding. `pilot.openProject` refuses a scratch on the same
+ * grounds, and the two have to refuse it the same way or the chevron and the
+ * chord disagree about a workspace — the one property #11955 established by
+ * construction.
+ *
+ * Structural, off the id, rather than off `group.kind`. The kind is metadata
+ * and arrives asynchronously — a scratch reads `"unknown"` until its name
+ * hydrates — so keying on it would open a window where the chevron enriches a
+ * workspace the chord is already refusing. The id shape is true immediately and
+ * is the same test the action applies.
  */
 function canDrill(
   group: PilotDisplayGroup,
   currentViewWorktreeCount: number
 ): group is PilotProjectGroup {
   if (group.axis !== "workspace") return false;
-  const enriched = group.isCurrent && group.kind !== "scratch";
+  const enriched = group.isCurrent && !isScratchWorkspaceId(group.workspaceId);
   return hasWorktreeAxis(
     group.rows.map((row) => row.run),
     enriched ? currentViewWorktreeCount : undefined
@@ -846,18 +854,21 @@ export function PilotView() {
    * through the same predicates the affordance reads, on the UNNARROWED groups,
    * so the line answers "would a fresh press scope now" rather than "is the
    * chevron drawn under this query". Where the workspace has no runs at all
-   * there is no group to ask, and its own worktrees are the whole answer —
-   * safe to consult unguarded here because the only writer of `fellBackFrom`
-   * passes this view's own workspace, and refuses a scratch before it does.
+   * there is no group to ask and its own worktrees are the whole answer, so the
+   * count carries `canDrill`'s scratch guard with it: a scratch DOES record a
+   * fallback (its none is a real none), and letting the current view's worktrees
+   * answer for it would suppress the very explanation it just earned.
    */
   const fallbackGroup =
     fellBackFrom === null
       ? null
       : (liveGroups.find((group) => group.workspaceId === fellBackFrom) ?? null);
+  const fallbackWorktreeCount =
+    fellBackFrom !== null && !isScratchWorkspaceId(fellBackFrom) ? viewWorktreeCount : 0;
   const fallbackHasAxis =
     fallbackGroup !== null
-      ? canDrill(fallbackGroup, viewWorktreeCount)
-      : hasWorktreeAxis([], viewWorktreeCount);
+      ? canDrill(fallbackGroup, fallbackWorktreeCount)
+      : hasWorktreeAxis([], fallbackWorktreeCount);
   const fallbackName =
     scope.kind === "fleet" && fellBackFrom !== null && !fallbackHasAxis
       ? (workspaces.get(fellBackFrom)?.name ?? null)

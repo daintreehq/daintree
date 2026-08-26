@@ -83,22 +83,33 @@ describe("useWorktreeStoreOptional", () => {
     expect(result.current).toBe("wt-a");
   });
 
-  it("stops reading a store the tree has dropped", () => {
+  it("releases its subscription when the tree drops it", () => {
+    // Asserted on the unsubscribe call, not on the value: a hook that leaked
+    // its subscription would ALSO leave `result.current` at its last render,
+    // because React drops an update aimed at an unmounted tree. Only the store
+    // can say whether anyone is still listening.
     const store = createWorktreeStore();
     store.getState().applySnapshot([snap("wt-a")], { epoch: "test", seq: 1 });
 
-    const { result, unmount } = renderHook(
-      () => useWorktreeStoreOptional((s) => s.worktrees.size, -1),
-      { wrapper: withStore(store) }
-    );
+    let unsubscribed = false;
+    const watched = {
+      ...store,
+      subscribe: (listener: Parameters<typeof store.subscribe>[0]) => {
+        const release = store.subscribe(listener);
+        return () => {
+          unsubscribed = true;
+          release();
+        };
+      },
+    };
+
+    const { unmount } = renderHook(() => useWorktreeStoreOptional((s) => s.worktrees.size, -1), {
+      wrapper: withStore(watched),
+    });
+    expect(unsubscribed).toBe(false);
+
     unmount();
 
-    act(() => {
-      store.getState().applySnapshot([snap("wt-a"), snap("wt-b")], { epoch: "test", seq: 2 });
-    });
-
-    // An update landing on an unmounted subscriber is a leak that React warns
-    // about; the value simply stops moving.
-    expect(result.current).toBe(1);
+    expect(unsubscribed).toBe(true);
   });
 });

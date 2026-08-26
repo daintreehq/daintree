@@ -116,6 +116,25 @@ function seedWorkspaceOpenings(daintreeOpened: number, spikeOpened: number): voi
   } as Partial<ReturnType<typeof useScratchStore.getState>>);
 }
 
+/**
+ * A structurally real scratch id.
+ *
+ * The `s1` placeholder above is enough wherever a scratch is just another
+ * workspace in the list, but not where the code under test asks WHAT KIND an id
+ * is: `isScratchWorkspaceId` reads the shape, deliberately, because the stores
+ * that would answer hydrate asynchronously and say "not a scratch" while they
+ * load. A placeholder id would route through the project path and prove nothing.
+ */
+const SCRATCH_ID = "3f2504e0-4f89-41d3-9a0c-0305e82c3301";
+
+/** Replaces the default `s1` scratch with one the shape test recognises. */
+function seedRealScratch(): void {
+  // eslint-disable-next-line @typescript-eslint/no-unsafe-type-assertion -- test carrier: only id/name/lastOpened are read
+  useScratchStore.setState({
+    scratches: [{ id: SCRATCH_ID, name: "spike", lastOpened: NOW - 60_000 }],
+  } as Partial<ReturnType<typeof useScratchStore.getState>>);
+}
+
 beforeEach(() => {
   vi.useFakeTimers();
   vi.setSystemTime(NOW);
@@ -2509,11 +2528,12 @@ describe("PilotView worktree axis from the project's own store", () => {
     // A scratch is not a git repository, so no count of its worktrees can be
     // anything but zero. `pilot.openProject` refuses one on those grounds, and
     // a chevron drawn here would be the chord and the affordance disagreeing.
-    seedViewWorkspace("s1");
+    seedRealScratch();
+    seedViewWorkspace(SCRATCH_ID);
     seed([
       run({
         runId: "a",
-        workspaceId: "s1",
+        workspaceId: SCRATCH_ID,
         worktreeId: "/scratch/one",
         agentState: "working",
         since: NOW - 60_000,
@@ -2552,7 +2572,13 @@ describe("PilotView worktree axis from the project's own store", () => {
     expect(screen.getByTestId("pilot-group-drill")).toBeTruthy();
     fireEvent.change(screen.getByTestId("pilot-search"), { target: { value: "auth" } });
 
+    // Both call sites, or the chord could go on drilling through a chevron
+    // that is no longer drawn — which is the disagreement this suite exists
+    // to prevent.
     expect(screen.queryByTestId("pilot-group-drill")).toBeNull();
+    expect(screen.queryByTestId("pilot-drill-hint")).toBeNull();
+    fireEvent.keyDown(screen.getByTestId("pilot-search"), { key: "Enter", ...DRILL_MODIFIER });
+    expect(usePilotStore.getState().scope).toEqual({ kind: "fleet" });
   });
 
   it("grows the affordance when a worktree appears under the open surface", () => {
@@ -2732,6 +2758,47 @@ describe("PilotView fallback explanation", () => {
 
     expect(screen.queryByTestId("pilot-fallback-note")).toBeNull();
     expect(screen.getByTestId("pilot-group-drill")).toBeTruthy();
+  });
+
+  it("keeps explaining a scratch that has no runs of its own", () => {
+    // The scratch earns the explanation — its none IS a none — and the current
+    // view's worktrees must not answer on its behalf and take it away. With no
+    // scratch runs there is no group to ask, which is the branch where the
+    // count would otherwise be consulted unguarded.
+    seedRealScratch();
+    seedViewWorkspace(SCRATCH_ID);
+    seed([
+      run({ runId: "a", worktreeId: "/repo/wt/alpha", agentState: "working", since: NOW - 60_000 }),
+    ]);
+    usePilotStore.setState({ isOpen: true, scope: { kind: "fleet" }, fellBackFrom: SCRATCH_ID });
+
+    const store = createWorktreeStore();
+    store.getState().applySnapshot(
+      [
+        {
+          id: "/repo/zebra",
+          worktreeId: "/repo/zebra",
+          path: "/repo/zebra",
+          name: "zebra",
+          isCurrent: false,
+        },
+        {
+          id: "/repo/wt/alpha",
+          worktreeId: "/repo/wt/alpha",
+          path: "/repo/wt/alpha",
+          name: "alpha",
+          isCurrent: false,
+        },
+      ],
+      { epoch: "test", seq: 1 }
+    );
+    render(
+      <WorktreeStoreContext.Provider value={store}>
+        <PilotView />
+      </WorktreeStoreContext.Provider>
+    );
+
+    expect(screen.getByTestId("pilot-fallback-note").textContent).toContain("spike");
   });
 
   it("says nothing when the workspace cannot be named", () => {
