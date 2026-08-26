@@ -53,7 +53,9 @@ afterAll(() => {
 });
 
 vi.mock("../resolveAssistantBinary.js", () => ({
-  resolveAssistantBinary: () => Promise.resolve("/nonexistent/daintree-assistant"),
+  ASSISTANT_BIN_ENV: "DAINTREE_ASSISTANT_BIN",
+  resolveAssistantBinary: () =>
+    Promise.resolve({ path: "/nonexistent/daintree-assistant", source: "repo" }),
 }));
 
 vi.mock("electron", () => ({

@@ -537,7 +537,7 @@ export class CliAvailabilityService {
   private async probeBundledAssistant(): Promise<ProbeResult> {
     try {
       const { resolveAssistantBinary } = await import("./assistant-host/resolveAssistantBinary.js");
-      const binaryPath = await resolveAssistantBinary();
+      const { path: binaryPath } = await resolveAssistantBinary();
       return this.probeNativePaths([binaryPath]);
     } catch {
       return { status: "missing" };

@@ -81,6 +81,10 @@ vi.mock("../../setup/environment.js", () => ({
 // Mock fs/promises for auth checks
 vi.mock("fs/promises", () => ({
   access: vi.fn().mockRejectedValue(new Error("ENOENT")),
+  // `resolveAssistantBinary` follows a passing `access` with a `stat`, because a
+  // directory satisfies both X_OK and R_OK and would otherwise resolve as the engine.
+  // Whatever `access` admits here is a file.
+  stat: vi.fn().mockResolvedValue({ isFile: () => true }),
   constants: { R_OK: 4, X_OK: 1 },
 }));
 

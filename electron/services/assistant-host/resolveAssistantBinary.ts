@@ -1,4 +1,4 @@
-import { access, constants } from "node:fs/promises";
+import { access, stat, constants } from "node:fs/promises";
 import path from "node:path";
 import { app } from "electron";
 
@@ -24,10 +24,32 @@ import { app } from "electron";
  * whatever the user installed, at whatever version; silently binding to it would
  * reintroduce the skew this design exists to prevent, and the failure mode would be
  * an inscrutable protocol rejection rather than a missing-binary message.
+ *
+ * The override outranks the bundled copy in a PACKAGED app too, and that is kept
+ * deliberately — engine development against a locally installed build (`npm run
+ * install:local`) is a real workflow and refusing it would leave no replacement. What
+ * is not acceptable is doing it SILENTLY: a `DAINTREE_ASSISTANT_BIN` exported into a
+ * shell months ago would otherwise substitute an unknown engine into a packaged
+ * acceptance run, and the run would certify an artifact it never executed.
+ *
+ * So resolution reports WHICH step won and stays otherwise pure. Saying anything about
+ * it belongs to whoever is about to spawn the thing — `CliAvailabilityService` resolves
+ * only to ask whether an engine exists, and a probe that announces it is "running" a
+ * substitute engine would be both noise and a lie.
  */
 
 /** Env override for local engine development. */
 export const ASSISTANT_BIN_ENV = "DAINTREE_ASSISTANT_BIN";
+
+/** Which of the three resolution steps produced the binary. */
+export type AssistantBinarySource = "override" | "packaged" | "repo";
+
+export interface ResolvedAssistantBinary {
+  /** Absolute path to the engine binary. Overrides are anchored before use. */
+  path: string;
+  /** Which resolution step won. `"packaged"` is the only acceptance-grade answer. */
+  source: AssistantBinarySource;
+}
 
 /**
  * Filename of the bundled binary. The platform/arch suffix is dropped at pack time
@@ -43,7 +65,10 @@ async function isExecutable(candidate: string): Promise<boolean> {
     // X_OK is meaningless on Windows (every readable file reports executable), so
     // check readability there and let spawn report a genuinely broken image.
     await access(candidate, process.platform === "win32" ? constants.R_OK : constants.X_OK);
-    return true;
+    // A directory passes both checks — searchable satisfies X_OK, readable satisfies
+    // R_OK — so `access` alone would hand back a folder as the engine and leave the
+    // failure to surface as an unreadable spawn error several layers away.
+    return (await stat(candidate)).isFile();
   } catch {
     return false;
   }
@@ -59,7 +84,8 @@ export interface ResolveAssistantBinaryOptions {
 }
 
 /**
- * Resolves the engine binary, or throws with a message that names the actual fix.
+ * Resolves the engine binary and reports which step produced it, or throws with a
+ * message that names the actual fix.
  *
  * The failure text matters: "assistant not found" sends someone hunting for an
  * install command that does not exist, because the engine is not separately
@@ -68,18 +94,23 @@ export interface ResolveAssistantBinaryOptions {
  */
 export async function resolveAssistantBinary(
   opts: ResolveAssistantBinaryOptions = {}
-): Promise<string> {
+): Promise<ResolvedAssistantBinary> {
   const env = opts.env ?? process.env;
   const tried: string[] = [];
 
-  const override = env[ASSISTANT_BIN_ENV]?.trim();
-  if (override) {
-    if (await isExecutable(override)) return override;
+  const raw = env[ASSISTANT_BIN_ENV]?.trim();
+  if (raw) {
+    // Anchored before it is checked. The child is spawned with the PROJECT as its cwd
+    // (`AssistantHostProcess`), while this check runs against main's — so a relative
+    // override would be validated as one file and executed as another, and a bare
+    // filename would reach the `PATH` lookup this resolver exists to refuse.
+    const override = path.resolve(raw);
+    if (await isExecutable(override)) return { path: override, source: "override" };
     // An override that does not resolve is FATAL, never a silent fall-through to the
     // bundled copy: someone set it to test a specific build, and quietly running a
     // different one would make the test a lie.
     throw new Error(
-      `${ASSISTANT_BIN_ENV} is set to "${override}", but no executable is there.\n` +
+      `${ASSISTANT_BIN_ENV} is set to "${raw}", but no executable is there.\n` +
         `Build it with: (cd vendor/daintree-assistant && make build)`
     );
   }
@@ -90,7 +121,7 @@ export async function resolveAssistantBinary(
   if (resourcesPath) {
     const packaged = path.join(resourcesPath, "assistant", name);
     tried.push(packaged);
-    if (await isExecutable(packaged)) return packaged;
+    if (await isExecutable(packaged)) return { path: packaged, source: "packaged" };
   }
 
   // Unpackaged: `app.getAppPath()` is the repo root in dev.
@@ -106,7 +137,7 @@ export async function resolveAssistantBinary(
       : `daintree-assistant-${process.platform}-${process.arch}`
   );
   tried.push(devPath);
-  if (await isExecutable(devPath)) return devPath;
+  if (await isExecutable(devPath)) return { path: devPath, source: "repo" };
 
   throw new Error(
     `Could not find the Daintree Assistant engine.\n` +
