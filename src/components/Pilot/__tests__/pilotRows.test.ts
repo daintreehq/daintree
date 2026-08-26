@@ -1151,13 +1151,65 @@ describe("hasWorktreeAxis", () => {
       true
     );
   });
+
+  describe("with the project's own worktree count", () => {
+    it("is true where every agent shares one worktree but the project has several", () => {
+      // The bug: a fleet row exists only for a terminal classified an agent, so
+      // drillability tracked where agents happened to be sitting rather than
+      // whether the project has an axis at all (#11957).
+      expect(hasWorktreeAxis([{ worktreeId: "/repo/wt/a" }, { worktreeId: "/repo/wt/a" }], 3)).toBe(
+        true
+      );
+    });
+
+    it("is true for a lone agent in a project with two worktrees", () => {
+      expect(hasWorktreeAxis([{ worktreeId: "/repo/wt/a" }], 2)).toBe(true);
+    });
+
+    it("is true with no runs at all once the project is known to have two", () => {
+      // A scoped view of a project with no agents says "none here yet", which
+      // answers the question asked. The whole fleet answers a different one.
+      expect(hasWorktreeAxis([], 2)).toBe(true);
+    });
+
+    it("is false where the project has exactly one worktree", () => {
+      // The root checkout is a first-class entry in that count, so one means a
+      // project worked only in its own root.
+      expect(hasWorktreeAxis([{ worktreeId: "/repo" }], 1)).toBe(false);
+    });
+
+    it("is false where the project has no worktrees to speak of", () => {
+      expect(hasWorktreeAxis([], 0)).toBe(false);
+    });
+
+    it("still passes on the runs alone when no count is available", () => {
+      // The count is `undefined` for a scratch, and for any view whose store
+      // has not mounted — neither may take an axis the runs already proved.
+      expect(
+        hasWorktreeAxis([{ worktreeId: "/repo/wt/a" }, { worktreeId: "/repo/wt/b" }], undefined)
+      ).toBe(true);
+      expect(hasWorktreeAxis([{ worktreeId: "/repo/wt/a" }, { worktreeId: "/repo/wt/b" }], 0)).toBe(
+        true
+      );
+    });
+
+    it("never joins the two sources, so unrelated spellings still count", () => {
+      // The one rule the fix has to keep: two mint sites can spell the same
+      // worktree differently, so the counts are OR'd and the ids never meet.
+      // Runs in one worktree, a store describing two entirely different ones.
+      expect(hasWorktreeAxis([{ worktreeId: "/private/repo/wt/a" }], 2)).toBe(true);
+    });
+  });
 });
 
 describe("buildPilotWorktreeGroups", () => {
   /** One project's rows, cut on the worktree axis, named in rendered order. */
-  function worktreeGroups(runs: FleetRunRow[]): ReturnType<typeof buildPilotWorktreeGroups> {
+  function worktreeGroups(
+    runs: FleetRunRow[],
+    mainWorktreeId?: string | null
+  ): ReturnType<typeof buildPilotWorktreeGroups> {
     const [project] = buildPilotGroups(runs, ctx());
-    return buildPilotWorktreeGroups(project!);
+    return buildPilotWorktreeGroups(project!, mainWorktreeId);
   }
 
   it("groups a project's runs by worktree and keeps every run", () => {
@@ -1172,8 +1224,10 @@ describe("buildPilotWorktreeGroups", () => {
   });
 
   it("keeps runs with no worktree, in a bucket ahead of the named ones", () => {
-    // Dropping them would hide a live agent because a field was absent, and
-    // burying them under thirty checkouts hides the project's own root work.
+    // Dropping them would hide a live agent because a field was absent. The
+    // bucket leads because a live agent filed under no worktree at all is an
+    // anomaly worth seeing — NOT because it holds the root, which carries an id
+    // of its own and gets its own section (#11957).
     const groups = worktreeGroups([
       run({ runId: "wt", worktreeId: "/repo/wt/alpha", agentState: "working" }),
       run({ runId: "root", agentState: "working" }),
@@ -1375,6 +1429,88 @@ describe("buildPilotWorktreeGroups", () => {
     expect(worktreeGroups(runs).map((g) => g.groupId)).toEqual(
       worktreeGroups([...runs].reverse()).map((g) => g.groupId)
     );
+  });
+
+  describe("with the main worktree named", () => {
+    /** A root whose basename sorts last, so only the lead rule can move it. */
+    const ZEBRA_ROOT = "/repo/zebra";
+
+    it("leads with the root even where its name sorts last", () => {
+      // The complaint in #11957: root work sorted alphabetically among branch
+      // checkouts, first by luck in a project called `daintree` and buried in
+      // one called `zebra`.
+      const groups = worktreeGroups(
+        [
+          run({ runId: "root", worktreeId: ZEBRA_ROOT }),
+          run({ runId: "a", worktreeId: "/repo/wt/alpha" }),
+          run({ runId: "b", worktreeId: "/repo/wt/beta" }),
+        ],
+        ZEBRA_ROOT
+      );
+
+      expect(groups.map((g) => g.worktreeId)).toEqual([
+        ZEBRA_ROOT,
+        "/repo/wt/alpha",
+        "/repo/wt/beta",
+      ]);
+    });
+
+    it("keeps the alphabetical order when the id resolves to nothing", () => {
+      // The two mint sites can spell one directory differently, so a miss has
+      // to cost nothing but the lead position.
+      const runs = [
+        run({ runId: "root", worktreeId: ZEBRA_ROOT }),
+        run({ runId: "a", worktreeId: "/repo/wt/alpha" }),
+      ];
+
+      expect(worktreeGroups(runs, "/private/repo/zebra").map((g) => g.worktreeId)).toEqual(
+        worktreeGroups(runs).map((g) => g.worktreeId)
+      );
+    });
+
+    it("puts the root ahead of the runs filed under no worktree", () => {
+      const groups = worktreeGroups(
+        [
+          run({ runId: "root", worktreeId: ZEBRA_ROOT }),
+          run({ runId: "orphan" }),
+          run({ runId: "a", worktreeId: "/repo/wt/alpha" }),
+        ],
+        ZEBRA_ROOT
+      );
+
+      expect(groups.map((g) => g.worktreeId)).toEqual([ZEBRA_ROOT, null, "/repo/wt/alpha"]);
+    });
+
+    it("does not let a null or empty id claim the no-worktree bucket", () => {
+      // `null` would otherwise equal every unbucketed group and promote a
+      // section of orphans as though it were the project root.
+      const runs = [
+        run({ runId: "orphan" }),
+        run({ runId: "a", worktreeId: "/repo/wt/alpha" }),
+        run({ runId: "root", worktreeId: ZEBRA_ROOT }),
+      ];
+
+      for (const absent of [null, undefined, ""]) {
+        expect(worktreeGroups(runs, absent).map((g) => g.worktreeId)).toEqual([
+          null,
+          "/repo/wt/alpha",
+          ZEBRA_ROOT,
+        ]);
+      }
+    });
+
+    it("stays a total order with the root named", () => {
+      const runs = [
+        run({ runId: "a", worktreeId: "/repo/wt/beta" }),
+        run({ runId: "root", worktreeId: ZEBRA_ROOT }),
+        run({ runId: "b", worktreeId: "/repo/wt/alpha" }),
+        run({ runId: "c" }),
+      ];
+
+      expect(worktreeGroups(runs, ZEBRA_ROOT).map((g) => g.groupId)).toEqual(
+        worktreeGroups([...runs].reverse(), ZEBRA_ROOT).map((g) => g.groupId)
+      );
+    });
   });
 });
 

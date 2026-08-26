@@ -5,7 +5,7 @@ const PROJECT = "a".repeat(64);
 const OTHER = "b".repeat(64);
 
 beforeEach(() => {
-  usePilotStore.setState({ isOpen: false, scope: { kind: "fleet" } });
+  usePilotStore.setState({ isOpen: false, scope: { kind: "fleet" }, fellBackFrom: null });
 });
 
 describe("pilotStore scope", () => {
@@ -78,5 +78,49 @@ describe("pilotStore scope", () => {
 
     expect(usePilotStore.getState().isOpen).toBe(true);
     expect(usePilotStore.getState().scope).toEqual({ kind: "fleet" });
+  });
+});
+
+describe("pilotStore fallback context", () => {
+  it("opens the fleet and records which project asked for a scope", () => {
+    // The fleet it lands on is the same surface the unscoped chord gives, so
+    // the workspace has to ride along or the two openings are indistinguishable.
+    usePilotStore.getState().openFleetFallback(PROJECT);
+
+    expect(usePilotStore.getState()).toMatchObject({
+      isOpen: true,
+      scope: { kind: "fleet" },
+      fellBackFrom: PROJECT,
+    });
+  });
+
+  it.each([
+    ["open", (): void => usePilotStore.getState().open()],
+    ["openProject", (): void => usePilotStore.getState().openProject(OTHER)],
+    ["showFleet", (): void => usePilotStore.getState().showFleet()],
+    ["close", (): void => usePilotStore.getState().close()],
+    ["toggle", (): void => usePilotStore.getState().toggle()],
+  ])("clears the explanation on %s", (_name, transition) => {
+    // An explanation belongs to the opening that needed it. One surviving a
+    // gesture would be describing something the user has already moved past.
+    usePilotStore.getState().openFleetFallback(PROJECT);
+    transition();
+
+    expect(usePilotStore.getState().fellBackFrom).toBeNull();
+  });
+
+  it("does not carry the explanation into the next opening", () => {
+    usePilotStore.getState().openFleetFallback(PROJECT);
+    usePilotStore.getState().close();
+    usePilotStore.getState().open();
+
+    expect(usePilotStore.getState()).toMatchObject({ isOpen: true, fellBackFrom: null });
+  });
+
+  it("replaces rather than accumulates when a second project falls back", () => {
+    usePilotStore.getState().openFleetFallback(PROJECT);
+    usePilotStore.getState().openFleetFallback(OTHER);
+
+    expect(usePilotStore.getState().fellBackFrom).toBe(OTHER);
   });
 });

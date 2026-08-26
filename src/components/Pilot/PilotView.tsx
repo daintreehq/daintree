@@ -8,6 +8,7 @@ import { usePilotStore } from "@/store/pilotStore";
 import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
+import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
 import { actionService } from "@/services/ActionService";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
@@ -625,22 +626,38 @@ function findParkTarget(
 }
 
 /**
- * Whether this group is a project whose rows, as currently narrowed, span more
- * than one worktree.
+ * Whether this group is a project with a worktree axis to drill into.
  *
  * A type predicate so the drill target is proven to be a project group at the
  * one place that reads its workspace id. Computed from the DISPLAYED rows, so a
  * query that narrows a project down to a single worktree also withdraws the
  * affordance rather than offering a regrouping that would change nothing.
+ *
+ * `currentViewWorktreeCount` is the enrichment, and the `isCurrent` check is
+ * what keeps it honest: it is the count for the ONE project this renderer view
+ * owns, and lending it to a neighbouring project's group would draw a chevron
+ * on a heading using a number about somewhere else entirely (#11950 — worktree
+ * metadata exists for the view's own project and for no other). Every foreign
+ * project stays on the run-derived answer, which is all this view can prove
+ * about them. The scoped chord only ever asks about this view's own workspace,
+ * so the chevron and the chord still agree everywhere both are offered.
  */
-function canDrill(group: PilotDisplayGroup): group is PilotProjectGroup {
-  return group.axis === "workspace" && hasWorktreeAxis(group.rows.map((row) => row.run));
+function canDrill(
+  group: PilotDisplayGroup,
+  currentViewWorktreeCount: number
+): group is PilotProjectGroup {
+  if (group.axis !== "workspace") return false;
+  return hasWorktreeAxis(
+    group.rows.map((row) => row.run),
+    group.isCurrent ? currentViewWorktreeCount : undefined
+  );
 }
 
 export function PilotView() {
   const isOpen = usePilotStore((s) => s.isOpen);
   const close = usePilotStore((s) => s.close);
   const scope = usePilotStore((s) => s.scope);
+  const fellBackFrom = usePilotStore((s) => s.fellBackFrom);
   const showFleet = usePilotStore((s) => s.showFleet);
   const openProject = usePilotStore((s) => s.openProject);
   const snapshot = useFleetSnapshotStore((s) => s.snapshot);
@@ -648,6 +665,29 @@ export function PilotView() {
   const scratches = useScratchStore((s) => s.scratches);
   const pilotShortcut = useEffectiveCombo("pilot.toggle");
   const scopedShortcut = useEffectiveCombo("pilot.openProject");
+
+  /**
+   * What this view's own project knows about its worktrees, as opposed to what
+   * its live agents happen to reveal (#11957).
+   *
+   * Subscribed rather than read once, because closing the last agent in a
+   * worktree — or creating a worktree while the overview is open — has to move
+   * the chevron with it. Both selectors return a primitive, which is what keeps
+   * an unrelated worktree update (a git-status poll rewriting a snapshot) from
+   * re-rendering this surface: only the count or the identity of the main
+   * worktree changing does.
+   *
+   * Optional because this is an overlay, not the project view. It renders in
+   * tests and could render before the provider mounts; a missing store just
+   * means no enrichment, which is exactly the pre-#11957 behavior.
+   */
+  const viewWorktreeCount = useWorktreeStoreOptional((s) => s.worktrees.size, 0);
+  const viewMainWorktreeId = useWorktreeStoreOptional<string | null>((s) => {
+    for (const [id, worktree] of s.worktrees) {
+      if (worktree.isMainWorktree === true) return id;
+    }
+    return null;
+  }, null);
 
   useOverlayClaim("pilot", isOpen);
 
@@ -775,8 +815,30 @@ export function PilotView() {
    */
   const displayGroups = useMemo<PilotDisplayGroup[]>(() => {
     if (scope.kind === "fleet") return liveGroups;
-    return scopedProject === null ? [] : buildPilotWorktreeGroups(scopedProject);
-  }, [scope.kind, liveGroups, scopedProject]);
+    if (scopedProject === null) return [];
+    // The root checkout leads, and only where this view can name it: the drill
+    // is reachable on a neighbouring project's heading too, and this view's
+    // worktree store describes its own project only. A foreign project keeps
+    // the label order, which is the honest answer there.
+    return buildPilotWorktreeGroups(
+      scopedProject,
+      scopedProject.isCurrent ? viewMainWorktreeId : null
+    );
+  }, [scope.kind, liveGroups, scopedProject, viewMainWorktreeId]);
+
+  /**
+   * The project a scoped opening asked for and could not give, named.
+   *
+   * Null unless this opening is the fallback, so a later back-out to the fleet
+   * from a scope the user chose does not inherit an explanation about a
+   * different gesture. Null too when the map cannot name the workspace: a line
+   * that says something has no worktree axis without saying WHICH something is
+   * worse than the silence it replaces.
+   */
+  const fallbackName =
+    scope.kind === "fleet" && fellBackFrom !== null
+      ? (workspaces.get(fellBackFrom)?.name ?? null)
+      : null;
 
   /** The scoped project's name, for the breadcrumb and the copy around it. */
   const scopedName =
@@ -1078,7 +1140,7 @@ export function PilotView() {
    */
   const drillTarget =
     scope.kind === "fleet" && selectedRow !== null && selectedRow.kind === "item"
-      ? canDrill(selectedRow.group)
+      ? canDrill(selectedRow.group, viewWorktreeCount)
         ? selectedRow.group.workspaceId
         : null
       : null;
@@ -1424,6 +1486,32 @@ export function PilotView() {
               </div>
             )}
 
+            {/*
+              Why this is the fleet when a project was asked for.
+
+              The scoped chord's fallback lands on a surface byte for byte
+              identical to the one the unscoped chord gives, so without a word
+              here the key is indistinguishable from a dead one (#11957). It
+              stays a line of text: nothing has gone wrong, there is nothing to
+              retry, and the user is already looking at the surface it describes
+              — a toast or an inbox entry would outlive the opening it belongs
+              to and interrupt for a routine outcome.
+
+              `role="status"` because the whole point is that the surface is not
+              the one that was asked for, and a screen reader hearing only the
+              dialog's "All agents" label would be told the same thing the
+              unscoped chord says.
+            */}
+            {fallbackName !== null && (
+              <p
+                role="status"
+                data-testid="pilot-fallback-note"
+                className="mb-1.5 min-w-0 text-[11px] leading-snug text-daintree-text/60"
+              >
+                {fallbackName} has nothing to group by worktree, so this is every agent
+              </p>
+            )}
+
             <AppPaletteDialog.Input
               inputRef={searchRef}
               value={query}
@@ -1605,7 +1693,7 @@ export function PilotView() {
             // Bound to a const so the discriminant narrows inside the drill
             // handler's closure as well as at the branch.
             const group = header.group;
-            const drillTo = canDrill(group) ? group.workspaceId : null;
+            const drillTo = canDrill(group, viewWorktreeCount) ? group.workspaceId : null;
             return (
               // `role="group"` is a permitted listbox child and carries the
               // group's name as the label for every option inside it, which is

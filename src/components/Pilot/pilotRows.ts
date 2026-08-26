@@ -116,10 +116,16 @@ export interface PilotWorktreeGroup extends PilotGroupCore {
    * The run's normalized worktree path, or null for the bucket holding runs the
    * snapshot files under no worktree at all.
    *
-   * Opaque here: a grouping key and a source of basename, never joined against
-   * a worktree store. The id has two mint sites that can spell the same
+   * Opaque to everything that derives display from it: a grouping key and a
+   * source of basename, never resolved through a worktree store for a label, a
+   * path or a branch. The id has two mint sites that can spell the same
    * worktree differently, and the store that would answer only exists for the
    * one project a renderer view owns.
+   *
+   * {@link buildPilotWorktreeGroups} is the single exception, and only for
+   * ORDER: it may be matched against a `mainWorktreeId` the caller took from
+   * that view's own store, where a mismatch costs nothing but the lead position.
+   * See its docblock for the three conditions that keep that safe.
    */
   worktreeId: string | null;
 }
@@ -527,21 +533,35 @@ function countWorktreeBuckets(runs: readonly Pick<FleetRunRow, "worktreeId">[]):
  * false — so the affordance and the chord can never disagree about whether a
  * project has a worktree axis.
  *
- * Two buckets is the floor because one bucket regroups a project into a single
- * section holding the rows it already had. That is also, for free, the right
- * answer to the two cases the issue left open: a scratch workspace's runs never
- * carry a worktree id, and neither does a project being worked only in its own
- * root, so both fall back rather than opening a list that tells the user
- * nothing. A project with no runs at all has no buckets and falls back too,
- * which is what keeps an empty scoped list unreachable.
+ * Two is the floor on either count, because one worktree regroups a project
+ * into a single section holding the rows it already had.
  *
- * Deliberately derived from the runs alone. The tempting alternative — compare
- * each `worktreeId` against the project's own path — joins two independently
- * minted spellings of the same directory, and the app has been bitten by that
- * before; there is no version of it that is worth a correct answer here.
+ * `knownWorktreeCount` is how many worktrees the project ACTUALLY has, which
+ * the runs cannot answer (#11957). A fleet row exists only for a terminal
+ * `classifyRun` calls an agent, so a plain shell, a dev-preview pane, a trashed
+ * panel and the help terminal all contribute no bucket — and a worktree nobody
+ * has opened a terminal in contributes none either. Deriving the axis from runs
+ * alone therefore tracked where agents happened to be sitting rather than
+ * whether the project has an axis at all: a project with three worktrees whose
+ * agents share one of them failed, and closing an agent could take the chord
+ * away. Callers pass it ONLY for the workspace their own view owns, because the
+ * store that answers exists for that project and for no other.
+ *
+ * The two counts are OR'd and never joined. Comparing individual ids — a run's
+ * `worktreeId` against a worktree store key, or against the project's own path
+ * — puts two independently minted spellings of one directory beside each other
+ * (`realpath` at creation, `pathResolve` over porcelain at enumeration), and
+ * the app has been bitten by that before. Aggregates cannot diverge that way.
+ *
+ * Omitting the count leaves the pre-#11957 behavior exactly: a scratch
+ * workspace, a project with no runs, and a project the store cannot describe
+ * all fall back rather than opening a list that tells the user nothing.
  */
-export function hasWorktreeAxis(runs: readonly Pick<FleetRunRow, "worktreeId">[]): boolean {
-  return countWorktreeBuckets(runs) >= 2;
+export function hasWorktreeAxis(
+  runs: readonly Pick<FleetRunRow, "worktreeId">[],
+  knownWorktreeCount?: number
+): boolean {
+  return countWorktreeBuckets(runs) >= 2 || (knownWorktreeCount ?? 0) >= 2;
 }
 
 /**
@@ -555,15 +575,33 @@ export function hasWorktreeAxis(runs: readonly Pick<FleetRunRow, "worktreeId">[]
  *
  * Group ORDER is severity-independent, exactly as it is across projects
  * (#11678). A worktree whose agent blocks does not climb over the others; it
- * turns its own header's chip on and stays where it was. Position is the
- * no-worktree bucket first, then the disambiguated label, then the full id so
- * the comparator is a true total order.
+ * turns its own header's chip on and stays where it was. Position is the main
+ * worktree first, then the no-worktree bucket, then the disambiguated label,
+ * then the full id so the comparator is a true total order.
  *
- * The no-worktree bucket leads because it holds the project's root work, and
- * burying that under thirty alphabetically-sorted checkouts hides the runs
- * most likely to be the ones being worked right now.
+ * `mainWorktreeId` is the project's root checkout, and it leads because root
+ * work is the most likely to be what is being worked right now — burying it
+ * under thirty alphabetically-sorted branch checkouts hides it. The no-worktree
+ * bucket used to carry that job on the premise that a root run has no worktree
+ * id; it does (#11957 measured one whose id is the project root path), so that
+ * bucket is now what it says it is — runs the snapshot files under no worktree
+ * at all — and it stays high because a live agent with no worktree is an
+ * anomaly worth seeing, not because it holds the root.
+ *
+ * This is the one place a `worktreeId` is matched against a worktree store, and
+ * it is safe for exactly three reasons, all of which have to hold: the caller
+ * passes an id only for the project its OWN view owns (the store answers for no
+ * other), the id it passes is one the store positively tagged `isMainWorktree`
+ * rather than a path matched against the project root (#2251), and a miss just
+ * means no group leads. So when the two mint sites spell one directory
+ * differently — `realpath` at creation against `pathResolve` over porcelain at
+ * enumeration — the order falls back to the label/id total order below rather
+ * than promoting the wrong worktree.
  */
-export function buildPilotWorktreeGroups(project: PilotProjectGroup): PilotWorktreeGroup[] {
+export function buildPilotWorktreeGroups(
+  project: PilotProjectGroup,
+  mainWorktreeId?: string | null
+): PilotWorktreeGroup[] {
   const byWorktree = new Map<string | null, PilotRow[]>();
   for (const row of project.rows) {
     const key = worktreeKey(row.run);
@@ -601,7 +639,14 @@ export function buildPilotWorktreeGroups(project: PilotProjectGroup): PilotWorkt
     );
   }
 
+  // A null id would match every bucket that has no worktree, so the leader is
+  // only ever a real id the caller vouched for.
+  const leadId = mainWorktreeId != null && mainWorktreeId !== "" ? mainWorktreeId : null;
+
   groups.sort((a, b) => {
+    const aLeads = leadId !== null && a.worktreeId === leadId;
+    const bLeads = leadId !== null && b.worktreeId === leadId;
+    if (aLeads !== bLeads) return aLeads ? -1 : 1;
     if ((a.worktreeId === null) !== (b.worktreeId === null)) return a.worktreeId === null ? -1 : 1;
     const byName = a.name.localeCompare(b.name);
     if (byName !== 0) return byName;

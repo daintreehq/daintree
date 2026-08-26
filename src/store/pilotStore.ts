@@ -14,9 +14,22 @@ const FLEET_SCOPE: PilotScope = { kind: "fleet" };
 interface PilotState {
   isOpen: boolean;
   scope: PilotScope;
+  /**
+   * The workspace a scoped opening asked for and could not give, or null.
+   *
+   * Set for exactly one opening, by the one caller that decided this project has
+   * no worktree axis to cut on. `PilotView` turns it into a line saying so, which
+   * is what stops the scoped chord from being indistinguishable from a dead key:
+   * the fleet it lands on is byte for byte the surface the unscoped chord already
+   * gives, so without this the user has no way to tell a fallback from a misfire
+   * (#11957).
+   */
+  fellBackFrom: string | null;
   open: () => void;
   /** Open (or re-scope) the overview to one project's worktrees. */
   openProject: (workspaceId: string) => void;
+  /** Open the fleet BECAUSE this workspace has no worktree axis, and say so. */
+  openFleetFallback: (workspaceId: string) => void;
   /** Back out to the whole fleet without closing. */
   showFleet: () => void;
   close: () => void;
@@ -49,15 +62,25 @@ interface PilotState {
 export const usePilotStore = create<PilotState>((set) => ({
   isOpen: false,
   scope: FLEET_SCOPE,
+  fellBackFrom: null,
   // Opening from anywhere that did not name a project means the whole fleet.
   // Carrying the last scope forward would reopen the surface already hiding
   // most of it, with the reason two openings in the past.
-  open: () => set({ isOpen: true, scope: FLEET_SCOPE }),
-  openProject: (workspaceId) => set({ isOpen: true, scope: { kind: "project", workspaceId } }),
-  showFleet: () => set({ scope: FLEET_SCOPE }),
-  close: () => set({ isOpen: false, scope: FLEET_SCOPE }),
+  //
+  // Every transition but the fallback itself clears `fellBackFrom` — an
+  // explanation is about the opening that needed it, and one still on screen a
+  // gesture later is describing something the user has already moved past.
+  open: () => set({ isOpen: true, scope: FLEET_SCOPE, fellBackFrom: null }),
+  openProject: (workspaceId) =>
+    set({ isOpen: true, scope: { kind: "project", workspaceId }, fellBackFrom: null }),
+  openFleetFallback: (workspaceId) =>
+    set({ isOpen: true, scope: FLEET_SCOPE, fellBackFrom: workspaceId }),
+  showFleet: () => set({ scope: FLEET_SCOPE, fellBackFrom: null }),
+  close: () => set({ isOpen: false, scope: FLEET_SCOPE, fellBackFrom: null }),
   toggle: () =>
-    set((state) =>
-      state.isOpen ? { isOpen: false, scope: FLEET_SCOPE } : { isOpen: true, scope: FLEET_SCOPE }
-    ),
+    set((state) => ({
+      isOpen: !state.isOpen,
+      scope: FLEET_SCOPE,
+      fellBackFrom: null,
+    })),
 }));
