@@ -440,10 +440,14 @@ async function runSample(scale: number, round: number, warmup: boolean): Promise
     await expect(dialog).toBeVisible({ timeout: T_LONG });
     dialogOpenMs = Date.now() - flowStartedAt;
 
-    const assignmentToggle = dialog.getByRole("checkbox", {
-      name: "Assign issues to me when creating worktrees",
-    });
-    if (await assignmentToggle.isChecked()) await assignmentToggle.uncheck();
+    // The row now renders for every issue batch and only enables once forge
+    // identity resolves, so an environment without a viewer leaves a disabled
+    // checkbox here rather than no checkbox at all.
+    const assignmentToggle = dialog.getByRole("checkbox", { name: "Assign to me" });
+    await expect(assignmentToggle).toBeVisible({ timeout: T_MEDIUM });
+    if ((await assignmentToggle.isEnabled()) && (await assignmentToggle.isChecked())) {
+      await assignmentToggle.uncheck();
+    }
 
     const recipeTrigger = ctx.window.locator("#bulk-recipe-selector-trigger");
     await expect(recipeTrigger).toBeVisible({ timeout: T_LONG });

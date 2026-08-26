@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, cleanup, act } from "@testing-library/react";
+import { render, screen, cleanup, act, fireEvent } from "@testing-library/react";
 import React from "react";
 import type { Issue, PR } from "@shared/types/forge";
 import {
@@ -96,6 +96,7 @@ vi.mock("@/utils/logger", () => ({
 }));
 
 const prefsHolder: { assignWorktreeToSelf: boolean } = { assignWorktreeToSelf: false };
+const mockSetAssignWorktreeToSelf = vi.fn();
 const viewerHolder: { user: { login: string; avatarUrl?: string } | null } = { user: null };
 const mockGetCurrentUser = vi.fn(async () => viewerHolder.user);
 
@@ -103,7 +104,7 @@ vi.mock("@/store/preferencesStore", () => ({
   usePreferencesStore: (selector: (s: Record<string, unknown>) => unknown) =>
     selector({
       assignWorktreeToSelf: prefsHolder.assignWorktreeToSelf,
-      setAssignWorktreeToSelf: vi.fn(),
+      setAssignWorktreeToSelf: mockSetAssignWorktreeToSelf,
       lastSelectedWorktreeRecipeIdByProject: {},
       setLastSelectedWorktreeRecipeIdByProject: vi.fn(),
     }),
@@ -252,7 +253,14 @@ vi.mock("@/components/ui/AppDialog", () => {
   };
   Dialog.CloseButton = CloseButton;
   Dialog.Body = ({ children }: { children: React.ReactNode }) => <div>{children}</div>;
-  Dialog.Footer = ({ children }: { children: React.ReactNode }) => <div>{children}</div>;
+  // `hint` is modelled rather than dropped: the batch summary is the footer's
+  // only rendering of what the selection resolves to.
+  Dialog.Footer = ({ children, hint }: { children: React.ReactNode; hint?: React.ReactNode }) => (
+    <div>
+      {hint !== undefined && <div data-testid="bulk-create-footer-hint">{hint}</div>}
+      {children}
+    </div>
+  );
   return { AppDialog: Dialog };
 });
 
@@ -2551,6 +2559,169 @@ describe("BulkCreateWorktreeDialog — issue assignment retry", () => {
   });
 });
 
+describe("BulkCreateWorktreeDialog — form layout and batch summary", () => {
+  const issueProps = {
+    isOpen: true,
+    onClose: vi.fn(),
+    mode: "issue" as const,
+    selectedIssues: [makeIssue(1), makeIssue(2), makeIssue(3)],
+    selectedPRs: [] as PR[],
+    onComplete: vi.fn(),
+  };
+
+  function hintText(): string {
+    return screen.getByTestId("bulk-create-footer-hint").textContent ?? "";
+  }
+
+  it("names the assignment checkbox from the form rail rather than an aria-label", () => {
+    viewerHolder.user = { login: "octocat" };
+    render(<BulkCreateWorktreeDialog {...issueProps} />);
+
+    const checkbox = screen.getByLabelText("Assign to me");
+    // An aria-label here would win over the rail's <label for>, leaving the
+    // visible text out of the accessible name (WCAG 2.5.3).
+    expect(checkbox.getAttribute("aria-label")).toBeNull();
+    expect(checkbox.getAttribute("type")).toBe("checkbox");
+  });
+
+  it("names the recipe trigger from the form rail", () => {
+    render(<BulkCreateWorktreeDialog {...issueProps} />);
+
+    const trigger = screen.getByLabelText("Starting layout");
+    expect(trigger.getAttribute("role")).toBe("combobox");
+    expect(trigger.getAttribute("aria-controls")).toBe("bulk-recipe-selector");
+  });
+
+  it("keeps the assignment row mounted while identity resolves", async () => {
+    let resolveViewer!: (user: { login: string } | null) => void;
+    mockGetCurrentUser.mockImplementationOnce(
+      () =>
+        new Promise((resolve) => {
+          resolveViewer = resolve as (user: { login: string } | null) => void;
+        })
+    );
+
+    render(<BulkCreateWorktreeDialog {...issueProps} />);
+
+    const before = screen.getByLabelText("Assign to me") as HTMLInputElement;
+    expect(before.disabled).toBe(true);
+
+    await act(async () => {
+      resolveViewer({ login: "octocat" });
+    });
+
+    // Same node, not a re-inserted row: identity arriving must populate the
+    // row rather than add one and push everything below it down.
+    const after = screen.getByLabelText("Assign to me") as HTMLInputElement;
+    expect(after).toBe(before);
+    expect(after.disabled).toBe(false);
+  });
+
+  it("shows the preference as off while no account is available", () => {
+    prefsHolder.assignWorktreeToSelf = true;
+    viewerHolder.user = null;
+    render(<BulkCreateWorktreeDialog {...issueProps} />);
+
+    // The run loop skips assignment without a login, so a checked box would
+    // promise work that never happens.
+    const checkbox = screen.getByLabelText("Assign to me") as HTMLInputElement;
+    expect(checkbox.disabled).toBe(true);
+    expect(checkbox.checked).toBe(false);
+  });
+
+  it("reflects the preference once an account is available", async () => {
+    prefsHolder.assignWorktreeToSelf = true;
+    viewerHolder.user = { login: "octocat" };
+    render(<BulkCreateWorktreeDialog {...issueProps} />);
+
+    await act(async () => {
+      await Promise.resolve();
+    });
+
+    const checkbox = screen.getByLabelText("Assign to me") as HTMLInputElement;
+    expect(checkbox.disabled).toBe(false);
+    expect(checkbox.checked).toBe(true);
+
+    fireEvent.click(checkbox);
+    expect(mockSetAssignWorktreeToSelf).toHaveBeenCalledWith(false);
+  });
+
+  it("renders one list item per planned worktree, skipped ones included", () => {
+    worktreeDataHolder.map.set("existing-2", {
+      worktreeId: "existing-2",
+      branch: "feature/issue-2",
+      path: "/worktrees/issue-2",
+      issueNumber: 2,
+    });
+    try {
+      render(<BulkCreateWorktreeDialog {...issueProps} />);
+      expect(screen.getAllByRole("listitem")).toHaveLength(issueProps.selectedIssues.length);
+      expect(screen.getByText("Has worktree")).toBeTruthy();
+    } finally {
+      worktreeDataHolder.map.delete("existing-2");
+    }
+  });
+
+  it("keeps the summary, the list and the create button telling the same story", () => {
+    const props = {
+      ...issueProps,
+      selectedIssues: [makeIssue(1), { ...makeIssue(2), state: "closed" as const }, makeIssue(3)],
+    };
+    render(<BulkCreateWorktreeDialog {...props} />);
+
+    const hint = hintText();
+    const selected = Number(/^(\d+)/.exec(hint)?.[1]);
+    const skipped = Number(/(\d+) skipped/.exec(hint)?.[1] ?? 0);
+    const creating = Number(
+      /Create (\d+)/.exec(screen.getByTestId("bulk-create-confirm-button").textContent ?? "")?.[1]
+    );
+
+    expect(selected).toBe(screen.getAllByRole("listitem").length);
+    expect(skipped).toBeGreaterThan(0);
+    expect(selected - skipped).toBe(creating);
+  });
+
+  it("omits the skipped clause when the whole selection is creatable", () => {
+    render(<BulkCreateWorktreeDialog {...issueProps} />);
+    expect(hintText()).toBe("3 issues selected");
+  });
+
+  it("uses the singular noun for a selection of one", () => {
+    const props = { ...issueProps, selectedIssues: [makeIssue(1)] };
+    render(<BulkCreateWorktreeDialog {...props} />);
+    expect(hintText()).toBe("1 issue selected");
+  });
+
+  it("names pull requests in PR mode", () => {
+    const props = {
+      ...issueProps,
+      mode: "pr" as const,
+      selectedIssues: [] as Issue[],
+      selectedPRs: [makePR(10), makePR(20)],
+    };
+    render(<BulkCreateWorktreeDialog {...props} />);
+    expect(hintText()).toBe("2 pull requests selected");
+  });
+
+  it("asks for a selection when there is nothing to plan", () => {
+    const props = { ...issueProps, selectedIssues: [] as Issue[] };
+    render(<BulkCreateWorktreeDialog {...props} />);
+    expect(hintText()).toBe("Select an issue to continue");
+  });
+
+  it("drops the summary once the run starts, leaving the progress line authoritative", async () => {
+    const props = { ...issueProps, selectedIssues: [makeIssue(1)] };
+    render(<BulkCreateWorktreeDialog {...props} />);
+    expect(screen.getByTestId("bulk-create-footer-hint")).toBeTruthy();
+
+    await act(async () => {
+      screen.getByTestId("bulk-create-confirm-button").click();
+    });
+
+    expect(screen.queryByTestId("bulk-create-footer-hint")).toBeNull();
+  });
+});
+
 describe("BulkCreateWorktreeDialog — PR mode", () => {
   const prProps = {
     isOpen: true,
@@ -2663,7 +2834,7 @@ describe("BulkCreateWorktreeDialog — PR mode", () => {
 
   it("does not show assign-to-self toggle in PR mode", () => {
     render(<BulkCreateWorktreeDialog {...prProps} />);
-    expect(screen.queryByText("Assign to me")).toBeNull();
+    expect(screen.queryByLabelText("Assign to me")).toBeNull();
   });
 
   it("falls back to local branch when remote not found", async () => {

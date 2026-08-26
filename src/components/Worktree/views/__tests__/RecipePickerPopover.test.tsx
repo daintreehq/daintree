@@ -33,7 +33,6 @@ function renderPicker(recipes: TerminalRecipe[], props?: { defaultRecipeId?: str
       onOpenChange={vi.fn()}
       onSelectRecipe={vi.fn()}
       onMarkTouched={vi.fn()}
-      label="Starting layout"
       listId="recipe-list"
       {...props}
     />
@@ -91,7 +90,6 @@ describe("RecipePickerPopover — scope indicator (#11510)", () => {
         onOpenChange={vi.fn()}
         onSelectRecipe={onSelectRecipe}
         onMarkTouched={vi.fn()}
-        label="Starting layout"
         listId="recipe-list"
       />
     );
