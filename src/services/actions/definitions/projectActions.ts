@@ -8,6 +8,8 @@ import { useProjectStore } from "@/store/projectStore";
 import { useScratchStore } from "@/store/scratchStore";
 import { getViewWorkspaceId } from "@/store/viewWorkspaceId";
 import { usePilotStore } from "@/store/pilotStore";
+import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
+import { hasWorktreeAxis } from "@/components/Pilot/pilotRows";
 import { actionService } from "@/services/ActionService";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { notify, EVENT_KIND_TO_SETTING_KEY, EVENT_KIND_LABEL } from "@/lib/notify";
@@ -105,6 +107,58 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     nonRepeatable: true,
     run: async () => {
       usePilotStore.getState().toggle();
+    },
+  }));
+
+  actions.set("pilot.openProject", () => ({
+    id: "pilot.openProject",
+    title: "View this project's agents",
+    description:
+      "Open the agent overview scoped to this project, grouped by worktree, or the whole fleet when this workspace has no worktree axis",
+    category: "project",
+    kind: "command",
+    danger: "safe",
+    scope: "renderer",
+    nonRepeatable: true,
+    run: async () => {
+      const pilot = usePilotStore.getState();
+
+      // The workspace THIS view owns, and nothing else. `currentProject` is
+      // replicated to every view including cached ones and is null outright in
+      // a scratch view, so it names what the app is globally pointed at rather
+      // than the project whose agents the user is asking to see — the same trap
+      // `pilot.openRun` documents below.
+      const workspaceId = getViewWorkspaceId();
+
+      // Already scoped here: the sibling chord closes, exactly as
+      // `pilot.toggle` does for the fleet. A second press that re-opened the
+      // surface it just showed would be a key that visibly does nothing.
+      const scope = pilot.scope;
+      if (pilot.isOpen && scope.kind === "project" && scope.workspaceId === workspaceId) {
+        pilot.close();
+        return;
+      }
+
+      // Scoping is offered only where regrouping would say something new. A
+      // scratch workspace's runs carry no worktree id, and neither does a
+      // project being worked only in its own root, so both land here — and so
+      // does a project with no runs at all, which is what keeps an empty scoped
+      // list unreachable. The unscoped fleet is the honest fallback: it is
+      // still the surface the user asked for, just without a narrowing it
+      // cannot support.
+      const runs = useFleetSnapshotStore.getState().snapshot?.runs;
+      if (workspaceId === null || runs === undefined) {
+        pilot.open();
+        return;
+      }
+
+      const projectRuns = runs.filter((run) => run.workspaceId === workspaceId);
+      if (!hasWorktreeAxis(projectRuns)) {
+        pilot.open();
+        return;
+      }
+
+      pilot.openProject(workspaceId);
     },
   }));
 

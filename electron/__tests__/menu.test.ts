@@ -327,7 +327,12 @@ describe("createApplicationMenu", () => {
       mockWebContents.isDevToolsOpened.mockReturnValue(false);
       const item = findMenuItem(capturedTemplate, "View", "Toggle Developer Tools");
       expect(item).toBeDefined();
-      expect(item!.accelerator).toBe("Alt+CommandOrControl+I");
+      // No accelerator: `Alt+CommandOrControl+I` belongs to the renderer's
+      // `pilot.openProject` binding now, and a native menu accelerator eats the
+      // keydown before the renderer ever sees it — a dev-only one here would
+      // leave that shortcut working in the shipped app and dead on every
+      // machine that develops or tests it (#11950).
+      expect(item!.accelerator).toBeUndefined();
       item!.click!(
         {} as Electron.MenuItem,
         mockBrowserWindow as unknown as Electron.BaseWindow,

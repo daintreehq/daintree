@@ -15,15 +15,20 @@ import { agoPhrase, formatWaitAge } from "@/lib/projectRowStatus";
 import { isDemandBand } from "@/lib/fleetAttention";
 import {
   buildPilotGroups,
+  buildPilotWorktreeGroups,
   countPilotBands,
   filterPilotBands,
   filterPilotGroups,
+  hasWorktreeAxis,
   summarizePilotGroups,
   PILOT_BAND_FILTER_LABEL,
   type PilotBandFilter,
+  type PilotDisplayGroup,
+  type PilotGroupCore,
   type PilotProjectGroup,
   type PilotRow,
   type PilotWorkspaceMeta,
+  type PilotWorktreeGroup,
 } from "./pilotRows";
 import { BAND_GLYPH, BAND_GLYPH_TONE, PilotRunState } from "./PilotRunState";
 import { PilotFilterBar } from "./PilotFilterBar";
@@ -38,7 +43,10 @@ import {
   type PaletteTreeGroupInput,
 } from "@/hooks/usePaletteTreeNavigation";
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
-import { CircleHelp, FileText } from "@/components/icons";
+import { CircleHelp, FileText, FolderGit2 } from "@/components/icons";
+// Direction glyphs, not app concepts, so they come straight from Lucide the way
+// every other chevron in the app does rather than through the icon aliases.
+import { ChevronLeft, ChevronRight } from "lucide-react";
 import { useEffectiveCombo } from "@/hooks/useKeybinding";
 // Leaf import, not the `@/hooks` barrel: palette suites routinely mock that
 // barrel and throw on an export they don't list.
@@ -50,9 +58,15 @@ const AGE_TICK_MS = 30_000;
 /** The loading rule's ">5s says something" threshold. */
 const LOADING_HINT_MS = 5_000;
 
-/** Id of a project's group container. */
-function groupDomId(workspaceId: string): string {
-  return `pilot-option-group-${workspaceId}`;
+/**
+ * Id of a group's container, on whichever axis the list is cut.
+ *
+ * Keyed on the GROUP id rather than a workspace id: on the worktree axis a
+ * group is a worktree, and the encoded path it carries is what keeps two
+ * checkouts from ever sharing a container.
+ */
+function groupDomId(groupId: string): string {
+  return `pilot-option-group-${groupId}`;
 }
 
 function runDomId(runId: string): string {
@@ -70,10 +84,10 @@ interface PilotOrder {
   rows: Map<string, string[]>;
 }
 
-function capturePilotOrder(groups: readonly PilotProjectGroup[]): PilotOrder {
+function capturePilotOrder(groups: readonly PilotGroupCore[]): PilotOrder {
   return {
-    groups: groups.map((group) => group.workspaceId),
-    rows: new Map(groups.map((group) => [group.workspaceId, group.rows.map((r) => r.run.runId)])),
+    groups: groups.map((group) => group.groupId),
+    rows: new Map(groups.map((group) => [group.groupId, group.rows.map((r) => r.run.runId)])),
   };
 }
 
@@ -86,28 +100,26 @@ function capturePilotOrder(groups: readonly PilotProjectGroup[]): PilotOrder {
  * releasing puts every newcomer straight at its real position rather than
  * leaving it stranded at the end of the list for the rest of the opening.
  */
-function applyPilotOrder(
-  groups: readonly PilotProjectGroup[],
-  order: PilotOrder
-): PilotProjectGroup[] {
+function applyPilotOrder<T extends PilotGroupCore>(groups: readonly T[], order: PilotOrder): T[] {
   const groupIndex = new Map(order.groups.map((id, i) => [id, i]));
   const rankOf = (index: Map<string, number>, id: string) =>
     index.get(id) ?? Number.MAX_SAFE_INTEGER;
 
   const ordered = [...groups].sort(
-    (a, b) => rankOf(groupIndex, a.workspaceId) - rankOf(groupIndex, b.workspaceId)
+    (a, b) => rankOf(groupIndex, a.groupId) - rankOf(groupIndex, b.groupId)
   );
 
   return ordered.map((group) => {
-    const rowOrder = order.rows.get(group.workspaceId);
+    const rowOrder = order.rows.get(group.groupId);
     if (!rowOrder) return group;
     const rowIndex = new Map(rowOrder.map((id, i) => [id, i]));
-    return {
-      ...group,
+    // `Object.assign` rather than a spread, for the reason `narrowGroup` gives:
+    // spreading a generic widens it past the return type.
+    return Object.assign({}, group, {
       rows: [...group.rows].sort(
         (a, b) => rankOf(rowIndex, a.run.runId) - rankOf(rowIndex, b.run.runId)
       ),
-    };
+    });
   });
 }
 
@@ -200,11 +212,73 @@ function WorkspaceTile({ group }: { group: PilotProjectGroup }) {
  * `role="group"` inside a `role="listbox"` was never structurally right either.
  * The header's whole job now is to file the rows underneath it.
  */
-function GroupHeader({ group, className }: { group: PilotProjectGroup; className?: string }) {
+/**
+ * The group's demand, at a glance: glyph and hue come from the worst row
+ * beneath (which is always a demand band whenever the count is non-zero, since
+ * demands outrank everything else), so five headers answer "which one is on
+ * fire" without reading a single row. Hidden with the rest of the header — the
+ * group's aria-label carries the same fact in words.
+ *
+ * Shared by both axes so a worktree's chip cannot come to mean something
+ * different from a project's.
+ */
+function GroupDemandChip({ group }: { group: PilotGroupCore }) {
+  if (group.demandCount === 0) return null;
+  const chipBand = isDemandBand(group.topBand) ? group.topBand : "needs-you";
+  const ChipGlyph = BAND_GLYPH[chipBand];
+  return (
+    <span
+      aria-hidden="true"
+      data-testid="pilot-group-demand"
+      className={cn(
+        "flex shrink-0 items-center gap-1 text-[10px] leading-none tabular-nums",
+        BAND_GLYPH_TONE[chipBand]
+      )}
+    >
+      <ChipGlyph className="h-2.5 w-2.5" />
+      {group.demandCount}
+    </span>
+  );
+}
+
+function GroupHeader({
+  group,
+  onDrill,
+  className,
+}: {
+  group: PilotProjectGroup;
+  /**
+   * Present only where regrouping this project by worktree would say something
+   * new, so the affordance never promises a list identical to the one already
+   * on screen.
+   *
+   * A click handler on the heading itself, not a button inside it. The rows
+   * live in a `role="listbox"` whose children are options, and a focusable
+   * control in there is both invalid and unreachable by the keyboard this
+   * surface is driven with — the ruling that removed the old disclosure
+   * (#11669). The keyboard form of this gesture is the chord the footer
+   * advertises instead, which lands on the selected RUN, where the arrow keys
+   * already are.
+   */
+  onDrill?: () => void;
+  className?: string;
+}) {
   return (
     <div
       data-testid="pilot-group-header"
-      className={cn("flex w-full items-center gap-2 py-1 pr-3 pl-3 select-none", className)}
+      {...(onDrill !== undefined
+        ? {
+            "data-drillable": "true",
+            onClick: onDrill,
+            title: `Show ${group.name} by worktree`,
+          }
+        : {})}
+      className={cn(
+        "flex w-full items-center gap-2 py-1 pr-3 pl-3 select-none",
+        onDrill !== undefined &&
+          "cursor-pointer rounded-[var(--radius-md)] transition-colors hover:bg-overlay-subtle",
+        className
+      )}
     >
       <WorkspaceTile group={group} />
 
@@ -231,31 +305,55 @@ function GroupHeader({ group, className }: { group: PilotProjectGroup; className
         )}
       </div>
 
+      <GroupDemandChip group={group} />
+
       {/*
-        The group's demand, at a glance: glyph and hue come from the worst row
-        beneath (which is always a demand band whenever the count is non-zero,
-        since demands outrank everything else), so five headers answer "which
-        project is on fire" without reading a single row. Hidden with the rest
-        of the header — the group's aria-label carries the same fact in words.
+        The only thing on the heading saying it can be opened. Muted to the
+        point of being scenery until the row is hovered, because a project that
+        cannot be drilled must not look like one that can — and structure is
+        not allowed to outweigh the rows it files.
       */}
-      {group.demandCount > 0 &&
-        (() => {
-          const chipBand = isDemandBand(group.topBand) ? group.topBand : "needs-you";
-          const ChipGlyph = BAND_GLYPH[chipBand];
-          return (
-            <span
-              aria-hidden="true"
-              data-testid="pilot-group-demand"
-              className={cn(
-                "flex shrink-0 items-center gap-1 text-[10px] leading-none tabular-nums",
-                BAND_GLYPH_TONE[chipBand]
-              )}
-            >
-              <ChipGlyph className="h-2.5 w-2.5" />
-              {group.demandCount}
-            </span>
-          );
-        })()}
+      {onDrill !== undefined && (
+        <ChevronRight
+          aria-hidden="true"
+          data-testid="pilot-group-drill"
+          className="h-3 w-3 shrink-0 text-daintree-text/25"
+        />
+      )}
+    </div>
+  );
+}
+
+/**
+ * A worktree, as a heading — the same structure a project is, on the other axis.
+ *
+ * Not navigable either, and for the same reason: the arrow keys walk agents,
+ * because agents are what this surface is for. Twenty to thirty worktrees in
+ * one project is the case this exists for, so the header is one compact line —
+ * a glyph, a name, and the demand chip. Nothing about the worktree's git state
+ * is on it, because the fleet snapshot is global and git state is not: branch,
+ * dirty count and divergence live in the per-project-view worktree store, which
+ * exists for the one project a renderer owns. The question this answers is
+ * which unit of work owns these agents, not whether that branch is safe to push.
+ */
+function WorktreeGroupHeader({ group }: { group: PilotWorktreeGroup }) {
+  return (
+    <div
+      data-testid="pilot-worktree-header"
+      className="flex w-full items-center gap-2 py-1 pr-3 pl-3 select-none"
+    >
+      <div className={cn(TILE_BASE, "bg-tint/[0.04] text-muted-foreground")}>
+        <FolderGit2 className="h-2.5 w-2.5" aria-hidden="true" />
+      </div>
+
+      {/* Hidden for the reason the project heading's name is: the enclosing
+          `role="group"` already carries it as the label for every option
+          inside, so announcing it here would say it twice. */}
+      <div aria-hidden="true" className="flex min-w-0 flex-1 items-center gap-1.5">
+        <span className={cn(PALETTE_SECTION_LABEL_CLASS, "truncate")}>{group.name}</span>
+      </div>
+
+      <GroupDemandChip group={group} />
     </div>
   );
 }
@@ -437,6 +535,7 @@ function RunRow({
 function PilotFooter({
   actionLabel,
   parkLabel,
+  drillLabel,
   summary,
   demandCount,
   onShowDemand,
@@ -444,6 +543,12 @@ function PilotFooter({
   actionLabel: string | null;
   /** The park verb for the highlighted row, or null while no row is selected. */
   parkLabel: string | null;
+  /**
+   * The drill verb, present only while the highlighted run's project has more
+   * than one worktree to break out. This is where the gesture's keyboard form
+   * is taught: the heading carries the mouse form and cannot carry a key.
+   */
+  drillLabel: string | null;
   summary: string;
   demandCount: number;
   onShowDemand: () => void;
@@ -461,6 +566,12 @@ function PilotFooter({
           <span data-testid="pilot-park-hint">
             <kbd className={KBD_CLASS}>{isMac() ? "⌥↵" : "Alt+↵"}</kbd>
             <span className="ml-1.5">{parkLabel}</span>
+          </span>
+        )}
+        {drillLabel !== null && (
+          <span data-testid="pilot-drill-hint">
+            <kbd className={KBD_CLASS}>{isMac() ? "⌘↵" : "Ctrl+↵"}</kbd>
+            <span className="ml-1.5">{drillLabel}</span>
           </span>
         )}
       </div>
@@ -513,13 +624,30 @@ function findParkTarget(
   return null;
 }
 
+/**
+ * Whether this group is a project whose rows, as currently narrowed, span more
+ * than one worktree.
+ *
+ * A type predicate so the drill target is proven to be a project group at the
+ * one place that reads its workspace id. Computed from the DISPLAYED rows, so a
+ * query that narrows a project down to a single worktree also withdraws the
+ * affordance rather than offering a regrouping that would change nothing.
+ */
+function canDrill(group: PilotDisplayGroup): group is PilotProjectGroup {
+  return group.axis === "workspace" && hasWorktreeAxis(group.rows.map((row) => row.run));
+}
+
 export function PilotView() {
   const isOpen = usePilotStore((s) => s.isOpen);
   const close = usePilotStore((s) => s.close);
+  const scope = usePilotStore((s) => s.scope);
+  const showFleet = usePilotStore((s) => s.showFleet);
+  const openProject = usePilotStore((s) => s.openProject);
   const snapshot = useFleetSnapshotStore((s) => s.snapshot);
   const projects = useProjectStore((s) => s.projects);
   const scratches = useScratchStore((s) => s.scratches);
   const pilotShortcut = useEffectiveCombo("pilot.toggle");
+  const scopedShortcut = useEffectiveCombo("pilot.openProject");
 
   useOverlayClaim("pilot", isOpen);
 
@@ -620,6 +748,43 @@ export function PilotView() {
   }, [snapshot, workspaces, nowMs]);
 
   /**
+   * The project the scope names, found among the groups actually built.
+   *
+   * Null while unscoped, and null too when the scoped project has drained: its
+   * agents can all exit while the surface is open, and there is no group left
+   * to regroup. That renders the scoped empty state rather than silently
+   * dropping back to the fleet — a surface that navigates itself somewhere the
+   * user did not ask for is harder to follow than one that says it is empty and
+   * leaves the way back on screen.
+   */
+  const scopedProject = useMemo(
+    () =>
+      scope.kind === "project"
+        ? (liveGroups.find((group) => group.workspaceId === scope.workspaceId) ?? null)
+        : null,
+    [scope, liveGroups]
+  );
+
+  /**
+   * The population, cut on whichever axis the scope names.
+   *
+   * Everything downstream — the pointer hold, the query, the counts, the band
+   * filter, the footer, the empty states — runs on this and never on the fleet
+   * behind it, which is what makes a scoped opening's numbers describe the
+   * scoped population rather than the whole fleet.
+   */
+  const displayGroups = useMemo<PilotDisplayGroup[]>(() => {
+    if (scope.kind === "fleet") return liveGroups;
+    return scopedProject === null ? [] : buildPilotWorktreeGroups(scopedProject);
+  }, [scope.kind, liveGroups, scopedProject]);
+
+  /** The scoped project's name, for the breadcrumb and the copy around it. */
+  const scopedName =
+    scope.kind === "project"
+      ? (scopedProject?.name ?? workspaces.get(scope.workspaceId)?.name ?? "Unknown workspace")
+      : null;
+
+  /**
    * Position, held only while the pointer is genuinely working the list.
    *
    * Row order is derived from live agent state and the ranking IS the answer
@@ -644,9 +809,17 @@ export function PilotView() {
   const [pointerOrder, setPointerOrder] = useState<PilotOrder | null>(null);
 
   const orderedGroups = useMemo(
-    () => (pointerOrder === null ? liveGroups : applyPilotOrder(liveGroups, pointerOrder)),
-    [liveGroups, pointerOrder]
+    () => (pointerOrder === null ? displayGroups : applyPilotOrder(displayGroups, pointerOrder)),
+    [displayGroups, pointerOrder]
   );
+
+  // A held order is a set of ids from ONE axis. Carried across a scope change it
+  // would rank the incoming groups against ids none of them have, stranding
+  // every one of them at the tail — the stale order this hold exists to
+  // prevent, arriving through the scope instead of through time.
+  useEffect(() => {
+    setPointerOrder(null);
+  }, [scope]);
 
   /**
    * The narrowing pipeline, in the one order that makes the counts honest.
@@ -673,24 +846,29 @@ export function PilotView() {
   /**
    * The tree, in the shared model's shape.
    *
-   * A project is structure, not content: its header is `navigable: false`, so
-   * the arrow keys walk agents and never stop on a heading on the way past.
-   * That keeps the common case — compare what is working against what is
-   * waiting — from costing an extra keystroke per project.
+   * A group is structure, not content, on either axis: its header is
+   * `navigable: false`, so the arrow keys walk agents and never stop on a
+   * heading on the way past. That keeps the common case — compare what is
+   * working against what is waiting — from costing an extra keystroke per
+   * section, and it is why drilling in is a chord on the selected RUN rather
+   * than Enter on a heading the arrows can never reach.
    */
-  const paletteGroups = useMemo<PaletteTreeGroupInput<PilotProjectGroup, PilotRow>[]>(
+  const paletteGroups = useMemo<PaletteTreeGroupInput<PilotDisplayGroup, PilotRow>[]>(
     () =>
       visibleGroups.map((group) => ({
-        groupId: group.workspaceId,
+        // The GROUP's id, which is a workspace id on one axis and an encoded
+        // worktree path on the other. Nothing may read a workspace off it —
+        // see `activate` below, which takes one off the run instead.
+        groupId: group.groupId,
         group,
         header: {
-          rowId: `group:${group.workspaceId}`,
+          rowId: `group:${group.groupId}`,
           // The group container's id. Safe only because the header is not
           // navigable, so this id never reaches `aria-activedescendant`.
           // Making headers navigable here would first have to give the header
           // element an id of its own — pointing the active descendant at a
           // role-less container is the dangling reference #11071 was about.
-          domId: groupDomId(group.workspaceId),
+          domId: groupDomId(group.groupId),
           navigable: false,
         },
         items: group.rows.map((row) => ({
@@ -757,11 +935,15 @@ export function PilotView() {
     }
   }, [isOpen]);
 
-  const activate = useCallback((row: NavigablePaletteTreeRow<PilotProjectGroup, PilotRow>) => {
+  const activate = useCallback((row: NavigablePaletteTreeRow<PilotDisplayGroup, PilotRow>) => {
     if (row.kind !== "item") return;
     void actionService.dispatch("pilot.openRun", {
       runId: row.item.run.runId,
-      workspaceId: row.groupId,
+      // Read off the RUN, never off the group. A group id names a project on
+      // one axis and a worktree on the other, so the row's own workspace is the
+      // only field that answers this question in both — and it is the field
+      // that was authoritative even when the two happened to coincide.
+      workspaceId: row.item.run.workspaceId,
     });
   }, []);
 
@@ -781,12 +963,14 @@ export function PilotView() {
    * its own arrows, but only while it physically holds focus, so the two never
    * contend.
    */
-  const navigation = usePaletteTreeNavigation<PilotProjectGroup, PilotRow>({
+  const navigation = usePaletteTreeNavigation<PilotDisplayGroup, PilotRow>({
     groups: paletteGroups,
     isActive: isOpen,
-    // Both narrowings scope the selection. Keyed on the query alone, the
-    // highlight would survive on a row the filter had just removed.
-    selectionScopeKey: `${query}|${bandFilter}`,
+    // Every narrowing scopes the selection. Keyed on the query alone, the
+    // highlight would survive on a row the filter had just removed — and the
+    // scope belongs here for the same reason, since drilling in replaces the
+    // whole population rather than narrowing it.
+    selectionScopeKey: `${scope.kind === "project" ? scope.workspaceId : "fleet"}|${query}|${bandFilter}`,
     onActivate: activate,
     shouldPreserveInputCaretKey: () => query.length > 0,
   });
@@ -871,13 +1055,76 @@ export function PilotView() {
     [selectedRow, snapshot]
   );
 
+  /**
+   * The project the highlighted run would drill into, or null.
+   *
+   * Read off the selected row's own GROUP, which is the narrowed one already on
+   * screen — so the chord is offered on exactly the projects whose headings are
+   * currently drawing a chevron, and the two forms of one gesture can never
+   * disagree about which projects have a worktree axis.
+   */
+  const drillTarget =
+    scope.kind === "fleet" && selectedRow !== null && selectedRow.kind === "item"
+      ? canDrill(selectedRow.group)
+        ? selectedRow.group.workspaceId
+        : null
+      : null;
+
+  /**
+   * The keyboard form of clicking a project heading.
+   *
+   * On the selected RUN rather than on the heading, because the heading is not
+   * in the arrow-key domain and making it one would reverse the ruling that
+   * keeps the arrows walking agents. The run names its project unambiguously,
+   * so "drill into where this one lives" needs no second selection.
+   *
+   * Beside Enter and Alt+Enter in both key paths rather than inside the
+   * navigation model, which owns structure and not actions.
+   */
+  const interceptDrillKey = useCallback(
+    (event: KeyboardEvent<HTMLElement>): boolean => {
+      if (event.key !== "Enter" || event.defaultPrevented) return false;
+      if (!(isMac() ? event.metaKey : event.ctrlKey)) return false;
+      if (drillTarget === null) return false;
+      event.preventDefault();
+      openProject(drillTarget);
+      return true;
+    },
+    [drillTarget, openProject]
+  );
+
+  /**
+   * Backspace leaves the scope, but only with nothing left to delete.
+   *
+   * The search box owns focus by default, so a bare Backspace is an editing key
+   * first and a navigation key second. Gated on an empty query it can never
+   * take a character the user meant to remove — the same arbitration Home and
+   * End already get.
+   */
+  const interceptScopeBackKey = useCallback(
+    (event: KeyboardEvent<HTMLInputElement>): boolean => {
+      if (event.key !== "Backspace" || event.defaultPrevented) return false;
+      if (event.metaKey || event.ctrlKey || event.altKey) return false;
+      if (scope.kind !== "project" || query.length > 0) return false;
+      event.preventDefault();
+      showFleet();
+      return true;
+    },
+    [scope.kind, query, showFleet]
+  );
+
   const handleInputKeyDown = useCallback<KeyboardEventHandler<HTMLInputElement>>(
     (event) => {
+      // Park first: it is the one Enter variant that also carries a modifier
+      // the drill checks, so letting the drill run first would let Alt+Cmd+
+      // Enter regroup a project instead of parking the run under the cursor.
       if (interceptParkKey(event)) return;
+      if (interceptDrillKey(event)) return;
+      if (interceptScopeBackKey(event)) return;
       navigation.handleInputKeyDown(event);
       releaseOnConsumedKey(event);
     },
-    [interceptParkKey, navigation, releaseOnConsumedKey]
+    [interceptParkKey, interceptDrillKey, interceptScopeBackKey, navigation, releaseOnConsumedKey]
   );
 
   const handleBodyKeyDown = useCallback<KeyboardEventHandler<HTMLElement>>(
@@ -887,10 +1134,11 @@ export function PilotView() {
       // of the note input would otherwise OPEN the highlighted run.
       if (parkEditing) return;
       if (interceptParkKey(event)) return;
+      if (interceptDrillKey(event)) return;
       navigation.handleBodyKeyDown(event);
       releaseOnConsumedKey(event);
     },
-    [parkEditing, interceptParkKey, navigation, releaseOnConsumedKey]
+    [parkEditing, interceptParkKey, interceptDrillKey, navigation, releaseOnConsumedKey]
   );
 
   /**
@@ -1023,20 +1271,32 @@ export function PilotView() {
         ? "Edit park"
         : "Park";
 
+  // The drill verb rides the same "is a row actually actionable" gating as the
+  // other two, and disappears with the target itself — a hint naming a chord
+  // that would do nothing is the same false promise as an "↵ Open" over an
+  // empty list.
+  const drillLabel = actionLabel === null || drillTarget === null ? null : "Worktrees";
+
   return (
-    // While the park editor is open, "close" means "back to the list": the
-    // palette's Escape runs through a document-level backstop that fires
-    // before any inner listener can, so the only reliable way to layer the
-    // editor under Escape is to redirect what closing does — not to race the
-    // key. Backdrop clicks follow the same rule, which is also the right
-    // gesture reading: dismissing the editor, not the surface under it.
+    // Dismissal is layered, innermost first: the park editor, then the project
+    // scope, then the dialog. The palette's Escape runs through a
+    // document-level backstop that fires before any inner listener can, so the
+    // only reliable way to put anything under Escape is to redirect what
+    // closing DOES — not to race the key. Backdrop clicks follow the same rule,
+    // which is also the right gesture reading each time: dismiss the thing on
+    // top, not the surface under it.
     <AppPaletteDialog
       isOpen={isOpen}
-      onClose={parkEditing ? () => closeParkEditor(false) : close}
-      ariaLabel="All agents"
+      onClose={
+        parkEditing ? () => closeParkEditor(false) : scope.kind === "project" ? showFleet : close
+      }
+      ariaLabel={scopedName === null ? "All agents" : `Agents in ${scopedName}`}
       tier="command"
     >
-      <AppPaletteDialog.Header label="All agents" shortcut={pilotShortcut}>
+      <AppPaletteDialog.Header
+        label={scopedName === null ? "All agents" : "Agents by worktree"}
+        shortcut={scopedName === null ? pilotShortcut : scopedShortcut}
+      >
         {/*
           The search-and-narrow controls belong to the list. While the park
           editor owns the body they unmount — a query box filtering an
@@ -1044,6 +1304,48 @@ export function PilotView() {
         */}
         {!parkEditing && (
           <>
+            {/*
+              The way back, and the only thing on screen saying where "here" is.
+
+              A row above the input rather than an adornment inside it:
+              `AppPaletteDialog.Input` renders a bare `<input>` or an `<input>`
+              wrapped in a div depending on whether it was given a prefix, so
+              moving the breadcrumb in there would change the element's type at
+              this position on every scope change and remount the search box —
+              taking focus with it mid-gesture. As a sibling rendered through
+              `&&` the input's position never moves.
+
+              Escape and an empty-box Backspace do the same thing; this is the
+              form that is visible without being tried.
+            */}
+            {scopedName !== null && (
+              <div className="mb-1.5 flex min-w-0 items-center gap-1 text-[11px] leading-none">
+                <button
+                  type="button"
+                  data-testid="pilot-scope-back"
+                  onClick={showFleet}
+                  className={cn(
+                    "flex shrink-0 items-center gap-0.5 rounded-[var(--radius-sm)] py-0.5 pr-1.5 pl-0.5",
+                    "text-daintree-text/60 transition-colors",
+                    "hover:bg-overlay-subtle hover:text-daintree-text",
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-daintree-accent"
+                  )}
+                >
+                  <ChevronLeft className="h-3 w-3" aria-hidden="true" />
+                  All agents
+                </button>
+                <span aria-hidden="true" className="shrink-0 text-daintree-text/25">
+                  /
+                </span>
+                <span
+                  data-testid="pilot-scope-name"
+                  className="min-w-0 truncate text-daintree-text/70"
+                >
+                  {scopedName}
+                </span>
+              </div>
+            )}
+
             <AppPaletteDialog.Input
               inputRef={searchRef}
               value={query}
@@ -1168,7 +1470,11 @@ export function PilotView() {
            */
           <AppPaletteDialog.Empty
             query={query}
-            emptyMessage="Start an agent in any project"
+            emptyMessage={
+              scopedName === null
+                ? "Start an agent in any project"
+                : `Start an agent in ${scopedName}`
+            }
             {...(bandFilter !== "all" ? { filterLabel: PILOT_BAND_FILTER_LABEL[bandFilter] } : {})}
             noMatchContent={
               bandFilter === "all" ? undefined : (
@@ -1205,49 +1511,69 @@ export function PilotView() {
         <div
           id={LIST_ID}
           hidden={parkEditing}
-          {...(hasTree ? { role: "listbox", "aria-label": "Agents by project" } : {})}
+          {...(hasTree
+            ? {
+                role: "listbox",
+                "aria-label": scope.kind === "project" ? "Agents by worktree" : "Agents by project",
+              }
+            : {})}
           // The pointer stops working the list the moment it leaves it, so the
           // ranking goes back to being true. On the container rather than the
           // rows: moving between two rows leaves one and enters the next, and a
           // per-row handler would release and re-take the hold on the way past.
           onPointerLeave={releasePointerOrder}
         >
-          {renderGroups.map(({ header, items }, groupIndex) => (
-            // `role="group"` is a permitted listbox child and carries the
-            // project's name as the label for every option inside it, which
-            // is how a screen reader still hears which project a run belongs
-            // to now that the header itself is not an item.
-            //
-            // Being in the current workspace decides whether opening a run is
-            // instant or swaps the whole view, and the header renders that as a
-            // word it then hides — so it rides the label rather than being
-            // visual-only. Short on purpose: this name is re-announced as
-            // context for every option inside, and the group's own contents are
-            // those options, so a prose summary here would be read once per row.
-            <div
-              key={header.domId}
-              id={header.domId}
-              role="group"
-              aria-label={`${header.group.name}${header.group.isCurrent ? ", current workspace" : ""}${header.group.demandCount > 0 ? `, ${demandPhrase(header.group.demandCount)}` : ""}`}
-              // The scroller spaces siblings equally, so after a long run list
-              // the next project arrives with no more separation than one more
-              // agent. Only between groups — a leading gap would push the list
-              // off its own top edge.
-              className={groupIndex > 0 ? "mt-2" : undefined}
-            >
-              <GroupHeader group={header.group} />
-              {items.map((row) => (
-                <RunRow
-                  key={row.domId}
-                  row={row.item}
-                  isSelected={row.rowId === selectedRow?.rowId}
-                  domId={row.domId}
-                  onActivate={() => navigation.activateRow(row.rowId)}
-                  onPointerMove={() => handleRowPointerMove(row.rowId)}
-                />
-              ))}
-            </div>
-          ))}
+          {renderGroups.map(({ header, items }, groupIndex) => {
+            // Bound to a const so the discriminant narrows inside the drill
+            // handler's closure as well as at the branch.
+            const group = header.group;
+            const drillTo = canDrill(group) ? group.workspaceId : null;
+            return (
+              // `role="group"` is a permitted listbox child and carries the
+              // group's name as the label for every option inside it, which is
+              // how a screen reader still hears which project — or, scoped,
+              // which worktree — a run belongs to now that the header itself is
+              // not an item.
+              //
+              // Being in the current workspace decides whether opening a run is
+              // instant or swaps the whole view, and the header renders that as
+              // a word it then hides — so it rides the label rather than being
+              // visual-only. Short on purpose: this name is re-announced as
+              // context for every option inside, and the group's own contents
+              // are those options, so a prose summary here would be read once
+              // per row.
+              <div
+                key={header.domId}
+                id={header.domId}
+                role="group"
+                aria-label={`${group.name}${group.axis === "workspace" && group.isCurrent ? ", current workspace" : ""}${group.demandCount > 0 ? `, ${demandPhrase(group.demandCount)}` : ""}`}
+                // The scroller spaces siblings equally, so after a long run list
+                // the next group arrives with no more separation than one more
+                // agent. Only between groups — a leading gap would push the list
+                // off its own top edge.
+                className={groupIndex > 0 ? "mt-2" : undefined}
+              >
+                {group.axis === "worktree" ? (
+                  <WorktreeGroupHeader group={group} />
+                ) : (
+                  <GroupHeader
+                    group={group}
+                    {...(drillTo !== null ? { onDrill: () => openProject(drillTo) } : {})}
+                  />
+                )}
+                {items.map((row) => (
+                  <RunRow
+                    key={row.domId}
+                    row={row.item}
+                    isSelected={row.rowId === selectedRow?.rowId}
+                    domId={row.domId}
+                    onActivate={() => navigation.activateRow(row.rowId)}
+                    onPointerMove={() => handleRowPointerMove(row.rowId)}
+                  />
+                ))}
+              </div>
+            );
+          })}
         </div>
       </AppPaletteDialog.Body>
 
@@ -1262,6 +1588,7 @@ export function PilotView() {
           <PilotFooter
             actionLabel={actionLabel}
             parkLabel={parkLabel}
+            drillLabel={drillLabel}
             summary={summary}
             demandCount={needsYou}
             onShowDemand={() => {

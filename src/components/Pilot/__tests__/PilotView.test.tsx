@@ -35,6 +35,7 @@ const dispatchMock = vi.hoisted(() => vi.fn());
 vi.mock("@/services/ActionService", () => ({ actionService: { dispatch: dispatchMock } }));
 
 import { PilotView } from "../PilotView";
+import { isMac } from "@/lib/platform";
 import { useGlobalEscapeDispatcher } from "@/hooks/useGlobalEscapeDispatcher";
 import { useFleetSnapshotStore } from "@/store/fleetSnapshotStore";
 import { usePilotStore } from "@/store/pilotStore";
@@ -118,7 +119,9 @@ beforeEach(() => {
   dispatchMock.mockClear();
   seedViewWorkspace(null);
   seed(null);
-  usePilotStore.setState({ isOpen: true });
+  // Scope reset with the open flag: a leaked project scope would silently
+  // narrow every later test's population to one workspace's worktrees.
+  usePilotStore.setState({ isOpen: true, scope: { kind: "fleet" } });
   seedWorkspaceOpenings(NOW, NOW - 60_000);
 });
 
@@ -1819,6 +1822,352 @@ describe("PilotView", () => {
       await vi.advanceTimersByTimeAsync(0);
 
       expect(screen.queryByTestId("pilot-park-editor")).toBeNull();
+    });
+  });
+});
+
+describe("PilotView worktree scope", () => {
+  /**
+   * The drill modifier, resolved the way the component resolves it.
+   *
+   * Hard-coding `metaKey` would make this suite pass on a developer's Mac and
+   * fail on CI's Linux — the chord under test is genuinely different there, so
+   * the fixture has to be too.
+   */
+  const DRILL_MODIFIER = isMac() ? { metaKey: true } : { ctrlKey: true };
+
+  /** A project spread over two worktrees plus one root-launched run. */
+  function seedSpread(): void {
+    seed([
+      run({
+        runId: "alpha-1",
+        worktreeId: "/repo/wt/alpha",
+        title: "auth refactor",
+        agentState: "waiting",
+        since: NOW - 60_000,
+      }),
+      run({
+        runId: "beta-1",
+        worktreeId: "/repo/wt/beta",
+        title: "docs pass",
+        agentState: "working",
+        since: NOW - 60_000,
+      }),
+      run({ runId: "root-1", title: "shell", agentState: "working", since: NOW - 60_000 }),
+    ]);
+  }
+
+  /**
+   * Section names in rendered order, read off the group labels.
+   *
+   * Scoped to the listbox: the palette body is itself a `role="group"` (it
+   * carries the scroller's accessible name), so an unscoped query would count
+   * the container as a section.
+   */
+  function sections(): string[] {
+    return [...screen.getByRole("listbox").querySelectorAll('[role="group"]')].map(
+      (group) => (group.getAttribute("aria-label") ?? "").split(",")[0] ?? ""
+    );
+  }
+
+  /** The first project heading, which is `daintree` under the default MRU seed. */
+  function drillHeader(): HTMLElement {
+    return screen.getAllByTestId("pilot-group-header")[0]!;
+  }
+
+  describe("drilling in", () => {
+    it("regroups one project's runs by worktree when its header is clicked", () => {
+      seedSpread();
+      render(<PilotView />);
+
+      fireEvent.click(drillHeader());
+
+      // Root work first — burying it under the checkouts hides the runs most
+      // likely to be the ones being worked right now.
+      expect(sections()).toEqual(["No worktree", "alpha", "beta"]);
+      expect(screen.getAllByTestId("pilot-row")).toHaveLength(3);
+    });
+
+    it("offers no drill on a project with a single worktree bucket", () => {
+      // Regrouping would produce one section holding the rows already on
+      // screen, so the affordance would promise something it cannot deliver.
+      seed([
+        run({ runId: "a", worktreeId: "/repo/wt/alpha", agentState: "working" }),
+        run({ runId: "b", worktreeId: "/repo/wt/alpha", agentState: "working" }),
+      ]);
+      render(<PilotView />);
+
+      expect(screen.queryByTestId("pilot-group-drill")).toBeNull();
+      fireEvent.click(drillHeader());
+      expect(usePilotStore.getState().scope).toEqual({ kind: "fleet" });
+    });
+
+    it("withdraws the drill when a query narrows the project to one worktree", () => {
+      // The affordance is computed from the rows actually drawn, so it cannot
+      // outlive the axis the user can currently see.
+      seedSpread();
+      render(<PilotView />);
+
+      fireEvent.change(screen.getByTestId("pilot-search"), { target: { value: "auth" } });
+
+      expect(screen.queryByTestId("pilot-group-drill")).toBeNull();
+    });
+
+    it("drills from the keyboard on the highlighted run", () => {
+      // The heading is outside the arrow-key domain by design, so the keyboard
+      // form lands on the run — which names its project unambiguously.
+      seedSpread();
+      render(<PilotView />);
+
+      fireEvent.keyDown(screen.getByTestId("pilot-search"), {
+        key: "Enter",
+        ...DRILL_MODIFIER,
+      });
+
+      expect(usePilotStore.getState().scope).toEqual({ kind: "project", workspaceId: "p1" });
+      expect(sections()).toEqual(["No worktree", "alpha", "beta"]);
+    });
+
+    it("does not open the highlighted run when the chord drills", () => {
+      seedSpread();
+      render(<PilotView />);
+
+      fireEvent.keyDown(screen.getByTestId("pilot-search"), {
+        key: "Enter",
+        ...DRILL_MODIFIER,
+      });
+
+      expect(dispatchMock).not.toHaveBeenCalled();
+    });
+
+    it("leaves the chord inert where there is no worktree axis", () => {
+      seed([run({ runId: "a", worktreeId: "/repo/wt/alpha", agentState: "working" })]);
+      render(<PilotView />);
+
+      fireEvent.keyDown(screen.getByTestId("pilot-search"), {
+        key: "Enter",
+        ...DRILL_MODIFIER,
+      });
+
+      expect(usePilotStore.getState().scope).toEqual({ kind: "fleet" });
+    });
+
+    it("still parks when the park modifier rides along with the drill one", () => {
+      // Alt+Enter is the park chord and it has to win: letting the drill run
+      // first would regroup a project instead of shelving the run under the
+      // cursor, on a keystroke the user aimed at one row.
+      seedSpread();
+      render(<PilotView />);
+
+      fireEvent.keyDown(screen.getByTestId("pilot-search"), {
+        key: "Enter",
+        altKey: true,
+        ...DRILL_MODIFIER,
+      });
+
+      expect(usePilotStore.getState().scope).toEqual({ kind: "fleet" });
+      expect(screen.getByTestId("pilot-park-editor")).toBeTruthy();
+    });
+
+    it("advertises the chord only while the highlighted run can use it", () => {
+      seedSpread();
+      render(<PilotView />);
+      expect(screen.getByTestId("pilot-drill-hint")).toBeTruthy();
+
+      fireEvent.change(screen.getByTestId("pilot-search"), { target: { value: "auth" } });
+      expect(screen.queryByTestId("pilot-drill-hint")).toBeNull();
+    });
+  });
+
+  describe("the way back", () => {
+    function drillIn(): void {
+      seedSpread();
+      render(<PilotView />);
+      fireEvent.click(drillHeader());
+    }
+
+    it("names where you are, and offers the way out", () => {
+      drillIn();
+
+      expect(screen.getByTestId("pilot-scope-name").textContent).toBe("daintree");
+      expect(screen.getByTestId("pilot-scope-back")).toBeTruthy();
+    });
+
+    it("returns to the fleet when the breadcrumb is clicked", () => {
+      drillIn();
+
+      fireEvent.click(screen.getByTestId("pilot-scope-back"));
+
+      expect(usePilotStore.getState().scope).toEqual({ kind: "fleet" });
+      expect(usePilotStore.getState().isOpen).toBe(true);
+    });
+
+    it("leaves the scope on Escape before it closes anything", () => {
+      function Dispatcher() {
+        useGlobalEscapeDispatcher();
+        return null;
+      }
+      seedSpread();
+      render(
+        <>
+          <Dispatcher />
+          <PilotView />
+        </>
+      );
+      fireEvent.click(drillHeader());
+
+      fireEvent.keyDown(screen.getByTestId("pilot-search"), { key: "Escape" });
+      expect(usePilotStore.getState()).toMatchObject({ isOpen: true, scope: { kind: "fleet" } });
+
+      fireEvent.keyDown(screen.getByTestId("pilot-search"), { key: "Escape" });
+      expect(usePilotStore.getState().isOpen).toBe(false);
+    });
+
+    it("leaves the scope on Backspace once the box is empty", () => {
+      drillIn();
+
+      fireEvent.keyDown(screen.getByTestId("pilot-search"), { key: "Backspace" });
+
+      expect(usePilotStore.getState().scope).toEqual({ kind: "fleet" });
+    });
+
+    it("leaves a Backspace alone while there is still a query to delete", () => {
+      // The box owns focus by default, so a bare Backspace is an editing key
+      // first — taking a character the user meant to remove is the failure.
+      drillIn();
+
+      fireEvent.change(screen.getByTestId("pilot-search"), { target: { value: "auth" } });
+      fireEvent.keyDown(screen.getByTestId("pilot-search"), { key: "Backspace" });
+
+      expect(usePilotStore.getState().scope).toEqual({
+        kind: "project",
+        workspaceId: "p1",
+      });
+    });
+  });
+
+  describe("the scoped surface", () => {
+    /**
+     * Two projects in the fleet, so the scoped surface has a population it must
+     * be seen to exclude — a fixture holding only the scoped project would let
+     * every count below pass while still describing the whole fleet.
+     */
+    function drillIn(): void {
+      seed([
+        run({
+          runId: "alpha-1",
+          worktreeId: "/repo/wt/alpha",
+          title: "auth refactor",
+          agentState: "waiting",
+          since: NOW - 60_000,
+        }),
+        run({
+          runId: "beta-1",
+          worktreeId: "/repo/wt/beta",
+          title: "docs pass",
+          agentState: "working",
+          since: NOW - 60_000,
+        }),
+        run({
+          runId: "elsewhere",
+          workspaceId: "s1",
+          title: "spike run",
+          agentState: "waiting",
+          since: NOW - 60_000,
+        }),
+      ]);
+      render(<PilotView />);
+      fireEvent.click(drillHeader());
+    }
+
+    it("counts the scoped population, not the fleet behind it", () => {
+      // The footer's sentence is a control that applies a filter, so a count
+      // taken over the whole fleet would promise agents it cannot then show.
+      drillIn();
+
+      expect(screen.getByTestId("pilot-demand-action").textContent).toBe("Agent needs you");
+      expect(screen.getAllByTestId("pilot-row")).toHaveLength(2);
+    });
+
+    it("says the list is cut by worktree", () => {
+      drillIn();
+
+      expect(screen.getByRole("listbox").getAttribute("aria-label")).toBe("Agents by worktree");
+    });
+
+    it("keeps the arrows walking runs and never stopping on a worktree", () => {
+      drillIn();
+      const search = screen.getByTestId("pilot-search");
+
+      const seen: (string | null)[] = [];
+      for (let i = 0; i < 4; i++) {
+        seen.push(search.getAttribute("aria-activedescendant"));
+        fireEvent.keyDown(search, { key: "ArrowDown" });
+      }
+
+      expect(seen.every((id) => id !== null && id.startsWith("pilot-option-run-"))).toBe(true);
+    });
+
+    it("holds nothing but options, drillable heading or not", () => {
+      // The ruling that removed the old disclosure: a focusable control inside
+      // a `role="group"` inside a `role="listbox"` is both invalid and
+      // unreachable by the keyboard this surface is driven with (#11669).
+      seedSpread();
+      render(<PilotView />);
+
+      expect(screen.getByTestId("pilot-group-drill")).toBeTruthy();
+      expect(screen.getByRole("listbox").querySelector("button")).toBeNull();
+    });
+
+    it("still narrows by query inside the scope", () => {
+      drillIn();
+
+      fireEvent.change(screen.getByTestId("pilot-search"), { target: { value: "docs" } });
+
+      expect(sections()).toEqual(["beta"]);
+    });
+
+    it("admits a whole worktree typed by name", () => {
+      drillIn();
+
+      fireEvent.change(screen.getByTestId("pilot-search"), { target: { value: "alpha" } });
+
+      expect(screen.getAllByTestId("pilot-row")).toHaveLength(1);
+    });
+
+    it("still narrows by band inside the scope", () => {
+      drillIn();
+
+      fireEvent.click(screen.getByTestId("pilot-demand-action"));
+
+      expect(sections()).toEqual(["alpha"]);
+    });
+
+    it("opens a run with its own workspace, never the section it was filed under", () => {
+      // A section id names a worktree here. Handing it to `pilot.openRun` as a
+      // workspace would send every scoped run through a switch to a project
+      // that does not exist.
+      drillIn();
+
+      fireEvent.click(screen.getAllByTestId("pilot-row")[0]!);
+
+      expect(dispatchMock).toHaveBeenCalledWith("pilot.openRun", {
+        runId: "alpha-1",
+        workspaceId: "p1",
+      });
+    });
+
+    it("names the project when the scoped list drains", () => {
+      // The scope survives the last agent exiting, and says so rather than
+      // navigating itself somewhere the user did not ask for.
+      drillIn();
+
+      act(() => {
+        seed([]);
+      });
+
+      expect(screen.getByText("Start an agent in daintree")).toBeTruthy();
+      expect(screen.getByTestId("pilot-scope-back")).toBeTruthy();
     });
   });
 });
