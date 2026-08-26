@@ -1695,9 +1695,13 @@ function ProjectSwitcherFooter({
  * The focus ring is inset for the same reason. The palette clips to
  * `overflow-hidden`, so a ring drawn outside a full-width row loses its left
  * and right sides at the dialog edge; `-outline-offset-2` keeps all four.
+ * `palette-command-row` is not styling — like `palette-row` next to it, it is
+ * the handle the `forced-colors: active` block in `index.css` needs, where a
+ * global `outline-offset: 2px !important` would otherwise push the ring back
+ * out past that same edge.
  */
 const PROJECT_ACTION_ROW_CLASS =
-  "w-full flex items-center gap-3 px-3 py-2 text-left transition-colors hover:bg-overlay-subtle focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-daintree-accent";
+  "palette-command-row w-full flex items-center gap-3 px-3 py-2 text-left transition-colors hover:bg-overlay-subtle focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-daintree-accent";
 
 interface ProjectPaletteInnerProps {
   inputRef: React.RefObject<HTMLInputElement | null>;

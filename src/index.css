@@ -2696,6 +2696,18 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     outline-offset: -2px;
   }
 
+  /* The project switcher's command rows run full-bleed, so their border box
+     reaches the palette's own clipped edge. The blanket `outline-offset: 2px`
+     above would draw their focus ring outside that clip and lose its left and
+     right strokes entirely — the ring has to turn inward here. `!important`
+     because the rule it is answering carries one, and specificity alone does
+     not settle a contest between two important declarations. Same marker-class
+     approach as `.palette-row`, for the same reason: `button` is far too broad
+     a hook to hang this on. */
+  .palette-command-row:focus-visible {
+    outline-offset: -2px !important;
+  }
+
   /* Macro-focus regions use a Tailwind ring (box-shadow) which is removed here.
      Fall back to a system outline so the focused region stays visible. */
   [data-macro-focus="true"] {
