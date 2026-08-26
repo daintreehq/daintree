@@ -41,6 +41,7 @@
  *   FAKE_ENGINE_CHECKOUT_PLAN=pro             # a purchase that lands on the next /account
  *   FAKE_ENGINE_ACCOUNT=unavailable           # the plan cannot be checked right now
  *   FAKE_ENGINE_REQUIRE_ACCOUNT=1             # refuse turns while signed out
+ *   FAKE_ENGINE_ACCOUNT_URL=https://x.test/p  # an address inside the engine's own answer
  *
  * Daintree invokes it as `<bin> host --stdio`; the argv is accepted and ignored.
  */
@@ -73,6 +74,19 @@ const account = {
   // The backend's DEPENDENCY taxonomy: the credential is fine and nothing was
   // established. It must never render as "not subscribed" — see accountText.
   unavailable: process.env.FAKE_ENGINE_ACCOUNT === "unavailable",
+  // An address the engine puts in its own answer, for the host to render.
+  //
+  // Off unless a test asks for it, because it is the ENGINE that decides whether an
+  // answer carries a link, and the two paths differ at the pinned commit. `/account`
+  // DOES print one — `accountNextStep` (internal/commands/account.go) answers a
+  // subscription-required state with "Choose a plan: " + Links.Subscribe and an
+  // inactive one with "Check billing: " + Links.Account — so the command path below
+  // reuses that exact wording. The TURN-ERROR path does not: `accountFailureAdvice`
+  // (internal/agent/session.go) deliberately prints no URL, sending people to
+  // `daintree-assistant auth status --refresh` "for the details and the link". The
+  // error case below is therefore a SHAPE the host must handle, not a wording claim
+  // about the engine — see the note where it is emitted.
+  url: process.env.FAKE_ENGINE_ACCOUNT_URL || null,
 };
 
 let seq = 0;
@@ -731,7 +745,16 @@ async function runTurn(text) {
       code: "auth_required",
       message:
         "Account problem: this backend requires an account and no credential was sent. " +
-        "Run /login to sign in through your browser.",
+        "Run /login to sign in through your browser." +
+        // A URL on the ERROR path, and SYNTHETIC — the pinned engine's own
+        // `accountFailureAdvice` prints none here, so this makes no claim about what it
+        // says. It exists because a command result and a refused turn reach the panel as
+        // different events and are stored by different branches, so a host that
+        // linkified one and not the other would pass every /account test while leaving
+        // the other half of the surface unrendered. Worded as a neutral pointer rather
+        // than a purchase prompt, because the real advice for THIS code is to sign in —
+        // telling a signed-out user to buy something would be testing a wrong product.
+        (account.url ? ` See ${account.url}` : ""),
     });
     emit({ type: "turn:end", turnId, endedAt: now(), outcome: "refused" });
     return;
@@ -785,7 +808,13 @@ function runAccountCommand(verb) {
     account.plan = account.checkoutPlan;
     account.checkoutPlan = null;
   }
-  return `plan     ${account.plan}\naccess   active`;
+  // `accountNextStep`'s own wording for a subscription-required state, on its OWN line
+  // below the column block — which is where the engine puts it. Inline after a padded
+  // value it would be indistinguishable from a long value, and the property under test
+  // is that linkifying leaves the columns alone, which is only observable if there are
+  // still columns beside the link.
+  const tail = account.url ? `\n\nChoose a plan: ${account.url}` : "";
+  return `plan     ${account.plan}\naccess   active${tail}`;
 }
 
 let busy = false;
