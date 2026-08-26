@@ -481,19 +481,20 @@ export function FileBrowserViewer({
             />
           </>
         )}
-        {/* One slot, two occupants, following whatever the viewer is showing:
-            a list is sorted, a file is refreshed. Both are outside the
-            `filePath` gate that wraps the actions above — each has a job in the
-            no-selection layouts too. */}
+        {/* The right-aligned group, following whatever the viewer is showing:
+            a list is sorted, a file gets its own actions, and Refresh appears
+            only while the tree header that normally owns it is collapsed away.
+            Sort and Refresh both sit outside the `filePath` gate that wraps the
+            block above — each has a job in the no-selection layouts too. */}
         <FileViewerToolbar.Actions>
           {/* The single home for sort (#11620). Deliberately not duplicated as
               clickable column headers in the listing below: two controls for
-              one setting is the same trap the Refresh comment above avoids, and
-              a header that looks sortable in one column but has no counterpart
-              in the tree would misdescribe what the setting governs. Hidden
-              while a file is open: this cluster describes what the viewer is
-              showing, and a single document has no order — the slot goes to
-              Refresh instead. */}
+              one setting is the same trap the Refresh gate below avoids, and a
+              header that looks sortable in one column but has no counterpart in
+              the tree would misdescribe what the setting governs. Hidden while
+              a file is open: this cluster describes what the viewer is showing,
+              and a single document has no order — Reveal and Open in editor
+              take the room. */}
           {!filePath && (
             <DropdownMenu>
               <Tooltip>
@@ -560,16 +561,16 @@ export function FileBrowserViewer({
               </DropdownMenuContent>
             </DropdownMenu>
           )}
-          {/* With a file open this is the file's own Refresh — it re-reads the
-              bytes on screen, which is the one freshness gesture a reader wants
-              and the sort menu can't be. The tree header yields its copy for
-              exactly these layouts (see `FileBrowserPane`), so there is still
-              only ever one Refresh in the panel (#11496). With nothing open the
-              older rule stands: the tree header owns it, and this one appears
-              only once that header is collapsed away (#11586) — a
-              workspace-rooted browser has no change tick at all (#11482), so
-              that layout would otherwise offer no refresh. */}
-          {(filePath || sidebarCollapsed) && (
+          {/* Only while the tree column is collapsed away. Its header owns the
+              browser-wide Refresh the rest of the time, open file or not: this
+              copy used to take over the moment something was selected, which
+              moved the control to the far edge of the panel for no gain — both
+              buttons have always run the same handler (#11938). One Refresh in
+              every layout either way (#11496), and this one still has to exist
+              for the collapsed-tree layouts (#11586), including with nothing
+              selected — a workspace-rooted browser has no change tick at all
+              (#11482), so it would otherwise offer no refresh. */}
+          {sidebarCollapsed && (
             <FileViewerToolbar.IconButton label="Refresh" onClick={onRefresh}>
               <SpinningIcon icon={RefreshCw} active={isRefreshing} className="h-4 w-4" />
             </FileViewerToolbar.IconButton>
