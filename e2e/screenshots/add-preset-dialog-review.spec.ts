@@ -205,6 +205,61 @@ async function snap(
   written.push(path.basename(file));
 }
 
+/**
+ * Measure what the option descriptions actually resolve to against the surface
+ * behind them. The descriptions answer the dialog's primary question, so their
+ * contrast is a design decision rather than a detail — and an alpha-modified
+ * utility resolves to a number no token guard measures. Reported, not asserted:
+ * the tier this text sits in is a judgement call, and the number is the input
+ * to it.
+ */
+async function measureDescriptionContrast(page: Page): Promise<string> {
+  return page.evaluate((panelSel) => {
+    const parse = (input: string): [number, number, number] => {
+      const el = document.createElement("div");
+      el.style.color = input;
+      document.body.appendChild(el);
+      const resolved = getComputedStyle(el).color;
+      el.remove();
+      const m = resolved.match(/(\d+(?:\.\d+)?)/g) ?? [];
+      return [Number(m[0] ?? 0), Number(m[1] ?? 0), Number(m[2] ?? 0)];
+    };
+    const lum = ([r, g, b]: [number, number, number]) => {
+      const f = (c: number) => {
+        const s = c / 255;
+        return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+      };
+      return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
+    };
+    const ratio = (a: [number, number, number], b: [number, number, number]) => {
+      const [l1, l2] = [lum(a), lum(b)].sort((x, y) => y - x);
+      return ((l1 as number) + 0.05) / ((l2 as number) + 0.05);
+    };
+
+    const panel = document.querySelector(panelSel);
+    if (!panel) return "no panel";
+    // The description is the second line inside an option's text column.
+    const label = Array.from(panel.querySelectorAll("label")).find((l) =>
+      l.querySelector('input[type="radio"]')
+    );
+    const desc = label?.querySelectorAll("span span")[1];
+    if (!desc) return "no description node";
+
+    let bgEl: Element | null = desc;
+    let bg = "rgba(0, 0, 0, 0)";
+    while (bgEl) {
+      const c = getComputedStyle(bgEl).backgroundColor;
+      if (c && !c.endsWith(", 0)") && c !== "transparent") {
+        bg = c;
+        break;
+      }
+      bgEl = bgEl.parentElement;
+    }
+    const fg = getComputedStyle(desc).color;
+    return `${getComputedStyle(document.documentElement).getPropertyValue("--theme-name") || document.documentElement.getAttribute("data-theme")}: fg=${fg} bg=${bg} ratio=${ratio(parse(fg), parse(bg)).toFixed(2)}:1`;
+  }, PANEL);
+}
+
 const ONLY = (process.env.DAINTREE_SHOT_ONLY ?? "").split(",").filter(Boolean);
 
 /**
@@ -257,19 +312,19 @@ test("add-preset dialog review — start-from states", async () => {
     type: "conditional-skip",
     description: "DAINTREE_SHOT_PRESET is required for the add-preset capture",
   });
-  test.skip(!ENABLED, "Set DAINTREE_SHOT_PRESET to run the add-preset capture");
-  test.skip(SWEEP, "Sweep mode runs the theme test instead");
+  test.skip(!ENABLED || SWEEP, "Set DAINTREE_SHOT_PRESET, and unset SWEEP, for the state matrix");
 
   mkdirSync(OUTPUT_DIR, { recursive: true });
   const { page, cleanup } = await boot();
   try {
     // ---- Shape A: claude, no custom presets. The rest state, and the shape a
-    // first-time user actually meets.
+    // first-time user actually meets. Nothing can be cloned, so the clone
+    // option is absent and the decision is Blank vs template.
     await seedPresets(page, "claude", [], null);
 
     await step("blank", async () => {
       await openDialog(page, "claude");
-      await snap(page, "10-blank-no-current", ["Start from", "Blank", "Clone current"]);
+      await snap(page, "10-blank-no-current", ["Start from", "Blank", "From template"]);
       await snap(page, "11-blank-no-current-window", ["Blank"], "body");
       await closeDialog(page);
     });
@@ -294,18 +349,20 @@ test("add-preset dialog review — start-from states", async () => {
       await openDialog(page, "claude");
       await tabToRadioGroup(page);
       await snap(page, "30-focus-visible-blank", ["Blank"]);
+      // Arrow must move selection with focus — native radio behaviour, and the
+      // reason this group is not built on the app's roving-tabindex primitive.
       await page.keyboard.press("ArrowDown");
       await settle(page, 300);
-      await snap(page, "31-focus-visible-arrowed", ["Clone current"]);
+      await snap(page, "31-focus-visible-arrowed", ["From template"]);
       await closeDialog(page);
     });
 
     // Hover on a row that is not the selected one — the click-target question.
     await step("hover", async () => {
       await openDialog(page, "claude");
-      await page.getByText("Clone current", { exact: true }).hover();
+      await page.getByText("From template", { exact: true }).hover();
       await settle(page, 300);
-      await snap(page, "35-hover-clone", ["Clone current"]);
+      await snap(page, "35-hover-unselected", ["From template"]);
       await closeDialog(page);
     });
 
@@ -326,11 +383,27 @@ test("add-preset dialog review — start-from states", async () => {
       await closeDialog(page);
     });
 
-    // ---- Shape B: an agent with no provider templates. Two options, not
-    // three — a shape the code path makes easy to forget.
+    // ---- Shape B: an agent with no provider templates and nothing to clone.
+    // Every branch but Blank is unavailable, so there is no decision left to
+    // present — the state most easily forgotten, and the one the old dialog
+    // rendered as two options that did exactly the same thing.
     await step("no-templates", async () => {
       await openDialog(page, "codex");
-      await snap(page, "50-no-templates", ["Start from", "Blank", "Clone current"]);
+      await snap(page, "50-single-path", ["The new preset starts empty"]);
+      await closeDialog(page);
+    });
+
+    // ---- Shape B2: the same agent once a preset exists — a real two-option
+    // decision, with no template branch.
+    await step("clone-no-templates", async () => {
+      await seedPresets(
+        page,
+        "codex",
+        [{ id: "shot-codex-1", name: "Sandboxed", env: {}, args: [] }],
+        "shot-codex-1"
+      );
+      await openDialog(page, "codex");
+      await snap(page, "55-clone-no-templates", ["Start from", "Blank", "Clone current"]);
       await closeDialog(page);
     });
 
@@ -404,6 +477,7 @@ test("add-preset dialog review — every theme", async () => {
         await page.getByText("From template", { exact: true }).click();
         await settle(page, 400);
         await snap(page, `80-theme-${theme}`, ["From template", "Provider"]);
+        console.log(`[preset-shots] contrast ${await measureDescriptionContrast(page)}`);
         await closeDialog(page);
       });
     }
