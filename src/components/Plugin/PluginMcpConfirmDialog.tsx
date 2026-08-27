@@ -362,8 +362,12 @@ function GateHint({ queueDepth }: { queueDepth: number }) {
     parts.push(`${queueDepth} more request${queueDepth === 1 ? "" : "s"} waiting`);
   }
 
+  // Wraps rather than truncates. This is the one line that says the approval is
+  // a standing grant, and a wide primary label leaves the hint little room — an
+  // ellipsis here would clip the disclosure down to "Remembered unti…", which
+  // discloses nothing. Two lines is the ceiling; the footer grows a little.
   return (
-    <span aria-live="polite" className="min-w-0 truncate">
+    <span aria-live="polite" className="min-w-0 leading-tight line-clamp-2">
       {parts.join(" · ")}
     </span>
   );
