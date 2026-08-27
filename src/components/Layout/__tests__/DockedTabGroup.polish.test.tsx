@@ -351,7 +351,7 @@ describe("DockedTabGroup dock-popover polish (#8164)", () => {
       const dot = overflowButton!.querySelector("span.bg-daintree-text\\/70");
       expect(dot).not.toBeNull();
       // Accent restraint: the neutral cue must NOT use any accent token.
-      expect(dot!.className).not.toMatch(/(?:daintree-accent|accent-primary)(?![\\w-])/);
+      expect(dot!.className).not.toMatch(/(?:daintree-accent|accent-primary)(?![\w-])/);
     });
   });
 

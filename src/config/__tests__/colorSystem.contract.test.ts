@@ -184,7 +184,7 @@ describe("color system contract", () => {
   // are the deferred ramp.
   it("has no solid daintree-* utility or raw alias read left in renderer source", () => {
     const solidUtility =
-      /(?<!--color)(?<=[a-z0-9\]])-daintree-(sidebar|border|accent|text|bg)(?![\w\-/])/g;
+      /(?<!--color)(?<=[a-z0-9\]])-daintree-(sidebar|border|accent|text|bg)(?![\w-]|\\*\/)/g;
     const rawRead = /var\(\s*--color-daintree-/g;
 
     const offenders = new Map<string, string[]>();

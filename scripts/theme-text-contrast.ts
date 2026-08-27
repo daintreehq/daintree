@@ -60,6 +60,8 @@ export type Spread = {
   ratioMin: number;
   /** Where lcMin occurs. */
   worst: Sample;
+  /** Where ratioMin occurs — often a different theme, since Lc and WCAG rank differently. */
+  ratioWorst: Sample;
 };
 
 export type StepBand = {
@@ -140,6 +142,7 @@ function spread(samples: Sample[]): Spread {
     lcMax: lc.at(-1)!,
     ratioMin: ratios[0]!,
     worst: samples.reduce((a, b) => (a.lc <= b.lc ? a : b)),
+    ratioWorst: samples.reduce((a, b) => (a.ratio <= b.ratio ? a : b)),
   };
 }
 
@@ -230,6 +233,7 @@ export function buildReport(schemes: AppColorScheme[] = BUILT_IN_APP_SCHEMES): R
 }
 
 const n = (value: number, width = 7) => value.toFixed(1).padStart(width);
+const where = (s: Sample) => `${s.theme}/${s.surface}`;
 const signed = (value: number, width = 7) =>
   `${value >= 0 ? "+" : ""}${value.toFixed(1)}`.padStart(width);
 
@@ -237,24 +241,28 @@ export function formatReport(report: Report): string {
   const lines: string[] = [];
 
   lines.push("Solid text tokens — across every theme x display surface");
-  lines.push("  role                 Lc min  Lc med  Lc max  WCAG min   weakest at");
+  lines.push(
+    "  role                 Lc min  Lc med  Lc max   weakest Lc at                    WCAG min   weakest WCAG at"
+  );
   for (const role of TEXT_ROLES) {
     const s = report.roles[role];
     if (!s) continue;
     lines.push(
-      `  ${role.padEnd(18)}${n(s.lcMin)}${n(s.lcMedian)}${n(s.lcMax)}${n(s.ratioMin, 10)}   ` +
-        `${s.worst.theme}/${s.worst.surface}`
+      `  ${role.padEnd(18)}${n(s.lcMin)}${n(s.lcMedian)}${n(s.lcMax)}   ` +
+        `${where(s.worst).padEnd(32)}${n(s.ratioMin, 8)}   ${where(s.ratioWorst)}`
     );
   }
 
   lines.push("");
   lines.push("Opacity ramp — what text-daintree-text/NN actually renders at");
-  lines.push("  step     Lc min  Lc med  Lc max  WCAG min   weakest at");
+  lines.push(
+    "  step     Lc min  Lc med  Lc max   weakest Lc at                    WCAG min   weakest WCAG at"
+  );
   for (const band of report.bands) {
+    const r = band.ramp;
     lines.push(
-      `  /${String(band.step).padEnd(4)}${n(band.ramp.lcMin)}${n(band.ramp.lcMedian)}` +
-        `${n(band.ramp.lcMax)}${n(band.ramp.ratioMin, 10)}   ` +
-        `${band.ramp.worst.theme}/${band.ramp.worst.surface}`
+      `  /${String(band.step).padEnd(4)}${n(r.lcMin)}${n(r.lcMedian)}${n(r.lcMax)}   ` +
+        `${where(r.worst).padEnd(32)}${n(r.ratioMin, 8)}   ${where(r.ratioWorst)}`
     );
   }
 

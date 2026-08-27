@@ -359,7 +359,7 @@ The dock sits at the very bottom of the window. It's a horizontal bar showing mi
 ```
 
 ```css
-background: var(--dock-bg, var(--color-daintree-sidebar));
+background: var(--dock-bg, var(--color-surface-sidebar));
 border-top: 1px solid var(--dock-border);
 box-shadow: var(--dock-shadow);
 ```
@@ -471,7 +471,7 @@ The settings dialog is split into two panes:
 |--------|                                  |
 | Panel  |  Each card uses:                 |
 | Wktree |  bg: settings-card-bg            |
-| Toolbar|  border: 1px daintree-border       |
+| Toolbar|  border: 1px border-default       |
 | Environ|  rounded corners                 |
 |--------|                                  |
 | CLI    |                                  |

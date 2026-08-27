@@ -131,7 +131,9 @@ describe("buildReport", () => {
     // Black at 50% over white is #808080, which is exactly text-secondary in the
     // fixture — so that band is the one case where swapping is genuinely free,
     // and both floor deltas must come out at zero.
-    const report = buildReport([fixture()]);
+    // The placeholder is pushed off #808080 so secondary is the sole match and
+    // the assertion rests on the numbers rather than on TEXT_ROLES order.
+    const report = buildReport([fixture({ "text-placeholder": "rgba(0, 0, 0, 0.2)" })]);
     const band = report.bands.find((b) => b.step === 50)!;
     expect(band.nearestRole).toBe("text-secondary");
     expect(band.lcFloorDelta).toBeCloseTo(0, 5);
