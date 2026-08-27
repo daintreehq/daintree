@@ -343,9 +343,18 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
     void projectClient.cancelClone();
   };
 
+  /**
+   * Complete mode's one action is `finalizeSuccess`, and that bails without a
+   * `clonedPath`. Since this mode withdraws Escape, the backdrop and the header
+   * X, a missing path would otherwise leave the user holding a dialog with no
+   * working way out at all — so the withdrawal is gated on the forward action
+   * actually being able to fire.
+   */
+  const canFinalize = isComplete && clonedPath !== null;
+
   const handleClose = () => {
     if (isCloning) return;
-    if (isComplete) {
+    if (canFinalize) {
       finalizeSuccess();
     } else {
       onCancel();
@@ -501,7 +510,11 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
       isOpen={isOpen}
       onClose={handleClose}
       size="md"
-      dismissible={!isCloning}
+      // Complete is deliberately not dismissible. Escape, the backdrop and the
+      // header X all route to `handleClose`, which in this mode opens the
+      // project — so leaving them live would dress the forward action up as a
+      // dismissal. The mode has one action and it is labelled.
+      dismissible={!isCloning && !canFinalize}
       initialFocus="none"
     >
       <AppDialog.Header>
@@ -510,7 +523,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
         <AppDialog.Title icon={<FolderGit2 className="h-5 w-5 text-text-secondary" />}>
           Clone repository
         </AppDialog.Title>
-        {!isCloning && <AppDialog.CloseButton />}
+        {!isCloning && !canFinalize && <AppDialog.CloseButton />}
       </AppDialog.Header>
 
       <AppDialog.Body className="space-y-5">
@@ -526,9 +539,11 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
             </div>
             <div className="space-y-1">
               <h3 className="text-base font-semibold text-daintree-text">Repository cloned</h3>
+              {/* Says what is about to happen, not merely what is possible:
+                  this mode opens the project on its own two seconds later. */}
               <p className="text-sm text-daintree-text/60">
-                <span aria-hidden="true">{effectiveEmoji} </span>
-                {trimmedFolderName} is ready to open
+                Opening <span aria-hidden="true">{effectiveEmoji} </span>
+                {trimmedFolderName}…
               </p>
             </div>
             {clonedPath !== null && <PathCaption path={clonedPath} className="max-w-full" />}

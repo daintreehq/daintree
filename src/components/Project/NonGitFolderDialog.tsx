@@ -77,7 +77,8 @@ export function NonGitFolderDialog({
         <p className="text-sm text-daintree-text/70">
           This folder isn&rsquo;t a git repository. Open it as-is and terminals, agents, recipes,
           and the file browser all work — worktrees, review, and diffs stay unavailable until it
-          becomes a repository. Nothing in the folder is changed either way.
+          becomes a repository, and nothing in the folder is touched. Setting up a repository writes
+          into it: you&rsquo;ll see exactly what before it runs.
         </p>
       </AppDialog.Body>
 
