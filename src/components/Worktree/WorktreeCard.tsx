@@ -860,6 +860,10 @@ export function WorktreeCard({
               "before:absolute before:right-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-l before:bg-daintree-accent before:content-['']",
             isBeingDeleted && !deleteError && "opacity-50 pointer-events-none"
           )}
+          // sidebar.css scopes the card's plane, gutter and hover states to
+          // this — the class alone is on both variants, and that file is
+          // unlayered, so an unscoped rule silently repaints the grid card.
+          data-variant={variant}
           data-active={isActive && variant === "sidebar" ? "true" : undefined}
           data-has-grip={variant === "sidebar" && hasRowDragHandle ? "true" : undefined}
           data-hoverable={!isActive && variant === "sidebar" ? "true" : undefined}

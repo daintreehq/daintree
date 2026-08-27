@@ -177,7 +177,14 @@ function TerminalRow({ term, onClick }: TerminalRowProps) {
 
 export interface WorktreeTerminalSectionProps {
   worktreeId: string;
-  /** Opens the panel palette for this worktree. Drives the empty tray's row. */
+  /**
+   * Opens the panel palette for this worktree. Drives the empty tray's row —
+   * and the empty tray does not render without it. The tray presents itself as
+   * a `Start a session` button, so a caller that cannot start a session gets
+   * no tray rather than a focusable control that silently does nothing.
+   * `DeletedWorktreeCard` is that caller: its worktree's directory is gone, so
+   * there is nothing to start a session in.
+   */
   onStartSession?: () => void;
   /** See {@link WorktreeDetailsSectionProps.variant} — same reasoning. */
   variant?: "sidebar" | "grid";
@@ -398,7 +405,8 @@ export function WorktreeTerminalSection({
      which is also the one thing this row is positioned to offer. Quiet at
      rest, so it reads as a footer and not as a call to action. */
   if (!showMetaFooter) {
-    if (!isSidebar) return null;
+    // No tray without somewhere for its row to go: see `onStartSession`.
+    if (!isSidebar || !onStartSession) return null;
     return (
       <div id={terminalsId} className={DISCLOSURE_WELL}>
         <button

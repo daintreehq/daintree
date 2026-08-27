@@ -12,8 +12,15 @@
    above the canvas — and the light themes here already proved the model.
 
    Shadow fallback must stay `0 0 #0000`, never `none` — it is the card's
-   resting material and the property is animated. */
-.sidebar-worktree-card {
+   resting material and the property is animated.
+
+   Scoped to `[data-variant="sidebar"]`: the same class is on the grid card the
+   overview modal renders, which owns its own surface (`bg-overlay-subtle`
+   inside a `rounded-lg` divider cell). This file is unlayered, so anything
+   declared here beats that card's utilities — the lift would double up and the
+   gutter below would paint an opaque band just inside the cell's own border,
+   leaving one edge that doesn't match the other three. */
+.sidebar-worktree-card[data-variant="sidebar"] {
   background: var(--sidebar-card-bg, rgba(255, 255, 255, 0.03));
   box-shadow: var(--sidebar-card-shadow, 0 0 #0000);
 

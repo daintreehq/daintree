@@ -177,10 +177,14 @@ export function WorktreeSidebarSearchBar({
       className={cn(
         // px-3 matches the header above and the status line below, so the whole
         // control zone sits on one 12px inset instead of three (#11991).
-        // No top padding: the header's py-3 already sets the 12px above the
-        // field. pb-3 matches it below, so the rule under the rail lands on
-        // the same rhythm the title sits on.
+        // No top padding in the sidebar: the header's py-3 already sets the
+        // 12px above the field. pb-3 matches it below, so the rule under the
+        // rail lands on the same rhythm the title sits on. The modal's header
+        // has no such trailing padding — it ends on its own border — so that
+        // variant supplies the inset itself rather than sitting flush against
+        // the rule above it.
         "px-3 pb-3 border-b border-divider shrink-0",
+        variant === "modal" && "pt-3",
         variant === "sidebar" && "worktree-filter-bar"
       )}
     >

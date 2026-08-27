@@ -126,7 +126,7 @@ function renderTerminals(
         counts={{ total, byState: {} } as never}
         terminals={total === 0 ? [] : [terminal]}
         onToggle={noop}
-        onStartSession={overrides.onStartSession}
+        onStartSession={"onStartSession" in overrides ? overrides.onStartSession : noop}
         onTerminalSelect={noop}
       />
     </TooltipProvider>
@@ -184,6 +184,19 @@ describe("sidebar session well", () => {
     expect(control, "the empty tray offers an action, so it must be a control").toBeTruthy();
     control!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
     expect(onStartSession).toHaveBeenCalledTimes(1);
+    unmount();
+  });
+
+  it("drops the empty tray when the caller has no session to start", () => {
+    // The tray IS a `Start a session` button, so a caller that cannot start
+    // one (DeletedWorktreeCard — the worktree's directory is gone) must get no
+    // tray rather than a focusable control that does nothing.
+    const { container, unmount } = renderTerminals({
+      variant: "sidebar",
+      total: 0,
+      onStartSession: undefined,
+    });
+    expect(container.firstElementChild, "empty tray rendered with no action behind it").toBeNull();
     unmount();
   });
 

@@ -121,9 +121,19 @@ describe("Worktree list keyboard grid — issue #6422 / virtualized rewrite", ()
       expect(cardSource).toContain("hover:bg-overlay-soft");
     });
 
-    it("keeps motion-reduce:transition-none on the drag handle for WCAG reduced-motion", async () => {
-      const cardSource = await fs.readFile(WORKTREE_CARD_PATH, "utf-8");
-      expect(cardSource).toContain("motion-reduce:transition-none");
+    it("kills the drag handle's transition under reduced motion", async () => {
+      // Asserted against the CSS, not a `motion-reduce:transition-none`
+      // utility on the card. The grip's transition lives in the unlayered
+      // `[data-worktree-row-drag-handle]` rule below, which beats any layered
+      // utility on the same element no matter its specificity — so a test
+      // looking for that class would pass while the transition still ran. The
+      // `@variant reduce-motion` block in the same file is the real guarantee.
+      const cssSource = await fs.readFile(SIDEBAR_CSS_PATH, "utf-8");
+      const block = cssSource.match(
+        /@variant reduce-motion\s*{\s*\[data-worktree-row-drag-handle\]\s*{([^}]*)}/
+      );
+      expect(block, "no reduce-motion block for [data-worktree-row-drag-handle]").toBeTruthy();
+      expect(block![1]).toMatch(/transition:\s*none/);
     });
   });
 

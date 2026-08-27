@@ -24,14 +24,20 @@
 export const SECTION_LABEL = "text-[11px] font-medium text-text-secondary";
 
 /**
- * A sidebar disclosure row — the collapsed Details trigger, the collapsed
- * sessions trigger, and the trigger at the top of an expanded well.
+ * The geometry of a sidebar disclosure row — the collapsed Details trigger,
+ * the collapsed sessions trigger, and the trigger at the top of an expanded
+ * well — without `w-full` or the flex reset.
  *
- * One class for all of them, because they are peers and the only way peers
- * stay aligned is by sharing their geometry rather than each being tuned to
- * look right on its own. Earlier these differed: Details was a chip with a 4px
- * negative margin and 4px padding, sessions was a row with 12px padding, and
- * their chevrons landed on different pixels one above the other.
+ * One set of values for all of them, because they are peers and the only way
+ * peers stay aligned is by sharing their geometry rather than each being tuned
+ * to look right on its own. Earlier these differed: Details was a chip with a
+ * 4px negative margin and 4px padding, sessions was a row with 12px padding,
+ * and their chevrons landed on different pixels one above the other.
+ *
+ * It is split out from `SECTION_ROW` because the collapsed Details row cannot
+ * use that one — it is a `flex-1` sibling of a trailing button group rather
+ * than a full-width row — so it composes this instead. The two used to carry
+ * the same values written out twice, and they drifted.
  *
  * `border border-transparent` is not decoration. When this row sits inside a
  * well its content is offset by the well's 1px border; when it sits on the
@@ -44,26 +50,22 @@ export const SECTION_LABEL = "text-[11px] font-medium text-text-secondary";
  * line and the commit row, against 6-14px everywhere else in the card.
  *
  * The horizontal padding is deliberately asymmetric — 6px leading, 10px
- * trailing. What
- * leads these rows is a chevron or a plus, and a glyph carries its own
- * whitespace inside its box: padded to match the trailing edge it measures
- * equal but reads over-indented, and the label after it drifts visibly away
- * from the title and branch lines above. What trails is text or a timestamp,
- * which has no such bearing and does want the full inset. Optical alignment,
- * not metric alignment; the icon is an indicator for the row, not its
- * subject.
- */
-/**
- * The row's box on its own, without `w-full` or the flex reset. The collapsed
- * Details row cannot use `SECTION_ROW` — it is a `flex-1` sibling of a trailing
- * button group rather than a full-width row — so it composes this instead. The
- * two used to carry the same values written out twice, and they drifted: this
- * exists so a change to the row's geometry cannot land on one and miss the
- * other.
+ * trailing. What leads these rows is a chevron or a plus, and a glyph carries
+ * its own whitespace inside its box: padded to match the trailing edge it
+ * measures equal but reads over-indented, and the label after it drifts
+ * visibly away from the title and branch lines above. What trails is text or a
+ * timestamp, which has no such bearing and does want the full inset. Optical
+ * alignment, not metric alignment; the icon is an indicator for the row, not
+ * its subject.
  */
 export const SECTION_ROW_BOX =
   "rounded-[var(--radius-lg)] border border-transparent py-1 pl-1.5 pr-2.5";
 
+/**
+ * The full-width disclosure row: `SECTION_ROW_BOX` plus the width and the flex
+ * reset a `<button>` needs to lay its contents out as a row. Everything a row
+ * that isn't full-width shares with this one lives in the box.
+ */
 export const SECTION_ROW = `worktree-section-button flex w-full items-center text-left ${SECTION_ROW_BOX}`;
 
 /**
