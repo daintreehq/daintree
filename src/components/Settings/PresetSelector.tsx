@@ -253,6 +253,7 @@ function PresetOption({
       className={cn(
         "flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-sm)] cursor-pointer text-sm",
         "hover:bg-overlay-soft focus:bg-overlay-soft focus:outline-hidden",
+        "focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]",
         isSelected && "text-daintree-text font-medium bg-overlay-selected"
       )}
     >

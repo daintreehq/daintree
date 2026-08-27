@@ -241,6 +241,7 @@ export function ColorSchemePicker() {
                     onBlur={handlePreviewLeave}
                     className={cn(
                       "flex flex-col gap-1.5 p-2 rounded-[var(--radius-md)] border transition-colors text-left",
+                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
                       "[&>*]:pointer-events-none",
                       isSelected
                         ? "border-border-strong bg-overlay-selected"
