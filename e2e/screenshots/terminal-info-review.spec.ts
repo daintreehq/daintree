@@ -336,51 +336,6 @@ async function snap(
 }
 
 /**
- * Capture a surface that can legitimately land in more than one state, and record which.
- *
- * Same hard rule as `snap` — nothing is written until a state is proven on screen — but
- * the caller names the states it will accept instead of the one it expects. The reached
- * state is appended to the filename, so the artifact carries its own label and a review
- * can never mistake an error shot for a populated one.
- */
-async function snapEither(
-  page: Page,
-  slug: string,
-  opts: { locator?: string } & Record<string, string>
-): Promise<string> {
-  const { locator, ...states } = opts;
-  const deadline = Date.now() + 15_000;
-  let reached: string | null = null;
-  while (Date.now() < deadline && !reached) {
-    for (const [name, selector] of Object.entries(states)) {
-      if (
-        await page
-          .locator(selector)
-          .first()
-          .isVisible()
-          .catch(() => false)
-      ) {
-        reached = name;
-        break;
-      }
-    }
-    if (!reached) await page.waitForTimeout(250);
-  }
-  if (!reached) {
-    const text = await page
-      .locator(DIALOG)
-      .innerText()
-      .catch(() => "<dialog not rendered>");
-    throw new Error(
-      `[terminfo-shots] "${slug}": none of [${Object.keys(states).join(", ")}] appeared. ` +
-        `Dialog read: ${text.slice(0, 300).replace(/\s+/g, " ")}`
-    );
-  }
-  await snap(page, `${slug}-${reached}`, { marker: states[reached]!, locator });
-  return reached;
-}
-
-/**
  * Every built-in theme. Switching themes in place reloads the renderer (see
  * `setAppTheme`), which destroys every terminal this harness spent a minute spawning,
  * so a cross-theme sweep boots once per theme:
@@ -564,21 +519,16 @@ test("terminal info review — diagnostic states", async () => {
 
     // 7. Plain shell that exited non-zero — the only route to the Exit Code row.
     //
-    // Captured through `snapEither` rather than `snap`, because which state this
-    // reaches is itself the question. `handleTerminalGetInfo` resolves through
-    // `ptyClient.getTerminalInfo`, which has nothing to return once the PTY record is
-    // gone, so a panel Daintree deliberately PRESERVES for debugging can answer its own
-    // info request with "Terminal <id> not found". Asserting the body here would fail
-    // the step and hide that; asserting the error would bless it. Prove whichever it is
-    // and name the file for it.
+    //    This step used to ask "body or error?" via `snapEither`, because a preserved
+    //    non-zero shell answered its own info request with nothing but
+    //    "Terminal <id> not found". That question is settled: the body renders from the
+    //    panel store whatever the host says. So assert BOTH — the inspector is present
+    //    AND the degradation is disclosed — which is the contract that replaced it.
     await step("exited-plain", async () => {
       await openInfo(page, ids.exitedPlain);
-      const reached = await snapEither(page, "31-exited-plain", {
-        body: TID.body,
-        error: TID.error,
-        locator: DIALOG,
-      });
-      console.log(`[terminfo-shots] exited-plain reached the "${reached}" state`);
+      await page.locator(TID.body).first().waitFor({ state: "visible", timeout: 10_000 });
+      await page.locator(TID.error).first().waitFor({ state: "visible", timeout: 10_000 });
+      await snap(page, "31-exited-plain", { marker: TID.body, locator: DIALOG });
     });
 
     // 8. Load failure through the real error path, on the real channel.
