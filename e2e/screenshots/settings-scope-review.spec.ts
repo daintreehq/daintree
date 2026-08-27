@@ -350,7 +350,7 @@ const STATES: ScopeState[] = [
     // Project settings failed to load.
     slug: "12-project-load-error",
     target: { tab: "project:general" },
-    expectText: ["Failed to load settings"],
+    expectText: ["Couldn't load settings"],
     // Same reason as 11: the store caches per project and never refetches for the
     // dialog, so the failure has to happen on the boot read.
     needsRendererReload: true,

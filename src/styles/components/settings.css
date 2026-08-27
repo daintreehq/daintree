@@ -83,13 +83,17 @@
    inset ring and the 2px accent marker are all dropped, leaving every section row
    identical and no way to tell which one you are looking at. */
 @media (forced-colors: active) {
+  /* Border, not fill. A `Highlight` background makes Chromium paint a Canvas backplate
+     behind the label, which comes out as a solid white block where the text should be —
+     verified in the capture harness. An outline-weight border says "selected" without
+     putting text on a system-coloured ground. */
   .settings-nav-item[data-active="true"] {
-    background: Highlight;
-    color: HighlightText;
+    border: 2px solid Highlight;
   }
 
   .settings-scope-control [data-slot="segmented-thumb"] {
-    background: Highlight;
+    background: Canvas;
+    border: 2px solid Highlight;
   }
 }
 

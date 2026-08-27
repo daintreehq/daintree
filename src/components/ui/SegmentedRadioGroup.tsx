@@ -123,9 +123,10 @@ export function SegmentedRadioGroup<T extends string>({
           className={cn(
             "absolute top-0.5 bottom-0.5 left-0 z-0 rounded-[var(--radius-sm)] pointer-events-none",
             "bg-surface-panel-elevated border border-border-default shadow-[var(--theme-shadow-ambient)]",
-            // forced-colors discards the fill and the ambient shadow, so the thumb has
-            // to say "selected" with a system-coloured border it cannot drop.
-            "forced-colors:border-[Highlight] forced-colors:bg-[Highlight]",
+            // forced-colors discards the fill and the ambient shadow, so the thumb says
+            // "selected" with a system-coloured border. Not a Highlight *fill*: that
+            // makes Chromium paint a backplate behind the label and the text vanishes.
+            "forced-colors:border-[Highlight]",
             // Only the thumb's own geometry animates, and reduced motion drops
             // it entirely rather than shortening it.
             !skipMotion && "transition-[translate,width] duration-150 ease-out",
@@ -157,9 +158,7 @@ export function SegmentedRadioGroup<T extends string>({
               "transition-colors duration-150 ease-out",
               "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1",
               "disabled:cursor-not-allowed disabled:pointer-events-none",
-              isActive
-                ? "text-daintree-text forced-colors:text-[HighlightText]"
-                : "text-text-secondary hover:text-daintree-text",
+              isActive ? "text-daintree-text" : "text-text-secondary hover:text-daintree-text",
               disabled && "opacity-40"
             )}
           >
