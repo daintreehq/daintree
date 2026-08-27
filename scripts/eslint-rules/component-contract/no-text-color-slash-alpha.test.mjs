@@ -25,6 +25,22 @@ describe("no-text-color-slash-alpha", () => {
         code: 'const a = <div className="text-[11px]/4" />;',
       },
       {
+        name: "a text-shadow alpha is a shadow modifier, not the glyph colour",
+        code: 'const a = <div className="text-shadow-sm/50" />;',
+      },
+      {
+        name: "the shorthand with a calc size",
+        code: 'const a = <div className="text-[calc(1rem+1px)]/4" />;',
+      },
+      {
+        name: "the shorthand with an explicit length hint",
+        code: 'const a = <div className="text-(length:--label-size)/4" />;',
+      },
+      {
+        name: "the shorthand on a custom step the doc tells you to add",
+        code: 'const a = <div className="text-2xs/4" />;',
+      },
+      {
         name: "a bare size utility with no slash",
         code: 'const a = <div className="text-xs text-center" />;',
       },
@@ -54,6 +70,11 @@ describe("no-text-color-slash-alpha", () => {
         name: "alpha on an arbitrary colour value",
         code: 'const a = <div className="text-[var(--color-state-active)]/70" />;',
         errors: [{ messageId: "slashAlpha" }],
+      },
+      {
+        name: "alpha on the paren custom-property shorthand",
+        code: 'const a = <div className="text-(--brand-fg)/50" />;',
+        errors: [{ messageId: "slashAlpha", data: { token: "text-(--brand-fg)/50" } }],
       },
       {
         name: "an arbitrary alpha value",

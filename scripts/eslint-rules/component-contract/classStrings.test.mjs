@@ -2,7 +2,7 @@ import { describe, expect, it } from "vitest";
 
 import { normalizeToken, splitVariants } from "./classStrings.js";
 import rule from "./no-raw-radius.js";
-import { createRuleTester } from "./testHarness.mjs";
+import { createRuleTester, createTsRuleTester } from "./testHarness.mjs";
 
 describe("splitVariants", () => {
   it("returns the whole token when there is no variant", () => {
@@ -55,7 +55,25 @@ describe("class-string extraction", () => {
     valid: [
       {
         name: "a token split across an interpolation is not a token",
-        code: "const a = `rounded${suffix} p-2`;",
+        code: "const a = <div className={`rounded${suffix} p-2`} />;",
+      },
+      {
+        name: "an interpolated literal that abuts text is a fragment, not a class",
+        code: 'const a = <div className={`${"rounded"}-lg`} />;',
+      },
+      {
+        name: "a cva option label is not a class",
+        code: `const v = cva("", {
+          variants: { shape: { rounded: "rounded-lg", square: "rounded-none" } },
+          defaultVariants: { shape: "rounded" },
+        });`,
+      },
+      {
+        name: "a compound-variant selector is not a class",
+        code: `const v = cva("", {
+          variants: { shape: { rounded: "rounded-lg" } },
+          compoundVariants: [{ shape: "rounded", class: "rounded-md" }],
+        });`,
       },
       {
         name: "class strings outside a className or class helper are out of scope",
@@ -100,6 +118,57 @@ describe("class-string extraction", () => {
       {
         name: "a complete token in a template literal quasi",
         code: "const a = <div className={`rounded ${extra}`} />;",
+        errors: [{ messageId: "unnamedStep" }],
+      },
+      {
+        name: "an escaped newline separates tokens the way runtime whitespace does",
+        code: "const a = <div className={`rounded\\np-2`} />;",
+        errors: [{ messageId: "unnamedStep" }],
+      },
+      {
+        name: "a class-string constant is a root of its own",
+        code: 'const SECTION_HEADER_CLASS = "px-3 rounded";',
+        errors: [{ messageId: "unnamedStep" }],
+      },
+      {
+        name: "a conventionally named class prop is a root",
+        code: 'const a = <Chip textClassName="rounded" />;',
+        errors: [{ messageId: "unnamedStep" }],
+      },
+      {
+        name: "a helper the root could not reach is still walked",
+        code: 'const a = <div className={cn(items.map(() => cn("rounded")))} />;',
+        errors: [{ messageId: "unnamedStep" }],
+      },
+      {
+        name: "a quoted delimiter inside an arbitrary variant does not hide the utility",
+        code: `const a = <div className="[&[data-x='(']]:rounded" />;`,
+        errors: [{ messageId: "unnamedStep" }],
+      },
+    ],
+  });
+});
+
+// The production parser is typescript-eslint; these shapes do not exist in Espree.
+describe("class-string extraction under the TypeScript parser", () => {
+  const ruleTester = createTsRuleTester();
+
+  ruleTester.run("extraction (via no-raw-radius)", rule, {
+    valid: [],
+    invalid: [
+      {
+        name: "a cast does not hide the helper call",
+        code: 'const a = <div className={cn("rounded") as string} />;',
+        errors: [{ messageId: "unnamedStep" }],
+      },
+      {
+        name: "a non-null assertion does not hide the class string",
+        code: 'const a = <div className={cn("rounded"!)} />;',
+        errors: [{ messageId: "unnamedStep" }],
+      },
+      {
+        name: "a satisfies expression does not hide the class string",
+        code: 'const a = <div className={cn("rounded" satisfies string)} />;',
         errors: [{ messageId: "unnamedStep" }],
       },
     ],

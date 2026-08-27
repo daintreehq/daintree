@@ -29,6 +29,14 @@ describe("no-arbitrary-text-size", () => {
         code: 'const a = <div className="text-[color:var(--x)] text-[color-mix(in_oklab,red,blue)]" />;',
       },
       {
+        name: "the paren shorthand for a custom-property colour",
+        code: 'const a = <div className="text-(--brand-fg)" />;',
+      },
+      {
+        name: "a text-shadow utility is not a font size",
+        code: 'const a = <div className="text-shadow-sm" />;',
+      },
+      {
         name: "a non-size text utility",
         code: 'const a = <div className="text-center text-balance" />;',
       },
@@ -53,6 +61,26 @@ describe("no-arbitrary-text-size", () => {
         name: "the size half of a size / leading shorthand",
         code: 'const a = <div className="text-[10px]/3" />;',
         errors: [{ messageId: "arbitrarySize", data: { token: "text-[10px]/3" } }],
+      },
+      {
+        name: "the paren shorthand with an explicit length hint",
+        code: 'const a = <div className="text-(length:--label-size)" />;',
+        errors: [{ messageId: "arbitrarySize", data: { token: "text-(length:--label-size)" } }],
+      },
+      {
+        name: "an arbitrary size computed with calc",
+        code: 'const a = <div className="text-[calc(1rem+1px)]" />;',
+        errors: [{ messageId: "arbitrarySize", data: { token: "text-[calc(1rem+1px)]" } }],
+      },
+      {
+        name: "an arbitrary size in container units",
+        code: 'const a = <div className="text-[1cqi]" />;',
+        errors: [{ messageId: "arbitrarySize" }],
+      },
+      {
+        name: "an arbitrary size given as a CSS size keyword",
+        code: 'const a = <div className="text-[small]" />;',
+        errors: [{ messageId: "arbitrarySize" }],
       },
       {
         name: "a variant-prefixed arbitrary size",

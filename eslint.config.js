@@ -1137,12 +1137,14 @@ export default tseslint.config(
   // the current colour vocabulary, solid text tokens, the type and radius
   // scales, and a replacement wherever a focus outline is suppressed. All five
   // are `warn` because each has thousands of pre-existing uses; lint-ratchet.mjs
-  // grandfathers today's counts per rule and fails any increase. Test files are
-  // excluded — the class strings in src/config/__tests__/*.contract.test.ts are
-  // deliberate violations used as fixtures. See #12029.
+  // grandfathers today's counts per rule and fails any increase. Builtin plugin
+  // renderers are in scope: they paint real product UI out of the same tokens.
+  // Test files are excluded — the class strings in
+  // src/config/__tests__/*.contract.test.ts are deliberate violations used as
+  // fixtures. See #12029.
   {
-    files: ["src/**/*.{ts,tsx}"],
-    ignores: ["src/**/__tests__/**", "src/**/*.{test,spec}.{ts,tsx}"],
+    files: ["src/**/*.{ts,tsx}", "plugins/builtin/*/renderer/**/*.{ts,tsx}"],
+    ignores: ["**/__tests__/**", "**/*.{test,spec}.{ts,tsx}"],
     plugins: { "component-contract": componentContract },
     rules: {
       "component-contract/no-legacy-daintree-utilities": "warn",

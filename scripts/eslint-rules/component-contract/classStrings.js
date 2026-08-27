@@ -7,9 +7,12 @@
  * `cn()` constants in `src/components/ui/paletteRowStyles.ts`, and helpers in
  * plain `.ts` modules.
  *
- * Roots are `className`/`class` JSX attributes and calls to the class-merge
- * helpers. A root nested inside another root is skipped so a `className={cn(…)}`
- * is not walked twice and every token reported twice.
+ * Roots are `className`/`class`/`*ClassName` JSX attributes, calls to the
+ * class-merge helpers, and `const`s whose name marks them as class strings.
+ * Every helper call a root already walked is remembered, so a nested
+ * `className={cn(…)}` is neither walked twice nor — as an ancestor test would
+ * have it — skipped when the root could not reach it (a call inside a callback,
+ * say).
  *
  * Deliberately NOT every string literal in the file: CSS selector strings and
  * the class-string fixtures in `src/config/__tests__/*.contract.test.ts` (which
@@ -17,6 +20,28 @@
  */
 
 const CLASS_HELPERS = new Set(["cn", "clsx", "classnames", "cx", "twMerge", "cva", "tv"]);
+
+/** Helpers whose second argument is a variant table rather than more classes. */
+const VARIANT_TABLE_HELPERS = new Set(["cva", "tv"]);
+
+/** `FOO_CLASS`, `rowClasses`, `paletteRowStyles` — conventional class-string constants. */
+const CLASS_CONSTANT_NAME = /(?:CLASS(?:ES)?|Class(?:Name)?s?|Styles)$/;
+
+/** Wrappers that carry no runtime meaning and must not hide the expression inside. */
+const TRANSPARENT = new Set([
+  "TSAsExpression",
+  "TSSatisfiesExpression",
+  "TSNonNullExpression",
+  "TSTypeAssertion",
+  "TSInstantiationExpression",
+  "ParenthesizedExpression",
+]);
+
+function unwrap(node) {
+  let current = node;
+  while (current && TRANSPARENT.has(current.type)) current = current.expression;
+  return current;
+}
 
 function helperName(callee) {
   if (callee.type === "Identifier") return callee.name;
@@ -32,26 +57,75 @@ function isClassHelperCall(node) {
 
 function isClassAttribute(node) {
   if (node.type !== "JSXAttribute" || node.name?.type !== "JSXIdentifier") return false;
-  return node.name.name === "className" || node.name.name === "class";
+  const { name } = node.name;
+  return name === "className" || name === "class" || name.endsWith("ClassName");
 }
 
 /**
- * Split a class token into its variant chain and the base utility, tolerating
- * the colons inside arbitrary variants (`data-[state=open]:`) and arbitrary
- * values (`text-[color:var(--x)]`) — only a colon at bracket depth zero
- * separates a variant from what follows.
+ * Walk a Tailwind candidate, returning the index of each top-level delimiter.
+ * Quoted sections and escapes are skipped and every bracket flavour shares one
+ * stack, so `[&[data-x='(']]:rounded` splits at the colon Tailwind splits at.
+ * Unmatched closers cannot drive the depth negative and desync the rest.
  */
-export function splitVariants(token) {
-  let depth = 0;
-  let lastColon = -1;
+function topLevelIndexes(token, delimiter) {
+  const indexes = [];
+  const stack = [];
+  let quote = null;
   for (let i = 0; i < token.length; i++) {
     const ch = token[i];
-    if (ch === "[" || ch === "(") depth++;
-    else if (ch === "]" || ch === ")") depth--;
-    else if (ch === ":" && depth === 0) lastColon = i;
+    if (ch === "\\") {
+      i++;
+      continue;
+    }
+    if (quote) {
+      if (ch === quote) quote = null;
+      continue;
+    }
+    if (ch === '"' || ch === "'") {
+      quote = ch;
+      continue;
+    }
+    if (ch === "[" || ch === "(" || ch === "{") {
+      stack.push(ch);
+      continue;
+    }
+    if (ch === "]" || ch === ")" || ch === "}") {
+      if (stack.length > 0) stack.pop();
+      continue;
+    }
+    if (ch === delimiter && stack.length === 0) indexes.push(i);
   }
-  if (lastColon === -1) return { variants: "", base: token };
-  return { variants: token.slice(0, lastColon), base: token.slice(lastColon + 1) };
+  return indexes;
+}
+
+/** Split a class token into its variant chain and the base utility. */
+export function splitVariants(token) {
+  const colons = topLevelIndexes(token, ":");
+  if (colons.length === 0) return { variants: "", base: token };
+  const last = colons[colons.length - 1];
+  return { variants: token.slice(0, last), base: token.slice(last + 1) };
+}
+
+/** The individual variants in a chain, e.g. `dark:focus-visible` → ["dark", "focus-visible"]. */
+export function variantSegments(variants) {
+  if (!variants) return [];
+  const colons = topLevelIndexes(variants, ":");
+  const segments = [];
+  let start = 0;
+  for (const index of colons) {
+    segments.push(variants.slice(start, index));
+    start = index + 1;
+  }
+  segments.push(variants.slice(start));
+  return segments.filter(Boolean);
+}
+
+/** Split off a trailing top-level `/modifier` (an alpha, or a line height). */
+export function splitModifier(value) {
+  const slashes = topLevelIndexes(value, "/");
+  if (slashes.length === 0) return null;
+  const last = slashes[slashes.length - 1];
+  return { value: value.slice(0, last), modifier: value.slice(last + 1) };
 }
 
 /** Variant chain plus the base utility with v4's `!important` marker stripped from either end. */
@@ -63,7 +137,8 @@ export function normalizeToken(token) {
 /**
  * Whitespace-separated tokens from one template-literal quasi, dropping the
  * fragments that abut an interpolation. Without this, `` `rounded${suffix}` ``
- * yields a bare `rounded` that no author ever wrote.
+ * yields a bare `rounded` that no author ever wrote. `cooked` is used so an
+ * escaped newline reads as the whitespace it becomes at runtime.
  */
 function completeTokens(raw, continuesFromExpression, continuesIntoExpression) {
   const tokens = [];
@@ -77,6 +152,9 @@ function completeTokens(raw, continuesFromExpression, continuesIntoExpression) {
   return tokens;
 }
 
+const isBlankEdge = (text, side) =>
+  text.length === 0 || /\s/.test(side === "end" ? text[text.length - 1] : text[0]);
+
 /**
  * Build a visitor that hands every class-string root to `onEntries` as a flat
  * `{ token, node }[]` gathered across every branch, argument and object member.
@@ -87,43 +165,99 @@ function completeTokens(raw, continuesFromExpression, continuesIntoExpression) {
  * replacement are routinely in different `cn()` arguments.
  */
 export function createClassExpressionVisitor(context, onEntries) {
-  const sourceCode = context.sourceCode;
+  const walkedCalls = new WeakSet();
 
-  function collect(node, entries) {
-    if (!node) return;
-    switch (node.type) {
-      case "Literal":
-        if (typeof node.value === "string") {
-          for (const token of node.value.split(/\s+/)) {
-            if (token) entries.push({ token, node });
+  function pushString(value, node, entries) {
+    for (const token of value.split(/\s+/)) {
+      if (token) entries.push({ token, node });
+    }
+  }
+
+  /**
+   * A `cva()`/`tv()` config. Only class strings are collected: option names live
+   * in the keys and in `defaultVariants`' values, and a `compoundVariants` entry
+   * mixes option selectors with the classes they apply.
+   */
+  function collectVariantConfig(node, entries) {
+    if (node.type !== "ObjectExpression") return collect(node, entries);
+    for (const property of node.properties) {
+      if (property.type !== "Property") continue;
+      const key = property.computed
+        ? null
+        : property.key.type === "Identifier"
+          ? property.key.name
+          : property.key.type === "Literal"
+            ? String(property.key.value)
+            : null;
+      if (key === "defaultVariants") continue;
+      if (key === "compoundVariants") {
+        const list = unwrap(property.value);
+        if (list?.type !== "ArrayExpression") continue;
+        for (const element of list.elements) {
+          const entry = unwrap(element);
+          if (entry?.type !== "ObjectExpression") continue;
+          for (const inner of entry.properties) {
+            if (inner.type !== "Property" || inner.computed) continue;
+            const innerKey = inner.key.type === "Identifier" ? inner.key.name : null;
+            if (innerKey === "class" || innerKey === "className") collect(inner.value, entries);
           }
         }
+        continue;
+      }
+      collectVariantConfig(property.value, entries);
+    }
+  }
+
+  function collect(node, entries) {
+    const current = unwrap(node);
+    if (!current) return;
+    switch (current.type) {
+      case "Literal":
+        if (typeof current.value === "string") pushString(current.value, current, entries);
         break;
       case "TemplateLiteral":
-        node.quasis.forEach((quasi, index) => {
-          const tokens = completeTokens(quasi.value.raw, index > 0, index < node.quasis.length - 1);
+        current.quasis.forEach((quasi, index) => {
+          const text = quasi.value.cooked ?? quasi.value.raw;
+          const tokens = completeTokens(text, index > 0, index < current.quasis.length - 1);
           for (const token of tokens) entries.push({ token, node: quasi });
         });
-        for (const expression of node.expressions) collect(expression, entries);
+        // An interpolation that abuts non-whitespace is a fragment of a
+        // neighbouring token (`${"rounded"}-lg`), not a class list of its own.
+        current.expressions.forEach((expression, index) => {
+          const before = current.quasis[index].value.cooked ?? current.quasis[index].value.raw;
+          const after =
+            current.quasis[index + 1].value.cooked ?? current.quasis[index + 1].value.raw;
+          if (!isBlankEdge(before, "end") || !isBlankEdge(after, "start")) return;
+          collect(expression, entries);
+        });
         break;
       case "ConditionalExpression":
-        collect(node.consequent, entries);
-        collect(node.alternate, entries);
+        collect(current.consequent, entries);
+        collect(current.alternate, entries);
         break;
       case "LogicalExpression":
-        collect(node.left, entries);
-        collect(node.right, entries);
+        collect(current.left, entries);
+        collect(current.right, entries);
         break;
-      case "CallExpression":
-        for (const argument of node.arguments) collect(argument, entries);
+      case "CallExpression": {
+        walkedCalls.add(current);
+        const name = helperName(current.callee) ?? "";
+        if (VARIANT_TABLE_HELPERS.has(name)) {
+          collect(current.arguments[0], entries);
+          for (const argument of current.arguments.slice(1)) {
+            collectVariantConfig(argument, entries);
+          }
+          break;
+        }
+        for (const argument of current.arguments) collect(argument, entries);
         break;
+      }
       case "ArrayExpression":
-        for (const element of node.elements) collect(element, entries);
+        for (const element of current.elements) collect(element, entries);
         break;
       case "ObjectExpression":
-        // Keys carry the classes in the `clsx({ "text-daintree-text": on })`
-        // form; values carry them in a `cva()` variant table. Both are real.
-        for (const property of node.properties) {
+        // The `clsx({ "text-daintree-text": on })` form puts classes in the keys.
+        for (const property of current.properties) {
           if (property.type !== "Property") continue;
           if (!property.computed) {
             const key =
@@ -132,11 +266,7 @@ export function createClassExpressionVisitor(context, onEntries) {
                 : property.key.type === "Identifier"
                   ? property.key.name
                   : null;
-            if (key !== null) {
-              for (const token of key.split(/\s+/)) {
-                if (token) entries.push({ token, node: property.key });
-              }
-            }
+            if (key !== null) pushString(key, property.key, entries);
           }
           collect(property.value, entries);
         }
@@ -144,12 +274,6 @@ export function createClassExpressionVisitor(context, onEntries) {
       default:
         break;
     }
-  }
-
-  function isNestedRoot(node) {
-    return sourceCode
-      .getAncestors(node)
-      .some((ancestor) => isClassAttribute(ancestor) || isClassHelperCall(ancestor));
   }
 
   function report(node) {
@@ -165,8 +289,14 @@ export function createClassExpressionVisitor(context, onEntries) {
       else report(node.value);
     },
 
+    VariableDeclarator(node) {
+      if (node.id.type !== "Identifier" || !node.init) return;
+      if (!CLASS_CONSTANT_NAME.test(node.id.name)) return;
+      report(node.init);
+    },
+
     CallExpression(node) {
-      if (!isClassHelperCall(node) || isNestedRoot(node)) return;
+      if (!isClassHelperCall(node) || walkedCalls.has(node)) return;
       report(node);
     },
   };

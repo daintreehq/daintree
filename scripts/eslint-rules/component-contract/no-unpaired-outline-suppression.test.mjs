@@ -29,7 +29,7 @@ describe("no-unpaired-outline-suppression", () => {
         code: 'const a = <div className={cn("outline-hidden", "focus-visible:outline-2")} />;',
       },
       {
-        name: "the fallback may live in the other arm of a ternary",
+        name: "the whole expression is one scope, matching the contract test",
         code: 'const a = <div className={cn("outline-hidden", on ? "focus:ring-1" : "p-2")} />;',
       },
       {
@@ -57,6 +57,36 @@ describe("no-unpaired-outline-suppression", () => {
         name: "a focus variant that only suppresses again is not a fallback",
         code: 'const a = <div className="outline-hidden focus:outline-none" />;',
         errors: [{ messageId: "unpaired" }, { messageId: "unsafeOutlineNone" }],
+      },
+      {
+        name: "a focus variant that paints nothing visible is not a fallback",
+        code: 'const a = <div className="outline-hidden focus-visible:pointer-events-auto" />;',
+        errors: [{ messageId: "unpaired" }],
+      },
+      {
+        name: "a descendant focus state inside an arbitrary variant is not element-owned",
+        code: 'const a = <div className="outline-hidden group-has-[:focus-visible]:ring-2" />;',
+        errors: [{ messageId: "unpaired" }],
+      },
+      {
+        name: "a data attribute that merely mentions focus is not a focus variant",
+        code: 'const a = <div className="outline-hidden data-[state=focus]:ring-2" />;',
+        errors: [{ messageId: "unpaired" }],
+      },
+      {
+        name: "macro-focus on a parent is not element-owned either",
+        code: 'const a = <div className="outline-hidden group-data-[macro-focus=true]:ring-2" />;',
+        errors: [{ messageId: "unpaired" }],
+      },
+      {
+        name: "a zero-width focus outline paints nothing",
+        code: 'const a = <div className="outline-hidden focus-visible:outline-[0px]" />;',
+        errors: [{ messageId: "unpaired" }],
+      },
+      {
+        name: "outline-0 suppresses just as outline-hidden does",
+        code: 'const a = <div className="outline-0 px-2" />;',
+        errors: [{ messageId: "unpaired", data: { token: "outline-0" } }],
       },
       {
         name: "focus:ring-0 removes rather than paints",

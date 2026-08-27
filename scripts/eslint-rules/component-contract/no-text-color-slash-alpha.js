@@ -22,7 +22,10 @@
  *   - `bg-…/N`, `border-…/N`, `ring-…/N` — surface and edge tinting composite
  *     against a known background; that ladder is the `overlay-*` design, not debt.
  *   - the font-size/line-height shorthand (`text-sm/6`, `text-[11px]/4`), where
- *     the slash separates a leading rather than an alpha.
+ *     the slash separates a leading rather than an alpha. The size test is shared
+ *     with `no-arbitrary-text-size` so the two rules cannot disagree about which
+ *     `text-*` values are sizes.
+ *   - `text-shadow-*`, whose modifier is a shadow alpha, not the glyph colour.
  *
  * Opt out with:
  *   // eslint-disable-next-line component-contract/no-text-color-slash-alpha -- <reason>
@@ -30,28 +33,8 @@
  * See docs/themes/component-contract.md.
  */
 
-import { createClassExpressionVisitor, normalizeToken } from "./classStrings.js";
-
-/** Tailwind's stock type scale — the left side of a size/leading shorthand. */
-const TYPE_SCALE = /^(?:xs|sm|base|lg|xl|[2-9]xl)$/;
-
-/** A bracket holding a bare length, i.e. an arbitrary font size rather than a colour. */
-const ARBITRARY_LENGTH =
-  /^\[(?:length:)?-?(?:\d*\.)?\d+(?:px|rem|em|pt|ch|ex|vw|vh|vmin|vmax|%)\]$/;
-
-/** Split on the last `/` outside brackets, so `text-[url(a/b)]/50` splits once, correctly. */
-function splitAlpha(base) {
-  let depth = 0;
-  let lastSlash = -1;
-  for (let i = 0; i < base.length; i++) {
-    const ch = base[i];
-    if (ch === "[" || ch === "(") depth++;
-    else if (ch === "]" || ch === ")") depth--;
-    else if (ch === "/" && depth === 0) lastSlash = i;
-  }
-  if (lastSlash === -1) return null;
-  return { value: base.slice(0, lastSlash), alpha: base.slice(lastSlash + 1) };
-}
+import { createClassExpressionVisitor, normalizeToken, splitModifier } from "./classStrings.js";
+import { isFontSizeValue } from "./fontSize.js";
 
 export default {
   meta: {
@@ -71,11 +54,11 @@ export default {
     return createClassExpressionVisitor(context, (entries) => {
       for (const { token, node } of entries) {
         const { base } = normalizeToken(token);
-        if (!base.startsWith("text-")) continue;
+        if (!base.startsWith("text-") || base.startsWith("text-shadow-")) continue;
 
-        const split = splitAlpha(base.slice("text-".length));
+        const split = splitModifier(base.slice("text-".length));
         if (!split) continue;
-        if (TYPE_SCALE.test(split.value) || ARBITRARY_LENGTH.test(split.value)) continue;
+        if (isFontSizeValue(split.value)) continue;
 
         context.report({ node, messageId: "slashAlpha", data: { token: base } });
       }

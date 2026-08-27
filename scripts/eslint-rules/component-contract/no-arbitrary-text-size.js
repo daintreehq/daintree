@@ -26,12 +26,8 @@
  * See docs/themes/component-contract.md.
  */
 
-import { createClassExpressionVisitor, normalizeToken } from "./classStrings.js";
-
-const LENGTH = /^-?(?:\d*\.)?\d+(?:px|rem|em|pt|ch|ex|vw|vh|vmin|vmax|%)$/;
-
-/** The `text-[…]` bracket, ignoring any `/leading` suffix that follows it. */
-const ARBITRARY_TEXT = /^text-\[([^\]]*)\](?:\/[^/]*)?$/;
+import { createClassExpressionVisitor, normalizeToken, splitModifier } from "./classStrings.js";
+import { arbitraryBody, isFontSizeValue } from "./fontSize.js";
 
 export default {
   meta: {
@@ -51,12 +47,12 @@ export default {
     return createClassExpressionVisitor(context, (entries) => {
       for (const { token, node } of entries) {
         const { base } = normalizeToken(token);
-        const match = ARBITRARY_TEXT.exec(base);
-        if (!match) continue;
+        if (!base.startsWith("text-") || base.startsWith("text-shadow-")) continue;
 
-        const value = match[1];
-        const isLength = value.startsWith("length:") || LENGTH.test(value);
-        if (!isLength) continue;
+        // A trailing `/…` is the line height on a size, so classify what precedes it.
+        const value =
+          splitModifier(base.slice("text-".length))?.value ?? base.slice("text-".length);
+        if (arbitraryBody(value) === null || !isFontSizeValue(value)) continue;
 
         context.report({ node, messageId: "arbitrarySize", data: { token: base } });
       }

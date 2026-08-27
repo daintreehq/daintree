@@ -76,6 +76,19 @@ describe("no-legacy-daintree-utilities", () => {
         ],
       },
       {
+        name: "a paren opacity modifier is carried through",
+        code: 'const a = <div className="text-daintree-text/(--opacity-muted)" />;',
+        errors: [
+          {
+            messageId: "mapped",
+            data: {
+              token: "text-daintree-text/(--opacity-muted)",
+              replacement: "text-text-primary/(--opacity-muted)",
+            },
+          },
+        ],
+      },
+      {
         name: "an alias with no mapping still reports",
         code: 'const a = <div className="text-daintree-assistant" />;',
         errors: [{ messageId: "unmapped", data: { token: "text-daintree-assistant" } }],

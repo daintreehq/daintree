@@ -38,7 +38,7 @@ const REPLACEMENTS = new Map([
   ["daintree-focus", "focus-ring"],
 ]);
 
-const LEGACY_UTILITY = /^([a-z]+(?:-[a-z]+)*)-(daintree-[a-z0-9-]+?)(\/(?:\d{1,3}|\[[^\]]*\]))?$/;
+const LEGACY_UTILITY = /^([a-z]+(?:-[a-z]+)*)-(daintree-[a-z0-9-]+?)(\/[^/\s]+)?$/;
 
 export default {
   meta: {

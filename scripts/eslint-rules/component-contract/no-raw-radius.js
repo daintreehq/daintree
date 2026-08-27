@@ -14,11 +14,15 @@
  *
  * Flagged:
  *   - bare `rounded` and bare side variants (`rounded-t`, `rounded-br`, …)
- *   - hardcoded lengths — `rounded-[2px]`, `rounded-l-[1.5px]`
+ *   - arbitrary values that hardcode a radius rather than reading a custom
+ *     property — `rounded-[2px]`, `rounded-l-[1.5px]`, `rounded-[0]`,
+ *     `rounded-[calc(2px)]`, `rounded-[2px_4px]`
  *
  * Not flagged:
- *   - the named scale (`rounded-sm` … `rounded-3xl`), which IS the token scale:
- *     `@theme inline` compiles `rounded-md` to `calc(var(--radius) - 2px)`
+ *   - the named scale `rounded-xs` … `rounded-3xl`, which IS the token scale:
+ *     `@theme inline` compiles `rounded-md` to `calc(var(--radius) - 2px)`. Stops
+ *     at `3xl` because that is where `src/index.css` stops redefining; Tailwind's
+ *     stock `rounded-4xl` is a fixed 2rem that no theme can scale.
  *   - `rounded-[var(--radius-md)]`, the same value spelled explicitly — the
  *     codebase's prevailing idiom, and token-backed either way
  *   - `rounded-full` and `rounded-none` (and their side variants), which are
@@ -31,6 +35,7 @@
  */
 
 import { createClassExpressionVisitor, normalizeToken } from "./classStrings.js";
+import { arbitraryBody } from "./fontSize.js";
 
 const SIDES = new Set([
   "t",
@@ -48,9 +53,9 @@ const SIDES = new Set([
   "es",
   "ee",
 ]);
-const NAMED_SCALE = /^(?:xs|sm|md|lg|xl|[2-9]xl)$/;
+/** The steps `src/index.css` actually redefines from `--radius`. */
+const NAMED_SCALE = /^(?:xs|sm|md|lg|xl|2xl|3xl)$/;
 const SHAPE = /^(?:full|none)$/;
-const LENGTH = /^-?(?:\d*\.)?\d+(?:px|rem|em|pt|ch|ex|vw|vh|vmin|vmax|%)$/;
 
 /** Strip `rounded` and any side segment, returning the scale value (`""` when absent). */
 function radiusValue(base) {
@@ -93,10 +98,18 @@ export default {
         }
         if (SHAPE.test(value) || NAMED_SCALE.test(value)) continue;
 
-        if (value.startsWith("[") && value.endsWith("]")) {
-          if (LENGTH.test(value.slice(1, -1))) {
-            context.report({ node, messageId: "hardcoded", data: { token: base } });
-          }
+        const body = arbitraryBody(value);
+        if (body === null) {
+          // A named step this repo never redefines, so it keeps Tailwind's fixed
+          // value (`rounded-4xl` is 2rem) and no theme can scale it.
+          context.report({ node, messageId: "hardcoded", data: { token: base } });
+          continue;
+        }
+        // Any arbitrary radius that never reads a custom property is a literal
+        // value — `[0]`, `[calc(2px)]` and `[2px_4px]` all bypass the scale
+        // exactly as `[2px]` does.
+        if (!body.includes("var(") && !body.startsWith("--")) {
+          context.report({ node, messageId: "hardcoded", data: { token: base } });
         }
       }
     });
