@@ -703,8 +703,10 @@ const createRecipeStore: StateCreator<RecipeState> = (set, get) => ({
     const prevProject = get().projectRecipes;
     const prevInRepo = get().inRepoRecipes;
     const nextGlobal = isGlobal ? prevGlobal.filter((r) => r.id !== id) : prevGlobal;
-    const nextProject =
-      !isGlobal && !isInRepo ? prevProject.filter((r) => r.id !== id) : prevProject;
+    // In-repo recipes also have a same-id ProjectFileStore mirror holding their
+    // machine-local frecency; leaving it behind makes `mergeRecipes` render it as
+    // a project-local ghost once the canonical row is gone (#11993).
+    const nextProject = !isGlobal ? prevProject.filter((r) => r.id !== id) : prevProject;
     const nextInRepo = isInRepo ? prevInRepo.filter((r) => r.id !== id) : prevInRepo;
     set({
       globalRecipes: nextGlobal,
