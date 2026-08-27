@@ -1141,7 +1141,7 @@ function AgentsStep({
               <>
                 <div className="flex items-center gap-2 py-1">
                   <div className="h-px flex-1 bg-border-divider" />
-                  <span className="text-[11px] text-text-secondary font-medium">More agents</span>
+                  <span className="text-2xs text-text-secondary font-medium">More agents</span>
                   <div className="h-px flex-1 bg-border-divider" />
                 </div>
 
@@ -1288,15 +1288,13 @@ export function CompleteStep({ installedAgents }: { installedAgents: string[] })
                 {presetCount > 1 && (
                   <span
                     data-testid="preset-count-badge"
-                    className="text-[10px] text-status-info font-medium bg-status-info/10 px-1.5 py-0.5 rounded"
+                    className="text-3xs text-status-info font-medium bg-status-info/10 px-1.5 py-0.5 rounded"
                   >
                     {presetCount} presets
                   </span>
                 )}
                 {shortcut && (
-                  <span className="text-[11px] text-text-muted ml-auto tabular-nums">
-                    {shortcut}
-                  </span>
+                  <span className="text-2xs text-text-muted ml-auto tabular-nums">{shortcut}</span>
                 )}
               </div>
             );

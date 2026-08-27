@@ -232,7 +232,7 @@
   );
   --_border: var(--toolbar-project-border, var(--theme-border-subtle));
   --_shadow: var(--toolbar-project-shadow, var(--theme-shadow-ambient));
-  --_radius: var(--toolbar-pill-radius, 0.5rem);
+  --_radius: var(--toolbar-pill-radius, var(--radius-md));
   position: relative;
   isolation: isolate;
   background: var(--_bg);

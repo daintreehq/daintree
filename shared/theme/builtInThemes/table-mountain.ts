@@ -200,7 +200,6 @@ export const theme: BuiltInThemeSource = {
     "toolbar-control-hover-fg": "#231F1A",
     "toolbar-control-hover-shadow": "none",
     "toolbar-divider": "rgba(213,203,189,0.7)",
-    "toolbar-pill-radius": "0.5rem",
     // Lichen-gold whisper, deliberately not the protea accent — the accent
     // stays scarce (rail/marker/CTA/ring only). Pills sit lighter than the
     // chrome strip.

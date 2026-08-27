@@ -1251,7 +1251,7 @@ export function BulkCreateWorktreeDialog({
                       )}
                     </div>
                     {item.skipped && (
-                      <span className="text-[10px] px-1.5 py-0.5 rounded bg-status-warning/10 text-status-warning shrink-0">
+                      <span className="text-3xs px-1.5 py-0.5 rounded bg-status-warning/10 text-status-warning shrink-0">
                         {item.skipReason}
                       </span>
                     )}
@@ -1297,7 +1297,7 @@ export function BulkCreateWorktreeDialog({
                           </span>
                           <span className="text-daintree-text truncate">{item.item.title}</span>
                           {isInProgress && itemStatus.attempt > 1 && (
-                            <span className="text-[10px] px-1.5 py-0.5 rounded bg-status-info/10 text-status-info shrink-0">
+                            <span className="text-3xs px-1.5 py-0.5 rounded bg-status-info/10 text-status-info shrink-0">
                               retry {itemStatus.attempt - 1}
                             </span>
                           )}

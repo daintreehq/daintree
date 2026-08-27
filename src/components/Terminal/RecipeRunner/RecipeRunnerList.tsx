@@ -109,7 +109,7 @@ export function RecipeRunnerList({
         <div className="mb-2 flex items-baseline gap-3 px-1">
           <span
             id="recipe-band-label"
-            className="shrink-0 text-[11px] font-medium uppercase tracking-wide text-text-secondary"
+            className="shrink-0 text-2xs font-medium uppercase tracking-wide text-text-secondary"
           >
             Recipes
           </span>

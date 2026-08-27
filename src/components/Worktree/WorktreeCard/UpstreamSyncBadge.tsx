@@ -128,7 +128,7 @@ export function UpstreamSyncBadge({
             onClick={handleSignInClick}
             data-no-dnd
             className={cn(
-              "flex items-center text-[10px] font-mono tabular-nums cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent",
+              "flex items-center text-3xs font-mono tabular-nums cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent",
               containerGapClass
             )}
             data-testid="upstream-sync-indicator"
@@ -160,7 +160,7 @@ export function UpstreamSyncBadge({
       <TooltipTrigger asChild>
         <span
           className={cn(
-            "flex items-center text-[10px] font-mono tabular-nums",
+            "flex items-center text-3xs font-mono tabular-nums",
             containerGapClass,
             isFlashing && "animate-upstream-badge-flash",
             fetchNetworkFailed && "opacity-75",

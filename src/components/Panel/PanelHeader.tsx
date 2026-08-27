@@ -922,7 +922,7 @@ function PanelHeaderComponent({
           {/* Worktree branch badge — shown when multiple worktrees are active */}
           {worktreeBranch && worktreeAccentColor && (
             <span
-              className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium leading-none select-none max-w-[120px]"
+              className="shrink-0 inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-3xs font-medium leading-none select-none max-w-[120px]"
               style={
                 {
                   color: worktreeAccentColor,
@@ -948,7 +948,7 @@ function PanelHeaderComponent({
           role="status"
           aria-live="polite"
         >
-          <div className="flex items-center gap-1.5 text-[11px] uppercase tracking-wider font-semibold whitespace-nowrap">
+          <div className="flex items-center gap-1.5 text-2xs uppercase tracking-wider font-semibold whitespace-nowrap">
             <Grid2X2 className="w-3 h-3 shrink-0" aria-hidden="true" />
             <span className="tabular-nums inline-flex items-center gap-1">
               <AnimatedLabel label={String(activeCount)} textClassName="tabular-nums" /> Background
@@ -1273,7 +1273,7 @@ function PanelHeaderComponent({
               {location === "dock"
                 ? createTooltipContent("Dismiss preview")
                 : createTooltipContent("Close Session", closeShortcut)}
-              <span className="text-daintree-text/50 text-[11px]">
+              <span className="text-daintree-text/50 text-2xs">
                 {formatShortcutForTooltip("Alt+Click to force close")}
               </span>
             </div>

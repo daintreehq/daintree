@@ -554,7 +554,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                 )}
               >
                 <span className="text-xs font-medium">{label}</span>
-                <span className="text-[11px] mt-0.5 opacity-60">{description}</span>
+                <span className="text-2xs mt-0.5 opacity-60">{description}</span>
               </button>
             ))}
           </div>
@@ -710,7 +710,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                 >
                   <Icon className="w-6 h-6 mb-2" />
                   <span className="text-xs font-medium">{label}</span>
-                  <span className="text-[11px] text-center mt-1 opacity-60">{description}</span>
+                  <span className="text-2xs text-center mt-1 opacity-60">{description}</span>
                 </button>
               ))}
             </div>
@@ -771,7 +771,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                 )}
               >
                 <span className="text-xs font-medium">{label}</span>
-                <span className="text-[11px] mt-0.5 opacity-60">{description}</span>
+                <span className="text-2xs mt-0.5 opacity-60">{description}</span>
               </button>
             ))}
           </div>
@@ -863,7 +863,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                 )}
               >
                 <span className="text-xs font-medium">{label}</span>
-                <span className="text-[11px] mt-0.5 opacity-60">{description}</span>
+                <span className="text-2xs mt-0.5 opacity-60">{description}</span>
               </button>
             ))}
           </div>

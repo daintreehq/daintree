@@ -21,7 +21,7 @@
  * passive metadata. The 11px size does the de-emphasis; the tone does not have
  * to as well.
  */
-export const SECTION_LABEL = "text-[11px] font-medium text-text-secondary";
+export const SECTION_LABEL = "text-2xs font-medium text-text-secondary";
 
 /**
  * The geometry of a sidebar disclosure row — the collapsed Details trigger,

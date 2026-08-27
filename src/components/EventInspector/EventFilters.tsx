@@ -259,7 +259,7 @@ export function EventFilters({ events, filters, onFiltersChange, className }: Ev
                   {count > 0 && (
                     <span
                       className={cn(
-                        "text-[11px] tabular-nums",
+                        "text-2xs tabular-nums",
                         isActive ? "opacity-80" : "opacity-60"
                       )}
                     >

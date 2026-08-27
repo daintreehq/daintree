@@ -190,32 +190,32 @@ export function RecipeManager({
             <div className="flex items-center gap-2">
               <span className="text-sm font-medium text-foreground truncate">{recipe.name}</span>
               {readOnly && (
-                <span className="text-[11px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0 flex items-center gap-1">
+                <span className="text-2xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0 flex items-center gap-1">
                   <Lock className="h-3 w-3" />
                   Read-only
                 </span>
               )}
               {isShadowed && (
-                <span className="text-[11px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0">
+                <span className="text-2xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0">
                   Overridden by team recipe
                 </span>
               )}
               {isGlobal && (
-                <span className="text-[11px] text-status-info bg-status-info/10 px-1.5 py-0.5 rounded font-medium shrink-0 flex items-center gap-1">
+                <span className="text-2xs text-status-info bg-status-info/10 px-1.5 py-0.5 rounded font-medium shrink-0 flex items-center gap-1">
                   <Globe className="h-3 w-3" />
                   Global
                 </span>
               )}
               {fromPlugin && (
-                <span className="text-[11px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0 truncate">
+                <span className="text-2xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0 truncate">
                   {recipe.origin.pluginId}
                 </span>
               )}
-              <span className="text-[11px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0">
+              <span className="text-2xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0">
                 {recipe.terminals.length} terminal{recipe.terminals.length !== 1 ? "s" : ""}
               </span>
               {recipe.showInEmptyState && (
-                <span className="text-[11px] text-status-info bg-status-info/10 px-1.5 py-0.5 rounded font-medium shrink-0">
+                <span className="text-2xs text-status-info bg-status-info/10 px-1.5 py-0.5 rounded font-medium shrink-0">
                   Empty State
                 </span>
               )}

@@ -85,7 +85,7 @@ export function StatusContainer({ config, terminals, compact = false }: StatusCo
               {compact && displayCount > 0 && (
                 <span
                   className={cn(
-                    "absolute -top-1.5 -right-1.5 z-10 flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full text-[10px] font-bold tabular-nums shadow-sm",
+                    "absolute -top-1.5 -right-1.5 z-10 flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full text-3xs font-bold tabular-nums shadow-sm",
                     config.badgeColor,
                     config.badgeTextColor
                   )}

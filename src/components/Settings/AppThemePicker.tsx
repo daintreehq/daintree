@@ -93,9 +93,7 @@ function PreferredSchemePicker({
 }) {
   return (
     <div className="space-y-1">
-      <p className="text-[10px] font-medium uppercase tracking-wider text-text-secondary">
-        {label}
-      </p>
+      <p className="text-3xs font-medium uppercase tracking-wider text-text-secondary">{label}</p>
       <div className="flex flex-wrap gap-1.5">
         {schemes.map((scheme) => (
           <button
@@ -559,7 +557,7 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
               {importWarnings.length > 0 && (
                 <ul className="mt-1 space-y-1.5">
                   {groupWarningsByKind(importWarnings).map(({ kind, messages }) => (
-                    <li key={kind} className="text-[11px] text-daintree-text/60">
+                    <li key={kind} className="text-2xs text-daintree-text/60">
                       {WARNING_KIND_COPY[kind] ?? "Some theme values may need attention"}
                       <details className="mt-0.5">
                         <summary className="cursor-pointer text-daintree-text/40 transition-colors hover:text-daintree-text/70">
@@ -610,7 +608,7 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
               {selectedScheme.name}
             </span>
             {selectedScheme.location && (
-              <span className="text-[11px] text-white/75 drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]">
+              <span className="text-2xs text-white/75 drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]">
                 {selectedScheme.location}
               </span>
             )}

@@ -68,7 +68,7 @@ function CrossWorktreeFileRow({ file, isSelected, onClick }: CrossWorktreeFileRo
           {file.path.split(/[/\\]/).filter(Boolean).pop()}
         </span>
         {hasChurn && (
-          <span className="ml-auto flex items-center gap-1 shrink-0 text-[10px] tabular-nums">
+          <span className="ml-auto flex items-center gap-1 shrink-0 text-3xs tabular-nums">
             {insertions > 0 && <span className="text-status-success/80">+{insertions}</span>}
             {deletions > 0 && <span className="text-status-error/80">-{deletions}</span>}
           </span>

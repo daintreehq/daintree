@@ -65,7 +65,7 @@ export function CommitInfoTooltip({
             <span className="truncate text-xs font-semibold text-daintree-text">
               {author ? author.name : "Last commit"}
             </span>
-            <span className="text-[11px] text-text-muted" title={committedAbsolute!}>
+            <span className="text-2xs text-text-muted" title={committedAbsolute!}>
               Committed {committed}
             </span>
           </div>
@@ -80,7 +80,7 @@ export function CommitInfoTooltip({
 
       {hasActivity && !activityMatchesCommit && (
         <div className={hasCommit ? "mt-2.5 border-t border-border-divider pt-2.5" : undefined}>
-          <div className="flex items-center gap-1.5 text-[11px] text-text-muted">
+          <div className="flex items-center gap-1.5 text-2xs text-text-muted">
             <ActivityLight lastActivityTimestamp={lastActivityTimestamp} className="h-1.5 w-1.5" />
             <span title={activityAbsolute!}>Last active {activityPhrase}</span>
           </div>

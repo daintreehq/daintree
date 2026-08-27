@@ -99,13 +99,13 @@ export function McpAuditLatencyTable({ records, includeRecord }: McpAuditLatency
     const band = sloBand(block.p95);
     return (
       <tr className="text-daintree-text/70">
-        <td className="py-1 pl-6 pr-2 text-[10px] text-daintree-text/50 truncate">{blockLabel}</td>
+        <td className="py-1 pl-6 pr-2 text-3xs text-daintree-text/50 truncate">{blockLabel}</td>
         <td className="py-1 px-2 text-right text-daintree-text/50 tabular-nums">{block.count}</td>
         <td className="py-1 px-2 text-right tabular-nums">{block.p50}ms</td>
         <td className="py-1 pl-2 text-right tabular-nums">
           {block.p95}ms
           {band.label && (
-            <span className={cn("ml-1.5 text-[10px]", band.className)}>{band.label}</span>
+            <span className={cn("ml-1.5 text-3xs", band.className)}>{band.label}</span>
           )}
         </td>
       </tr>

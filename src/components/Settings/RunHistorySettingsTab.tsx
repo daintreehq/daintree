@@ -14,7 +14,7 @@ function CountPill({ tone, label }: { tone: "success" | "danger" | "muted"; labe
   return (
     <span
       className={cn(
-        "inline-flex items-center rounded px-1.5 py-0.5 text-[11px] font-medium",
+        "inline-flex items-center rounded px-1.5 py-0.5 text-2xs font-medium",
         tone === "success" && "bg-status-success/15 text-status-success",
         tone === "danger" && "bg-status-error/15 text-status-error",
         tone === "muted" && "bg-overlay-subtle text-daintree-text/70"

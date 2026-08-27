@@ -92,14 +92,12 @@ export function TrashBinItem({ terminal, trashedInfo, worktreeName }: TrashBinIt
           {worktreeName ? (
             <span className="text-daintree-text/50 ml-1 font-normal">({worktreeName})</span>
           ) : isOrphan ? (
-            <span className="text-status-warning/70 ml-1 font-normal text-[11px]">
-              (deleted tree)
-            </span>
+            <span className="text-status-warning/70 ml-1 font-normal text-2xs">(deleted tree)</span>
           ) : null}
         </div>
         <div
           className={cn(
-            "text-[11px] tabular-nums transition-opacity",
+            "text-2xs tabular-nums transition-opacity",
             seconds <= COUNTDOWN_CRITICAL_SECONDS
               ? "opacity-100 text-status-warning/70"
               : "text-text-secondary opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"

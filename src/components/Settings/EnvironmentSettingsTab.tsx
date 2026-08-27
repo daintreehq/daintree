@@ -322,7 +322,7 @@ export function EnvironmentSettingsTab() {
                     </button>
                   </div>
                   {error && (
-                    <p id={errorId} className="text-[11px] text-status-error mt-1 ml-1">
+                    <p id={errorId} className="text-2xs text-status-error mt-1 ml-1">
                       {error}
                     </p>
                   )}

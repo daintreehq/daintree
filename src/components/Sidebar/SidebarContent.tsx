@@ -314,7 +314,7 @@ function renderSidebarFlatItem(
         <div
           role="rowheader"
           aria-colspan={1}
-          className="px-4 py-2 text-[10px] font-medium text-daintree-text/50 uppercase tracking-wide"
+          className="px-4 py-2 text-3xs font-medium text-daintree-text/50 uppercase tracking-wide"
         >
           {item.displayName} ({item.count})
         </div>

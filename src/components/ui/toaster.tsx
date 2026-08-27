@@ -431,7 +431,7 @@ function Toast({
                     data-testid="toast-coalesce-badge"
                     aria-label={formatNotificationCountAriaLabel(notification.count)}
                     className={cn(
-                      "shrink-0 rounded-full bg-tint/10 px-1.5 py-0.5 text-[10px] font-medium leading-none text-daintree-text/60 tabular-nums min-w-[3.5ch] text-center",
+                      "shrink-0 rounded-full bg-tint/10 px-1.5 py-0.5 text-3xs font-medium leading-none text-daintree-text/60 tabular-nums min-w-[3.5ch] text-center",
                       isCountBumping && "animate-badge-bump"
                     )}
                     style={{ animationDuration: `${DURATION_150}ms` }}
@@ -451,7 +451,7 @@ function Toast({
                 data-testid="toast-coalesce-badge"
                 aria-label={formatNotificationCountAriaLabel(notification.count)}
                 className={cn(
-                  "inline-block rounded-full bg-tint/10 px-1.5 py-0.5 text-[10px] font-medium leading-none text-daintree-text/60 tabular-nums min-w-[3.5ch] text-center",
+                  "inline-block rounded-full bg-tint/10 px-1.5 py-0.5 text-3xs font-medium leading-none text-daintree-text/60 tabular-nums min-w-[3.5ch] text-center",
                   isCountBumping && "animate-badge-bump"
                 )}
                 style={{ animationDuration: `${DURATION_150}ms` }}
@@ -700,7 +700,7 @@ function OverflowPill({ count }: { count: number }) {
         "inline-flex items-center gap-1 rounded-full",
         "bg-surface-panel/85 backdrop-blur-xl",
         "border border-tint/[0.08] ring-1 ring-inset ring-tint/[0.05]",
-        "px-2.5 py-1 text-[11px] font-medium leading-none tabular-nums",
+        "px-2.5 py-1 text-2xs font-medium leading-none tabular-nums",
         "text-daintree-text/70 hover:text-daintree-text",
         "shadow-[var(--theme-shadow-floating)]",
         "transition-colors",

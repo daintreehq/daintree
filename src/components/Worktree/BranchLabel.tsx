@@ -99,7 +99,9 @@ export function BranchLabel({
           <span
             className={cn(
               "truncate font-mono transition-colors duration-150",
-              isMainWorktree ? "text-[13px] font-bold tracking-wide" : "text-[11px] font-medium",
+              isMainWorktree
+                ? "text-sm leading-[inherit] font-bold tracking-wide"
+                : "text-2xs font-medium",
               isActive
                 ? "text-text-primary/90"
                 : isMuted

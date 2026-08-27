@@ -6,7 +6,7 @@ import { pluginLabel } from "./PluginDetailPane";
 import { groupPluginsByCategory } from "./pluginGrouping";
 
 const CARD_BADGE_CLASS =
-  "inline-flex items-center px-1.5 py-0.5 rounded-sm text-[10px] font-medium bg-overlay-subtle border border-daintree-border/50 text-daintree-text/60 uppercase tracking-wide";
+  "inline-flex items-center px-1.5 py-0.5 rounded-sm text-3xs font-medium bg-overlay-subtle border border-daintree-border/50 text-daintree-text/60 uppercase tracking-wide";
 
 function PluginCard({ plugin, onSelect }: { plugin: LoadedPluginInfo; onSelect: () => void }) {
   const disabled = plugin.disabled === true;
@@ -32,7 +32,7 @@ function PluginCard({ plugin, onSelect }: { plugin: LoadedPluginInfo; onSelect: 
           >
             {pluginLabel(plugin)}
           </span>
-          <span className="text-[11px] font-normal text-text-secondary">
+          <span className="text-2xs font-normal text-text-secondary">
             v{plugin.manifest.version}
           </span>
           {disabled && <span className={CARD_BADGE_CLASS}>Disabled</span>}
@@ -87,7 +87,7 @@ export function PluginCatalog({
             <div className="flex items-center gap-2">
               <CategoryIcon className="w-4 h-4 text-daintree-text/50" aria-hidden="true" />
               <h4 className="text-sm font-medium text-daintree-text">{category.label}</h4>
-              <span className="text-[11px] text-daintree-text/40">{sectionPlugins.length}</span>
+              <span className="text-2xs text-daintree-text/40">{sectionPlugins.length}</span>
             </div>
             <p className="text-xs text-daintree-text/45 mt-0.5">{category.blurb}</p>
             <div className="mt-3 grid gap-3 grid-cols-[repeat(auto-fill,minmax(260px,1fr))]">

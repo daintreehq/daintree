@@ -209,7 +209,7 @@ const ROW_TONE = "text-daintree-text/70 hover:bg-overlay-subtle hover:text-daint
  * it just no longer outweighs the agents it organises.
  */
 const TILE_BASE =
-  "flex h-4 w-4 shrink-0 items-center justify-center rounded-[var(--radius-sm)] text-[9px]";
+  "flex h-4 w-4 shrink-0 items-center justify-center rounded-[var(--radius-sm)] text-4xs";
 
 /**
  * The workspace's identity tile, at the switcher's colour and a heading's size.
@@ -285,7 +285,7 @@ function GroupDemandChip({ group }: { group: PilotGroupCore }) {
     <span
       aria-hidden="true"
       data-testid="pilot-group-demand"
-      className="flex shrink-0 items-center gap-2 text-[10px] leading-none tabular-nums"
+      className="flex shrink-0 items-center gap-2 text-3xs leading-none tabular-nums"
     >
       {group.attention.map(({ band, count }) => {
         const ChipGlyph = BAND_GLYPH[band];
@@ -360,7 +360,7 @@ function GroupHeader({
           textual — membership is never an accent signal.
         */}
         {group.isCurrent && (
-          <span className="shrink-0 text-[10px] leading-none text-text-secondary">Current</span>
+          <span className="shrink-0 text-3xs leading-none text-text-secondary">Current</span>
         )}
       </div>
 
@@ -563,7 +563,7 @@ function RunRow({
           aria-hidden="true"
           data-testid="pilot-row-age"
           className={cn(
-            "shrink-0 text-right text-[11px] leading-none tabular-nums",
+            "shrink-0 text-right text-2xs leading-none tabular-nums",
             row.ageLabel === null ? "min-w-[3.5rem] text-text-secondary" : "text-state-waiting"
           )}
         >
@@ -1733,7 +1733,7 @@ export function PilotView() {
               does everywhere else in the app.
             */}
             {scopedName !== null && (
-              <div className="mb-1.5 flex min-w-0 items-center gap-1 text-[11px] leading-none">
+              <div className="mb-1.5 flex min-w-0 items-center gap-1 text-2xs leading-none">
                 <button
                   type="button"
                   data-testid="pilot-scope-back"
@@ -1780,7 +1780,7 @@ export function PilotView() {
               <p
                 role="status"
                 data-testid="pilot-fallback-note"
-                className="mb-1.5 min-w-0 text-[11px] leading-snug text-daintree-text/60"
+                className="mb-1.5 min-w-0 text-2xs leading-snug text-daintree-text/60"
               >
                 {fallbackName} has nothing to group by worktree, so this is every agent
               </p>
@@ -1881,7 +1881,7 @@ export function PilotView() {
         )}
 
         {!parkEditing && status.kind === "stale" && (
-          <div data-testid="pilot-stale" className="px-3 py-1.5 text-[11px] text-activity-waiting">
+          <div data-testid="pilot-stale" className="px-3 py-1.5 text-2xs text-activity-waiting">
             {/*
               The announced copy is fixed and the ticking age is hidden from it.
               Putting the age inside the live region made a disconnected host

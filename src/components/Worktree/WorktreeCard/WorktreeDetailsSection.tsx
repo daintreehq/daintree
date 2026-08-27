@@ -569,7 +569,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                       <ChevronDown className="w-3 h-3" aria-hidden="true" />
                       Show details
                     </summary>
-                    <pre className="mt-1.5 max-h-32 overflow-auto rounded bg-status-error/5 p-2 font-mono text-[11px] text-text-secondary whitespace-pre-wrap break-all select-text">
+                    <pre className="mt-1.5 max-h-32 overflow-auto rounded bg-status-error/5 p-2 font-mono text-2xs text-text-secondary whitespace-pre-wrap break-all select-text">
                       {[lifecycleError, lifecycleOutput].filter(Boolean).join("\n\n")}
                     </pre>
                   </details>

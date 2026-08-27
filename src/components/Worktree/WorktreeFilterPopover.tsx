@@ -50,7 +50,7 @@ function FilterSection({
           <span className="flex items-center gap-1.5">
             {title}
             {hasActive && (
-              <span className="rounded-full bg-tint/10 px-1.5 py-0.5 text-[10px] font-medium leading-none tabular-nums text-daintree-text/60">
+              <span className="rounded-full bg-tint/10 px-1.5 py-0.5 text-3xs font-medium leading-none tabular-nums text-daintree-text/60">
                 {activeCount}
               </span>
             )}
@@ -71,7 +71,7 @@ function FilterSection({
               onClear();
             }}
             aria-label={`Clear ${title} filters`}
-            className="shrink-0 px-2 py-1.5 text-[11px] text-text-secondary transition-colors hover:text-daintree-text"
+            className="shrink-0 px-2 py-1.5 text-2xs text-text-secondary transition-colors hover:text-daintree-text"
           >
             Clear
           </button>
@@ -115,7 +115,7 @@ function FilterChip({ label, isActive, onClick, count }: FilterChipProps) {
       onClick={onClick}
       aria-pressed={isActive}
       className={cn(
-        "inline-flex items-center px-2 py-0.5 text-[11px] rounded-full border transition-colors",
+        "inline-flex items-center px-2 py-0.5 text-2xs rounded-full border transition-colors",
         isActive
           ? "bg-filter-selected-bg-soft border-daintree-border text-daintree-text"
           : isDimmed
@@ -409,7 +409,7 @@ export function WorktreeFilterPopover({
         >
           <Filter className="w-3.5 h-3.5 shrink-0" />
           {showBadge && (
-            <span className="text-[10px] font-medium leading-none tabular-nums">{filterCount}</span>
+            <span className="text-3xs font-medium leading-none tabular-nums">{filterCount}</span>
           )}
         </button>
       </PopoverTrigger>
@@ -462,7 +462,7 @@ export function WorktreeFilterPopover({
           <div className="px-3 pt-2.5 pb-2 border-b border-daintree-border">
             <div
               id="worktree-sort-by-label"
-              className="text-[10px] font-medium text-text-secondary uppercase tracking-wide mb-1.5"
+              className="text-3xs font-medium text-text-secondary uppercase tracking-wide mb-1.5"
             >
               Sort by
             </div>

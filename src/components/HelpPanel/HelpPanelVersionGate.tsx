@@ -45,7 +45,7 @@ export function HelpPanelVersionGate({
         onClick={onCheckAgain}
         disabled={isCheckingVersion}
         className={cn(
-          "text-[11px] text-daintree-text/40 transition-colors",
+          "text-2xs text-daintree-text/40 transition-colors",
           "hover:text-daintree-text/60",
           "disabled:opacity-50 disabled:cursor-default disabled:hover:text-daintree-text/40",
           "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"

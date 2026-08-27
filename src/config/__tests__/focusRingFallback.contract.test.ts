@@ -441,7 +441,7 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
   },
   {
     file: "src/components/Worktree/ReviewHub/FileSection.tsx",
-    fragment: "w-[104px] min-w-0 bg-transparent text-[11px]",
+    fragment: "w-[104px] min-w-0 bg-transparent text-2xs",
     reason:
       "Section filter is a strip: the wrapper carries the border, focus-within and the forced-colors outline, so the bare input must not paint a second box inside it (that nested rectangle is exactly what #11984 removed)",
   },

@@ -426,7 +426,7 @@ AppPaletteDialog.Header = function AppPaletteHeader({
         className
       )}
     >
-      <div className="flex justify-between items-center mb-1.5 text-[11px] text-daintree-text/50">
+      <div className="flex justify-between items-center mb-1.5 text-2xs text-daintree-text/50">
         <span>{label}</span>
         {/*
          * Grouped only when there is something to group. `justify-between`

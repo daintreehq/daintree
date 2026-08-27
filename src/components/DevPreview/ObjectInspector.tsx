@@ -155,7 +155,7 @@ export function ObjectInspector({
         </span>
         {displayText}
       </button>
-      {fetchError && <span className="text-status-error text-[10px] ml-1">unavailable</span>}
+      {fetchError && <span className="text-status-error text-3xs ml-1">unavailable</span>}
       {isExpanded && properties && (
         <PropertyTree
           properties={properties}

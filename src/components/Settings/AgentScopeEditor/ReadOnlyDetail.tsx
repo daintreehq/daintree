@@ -29,7 +29,7 @@ export function ReadOnlyDetail({ scopeKind, selectedPreset, onDuplicate }: ReadO
         {selectedPreset.env && Object.keys(selectedPreset.env).length > 0 && (
           <div className="space-y-1">
             {Object.entries(selectedPreset.env).map(([k, v]) => (
-              <div key={k} className="flex items-center gap-2 font-mono text-[11px]">
+              <div key={k} className="flex items-center gap-2 font-mono text-2xs">
                 <span className="text-daintree-text/50 shrink-0">{k}</span>
                 <span className="text-daintree-text/30">=</span>
                 <span className="text-daintree-text/60 truncate">{v}</span>
@@ -38,12 +38,10 @@ export function ReadOnlyDetail({ scopeKind, selectedPreset, onDuplicate }: ReadO
           </div>
         )}
         {selectedPreset.description && (
-          <p className="text-[11px] text-text-secondary select-text">
-            {selectedPreset.description}
-          </p>
+          <p className="text-2xs text-text-secondary select-text">{selectedPreset.description}</p>
         )}
         {scopeKind === "project" && (
-          <p className="text-[10px] text-text-secondary select-text">
+          <p className="text-3xs text-text-secondary select-text">
             Sourced from <code>.daintree/presets/</code> in this project.
           </p>
         )}

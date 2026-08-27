@@ -288,7 +288,7 @@ export function WorktreeHeader({
             <TruncatedTooltip content={worktree.name}>
               <span
                 className={cn(
-                  "truncate text-[13px] font-medium transition-colors duration-150",
+                  "truncate text-sm leading-[inherit] font-medium transition-colors duration-150",
                   isActive
                     ? "text-text-primary/90"
                     : isMuted
@@ -353,9 +353,7 @@ export function WorktreeHeader({
                 </TooltipTrigger>
                 <TooltipContent side="bottom" className="max-w-xs">
                   <span className="block">Outside the project directory</span>
-                  <span className="mt-0.5 block font-mono text-[11px] break-all">
-                    {worktree.path}
-                  </span>
+                  <span className="mt-0.5 block font-mono text-2xs break-all">{worktree.path}</span>
                 </TooltipContent>
               </Tooltip>
             )}

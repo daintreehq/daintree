@@ -17,7 +17,7 @@ export const KBD_CLASS =
  * loudest on the light themes.
  */
 export const KBD_COMPACT_CLASS =
-  "px-1 py-px rounded-sm text-[10px] font-mono tabular-nums leading-none bg-overlay-subtle text-daintree-text/70 border border-border-subtle";
+  "px-1 py-px rounded-sm text-3xs font-mono tabular-nums leading-none bg-overlay-subtle text-daintree-text/70 border border-border-subtle";
 
 export interface KbdProps {
   children: React.ReactNode;
@@ -66,7 +66,7 @@ export function KbdChord({
       {steps.map((tokens, stepIndex) => (
         <Fragment key={stepIndex}>
           {stepIndex > 0 && (
-            <span className="text-daintree-text/40 text-[10px] select-none" aria-hidden>
+            <span className="text-daintree-text/40 text-3xs select-none" aria-hidden>
               ,
             </span>
           )}
@@ -74,7 +74,7 @@ export function KbdChord({
             {tokens.map((token, tokenIndex) => (
               <Fragment key={tokenIndex}>
                 {tokenIndex > 0 && !mac && (
-                  <span className="text-daintree-text/40 text-[10px] select-none" aria-hidden>
+                  <span className="text-daintree-text/40 text-3xs select-none" aria-hidden>
                     +
                   </span>
                 )}

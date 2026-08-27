@@ -618,7 +618,7 @@ function InlineChecklist({
         <h3 className="text-xs font-medium text-daintree-text/50 uppercase tracking-wider">
           Getting started
         </h3>
-        <span className="text-[10px] text-text-secondary font-mono">
+        <span className="text-3xs text-text-secondary font-mono">
           {progressDone}/{progressTotal}
         </span>
       </div>
@@ -680,7 +680,7 @@ function InlineChecklist({
                       {description && (
                         <span
                           className={cn(
-                            "text-[10px] leading-snug",
+                            "text-3xs leading-snug",
                             done ? "text-daintree-text/30" : "text-daintree-text/50"
                           )}
                         >

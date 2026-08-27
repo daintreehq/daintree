@@ -587,7 +587,7 @@ export function BrowserToolbar({
                 <span className="text-xs text-daintree-text truncate">
                   {entry.title || entry.url}
                 </span>
-                <span className="text-[11px] text-text-secondary truncate">{entry.url}</span>
+                <span className="text-2xs text-text-secondary truncate">{entry.url}</span>
               </button>
             ))}
           </div>
@@ -633,7 +633,7 @@ export function BrowserToolbar({
                 <span className="text-xs text-daintree-text truncate">
                   {entry.title || entry.url}
                 </span>
-                <span className="text-[11px] text-text-secondary truncate">{entry.url}</span>
+                <span className="text-2xs text-text-secondary truncate">{entry.url}</span>
               </button>
             ))}
           </div>

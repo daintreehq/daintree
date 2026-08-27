@@ -252,7 +252,7 @@ export function confirmTitle(current: PendingMcpConfirm): string {
 }
 
 /** Shared micro-label, matching the section-heading grammar used app-wide. */
-const MICRO_LABEL = "text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60";
+const MICRO_LABEL = "text-2xs font-semibold uppercase tracking-wider text-daintree-text/60";
 
 /**
  * Who is asking, in one line.
@@ -299,7 +299,7 @@ function RequesterRow({ current }: { current: PendingMcpConfirm }) {
           {name}
         </span>
         {detail && (
-          <span className="shrink-0 font-mono text-[11px] text-daintree-text/45">{detail}</span>
+          <span className="shrink-0 font-mono text-2xs text-daintree-text/45">{detail}</span>
         )}
       </span>
     </div>

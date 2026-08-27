@@ -186,7 +186,7 @@ function ActionPaletteItemInner({
             className={cn(
               // Natural width inside the fixed column, not stretched to fill it:
               // a 3-letter category in an 80px pill reads as a stretched button.
-              "inline-block max-w-full truncate rounded px-1.5 py-0.5 text-[10px] font-medium leading-tight",
+              "inline-block max-w-full truncate rounded px-1.5 py-0.5 text-3xs font-medium leading-tight",
               categoryColor
             )}
           >
@@ -202,7 +202,7 @@ function ActionPaletteItemInner({
             </div>
           )}
           {!item.enabled && item.disabledReason && (
-            <div className="text-[10px] leading-snug text-daintree-text/50 italic truncate">
+            <div className="text-3xs leading-snug text-daintree-text/50 italic truncate">
               {item.disabledReason}
             </div>
           )}
@@ -216,7 +216,7 @@ function ActionPaletteItemInner({
           )}
           {pinRejected && (
             <div
-              className="text-[10px] leading-snug text-status-error mt-0.5 truncate"
+              className="text-3xs leading-snug text-status-error mt-0.5 truncate"
               role="status"
               aria-live="polite"
             >
@@ -276,7 +276,7 @@ function ActionPaletteItemInner({
         )}
 
         {item.keybinding && (
-          <span className="text-[11px] font-mono text-daintree-text/50 transition-colors group-aria-selected:text-daintree-text/70">
+          <span className="text-2xs font-mono text-daintree-text/50 transition-colors group-aria-selected:text-daintree-text/70">
             {item.keybinding}
           </span>
         )}

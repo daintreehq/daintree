@@ -461,11 +461,11 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                   id={changesHeadingId}
                   role="heading"
                   aria-level={3}
-                  className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60"
+                  className="text-2xs font-semibold uppercase tracking-wider text-daintree-text/60"
                 >
                   Uncommitted work
                 </span>
-                <span className="text-[11px] tabular-nums text-daintree-text/50">
+                <span className="text-2xs tabular-nums text-daintree-text/50">
                   {changeSummaryLabel}
                 </span>
               </div>
@@ -515,7 +515,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
               would then dispatch the values the user had BEFORE they changed
               their mind. Cancel and Escape stay live throughout. */}
           <fieldset className="space-y-3">
-            <legend className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60">
+            <legend className="text-2xs font-semibold uppercase tracking-wider text-daintree-text/60">
               Options
             </legend>
 
@@ -592,7 +592,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
               id={consequencesHeadingId}
               role="heading"
               aria-level={3}
-              className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60"
+              className="text-2xs font-semibold uppercase tracking-wider text-daintree-text/60"
             >
               What will happen
             </span>

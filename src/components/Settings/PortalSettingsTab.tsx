@@ -258,7 +258,7 @@ export function PortalSettingsTab() {
             {!allowDelete && (
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <span className="text-[11px] font-mono text-daintree-text/50 truncate min-w-0">
+                  <span className="text-2xs font-mono text-daintree-text/50 truncate min-w-0">
                     {link.url}
                   </span>
                 </TooltipTrigger>

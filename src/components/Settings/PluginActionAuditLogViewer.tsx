@@ -262,11 +262,11 @@ export function PluginActionAuditLogViewer({
                       {record.actionId}
                     </span>
                     {record.source ? (
-                      <span className="text-[10px] uppercase tracking-wide text-daintree-text/50">
+                      <span className="text-3xs uppercase tracking-wide text-daintree-text/50">
                         {record.source}
                       </span>
                     ) : record.recordType && RECORD_TYPE_LABEL[record.recordType] ? (
-                      <span className="text-[10px] uppercase tracking-wide text-daintree-text/50">
+                      <span className="text-3xs uppercase tracking-wide text-daintree-text/50">
                         {RECORD_TYPE_LABEL[record.recordType]}
                       </span>
                     ) : null}

@@ -183,7 +183,7 @@ export function DeletedWorktreeGroup({ worktrees }: DeletedWorktreeGroupProps) {
             strokeWidth={2.5}
             aria-hidden="true"
           />
-          <span className="truncate text-[11px] font-medium text-text-muted">
+          <span className="truncate text-2xs font-medium text-text-muted">
             {members.length} {worktreeNoun}
             <span aria-hidden="true"> · </span>
             <span className="sr-only">, </span>
@@ -193,7 +193,7 @@ export function DeletedWorktreeGroup({ worktrees }: DeletedWorktreeGroupProps) {
         <div className="flex shrink-0 items-center gap-2">
           {hasCountdown && (
             <span
-              className="font-mono text-[11px] tabular-nums text-text-muted"
+              className="font-mono text-2xs tabular-nums text-text-muted"
               title={`Next cleanup in ${remainingSeconds}s`}
               data-testid="deleted-worktree-group-countdown"
             >
@@ -294,7 +294,7 @@ function DeletedWorktreeTerminalChip({
         aria-label={label}
       >
         <TerminalIcon chrome={chrome} className="w-3 h-3 shrink-0" />
-        <span className="truncate text-[11px] text-text-muted">{terminal.title}</span>
+        <span className="truncate text-2xs text-text-muted">{terminal.title}</span>
       </button>
     </div>
   );

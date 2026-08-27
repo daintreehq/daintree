@@ -25,7 +25,7 @@ const INLINE_CHIP_BASE = {
   gap: "4px",
   padding: "0 5px",
   fontWeight: 600,
-  borderRadius: "3px",
+  borderRadius: "var(--radius-xs)",
 } as const;
 
 const CHIP_SVG_SIZE = {
@@ -54,7 +54,7 @@ export function buildInputBarTheme(theme: ITheme): Extension {
       },
       ".cm-content": {
         fontFamily: "var(--font-mono, monospace)",
-        fontSize: "12px",
+        fontSize: "var(--text-xs)",
         lineHeight: "20px",
         padding: "0 4px 0 0",
         caretColor: c.accent,
@@ -132,7 +132,7 @@ export function buildInputBarTheme(theme: ITheme): Extension {
         height: "16px",
         width: "16px",
         objectFit: "cover",
-        borderRadius: "2px",
+        borderRadius: "var(--radius-xs)",
         flexShrink: "0",
       },
       ".cm-file-drop-chip": {
@@ -146,7 +146,7 @@ export function buildInputBarTheme(theme: ITheme): Extension {
         width: "14px",
         height: "14px",
         marginLeft: "2px",
-        borderRadius: "2px",
+        borderRadius: "var(--radius-xs)",
         color: `color-mix(in oklab, ${c.foreground} 55%, transparent)`,
         cursor: "pointer",
         flexShrink: "0",
@@ -154,7 +154,7 @@ export function buildInputBarTheme(theme: ITheme): Extension {
         pointerEvents: "none",
         transition: "opacity 100ms ease-out",
         lineHeight: "1",
-        fontSize: "12px",
+        fontSize: "var(--text-xs)",
         border: "none",
         background: "transparent",
         padding: "0",

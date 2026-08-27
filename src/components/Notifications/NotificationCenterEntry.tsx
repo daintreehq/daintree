@@ -244,7 +244,7 @@ export function NotificationCenterEntry({
                 data-notification-count="true"
                 style={{ animationDuration: "150ms" }}
                 className={cn(
-                  "shrink-0 rounded-full bg-tint/15 px-1.5 py-0.5 text-[10px] font-medium leading-none text-daintree-text/60 tabular-nums min-w-[2.5ch] text-center",
+                  "shrink-0 rounded-full bg-tint/15 px-1.5 py-0.5 text-3xs font-medium leading-none text-daintree-text/60 tabular-nums min-w-[2.5ch] text-center",
                   bumpKey > 0 && "animate-badge-bump"
                 )}
               >
@@ -276,7 +276,7 @@ export function NotificationCenterEntry({
             data-notification-count="true"
             style={{ animationDuration: "150ms" }}
             className={cn(
-              "col-span-2 row-start-2 mt-0.5 justify-self-start rounded-full bg-tint/15 px-1.5 py-0.5 text-[10px] font-medium leading-none text-daintree-text/60 tabular-nums min-w-[2.5ch] text-center",
+              "col-span-2 row-start-2 mt-0.5 justify-self-start rounded-full bg-tint/15 px-1.5 py-0.5 text-3xs font-medium leading-none text-daintree-text/60 tabular-nums min-w-[2.5ch] text-center",
               bumpKey > 0 && "animate-badge-bump"
             )}
           >
@@ -306,7 +306,7 @@ export function NotificationCenterEntry({
                       : undefined
                   }
                   className={cn(
-                    "h-6 rounded-[var(--radius-sm)] px-2 text-[11px] font-medium transition-colors",
+                    "h-6 rounded-[var(--radius-sm)] px-2 text-2xs font-medium transition-colors",
                     isAvailable
                       ? action.variant === "secondary"
                         ? "border border-daintree-text/20 text-text-secondary hover:bg-overlay-medium"
@@ -369,7 +369,7 @@ export function NotificationCenterEntry({
               {/* The clock means "snoozed until later"; the stamp beside it means
                   "arrived at". Abutting they read as one fact, so they get a
                   separator. */}
-              <span aria-hidden="true" className="text-[10px] leading-none text-daintree-text/40">
+              <span aria-hidden="true" className="text-3xs leading-none text-daintree-text/40">
                 ·
               </span>
             </>
@@ -385,7 +385,7 @@ export function NotificationCenterEntry({
                 // composites against whatever is behind it and read at ~3.2:1
                 // here. `theme-tokens.md` gates `text-secondary` at >=3:1 across
                 // every theme and prefers a solid token for exactly this.
-                className="text-[10px] text-text-secondary tabular-nums"
+                className="text-3xs text-text-secondary tabular-nums"
               >
                 {ts.label}
               </span>

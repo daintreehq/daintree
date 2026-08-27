@@ -181,9 +181,7 @@ export function useDevPreviewCommandConfig({
                 aria-current={isActive ? "true" : undefined}
               >
                 <span className="text-xs font-medium">{c.name}</span>
-                <code className="text-[11px] text-daintree-text/50 truncate ml-auto">
-                  {c.command}
-                </code>
+                <code className="text-2xs text-daintree-text/50 truncate ml-auto">{c.command}</code>
               </DropdownMenuItem>
             );
           })}

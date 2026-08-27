@@ -229,7 +229,7 @@ export function TerminalHeaderContent({
         <Tooltip>
           <TooltipTrigger asChild>
             <span
-              className="inline-flex items-center gap-1 shrink-0 px-2 py-0.5 rounded-full text-[11px] bg-overlay-soft border border-divider text-daintree-text/60"
+              className="inline-flex items-center gap-1 shrink-0 px-2 py-0.5 rounded-full text-2xs bg-overlay-soft border border-divider text-daintree-text/60"
               role="status"
               aria-label="Agent finished with no file changes"
             >
@@ -306,7 +306,7 @@ export function TerminalHeaderContent({
             </div>
             {(agentState === "completed" || agentState === "exited") && sessionCost != null && (
               <span
-                className="text-[11px] text-daintree-text/50 font-mono shrink-0"
+                className="text-2xs text-daintree-text/50 font-mono shrink-0"
                 style={{ fontVariantNumeric: "tabular-nums" }}
               >
                 ${sessionCost.toFixed(2)}
@@ -529,7 +529,7 @@ export function TerminalHeaderContent({
       {showCommandPill && (
         <Tooltip autoDismiss={false}>
           <TooltipTrigger asChild>
-            <span className="px-2 py-0.5 rounded-full text-[11px] font-mono bg-overlay-soft text-daintree-text/60 border border-divider truncate max-w-[20rem]">
+            <span className="px-2 py-0.5 rounded-full text-2xs font-mono bg-overlay-soft text-daintree-text/60 border border-divider truncate max-w-[20rem]">
               {lastCommand}
             </span>
           </TooltipTrigger>
@@ -564,7 +564,7 @@ export function TerminalHeaderContent({
           <TooltipTrigger asChild>
             <div
               className={cn(
-                "inline-flex items-center gap-1 text-[11px] font-mono shrink-0 transition-colors duration-150",
+                "inline-flex items-center gap-1 text-2xs font-mono shrink-0 transition-colors duration-150",
                 {
                   "text-text-secondary": stickySeverity === "muted",
                   "text-status-warning": stickySeverity === "amber",

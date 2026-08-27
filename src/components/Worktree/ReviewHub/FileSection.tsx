@@ -160,11 +160,11 @@ export function FileSection({
           while a long changeset scrolls. */}
       <div className={cn("@container/file-section", REVIEW_HUB_STICKY_BAND)}>
         <div className="flex items-center justify-between px-4 py-2 bg-overlay-subtle gap-2">
-          <span className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60 shrink-0 flex items-center">
+          <span className="text-2xs font-semibold uppercase tracking-wider text-daintree-text/60 shrink-0 flex items-center">
             {title}
             <span
               data-testid={countTestId}
-              className="ml-1.5 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-[10px] font-medium normal-case tracking-normal inline-flex items-center gap-1"
+              className="ml-1.5 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-3xs font-medium normal-case tracking-normal inline-flex items-center gap-1"
             >
               <span>
                 {totalCount} file{totalCount !== 1 ? "s" : ""}
@@ -190,7 +190,7 @@ export function FileSection({
                 role="status"
                 data-testid={`${section}-section-shown-chip`}
                 aria-label={`${shownCount} of ${totalCount} files shown`}
-                className="ml-1 tabular-nums rounded px-1 py-0.5 text-[10px] font-medium normal-case tracking-normal text-daintree-text/50 bg-overlay-medium"
+                className="ml-1 tabular-nums rounded px-1 py-0.5 text-3xs font-medium normal-case tracking-normal text-daintree-text/50 bg-overlay-medium"
               >
                 {shownCount} shown
               </span>
@@ -224,7 +224,7 @@ export function FileSection({
                 defaultValue={view.filterQuery}
                 onChange={(e) => setFilterQuery(e.target.value)}
                 className={cn(
-                  "w-[104px] min-w-0 bg-transparent text-[11px]",
+                  "w-[104px] min-w-0 bg-transparent text-2xs",
                   "text-daintree-text placeholder:text-text-placeholder",
                   // The transparent-outline utility below is what forced
                   // colors would normally turn into a visible box. That is
@@ -260,7 +260,7 @@ export function FileSection({
                   {nonDefaultViewCount > 0 && (
                     <span
                       aria-hidden="true"
-                      className="text-[10px] font-medium leading-none tabular-nums"
+                      className="text-3xs font-medium leading-none tabular-nums"
                     >
                       {nonDefaultViewCount}
                     </span>
@@ -346,7 +346,7 @@ export function FileSection({
                 // justify-start so the glyph keeps the same x in both stacked
                 // sections; the ghost button has no chrome at rest, so the
                 // reserved trailing space is invisible.
-                className="h-5 px-1.5 text-[10px] shrink-0 min-w-[9rem] justify-start"
+                className="h-5 px-1.5 text-3xs shrink-0 min-w-[9rem] justify-start"
                 data-testid={bulkActionTestId}
               >
                 <BulkActionIcon className="w-3 h-3 mr-1" />

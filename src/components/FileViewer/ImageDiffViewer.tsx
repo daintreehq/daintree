@@ -52,7 +52,7 @@ function SideChip({ label, floating }: { label: string; floating?: boolean }) {
   return (
     <span
       className={cn(
-        "rounded bg-daintree-sidebar px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground",
+        "rounded bg-daintree-sidebar px-1.5 py-0.5 text-3xs font-medium text-muted-foreground",
         floating && "bg-daintree-sidebar/90"
       )}
     >
@@ -195,7 +195,7 @@ function ImagePane({
         )}
       </div>
       {side.ok && !decodeFailed ? (
-        <p className="text-[11px] tabular-nums text-muted-foreground">
+        <p className="text-2xs tabular-nums text-muted-foreground">
           {dims ? `${dims.width}×${dims.height} px · ` : ""}
           {formatBytes(side.byteSize)}
         </p>
@@ -511,7 +511,7 @@ export function ImageDiffViewer({ relPath, worktreePath, status }: ImageDiffView
         <div className="flex shrink-0 items-center justify-between gap-2 px-3 pt-3">
           <SegmentedToggle options={MODE_OPTIONS} value={effectiveMode} onChange={setMode} />
           {effectiveMode === "onion" ? (
-            <label className="flex items-center gap-2 text-[11px] text-muted-foreground">
+            <label className="flex items-center gap-2 text-2xs text-muted-foreground">
               Working tree opacity
               <input
                 type="range"

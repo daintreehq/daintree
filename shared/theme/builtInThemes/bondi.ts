@@ -292,7 +292,6 @@ export const theme: BuiltInThemeSource = {
     "toolbar-control-hover-fg": "#1C2028",
     "toolbar-control-hover-shadow": "none",
     "toolbar-divider": "rgba(207,199,184,0.7)",
-    "toolbar-pill-radius": "0.5rem",
     // Pills sit lighter than the chrome strip (raised, like all content). The
     // base has to out-run this pill's own two washes: at #F6F0E7 the composed
     // gradient landed at L 0.9453 against a strip at L 0.9453 — zero lift,

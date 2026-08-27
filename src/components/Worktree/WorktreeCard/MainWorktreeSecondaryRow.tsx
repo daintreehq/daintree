@@ -68,13 +68,13 @@ export function MainWorktreeSecondaryRow({
       )}
       {aggregateCounts && aggregateCounts.worktrees > 0 && (
         <>
-          <span className="text-text-muted/40 text-[10px]" aria-hidden="true">
+          <span className="text-text-muted/40 text-3xs" aria-hidden="true">
             ·
           </span>
           <Tooltip>
             <TooltipTrigger asChild>
               <span
-                className="flex items-center gap-1.5 text-[10px] text-daintree-text/50"
+                className="flex items-center gap-1.5 text-3xs text-daintree-text/50"
                 data-testid="aggregate-worktree-row"
               >
                 <span className="flex items-center gap-0.5">

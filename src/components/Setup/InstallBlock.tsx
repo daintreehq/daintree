@@ -25,7 +25,7 @@ export function InstallBlock({ block }: { block: AgentInstallBlock }) {
         </div>
       )}
       {block.notes && block.notes.length > 0 && (
-        <div className="mt-2 text-[11px] text-text-secondary space-y-0.5">
+        <div className="mt-2 text-2xs text-text-secondary space-y-0.5">
           {block.notes.map((note, i) => (
             <p key={i}>{note}</p>
           ))}

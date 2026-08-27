@@ -44,7 +44,7 @@ function WorktreeListItem({ worktree, isActive, isSelected, onClick }: WorktreeL
               <span className="font-mono text-daintree-text/70 truncate">{worktree.branch}</span>
             )}
             {isActive && (
-              <span className="px-1.5 py-0.5 rounded-[var(--radius-md)] bg-[var(--color-state-active)]/15 text-[var(--color-state-active)] text-[11px] font-semibold">
+              <span className="px-1.5 py-0.5 rounded-[var(--radius-md)] bg-[var(--color-state-active)]/15 text-[var(--color-state-active)] text-2xs font-semibold">
                 Active
               </span>
             )}
@@ -52,7 +52,7 @@ function WorktreeListItem({ worktree, isActive, isSelected, onClick }: WorktreeL
         </div>
         <div
           ref={ref}
-          className="text-[11px] text-daintree-text/50 truncate transition-colors group-aria-selected:text-daintree-text/60"
+          className="text-2xs text-daintree-text/50 truncate transition-colors group-aria-selected:text-daintree-text/60"
         >
           {worktree.path}
         </div>

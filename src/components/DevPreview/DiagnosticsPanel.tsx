@@ -293,7 +293,7 @@ export function DiagnosticsPanel({ paneId, projectId, status }: DiagnosticsPanel
                       >
                         {label}
                         {event.count !== undefined && event.count > 1 && (
-                          <span className="ml-1 rounded-full bg-overlay-medium px-1.5 text-[10px] tabular-nums text-daintree-text/60">
+                          <span className="ml-1 rounded-full bg-overlay-medium px-1.5 text-3xs tabular-nums text-daintree-text/60">
                             ×{event.count}
                           </span>
                         )}

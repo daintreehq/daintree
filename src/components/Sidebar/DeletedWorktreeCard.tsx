@@ -257,12 +257,12 @@ export function DeletedWorktreeCard({
               aria-hidden="true"
             />
             <span
-              className="truncate font-mono text-[11px] font-medium text-text-muted"
+              className="truncate font-mono text-2xs font-medium text-text-muted"
               title={worktree.title}
             >
               {worktree.title}
             </span>
-            <span className="shrink-0 rounded-full bg-overlay-soft px-1.5 py-0.5 text-[10px] font-medium text-text-muted">
+            <span className="shrink-0 rounded-full bg-overlay-soft px-1.5 py-0.5 text-3xs font-medium text-text-muted">
               Deleted
             </span>
           </span>
@@ -271,7 +271,7 @@ export function DeletedWorktreeCard({
               <Tooltip>
                 <TooltipTrigger asChild>
                   <span
-                    className="shrink-0 rounded-full bg-overlay-soft px-1.5 py-0.5 text-[10px] font-medium text-text-muted"
+                    className="shrink-0 rounded-full bg-overlay-soft px-1.5 py-0.5 text-3xs font-medium text-text-muted"
                     data-testid="deleted-worktree-countdown-hold"
                     data-hold-reason={worktree.holdReason}
                   >
@@ -283,7 +283,7 @@ export function DeletedWorktreeCard({
             )}
             {hasCountdown && (
               <span
-                className="font-mono text-[11px] tabular-nums text-text-muted"
+                className="font-mono text-2xs tabular-nums text-text-muted"
                 title={
                   hold !== undefined
                     ? `${hold.tooltip}, holding at ${remainingSeconds}s`

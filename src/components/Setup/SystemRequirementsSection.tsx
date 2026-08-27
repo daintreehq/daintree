@@ -82,28 +82,28 @@ export function SystemRequirementsSection({
         <span className="text-sm font-medium text-daintree-text">System requirements</span>
 
         {isChecking && (
-          <span className="flex items-center gap-1.5 ml-auto text-[11px] text-text-secondary">
+          <span className="flex items-center gap-1.5 ml-auto text-2xs text-text-secondary">
             <Loader2 className="w-3 h-3 animate-spin" />
             Checking...
           </span>
         )}
 
         {allDone && !hasFatalFailure && !hasWarning && !error && (
-          <span className="flex items-center gap-1.5 ml-auto text-[11px] text-status-success">
+          <span className="flex items-center gap-1.5 ml-auto text-2xs text-status-success">
             <CircleCheck className="w-3.5 h-3.5" />
             All system tools ready
           </span>
         )}
 
         {allDone && hasFatalFailure && (
-          <span className="flex items-center gap-1.5 ml-auto text-[11px] text-status-error">
+          <span className="flex items-center gap-1.5 ml-auto text-2xs text-status-error">
             <CircleX className="w-3.5 h-3.5" />
             Action required: {readyCount} of {totalCount} tools ready
           </span>
         )}
 
         {allDone && !hasFatalFailure && hasWarning && (
-          <span className="flex items-center gap-1.5 ml-auto text-[11px] text-status-warning">
+          <span className="flex items-center gap-1.5 ml-auto text-2xs text-status-warning">
             <AlertTriangle className="w-3.5 h-3.5" />
             Warning: {readyCount} of {totalCount} tools ready
           </span>

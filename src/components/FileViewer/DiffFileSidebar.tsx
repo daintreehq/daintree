@@ -129,7 +129,7 @@ export function DiffFileSidebar({
           <span className="font-medium text-daintree-text">
             {files.length} {files.length === 1 ? "file" : "files"}
           </span>
-          <span className="flex items-center gap-1.5 font-mono text-[11px]">
+          <span className="flex items-center gap-1.5 font-mono text-2xs">
             {summary.insertions > 0 && (
               <span className="text-status-success">+{summary.insertions}</span>
             )}
@@ -139,7 +139,7 @@ export function DiffFileSidebar({
           </span>
         </div>
         <div className="mt-1" data-testid="diff-sidebar-progress">
-          <span className="text-[11px] text-text-muted">
+          <span className="text-2xs text-text-muted">
             {viewedCount} of {files.length} viewed
           </span>
           {/* The track only appears once review has started — an empty
@@ -197,7 +197,7 @@ export function DiffFileSidebar({
         )}
         {groups.map((group) => (
           <div key={group.dir || "(root)"} className="mb-1.5">
-            <div className="flex items-center gap-1.5 px-1.5 py-1 text-[11px] text-text-secondary">
+            <div className="flex items-center gap-1.5 px-1.5 py-1 text-2xs text-text-secondary">
               <Folder className="h-3 w-3 shrink-0" />
               <span className="truncate font-mono">{formatDir(group.dir)}</span>
             </div>
@@ -252,7 +252,7 @@ export function DiffFileSidebar({
                       >
                         {basename(file.path)}
                       </span>
-                      <span className="ml-auto flex shrink-0 items-center gap-1.5 pl-2 text-[11px]">
+                      <span className="ml-auto flex shrink-0 items-center gap-1.5 pl-2 text-2xs">
                         {(file.insertions ?? 0) > 0 && (
                           <span className="text-status-success/80">+{file.insertions}</span>
                         )}

@@ -430,7 +430,7 @@ function ProjectRoutingPanel({
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <span
-                        className="inline-flex items-center px-1.5 py-0.5 rounded-sm text-[10px] font-medium border border-daintree-border/60 text-daintree-text/70 cursor-default"
+                        className="inline-flex items-center px-1.5 py-0.5 rounded-sm text-3xs font-medium border border-daintree-border/60 text-daintree-text/70 cursor-default"
                         tabIndex={0}
                       >
                         Active
@@ -465,7 +465,7 @@ function RoutingBadge({ resolved }: { resolved: ResolvedForgeProvider }) {
       <Tooltip>
         <TooltipTrigger asChild>
           <span
-            className="inline-flex items-center px-2 py-0.5 rounded-sm text-[10px] font-medium border border-daintree-border/60 text-daintree-text/50 cursor-default"
+            className="inline-flex items-center px-2 py-0.5 rounded-sm text-3xs font-medium border border-daintree-border/60 text-daintree-text/50 cursor-default"
             tabIndex={0}
           >
             No match
@@ -484,7 +484,7 @@ function RoutingBadge({ resolved }: { resolved: ResolvedForgeProvider }) {
     <Tooltip>
       <TooltipTrigger asChild>
         <span
-          className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-sm text-[10px] font-medium border border-daintree-border/60 bg-status-info/10 text-daintree-text/80 cursor-default"
+          className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-sm text-3xs font-medium border border-daintree-border/60 bg-status-info/10 text-daintree-text/80 cursor-default"
           tabIndex={0}
         >
           <span>{providerName}</span>

@@ -117,12 +117,12 @@ export function EnvironmentPopover({
           )}
         </div>
         {resourceEndpoint && (
-          <div className="mb-2 font-mono text-[11px] text-text-secondary break-all">
+          <div className="mb-2 font-mono text-2xs text-text-secondary break-all">
             {resourceEndpoint}
           </div>
         )}
         {resourceLastOutput && (
-          <pre className="mb-2 max-h-32 overflow-y-auto whitespace-pre-wrap break-all rounded bg-surface-panel-elevated p-2 font-mono text-[11px] text-text-secondary">
+          <pre className="mb-2 max-h-32 overflow-y-auto whitespace-pre-wrap break-all rounded bg-surface-panel-elevated p-2 font-mono text-2xs text-text-secondary">
             {resourceLastOutput.trim()}
           </pre>
         )}

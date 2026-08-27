@@ -88,14 +88,14 @@ function RecipeListItem({
           {uniqueTypes.map((type) => (
             <span
               key={type}
-              className="px-1.5 py-0.5 rounded-[var(--radius-md)] bg-overlay-medium text-daintree-text/70 text-[11px]"
+              className="px-1.5 py-0.5 rounded-[var(--radius-md)] bg-overlay-medium text-daintree-text/70 text-2xs"
             >
               {type}
             </span>
           ))}
         </div>
       </div>
-      <div className="flex items-center gap-2 text-[11px] text-daintree-text/50">
+      <div className="flex items-center gap-2 text-2xs text-daintree-text/50">
         <span className="truncate">{getRecipeScope(recipe, () => worktreeName).label}</span>
         {recipe.shadowedBy && <span className="shrink-0">Overridden by Team</span>}
         <span className="ml-auto shrink-0">

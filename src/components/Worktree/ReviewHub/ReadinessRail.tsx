@@ -55,7 +55,7 @@ const FOCUS_RING =
   "outline-hidden focus-visible:outline focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2";
 
 const CTA_CLASS = cn(
-  "inline-flex items-center gap-1 shrink-0 px-2 py-0.5 rounded text-[11px] font-medium transition-colors",
+  "inline-flex items-center gap-1 shrink-0 px-2 py-0.5 rounded text-2xs font-medium transition-colors",
   "bg-filter-selected-bg-soft hover:bg-tint/[0.14] text-daintree-text/80",
   FOCUS_RING
 );
@@ -94,7 +94,7 @@ export function ReadinessRail({ summary, onCta }: ReadinessRailProps) {
       data-testid="review-readiness-rail"
       role="group"
       aria-label="Review readiness"
-      className="flex items-center gap-2 px-4 py-1.5 border-b border-divider text-[11px]"
+      className="flex items-center gap-2 px-4 py-1.5 border-b border-divider text-2xs"
     >
       <span
         data-testid="review-readiness-level"
@@ -160,7 +160,7 @@ function ReadinessOverflow({
         data-testid="review-readiness-overflow"
         aria-label={`${items.length} more: ${items.map((i) => i.label).join(", ")}`}
         className={cn(
-          "inline-flex items-center gap-0.5 shrink-0 px-1.5 py-0.5 rounded text-[11px] transition-colors",
+          "inline-flex items-center gap-0.5 shrink-0 px-1.5 py-0.5 rounded text-2xs transition-colors",
           "text-text-secondary hover:text-daintree-text hover:bg-tint/[0.06]",
           FOCUS_RING
         )}

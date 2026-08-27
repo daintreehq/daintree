@@ -458,7 +458,7 @@ function SettingField({
           {fieldLabel(def)}
         </label>
         <div className="flex items-center gap-1.5 shrink-0">
-          <span className="text-[10px] uppercase tracking-wide text-text-secondary">
+          <span className="text-3xs uppercase tracking-wide text-text-secondary">
             {SCOPE_BADGE_LABEL[scope]}
           </span>
           {canReset && (
@@ -480,7 +480,7 @@ function SettingField({
       {type === "boolean" ? (
         <div className="flex items-center justify-between gap-3">
           {def.description ? (
-            <p id={`${fieldId}-desc`} className="text-[11px] text-daintree-text/50">
+            <p id={`${fieldId}-desc`} className="text-2xs text-daintree-text/50">
               {def.description}
             </p>
           ) : (
@@ -492,7 +492,7 @@ function SettingField({
         <>
           {renderControl()}
           {isSecret && scopeReady && (
-            <p className="text-[11px] text-daintree-text/50">
+            <p className="text-2xs text-daintree-text/50">
               {secretTier === "plaintext"
                 ? "Stored as plaintext — keychain unavailable"
                 : hasStored && secretIsPlaintext && !migratedToKeychain
@@ -501,7 +501,7 @@ function SettingField({
             </p>
           )}
           {def.description && (
-            <p id={`${fieldId}-desc`} className="text-[11px] text-daintree-text/50">
+            <p id={`${fieldId}-desc`} className="text-2xs text-daintree-text/50">
               {def.description}
             </p>
           )}
@@ -509,15 +509,15 @@ function SettingField({
       )}
 
       {!scopeReady && (
-        <p className="text-[11px] text-text-secondary">Open a project to edit this setting.</p>
+        <p className="text-2xs text-text-secondary">Open a project to edit this setting.</p>
       )}
       {pathMissing && !error && (
-        <p className="text-[11px] text-status-warning">
+        <p className="text-2xs text-status-warning">
           This {type === "file" ? "file" : "folder"} no longer exists — pick a new one.
         </p>
       )}
       {error && (
-        <p id={`${fieldId}-error`} className="text-[11px] text-status-danger">
+        <p id={`${fieldId}-error`} className="text-2xs text-status-danger">
           {error}
         </p>
       )}

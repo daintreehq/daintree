@@ -165,7 +165,7 @@ const NO_PINNED_IDS: ReadonlySet<AnyToolbarButtonId> = new Set();
 
 function ForgeStatsPlaceholder() {
   return (
-    <div className="toolbar-stats app-no-drag relative mr-2 flex h-8 w-[13rem] shrink-0 items-center overflow-hidden rounded-[var(--toolbar-pill-radius,0.5rem)] border divide-x divide-[var(--toolbar-stats-divider,var(--theme-border-subtle))] opacity-0 pointer-events-none">
+    <div className="toolbar-stats app-no-drag relative mr-2 flex h-8 w-[13rem] shrink-0 items-center overflow-hidden rounded-[var(--toolbar-pill-radius,var(--radius-md))] border divide-x divide-[var(--toolbar-stats-divider,var(--theme-border-subtle))] opacity-0 pointer-events-none">
       <div className="h-8 flex-1" />
       <div className="h-8 flex-1" />
       <div className="h-8 flex-1" />
@@ -2179,7 +2179,7 @@ export function Toolbar({
                       {currentProject.name}
                       {branchName ? ` · ${branchName}` : ""}
                     </div>
-                    <div className="text-text-muted font-mono text-[11px] truncate">
+                    <div className="text-text-muted font-mono text-2xs truncate">
                       {currentProject.path}
                     </div>
                   </div>
@@ -2189,7 +2189,7 @@ export function Toolbar({
                 <TooltipContent side="bottom" className="max-w-[28rem]">
                   <div className="flex flex-col gap-0.5">
                     <div className="text-xs font-medium">{currentScratch.name}</div>
-                    <div className="text-text-muted text-[11px]">Scratch workspace</div>
+                    <div className="text-text-muted text-2xs">Scratch workspace</div>
                   </div>
                 </TooltipContent>
               )}

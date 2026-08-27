@@ -63,11 +63,11 @@ function TranscriptBody({
   return (
     <div className="flex flex-col gap-2">
       {transcript.truncated && (
-        <p className="text-[10px] text-daintree-text/35">Showing the latest messages</p>
+        <p className="text-3xs text-daintree-text/35">Showing the latest messages</p>
       )}
       {transcript.messages.map((message, index) => (
         <div key={`${transcript.subagentId}-${index}`} className="flex flex-col gap-0.5">
-          <span className="text-[10px] uppercase tracking-wider text-text-secondary">
+          <span className="text-3xs uppercase tracking-wider text-text-secondary">
             {message.role === "task" ? "Task" : "Reply"}
           </span>
           <p className="text-xs text-daintree-text/80 whitespace-pre-wrap break-words">
@@ -148,16 +148,14 @@ function SubagentRow({
             <span className="text-xs font-medium text-daintree-text truncate">
               {subagentTitle(subagent)}
             </span>
-            <span className={cn("text-[10px] shrink-0", TONE_CLASSES[tone])}>
+            <span className={cn("text-3xs shrink-0", TONE_CLASSES[tone])}>
               {subagentStatusLabel(subagent.status)}
             </span>
           </span>
-          {subtitle && (
-            <span className="text-[11px] text-daintree-text/50 truncate">{subtitle}</span>
-          )}
+          {subtitle && <span className="text-2xs text-daintree-text/50 truncate">{subtitle}</span>}
         </span>
         {subagent.updatedAt > 0 && (
-          <span className="text-[10px] text-daintree-text/35 shrink-0 mt-0.5 tabular-nums">
+          <span className="text-3xs text-daintree-text/35 shrink-0 mt-0.5 tabular-nums">
             {formatTimeAgo(subagent.updatedAt)}
           </span>
         )}

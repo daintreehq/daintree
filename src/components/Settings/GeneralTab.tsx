@@ -712,7 +712,7 @@ export function GeneralTab({
                 {buildChannelLabel && (
                   <span
                     data-testid="about-build-channel"
-                    className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-status-info/15 text-status-info leading-none"
+                    className="text-3xs font-medium px-1.5 py-0.5 rounded-full bg-status-info/15 text-status-info leading-none"
                   >
                     {buildChannelLabel}
                   </span>

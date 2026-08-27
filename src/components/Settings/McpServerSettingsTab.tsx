@@ -752,7 +752,7 @@ export function McpServerSettingsTab() {
                               <div className="truncate text-xs text-daintree-text/80">
                                 {bearer.userAgent}
                               </div>
-                              <div className="text-[11px] text-daintree-text/50">
+                              <div className="text-2xs text-daintree-text/50">
                                 <span className="font-mono">…{bearer.token4LastChars}</span>
                                 {" · "}
                                 {bearer.requestsSinceLaunch}{" "}
@@ -808,7 +808,7 @@ export function McpServerSettingsTab() {
                               <div className="truncate text-xs text-daintree-text/80">
                                 {bearer.userAgent}
                               </div>
-                              <div className="text-[11px] text-daintree-text/50">
+                              <div className="text-2xs text-daintree-text/50">
                                 {bearer.sessionCount}{" "}
                                 {bearer.sessionCount === 1 ? "session" : "sessions"}
                                 {" · "}
@@ -1056,7 +1056,7 @@ export function McpServerSettingsTab() {
               <span className="text-xs text-daintree-text/80 truncate">
                 {client.userAgent ?? "Unknown client"}
               </span>
-              <span className="text-[11px] text-daintree-text/50 shrink-0">
+              <span className="text-2xs text-daintree-text/50 shrink-0">
                 connected {formatRelativeTime(client.connectedAtMs)}
               </span>
             </li>

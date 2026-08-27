@@ -264,7 +264,7 @@ export function AgentCliStep({
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-medium text-daintree-text">{config.name}</div>
                   {description && (
-                    <div className="text-[11px] text-text-secondary truncate">{description}</div>
+                    <div className="text-2xs text-text-secondary truncate">{description}</div>
                   )}
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
@@ -284,26 +284,26 @@ export function AgentCliStep({
                     </Tooltip>
                   )}
                   {isInstalled ? (
-                    <span className="inline-flex items-center gap-1 text-[11px] text-status-success font-medium">
+                    <span className="inline-flex items-center gap-1 text-2xs text-status-success font-medium">
                       <CircleCheck className="w-3 h-3" />
                       Installed
                     </span>
                   ) : isInstalling ? (
-                    <span className="inline-flex items-center gap-1 text-[11px] text-text-secondary font-medium">
+                    <span className="inline-flex items-center gap-1 text-2xs text-text-secondary font-medium">
                       <Loader2 className="w-3 h-3 animate-spin" />
                       Installing
                     </span>
                   ) : isError ? (
-                    <span className="inline-flex items-center gap-1 text-[11px] text-status-error font-medium">
+                    <span className="inline-flex items-center gap-1 text-2xs text-status-error font-medium">
                       <AlertCircle className="w-3 h-3" />
                       Failed
                     </span>
                   ) : isManual ? (
-                    <span className="inline-flex items-center gap-1 text-[11px] text-text-secondary">
+                    <span className="inline-flex items-center gap-1 text-2xs text-text-secondary">
                       Manual
                     </span>
                   ) : (
-                    <span className="inline-flex items-center gap-1 text-[11px] text-text-muted">
+                    <span className="inline-flex items-center gap-1 text-2xs text-text-muted">
                       <CircleDashed className="w-3 h-3" />
                       Not installed
                     </span>
@@ -312,7 +312,7 @@ export function AgentCliStep({
                     <button
                       type="button"
                       onClick={() => handleInstall(agentId)}
-                      className="inline-flex items-center gap-1 px-2 py-1 rounded text-[11px] font-medium text-daintree-text hover:bg-overlay-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-daintree-accent"
+                      className="inline-flex items-center gap-1 px-2 py-1 rounded text-2xs font-medium text-daintree-text hover:bg-overlay-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-daintree-accent"
                     >
                       <Download className="w-3 h-3" />
                       Install
@@ -323,7 +323,7 @@ export function AgentCliStep({
 
               {hasMultipleMethods && !isInstalled && (
                 <div className="flex items-center gap-1 pl-14 pt-1 pb-0.5">
-                  <span className="text-[10px] text-daintree-text/30 mr-1">via</span>
+                  <span className="text-3xs text-daintree-text/30 mr-1">via</span>
                   {blocks.map((block, idx) => (
                     <button
                       key={idx}
@@ -331,7 +331,7 @@ export function AgentCliStep({
                       disabled={isInstalling || isBatchRunning}
                       onClick={() => handleMethodChange(agentId, idx)}
                       data-selected={idx === currentMethodIdx || undefined}
-                      className="px-1.5 py-0.5 rounded text-[10px] text-daintree-text/50 transition-colors hover:text-daintree-text/80 data-[selected]:bg-tint/[0.12] data-[selected]:text-daintree-text disabled:opacity-50 disabled:pointer-events-none"
+                      className="px-1.5 py-0.5 rounded text-3xs text-daintree-text/50 transition-colors hover:text-daintree-text/80 data-[selected]:bg-tint/[0.12] data-[selected]:text-daintree-text disabled:opacity-50 disabled:pointer-events-none"
                     >
                       {block.label ?? `Method ${idx + 1}`}
                     </button>
@@ -341,7 +341,7 @@ export function AgentCliStep({
 
               {isManual && currentBlock?.commands && (
                 <div className="pl-14 pt-1.5 pb-1 space-y-1">
-                  <div className="text-[11px] text-text-secondary mb-1">
+                  <div className="text-2xs text-text-secondary mb-1">
                     Run this command in your terminal. It will be detected automatically.
                   </div>
                   {currentBlock.commands.map((cmd) => (
@@ -359,7 +359,7 @@ export function AgentCliStep({
                         onClick={() => toggleErrorExpanded(agentId)}
                         aria-expanded={isErrorExpanded ?? false}
                         aria-controls={`error-log-${agentId}`}
-                        className="inline-flex items-center gap-1 text-[11px] text-daintree-text/50 hover:text-daintree-text/80 transition-colors"
+                        className="inline-flex items-center gap-1 text-2xs text-daintree-text/50 hover:text-daintree-text/80 transition-colors"
                       >
                         {isErrorExpanded ? (
                           <ChevronDown className="w-3 h-3" />
@@ -371,7 +371,7 @@ export function AgentCliStep({
                       <pre
                         id={`error-log-${agentId}`}
                         hidden={!isErrorExpanded}
-                        className="text-[10px] text-status-error/80 bg-daintree-bg border border-daintree-border rounded-[var(--radius-sm)] p-2 max-h-[120px] overflow-y-auto whitespace-pre-wrap font-mono"
+                        className="text-3xs text-status-error/80 bg-daintree-bg border border-daintree-border rounded-[var(--radius-sm)] p-2 max-h-[120px] overflow-y-auto whitespace-pre-wrap font-mono"
                       >
                         {errorLog}
                       </pre>
@@ -379,7 +379,7 @@ export function AgentCliStep({
                   )}
                   {currentBlock?.commands && (
                     <div className="space-y-1">
-                      <div className="text-[11px] text-text-secondary">Or install manually:</div>
+                      <div className="text-2xs text-text-secondary">Or install manually:</div>
                       {currentBlock.commands.map((cmd) => (
                         <CopyableCommand
                           key={cmd}
@@ -446,7 +446,7 @@ export function AgentCliStep({
                   />
                   <span className="text-xs text-daintree-text/70">{config.name}</span>
                   {isEnabled && (
-                    <code className="text-[10px] text-status-error font-mono ml-auto">
+                    <code className="text-3xs text-status-error font-mono ml-auto">
                       {dangerousArg}
                     </code>
                   )}
@@ -454,7 +454,7 @@ export function AgentCliStep({
               );
             })}
           </div>
-          <p className="text-[11px] text-daintree-text/30">
+          <p className="text-2xs text-daintree-text/30">
             Auto-approve all actions. Use with caution.
           </p>
         </div>

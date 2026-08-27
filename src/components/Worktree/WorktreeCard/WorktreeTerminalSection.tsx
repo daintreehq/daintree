@@ -107,7 +107,7 @@ function TerminalRow({ term, onClick }: TerminalRowProps) {
               {!chrome.isAgent && term.activityStatus === "working" && term.lastCommand && (
                 <Tooltip autoDismiss={false}>
                   <TooltipTrigger asChild>
-                    <span className="truncate text-[11px] font-mono text-text-muted">
+                    <span className="truncate text-2xs font-mono text-text-muted">
                       {term.lastCommand}
                     </span>
                   </TooltipTrigger>
@@ -121,7 +121,7 @@ function TerminalRow({ term, onClick }: TerminalRowProps) {
         <div className="flex items-center gap-2.5 shrink-0">
           {isArmed && armBadge !== undefined && (
             <span
-              className="inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-daintree-accent px-1 text-[9px] font-mono font-semibold text-accent-primary-foreground tabular-nums"
+              className="inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-daintree-accent px-1 text-4xs font-mono font-semibold text-accent-primary-foreground tabular-nums"
               aria-label={`Armed position ${armBadge}`}
             >
               {armBadge}
@@ -414,7 +414,7 @@ export function WorktreeTerminalSection({
           onClick={onStartSession}
           className={cn(
             SECTION_ROW,
-            "gap-1.5 text-[11px] text-text-secondary transition-colors hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]"
+            "gap-1.5 text-2xs text-text-secondary transition-colors hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]"
           )}
         >
           <Plus className="h-3 w-3 shrink-0" aria-hidden="true" />
@@ -446,7 +446,7 @@ export function WorktreeTerminalSection({
             <span
               className={cn(
                 "flex items-center gap-1.5",
-                isSidebar ? SECTION_LABEL : "text-[11px] font-medium text-text-muted"
+                isSidebar ? SECTION_LABEL : "text-2xs font-medium text-text-muted"
               )}
             >
               {/* The expanded sidebar trigger drops the summary glyph. It led
@@ -476,7 +476,7 @@ export function WorktreeTerminalSection({
             {eligibleTerminals.length >= 2 && armedIdsSize === 0 && !hintDismissed && (
               <div
                 className={cn(
-                  "flex items-center justify-between py-1.5 text-[11px] text-text-muted",
+                  "flex items-center justify-between py-1.5 text-2xs text-text-muted",
                   isSidebar ? "px-3" : "border-b border-border-default bg-surface-inset px-3"
                 )}
               >
@@ -548,7 +548,7 @@ export function WorktreeTerminalSection({
           )}
           id={`${terminalsId}-button`}
         >
-          <div className="flex items-center gap-1.5 text-[11px] text-text-secondary">
+          <div className="flex items-center gap-1.5 text-2xs text-text-secondary">
             {isSidebar && (
               <ChevronRight className="h-3 w-3 shrink-0 text-text-secondary" aria-hidden="true" />
             )}

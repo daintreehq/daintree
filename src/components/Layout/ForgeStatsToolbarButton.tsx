@@ -859,7 +859,7 @@ export const ForgeStatsToolbarButton = memo(
       <ContextMenu>
         <ContextMenuTrigger asChild>
           <div
-            className="toolbar-stats app-no-drag relative mr-2 flex h-8 shrink-0 items-center overflow-hidden rounded-[var(--toolbar-pill-radius,0.5rem)] border divide-x divide-[var(--toolbar-stats-divider,var(--theme-border-subtle))] transition-[width] duration-150 ease-out"
+            className="toolbar-stats app-no-drag relative mr-2 flex h-8 shrink-0 items-center overflow-hidden rounded-[var(--toolbar-pill-radius,var(--radius-md))] border divide-x divide-[var(--toolbar-stats-divider,var(--theme-border-subtle))] transition-[width] duration-150 ease-out"
             style={{
               width: statsContainerWidth,
               ["--toolbar-stats-divider" as string]:

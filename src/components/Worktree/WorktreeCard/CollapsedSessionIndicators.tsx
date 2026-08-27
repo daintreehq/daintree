@@ -27,7 +27,7 @@ export function CollapsedSessionIndicators({
               <span
                 key={state}
                 aria-hidden="true"
-                className={cn("flex items-center gap-0.5 text-[10px]", STATE_COLORS[state])}
+                className={cn("flex items-center gap-0.5 text-3xs", STATE_COLORS[state])}
               >
                 <Icon
                   className={cn(

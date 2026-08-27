@@ -47,9 +47,9 @@ const OUTCOME_LABEL: Record<ConflictResolution, string> = {
 const PREVIEW_FRAME = "rounded border border-tint/[0.08] bg-tint/[0.04] text-xs";
 const PREVIEW_STRIP =
   "px-3 py-2 border-b border-tint/[0.08] flex items-center justify-between gap-2";
-const PREVIEW_CAPTION = "text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60";
+const PREVIEW_CAPTION = "text-2xs font-semibold uppercase tracking-wider text-daintree-text/60";
 const PREVIEW_COUNT =
-  "ml-1.5 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-[10px] font-medium normal-case tracking-normal";
+  "ml-1.5 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-3xs font-medium normal-case tracking-normal";
 
 function collapsePairs(result: ParseEnvResult): Record<string, string> {
   const out: Record<string, string> = {};
@@ -98,7 +98,7 @@ function ConflictSide({ label, value, kept }: { label: string; value: string; ke
   const isEmpty = value === "";
   return (
     <>
-      <dt className="text-[10px] uppercase tracking-wide text-text-secondary">{label}</dt>
+      <dt className="text-3xs uppercase tracking-wide text-text-secondary">{label}</dt>
       <dd
         className={cn(
           // BOTH sides read at the audited 4.5:1 tier. The losing value is
@@ -106,7 +106,7 @@ function ConflictSide({ label, value, kept }: { label: string; value: string; ke
           // being protected the hardest thing in the row to read. The surviving
           // side is marked by weight instead, which costs no contrast and
           // survives forced-colors, where a colour difference would not.
-          "font-mono text-[11px] break-all text-daintree-text",
+          "font-mono text-2xs break-all text-daintree-text",
           kept ? "font-medium" : "font-normal",
           isEmpty && "italic"
         )}
@@ -258,8 +258,8 @@ export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDia
           <AppDialog.Description>
             {step === "paste" ? (
               <>
-                Keys must match <code className="text-[11px]">[A-Za-z_][A-Za-z0-9_]*</code>. Quoted
-                values, comments, and <code className="text-[11px]">export</code> prefixes are
+                Keys must match <code className="text-2xs">[A-Za-z_][A-Za-z0-9_]*</code>. Quoted
+                values, comments, and <code className="text-2xs">export</code> prefixes are
                 supported.
               </>
             ) : (
@@ -286,7 +286,7 @@ export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDia
               // for `focus-visible:outline-*` for keyboard focus, and the ring
               // this replaced measured ~2.2:1 — under the 3:1 floor for a
               // non-text indicator, on the step's primary input.
-              className="w-full h-56 resize-y font-mono text-[12px] bg-surface-input border border-border-strong rounded-[var(--radius-md)] px-3 py-2 text-daintree-text placeholder:text-text-placeholder transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+              className="w-full h-56 resize-y font-mono text-xs leading-[inherit] bg-surface-input border border-border-strong rounded-[var(--radius-md)] px-3 py-2 text-daintree-text placeholder:text-text-placeholder transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
               aria-label="Paste .env content"
               aria-invalid={hasErrors || undefined}
               aria-describedby={hasErrors ? errorsId : undefined}
@@ -296,7 +296,7 @@ export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDia
               <div
                 id={errorsId}
                 role="alert"
-                className="rounded-[var(--radius-md)] border border-status-warning/20 bg-status-warning/10 px-3 py-2 text-[12px]"
+                className="rounded-[var(--radius-md)] border border-status-warning/20 bg-status-warning/10 px-3 py-2 text-xs leading-[inherit]"
                 data-testid="import-env-errors"
               >
                 <div className="flex items-center gap-1.5 font-medium mb-1 text-status-warning">
@@ -311,7 +311,7 @@ export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDia
                     so they run on the audited text tiers — the amber tri-tone
                     this replaced flattened to one uniform run under
                     `forced-colors: active` anyway. */}
-                <ul className="space-y-0.5 font-mono text-[11px]">
+                <ul className="space-y-0.5 font-mono text-2xs">
                   {parsed.errors.map((e) => (
                     <li key={`${e.line}-${e.raw}`}>
                       <span className="text-text-secondary">Line {e.line}:</span>{" "}
@@ -335,7 +335,7 @@ export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDia
                 meant a paste that had both a bad line and a duplicated key
                 reported the bad line and silently dropped the duplicate. */}
             {incomingCount > 0 && (
-              <p className="text-[11px] text-text-secondary" data-testid="import-env-summary">
+              <p className="text-2xs text-text-secondary" data-testid="import-env-summary">
                 {incomingCount} variable{incomingCount === 1 ? "" : "s"} detected
                 {conflicts.length > 0
                   ? ` · ${conflicts.length} conflict${conflicts.length === 1 ? "" : "s"}`
@@ -389,7 +389,7 @@ export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDia
                   Conflicts
                   <span className={PREVIEW_COUNT}>{conflicts.length}</span>
                 </span>
-                <span className="text-[11px] text-text-secondary">
+                <span className="text-2xs text-text-secondary">
                   {OUTCOME_LABEL[conflictResolution]}
                 </span>
               </div>
@@ -410,7 +410,7 @@ export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDia
                 <ul className="divide-y divide-tint/[0.06]">
                   {conflicts.map((c) => (
                     <li key={c.key} className="px-3 py-2">
-                      <div className="font-mono text-[11px] text-daintree-text">{c.key}</div>
+                      <div className="font-mono text-2xs text-daintree-text">{c.key}</div>
                       <dl className="mt-0.5 grid grid-cols-[max-content_1fr] items-baseline gap-x-3 gap-y-0.5">
                         <ConflictSide
                           label="Existing"

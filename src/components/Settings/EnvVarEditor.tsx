@@ -248,7 +248,7 @@ function EnvVarKeyCell({
             }}
             type="text"
             className={cn(
-              "w-full h-full bg-transparent border-0 outline-hidden py-2 font-mono text-[12px]",
+              "w-full h-full bg-transparent border-0 outline-hidden py-2 font-mono text-xs leading-[inherit]",
               "focus:ring-2 focus:ring-inset focus:ring-daintree-accent/40",
               "disabled:cursor-default",
               showChevron ? "pl-2.5 pr-8" : "px-2.5",
@@ -361,7 +361,7 @@ function EnvVarKeyCell({
               >
                 <span className="font-mono text-xs text-daintree-text/80 shrink-0">{s.key}</span>
                 {s.hint && (
-                  <span className="text-[11px] text-daintree-text/50 leading-snug">{s.hint}</span>
+                  <span className="text-2xs text-daintree-text/50 leading-snug">{s.hint}</span>
                 )}
               </div>
             ))}
@@ -371,7 +371,7 @@ function EnvVarKeyCell({
       {(isEmptyKey || isDuplicate) && (
         <p
           className={cn(
-            "absolute left-2.5 bottom-0.5 text-[9px] leading-none pointer-events-none",
+            "absolute left-2.5 bottom-0.5 text-4xs leading-none pointer-events-none",
             isEmptyKey ? "text-status-error" : "text-status-warning"
           )}
           data-testid={isEmptyKey ? "env-editor-error-empty" : "env-editor-error-duplicate"}
@@ -694,7 +694,7 @@ export function EnvVarEditor({
       data-testid={dataTestId}
     >
       {/* Header */}
-      <div className="grid grid-cols-[2fr_3fr_auto] text-[10px] uppercase tracking-wide text-daintree-text/50 bg-daintree-bg/40 border-b border-daintree-border">
+      <div className="grid grid-cols-[2fr_3fr_auto] text-3xs uppercase tracking-wide text-daintree-text/50 bg-daintree-bg/40 border-b border-daintree-border">
         <div className="px-2.5 py-1.5">Key</div>
         <div className="px-2.5 py-1.5 border-l border-daintree-border/60">Value</div>
         <div className="px-2.5 py-1.5 w-9" aria-hidden="true" />
@@ -705,7 +705,7 @@ export function EnvVarEditor({
           <button
             type="button"
             onClick={handleAdd}
-            className="w-full flex items-center justify-center gap-1.5 py-4 text-[12px] text-daintree-text/50 hover:text-daintree-text hover:bg-daintree-bg/50 transition-colors border border-dashed border-daintree-border/60 rounded-[var(--radius-sm)]"
+            className="w-full flex items-center justify-center gap-1.5 py-4 text-xs leading-[inherit] text-daintree-text/50 hover:text-daintree-text hover:bg-daintree-bg/50 transition-colors border border-dashed border-daintree-border/60 rounded-[var(--radius-sm)]"
             data-testid="env-editor-add"
           >
             <Plus size={12} aria-hidden="true" />
@@ -714,7 +714,7 @@ export function EnvVarEditor({
           <button
             type="button"
             onClick={() => setIsImportOpen(true)}
-            className="w-full flex items-center justify-center gap-1.5 py-2 text-[11px] text-daintree-text/50 hover:text-daintree-text hover:bg-daintree-bg/50 transition-colors rounded-[var(--radius-sm)]"
+            className="w-full flex items-center justify-center gap-1.5 py-2 text-2xs text-daintree-text/50 hover:text-daintree-text hover:bg-daintree-bg/50 transition-colors rounded-[var(--radius-sm)]"
             data-testid="env-editor-import"
           >
             <Upload size={12} aria-hidden="true" />
@@ -782,7 +782,7 @@ export function EnvVarEditor({
                   <input
                     type={valueInputType}
                     className={cn(
-                      "w-full h-full bg-transparent border-0 outline-hidden py-2 font-mono text-[12px]",
+                      "w-full h-full bg-transparent border-0 outline-hidden py-2 font-mono text-xs leading-[inherit]",
                       "focus:ring-2 focus:ring-inset focus:ring-daintree-accent/40",
                       "disabled:cursor-default",
                       isSecret ? "pl-2.5 pr-8" : "px-2.5",
@@ -840,7 +840,7 @@ export function EnvVarEditor({
                   )}
                   {hasSecretWarning && (
                     <p
-                      className="absolute left-2.5 bottom-0.5 text-[9px] leading-none text-status-warning pointer-events-none"
+                      className="absolute left-2.5 bottom-0.5 text-4xs leading-none text-status-warning pointer-events-none"
                       data-testid="env-editor-warning-secret"
                       title="Looks like a secret. Prefer a ${ENV_VAR} reference to your shell environment."
                     >
@@ -849,7 +849,7 @@ export function EnvVarEditor({
                   )}
                   {!hasSecretWarning && normalizedRows.has(row.rowId) && (
                     <p
-                      className="absolute left-2.5 bottom-0.5 text-[9px] leading-none text-status-info pointer-events-none"
+                      className="absolute left-2.5 bottom-0.5 text-4xs leading-none text-status-info pointer-events-none"
                       data-testid="env-editor-normalized"
                     >
                       Pasted text normalized
@@ -903,7 +903,7 @@ export function EnvVarEditor({
           <button
             type="button"
             onClick={handleAdd}
-            className="flex items-center justify-center gap-1.5 py-2 text-[11px] text-daintree-text/50 hover:text-daintree-text hover:bg-daintree-bg/50 transition-colors"
+            className="flex items-center justify-center gap-1.5 py-2 text-2xs text-daintree-text/50 hover:text-daintree-text hover:bg-daintree-bg/50 transition-colors"
             data-testid="env-editor-add"
           >
             <Plus size={12} aria-hidden="true" />
@@ -912,7 +912,7 @@ export function EnvVarEditor({
           <button
             type="button"
             onClick={() => setIsImportOpen(true)}
-            className="flex items-center justify-center gap-1.5 py-2 text-[11px] text-daintree-text/50 hover:text-daintree-text hover:bg-daintree-bg/50 transition-colors"
+            className="flex items-center justify-center gap-1.5 py-2 text-2xs text-daintree-text/50 hover:text-daintree-text hover:bg-daintree-bg/50 transition-colors"
             data-testid="env-editor-import"
           >
             <Upload size={12} aria-hidden="true" />

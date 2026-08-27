@@ -23,7 +23,7 @@ function SchemePreview({ scheme }: { scheme: TerminalColorScheme }) {
         backgroundColor: c.background ?? "#000",
         padding: "6px 8px",
         fontFamily: "ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace",
-        fontSize: "9px",
+        fontSize: "var(--text-4xs)",
         lineHeight: "1.4",
         whiteSpace: "nowrap",
         WebkitFontSmoothing: "antialiased",
@@ -191,7 +191,7 @@ export function ColorSchemePicker() {
               type="button"
               onClick={() => setTypeFilter("dark")}
               className={cn(
-                "px-2.5 py-0.5 text-[11px] font-medium transition-colors",
+                "px-2.5 py-0.5 text-2xs font-medium transition-colors",
                 typeFilter === "dark"
                   ? "bg-overlay-selected text-daintree-text"
                   : "text-daintree-text/50 hover:text-daintree-text/70"
@@ -203,7 +203,7 @@ export function ColorSchemePicker() {
               type="button"
               onClick={() => setTypeFilter("light")}
               className={cn(
-                "px-2.5 py-0.5 text-[11px] font-medium transition-colors border-l border-daintree-border",
+                "px-2.5 py-0.5 text-2xs font-medium transition-colors border-l border-daintree-border",
                 typeFilter === "light"
                   ? "bg-overlay-selected text-daintree-text"
                   : "text-daintree-text/50 hover:text-daintree-text/70"

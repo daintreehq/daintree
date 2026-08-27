@@ -46,7 +46,7 @@ export function WorktreeDragPreview({ worktree }: WorktreeDragPreviewProps) {
             />
             <span
               style={{
-                fontSize: 12,
+                fontSize: "var(--text-xs)",
                 fontWeight: 500,
                 color: "var(--color-text-primary)",
                 whiteSpace: "nowrap",
@@ -60,7 +60,7 @@ export function WorktreeDragPreview({ worktree }: WorktreeDragPreviewProps) {
           <span
             style={{
               fontFamily: "var(--font-mono)",
-              fontSize: 10,
+              fontSize: "var(--text-3xs)",
               color: "color-mix(in srgb, var(--color-daintree-text) 50%, transparent)",
               whiteSpace: "nowrap",
               overflow: "hidden",
@@ -90,7 +90,7 @@ export function WorktreeDragPreview({ worktree }: WorktreeDragPreviewProps) {
           <span
             style={{
               fontFamily: "var(--font-mono)",
-              fontSize: 11,
+              fontSize: "var(--text-2xs)",
               fontWeight: 500,
               color: "var(--color-daintree-text)",
               whiteSpace: "nowrap",

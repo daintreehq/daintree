@@ -357,8 +357,8 @@ export function VoiceInputButton({
             className="flex h-2.5 w-2.5 items-stretch justify-between"
             aria-hidden="true"
           >
-            <span className="status-mark block w-[2px] rounded-[1px] bg-current opacity-70" />
-            <span className="status-mark block w-[2px] rounded-[1px] bg-current opacity-70" />
+            <span className="status-mark block w-[2px] rounded-full bg-current opacity-70" />
+            <span className="status-mark block w-[2px] rounded-full bg-current opacity-70" />
           </span>
         ) : showOrbit ? (
           <span

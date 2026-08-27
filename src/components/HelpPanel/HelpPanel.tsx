@@ -1486,7 +1486,7 @@ export function HelpPanel({
                   </Button>
                   {!hasEverLaunchedAgent && (
                     <div className="flex flex-col gap-1.5 w-full">
-                      <p className="text-[11px] text-daintree-text/60">Or start with a question</p>
+                      <p className="text-2xs text-daintree-text/60">Or start with a question</p>
                       {STARTER_PROMPTS.map((prompt) => (
                         <button
                           key={prompt}
@@ -1510,7 +1510,7 @@ export function HelpPanel({
                 <button
                   type="button"
                   onClick={handleOpenSettings}
-                  className="flex items-center gap-1 text-[11px] text-daintree-text/70 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+                  className="flex items-center gap-1 text-2xs text-daintree-text/70 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
                 >
                   <Settings2 className="w-3.5 h-3.5" />
                   Assistant settings
@@ -1518,7 +1518,7 @@ export function HelpPanel({
                 <button
                   type="button"
                   onClick={handleOpenAssistantDocs}
-                  className="flex items-center gap-1 text-[11px] text-daintree-text/70 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+                  className="flex items-center gap-1 text-2xs text-daintree-text/70 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
                 >
                   <ExternalLink className="w-3.5 h-3.5" />
                   Daintree Assistant guide
@@ -1535,7 +1535,7 @@ export function HelpPanel({
           edge. Raw args, the elapsed ticker, and the marketing link live in
           the popover / hover titles / header docs button now. */}
       {showTerminal && agentConfig && !isMissingCli && (
-        <div className="flex items-center justify-between gap-3 border-t border-daintree-border shrink-0 px-3 py-1.5 text-[11px] text-text-secondary">
+        <div className="flex items-center justify-between gap-3 border-t border-daintree-border shrink-0 px-3 py-1.5 text-2xs text-text-secondary">
           <span className="flex items-center gap-2 min-w-0">
             <McpActivityStrip sessionId={sessionId} activity={session.mcpActivity} />
             <TurnOutcomePip outcome={session.outcomeAlert} onDismiss={dismissOutcomeAlert} />
@@ -1558,7 +1558,7 @@ export function HelpPanel({
                     }
                   }}
                   className={cn(
-                    "flex items-center gap-1.5 min-w-0 p-0 bg-transparent border-none text-[11px]",
+                    "flex items-center gap-1.5 min-w-0 p-0 bg-transparent border-none text-2xs",
                     "text-status-warning hover:text-status-warning/80 transition-colors duration-150",
                     "rounded-[var(--radius-sm)]",
                     "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"

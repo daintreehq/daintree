@@ -128,7 +128,7 @@ function HealthChip({ icon, label, onClick, className, tone = "neutral" }: Healt
   return (
     <Wrapper
       className={cn(
-        "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-[11px] font-medium",
+        "inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-2xs font-medium",
         onClick && "cursor-pointer transition-colors hover:opacity-85",
         className
       )}
@@ -325,7 +325,7 @@ function PulseHeatmapLegend({
       <div
         aria-hidden="true"
         data-testid="pulse-heatmap-legend"
-        className="flex items-center justify-end text-[10px] text-daintree-text/55 select-none"
+        className="flex items-center justify-end text-3xs text-daintree-text/55 select-none"
         style={{ width: `${rowWidth}px`, gap: `${HEATMAP_LEGEND_GAP_PX}px` }}
       >
         <span>Less</span>
@@ -586,7 +586,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
 
         <div className="flex items-center gap-2">
           <div
-            className="pulse-range flex items-center rounded-md border border-transparent text-[11px] font-medium"
+            className="pulse-range flex items-center rounded-md border border-transparent text-2xs font-medium"
             role="radiogroup"
             aria-label="Activity range"
             onKeyDown={handleRangeKeyDown}
@@ -673,7 +673,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
             type="button"
             onClick={handleRefresh}
             disabled={isLoading}
-            className="pulse-control mt-2 inline-flex items-center text-[11px] text-daintree-text/55 transition-colors hover:text-daintree-text/80 disabled:opacity-50 disabled:pointer-events-none"
+            className="pulse-control mt-2 inline-flex items-center text-2xs text-daintree-text/55 transition-colors hover:text-daintree-text/80 disabled:opacity-50 disabled:pointer-events-none"
             aria-label={`Refresh — last updated ${updatedLabel}`}
             data-testid="pulse-last-updated"
           >

@@ -363,7 +363,7 @@ export function CommitPanel({
 
   const blockerTooltip = (
     <div>
-      <div className="text-[11px] font-semibold text-daintree-text/60 mb-2">Cannot commit</div>
+      <div className="text-2xs font-semibold text-daintree-text/60 mb-2">Cannot commit</div>
       <ul className="flex flex-col gap-1.5 text-xs">
         {blockers.map((b) => (
           <li key={b.key} className="flex items-center gap-2">
@@ -432,7 +432,7 @@ export function CommitPanel({
       />
       <div
         className={cn(
-          "flex justify-end text-[10px] tabular-nums -mt-1",
+          "flex justify-end text-3xs tabular-nums -mt-1",
           hasLineOverflow ? "text-status-warning" : "text-text-secondary"
         )}
       >
@@ -440,7 +440,7 @@ export function CommitPanel({
       </div>
 
       {isPushing && pushTargetBranch && (
-        <div className="text-[10px] text-daintree-text/50 truncate">
+        <div className="text-3xs text-daintree-text/50 truncate">
           Pushing to <span className="text-daintree-text/70 font-mono">{pushTargetBranch}</span>
         </div>
       )}
@@ -448,10 +448,7 @@ export function CommitPanel({
       {isPushing && hasProgress && (
         <div className="space-y-1">
           {progressEntries.map((e) => (
-            <div
-              key={e.stage}
-              className="flex items-center gap-2 text-[10px] text-daintree-text/70"
-            >
+            <div key={e.stage} className="flex items-center gap-2 text-3xs text-daintree-text/70">
               <span className="w-20 truncate capitalize">{e.stage}</span>
               <div className="flex-1 h-1 bg-daintree-bg rounded-full overflow-hidden">
                 <div
@@ -495,7 +492,7 @@ export function CommitPanel({
         <div className="flex flex-col gap-2">
           {pushDestination === null && (
             <div
-              className="rounded border border-status-error/30 bg-status-error/10 px-2 py-1.5 text-[11px] text-status-error"
+              className="rounded border border-status-error/30 bg-status-error/10 px-2 py-1.5 text-2xs text-status-error"
               data-testid="commit-panel-push-no-destination"
             >
               No push destination is configured for this branch. Set an upstream, or configure a
@@ -505,7 +502,7 @@ export function CommitPanel({
           <div>
             <span
               data-testid="commit-panel-push-confirm-branch"
-              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-tint/[0.07] border border-tint/[0.08] text-[11px] font-mono text-daintree-text"
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-tint/[0.07] border border-tint/[0.08] text-2xs font-mono text-daintree-text"
             >
               {destinationLabel ?? currentBranch ?? ""}
             </span>

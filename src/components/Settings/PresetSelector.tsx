@@ -114,7 +114,7 @@ export function PresetSelector({
           <span className="flex-1 text-left truncate">{selectedItem.label}</span>
           {selectedItem.source === "ccr" && (
             <span
-              className="text-[9px] uppercase tracking-wide text-text-secondary bg-daintree-text/5 px-1 py-0.5 rounded shrink-0"
+              className="text-4xs uppercase tracking-wide text-text-secondary bg-daintree-text/5 px-1 py-0.5 rounded shrink-0"
               aria-hidden="true"
             >
               CCR
@@ -122,7 +122,7 @@ export function PresetSelector({
           )}
           {selectedItem.source === "project" && (
             <span
-              className="text-[9px] uppercase tracking-wide text-text-secondary bg-daintree-text/5 px-1 py-0.5 rounded shrink-0"
+              className="text-4xs uppercase tracking-wide text-text-secondary bg-daintree-text/5 px-1 py-0.5 rounded shrink-0"
               aria-hidden="true"
             >
               Project
@@ -212,7 +212,7 @@ export function PresetSelector({
 function Divider({ label }: { label: string }) {
   return (
     <div
-      className="px-2 pt-1.5 pb-0.5 text-[10px] font-medium uppercase tracking-wide text-text-secondary"
+      className="px-2 pt-1.5 pb-0.5 text-3xs font-medium uppercase tracking-wide text-text-secondary"
       data-testid={`preset-group-${label.toLowerCase().replace(/\s+/g, "-")}`}
     >
       {label}
@@ -265,7 +265,7 @@ function PresetOption({
       <span className="flex-1 truncate">{label}</span>
       {badge && (
         <span
-          className="text-[9px] uppercase tracking-wide text-text-secondary bg-daintree-text/5 px-1 py-0.5 rounded"
+          className="text-4xs uppercase tracking-wide text-text-secondary bg-daintree-text/5 px-1 py-0.5 rounded"
           aria-hidden="true"
         >
           {badge}

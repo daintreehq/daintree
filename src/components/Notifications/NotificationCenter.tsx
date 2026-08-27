@@ -888,7 +888,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
               <button
                 type="button"
                 onClick={handleMarkAllRead}
-                className="toolbar-icon-button inline-flex items-center gap-1 px-1.5 py-1 rounded-[var(--radius-sm)] text-[11px] text-daintree-text/50 whitespace-nowrap"
+                className="toolbar-icon-button inline-flex items-center gap-1 px-1.5 py-1 rounded-[var(--radius-sm)] text-2xs text-daintree-text/50 whitespace-nowrap"
               >
                 <CheckCheck className="w-3 h-3" aria-hidden="true" />
                 Mark all read
@@ -960,7 +960,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                 setFrozenUnreadIds(null);
               }}
               className={cn(
-                "inline-flex items-center px-2 py-0.5 text-[11px] rounded-full transition-colors",
+                "inline-flex items-center px-2 py-0.5 text-2xs rounded-full transition-colors",
                 filter === "all"
                   ? "bg-filter-selected-bg-strong text-daintree-text font-medium"
                   : "text-daintree-text/60 hover:text-daintree-text hover:bg-tint/[0.04]"
@@ -973,7 +973,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
               aria-pressed={filter === "unread"}
               onClick={() => setFilter("unread")}
               className={cn(
-                "inline-flex items-center px-2 py-0.5 text-[11px] rounded-full transition-colors",
+                "inline-flex items-center px-2 py-0.5 text-2xs rounded-full transition-colors",
                 filter === "unread"
                   ? "bg-filter-selected-bg-strong text-daintree-text font-medium"
                   : "text-daintree-text/60 hover:text-daintree-text hover:bg-tint/[0.04]"
@@ -989,7 +989,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                 setFrozenUnreadIds(null);
               }}
               className={cn(
-                "inline-flex items-center px-2 py-0.5 text-[11px] rounded-full transition-colors",
+                "inline-flex items-center px-2 py-0.5 text-2xs rounded-full transition-colors",
                 filter === "archived"
                   ? "bg-filter-selected-bg-strong text-daintree-text font-medium"
                   : "text-daintree-text/60 hover:text-daintree-text hover:bg-tint/[0.04]"
@@ -1006,7 +1006,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                   setFrozenUnreadIds(null);
                 }}
                 className={cn(
-                  "inline-flex items-center px-2 py-0.5 text-[11px] rounded-full transition-colors",
+                  "inline-flex items-center px-2 py-0.5 text-2xs rounded-full transition-colors",
                   filter === "snoozed"
                     ? "bg-filter-selected-bg-strong text-daintree-text font-medium"
                     : "text-daintree-text/60 hover:text-daintree-text hover:bg-tint/[0.04]"
@@ -1021,7 +1021,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
       {showMutedPill && (
         <div
           data-testid="notification-muted-pill"
-          className="flex flex-col gap-0.5 px-3 py-1.5 bg-overlay-raised text-[11px] text-daintree-text/70"
+          className="flex flex-col gap-0.5 px-3 py-1.5 bg-overlay-raised text-2xs text-daintree-text/70"
         >
           <div className="flex items-center gap-1.5">
             <span className="min-w-0 flex-1 truncate font-medium">{summaryHeroLine}</span>
@@ -1031,7 +1031,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                 onClick={handleResumeNotifications}
                 aria-label="Resume notifications"
                 title="Resume notifications"
-                className="inline-flex shrink-0 items-center justify-center rounded-[var(--radius-sm)] px-1.5 py-0.5 text-[11px] font-medium text-daintree-text/70 hover:bg-overlay-raised hover:text-daintree-text transition-colors"
+                className="inline-flex shrink-0 items-center justify-center rounded-[var(--radius-sm)] px-1.5 py-0.5 text-2xs font-medium text-daintree-text/70 hover:bg-overlay-raised hover:text-daintree-text transition-colors"
               >
                 Resume
               </button>
@@ -1173,7 +1173,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
               "inline-flex items-center gap-1.5 px-3 py-1 rounded-full",
               "bg-overlay-raised border border-border-strong",
               "shadow-[var(--theme-shadow-floating)]",
-              "text-[11px] font-medium text-daintree-text/80",
+              "text-2xs font-medium text-daintree-text/80",
               "hover:text-daintree-text hover:bg-overlay-raised",
               "transition-[translate,opacity] motion-reduce:transition-none",
               showJumpPill
@@ -1233,7 +1233,7 @@ function NeedsAttentionSection({
 } & RovingSectionProps) {
   return (
     <div data-testid="needs-attention-section" className="border-b border-divider">
-      <div className="px-3 pt-2 pb-1 text-[10px] font-semibold uppercase tracking-wide text-daintree-text/50">
+      <div className="px-3 pt-2 pb-1 text-3xs font-semibold uppercase tracking-wide text-daintree-text/50">
         Needs attention
       </div>
       <div role="group" aria-label="Needs attention">
@@ -1268,7 +1268,7 @@ function NeedsAttentionSection({
       {overflowCount > 0 && (
         <div
           data-testid="needs-attention-overflow"
-          className="px-3 pb-2 text-[10px] text-daintree-text/45"
+          className="px-3 pb-2 text-3xs text-daintree-text/45"
         >
           +{overflowCount} more below
         </div>
@@ -1499,7 +1499,7 @@ function ContextSectionHeader({
   return (
     <div
       data-testid="context-section-header"
-      className="group/section flex items-center justify-between px-3 py-1 bg-overlay-raised text-[10px] font-medium uppercase tracking-wide text-daintree-text/60"
+      className="group/section flex items-center justify-between px-3 py-1 bg-overlay-raised text-3xs font-medium uppercase tracking-wide text-daintree-text/60"
     >
       <span className="truncate">{label}</span>
       <div className="ml-2 shrink-0 flex items-center gap-2">
@@ -1534,7 +1534,7 @@ function NewSinceLastLookedDivider({
       ref={ref}
       tabIndex={-1}
       data-testid="new-since-last-looked"
-      className="flex items-center gap-2 px-3 py-1 bg-overlay-raised text-[10px] font-medium uppercase tracking-wide text-daintree-text/50 outline-hidden"
+      className="flex items-center gap-2 px-3 py-1 bg-overlay-raised text-3xs font-medium uppercase tracking-wide text-daintree-text/50 outline-hidden"
     >
       <span>New since you last looked</span>
       {unreadCount > 0 && (

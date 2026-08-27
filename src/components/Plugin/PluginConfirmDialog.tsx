@@ -14,7 +14,7 @@ import { usePluginConfirmStore, type PluginConfirmationDecision } from "@/store/
 const CONFIRM_COOLDOWN_MS = 1_200;
 
 /** Shared micro-label, matching the section-heading grammar used app-wide. */
-const MICRO_LABEL = "text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60";
+const MICRO_LABEL = "text-2xs font-semibold uppercase tracking-wider text-daintree-text/60";
 
 /**
  * Singleton dialog driven by the plugin-action confirmation queue. Mounted

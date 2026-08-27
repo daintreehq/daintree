@@ -60,7 +60,7 @@ export function OverrideField({
             aria-label="Reset to global"
             onClick={onReset}
             className={cn(
-              "inline-flex items-center gap-1 px-1.5 py-0.5 rounded-sm text-[11px] text-text-muted hover:text-daintree-text hover:bg-overlay-subtle",
+              "inline-flex items-center gap-1 px-1.5 py-0.5 rounded-sm text-2xs text-text-muted hover:text-daintree-text hover:bg-overlay-subtle",
               "invisible group-hover:visible group-focus-within:visible focus-visible:visible",
               "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent",
               "transition-colors"

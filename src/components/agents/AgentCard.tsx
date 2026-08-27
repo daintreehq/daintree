@@ -104,14 +104,14 @@ function OnboardingCard({
       />
       <div className="flex items-center gap-2 shrink-0">
         {presetCount > 1 && (
-          <span className="text-[10px] text-status-info font-medium bg-status-info/10 px-1.5 py-0.5 rounded">
+          <span className="text-3xs text-status-info font-medium bg-status-info/10 px-1.5 py-0.5 rounded">
             {presetCount} presets
           </span>
         )}
         {installed ? (
-          <span className="text-[11px] text-status-success font-medium">Installed</span>
+          <span className="text-2xs text-status-success font-medium">Installed</span>
         ) : (
-          <span className="text-[11px] text-daintree-text/30">Not installed</span>
+          <span className="text-2xs text-daintree-text/30">Not installed</span>
         )}
       </div>
     </label>
@@ -172,9 +172,7 @@ export function AgentIdentityBlock({
       </div>
       <div className="flex-1 min-w-0">
         <div className="text-sm font-medium text-daintree-text">{name}</div>
-        {description && (
-          <div className="text-[11px] text-text-secondary truncate">{description}</div>
-        )}
+        {description && <div className="text-2xs text-text-secondary truncate">{description}</div>}
       </div>
     </>
   );

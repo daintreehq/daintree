@@ -101,7 +101,7 @@ export function FolderListingView({
       */}
       <div
         aria-hidden="true"
-        className="flex shrink-0 items-center gap-3 border-b border-overlay px-3 py-1 text-[11px] font-medium text-text-secondary"
+        className="flex shrink-0 items-center gap-3 border-b border-overlay px-3 py-1 text-2xs font-medium text-text-secondary"
       >
         <span className="min-w-0 flex-1">Name</span>
         <span className="w-20 shrink-0 text-right">Size</span>

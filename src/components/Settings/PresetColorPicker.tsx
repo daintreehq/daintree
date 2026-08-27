@@ -165,14 +165,14 @@ export function PresetColorPicker({
             color={draftColor}
             onChange={setDraftColor}
             prefixed
-            className="w-20 rounded border border-daintree-border/60 bg-daintree-bg px-1.5 py-0.5 text-[11px] font-mono uppercase text-daintree-text focus:outline-hidden focus:border-daintree-accent/40"
+            className="w-20 rounded border border-daintree-border/60 bg-daintree-bg px-1.5 py-0.5 text-2xs font-mono uppercase text-daintree-text focus:outline-hidden focus:border-daintree-accent/40"
             aria-label="Hex color"
             data-testid="preset-color-hex-input"
           />
           <div className="flex-1" />
           <button
             type="button"
-            className="flex items-center gap-1 text-[11px] text-daintree-text/60 hover:text-daintree-text transition-colors"
+            className="flex items-center gap-1 text-2xs text-daintree-text/60 hover:text-daintree-text transition-colors"
             onClick={handleClear}
             data-testid="preset-color-clear"
           >
@@ -181,7 +181,7 @@ export function PresetColorPicker({
           </button>
           <button
             type="button"
-            className="text-[11px] font-medium text-text-secondary hover:text-daintree-text underline-offset-2 hover:underline transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            className="text-2xs font-medium text-text-secondary hover:text-daintree-text underline-offset-2 hover:underline transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             onClick={handleDone}
             disabled={!isValidHex(draftColor)}
             data-testid="preset-color-done"

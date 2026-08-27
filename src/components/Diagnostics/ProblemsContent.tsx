@@ -145,7 +145,7 @@ function ErrorRow({
           <div className="flex items-center gap-1">
             {isRetrying && onCancelRetry && (
               <>
-                <span className="text-[10px] text-status-warning">
+                <span className="text-3xs text-status-warning">
                   Retrying {error.retryProgress!.attempt}/{error.retryProgress!.maxAttempts}...
                 </span>
                 <button

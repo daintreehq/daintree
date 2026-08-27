@@ -50,7 +50,7 @@ function ResumeSessionRow({ item, isSelected, matches, onSelect, itemRef }: Resu
         )}
       </div>
       {item.isStale && (
-        <span className="shrink-0 mt-0.5 text-[10px] font-medium text-text-secondary">
+        <span className="shrink-0 mt-0.5 text-3xs font-medium text-text-secondary">
           Worktree removed
         </span>
       )}

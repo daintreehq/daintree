@@ -66,7 +66,7 @@ export const PALETTE_ROW_CLASS = cn(
  * otherwise, because the size and the tracking were never the problem.
  */
 export const PALETTE_SECTION_LABEL_CLASS =
-  "text-[10px] font-medium tracking-wider uppercase text-text-secondary select-none";
+  "text-3xs font-medium tracking-wider uppercase text-text-secondary select-none";
 
 /**
  * The keyboard-focus ring every palette control wears.

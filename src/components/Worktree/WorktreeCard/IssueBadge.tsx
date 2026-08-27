@@ -80,7 +80,7 @@ export function IssueBadge({
           className={cn(
             "flex items-center gap-1 text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent min-w-0",
             freshnessClass(freshnessLevel),
-            isHeadline ? "gap-1.5 text-[13px]" : "text-xs"
+            isHeadline ? "gap-1.5 text-sm leading-[inherit]" : "text-xs"
           )}
           aria-disabled={!isActive || undefined}
           aria-label={
@@ -142,7 +142,7 @@ export function IssueBadge({
           <span className="text-xs text-text-secondary">Issue #{issueNumber}</span>
         )}
         {!data && (
-          <FreshnessMetaItem freshness={freshness} className="text-[11px] text-text-muted mt-1" />
+          <FreshnessMetaItem freshness={freshness} className="text-2xs text-text-muted mt-1" />
         )}
       </TooltipContent>
     </Tooltip>

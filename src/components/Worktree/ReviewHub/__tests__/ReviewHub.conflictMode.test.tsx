@@ -647,7 +647,7 @@ describe("ReviewHub", () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
 
       await waitFor(() => screen.getByTestId("conflict-panel"));
-      // The Abort control is now sized `xs` (text-[10px]); Continue is the
+      // The Abort control is now sized `xs` (text-3xs); Continue is the
       // only `sm` primary in the footer region. Verify both exist and that
       // there is exactly one Continue and exactly one Abort.
       expect(screen.getAllByRole("button", { name: /^Continue /i })).toHaveLength(1);

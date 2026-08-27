@@ -88,7 +88,7 @@ export function WorkspaceRootRow({
             <div className="flex items-center gap-2 min-w-0">
               <KindIcon className="w-4 h-4 shrink-0 text-daintree-text/60" aria-hidden="true" />
               <TruncatedTooltip content={workspace.name}>
-                <span className="truncate min-w-0 text-[13px] font-medium text-daintree-text">
+                <span className="truncate min-w-0 text-sm leading-[inherit] font-medium text-daintree-text">
                   {workspace.name}
                 </span>
               </TruncatedTooltip>
