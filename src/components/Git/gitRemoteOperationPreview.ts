@@ -46,15 +46,33 @@ export interface GitPushRangeFacts {
   rangeBasis: "tracked" | "creates" | "unverified";
 }
 
+/**
+ * Pull-rebase-only facts about the range `commits` was drawn from.
+ *
+ * Kept apart from {@link GitPushRangeFacts} for the same reason that one is kept
+ * off a rebase preview: `null` means "no range was measured", which is a
+ * different statement from "the range is empty".
+ */
+export interface GitRebaseRangeFacts {
+  /** Commits in the whole replay set, which may exceed the rows in `commits`. */
+  total: number;
+  /**
+   * How the rows were established — see `GitRebaseCommitPreview.rangeBasis`.
+   * `tracked` is a settled answer; `unfetched` is not, and an empty `unfetched`
+   * range is NOT evidence that nothing would be replayed.
+   */
+  rangeBasis: "tracked" | "unfetched";
+}
+
 export interface GitRemoteOperationPreview {
   /** `null` for a detached HEAD — `getStagingStatus` reports no current branch. */
   branch: string | null;
   /**
    * The commits the operation would act on.
    *
-   * For `"push"` this is the actual publish range (`<destination>..<branch>`),
-   * not the branch's recent history — see {@link buildGitRemoteOperationPreview}.
-   * For `"pull-rebase"` it stays the branch's recent local commits.
+   * Never the branch's recent history: for `"push"` the actual publish range
+   * (`<destination>..<branch>`), for `"pull-rebase"` the actual replay set
+   * (`<upstream>..<branch>`). See {@link buildGitRemoteOperationPreview}.
    */
   commits: GitPreviewCommit[];
   /**
@@ -71,6 +89,11 @@ export interface GitRemoteOperationPreview {
    * was measured. `null` everywhere else.
    */
   pushRange: GitPushRangeFacts | null;
+  /**
+   * Set only for `"pull-rebase"`, and only once the upstream resolved and the
+   * range was measured. `null` everywhere else.
+   */
+  rebaseRange: GitRebaseRangeFacts | null;
 }
 
 /**
@@ -82,17 +105,22 @@ export interface GitRemoteOperationPreview {
  * dialogs show a retryable error and keep confirm disabled; the MCP surface
  * shows a "couldn't verify" note).
  *
- * `operation` decides which commits are fetched, and the difference is the whole
- * point of #11979:
+ * `operation` decides which remote ref the range is measured against, and the
+ * two are genuinely different refs in a triangular workflow:
  *
  * - **push** reads the real publish range through `git.listPushCommits`, which
  *   ranges from the resolved destination's remote-tracking ref up to the named
- *   branch. It also fails CLOSED: any git failure rejects, so "the read broke"
- *   can never arrive looking like "there is nothing to publish".
- * - **pull-rebase** keeps reading recent local history through `git.listCommits`.
- *   That read swallows git failures into an empty list, so it cannot distinguish
- *   a broken repository from an empty branch — a known weakness of that IPC's
- *   contract, unchanged here because every other caller depends on it.
+ *   branch (#11979).
+ * - **pull-rebase** reads the real replay set through `git.listRebaseCommits`,
+ *   which ranges from the UPSTREAM's remote-tracking ref up to the named branch
+ *   (#11980). It used to read recent local history through `git.listCommits`,
+ *   which listed commits the upstream already had under a heading promising they
+ *   were about to be rewritten — and, because that IPC swallows git failures
+ *   into an empty list, rendered a broken repository as "no local commits" with
+ *   the rebase still approvable.
+ *
+ * Both fail CLOSED: any git failure rejects, so "the read broke" can never
+ * arrive looking like "there is nothing to do".
  *
  * The branch is read first and then named explicitly in the range read, rather
  * than letting main resolve `HEAD` a second time: the two diverge the moment
@@ -116,7 +144,7 @@ export async function buildGitRemoteOperationPreview(
     // Both states already block confirm on their own terms, and the dialog says
     // which one it is rather than showing an empty list that reads as "safe".
     if (!status.currentBranch || !status.pushDestination) {
-      return { ...base, commits: [], pushRange: null };
+      return { ...base, commits: [], pushRange: null, rebaseRange: null };
     }
     const preview = await window.electron.git.listPushCommits(
       cwd,
@@ -137,18 +165,35 @@ export async function buildGitRemoteOperationPreview(
         total: preview.total,
         rangeBasis: preview.rangeBasis,
       },
+      rebaseRange: null,
     };
   }
 
-  const commitList = await window.electron.git.listCommits({ cwd, limit: PREVIEW_COMMIT_LIMIT });
+  // Same shape as the push branch: no branch or no nameable upstream means there
+  // is no range to measure, and each blocks confirm on its own terms.
+  if (!status.currentBranch || !status.pullSource) {
+    return { ...base, commits: [], pushRange: null, rebaseRange: null };
+  }
+  const preview = await window.electron.git.listRebaseCommits(
+    cwd,
+    status.currentBranch,
+    PREVIEW_COMMIT_LIMIT
+  );
   return {
     ...base,
-    commits: commitList.items.map((c) => ({
+    // Main resolves the upstream independently for the range read, so prefer its
+    // answer over the status read's for the same reason push does.
+    pullSource: preview.upstream,
+    commits: preview.commits.map((c) => ({
       hash: c.hash,
       message: c.message,
-      author: c.author.name,
+      author: c.author,
     })),
     pushRange: null,
+    rebaseRange: {
+      total: preview.total,
+      rangeBasis: preview.rangeBasis,
+    },
   };
 }
 
@@ -196,9 +241,8 @@ export function formatGitRemoteOperationPreviewLines(
   // The tail is only stated when a total was actually measured over the same
   // range the rows came from. Deriving it from anything else would let the
   // approver read a count that describes a different set of commits.
-  const hidden = preview.pushRange
-    ? Math.max(0, preview.pushRange.total - preview.commits.length)
-    : 0;
+  const measuredTotal = preview.pushRange?.total ?? preview.rebaseRange?.total ?? null;
+  const hidden = measuredTotal === null ? 0 : Math.max(0, measuredTotal - preview.commits.length);
   return [
     destinationLine,
     branchLine,
@@ -223,15 +267,25 @@ export function formatGitRemoteOperationPreviewLines(
  *   human dialog guards this with its `git-push-empty-unverified` state; the
  *   MCP surface says the same thing here so the two approvers read one story.
  *
- * A pull-rebase keeps its own note in every state: it names no publish range,
- * and its note claims nothing about the remote.
+ * A pull-rebase is subject to the same rule for the same reason. Its range is
+ * measured against the upstream's remote-tracking ref, so an `unfetched` upstream
+ * means "never fetched here, nothing to subtract from" — which is not the same
+ * statement as "nothing would be replayed" and must not borrow its note.
  */
 function emptyLines(
   preview: GitRemoteOperationPreview,
   emptyNote: string,
   operation: GitRemoteOperationKind
 ): string[] {
-  if (operation !== "push") return [emptyNote];
+  if (operation !== "push") {
+    if (preview.pullSource === null) return [];
+    if (preview.rebaseRange?.rangeBasis === "unfetched") {
+      return [
+        `${MCP_PREVIEW_CAUTION_PREFIX}${formatGitPushDestination(preview.pullSource)} has never been fetched into this worktree, so what would be replayed could not be measured.`,
+      ];
+    }
+    return [emptyNote];
+  }
   if (preview.destination === null) return [];
   if (preview.pushRange?.rangeBasis === "unverified") {
     return [

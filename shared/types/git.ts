@@ -198,6 +198,32 @@ export interface GitPushCommitPreview {
   total: number;
 }
 
+/**
+ * The commits a `git pull --rebase` would replay, and what it would replay them onto.
+ *
+ * Separate from {@link GitPushCommitPreview} rather than a shared shape with a
+ * wider `rangeBasis`: a rebase has no "creates the branch" case and needs no
+ * network read, so folding the two together would leave a pull-rebase preview
+ * holding fields that were never measured for it.
+ */
+export interface GitRebaseCommitPreview {
+  /** The upstream the rebase would replay onto, as git resolved it. */
+  upstream: GitPushDestination;
+  /**
+   * How the replay set was established.
+   *
+   * - `tracked` — the delta against the upstream's remote-tracking ref is exact.
+   * - `unfetched` — the upstream is configured but has never been fetched into
+   *   this worktree, so there is no local ref to subtract from and the set
+   *   cannot be measured. `commits` is empty and `total` is 0, and NEITHER
+   *   means "nothing would be replayed".
+   */
+  rangeBasis: "tracked" | "unfetched";
+  commits: GitRemoteCommit[];
+  /** Commits in the whole replay set, which may exceed the returned `commits`. */
+  total: number;
+}
+
 export interface StagingStatus {
   staged: StagingFileEntry[];
   unstaged: StagingFileEntry[];

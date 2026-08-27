@@ -13,9 +13,13 @@ function stubGit(overrides: {
   pushCommits?: Array<{ hash: string; message: string; author: string }>;
   pushTotal?: number;
   rangeBasis?: "tracked" | "creates" | "unverified";
+  rebaseCommits?: Array<{ hash: string; message: string; author: string }>;
+  rebaseTotal?: number;
+  rebaseRangeBasis?: "tracked" | "unfetched";
   reject?: boolean;
   rejectCommits?: boolean;
   rejectPushCommits?: boolean;
+  rejectRebaseCommits?: boolean;
 }) {
   // `??` would swallow an explicit null, which is exactly the detached-HEAD
   // case under test — key off presence instead.
@@ -49,12 +53,25 @@ function stubGit(overrides: {
           total: overrides.pushTotal ?? pushCommits.length,
         })
   );
+  const rebaseCommits = overrides.rebaseCommits ?? [];
+  const listRebaseCommits = vi.fn(() =>
+    overrides.rejectRebaseCommits
+      ? Promise.reject(new Error("git log rebase range failed"))
+      : Promise.resolve({
+          upstream: pullSource,
+          rangeBasis: overrides.rebaseRangeBasis ?? "tracked",
+          commits: rebaseCommits,
+          total: overrides.rebaseTotal ?? rebaseCommits.length,
+        })
+  );
   Object.defineProperty(globalThis, "window", {
-    value: { electron: { git: { getStagingStatus, listCommits, listPushCommits } } },
+    value: {
+      electron: { git: { getStagingStatus, listCommits, listPushCommits, listRebaseCommits } },
+    },
     configurable: true,
     writable: true,
   });
-  return { getStagingStatus, listCommits, listPushCommits };
+  return { getStagingStatus, listCommits, listPushCommits, listRebaseCommits };
 }
 
 afterEach(() => {
@@ -99,6 +116,7 @@ describe("buildGitRemoteOperationPreview", () => {
     await expect(buildGitRemoteOperationPreview("/repo", "push")).resolves.toMatchObject({
       commits: [{ hash: "abcdef1234", message: "First", author: "Ada" }],
       pushRange: { total: 9, rangeBasis: "unverified" as const },
+      rebaseRange: null,
     });
   });
 
@@ -111,6 +129,7 @@ describe("buildGitRemoteOperationPreview", () => {
       destination: null,
       commits: [],
       pushRange: null,
+      rebaseRange: null,
     });
     expect(listPushCommits).not.toHaveBeenCalled();
   });
@@ -120,6 +139,7 @@ describe("buildGitRemoteOperationPreview", () => {
     await expect(buildGitRemoteOperationPreview("/repo", "push")).resolves.toMatchObject({
       branch: null,
       pushRange: null,
+      rebaseRange: null,
     });
     expect(listPushCommits).not.toHaveBeenCalled();
   });
@@ -148,16 +168,86 @@ describe("buildGitRemoteOperationPreview", () => {
     });
   });
 
-  it("keeps reading recent local history for a pull-rebase", async () => {
-    const { listCommits, listPushCommits } = stubGit({
-      items: [{ hash: "abcdef1234", message: "Fix the thing", author: { name: "Ada" } }],
+  // The #11980 invariant, and the mirror of the push one above. A rebase preview
+  // must describe the range the rebase would REPLAY. Recent branch history is a
+  // different set for every branch that is not entirely unpushed: on a branch
+  // level with its upstream it lists commits the upstream already has, under a
+  // heading promising they are about to be rewritten.
+  it("measures a pull-rebase against the resolved upstream, never as recent history", async () => {
+    const { listCommits, listRebaseCommits, listPushCommits } = stubGit({
+      currentBranch: "feature/x",
+      rebaseCommits: [{ hash: "abcdef1234", message: "Fix the thing", author: "Ada" }],
     });
     await expect(buildGitRemoteOperationPreview("/repo", "pull-rebase")).resolves.toMatchObject({
       commits: [{ hash: "abcdef1234", message: "Fix the thing", author: "Ada" }],
       pushRange: null,
+      rebaseRange: { total: 1, rangeBasis: "tracked" },
     });
-    expect(listCommits).toHaveBeenCalledWith({ cwd: "/repo", limit: PREVIEW_COMMIT_LIMIT });
+    expect(listRebaseCommits).toHaveBeenCalledWith("/repo", "feature/x", PREVIEW_COMMIT_LIMIT);
+    expect(listCommits).not.toHaveBeenCalled();
     expect(listPushCommits).not.toHaveBeenCalled();
+  });
+
+  // The two operations read different remote refs on purpose. A triangular branch
+  // tracks one repository and pushes to another, so measuring a replay set against
+  // the push destination would preview a range the rebase never touches.
+  it("ranges a rebase against the upstream while a push ranges against the destination", async () => {
+    const { listRebaseCommits, listPushCommits } = stubGit({
+      currentBranch: "topic",
+      pushDestination: { remote: "fork", branch: "topic" },
+      pullSource: { remote: "origin", branch: "release/topic" },
+    });
+    await buildGitRemoteOperationPreview("/repo", "pull-rebase");
+    await buildGitRemoteOperationPreview("/repo", "push");
+    await expect(listRebaseCommits.mock.results[0]!.value).resolves.toMatchObject({
+      upstream: { remote: "origin", branch: "release/topic" },
+    });
+    expect(listPushCommits).toHaveBeenCalledTimes(1);
+  });
+
+  // Fail closed, for the same reason the push side does. The old recent-history
+  // read swallowed git failures into an empty list, so a broken repository
+  // rendered as "no local commits" with the rebase still approvable.
+  it("propagates a rebase-range rejection instead of substituting an empty range", async () => {
+    stubGit({ rejectRebaseCommits: true });
+    await expect(buildGitRemoteOperationPreview("/repo", "pull-rebase")).rejects.toThrow(
+      "git log rebase range failed"
+    );
+  });
+
+  // An unresolved upstream has no range to measure, and asking for one anyway
+  // would surface the resolver's refusal as a load error rather than as the
+  // actionable "set an upstream" state.
+  it("skips the rebase range read and reports no range when the upstream is unresolved", async () => {
+    const { listRebaseCommits } = stubGit({ pullSource: null });
+    await expect(buildGitRemoteOperationPreview("/repo", "pull-rebase")).resolves.toMatchObject({
+      pullSource: null,
+      commits: [],
+      rebaseRange: null,
+    });
+    expect(listRebaseCommits).not.toHaveBeenCalled();
+  });
+
+  it("skips the rebase range read for a detached HEAD", async () => {
+    const { listRebaseCommits } = stubGit({ currentBranch: null });
+    await expect(buildGitRemoteOperationPreview("/repo", "pull-rebase")).resolves.toMatchObject({
+      branch: null,
+      rebaseRange: null,
+    });
+    expect(listRebaseCommits).not.toHaveBeenCalled();
+  });
+
+  it("prefers the upstream the rebase range was actually measured against", async () => {
+    const { listRebaseCommits } = stubGit({ pullSource: { remote: "origin", branch: "topic" } });
+    listRebaseCommits.mockResolvedValueOnce({
+      upstream: { remote: "origin", branch: "renamed-topic" },
+      rangeBasis: "tracked" as const,
+      commits: [],
+      total: 0,
+    });
+    await expect(buildGitRemoteOperationPreview("/repo", "pull-rebase")).resolves.toMatchObject({
+      pullSource: { remote: "origin", branch: "renamed-topic" },
+    });
   });
 
   it("carries the resolved push destination through from the staging status", async () => {
@@ -194,11 +284,16 @@ describe("buildGitRemoteOperationPreview", () => {
     );
   });
 
-  it("propagates a commit-read rejection instead of substituting an empty list", async () => {
-    stubGit({ rejectCommits: true });
-    await expect(buildGitRemoteOperationPreview("/repo", "pull-rebase")).rejects.toThrow(
-      "git log failed"
-    );
+  // Neither operation may leave the generic recent-history read in its path. That
+  // IPC swallows git failures into an empty list, so a preview routed through it
+  // renders a broken repository as "nothing to do" — the reassuring answer, and
+  // the one that lets a destructive confirm be approved against a read that never
+  // happened.
+  it("never routes either preview through the failure-swallowing history read", async () => {
+    const { listCommits } = stubGit({ rejectCommits: true });
+    await buildGitRemoteOperationPreview("/repo", "push");
+    await buildGitRemoteOperationPreview("/repo", "pull-rebase");
+    expect(listCommits).not.toHaveBeenCalled();
   });
 });
 
@@ -214,6 +309,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
           { hash: "9876543210fed", message: "Second", author: "Bob" },
         ],
         pushRange: null,
+        rebaseRange: null,
       },
       "none",
       "push"
@@ -237,6 +333,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         pullSource: { remote: "fork", branch: "release/topic" },
         commits: [],
         pushRange: null,
+        rebaseRange: null,
       },
       "none",
       "push"
@@ -254,6 +351,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         pullSource: { remote: "origin", branch: "release/topic" },
         commits: [],
         pushRange: null,
+        rebaseRange: null,
       },
       "none",
       "pull-rebase"
@@ -264,7 +362,14 @@ describe("formatGitRemoteOperationPreviewLines", () => {
 
   it("warns explicitly when no push destination is configured", () => {
     const lines = formatGitRemoteOperationPreviewLines(
-      { branch: "topic", destination: null, pullSource: null, commits: [], pushRange: null },
+      {
+        branch: "topic",
+        destination: null,
+        pullSource: null,
+        commits: [],
+        pushRange: null,
+        rebaseRange: null,
+      },
       "Nothing to publish — the destination already has everything on this branch.",
       "push"
     );
@@ -283,6 +388,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         pullSource: null,
         commits: [],
         pushRange: null,
+        rebaseRange: null,
       },
       "none",
       "pull-rebase"
@@ -300,6 +406,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         pullSource: { remote: "origin", branch: "topic" },
         commits: [],
         pushRange: null,
+        rebaseRange: null,
       },
       "none",
       "pull-rebase"
@@ -315,6 +422,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         pullSource: { remote: "origin", branch: "main" },
         commits: [],
         pushRange: null,
+        rebaseRange: null,
       },
       "No local commits found on this branch.",
       "push"
@@ -335,6 +443,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         pullSource: { remote: "origin", branch: "main" },
         commits: [],
         pushRange: null,
+        rebaseRange: null,
       },
       "none",
       "push"
@@ -352,6 +461,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         pullSource: { remote: "origin", branch: "main" },
         commits: [{ hash: "abcdef1234567", message: "First", author: "Ada" }],
         pushRange: { total: 4, rangeBasis: "tracked" as const },
+        rebaseRange: null,
       },
       "none",
       "push"
@@ -367,6 +477,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         pullSource: { remote: "origin", branch: "main" },
         commits: [{ hash: "abcdef1234567", message: "First", author: "Ada" }],
         pushRange: { total: 1, rangeBasis: "tracked" as const },
+        rebaseRange: null,
       },
       "none",
       "push"
@@ -384,6 +495,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         pullSource: { remote: "origin", branch: "main" },
         commits: [{ hash: "abcdef1234567", message: "First", author: "Ada" }],
         pushRange: null,
+        rebaseRange: null,
       },
       "none",
       "pull-rebase"
@@ -401,6 +513,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         pullSource: null,
         commits: [],
         pushRange: { total: 0, rangeBasis: "creates" as const },
+        rebaseRange: null,
       },
       "none",
       "push"
@@ -416,6 +529,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         pullSource: null,
         commits: [],
         pushRange: { total: 0, rangeBasis: "unverified" as const },
+        rebaseRange: null,
       },
       "none",
       "push"
@@ -435,6 +549,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         pullSource: null,
         commits: [],
         pushRange: { total: 0, rangeBasis: "unverified" as const },
+        rebaseRange: null,
       },
       "Nothing to publish — the destination already has everything on this branch.",
       "push"
@@ -455,6 +570,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         pullSource: null,
         commits: [],
         pushRange: { total: 0, rangeBasis: "tracked" as const },
+        rebaseRange: null,
       },
       "Nothing to publish — the destination already has everything on this branch.",
       "push"
@@ -462,15 +578,62 @@ describe("formatGitRemoteOperationPreviewLines", () => {
     expect(lines[2]).toContain("already has everything");
   });
 
-  // The pull-rebase note claims nothing about a remote, so it survives states
-  // that silence the push one.
-  it("keeps the pull-rebase note when there is no upstream to rebase onto", () => {
+  // Reversed in #11980, deliberately. While a pull-rebase previewed recent branch
+  // history, an empty list was a real measurement and the note claimed nothing
+  // about a remote, so it survived the states that silence the push one. Now the
+  // list is the range `<upstream>..<branch>`, and with no upstream that range is
+  // never measured at all — so the note would assert a result from a read that was
+  // skipped, on a surface whose whole job is to say only what it actually knows.
+  it("drops the pull-rebase note when no upstream means no range was measured", () => {
     const lines = formatGitRemoteOperationPreviewLines(
-      { branch: "topic", destination: null, pullSource: null, commits: [], pushRange: null },
+      {
+        branch: "topic",
+        destination: null,
+        pullSource: null,
+        commits: [],
+        pushRange: null,
+        rebaseRange: null,
+      },
+      "No local commits to replay.",
+      "pull-rebase"
+    );
+    expect(lines.join(" ")).not.toContain("No local commits to replay.");
+    expect(lines[0]).toContain("no upstream to rebase onto");
+  });
+
+  it("keeps the pull-rebase note when the range WAS measured and came back empty", () => {
+    const lines = formatGitRemoteOperationPreviewLines(
+      {
+        branch: "topic",
+        destination: null,
+        pullSource: { remote: "origin", branch: "topic" },
+        commits: [],
+        pushRange: null,
+        rebaseRange: { total: 0, rangeBasis: "tracked" },
+      },
       "No local commits to replay.",
       "pull-rebase"
     );
     expect(lines[2]).toBe("No local commits to replay.");
+  });
+
+  // An unfetched upstream is not a measurement either: there was no local ref to
+  // subtract from, so empty means "not measured", never "nothing would be replayed".
+  it("refuses the empty note when the upstream has never been fetched", () => {
+    const lines = formatGitRemoteOperationPreviewLines(
+      {
+        branch: "topic",
+        destination: null,
+        pullSource: { remote: "origin", branch: "topic" },
+        commits: [],
+        pushRange: null,
+        rebaseRange: { total: 0, rangeBasis: "unfetched" },
+      },
+      "No local commits to replay.",
+      "pull-rebase"
+    );
+    expect(lines.join(" ")).not.toContain("No local commits to replay.");
+    expect(lines.join(" ")).toContain("never been fetched");
   });
 
   it("surfaces an explicit couldn't-verify warning for a failed fetch", () => {
