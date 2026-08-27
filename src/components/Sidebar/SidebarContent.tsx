@@ -50,6 +50,7 @@ import {
 } from "@/components/DragDrop/SortableWorktreeCard";
 import { applyManualWorktreeReorder } from "@/lib/worktreeReorder";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
+import { cn } from "@/lib/utils";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { usePanelStore, useWorktreeSelectionStore, useProjectStore } from "@/store";
 import type { PendingCreation, DeletedWorktree } from "@/store/worktreeStore";
@@ -1524,8 +1525,10 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     return (
       <div className="flex flex-col h-full">
         {worktreeLoadErrorBanner}
-        <div className="flex items-center px-4 py-2 border-b border-divider shrink-0">
-          <h2 className="text-daintree-text font-semibold text-sm tracking-wide">Worktrees</h2>
+        <div className="flex h-8 items-center px-3 border-b border-divider shrink-0">
+          <h2 className="truncate text-daintree-text font-semibold text-sm tracking-wide">
+            Worktrees
+          </h2>
         </div>
         <div className="flex-1 min-h-0 relative overflow-hidden pb-8">
           <Skeleton label="Loading worktrees">
@@ -1558,8 +1561,10 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       <>
         <div className="flex flex-col h-full">
           {worktreeLoadErrorBanner}
-          <div className="flex items-center px-4 py-2 border-b border-divider shrink-0">
-            <h2 className="text-daintree-text font-semibold text-sm tracking-wide">Worktrees</h2>
+          <div className="flex h-8 items-center px-3 border-b border-divider shrink-0">
+            <h2 className="truncate text-daintree-text font-semibold text-sm tracking-wide">
+              Worktrees
+            </h2>
           </div>
           {errorBanner}
 
@@ -1652,9 +1657,21 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     <div className="flex flex-col h-full">
       {worktreeLoadErrorBanner}
       {/* Header Section */}
-      <div className="group/header flex items-center justify-between px-4 py-2 border-b border-divider bg-transparent shrink-0">
-        <div className="flex items-baseline gap-1.5">
-          <h2 className="text-daintree-text font-semibold text-sm tracking-wide">Worktrees</h2>
+      {/* The control zone carries ONE horizontal rule, at its bottom edge. When
+          the search rail renders it owns that rule, so the header goes without;
+          with no rail the header IS the bottom of the zone and keeps it.
+          Stacking a header rule on a rail rule put two hairlines in the first
+          90px of the sidebar and neither was carrying hierarchy (#11991). */}
+      <div
+        className={cn(
+          "group/header @container/header flex h-8 items-center justify-between gap-1 px-3 bg-transparent shrink-0",
+          !hasNonMainWorktrees && "border-b border-divider"
+        )}
+      >
+        <div className="flex min-w-0 items-baseline gap-1.5">
+          <h2 className="truncate text-daintree-text font-semibold text-sm tracking-wide">
+            Worktrees
+          </h2>
           {showReconnecting && (
             <span
               aria-hidden="true"
@@ -1665,8 +1682,11 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
                 <Tooltip autoDismiss={false}>
                   <TooltipTrigger asChild>
                     <span className="inline-flex items-center gap-1 whitespace-nowrap shrink-0 text-status-warning text-xs">
-                      <RefreshCw className="w-3 h-3 animate-spin" aria-hidden="true" />
-                      Reconnecting…
+                      <RefreshCw
+                        className="w-3 h-3 animate-spin motion-reduce:animate-none"
+                        aria-hidden="true"
+                      />
+                      <span className="hidden @[16rem]/header:inline">Reconnecting…</span>
                     </span>
                   </TooltipTrigger>
                   <TooltipContent side="bottom">
@@ -1674,16 +1694,22 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
                   </TooltipContent>
                 </Tooltip>
               ) : (
-                <span className="inline-flex items-center gap-1 whitespace-nowrap shrink-0 text-daintree-text/60 text-xs">
-                  <RefreshCw className="w-3 h-3 animate-spin" aria-hidden="true" />
-                  Reconnecting…
+                <span className="inline-flex items-center gap-1 whitespace-nowrap shrink-0 text-text-secondary text-xs">
+                  <RefreshCw
+                    className="w-3 h-3 animate-spin motion-reduce:animate-none"
+                    aria-hidden="true"
+                  />
+                  <span className="hidden @[16rem]/header:inline">Reconnecting…</span>
                 </span>
               )}
             </span>
           )}
         </div>
-        <div className="flex items-center gap-1">
-          <div className="invisible opacity-0 pointer-events-none transition-[opacity,visibility] duration-150 delay-75 group-hover/header:visible group-hover/header:opacity-100 group-hover/header:pointer-events-auto group-hover/header:delay-75 group-focus-within/header:visible group-focus-within/header:opacity-100 group-focus-within/header:pointer-events-auto group-focus-within/header:delay-75 motion-reduce:transition-none flex items-center gap-1">
+        {/* gap-0.5, not gap-1: the four buttons already carry p-1, so a 4px gap
+            on top of that spent ~12px the 200px minimum width does not have —
+            the cluster crowded the "Worktrees" landmark it sits beside. */}
+        <div className="flex shrink-0 items-center gap-0.5">
+          <div className="invisible opacity-0 pointer-events-none transition-[opacity,visibility] duration-150 delay-75 group-hover/header:visible group-hover/header:opacity-100 group-hover/header:pointer-events-auto group-hover/header:delay-75 group-focus-within/header:visible group-focus-within/header:opacity-100 group-focus-within/header:pointer-events-auto group-focus-within/header:delay-75 motion-reduce:transition-none flex items-center gap-0.5">
             <button
               type="button"
               onClick={onOpenOverview}

@@ -175,7 +175,9 @@ export function WorktreeSidebarSearchBar({
   return (
     <div
       className={cn(
-        "px-3 py-2 border-b border-divider shrink-0",
+        // px-3 matches the header above and the status line below, so the whole
+        // control zone sits on one 12px inset instead of three (#11991).
+        "px-3 py-1.5 border-b border-divider shrink-0",
         variant === "sidebar" && "worktree-filter-bar"
       )}
     >
@@ -183,7 +185,10 @@ export function WorktreeSidebarSearchBar({
         <div
           role="search"
           className={cn(
-            "flex flex-1 min-w-0 items-center gap-1.5 px-2.5 py-2 rounded-[var(--radius-md)]",
+            // h-7: 28px is the app's compact control height and the desktop-IDE
+            // norm; the field used to be 34px, which gave the rail more visual
+            // mass than the title above it.
+            "flex h-7 flex-1 min-w-0 items-center gap-1.5 px-2 rounded-[var(--radius-md)]",
             // Fallback keeps themes without --worktree-search-input-bg byte-identical.
             "bg-[var(--worktree-search-input-bg,var(--color-daintree-bg))] border border-daintree-border",
             "focus-within:border-daintree-accent/40 focus-within:ring-1 focus-within:ring-daintree-accent/20"
@@ -199,7 +204,11 @@ export function WorktreeSidebarSearchBar({
             value={liveQuery}
             onChange={(e) => handleQueryChange(e.target.value)}
             onKeyDown={handleKeyDown}
-            placeholder="Search worktrees..."
+            // Short on purpose: at the 200px minimum "Search worktrees..." clips
+            // to "Search worktree", which reads as a typo rather than as
+            // truncation. The noun is already the heading directly above, and
+            // the full phrase stays the accessible name.
+            placeholder="Search…"
             aria-label="Search worktrees"
             className="flex-1 min-w-0 text-xs bg-transparent text-daintree-text placeholder-daintree-text/40 focus:outline-hidden"
           />
@@ -207,7 +216,7 @@ export function WorktreeSidebarSearchBar({
             <button
               type="button"
               onClick={handleClearSearch}
-              className="flex shrink-0 items-center justify-center w-5 h-5 rounded text-daintree-text/40 hover:text-daintree-text"
+              className="flex shrink-0 items-center justify-center w-5 h-5 rounded text-daintree-text/40 transition-colors hover:text-daintree-text focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-daintree-accent"
               aria-label="Clear search"
             >
               <X className="w-3 h-3" />
@@ -228,7 +237,7 @@ export function WorktreeSidebarSearchBar({
       {(statusText || showClearAll) && (
         <div className="flex items-center gap-2 pt-1">
           {statusText && (
-            <span className="min-w-0 flex-1 truncate text-[11px] text-daintree-text/50">
+            <span className="min-w-0 flex-1 truncate text-[11px] text-text-secondary">
               {statusText}
             </span>
           )}
@@ -236,7 +245,7 @@ export function WorktreeSidebarSearchBar({
             <button
               type="button"
               onClick={handleClearAll}
-              className="ml-auto shrink-0 text-[11px] text-daintree-text/50 hover:text-daintree-text transition-colors"
+              className="ml-auto shrink-0 rounded text-[11px] text-text-secondary hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-daintree-accent"
             >
               Clear all
             </button>
