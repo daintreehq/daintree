@@ -159,7 +159,8 @@ export async function buildGitRemoteOperationPreview(
  *
  * `null` means the fresh fetch could not be verified: surface that explicitly
  * rather than an empty list, which would imply "nothing to push". An empty
- * `commits` array IS a valid loaded state and gets `emptyNote`, never a warning.
+ * `commits` array IS a valid loaded state and never gets a warning — what it is
+ * allowed to say about the remote is decided by {@link emptyLines}.
  */
 export function formatGitRemoteOperationPreviewLines(
   preview: GitRemoteOperationPreview | null,
@@ -190,7 +191,7 @@ export function formatGitRemoteOperationPreviewLines(
       ? `${MCP_PREVIEW_CAUTION_PREFIX}This branch has no upstream to rebase onto — this operation will be refused.`
       : `${MCP_PREVIEW_CAUTION_PREFIX}No push destination is configured for this branch — this operation will be refused.`;
   if (preview.commits.length === 0) {
-    return [destinationLine, branchLine, emptyNote];
+    return [destinationLine, branchLine, ...emptyLines(preview, emptyNote, operation)];
   }
   // The tail is only stated when a total was actually measured over the same
   // range the rows came from. Deriving it from anything else would let the
@@ -206,6 +207,38 @@ export function formatGitRemoteOperationPreviewLines(
     ),
     ...(hidden > 0 ? [`  …and ${hidden} more`] : []),
   ];
+}
+
+/**
+ * What an empty commit list is allowed to claim.
+ *
+ * A push caller's `emptyNote` is the categorical "the destination already has
+ * everything" claim, and that is only true when the range settled against a
+ * destination git could name:
+ *
+ * - With no destination, the line above already says the push will be refused,
+ *   so an in-sync note would contradict it — nothing was compared at all.
+ * - With an `unverified` range, empty means "nothing found locally", never "the
+ *   destination is up to date" (see {@link GitPushRangeFacts.rangeBasis}). The
+ *   human dialog guards this with its `git-push-empty-unverified` state; the
+ *   MCP surface says the same thing here so the two approvers read one story.
+ *
+ * A pull-rebase keeps its own note in every state: it names no publish range,
+ * and its note claims nothing about the remote.
+ */
+function emptyLines(
+  preview: GitRemoteOperationPreview,
+  emptyNote: string,
+  operation: GitRemoteOperationKind
+): string[] {
+  if (operation !== "push") return [emptyNote];
+  if (preview.destination === null) return [];
+  if (preview.pushRange?.rangeBasis === "unverified") {
+    return [
+      `Nothing found to publish, but ${preview.destination.remote} couldn't be reached to check ${formatGitPushDestination(preview.destination)} — so this isn't confirmed.`,
+    ];
+  }
+  return [emptyNote];
 }
 
 /** Human-facing `remote/branch`. */

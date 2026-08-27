@@ -10,6 +10,7 @@ import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
+import { isClientGitError } from "@/utils/clientGitError";
 import { useGitPushConfirmStore } from "@/store/gitPushConfirmStore";
 import {
   buildGitRemoteOperationPreview,
@@ -93,7 +94,13 @@ function GitPushConfirmDialogInner() {
         })
         .catch((err: unknown) => {
           if (requestIdRef.current !== requestId) return;
-          setLoadError(formatErrorMessage(err, "Failed to load push preview"));
+          // `git:list-push-commits` fails as a `GitOperationError`, and the
+          // preload carries its discriminant across the realm boundary encoded
+          // INTO the message (`[GitError|<reason>||<branch>] fatal: …`). The
+          // guard strips that prefix in place and is idempotent, so format
+          // after calling it or the dialog shows the user the encoding.
+          isClientGitError(err);
+          setLoadError(formatErrorMessage(err, "Git ended the read without saying why."));
         })
         .finally(() => {
           if (requestIdRef.current !== requestId) return;

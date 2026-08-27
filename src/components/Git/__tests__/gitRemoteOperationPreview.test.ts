@@ -265,11 +265,14 @@ describe("formatGitRemoteOperationPreviewLines", () => {
   it("warns explicitly when no push destination is configured", () => {
     const lines = formatGitRemoteOperationPreviewLines(
       { branch: "topic", destination: null, pullSource: null, commits: [], pushRange: null },
-      "none",
+      "Nothing to publish — the destination already has everything on this branch.",
       "push"
     );
     expect(lines[0]).toContain("No push destination");
     expect(lines[1]).toBe("Branch: topic");
+    // Nothing was compared, so the in-sync note would contradict the warning
+    // one line above it — the line that says the push will be refused.
+    expect(lines.join(" ")).not.toContain("already has everything");
   });
 
   it("warns about a missing upstream for a pull-rebase, even when a push target resolves", () => {
@@ -419,6 +422,55 @@ describe("formatGitRemoteOperationPreviewLines", () => {
     );
     expect(lines[0]).toContain("unverified");
     expect(lines[0]).not.toContain("creates");
+  });
+
+  // An empty `unverified` range means "nothing found locally", never "the
+  // destination is up to date" — the caller's note asserts the second, so it
+  // must not reach an approver who was told the remote was unreachable.
+  it("refuses the in-sync note for an empty range the remote never confirmed", () => {
+    const lines = formatGitRemoteOperationPreviewLines(
+      {
+        branch: "spike",
+        destination: { remote: "fork", branch: "release/spike" },
+        pullSource: null,
+        commits: [],
+        pushRange: { total: 0, rangeBasis: "unverified" as const },
+      },
+      "Nothing to publish — the destination already has everything on this branch.",
+      "push"
+    );
+    const body = lines.join(" ");
+    expect(body).not.toContain("already has everything");
+    expect(body).toContain("fork");
+    expect(body).toContain("isn't confirmed");
+  });
+
+  // The same range basis with a settled `tracked` answer IS the in-sync case,
+  // so the guard above must not be swallowing the note in every empty state.
+  it("still states in sync when the range settled against the destination", () => {
+    const lines = formatGitRemoteOperationPreviewLines(
+      {
+        branch: "main",
+        destination: { remote: "origin", branch: "main" },
+        pullSource: null,
+        commits: [],
+        pushRange: { total: 0, rangeBasis: "tracked" as const },
+      },
+      "Nothing to publish — the destination already has everything on this branch.",
+      "push"
+    );
+    expect(lines[2]).toContain("already has everything");
+  });
+
+  // The pull-rebase note claims nothing about a remote, so it survives states
+  // that silence the push one.
+  it("keeps the pull-rebase note when there is no upstream to rebase onto", () => {
+    const lines = formatGitRemoteOperationPreviewLines(
+      { branch: "topic", destination: null, pullSource: null, commits: [], pushRange: null },
+      "No local commits to replay.",
+      "pull-rebase"
+    );
+    expect(lines[2]).toBe("No local commits to replay.");
   });
 
   it("surfaces an explicit couldn't-verify warning for a failed fetch", () => {

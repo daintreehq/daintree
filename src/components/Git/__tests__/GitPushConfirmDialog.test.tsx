@@ -167,6 +167,25 @@ describe("GitPushConfirmDialog", () => {
     expect(screen.getByText("Fix it")).toBeTruthy();
   });
 
+  // The preview handler fails as a `GitOperationError`, whose discriminant the
+  // preload encodes into `.message` because contextBridge strips own Error
+  // properties. Rendered raw, that encoding is what the approver reads.
+  it("shows the git message without the encoded error prefix", async () => {
+    mocks.buildPreview.mockRejectedValue(
+      new Error("[GitError|not-a-repo||feature%2Fx] fatal: not a git repository")
+    );
+    render(<GitPushConfirmDialog />);
+
+    await act(async () => {
+      void useGitPushConfirmStore.getState().requestConfirmation("/repo");
+    });
+
+    const alert = screen.getByTestId("git-push-commits-retry").closest("[role='alert']");
+    expect(alert?.textContent).toContain("fatal: not a git repository");
+    expect(alert?.textContent).not.toContain("GitError");
+    expect(alert?.textContent).not.toContain("feature%2Fx");
+  });
+
   // A preview fetch is not the action running. Wiring it to `isConfirmLoading`
   // disabled Cancel, and AppDialog's initial-focus pass calls `.focus()` on the
   // Cancel button it finds by selector without checking it is enabled — so a
