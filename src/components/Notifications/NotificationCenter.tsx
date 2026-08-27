@@ -909,11 +909,12 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
           heading, where it read as part of the title rather than as a peer of
           the other three.
 
-          pr-2, not px-3, on both rows: the right-side icon buttons carry 4px of
-          internal p-1 touch padding, so an 8px container edge lands their
-          glyphs at the same 12px optical inset as the title text on the left. */}
+          The right edge stays tighter than the left on purpose: the icon
+          buttons carry their own internal touch padding, so a smaller container
+          inset lands their glyphs at roughly the same optical distance from the
+          edge as the title text on the 16px left margin. */}
       <div className="flex flex-col border-b border-divider">
-        <div className="flex items-center justify-between pl-3 pr-2.5 py-2 gap-2">
+        <div className="flex items-center justify-between pl-4 pr-2.5 py-2 gap-2">
           {/* Full strength, semibold. At /80 the panel's own heading measured
               dimmer than the row titles underneath it — the label naming the
               surface was quieter than the content it named, which is the
@@ -1009,16 +1010,14 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
           </div>
         </div>
         {entries.length > 0 && (
-          // `pl-1`, not `pl-3`, and it is deliberate. Every other band down the
-          // panel puts its TEXT on a 12px column — the title, the section
-          // labels, the quiet-state pill, the row icons. A chip carries its own
-          // 8px of padding, so a 12px container left the chip labels at 20px,
-          // and the one row of the panel made of words the eye reads as a list
-          // was the one row that didn't line up with the rest. Insetting the
-          // container by the chip's own padding puts the labels back on the
-          // column and lets the selected pill bleed into the gutter, which is
-          // the usual way a pill row is optically aligned.
-          <div className="flex flex-wrap items-center gap-1.5 pl-1 pr-2 pb-2">
+          // The chip row sits on the same 16px margin as every other band. An
+          // earlier pass inset it by the chip's own padding so the LABELS
+          // landed on the text column, but that put the selected pill 4px off
+          // the panel edge, into the same crowded strip as the unread dots and
+          // the thread rail. Between aligning label-to-label and keeping one
+          // clean left margin, the margin wins: a pill is a surface, and
+          // surfaces line up with surfaces.
+          <div className="flex flex-wrap items-center gap-1.5 pl-4 pr-2 pb-2">
             <FilterChip
               label="All"
               selected={filter === "all"}
@@ -1070,7 +1069,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
       {showMutedPill && (
         <div
           data-testid="notification-muted-pill"
-          className="flex items-start gap-2 px-3 py-1.5 bg-overlay-raised text-2xs text-daintree-text/70"
+          className="flex items-start gap-2 pl-4 pr-3 py-1.5 bg-overlay-raised text-2xs text-daintree-text/70"
         >
           <div className="min-w-0 flex-1 flex flex-col gap-0.5">
             <span className="font-medium text-text-primary">{quietCause}</span>
@@ -1355,7 +1354,7 @@ function NeedsAttentionSection({
 } & RovingSectionProps) {
   return (
     <div data-testid="needs-attention-section" className="border-b border-divider">
-      <div className="px-3 pt-2 pb-1 text-3xs font-semibold uppercase tracking-wide text-daintree-text/70">
+      <div className="pl-4 pr-3 pt-2 pb-1 text-3xs font-semibold uppercase tracking-wide text-daintree-text/70">
         Needs attention
       </div>
       <div role="group" aria-label="Needs attention">
@@ -1390,7 +1389,7 @@ function NeedsAttentionSection({
       {overflowCount > 0 && (
         <div
           data-testid="needs-attention-overflow"
-          className="px-3 pb-2 text-3xs text-daintree-text/45"
+          className="pl-4 pr-3 pb-2 text-3xs text-daintree-text/45"
         >
           +{overflowCount} more below
         </div>
@@ -1631,7 +1630,7 @@ function ContextSectionHeader({
   return (
     <div
       data-testid="context-section-header"
-      className="group/section flex items-center justify-between px-3 py-1 bg-overlay-raised text-3xs font-medium uppercase tracking-wide text-daintree-text/60"
+      className="group/section flex items-center justify-between pl-4 pr-3 py-1 bg-overlay-raised text-3xs font-medium uppercase tracking-wide text-daintree-text/60"
     >
       <span className="truncate">{label}</span>
       <div className="ml-2 shrink-0 flex items-center gap-2">
@@ -1666,7 +1665,7 @@ function NewSinceLastLookedDivider({
       ref={ref}
       tabIndex={-1}
       data-testid="new-since-last-looked"
-      className="flex items-center gap-2 px-3 py-1 bg-overlay-raised text-3xs font-medium uppercase tracking-wide text-daintree-text/70 outline-hidden"
+      className="flex items-center gap-2 pl-4 pr-3 py-1 bg-overlay-raised text-3xs font-medium uppercase tracking-wide text-daintree-text/70 outline-hidden"
     >
       <span>New since you last looked</span>
       {unreadCount > 0 && (

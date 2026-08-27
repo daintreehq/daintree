@@ -195,7 +195,7 @@ export function NotificationCenterEntry({
       role={role}
       onFocus={onFocus}
       className={cn(
-        "group flex items-start gap-2 px-3 py-2.5 hover:bg-overlay-subtle transition-colors",
+        "group flex items-start gap-2 pl-4 pr-3 py-2.5 hover:bg-overlay-subtle transition-colors",
         // The shared palette-row focus treatment, not a bespoke ring: `outline`
         // survives Windows High Contrast where a box-shadow ring does not, and
         // the offset is negative because this row is full-bleed inside three
@@ -205,9 +205,12 @@ export function NotificationCenterEntry({
       )}
     >
       <div className={cn("relative shrink-0", config.className)}>
-        {/* The unread dot floats in the row's px-3 gutter (absolute, anchored
-            to the icon) so read rows don't carry a phantom spacer column and
-            the icon shares the 12px gutter with the header and section labels. */}
+        {/* The unread dot floats in the row's left gutter (absolute, anchored to
+            the icon) so read rows don't carry a phantom spacer column. The
+            gutter is 16px rather than 12px so this 6px dot sits inside the
+            panel's margin instead of hanging off the edge next to the thread
+            rail — the icon still shares that gutter with the header, the chip
+            row and the section labels. */}
         {isNew && (
           <span
             aria-hidden="true"
