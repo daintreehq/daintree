@@ -239,11 +239,11 @@ function SettingsDialogInner({
     } else if (isOpen) {
       // Untargeted open (toolbar/menu): always land on global scope
       const tab = rememberedTab;
-      setActiveScope("global");
       markTabVisited(tab);
-      if (tab !== activeTab) {
-        startTransition(() => setActiveTab(tab));
-      }
+      startTransition(() => {
+        setActiveScope("global");
+        setActiveTab(tab);
+      });
       setScrollToSection(null);
       setSearchQuery("");
       setHiddenSettingBanner(null);
@@ -531,11 +531,17 @@ function SettingsDialogInner({
 
   const handleScopeSwitch = (scope: SettingsScope) => {
     if (scope === activeScope) return;
-    setActiveScope(scope);
     setSearchQuery("");
     const tab = scope === "project" ? rememberedProjectTab : rememberedTab;
     markTabVisited(tab);
-    startTransition(() => setActiveTab(tab));
+    // Scope rides in the same transition as the tab, for the reason handleResultClick
+    // already documents: split across an urgent and a transitional update, a cold lazy
+    // tab commits the new scope's chrome while the pane still shows the old scope's
+    // content — the header would name the project over Daintree's settings.
+    startTransition(() => {
+      setActiveScope(scope);
+      setActiveTab(tab);
+    });
   };
 
   const tablistRef = useRef<HTMLDivElement>(null);
@@ -725,6 +731,15 @@ function SettingsDialogInner({
                   )
                 }
               >
+                {/* The title is what aria-labelledby points at, so the scope has to be
+                    part of it — otherwise opening the modal announces "General, dialog"
+                    and never says whose General. The visible line above is decorative
+                    for the same reason: saying it twice is worse than saying it once. */}
+                <span className="sr-only">
+                  {activeScope === "project" && hasProject
+                    ? `Project settings for ${projectLabel}, `
+                    : "Global settings for Daintree, "}
+                </span>
                 {isSearching ? "Search results" : tabTitles[activeTab]}
               </AppDialog.Title>
             </div>
@@ -737,18 +752,18 @@ function SettingsDialogInner({
               user never sees. Naming the project keeps the failure attached to the
               thing it happened to. */}
           {activeScope === "project" && projectId && (
-            <div className="px-6 pt-4 space-y-2 shrink-0 empty:hidden">
+            <div className="px-6 pt-6 space-y-2 shrink-0 empty:hidden">
               {projectForm.projectError && (
                 <SettingsLoadErrorBanner
-                  title="Couldn't load settings"
-                  message={`${projectLabel} — ${projectForm.projectError}`}
+                  title={`Couldn't load settings for ${projectLabel}`}
+                  message={projectForm.projectError}
                   onRetry={projectForm.refreshProjectSettings}
                 />
               )}
               {projectForm.projectAutoSaveError && (
                 <SettingsLoadErrorBanner
-                  title="Couldn't save settings"
-                  message={`${projectLabel} — ${projectForm.projectAutoSaveError}`}
+                  title={`Couldn't save settings for ${projectLabel}`}
+                  message={projectForm.projectAutoSaveError}
                   onRetry={() => void projectForm.flush()}
                 />
               )}
@@ -1335,7 +1350,7 @@ export function NavItem({
             two survive colour being removed. */}
         {(hasError || modified) && (
           <span
-            className="absolute -top-1 -right-1 flex items-center justify-center"
+            className="absolute -top-1.5 -right-1.5 flex items-center justify-center"
             role="img"
             aria-label={hasError ? "Contains validation errors" : "Modified from default"}
           >
@@ -1391,13 +1406,18 @@ export function ScopeContext({
   const Icon = isProject ? Folder : Globe;
   return (
     <span
-      className="flex items-center gap-1.5 min-w-0 text-xs text-text-secondary"
+      // gap-2 and a w-5 icon box, matching AppDialog.Title's icon slot exactly, so the
+      // context line's text starts on the same x as the section title's rather than
+      // 8px inside it.
+      className="flex items-center gap-2 min-w-0 text-xs text-text-secondary"
       data-settings-scope-context={isProject ? "project" : "global"}
+      // Decorative: the same scope and entity are inside the dialog's labelled title,
+      // and a screen reader should hear them once, not on both nodes.
+      aria-hidden="true"
     >
-      <Icon className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
-      {/* The icon is the only visual carrier of the scope word, so the word itself has
-          to reach a screen reader some other way. */}
-      <span className="sr-only">{isProject ? "Project settings for" : "Global settings for"}</span>
+      <span className="w-5 flex justify-center shrink-0">
+        <Icon className="w-3.5 h-3.5" />
+      </span>
       <span className="truncate" title={entity}>
         {entity}
       </span>

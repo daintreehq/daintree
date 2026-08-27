@@ -28,6 +28,7 @@ export {
   FolderOutput, // worktree living outside the project directory (external)
   FolderTree, // Daintree's own file browser panel (the worktree file tree)
   Folders, // copy tree / file hierarchy capture (two overlapping folders)
+  GitBranchPlus, // per-project worktree setup — creating branches, not browsing them
   GitPullRequest, // forge provider / code-host plugin category
   Globe, // application-wide scope — the setting belongs to Daintree, not one project
   History, // resume closed session / session history

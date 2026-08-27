@@ -83,6 +83,11 @@
    inset ring and the 2px accent marker are all dropped, leaving every section row
    identical and no way to tell which one you are looking at. */
 @media (forced-colors: active) {
+  /* Same reason as the prefers-contrast rule below: the wrapper carries the boundary. */
+  .settings-search-input {
+    border: none;
+  }
+
   /* Border, not fill. A `Highlight` background makes Chromium paint a Canvas backplate
      behind the label, which comes out as a solid white block where the text should be —
      verified in the capture harness. An outline-weight border says "selected" without
@@ -121,6 +126,27 @@
 }
 
 @media (prefers-contrast: more) {
+  /* The scope switch and the active nav row are the two selection signals in this
+     shell, and both were carried by a low-delta neutral fill — in the mode whose whole
+     point is stronger state contrast they read exactly as faintly as they do by
+     default, while every row around them gains a border. Give both an explicit
+     boundary. Kept separate from the forced-colors block above by house rule. */
+  .settings-scope-control [data-slot="segmented-thumb"] {
+    border-width: 2px;
+    border-color: var(--theme-text-primary);
+  }
+
+  .settings-nav-item[data-active="true"] {
+    border: 2px solid var(--theme-text-primary);
+  }
+
+  /* The search field's perceivable boundary is its wrapper, so the generic
+     "border on every native form control" rule gives the inner input a second,
+     square-cornered box inside the rounded pill. One control, one border. */
+  .settings-search-input {
+    border: none;
+  }
+
   .settings-section-header {
     --_bg: var(--settings-section-header-bg-solid, var(--theme-surface-panel));
     backdrop-filter: none;

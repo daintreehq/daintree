@@ -4,6 +4,7 @@ import {
   Command,
   FileCode,
   GitBranch,
+  GitBranchPlus,
   History,
   LayoutGrid,
   Mic,
@@ -1649,7 +1650,9 @@ export const SETTINGS_REGISTRY = [
     scope: "project",
     group: "Project",
     label: "Worktree Setup",
-    icon: <GitBranch className="w-4 h-4" />,
+    // Not GitBranch: project Code Forge already uses it, and two sections in the same
+    // nav list sharing one glyph makes the icon useless for telling them apart.
+    icon: <GitBranchPlus className="w-4 h-4" />,
     importKind: "lazy",
     importer: importProjectAutomationTab,
     LazyComponent: LazyProjectAutomationTab,
@@ -1945,7 +1948,7 @@ export const projectTabIcons: Record<ProjectSettingsTab, ReactNode> = {
   "project:general": <SettingsIcon className="w-5 h-5 text-text-secondary" />,
   "project:context": <FileCode className="w-5 h-5 text-text-secondary" />,
   "project:variables": <KeyRound className="w-5 h-5 text-text-secondary" />,
-  "project:automation": <GitBranch className="w-5 h-5 text-text-secondary" />,
+  "project:automation": <GitBranchPlus className="w-5 h-5 text-text-secondary" />,
   "project:recipes": <Workflow className="w-5 h-5 text-text-secondary" />,
   "project:commands": <Command className="w-5 h-5 text-text-secondary" />,
   "project:notifications": <Bell className="w-5 h-5 text-text-secondary" />,

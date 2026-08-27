@@ -67,6 +67,13 @@ export function SegmentedRadioGroup<T extends string>({
     if (!container || typeof ResizeObserver === "undefined") return;
     const observer = new ResizeObserver(measure);
     observer.observe(container);
+    // The segments too, not just their container: under `fullWidth` a segment's box
+    // can settle after the container's has (late font metrics, a flex reflow), and a
+    // container-only observer never hears about it — which strands the thumb at zero
+    // width and leaves the group with no selected mark at all.
+    for (const button of buttonRefs.current) {
+      if (button) observer.observe(button);
+    }
     return () => observer.disconnect();
   }, [measure, options.length]);
 
@@ -122,7 +129,11 @@ export function SegmentedRadioGroup<T extends string>({
           data-slot="segmented-thumb"
           className={cn(
             "absolute top-0.5 bottom-0.5 left-0 z-0 rounded-[var(--radius-sm)] pointer-events-none",
-            "bg-surface-panel-elevated border border-border-default shadow-[var(--theme-shadow-ambient)]",
+            // Per docs/themes/interaction-state-recipes.md "Segmented Toggle Group Active
+            // State": overlay-medium fill, border-strong boundary. The previous
+            // panel-elevated + border-default pairing put the selected segment 1.15:1
+            // against its track, well under SC 1.4.11's 3:1 for a selection indicator.
+            "bg-overlay-medium border border-border-strong shadow-[var(--theme-shadow-ambient)]",
             // forced-colors discards the fill and the ambient shadow, so the thumb says
             // "selected" with a system-coloured border. Not a Highlight *fill*: that
             // makes Chromium paint a backplate behind the label and the text vanishes.
@@ -159,6 +170,12 @@ export function SegmentedRadioGroup<T extends string>({
               "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1",
               "disabled:cursor-not-allowed disabled:pointer-events-none",
               isActive ? "text-daintree-text" : "text-text-secondary hover:text-daintree-text",
+              // Belt and braces: if the thumb could not be measured, the checked
+              // segment still has to look checked. A brighter label alone is not a
+              // selected state.
+              isActive &&
+                !thumb &&
+                "bg-overlay-medium border border-border-strong forced-colors:border-[Highlight]",
               disabled && "opacity-40"
             )}
           >

@@ -63,9 +63,15 @@ describe("settings scope orientation", () => {
       ).toBe("global");
     });
 
-    it("exposes the scope in text, not only through the icon", () => {
-      render(<ScopeContext scope="project" projectLabel="Helios Dashboard" />);
-      expect(screen.getByText(/project settings for/i)).toBeTruthy();
+    it("is decorative — the dialog's own labelled title carries the announced name", () => {
+      // Both the header eyebrow and the dialog title name the scope and the entity.
+      // Only one of them should reach a screen reader, or every open announces it
+      // twice; the title wins, because that is what aria-labelledby points at.
+      const { container } = render(
+        <ScopeContext scope="project" projectLabel="Helios Dashboard" />
+      );
+      const line = container.querySelector("[data-settings-scope-context]");
+      expect(line?.getAttribute("aria-hidden")).toBe("true");
     });
   });
 
