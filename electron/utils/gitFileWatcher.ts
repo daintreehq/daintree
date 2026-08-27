@@ -382,8 +382,13 @@ export class GitFileWatcher {
       // healthy FSEvents stream under exactly the file churn that provokes the
       // overflow, and would burn the controller's bounded re-arm budget until
       // the worktree stranded on the git-only fallback. Events WERE lost
-      // though, so force a refresh instead of ignoring it.
-      this.handleGitFileChange();
+      // though, so force a refresh instead of ignoring it — through the
+      // worktree path, not the git-internal one: what overflowed was
+      // working-tree writes, and `flushWorktreeChange` fires both the
+      // raw-filesystem signal the file browser reads and the git-status
+      // recompute. `handleGitFileChange` would only do the latter, leaving
+      // writes to gitignored paths invisible (#11330).
+      this.handleWorktreeChange();
       return;
     }
 

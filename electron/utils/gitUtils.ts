@@ -32,21 +32,39 @@ const DEFINITIVE_TTL_MS = 600_000;
 // PATH) decays to the same cadence a definitive answer gets instead of paying
 // one `git rev-parse` every 15s per worktree forever.
 const TRANSIENT_TTL_BASE_MS = 15_000;
-const gitDirCache = new Cache<string, Promise<string | null>>({
-  maxSize: 200,
-  defaultTTL: DEFINITIVE_TTL_MS,
-});
-const gitCommonDirCache = new Cache<string, Promise<string | null>>({
-  maxSize: 200,
-  defaultTTL: DEFINITIVE_TTL_MS,
-});
-// Consecutive transient failures per worktree, driving the backoff above.
-// Same bounds as the resolution caches, and entries age out on their own so a
-// path that stops being asked about doesn't pin a counter.
-const transientFailureStreak = new Cache<string, number>({
-  maxSize: 200,
-  defaultTTL: DEFINITIVE_TTL_MS,
-});
+// The streak has to OUTLIVE the longest window it can produce. If it expired
+// alongside a capped negative entry, a permanently unreachable path would
+// forget it had ever failed and drop straight back to the 15s cadence, so the
+// backoff would sawtooth instead of settling.
+const TRANSIENT_STREAK_TTL_MS = DEFINITIVE_TTL_MS * 2;
+
+/**
+ * One resolution's cache pair. The streak is per-resolution, not per-path:
+ * `--git-dir` and `--git-common-dir` are separate probes, so sharing a counter
+ * would let two logically-first failures land at 15s and 30s, reach the cap
+ * twice as fast, and let a success on one reset the other's history.
+ */
+interface GitPathCaches {
+  results: Cache<string, Promise<string | null>>;
+  /** Consecutive transient failures per worktree, driving the backoff above. */
+  transientStreak: Cache<string, number>;
+}
+
+function makeGitPathCaches(): GitPathCaches {
+  return {
+    results: new Cache<string, Promise<string | null>>({
+      maxSize: 200,
+      defaultTTL: DEFINITIVE_TTL_MS,
+    }),
+    transientStreak: new Cache<string, number>({
+      maxSize: 200,
+      defaultTTL: TRANSIENT_STREAK_TTL_MS,
+    }),
+  };
+}
+
+const gitDirCaches = makeGitPathCaches();
+const gitCommonDirCaches = makeGitPathCaches();
 
 /** Exit code git uses for a fatal error, including "not a git repository". */
 const GIT_FATAL_EXIT_CODE = 128;
@@ -91,9 +109,9 @@ function classifyGitFailure(error: unknown, stderr: string): FailureKind {
  * failure and capped at the definitive TTL so a permanently unreachable path
  * costs no more than a non-repo one.
  */
-function nextTransientTtlMs(worktreePath: string): number {
-  const streak = (transientFailureStreak.get(worktreePath) ?? 0) + 1;
-  transientFailureStreak.set(worktreePath, streak);
+function nextTransientTtlMs(caches: GitPathCaches, worktreePath: string): number {
+  const streak = (caches.transientStreak.get(worktreePath) ?? 0) + 1;
+  caches.transientStreak.set(worktreePath, streak);
   return Math.min(TRANSIENT_TTL_BASE_MS * 2 ** (streak - 1), DEFINITIVE_TTL_MS);
 }
 
@@ -240,13 +258,14 @@ async function resolveGitPath(
 }
 
 function cachedResolveGitPath(
-  cacheStore: Cache<string, Promise<string | null>>,
+  caches: GitPathCaches,
   revParseFlag: string,
   warnMessage: string,
   worktreePath: string,
   options: GitDirOptions
 ): Promise<string | null> {
   const { cache = true, timeout = 5000, logErrors = false, cacheErrors = true } = options;
+  const cacheStore = caches.results;
 
   if (cache) {
     const cached = cacheStore.get(worktreePath);
@@ -269,14 +288,14 @@ function cachedResolveGitPath(
         return;
       }
       if (resolved.path !== null) {
-        transientFailureStreak.invalidate(worktreePath);
+        caches.transientStreak.invalidate(worktreePath);
         cacheStore.set(worktreePath, promise, SUCCESS_TTL_MS);
       } else if (!cacheErrors) {
         cacheStore.invalidate(worktreePath);
       } else if (resolved.failure === "transient") {
-        cacheStore.set(worktreePath, promise, nextTransientTtlMs(worktreePath));
+        cacheStore.set(worktreePath, promise, nextTransientTtlMs(caches, worktreePath));
       } else {
-        transientFailureStreak.invalidate(worktreePath);
+        caches.transientStreak.invalidate(worktreePath);
       }
     });
   }
@@ -289,7 +308,7 @@ export function getGitDir(
   options: GitDirOptions = {}
 ): Promise<string | null> {
   return cachedResolveGitPath(
-    gitDirCache,
+    gitDirCaches,
     "--git-dir",
     "Failed to resolve git directory",
     worktreePath,
@@ -311,7 +330,7 @@ export function getGitCommonDir(
   options: GitDirOptions = {}
 ): Promise<string | null> {
   return cachedResolveGitPath(
-    gitCommonDirCache,
+    gitCommonDirCaches,
     "--git-common-dir",
     "Failed to resolve git common directory",
     worktreePath,
@@ -344,21 +363,21 @@ export async function getGitBranch(
 
 export function clearGitDirCache(worktreePath?: string): void {
   if (worktreePath) {
-    gitDirCache.invalidate(worktreePath);
-    transientFailureStreak.invalidate(worktreePath);
+    gitDirCaches.results.invalidate(worktreePath);
+    gitDirCaches.transientStreak.invalidate(worktreePath);
   } else {
-    gitDirCache.clear();
-    transientFailureStreak.clear();
+    gitDirCaches.results.clear();
+    gitDirCaches.transientStreak.clear();
   }
 }
 
 export function clearGitCommonDirCache(worktreePath?: string): void {
   if (worktreePath) {
-    gitCommonDirCache.invalidate(worktreePath);
-    transientFailureStreak.invalidate(worktreePath);
+    gitCommonDirCaches.results.invalidate(worktreePath);
+    gitCommonDirCaches.transientStreak.invalidate(worktreePath);
   } else {
-    gitCommonDirCache.clear();
-    transientFailureStreak.clear();
+    gitCommonDirCaches.results.clear();
+    gitCommonDirCaches.transientStreak.clear();
   }
 }
 

@@ -379,6 +379,26 @@ describe("negative-result caching is classified by failure kind (#12042)", () =>
     expect(execFileMock.mock.calls.length).toBe(spawnsAfterSecondFailure);
   });
 
+  it("keeps the backoff separate for git-dir and common-dir", async () => {
+    // Two distinct probes. Sharing a streak would let a common-dir failure
+    // widen getGitDir's window — delaying exactly the resolution the watcher
+    // is waiting on — and let a success on one wipe the other's history.
+    const ONE_WINDOW_MS = 20_000;
+
+    mockSpawnFailure("EPERM");
+    await expect(getGitCommonDir("/shared")).resolves.toBeNull();
+    await vi.advanceTimersByTimeAsync(ONE_WINDOW_MS);
+    await expect(getGitCommonDir("/shared")).resolves.toBeNull();
+
+    // getGitDir has failed zero times, so it must still be on the base window.
+    await expect(getGitDir("/shared")).resolves.toBeNull();
+    const spawns = execFileMock.mock.calls.length;
+
+    await vi.advanceTimersByTimeAsync(ONE_WINDOW_MS);
+    await expect(getGitDir("/shared")).resolves.toBeNull();
+    expect(execFileMock.mock.calls.length).toBe(spawns + 1);
+  });
+
   it("restarts the backoff after an explicit invalidation", async () => {
     mockSpawnFailure("EPERM");
     await expect(getGitDir("/unreachable")).resolves.toBeNull();

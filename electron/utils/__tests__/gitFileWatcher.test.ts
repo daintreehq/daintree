@@ -1469,6 +1469,7 @@ describe("GitFileWatcher", () => {
       // controller's bounded re-arm budget.
       const onChange = vi.fn();
       const onWatcherFailed = vi.fn();
+      const onWorktreeFilesChanged = vi.fn();
       const mock = setupSubscribeMock();
 
       const origPlatform = process.platform;
@@ -1482,6 +1483,7 @@ describe("GitFileWatcher", () => {
           onChange,
           watchWorktree: true,
           onWatcherFailed,
+          onWorktreeFilesChanged,
         });
 
         await expect(gitWatcher.start()).resolves.toBe(true);
@@ -1494,9 +1496,12 @@ describe("GitFileWatcher", () => {
         );
 
         expect(onWatcherFailed).not.toHaveBeenCalled();
-        // Events WERE lost, so it must still force a reconcile rather than
-        // silently carrying on with a stale snapshot.
-        await vi.advanceTimersByTimeAsync(400);
+        // Events WERE lost, so it must still reconcile rather than carrying on
+        // with a stale snapshot — and what overflowed was working-tree writes,
+        // so the raw-filesystem consumer has to hear about it too, not just the
+        // git-status pass.
+        await vi.advanceTimersByTimeAsync(1_000);
+        expect(onWorktreeFilesChanged).toHaveBeenCalled();
         expect(onChange).toHaveBeenCalled();
       } finally {
         Object.defineProperty(process, "platform", { value: origPlatform, configurable: true });

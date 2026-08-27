@@ -424,13 +424,17 @@ export class WatcherController {
    * and doesn't need to wait for budget exhaustion before the recovery path
    * is available. The session cap still bounds total resets.
    *
-   * Returns `true` when the budget was actually reset (non-zero counter,
-   * under the cap); callers can use this to decide whether a re-arm attempt
-   * is worthwhile.
+   * Returns `true` when the budget was actually reset (a spent counter or a
+   * pending backoff, under the cap); callers can use this to decide whether a
+   * re-arm attempt is worthwhile.
    */
   resetRetryBudget(): boolean {
     if (this.disposed) return false;
-    if (this.watcherRetryCount === 0) return false;
+    // A pending timer counts even before it has charged an attempt: the budget
+    // is spent where the arm actually happens, so the first backoff window sits
+    // at count 0. Refusing there would make a user-triggered refresh during that
+    // window a silent no-op — exactly when they most want the immediate re-arm.
+    if (this.watcherRetryCount === 0 && this.watcherRetryTimer === null) return false;
     if (this.retryBudgetResetCount >= MAX_RESETS_PER_SESSION) return false;
 
     if (this.watcherRetryTimer) {

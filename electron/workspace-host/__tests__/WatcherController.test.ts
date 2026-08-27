@@ -1127,6 +1127,23 @@ describe("WatcherController", () => {
       expect(vi.getTimerCount()).toBe(1);
     });
 
+    it("lets a user refresh cut short the very first backoff", async () => {
+      // The budget is charged where the arm happens, so the first 30s of
+      // backoff sits at count 0. resetRetryBudget still has to report success
+      // there — WorktreeMonitor.refresh() only re-arms when it does, and that
+      // window is exactly when the user is most likely to hit Refresh.
+      mockWatcherStartResult = false;
+      const host = makeHost({ isElevated: false });
+      const ctrl = new WatcherController(host as WatcherControllerHost);
+
+      ctrl.start();
+      await settle();
+      expect(vi.getTimerCount()).toBe(1);
+
+      expect(ctrl.resetRetryBudget()).toBe(true);
+      expect(vi.getTimerCount()).toBe(0);
+    });
+
     it("does not re-arm after the controller is stopped mid-backoff", async () => {
       mockWatcherStartResult = false;
       const host = makeHost({ isElevated: false });
