@@ -1759,6 +1759,12 @@ export interface IpcEventMap {
     type: "alert" | "confirm" | "prompt";
     message: string;
     defaultValue: string;
+    /**
+     * Host of the frame that raised the dialog, or null when it has no host worth
+     * claiming (data:, blob:, about:). Never guessed — an attribution that can lie is
+     * worse than none.
+     */
+    origin: string | null;
   };
 
   // Webview dialogs dismissed — guest navigated away or its renderer crashed,

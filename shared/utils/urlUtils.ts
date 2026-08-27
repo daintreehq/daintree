@@ -232,3 +232,51 @@ export function looksLikeOAuthUrl(url: string): boolean {
     return false;
   }
 }
+
+/** Longest origin rendered before the label is clipped. Hosts this long are hostile. */
+const MAX_ORIGIN_LENGTH = 64;
+
+/**
+ * Clip a hostile-length host from the LEFT, keeping the tail.
+ *
+ * The end is the part that identifies the site — the registrable domain and the port —
+ * and it is the part the attacker does not control. The start is arbitrary subdomains
+ * they do. Truncating the other way turns `bank.com.<...>.evil.example` into a label
+ * reading `bank.com…`, which is worse than showing nothing.
+ */
+function clipOriginTail(host: string): string {
+  return host.length > MAX_ORIGIN_LENGTH ? `…${host.slice(-MAX_ORIGIN_LENGTH)}` : host;
+}
+
+/**
+ * The origin to show as the source of a guest-page dialog, or `null` when there is no
+ * origin worth claiming.
+ *
+ * Returning `null` rather than a placeholder is the point: this label is the user's only
+ * evidence about who is speaking, so a guess is worse than an absence. `extractHostPort`
+ * answers "localhost" for anything it cannot parse, which is fine for a display URL and
+ * wrong here.
+ *
+ * `host` rather than `hostname` keeps the port, which is what distinguishes two dev
+ * servers on the same machine.
+ */
+export function formatDialogOrigin(url: string | undefined | null): string | null {
+  if (!url) return null;
+  let parsed: URL;
+  try {
+    parsed = new URL(url);
+  } catch {
+    return null;
+  }
+  if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+    // No bidi-control stripping here on purpose: a host carrying one fails WHATWG URL
+    // parsing outright, so it never reaches this line — it leaves through the `catch`
+    // above as `null`. Stripping would be a defence that can never fire.
+    const host = parsed.host;
+    if (!host) return null;
+    return clipOriginTail(host);
+  }
+  if (parsed.protocol === "file:") return "Local file";
+  // data:, blob:, about:, and anything else carry no host a user could act on.
+  return null;
+}

@@ -2220,6 +2220,7 @@ function buildElectronApi(): ElectronAPI {
           type: "alert" | "confirm" | "prompt";
           message: string;
           defaultValue: string;
+          origin: string | null;
         }) => void
       ): (() => void) => _typedOn(CHANNELS.WEBVIEW_DIALOG_REQUEST, callback),
       onDialogDismiss: (callback: (payload: { panelId: string }) => void): (() => void) =>
