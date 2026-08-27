@@ -125,7 +125,7 @@ Every state is checked across the whole 150ms crossfade rather than at its endpo
 "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2";
 ```
 
-**Usage:** 2px outline with 2px offset satisfies WCAG 2.2 SC 2.4.13 (3:1 contrast ratio and size requirements). Requires `focus-visible:outline` base class to enable outline rendering. Used in `SettingsInput.tsx` (`INPUT_CLASSES`).
+**Usage:** 2px outline with 2px offset satisfies WCAG 2.2 SC 2.4.13 (3:1 contrast ratio and size requirements). Requires `focus-visible:outline` base class to enable outline rendering. Used in `src/components/ui/input.tsx` (`inputVariants`).
 
 ---
 
@@ -151,7 +151,7 @@ Every state is checked across the whole 150ms crossfade rather than at its endpo
 "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2";
 ```
 
-**Usage:** Base state includes `border-border-strong`. On focus, outline is added — do NOT change `border-width`. Changing width causes layout jitter. Used in `SettingsInput.tsx` and `SettingsTextarea.tsx`.
+**Usage:** Base state includes `border-border-strong`. On focus, outline is added — do NOT change `border-width`. Changing width causes layout jitter. Used in `src/components/ui/input.tsx` (`inputVariants`) and `src/components/ui/textarea.tsx` (`textareaVariants`); the settings wrappers `SettingsInput.tsx` and `SettingsTextarea.tsx` compose those rather than restating the recipe.
 
 ---
 
@@ -187,7 +187,7 @@ Every state is checked across the whole 150ms crossfade rather than at its endpo
 "border-daintree-border text-daintree-text";
 ```
 
-**Usage:** The row card always uses neutral border and text. A 2px left rail (`bg-state-modified`) on the row signals modified state — semantic info hue, not accent. In the default `accent` color scheme (`SettingsSwitch.tsx` `COLOR_SCHEMES`), the switch track uses `bg-daintree-border` in OFF state and `data-[state=checked]:bg-daintree-text` in ON state — the ON fill is neutral text color, not accent. Accent on this widget is confined to the focus outline (`focus-visible:outline-daintree-accent`), never the track fill, the row card, or the modified-state rail. Apply `focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2` to the switch Root for keyboard focus. Used in `SettingsSwitchCard.tsx` + `SettingsSwitch.tsx`.
+**Usage:** The row card always uses neutral border and text. A 2px left rail (`bg-state-modified`) on the row signals modified state — semantic info hue, not accent. In the default `neutral` tone (`src/components/ui/switch.tsx` `switchVariants`), the track is `bg-surface-input` with an inset `ring-border-strong` in OFF state and `data-[state=checked]:bg-text-primary` in ON state — the ON fill is neutral text color, not accent. Accent on this widget is confined to the focus outline (`focus-visible:outline-daintree-accent`), never the track fill, the row card, or the modified-state rail. The Root already carries `focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2` for keyboard focus. Used in `SettingsSwitchCard.tsx` + `src/components/ui/switch.tsx`, with `SettingsSwitch.tsx` mapping the settings layer's color-scheme names onto the primitive's tones.
 
 ---
 
@@ -252,15 +252,15 @@ Each recipe is a class fragment to apply to a suitable base component, not a sta
 | Component | File | Key Pattern |
 | --- | --- | --- |
 | Quick Switcher Item | `QuickSwitcherItem.tsx` | Selected state with neutral rail via `PALETTE_ROW_CLASS` |
-| Settings Input | `SettingsInput.tsx` | Input focus with outline ring |
-| Settings Textarea | `SettingsTextarea.tsx` | Input focus with outline ring |
+| Text Input | `ui/input.tsx` (`inputVariants`) | Input focus with outline ring |
+| Textarea | `ui/textarea.tsx` (`textareaVariants`) | Input focus with outline ring |
 | Button Ghost | `button.tsx` (`ghost` variant) | Ghost button hover with overlay-soft |
 | Dock Launch Button | `DockLaunchButton.tsx` (`pill` variant) | Neutral lift, no accent active state |
 | Settings Subtab | `SettingsSubtabBar.tsx` | Active tab with bottom border accent |
 | Worktree Card | `WorktreeCard.tsx` | Card hover with neutral overlay + ambient elevation |
 | GitHub Settings Tab | `GitHubSettingsTab.tsx` | Input focus with border-shift (no outline) |
 | Notification Settings | `NotificationSettingsTab.tsx` | Input focus with border-shift (no outline) |
-| Settings Switch Row | `SettingsSwitchCard.tsx` | Neutral row, neutral switch track (accent only on focus) |
+| Settings Switch Row | `SettingsSwitchCard.tsx` + `ui/switch.tsx` | Neutral row, neutral switch track (accent only on focus) |
 | Portal Drag Handle | `PortalToolbar.tsx` (`isDragging`) | Drag state with elevation + scale, no accent |
 | Inline Rename Input | `TabButton.tsx` (rename input) | Neutral `bg-overlay-soft`, transparent border |
 
@@ -274,7 +274,7 @@ Accent color is a scarce resource, not a default. These are the only contexts wh
 - **Primary view anchor** — The single load-bearing signal per active focus region: armed terminal, focused worktree card, primary CTA button.
 - **Editor caret** — The terminal cursor is a singleton position anchor. (`--color-terminal-cursor-accent` in `src/index.css`.)
 - **Theme mockup chrome** — Swatches and preview strips that display a theme's accent color are data, not interactive chrome (e.g., `PaletteStrip.tsx`, `AppThemePicker.tsx`).
-- **Status-tone routing** — Where `accent` is one option among `success`/`warning`/`danger` for mapping a semantic state to a color (e.g., `SettingsSwitch.tsx` `COLOR_SCHEMES`).
+- **Status-tone routing** — Where `accent` is one option among `success`/`warning`/`danger` for mapping a semantic state to a color (e.g., `SettingsSwitchCard.tsx` `COLOR_SCHEMES`, where `accent` tints the row's leading icon).
 
 For everything else, use the neutral overlay ladder (`bg-overlay-*`, `border-overlay`) or structural tokens (`border-border-strong`, `text-daintree-text`).
 

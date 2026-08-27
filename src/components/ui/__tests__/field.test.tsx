@@ -182,6 +182,23 @@ describe("Field horizontal orientation", () => {
     }
   });
 
+  // With no FieldLabel there is no id for aria-labelledby to scope the name to,
+  // so a <label> root would hand the control the description and the error as
+  // one run-on string. The row gives up its click target instead.
+  it("drops the label root when the row has no label", () => {
+    render(
+      <Field orientation="horizontal">
+        <Checkbox checked={false} onCheckedChange={vi.fn()} />
+        <FieldDescription>Includes stack traces and the app version</FieldDescription>
+        <FieldError>Pick one</FieldError>
+      </Field>
+    );
+    const checkbox = screen.getByRole("checkbox");
+    expect(checkbox.closest("label")).toBeNull();
+    expect(screen.queryByRole("checkbox", { name: /Includes stack traces/ })).toBeNull();
+    expect(checkbox.hasAttribute("aria-labelledby")).toBe(false);
+  });
+
   it("does not nest a label inside the row label", () => {
     const { container } = render(
       <Field orientation="horizontal">

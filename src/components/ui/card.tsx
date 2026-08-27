@@ -25,8 +25,13 @@ const cardVariants = cva("rounded-[var(--radius-lg)] border", {
       md: "p-4",
       lg: "p-6",
     },
+    /**
+     * Hover paint only. The frame stays a plain `<div>` and never takes focus,
+     * so a focus ring here could never match — the real control inside the card
+     * owns focus, and the accent that goes with it.
+     */
     interactive: {
-      true: "transition-[background-color,border-color] duration-150 ease-out hover:bg-overlay-subtle hover:border-border-strong focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
+      true: "transition-[background-color,border-color] duration-150 ease-out hover:bg-overlay-subtle hover:border-border-strong",
       false: "",
     },
   },

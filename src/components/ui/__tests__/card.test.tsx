@@ -119,9 +119,15 @@ describe("cardVariants", () => {
     expectNarrowTransition(cardVariants({ interactive: true }), /^transition-\[[a-z,-]+\]$/);
   });
 
-  it("spends accent only on the focus ring", () => {
+  // The frame is a plain div that never takes focus, so a focus ring on it could
+  // never match. Focus — and the accent that comes with it — belongs to the real
+  // control the card wraps.
+  it("paints no focus state on a frame that cannot take focus", () => {
     for (const variant of VARIANTS) {
-      expectNoUnfocusedAccent(cardVariants({ variant, interactive: true }));
+      const classes = cardVariants({ variant, interactive: true });
+      const focusUtilities = classes.split(/\s+/).filter((token) => token.includes("focus"));
+      expect(focusUtilities, variant).toEqual([]);
+      expectNoUnfocusedAccent(classes);
     }
   });
 

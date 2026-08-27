@@ -176,15 +176,21 @@ const fieldVariants = cva("min-w-0", {
       true: "cursor-not-allowed",
       false: "",
     },
+    /** Only a labelled row gets a `<label>` root, so only it takes a row click. */
+    clickable: {
+      true: "",
+      false: "",
+    },
   },
   compoundVariants: [
     // The whole horizontal row is the click target, so it advertises that —
     // but only while the control can actually take the click.
-    { orientation: "horizontal", disabled: false, class: "cursor-pointer" },
+    { orientation: "horizontal", disabled: false, clickable: true, class: "cursor-pointer" },
   ],
   defaultVariants: {
     orientation: "vertical",
     disabled: false,
+    clickable: true,
   },
 });
 
@@ -237,14 +243,19 @@ function Field({
     [resolvedControlId, labelId, descriptionId, errorId, resolvedInvalid, disabled, orientation]
   );
 
-  const classes = cn(fieldVariants({ orientation, disabled }), className);
+  // A label root makes the entire row clickable, and the named text living in
+  // `FieldLabel` is what keeps the description and error out of the accessible
+  // name. Without a `FieldLabel` there is no `labelId` to scope that name, so a
+  // `<label>` root would hand the control every scrap of text it wraps as one
+  // run-on string — the exact failure this primitive exists to prevent. Fall
+  // back to a plain `<div>`: the row loses its click target, nothing else.
+  const labelRoot = orientation === "horizontal" && hasLabel;
+
+  const classes = cn(fieldVariants({ orientation, disabled, clickable: labelRoot }), className);
 
   return (
     <FieldContext.Provider value={value}>
-      {orientation === "horizontal" ? (
-        // A label root makes the entire row clickable. The named text lives in
-        // `FieldLabel`, so the description and error stay out of the accessible
-        // name instead of being read as one run-on string.
+      {labelRoot ? (
         <label htmlFor={resolvedControlId} className={classes} {...props}>
           {children}
         </label>
