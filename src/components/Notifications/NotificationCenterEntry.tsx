@@ -12,6 +12,7 @@ import {
   ArrowRight,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
 import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
 import { actionService } from "@/services/ActionService";
 import { EVENT_KIND_LABEL, isNotificationEventKind, notify } from "@/lib/notify";
@@ -49,6 +50,20 @@ function formatSnoozedUntil(snoozedUntil: number): string {
   const target = new Date(snoozedUntil);
   return snoozedUntilFormatter.format(target);
 }
+
+/**
+ * The row's two management controls. 24x24 rather than the previous 16x16:
+ * WCAG 2.2 SC 2.5.8 wants 24 CSS px, and the old pair sat 22px apart, so it
+ * cleared neither the size rule nor the spacing exemption. It is also the size
+ * the toast uses for this same notification content, and the dominant size for
+ * row controls across the app. They had no focus ring at all before.
+ */
+const ROW_CONTROL_CLASS = cn(
+  "h-6 w-6 shrink-0 flex items-center justify-center rounded-[var(--radius-sm)]",
+  "text-text-muted transition-colors hover:bg-overlay-soft hover:text-daintree-text",
+  "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2",
+  "focus-visible:outline-daintree-accent focus-visible:text-daintree-text"
+);
 
 const TYPE_CONFIG = {
   success: { icon: CheckCircle2, className: "text-status-success" },
@@ -180,9 +195,13 @@ export function NotificationCenterEntry({
       role={role}
       onFocus={onFocus}
       className={cn(
-        "group flex items-start gap-2 px-3 py-2.5 hover:bg-overlay-raised transition-colors",
-        tabIndex !== undefined &&
-          "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-daintree-accent/50"
+        "group flex items-start gap-2 px-3 py-2.5 hover:bg-overlay-subtle transition-colors",
+        // The shared palette-row focus treatment, not a bespoke ring: `outline`
+        // survives Windows High Contrast where a box-shadow ring does not, and
+        // the offset is negative because this row is full-bleed inside three
+        // nested clipping ancestors (ScrollShadow's scrollport and wrapper, and
+        // the popover itself), so an outset outline loses all four sides.
+        tabIndex !== undefined && PALETTE_ROW_FOCUS_CLASS
       )}
     >
       <div className={cn("relative shrink-0", config.className)}>
@@ -192,14 +211,21 @@ export function NotificationCenterEntry({
         {isNew && (
           <span
             aria-hidden="true"
+            // The attribute is not styling — it is the handle the
+            // `forced-colors: active` block in index.css repaints, the same way
+            // ActivityLight's dot is handled. Without it the UA forces this
+            // background to Canvas and the dot disappears, and an unread row
+            // carries no border or tint by design, so an untitled one was left
+            // with no unread signal at all.
+            data-notification-unread="true"
             className="absolute right-full mr-[3px] top-1/2 -translate-y-1/2 h-1.5 w-1.5 rounded-full bg-status-info"
           />
         )}
         <Icon className="h-4 w-4" />
       </div>
-      <div className="flex-1 min-w-0">
+      <div className="grid flex-1 min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-x-2">
         {entry.title && (
-          <div className="flex items-center gap-1.5">
+          <div className="col-start-1 row-start-1 flex min-w-0 items-center gap-1.5">
             <p
               className={cn(
                 "text-xs text-daintree-text truncate",
@@ -212,6 +238,10 @@ export function NotificationCenterEntry({
               <span
                 key={bumpKey}
                 aria-label={formatNotificationCountAriaLabel(safeCount)}
+                // Handle for the forced-colors repaint — the tint fill is forced
+                // to Canvas there, leaving a bare numeral that reads as part of
+                // the title.
+                data-notification-count="true"
                 style={{ animationDuration: "150ms" }}
                 className={cn(
                   "shrink-0 rounded-full bg-tint/15 px-1.5 py-0.5 text-[10px] font-medium leading-none text-daintree-text/60 tabular-nums min-w-[2.5ch] text-center",
@@ -223,14 +253,30 @@ export function NotificationCenterEntry({
             )}
           </div>
         )}
-        <p className="text-xs text-daintree-text/70 leading-snug break-words">{entry.message}</p>
+        {/* A titled row's message spans both columns on row 2, under the rail,
+            so it gets the full width. An untitled row has nothing else to put
+            on row 1, so the message takes that cell instead — otherwise the
+            rail sits alone against an empty gutter and the row wastes a line.
+            It wraps inside column 1 there, which costs nothing at the widths
+            this popover actually uses: the rail is about 100px for a relative
+            stamp, and a message long enough to wrap at 210px was already
+            wrapping at 312px. */}
+        <p
+          className={cn(
+            "text-xs text-daintree-text/70 leading-snug break-words",
+            entry.title ? "col-span-2 row-start-2" : "col-start-1 row-start-1 min-w-0"
+          )}
+        >
+          {entry.message}
+        </p>
         {showChip && !entry.title && (
           <span
             key={bumpKey}
             aria-label={formatNotificationCountAriaLabel(safeCount)}
+            data-notification-count="true"
             style={{ animationDuration: "150ms" }}
             className={cn(
-              "mt-0.5 inline-block rounded-full bg-tint/15 px-1.5 py-0.5 text-[10px] font-medium leading-none text-daintree-text/60 tabular-nums min-w-[2.5ch] text-center",
+              "col-span-2 row-start-2 mt-0.5 justify-self-start rounded-full bg-tint/15 px-1.5 py-0.5 text-[10px] font-medium leading-none text-daintree-text/60 tabular-nums min-w-[2.5ch] text-center",
               bumpKey > 0 && "animate-badge-bump"
             )}
           >
@@ -238,7 +284,7 @@ export function NotificationCenterEntry({
           </span>
         )}
         {entry.actions && entry.actions.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 mt-1.5">
+          <div className="col-span-2 row-start-4 mt-1.5 flex flex-wrap gap-1.5">
             {entry.actions.map((action, index) => {
               const manifest = actionService.get(action.actionId as ActionId);
               const isAvailable = manifest !== null && manifest.enabled;
@@ -263,9 +309,19 @@ export function NotificationCenterEntry({
                     "h-6 rounded-[var(--radius-sm)] px-2 text-[11px] font-medium transition-colors",
                     isAvailable
                       ? action.variant === "secondary"
-                        ? "border border-daintree-text/20 text-daintree-text/70 hover:bg-overlay-medium"
-                        : "border border-status-info/30 bg-status-info/15 text-status-info hover:bg-status-info/20"
-                      : "border border-daintree-text/10 text-daintree-text/30 cursor-not-allowed"
+                        ? "border border-daintree-text/20 text-text-secondary hover:bg-overlay-medium"
+                        : // The primary used to ink its label from `status-info`,
+                          // which `shared/theme/contrast.ts` only gates at 3:1 —
+                          // no body-text guarantee. It measured 4.46:1 against
+                          // its own fill while the secondary beside it measured
+                          // 7.6:1, so the button with primary chrome read as the
+                          // weaker, near-disabled one, and `prefers-contrast:
+                          // more` lifted the secondary and left it behind. Keep
+                          // status-info as the fill and border (that is what
+                          // marks it primary) and take the label from the gated
+                          // text ramp.
+                          "border border-status-info/30 bg-status-info/15 text-daintree-text hover:bg-status-info/20"
+                      : "border border-daintree-text/10 text-text-muted cursor-not-allowed"
                   )}
                 >
                   {action.label}
@@ -274,18 +330,49 @@ export function NotificationCenterEntry({
             })}
           </div>
         )}
-      </div>
-      <div className="relative shrink-0 self-start mt-0.5 flex items-center justify-end">
-        <div className="flex items-center gap-1.5 transition-opacity duration-150 group-hover:opacity-0 group-focus-visible:opacity-0 group-has-[:focus-visible]:opacity-0 group-has-[[data-state=open]]:opacity-0">
+        {/* One stable rail — the row's trailing metadata and management
+            controls, held in a grid cell rather than an overlay or a float.
+
+            The old build cross-faded the metadata out and covered it with an
+            absolutely positioned layer carrying its own `bg-overlay-raised`
+            fill, so time — the orientation cue the inbox exists to provide —
+            vanished at exactly the moment the user was inspecting the row, and
+            on the Snoozed tab took the snooze state with it. It was also the
+            only metadata-covering action layer in the app. Now nothing moves
+            and nothing is covered: the controls hold their place at every
+            state, quiet at rest and stronger under the pointer, which is the
+            treatment the worktree card's action toolbar already uses here.
+            Keeping them in flow is what makes them reachable on a touch screen,
+            where there is no hover to reveal anything.
+
+            Grid, not a flex sibling and not a float. A flex sibling subtracts
+            its width from every line of the row rather than the one it sits on,
+            which cost the default message a line and the dense one two. A float
+            fixes that but has to precede the content it shifts, which put the
+            management controls ahead of the title, message and recovery actions
+            in DOM order — so tabbing reached Dismiss before "Pull and rebase",
+            and a screen reader read the metadata before the event. Explicit
+            grid placement gets both: this rail is last in the DOM and reads
+            last, but paints in row 1's trailing column, and the message and
+            actions below it span the full width. */}
+        <div className="col-start-2 row-start-1 flex items-center gap-1.5">
           {isSnoozed && snoozedUntil !== undefined && (
-            <span
-              data-testid="notification-snoozed-indicator"
-              title={`Snoozed until ${formatSnoozedUntil(snoozedUntil)}`}
-              aria-label={`Snoozed until ${formatSnoozedUntil(snoozedUntil)}`}
-              className="inline-flex h-4 w-4 items-center justify-center text-daintree-text/40"
-            >
-              <Clock className="h-3 w-3" aria-hidden="true" />
-            </span>
+            <>
+              <span
+                data-testid="notification-snoozed-indicator"
+                title={`Snoozed until ${formatSnoozedUntil(snoozedUntil)}`}
+                aria-label={`Snoozed until ${formatSnoozedUntil(snoozedUntil)}`}
+                className="inline-flex h-4 w-4 items-center justify-center text-text-secondary"
+              >
+                <Clock className="h-3 w-3" aria-hidden="true" />
+              </span>
+              {/* The clock means "snoozed until later"; the stamp beside it means
+                  "arrived at". Abutting they read as one fact, so they get a
+                  separator. */}
+              <span aria-hidden="true" className="text-[10px] leading-none text-text-secondary">
+                ·
+              </span>
+            </>
           )}
           {(() => {
             const ts = formatNotificationTimestamp(entry.timestamp);
@@ -294,14 +381,16 @@ export function NotificationCenterEntry({
                 data-testid="notification-timestamp"
                 title={ts.absolute}
                 aria-label={ts.absolute}
-                className="text-[10px] text-daintree-text/40 tabular-nums"
+                // A solid token, not `text-daintree-text/40`: slash-alpha
+                // composites against whatever is behind it and read at ~3.2:1
+                // here. `theme-tokens.md` gates `text-secondary` at >=3:1 across
+                // every theme and prefers a solid token for exactly this.
+                className="text-[10px] text-text-secondary tabular-nums"
               >
                 {ts.label}
               </span>
             );
           })()}
-        </div>
-        <div className="absolute inset-y-0 right-0 flex items-center gap-1.5 pl-3 bg-overlay-raised opacity-0 pointer-events-none transition-opacity duration-150 group-hover:opacity-100 group-hover:pointer-events-auto group-focus-visible:opacity-100 group-focus-visible:pointer-events-auto group-has-[:focus-visible]:opacity-100 group-has-[:focus-visible]:pointer-events-auto group-has-[[data-state=open]]:opacity-100 group-has-[[data-state=open]]:pointer-events-auto">
           <RowOptionsMenu
             entry={entry}
             onDropdownOpenChange={onDropdownOpenChange}
@@ -320,9 +409,9 @@ export function NotificationCenterEntry({
                 e.stopPropagation();
                 onDismiss();
               }}
-              className="h-4 w-4 flex items-center justify-center rounded text-daintree-text/40 hover:text-daintree-text/70 transition-colors"
+              className={ROW_CONTROL_CLASS}
             >
-              <X className="h-3 w-3" />
+              <X className="h-3.5 w-3.5" />
             </button>
           )}
         </div>
@@ -524,12 +613,19 @@ function RowOptionsMenu({
           type="button"
           aria-label="Notification options"
           onClick={(e) => e.stopPropagation()}
-          className="h-4 w-4 flex items-center justify-center rounded text-daintree-text/40 hover:text-daintree-text/70 transition-colors"
+          // `data-[state=open]` so the trigger reads as pressed while its menu
+          // is up — the repo's standard open-row cue. Without it nothing said
+          // which of the two controls opened the menu.
+          className={cn(ROW_CONTROL_CLASS, "data-[state=open]:bg-overlay-raised")}
         >
-          <MoreHorizontal className="h-3 w-3" />
+          <MoreHorizontal className="h-3.5 w-3.5" />
         </button>
       </DropdownMenuTrigger>
-      <DropdownMenuContent align="end" sideOffset={4}>
+      {/* Bounded on both sides, matching the panel-header and docked-tab menus:
+          a floor so short items do not collapse it, and a ceiling so it cannot
+          end up wider than the 360px popover it belongs to — it was overlaying
+          three rows of the inbox behind it. */}
+      <DropdownMenuContent align="end" sideOffset={4} className="min-w-[200px] max-w-[280px]">
         {supportsSnooze &&
           (isSnoozed ? (
             <DropdownMenuItem
@@ -599,8 +695,10 @@ function RowOptionsMenu({
               });
             }}
           >
-            Silence {EVENT_KIND_LABEL[eventKind]}
-            {entry.context?.projectId && eventKind !== "uiFeedback" ? " from this project" : ""}
+            <span className="ml-[1.375rem]">
+              Silence {EVENT_KIND_LABEL[eventKind]}
+              {entry.context?.projectId && eventKind !== "uiFeedback" ? " from this project" : ""}
+            </span>
           </DropdownMenuItem>
         )}
         {entry.context?.projectId && (
@@ -611,7 +709,7 @@ function RowOptionsMenu({
               void actionService.dispatch("project.muteNotifications", { projectId });
             }}
           >
-            Mute project notifications
+            <span className="ml-[1.375rem]">Mute project notifications</span>
           </DropdownMenuItem>
         )}
       </DropdownMenuContent>

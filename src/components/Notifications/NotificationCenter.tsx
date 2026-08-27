@@ -15,6 +15,7 @@ import {
   useNotificationHistoryStore,
   type NotificationHistoryEntry,
 } from "@/store/slices/notificationHistorySlice";
+import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
 import { NotificationCenterEntry } from "./NotificationCenterEntry";
 import { useSnoozeExpiryTimer } from "./useSnoozeExpiryTimer";
 import { resolveSnoozeDuration, type SnoozeDurationOption } from "@shared/utils/snoozeTimestamps";
@@ -854,157 +855,168 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
   }, [filter, hasSnoozedThreads]);
 
   return (
-    <div className="w-[360px] max-h-[420px] flex flex-col">
-      {/* pr-2, not px-3: the right-side icon buttons carry 4px of internal p-1
-          touch padding, so an 8px container edge lands their glyphs at the same
-          12px optical inset as the title text on the left. */}
-      <div className="flex items-start justify-between pl-3 pr-2 py-2 border-b border-divider gap-2">
-        <div className="flex flex-1 flex-wrap items-center gap-1.5 min-w-0">
-          <span className="text-xs font-medium text-daintree-text/80">Notifications</span>
-          {entries.length > 0 && (
-            <>
+    <div data-testid="notification-center" className="w-[360px] max-h-[420px] flex flex-col">
+      {/* Two rows, not one. Sharing a line with the toolbar squeezed the filter
+          group down to about 120px, so all four chips wrapped onto three lines
+          and the header ate a quarter of a 420px popover while roughly 230px
+          sat empty to the right of them. It also stranded "All" up beside the
+          heading, where it read as part of the title rather than as a peer of
+          the other three.
+
+          pr-2, not px-3, on both rows: the right-side icon buttons carry 4px of
+          internal p-1 touch padding, so an 8px container edge lands their
+          glyphs at the same 12px optical inset as the title text on the left. */}
+      <div className="flex flex-col border-b border-divider">
+        <div className="flex items-center justify-between pl-3 pr-2 py-2 gap-2">
+          <span className="min-w-0 truncate text-xs font-medium text-daintree-text/80">
+            Notifications
+          </span>
+          <div className="flex items-center gap-1 shrink-0">
+            {showGroupToggle && (
               <button
                 type="button"
-                aria-pressed={filter === "all"}
-                onClick={() => {
-                  setFilter("all");
-                  setFrozenUnreadIds(null);
-                }}
-                className={cn(
-                  "inline-flex items-center px-2 py-0.5 text-[11px] rounded-full transition-colors",
-                  filter === "all"
-                    ? "bg-filter-selected-bg-strong text-daintree-text font-medium"
-                    : "text-daintree-text/60 hover:text-daintree-text hover:bg-tint/[0.04]"
-                )}
-              >
-                All
-              </button>
-              <button
-                type="button"
-                aria-pressed={filter === "unread"}
-                onClick={() => setFilter("unread")}
-                className={cn(
-                  "inline-flex items-center px-2 py-0.5 text-[11px] rounded-full transition-colors",
-                  filter === "unread"
-                    ? "bg-filter-selected-bg-strong text-daintree-text font-medium"
-                    : "text-daintree-text/60 hover:text-daintree-text hover:bg-tint/[0.04]"
-                )}
-              >
-                Unread
-              </button>
-              <button
-                type="button"
-                aria-pressed={filter === "archived"}
-                onClick={() => {
-                  setFilter("archived");
-                  setFrozenUnreadIds(null);
-                }}
-                className={cn(
-                  "inline-flex items-center px-2 py-0.5 text-[11px] rounded-full transition-colors",
-                  filter === "archived"
-                    ? "bg-filter-selected-bg-strong text-daintree-text font-medium"
-                    : "text-daintree-text/60 hover:text-daintree-text hover:bg-tint/[0.04]"
-                )}
-              >
-                Archived
-              </button>
-              {hasSnoozedThreads && (
-                <button
-                  type="button"
-                  aria-pressed={filter === "snoozed"}
-                  onClick={() => {
-                    setFilter("snoozed");
-                    setFrozenUnreadIds(null);
-                  }}
-                  className={cn(
-                    "inline-flex items-center px-2 py-0.5 text-[11px] rounded-full transition-colors",
-                    filter === "snoozed"
-                      ? "bg-filter-selected-bg-strong text-daintree-text font-medium"
-                      : "text-daintree-text/60 hover:text-daintree-text hover:bg-tint/[0.04]"
-                  )}
-                >
-                  Snoozed
-                </button>
-              )}
-            </>
-          )}
-        </div>
-        <div className="flex items-center gap-1 shrink-0">
-          {showGroupToggle && (
-            <button
-              type="button"
-              aria-label="Group by project or worktree"
-              aria-pressed={groupByContext}
-              title="Group by project or worktree"
-              onClick={() => setGroupByContext(!groupByContext)}
-              className="toolbar-icon-button p-1 rounded-[var(--radius-sm)] text-daintree-text/50"
-            >
-              <Layers className="w-3 h-3" aria-hidden="true" />
-            </button>
-          )}
-          {unreadCount > 0 && (
-            <button
-              type="button"
-              onClick={handleMarkAllRead}
-              className="toolbar-icon-button inline-flex items-center gap-1 px-1.5 py-1 rounded-[var(--radius-sm)] text-[11px] text-daintree-text/50 whitespace-nowrap"
-            >
-              <CheckCheck className="w-3 h-3" aria-hidden="true" />
-              Mark all read
-            </button>
-          )}
-          <DropdownMenu>
-            <DropdownMenuTrigger asChild>
-              <button
-                type="button"
-                aria-label="Pause notifications"
-                title="Pause notifications"
+                aria-label="Group by project or worktree"
+                aria-pressed={groupByContext}
+                title="Group by project or worktree"
+                onClick={() => setGroupByContext(!groupByContext)}
                 className="toolbar-icon-button p-1 rounded-[var(--radius-sm)] text-daintree-text/50"
               >
-                <Moon className="w-3 h-3" aria-hidden="true" />
+                <Layers className="w-3 h-3" aria-hidden="true" />
               </button>
-            </DropdownMenuTrigger>
-            <DropdownMenuContent align="end" className="min-w-[180px]">
-              <DropdownMenuItem onSelect={() => handleMuteFor(60 * 60 * 1000)}>
-                For 1 hour
-              </DropdownMenuItem>
-              <DropdownMenuItem onSelect={handleMuteUntilMorning}>{morningLabel}</DropdownMenuItem>
-              <DropdownMenuItem onSelect={openNotificationSettings}>Custom…</DropdownMenuItem>
-              <DropdownMenuSeparator />
-              <DropdownMenuItem
-                aria-label="Notification settings"
-                onSelect={openNotificationSettings}
+            )}
+            {unreadCount > 0 && (
+              <button
+                type="button"
+                onClick={handleMarkAllRead}
+                className="toolbar-icon-button inline-flex items-center gap-1 px-1.5 py-1 rounded-[var(--radius-sm)] text-[11px] text-daintree-text/50 whitespace-nowrap"
               >
-                Notification settings…
-              </DropdownMenuItem>
-            </DropdownMenuContent>
-          </DropdownMenu>
-          {entries.length > 0 && (
+                <CheckCheck className="w-3 h-3" aria-hidden="true" />
+                Mark all read
+              </button>
+            )}
             <DropdownMenu>
               <DropdownMenuTrigger asChild>
                 <button
                   type="button"
+                  aria-label="Pause notifications"
+                  title="Pause notifications"
                   className="toolbar-icon-button p-1 rounded-[var(--radius-sm)] text-daintree-text/50"
-                  aria-label="More notification actions"
-                  title="More notification actions"
                 >
-                  <Ellipsis className="w-3 h-3" aria-hidden="true" />
+                  <Moon className="w-3 h-3" aria-hidden="true" />
                 </button>
               </DropdownMenuTrigger>
-              <DropdownMenuContent align="end" className="min-w-[160px]">
+              <DropdownMenuContent align="end" className="min-w-[180px]">
+                <DropdownMenuItem onSelect={() => handleMuteFor(60 * 60 * 1000)}>
+                  For 1 hour
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={handleMuteUntilMorning}>
+                  {morningLabel}
+                </DropdownMenuItem>
+                <DropdownMenuItem onSelect={openNotificationSettings}>Custom…</DropdownMenuItem>
+                <DropdownMenuSeparator />
                 <DropdownMenuItem
-                  destructive
-                  onSelect={() => {
-                    clearAll();
-                    onClose();
-                  }}
+                  aria-label="Notification settings"
+                  onSelect={openNotificationSettings}
                 >
-                  <Trash2 className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
-                  Clear all
+                  Notification settings…
                 </DropdownMenuItem>
               </DropdownMenuContent>
             </DropdownMenu>
-          )}
+            {entries.length > 0 && (
+              <DropdownMenu>
+                <DropdownMenuTrigger asChild>
+                  <button
+                    type="button"
+                    className="toolbar-icon-button p-1 rounded-[var(--radius-sm)] text-daintree-text/50"
+                    aria-label="More notification actions"
+                    title="More notification actions"
+                  >
+                    <Ellipsis className="w-3 h-3" aria-hidden="true" />
+                  </button>
+                </DropdownMenuTrigger>
+                <DropdownMenuContent align="end" className="min-w-[160px]">
+                  <DropdownMenuItem
+                    destructive
+                    onSelect={() => {
+                      clearAll();
+                      onClose();
+                    }}
+                  >
+                    <Trash2 className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
+                    Clear all
+                  </DropdownMenuItem>
+                </DropdownMenuContent>
+              </DropdownMenu>
+            )}
+          </div>
         </div>
+        {entries.length > 0 && (
+          <div className="flex flex-wrap items-center gap-1.5 pl-3 pr-2 pb-2">
+            <button
+              type="button"
+              aria-pressed={filter === "all"}
+              onClick={() => {
+                setFilter("all");
+                setFrozenUnreadIds(null);
+              }}
+              className={cn(
+                "inline-flex items-center px-2 py-0.5 text-[11px] rounded-full transition-colors",
+                filter === "all"
+                  ? "bg-filter-selected-bg-strong text-daintree-text font-medium"
+                  : "text-daintree-text/60 hover:text-daintree-text hover:bg-tint/[0.04]"
+              )}
+            >
+              All
+            </button>
+            <button
+              type="button"
+              aria-pressed={filter === "unread"}
+              onClick={() => setFilter("unread")}
+              className={cn(
+                "inline-flex items-center px-2 py-0.5 text-[11px] rounded-full transition-colors",
+                filter === "unread"
+                  ? "bg-filter-selected-bg-strong text-daintree-text font-medium"
+                  : "text-daintree-text/60 hover:text-daintree-text hover:bg-tint/[0.04]"
+              )}
+            >
+              Unread
+            </button>
+            <button
+              type="button"
+              aria-pressed={filter === "archived"}
+              onClick={() => {
+                setFilter("archived");
+                setFrozenUnreadIds(null);
+              }}
+              className={cn(
+                "inline-flex items-center px-2 py-0.5 text-[11px] rounded-full transition-colors",
+                filter === "archived"
+                  ? "bg-filter-selected-bg-strong text-daintree-text font-medium"
+                  : "text-daintree-text/60 hover:text-daintree-text hover:bg-tint/[0.04]"
+              )}
+            >
+              Archived
+            </button>
+            {hasSnoozedThreads && (
+              <button
+                type="button"
+                aria-pressed={filter === "snoozed"}
+                onClick={() => {
+                  setFilter("snoozed");
+                  setFrozenUnreadIds(null);
+                }}
+                className={cn(
+                  "inline-flex items-center px-2 py-0.5 text-[11px] rounded-full transition-colors",
+                  filter === "snoozed"
+                    ? "bg-filter-selected-bg-strong text-daintree-text font-medium"
+                    : "text-daintree-text/60 hover:text-daintree-text hover:bg-tint/[0.04]"
+                )}
+              >
+                Snoozed
+              </button>
+            )}
+          </div>
+        )}
       </div>
       {showMutedPill && (
         <div
@@ -1590,8 +1602,11 @@ function NotificationThread({
       data-testid="notification-thread"
       className={cn(
         "group relative border-l-2 border-tint/15",
-        tabIndex !== undefined &&
-          "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-daintree-accent/50"
+        // Same treatment as a solo row (NotificationCenterEntry). Both are
+        // stops on the same roving-tabindex ring, so they must not focus
+        // differently — one outline, one box-shadow ring would read as two
+        // kinds of row.
+        tabIndex !== undefined && PALETTE_ROW_FOCUS_CLASS
       )}
     >
       <NotificationCenterEntry

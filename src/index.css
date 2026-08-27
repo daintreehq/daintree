@@ -2865,6 +2865,26 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     background-color: CanvasText !important;
   }
 
+  /* Inbox unread dot. Same problem, same fix: the dot is a solid background, so
+     forced colors pushes it to Canvas and it vanishes. It is load-bearing here
+     in a way it is not elsewhere — an unread inbox row deliberately carries no
+     border and no background tint (weight on the title is the only companion
+     signal), and an untitled row has no title to embolden, so losing the dot
+     leaves that row with no unread indication at all. CanvasText, not
+     Highlight: this block already spends Highlight on `*:focus-visible`, and a
+     row can be both unread and focused. */
+  [data-notification-unread="true"] {
+    background-color: CanvasText !important;
+  }
+
+  /* Inbox thread-count chip. The tint fill is forced to Canvas, which strips the
+     pill and leaves a bare numeral running on from the title — "Push rejected 3"
+     reads as the title rather than as a count of three grouped events. Borders
+     survive the override, so give it one. */
+  [data-notification-count="true"] {
+    border: 1px solid CanvasText;
+  }
+
   /* Project-switcher row marks. The solid states are a CSS background, which
      forced colors pushes toward Canvas, so the whole 8px slot would read as
      empty. Repaint them as a CanvasText disc: hue is gone here either way, and

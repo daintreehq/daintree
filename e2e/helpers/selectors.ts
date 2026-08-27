@@ -343,6 +343,7 @@ export const SEL = {
     gridBar: '[data-testid="grid-notification-bar"]',
     gridBarStatus: '[data-testid="grid-notification-bar"] [role="status"]',
     // Notification center (NotificationCenter.tsx)
+    center: '[data-testid="notification-center"]',
     centerList: '[role="list"][aria-label="Notifications"]',
     centerRow: '[role="listitem"]',
     centerFilter: (label: string) => `button[aria-pressed]:has-text("${label}")`,
