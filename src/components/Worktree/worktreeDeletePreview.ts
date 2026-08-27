@@ -26,6 +26,15 @@ export interface WorktreeChangeSummary {
 /** A fresh delete preview: the change summary plus the raw file list. */
 export interface WorktreeDeletePreview extends WorktreeChangeSummary {
   changes: FileChangeDetail[];
+  /**
+   * Absolute worktree root, carried so previews can render each file relative
+   * to it. `FileChangeDetail.path` arrives ABSOLUTE from the only producer
+   * (`electron/utils/git.ts` resolves every entry against the git root), which
+   * is why the rest of the renderer derives a `relativePath` before display —
+   * see `src/lib/workingTreeDiff.ts`. Without the root, a preview repeats the
+   * whole worktree path on every row and buries the filename.
+   */
+  rootPath: string;
 }
 
 /**
@@ -65,7 +74,7 @@ export async function buildWorktreeDeletePreview(
   const fresh: WorktreeChanges | null = await worktreeClient.getFreshChanges(worktreeId);
   if (!fresh) return null;
   const changes = fresh.changes ?? [];
-  return { ...summarizeWorktreeChanges(changes), changes };
+  return { ...summarizeWorktreeChanges(changes), changes, rootPath: fresh.rootPath };
 }
 
 /** Max file rows shown in a compact preview before collapsing the tail. */
@@ -83,17 +92,39 @@ const STATUS_GLYPH: Record<FileChangeDetail["status"], string> = {
 };
 
 /**
+ * Strip the worktree root off an absolute change path.
+ *
+ * `FileChangeDetail.path` is absolute (see {@link WorktreeDeletePreview.rootPath}),
+ * so a preview that renders it raw repeats the entire worktree path on every
+ * row and pushes the only distinguishing part — the filename — past the wrap.
+ * Mirrors `getRelativePath` in `src/lib/workingTreeDiff.ts`; a path that
+ * escapes the root (or a root we weren't given) is left alone rather than
+ * mangled, because showing a wrong path here is worse than showing a long one.
+ */
+function toDisplayPath(filePath: string, rootPath: string | undefined): string {
+  if (!rootPath) return filePath;
+  const root = rootPath.endsWith("/") ? rootPath : `${rootPath}/`;
+  return filePath.startsWith(root) ? filePath.slice(root.length) : filePath;
+}
+
+/**
  * Render a change set as capped, glyph-prefixed file rows (`  M src/app.ts`),
  * shared by the local delete dialog and the MCP preview so both show the same
  * actual content (the D2 "a count is insufficient" rule). Ignored files are
  * dropped — they're not part of what a delete discards.
+ *
+ * Pass `rootPath` to get worktree-relative rows; without it the raw (absolute)
+ * paths are rendered, which is the legacy behaviour.
  */
 export function formatWorktreeChangeRows(
   changes: FileChangeDetail[],
-  limit: number = PREVIEW_FILE_LIMIT
+  limit: number = PREVIEW_FILE_LIMIT,
+  rootPath?: string
 ): string[] {
   const shown = changes.filter((c) => c.status !== "ignored");
-  const rows = shown.slice(0, limit).map((c) => `  ${STATUS_GLYPH[c.status] ?? "?"} ${c.path}`);
+  const rows = shown
+    .slice(0, limit)
+    .map((c) => `  ${STATUS_GLYPH[c.status] ?? "?"} ${toDisplayPath(c.path, rootPath)}`);
   if (shown.length > limit) {
     rows.push(`  …and ${shown.length - limit} more`);
   }
@@ -114,7 +145,7 @@ export function formatWorktreeDeletePreviewLines(preview: WorktreeDeletePreview 
       `${MCP_PREVIEW_CAUTION_PREFIX}Could not verify current changes — proceed with caution.`,
     ];
   }
-  const { trackedChangeCount, untrackedFileCount, changes } = preview;
+  const { trackedChangeCount, untrackedFileCount, changes, rootPath } = preview;
   if (changes.length === 0) {
     return ["No uncommitted changes."];
   }
@@ -127,5 +158,8 @@ export function formatWorktreeDeletePreviewLines(preview: WorktreeDeletePreview 
   if (untrackedFileCount > 0) {
     parts.push(`${untrackedFileCount} untracked file${untrackedFileCount === 1 ? "" : "s"}`);
   }
-  return [`${parts.join(" and ")}:`, ...formatWorktreeChangeRows(changes)];
+  return [
+    `${parts.join(" and ")}:`,
+    ...formatWorktreeChangeRows(changes, PREVIEW_FILE_LIMIT, rootPath),
+  ];
 }

@@ -16,14 +16,24 @@ import {
   formatWorktreeChangeRows,
 } from "../worktreeDeletePreview";
 
+/**
+ * The worktree root every fixture hangs off. Production `FileChangeDetail.path`
+ * is ABSOLUTE — `electron/utils/git.ts` resolves each entry against the git
+ * root — so `file()` builds absolute paths from a relative one. The previous
+ * fixture hand-built bare names like `a.ts`, a shape the app never produces,
+ * which is precisely why a preview rendering raw absolute paths passed this
+ * suite while rendering unreadably in the real dialog (#11977).
+ */
+const ROOT = "/Users/dev/proj-worktrees/feature-streaming-uploads";
+
 function file(path: string, status: GitStatus): FileChangeDetail {
-  return { path, status, insertions: null, deletions: null };
+  return { path: `${ROOT}/${path}`, status, insertions: null, deletions: null };
 }
 
 function changes(files: FileChangeDetail[]): WorktreeChanges {
   return {
     worktreeId: "wt-1",
-    rootPath: "/wt",
+    rootPath: ROOT,
     changedFileCount: files.length,
     changes: files,
   };
@@ -106,6 +116,7 @@ describe("formatWorktreeDeletePreviewLines", () => {
       hasTrackedChanges: false,
       hasUntrackedFiles: false,
       changes: [],
+      rootPath: ROOT,
     };
     expect(formatWorktreeDeletePreviewLines(preview)).toEqual(["No uncommitted changes."]);
   });
@@ -118,6 +129,7 @@ describe("formatWorktreeDeletePreviewLines", () => {
       hasTrackedChanges: true,
       hasUntrackedFiles: true,
       changes: files,
+      rootPath: ROOT,
     };
     const lines = formatWorktreeDeletePreviewLines(preview);
     expect(lines[0]).toBe("1 uncommitted tracked file and 1 untracked file:");
@@ -133,6 +145,7 @@ describe("formatWorktreeDeletePreviewLines", () => {
       hasTrackedChanges: true,
       hasUntrackedFiles: false,
       changes: files,
+      rootPath: ROOT,
     };
     const lines = formatWorktreeDeletePreviewLines(preview);
     // header + 12 files + overflow line
@@ -143,20 +156,25 @@ describe("formatWorktreeDeletePreviewLines", () => {
 
 describe("formatWorktreeChangeRows", () => {
   it("prefixes each file with its status glyph", () => {
-    const rows = formatWorktreeChangeRows([
-      file("a.ts", "modified"),
-      file("b.ts", "deleted"),
-      file("c.ts", "added"),
-      file("n.txt", "untracked"),
-    ]);
+    const rows = formatWorktreeChangeRows(
+      [
+        file("a.ts", "modified"),
+        file("b.ts", "deleted"),
+        file("c.ts", "added"),
+        file("n.txt", "untracked"),
+      ],
+      undefined,
+      ROOT
+    );
     expect(rows).toEqual(["  M a.ts", "  D b.ts", "  A c.ts", "  ? n.txt"]);
   });
 
   it("drops ignored files (not part of what a delete discards)", () => {
-    const rows = formatWorktreeChangeRows([
-      file("a.ts", "modified"),
-      file("node_modules/x", "ignored"),
-    ]);
+    const rows = formatWorktreeChangeRows(
+      [file("a.ts", "modified"), file("node_modules/x", "ignored")],
+      undefined,
+      ROOT
+    );
     expect(rows).toEqual(["  M a.ts"]);
   });
 
@@ -168,5 +186,45 @@ describe("formatWorktreeChangeRows", () => {
     const rows = formatWorktreeChangeRows(files);
     expect(rows).toHaveLength(13); // 12 files + overflow
     expect(rows[rows.length - 1]).toBe("  …and 2 more");
+  });
+
+  /**
+   * The rule, not the value: a preview row must never carry the worktree root.
+   * Asserted against the prefix rather than against specific expected strings
+   * so it keeps holding when the row format changes — the point is that the
+   * distinguishing part of a path is never pushed past the wrap by a prefix
+   * that is identical on every row and already shown elsewhere in the dialog.
+   */
+  it("never repeats the worktree root on a row when the root is known", () => {
+    const rows = formatWorktreeChangeRows(
+      [
+        file("src/queue.ts", "modified"),
+        file("deeply/nested/dir/component.tsx", "added"),
+        file(".env.local", "untracked"),
+      ],
+      undefined,
+      ROOT
+    );
+    expect(rows).toHaveLength(3);
+    for (const row of rows) {
+      expect(row).not.toContain(ROOT);
+    }
+    // ...and the filename still survives intact.
+    expect(rows.join("\n")).toContain("src/queue.ts");
+  });
+
+  it("leaves a path that escapes the root absolute rather than mangling it", () => {
+    const outside = "/somewhere/else/stray.ts";
+    const rows = formatWorktreeChangeRows(
+      [{ path: outside, status: "modified", insertions: null, deletions: null }],
+      undefined,
+      ROOT
+    );
+    expect(rows).toEqual([`  M ${outside}`]);
+  });
+
+  it("renders raw paths when no root is supplied", () => {
+    const rows = formatWorktreeChangeRows([file("src/a.ts", "modified")]);
+    expect(rows).toEqual([`  M ${ROOT}/src/a.ts`]);
   });
 });
