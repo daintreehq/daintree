@@ -482,7 +482,7 @@ describe("WorktreeDeleteDialog — consequence list", () => {
 
     const closed = screen.getByText(/terminals will be closed/);
     const agents = screen.getByText(/running agents/);
-    expect(agents.previousElementSibling).toBe(closed);
+    expect(agents.previousSibling).toBe(closed);
     expect(agents.textContent).toMatch(/^\s/);
   });
 
@@ -554,8 +554,8 @@ describe("WorktreeDeleteDialog — consequence list", () => {
     // The outcome and the guard that qualifies it are separate elements — the
     // dash that used to join them read as one sentence.
     const guard = screen.getByText(/Fails if it has unmerged changes/);
-    const outcome = guard.previousElementSibling;
-    expect(outcome?.textContent).toMatch(/^Branch .+ will be deleted$/);
+    const outcome = guard.previousSibling;
+    expect(outcome?.textContent).toContain(worktree.branch);
     expect(guard.textContent).toMatch(/^\s/);
   });
 

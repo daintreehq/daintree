@@ -168,7 +168,7 @@ describe("SettingsShortcutCapture", () => {
     // already carries it as the one live signal, and a second accent tone
     // would compete with it.
     const instruction = screen.getByText(/Press second key or wait to finish/);
-    const combo = instruction.previousElementSibling;
+    const combo = instruction.previousSibling;
     expect(combo).not.toBeNull();
     expect(instruction.textContent).toMatch(/^\s/);
     expect(instruction.parentElement?.textContent).toBe(

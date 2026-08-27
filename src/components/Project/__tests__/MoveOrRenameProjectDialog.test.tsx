@@ -191,7 +191,7 @@ describe("MoveOrRenameProjectDialog", () => {
     const claudeRow = screen.getByTestId("relocate-continuity-claude");
     const identity = within(claudeRow).getByText("Claude Code");
     const status = within(claudeRow).getByText("Provider migration required");
-    expect(status.previousElementSibling).toBe(identity);
+    expect(status.previousSibling).toBe(identity);
     expect(status.textContent).toMatch(/^\s/);
     // Continuity is informational — it must NOT disable confirm (only blockers do).
     await waitFor(() => expect(confirmButton().hasAttribute("aria-disabled")).toBe(false));
@@ -235,7 +235,7 @@ describe("MoveOrRenameProjectDialog", () => {
     // The consequence outranks the reassurance by weight, not punctuation.
     const consequence = screen.getByText("2 terminals will be gracefully stopped");
     const reassurance = screen.getByText("They restart at the new location");
-    expect(reassurance.previousElementSibling).toBe(consequence);
+    expect(reassurance.previousSibling).toBe(consequence);
     expect(reassurance.textContent).toMatch(/^\s/);
     expect(consequence.parentElement?.textContent).toBe(
       `${consequence.textContent}${reassurance.textContent}`

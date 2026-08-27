@@ -147,7 +147,7 @@ describe("ResourceEnvironmentsSection", () => {
     // announcing as "{branch}branch name".
     const token = screen.getByText("{branch}");
     const description = screen.getByText("branch name");
-    expect(description.previousElementSibling).toBe(token);
+    expect(description.previousSibling).toBe(token);
     expect(description.textContent).toMatch(/^\s/);
     expect(token.parentElement?.textContent).toBe(`${token.textContent}${description.textContent}`);
   });

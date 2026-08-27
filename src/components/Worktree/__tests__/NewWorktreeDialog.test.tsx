@@ -386,7 +386,7 @@ describe("NewWorktreeDialog — existing branch mode", () => {
     // speaks it fine.
     const number = screen.getByText("#42");
     const title = screen.getByText("Test PR");
-    expect(title.previousElementSibling).toBe(number);
+    expect(title.previousSibling).toBe(number);
     expect(title.textContent).toMatch(/^\s/);
   });
 
