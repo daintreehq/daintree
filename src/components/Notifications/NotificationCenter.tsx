@@ -854,7 +854,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
   }, [filter, hasSnoozedThreads]);
 
   return (
-    <div className="w-[360px] max-h-[420px] flex flex-col">
+    <div data-testid="notification-center" className="w-[360px] max-h-[420px] flex flex-col">
       {/* pr-2, not px-3: the right-side icon buttons carry 4px of internal p-1
           touch padding, so an 8px container edge lands their glyphs at the same
           12px optical inset as the title text on the left. */}
