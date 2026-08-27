@@ -1,4 +1,6 @@
-import { useCallback, useRef } from "react";
+import { useCallback, useRef, useState } from "react";
+import { ChevronRight } from "lucide-react";
+import { cn } from "@/lib/utils";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { usePluginConfirmStore, type PluginConfirmationDecision } from "@/store/pluginConfirmStore";
@@ -10,6 +12,9 @@ import { usePluginConfirmStore, type PluginConfirmationDecision } from "@/store/
  * freshly-promoted destructive write before the user has read it.
  */
 const CONFIRM_COOLDOWN_MS = 1_200;
+
+/** Shared micro-label, matching the section-heading grammar used app-wide. */
+const MICRO_LABEL = "text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60";
 
 /**
  * Singleton dialog driven by the plugin-action confirmation queue. Mounted
@@ -80,22 +85,69 @@ export function PluginConfirmDialog() {
         variant={variant}
         // A redacted args block is structured evidence, so this is a dialog
         // rather than an alertdialog. A no-argument action drops the block
-        // entirely and really is the brief message alertdialog is for.
+        // entirely and really is the brief message alertdialog is for. This
+        // tracks whether the payload exists, never whether the disclosure
+        // below happens to be open — the role must not flip as the user toggles.
         hasPreview={hasArgs}
+        // The queue advances by swapping `current` on a mounted dialog, so the
+        // body's scroll offset would otherwise carry into the next request.
+        bodyResetKey={current.requestId}
         confirmCooldownMs={isDestructive ? CONFIRM_COOLDOWN_MS : undefined}
         cooldownKey={current.requestId}
       >
         {hasArgs ? (
-          <div className="space-y-2">
-            <div className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60">
-              Arguments
-            </div>
-            <pre className="text-xs font-mono whitespace-pre-wrap break-words bg-overlay-subtle rounded px-2 py-1.5 text-daintree-text/80">
-              {current.argsSummary}
-            </pre>
-          </div>
+          // Keyed on the request for the same reason: without this the next
+          // promoted action inherits this one's expanded disclosure, showing a
+          // payload the user never asked to see for an action they haven't read.
+          <ArgumentsDisclosure key={current.requestId} argsSummary={current.argsSummary} />
         ) : null}
       </ConfirmDialog>
     </ErrorBoundary>
+  );
+}
+
+/**
+ * The redacted argument summary, behind a disclosure.
+ *
+ * Raw payloads shown inline are the classic driver of consent-dialog
+ * click-through: they read as noise, and the noise trains people to skip the
+ * whole surface. Collapsed, they stay one keystroke away for anyone who wants
+ * them without competing with the title and description — which are what this
+ * approval actually rests on — for attention. Unlike the plugin-MCP sibling
+ * there is no audited content-preview requirement to weigh against that:
+ * `docs/architecture/destructive-action-safeguards.md` caps plugin-contributed
+ * actions at D1, whose safeguard is the confirm step itself.
+ */
+function ArgumentsDisclosure({ argsSummary }: { argsSummary: string }) {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <div>
+      <button
+        type="button"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((value) => !value)}
+        className={cn(
+          "flex w-full items-center gap-1.5 rounded-[var(--radius-sm)] py-1 text-left",
+          "transition-colors duration-150 ease-out hover:bg-overlay-subtle",
+          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:-outline-offset-2"
+        )}
+      >
+        <ChevronRight
+          aria-hidden="true"
+          data-animated-chevron
+          className={cn(
+            "w-3 h-3 shrink-0 text-daintree-text/40 transition-transform duration-150 ease-out",
+            expanded && "rotate-90"
+          )}
+        />
+        <span className={MICRO_LABEL}>Arguments</span>
+      </button>
+      {expanded && (
+        <pre className="mt-1 max-h-40 overflow-y-auto rounded-[var(--radius-md)] bg-overlay-subtle px-2 py-1.5 font-mono text-xs break-words whitespace-pre-wrap text-daintree-text/80">
+          {argsSummary}
+        </pre>
+      )}
+    </div>
   );
 }

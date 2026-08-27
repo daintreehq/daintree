@@ -305,13 +305,64 @@ describe("PluginMcpConfirmDialog structure", () => {
     expect(screen.getByText("Run shell commands")).toBeTruthy();
   });
 
-  it("keeps the redacted arguments expanded on a destructive tier", () => {
-    // docs/architecture/destructive-action-safeguards.md records the redacted
-    // argsSummary as the content preview that satisfies this surface's D2
-    // requirement. Collapsing it behind a disclosure would weaken an audited
-    // safeguard, so only the capability list collapses.
-    enqueue({ dangerTier: "D2", argsSummary: '{\n  "app": "helios-prod"\n}' });
+  // #12015 — on the tiers with no content-preview requirement the payload is
+  // offered rather than shown, matching McpConfirmDialog and
+  // PluginConfirmDialog. What splits the two paths is the safeguard the tier
+  // owes, not the shape of the data.
+  it.each(["D0", "D1"] as const)(
+    "keeps the redacted arguments behind a disclosure on %s",
+    (dangerTier) => {
+      enqueue({ dangerTier, argsSummary: '{\n  "path": "README.md"\n}' });
+      render(<PluginMcpConfirmDialog />);
+
+      const disclosure = screen.getByRole("button", { name: /^arguments$/i });
+      expect(disclosure.getAttribute("aria-expanded")).toBe("false");
+      expect(screen.queryByText(/README\.md/)).toBeNull();
+
+      act(() => disclosure.click());
+
+      expect(disclosure.getAttribute("aria-expanded")).toBe("true");
+      expect(screen.getByText(/README\.md/)).toBeTruthy();
+    }
+  );
+
+  // The tier split made the empty-summary path conditional for the first time.
+  // D2+ owes a content preview even when there is nothing to preview — saying
+  // so IS the preview — while the tiers that owe nothing drop the section
+  // rather than offer a disclosure over an empty payload.
+  it.each([
+    ["D0", false],
+    ["D1", false],
+    ["D2", true],
+    ["D3", true],
+  ] as const)("with no arguments, %s states the absence inline: %s", (dangerTier, statesIt) => {
+    enqueue({ dangerTier, argsSummary: "" });
     render(<PluginMcpConfirmDialog />);
-    expect(screen.getByText(/helios-prod/)).toBeTruthy();
+
+    // Never a disclosure over nothing, on any tier.
+    expect(screen.queryByRole("button", { name: /^arguments$/i })).toBeNull();
+    if (statesIt) {
+      expect(screen.getByText(/^no arguments$/i)).toBeTruthy();
+    } else {
+      expect(screen.queryByText(/^no arguments$/i)).toBeNull();
+    }
   });
+
+  // docs/architecture/destructive-action-safeguards.md records the redacted
+  // argsSummary as the content preview that satisfies this surface's D2
+  // requirement. Collapsing it behind a disclosure would weaken an audited
+  // safeguard, so only the capability list collapses. A disclosure defaulted
+  // to open is not the same safeguard either — it is one click from hidden and
+  // one queue advance from remounting shut — so the absence of a trigger is
+  // half of what this pins.
+  it.each(["D2", "D3"] as const)(
+    "shows the redacted arguments outright on %s, with nothing to collapse them",
+    (dangerTier) => {
+      enqueue({ dangerTier, argsSummary: '{\n  "app": "helios-prod"\n}' });
+      render(<PluginMcpConfirmDialog />);
+
+      expect(screen.getByText(/helios-prod/)).toBeTruthy();
+      expect(screen.queryByRole("button", { name: /^arguments$/i })).toBeNull();
+    }
+  );
 });

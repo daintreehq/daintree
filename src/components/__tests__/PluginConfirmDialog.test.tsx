@@ -297,12 +297,64 @@ describe("PluginConfirmDialog", () => {
     expect(screen.getByText("Action contributed by the 'my-plugin' plugin.")).toBeTruthy();
   });
 
-  it("renders the args preview block", () => {
+  // #12015 — the payload is offered, not shown. A raw args blob sitting open
+  // on every prompt reads as noise, and the noise is what trains people to
+  // click through the surface it sits on.
+  it("keeps the args payload behind a collapsed disclosure until asked for", () => {
     void enqueue({ argsSummary: '{"key":"value"}' });
     render(<PluginConfirmDialog />);
 
-    expect(screen.getByText("Arguments")).toBeTruthy();
+    const disclosure = screen.getByRole("button", { name: /^arguments$/i });
+    expect(disclosure.getAttribute("aria-expanded")).toBe("false");
+    expect(screen.queryByText('{"key":"value"}')).toBeNull();
+    // The role is fixed by whether a payload exists, not by whether it is
+    // currently revealed. Asserted on both sides of the toggle: wiring
+    // `hasPreview` to the disclosure's own state would start this destructive
+    // request as an alertdialog and flip it to a dialog mid-decision, which a
+    // post-click assertion alone would wave through.
+    expect(screen.getByRole("dialog")).toBeTruthy();
+
+    act(() => {
+      disclosure.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(disclosure.getAttribute("aria-expanded")).toBe("true");
     expect(screen.getByText('{"key":"value"}')).toBeTruthy();
+    expect(screen.getByRole("dialog")).toBeTruthy();
+    expect(screen.queryByRole("alertdialog")).toBeNull();
+  });
+
+  // The queue advances by swapping `current` on a mounted dialog, so the
+  // disclosure's expanded state survives unless it is keyed — showing a
+  // freshly promoted action's payload already open, in a state the user chose
+  // for a different action.
+  it("does not carry an expanded disclosure over to the next queued action", () => {
+    void enqueue({ requestId: "A", argsSummary: '{"first":"payload"}' });
+    void enqueue({
+      requestId: "B",
+      actionTitle: "Push branch",
+      argsSummary: '{"second":"payload"}',
+    });
+    render(<PluginConfirmDialog />);
+
+    act(() => {
+      screen
+        .getByRole("button", { name: /^arguments$/i })
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+    expect(screen.getByText('{"first":"payload"}')).toBeTruthy();
+
+    act(() => {
+      screen
+        .getByRole("button", { name: "Cancel" })
+        .dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
+    expect(screen.getByRole("button", { name: "Push branch" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^arguments$/i }).getAttribute("aria-expanded")).toBe(
+      "false"
+    );
+    expect(screen.queryByText('{"second":"payload"}')).toBeNull();
   });
 
   it("omits the Arguments section entirely for an action with no arguments", () => {
@@ -326,7 +378,13 @@ describe("PluginConfirmDialog", () => {
     void enqueue({ argsSummary: "null" });
     render(<PluginConfirmDialog />);
 
-    expect(screen.getByText("Arguments")).toBeTruthy();
+    const disclosure = screen.getByRole("button", { name: /^arguments$/i });
+    expect(disclosure.getAttribute("aria-expanded")).toBe("false");
+
+    act(() => {
+      disclosure.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    });
+
     expect(screen.getByText("null")).toBeTruthy();
   });
 
