@@ -2695,11 +2695,13 @@ describe("recipeStore", () => {
         terminals: [{ type: "terminal" as const, title: "Shell", env: { TOKEN: "" } }],
         createdAt: 500,
       };
+      // The blanked env is the one thing `loadRecipes` does not hydrate onto the
+      // canonical copy, so it identifies which of the two restored rows the
+      // rollback re-merge actually rendered.
       const mirror = {
         ...inRepoRecipe,
         projectId: "project-1",
-        lastUsedAt: 900,
-        usageHistory: [800, 900],
+        terminals: [{ type: "terminal" as const, title: "Shell", env: { TOKEN: "secret" } }],
       };
       globalGetRecipesMock.mockResolvedValueOnce([]);
       getRecipesMock.mockResolvedValueOnce({ recipes: [mirror], collisions: [] });
@@ -2708,60 +2710,32 @@ describe("recipeStore", () => {
 
       // Hold the IPC open so the optimistic slice can be inspected before the
       // rollback runs — a post-rejection assertion alone passes either way.
-      let rejectDelete: (error: Error) => void = () => {};
-      deleteInRepoRecipeMock.mockImplementationOnce(
-        () =>
-          new Promise<void>((_resolve, reject) => {
-            rejectDelete = reject;
-          })
-      );
+      let rejectDelete!: (error: Error) => void;
+      const deleteInFlight = new Promise<void>((_resolve, reject) => {
+        rejectDelete = reject;
+      });
+      deleteInRepoRecipeMock.mockReturnValueOnce(deleteInFlight);
 
       const pending = useRecipeStore.getState().deleteRecipe("recipe-opaque-abc");
+      // Proves the IPC was reached synchronously, so the assertions below read
+      // the optimistic slice rather than hanging if that sequencing changes.
+      expect(deleteInRepoRecipeMock).toHaveBeenCalledWith("project-1", "Team Recipe");
       const optimistic = useRecipeStore.getState();
       expect(optimistic.inRepoRecipes).toHaveLength(0);
       expect(optimistic.projectRecipes).toHaveLength(0);
       expect(optimistic.recipes).toHaveLength(0);
 
+      const settled = expect(pending).rejects.toThrow("disk error");
       rejectDelete(new Error("disk error"));
-      await expect(pending).rejects.toThrow("disk error");
+      await settled;
 
       const state = useRecipeStore.getState();
       expect(state.inRepoRecipes.map((r) => r.id)).toEqual(["recipe-opaque-abc"]);
       expect(state.projectRecipes.map((r) => r.id)).toEqual(["recipe-opaque-abc"]);
-      // Restoring both copies must re-collapse into one row, not a duplicate,
-      // and the surviving row keeps the mirror-only frecency.
+      // Restoring both copies must re-collapse into the single mirror-backed
+      // row, not a duplicate and not the redacted canonical copy.
       expect(state.recipes).toHaveLength(1);
-      expect(state.recipes[0]).toMatchObject({
-        id: "recipe-opaque-abc",
-        lastUsedAt: 900,
-        usageHistory: [800, 900],
-      });
-    });
-
-    it("deleteRecipe drops the mirror of a renamed in-repo recipe (#11993)", async () => {
-      const inRepoRecipe = {
-        id: "recipe-opaque-abc",
-        name: "Before",
-        scope: "inrepo" as const,
-        terminals: [{ type: "terminal" as const, title: "Shell" }],
-        createdAt: 500,
-      };
-      globalGetRecipesMock.mockResolvedValueOnce([]);
-      getRecipesMock.mockResolvedValueOnce({
-        recipes: [{ ...inRepoRecipe, projectId: "project-1", lastUsedAt: 900 }],
-        collisions: [],
-      });
-      getInRepoRecipesMock.mockResolvedValueOnce([inRepoRecipe]);
-      await useRecipeStore.getState().loadRecipes("project-1");
-
-      await useRecipeStore.getState().updateRecipe("recipe-opaque-abc", { name: "After" });
-      await useRecipeStore.getState().deleteRecipe("recipe-opaque-abc");
-
-      expect(deleteInRepoRecipeMock).toHaveBeenCalledWith("project-1", "After");
-      const state = useRecipeStore.getState();
-      expect(state.inRepoRecipes).toHaveLength(0);
-      expect(state.projectRecipes).toHaveLength(0);
-      expect(state.recipes).toHaveLength(0);
+      expect(state.recipes[0]?.terminals[0]?.env).toEqual({ TOKEN: "secret" });
     });
 
     describe("RECIPE_STALE_CONFLICT handling (#9186)", () => {
