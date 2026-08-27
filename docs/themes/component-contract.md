@@ -18,6 +18,8 @@ Check `src/components/ui/` before you hand-roll anything. A surface built from t
 | `SegmentedToggle`, `SegmentedRadioGroup`, `RadioChoiceGroup` / `RadioChoiceRow` | Two-to-three-way mode switches and option groups. |
 | `EmptyState` | An empty region. The `user-cleared` variant deliberately nulls its action so completed-work states stay quiet. |
 | `Skeleton`, `Spinner` | Loading, under the 400ms Doherty gate in `CLAUDE.md` — skeleton when the layout shape is predictable, `Spinner` when it is not. |
+| `field`, `input`, `textarea`, `checkbox`, `switch` | Any form control. `field` owns the label/description/error wiring and the `aria-describedby` and `aria-invalid` plumbing that hand-rolled forms get wrong. |
+| `card`, `badge` | A bounded content block and its status pill. |
 | `SurfaceHeader` | A panel or dialog header, at either density. |
 | `Kbd`, `ShortcutHint`, `HighlightedText`, `TruncatedTooltip` | Chrome details that already exist and are easy to reinvent slightly differently. |
 
@@ -29,13 +31,13 @@ Three vocabularies are live in the codebase. **The semantic tokens are the curre
 
 | Vocabulary | Shape | Uses | Status |
 | --- | --- | --- | --- |
-| Semantic tokens | `text-text-secondary`, `bg-surface-panel`, `border-border-default`, `text-status-error` | ~2,700 | **Current.** The validated contract is 155 tokens; the full list is in [theme-tokens.md](./theme-tokens.md). |
-| Legacy `daintree-*` aliases | `text-daintree-text`, `bg-daintree-bg` | ~4,500 | Legacy. Seven aliases over tokens that already have semantic names. |
-| shadcn defaults | `text-muted-foreground`, `bg-muted`, `bg-popover` | ~200 | Legacy. Arrived with the vendored shadcn primitives. Nearly all are theme-backed (`--muted` resolves to `--theme-surface-panel`), so they render correctly — they are simply a third name for tokens that already have one. |
+| Semantic tokens | `text-text-secondary`, `bg-surface-panel`, `border-border-default`, `text-status-error` | ~4,900 | **Current.** The validated contract is 155 tokens; the full list is in [theme-tokens.md](./theme-tokens.md). |
+| Legacy `daintree-*` aliases | `text-daintree-text/70`, `bg-daintree-accent/10` | ~2,300 | Legacy. Five aliases over tokens that already have semantic names. Every solid use is gone; what remains is alpha forms, which is the only reason the alias layer still has to generate. |
+| shadcn defaults | `text-muted-foreground`, `bg-muted`, `bg-popover` | ~250 | Legacy. Arrived with the vendored shadcn primitives. Nearly all are theme-backed (`--muted` resolves to `--theme-surface-panel`), so they render correctly — they are simply a third name for tokens that already have one. |
 
 Counts are utilities in production `src/**`, measured with the same extraction the rules use.
 
-The `daintree-*` layer is pure aliasing — `--color-daintree-text` is defined in `src/index.css` as nothing but `var(--theme-text-primary)`. Two names for one token means neither reads as canonical, and because the alias layer covers seven tokens against the semantic layer's 155, anything outside those seven has no legacy spelling at all. That is why single class strings today mix both vocabularies.
+The `daintree-*` layer is pure aliasing — `--color-daintree-text` is defined in `src/index.css` as nothing but `var(--theme-text-primary)`. Two names for one token means neither reads as canonical, and because the alias layer covers five tokens against the semantic layer's 155, anything outside those five has no legacy spelling at all. That is why single class strings today mix both vocabularies.
 
 Migrate on the utility, keeping the prefix:
 
@@ -46,8 +48,8 @@ Migrate on the utility, keeping the prefix:
 | `bg-daintree-sidebar` | `bg-surface-sidebar` |
 | `border-daintree-border` | `border-border-default` |
 | `outline-daintree-accent`, `ring-daintree-accent` | `outline-accent-primary`, `ring-accent-primary` |
-| `*-daintree-accent-rgb` | `*-accent-rgb` |
-| `*-daintree-focus` | `*-focus-ring` |
+
+Two further aliases, `--color-daintree-accent-rgb` and `--color-daintree-focus`, were deleted once their last call sites went. The rule still maps them, deliberately: a utility naming an alias that no longer exists generates no CSS at all, which is a worse failure than the vocabulary mixing and worth catching by name rather than falling through to the generic message.
 
 An alpha modifier carries across unchanged on surfaces and edges — `bg-daintree-accent/10` becomes `bg-accent-primary/10`. On a **text** colour it does not: `text-daintree-text/70` becomes `text-text-secondary` or `text-text-muted`, per the next section. Both rules fire on that token, and both fixes are needed.
 
@@ -75,7 +77,7 @@ Extract shared class strings the way `src/components/ui/paletteRowStyles.ts` doe
 
 ## Scales
 
-**Type.** Tailwind's stock `--text-*` steps; this repo overrides none of them. Arbitrary sizes (`text-[11px]`) are off the scale, invisible to it, and do not move when it moves — and because the values sit a pixel apart, 9px through 13px are all in use where the scale offers two steps. When a design genuinely needs a step the scale lacks — the 10-11px label sizes are the real case — add a named step to the `@theme` block in `src/index.css` and use that. One list of legal sizes beats an open set of brackets. Enforced by `component-contract/no-arbitrary-text-size`; arbitrary _colours_ share the `text-[…]` spelling and are not flagged.
+**Type.** Tailwind's stock `--text-*` steps; this repo overrides none of them. Arbitrary sizes (`text-[11px]`) are off the scale, invisible to it, and do not move when it moves — and because the values sit a pixel apart, 9px through 13px are all in use where the scale offers two steps. When a design genuinely needs a step the scale lacks, add a named step to the `@theme` block in `src/index.css` and use that — `--text-2xs` (11px), `--text-3xs` (10px) and `--text-4xs` (9px) are exactly that, added for the label sizes the stock scale skips, and `button`'s `xs` size now spells itself `text-3xs`. One list of legal sizes beats an open set of brackets. Enforced by `component-contract/no-arbitrary-text-size`; arbitrary _colours_ share the `text-[…]` spelling and are not flagged.
 
 **Radius.** `--radius-xs` through `--radius-3xl`, all derived in `src/index.css` from one base: `--radius: calc(0.625rem * var(--theme-radius-scale, 1))`. A theme can therefore scale every corner in the app at once. Both `rounded-md` and `rounded-[var(--radius-md)]` are on the scale and resolve to the same value; the second is the codebase's prevailing spelling. `rounded-full` and `rounded-none` are shape decisions rather than points on a scale and stay legal.
 
@@ -111,4 +113,4 @@ The reason is the point. A rule with no written rationale gets disabled the firs
 
 All five ship as `warn`, because each has thousands of pre-existing uses. `scripts/lint-ratchet.mjs` records today's per-rule counts in `scripts/baselines/eslint-warnings-baseline.json` and fails CI when any single rule's count rises, so new violations cannot land quietly. A rule that vanishes from ESLint's output is a hard failure too — you cannot silence one to make a number go away.
 
-Two sharp edges when you clean up. The counts fall only when someone reseeds the baseline; `--update` writes whatever it currently sees, so reseeding is a deliberate act to review, not a formality. And the update path refuses a drop of more than 10% for any single rule, which is easier to hit than it sounds — 465 of the 4,644 legacy uses trips it, as does fixing four of the 35 focus warnings — and clearing a rule all the way to zero is stricter still: the rule vanishes from ESLint's output, so check mode reports it as disappeared and hard-fails until the baseline is reseeded. The escape is `npm run lint:ratchet -- --update --force`, which is the case that guard is designed to let through deliberately; note that it lifts the guard for every rule at once, so read the whole diff before committing it.
+Two sharp edges when you clean up. The counts fall only when someone reseeds the baseline; `--update` writes whatever it currently sees, so reseeding is a deliberate act to review, not a formality. And the update path refuses a drop of more than 10% for any single rule, which is easier to hit than it sounds — 233 of the 2,322 legacy uses trips it, as does fixing four of the 35 focus warnings, and on a rule already down to six a single fix does — and clearing a rule all the way to zero is stricter still: the rule vanishes from ESLint's output, so check mode reports it as disappeared and hard-fails until the baseline is reseeded. The escape is `npm run lint:ratchet -- --update --force`, which is the case that guard is designed to let through deliberately; note that it lifts the guard for every rule at once, so read the whole diff before committing it.

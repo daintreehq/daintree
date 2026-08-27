@@ -5,8 +5,8 @@
  * `src/index.css` is a thin alias layer over the semantic tokens the theme
  * system actually validates — `--color-daintree-text` is nothing but
  * `var(--theme-text-primary)` under an older name. Two names for one token
- * means neither reads as canonical, and the alias layer covers seven tokens
- * against the semantic layer's 155, so anything outside those seven has no
+ * means neither reads as canonical, and the alias layer covers five tokens
+ * against the semantic layer's 155, so anything outside those five has no
  * legacy spelling and the codebase mixes vocabularies inside single class
  * strings.
  *
@@ -27,7 +27,15 @@
 
 import { createClassExpressionVisitor, normalizeToken, splitModifier } from "./classStrings.js";
 
-/** Legacy alias → the semantic token that replaces it, as spelled in a utility. */
+/**
+ * Legacy alias → the semantic token that replaces it, as spelled in a utility.
+ *
+ * Seven entries against five live aliases: `daintree-accent-rgb` and
+ * `daintree-focus` were deleted from `src/index.css` once their last call sites
+ * went, so a utility naming either now generates no CSS at all. They stay mapped
+ * on purpose — that failure is worse than vocabulary mixing, and it deserves the
+ * named replacement rather than the generic `unmapped` message.
+ */
 const REPLACEMENTS = new Map([
   ["daintree-text", "text-primary"],
   ["daintree-bg", "surface-canvas"],
