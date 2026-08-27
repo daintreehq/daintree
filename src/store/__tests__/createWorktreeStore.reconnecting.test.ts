@@ -521,7 +521,11 @@ describe("createWorktreeStore — removal tombstones (#8403)", () => {
 
 // Comfortably past any plausible suppression window without restating its
 // length — the point is that a stamped comparison ignores the clock entirely.
-const TOMBSTONE_WINDOW_OVERSHOOT_MS = 10 * 60_000;
+const TOMBSTONE_WINDOW_OVERSHOOT_MS = 60_000;
+
+// Past any plausible fence lifetime. A stamped fence is deliberately kept far
+// longer than the suppression window, so this has to clear a much bigger gap.
+const FENCE_LIFETIME_OVERSHOOT_MS = 24 * 60 * 60_000;
 
 describe("createWorktreeStore — same-path re-creation (#11994)", () => {
   beforeEach(() => {
@@ -741,6 +745,23 @@ describe("createWorktreeStore — same-path re-creation (#11994)", () => {
         seq: 2,
       });
     expect(store.getState().worktrees.has("wt-2")).toBe(true);
+  });
+
+  it("retires a stamped fence only once it is far older than any in-flight poll", () => {
+    const store = createWorktreeStore();
+    store
+      .getState()
+      .applySnapshot([makeSnapshot("wt-1", { generation: 4 })], { epoch: "e", seq: 1 });
+    store.getState().applyRemove("wt-1", { epoch: "e", seq: 2 }, 4);
+
+    // Reaping happens on write, so a later unrelated removal is what sweeps it.
+    vi.advanceTimersByTime(TOMBSTONE_WINDOW_OVERSHOOT_MS);
+    store.getState().applyRemove("wt-2", { epoch: "e", seq: 3 }, 9);
+    expect(store.getState().tombstones.has("wt-1")).toBe(true);
+
+    vi.advanceTimersByTime(FENCE_LIFETIME_OVERSHOOT_MS);
+    store.getState().applyRemove("wt-3", { epoch: "e", seq: 4 }, 9);
+    expect(store.getState().tombstones.has("wt-1")).toBe(false);
   });
 
   it("accepts a lower generation from a restarted host", () => {

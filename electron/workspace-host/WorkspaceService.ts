@@ -382,15 +382,18 @@ export class WorkspaceService {
   private worktreeGeneration = 0;
 
   /**
-   * Worktree ids with an `addNewWorktreeMonitor` call in flight. The entry
-   * guard reads `monitors` before several awaits, so without this a second
+   * In-flight `installWorktreeMonitor` promise per worktree id. The entry guard
+   * reads `monitors` before several awaits, so without single-flighting a second
    * caller for the same id (a `syncMonitors` pass racing `performCreateWorktree`
    * or a topology reconcile) sails past it and installs a second live monitor
    * for one path — double-polling it, and breaking the invariant the removal
    * tombstone leans on: the registered monitor holds the highest incarnation
-   * minted for its id (#11994).
+   * minted for its id (#11994). The promise, rather than a bare id set, is what
+   * lets the losing caller wait for the winner instead of returning while the
+   * monitor is still absent — `performCreateWorktree` documents that the
+   * monitor IS registered once its await resolves.
    */
-  private readonly pendingMonitorInstalls = new Set<string>();
+  private readonly pendingMonitorInstalls = new Map<string, Promise<void>>();
 
   /**
    * Epoch-scoped set of mutation IDs that have been successfully acknowledged
@@ -1385,12 +1388,27 @@ export class WorkspaceService {
     skipInitialGitStatus: boolean,
     deferWatcherBudget: boolean = false
   ): Promise<void> {
-    if (this.monitors.has(wt.id) || this.pendingMonitorInstalls.has(wt.id)) {
+    if (this.monitors.has(wt.id)) {
       return;
     }
-    this.pendingMonitorInstalls.add(wt.id);
+    const inFlight = this.pendingMonitorInstalls.get(wt.id);
+    if (inFlight) {
+      // Swallow the winner's failure rather than re-throwing it into a caller
+      // that only asked for the monitor to exist: a duplicate call stays the
+      // no-op it always was, and the shared await is purely so this returns
+      // once the install has actually settled.
+      await inFlight.catch(() => {});
+      return;
+    }
+    const install = this.installWorktreeMonitor(
+      wt,
+      isActive,
+      skipInitialGitStatus,
+      deferWatcherBudget
+    );
+    this.pendingMonitorInstalls.set(wt.id, install);
     try {
-      await this.installWorktreeMonitor(wt, isActive, skipInitialGitStatus, deferWatcherBudget);
+      await install;
     } finally {
       this.pendingMonitorInstalls.delete(wt.id);
     }

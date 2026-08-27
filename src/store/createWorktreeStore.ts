@@ -35,12 +35,16 @@ interface WorktreeTombstone {
 }
 
 /**
- * Ceiling on retained tombstones. A stamped one outlives {@link TOMBSTONE_TTL_MS}
- * (only a newer incarnation retires it), so age-based eviction is what keeps a
- * long session that churns hundreds of worktrees from growing the map without
- * bound. Insertion order tracks recency — `applyRemove` re-inserts on rewrite.
+ * How long a *stamped* tombstone is kept. Unlike {@link TOMBSTONE_TTL_MS} this
+ * is not a correctness window — the incarnation comparison decides those cases
+ * algebraically — it only stops fences accumulating for the life of an epoch.
+ * The bound worth clearing is the longest a torn-down monitor can still emit:
+ * a queued git-status pass is capped at 60s by the host's own poll-queue
+ * timeout, so ten minutes is two orders of magnitude of headroom over the
+ * thing it has to outlive. Counting entries instead would be wrong — evicting
+ * by volume can drop a fence whose monitor has not gone quiet yet.
  */
-const MAX_TOMBSTONES = 256;
+const FENCE_TTL_MS = 10 * 60_000;
 
 /**
  * Drop the tombstones a host snapshot has settled. An id the host still reports
@@ -726,23 +730,14 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
         ? new Map<string, WorktreeTombstone>()
         : new Map(prevState.tombstones);
       // Reap on write so ids that never receive a follow-up update can't
-      // accumulate over a long high-churn session. Only unstamped tombstones
-      // expire by age — a stamped one is a durable fence and is retired by a
-      // newer incarnation, an epoch change, or the size cap below.
+      // accumulate over a long high-churn session. A stamped fence is durable —
+      // retired by a newer incarnation, an epoch change, or a snapshot that
+      // reports the id alive — so it expires on the far longer FENCE_TTL_MS
+      // rather than the suppression window.
       for (const [id, tombstone] of tombstones) {
-        if (tombstone.generation === undefined && now - tombstone.removedAt >= TOMBSTONE_TTL_MS) {
-          tombstones.delete(id);
-        }
+        const ttl = tombstone.generation === undefined ? TOMBSTONE_TTL_MS : FENCE_TTL_MS;
+        if (now - tombstone.removedAt >= ttl) tombstones.delete(id);
       }
-      while (tombstones.size >= MAX_TOMBSTONES) {
-        const oldest = tombstones.keys().next().value;
-        if (oldest === undefined) break;
-        tombstones.delete(oldest);
-      }
-      // Delete before re-inserting so insertion order tracks recency: `set` on
-      // an existing key would leave the entry at its original position and the
-      // eviction above would then evict by first-seen rather than by age.
-      tombstones.delete(worktreeId);
       // Fall back to the outgoing row's stamp when the event didn't carry one,
       // so the incarnation comparison still works for any path that removes a
       // worktree the store had already hydrated from a snapshot.
