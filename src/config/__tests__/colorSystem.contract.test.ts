@@ -113,6 +113,69 @@ describe("color system contract", () => {
     );
   });
 
+  // #12031 renamed ~2.3k solid call sites off the legacy `daintree-*` vocabulary
+  // onto the semantic tokens it aliased. The rename is only a no-op while both
+  // spellings still resolve to the same `--theme-*` terminal, so resolve them
+  // through the real declarations rather than trusting the alias block to read
+  // the way it did the day it was written.
+  it("resolves each surviving daintree-* alias to the same theme token as its replacement", () => {
+    const declarations = new Map(
+      Array.from(indexCss.matchAll(/--color-([a-z0-9-]+):\s*([^;]+);/g), (m) => [
+        m[1]!,
+        m[2]!.trim(),
+      ])
+    );
+
+    function resolve(name: string): string {
+      const seen = new Set<string>();
+      let current = name;
+      for (;;) {
+        if (seen.has(current)) throw new Error(`--color-${name} resolves through a cycle`);
+        seen.add(current);
+        const value = declarations.get(current);
+        expect(value, `--color-${current} is not declared`).toBeDefined();
+        const hop = value!.match(/^var\(\s*--color-([a-z0-9-]+)\s*\)$/);
+        if (!hop) return value!;
+        current = hop[1]!;
+      }
+    }
+
+    const renames: Record<string, string> = {
+      "daintree-bg": "surface-canvas",
+      "daintree-sidebar": "surface-sidebar",
+      "daintree-border": "border-default",
+      "daintree-text": "text-primary",
+      "daintree-accent": "accent-primary",
+    };
+
+    for (const [legacy, semantic] of Object.entries(renames)) {
+      expect(
+        resolve(legacy),
+        `--color-${legacy} and --color-${semantic} must paint the same colour, or the ` +
+          `#12031 rename of every ${legacy.replace("daintree-", "")} call site changed pixels`
+      ).toBe(resolve(semantic));
+    }
+  });
+
+  // The two aliases #12031 deleted had no consumers. Removing a live one would
+  // silently stop Tailwind generating the alpha-modified utilities still in the
+  // tree (`text-daintree-text/60`, `ring-daintree-accent/30`).
+  it("keeps a daintree-* alias declared for every alpha-modified use still in the tree", () => {
+    const alphaUse =
+      /(?<=[a-z0-9\]])-daintree-(sidebar|border|accent|text|bg)\/(?:\[[\d.]+\]|\d+)/g;
+
+    const needed = new Set<string>();
+    for (const filePath of collectSourceFiles(SRC_ROOT)) {
+      const source = fs.readFileSync(filePath, "utf8");
+      for (const match of source.matchAll(alphaUse)) needed.add(`daintree-${match[1]!}`);
+    }
+
+    const undeclared = Array.from(needed).filter((name) => !exportedColorVars.has(name));
+    expect(undeclared, `alpha-modified utilities reference undeclared --color-* aliases`).toEqual(
+      []
+    );
+  });
+
   it("defines --dock-shadow with alpha-pinned relative color (visible on light themes)", () => {
     // Regression for #8156: color-mix multiplied --theme-shadow-color's own
     // alpha (0.12 on light themes) toward transparent, making the dock shadow
