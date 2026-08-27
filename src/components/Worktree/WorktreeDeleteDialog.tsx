@@ -18,6 +18,7 @@ import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import type { WorktreeState } from "@/types";
 import { cn } from "@/lib/utils";
 import { isProtectedBranch as isProtectedBranchName } from "@shared/utils/gitConstants";
+import { prefersReducedMotion } from "@/lib/appThemeViewTransition";
 
 interface WorktreeDeleteDialogProps {
   isOpen: boolean;
@@ -47,6 +48,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   // (an ABA race a plain boolean flag would miss). `mountedRef` covers unmount.
   const sessionRef = useRef(0);
   const mountedRef = useRef(true);
+  const gateRef = useRef<HTMLDivElement>(null);
   useEffect(() => {
     // Set on SETUP as well as clearing on cleanup — under React StrictMode the
     // mount effect runs setup → cleanup → setup, so a setup that only cleared
@@ -171,6 +173,21 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
       setConfirmInput("");
     }
   }, [force]);
+
+  // An escalation the user cannot see is not an escalation. On a tall state
+  // (long path, many changed files) the D3 gate renders below the body's
+  // scroll fold, so the footer would report a disabled action whose cause was
+  // off-screen. Bring the gate into view when the tier escalates — the user
+  // did not scroll away from it, it appeared somewhere they were not looking.
+  useEffect(() => {
+    if (!isHighTier) return;
+    const node = gateRef.current;
+    if (!node) return;
+    node.scrollIntoView({
+      block: "nearest",
+      behavior: prefersReducedMotion() ? "auto" : "smooth",
+    });
+  }, [isHighTier]);
 
   useEffect(() => {
     if (!canDeleteBranch && deleteBranch) {
@@ -474,10 +491,11 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                 />
                 <span className="flex items-center gap-1.5 text-sm text-daintree-text">
                   <FolderGit2 className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+                  {/* No branch chip: the entity summary directly above names
+                      the branch, and so does the title. A third copy bought
+                      nothing and, on a long branch, forced this label to wrap
+                      while the chip took the whole remaining width. */}
                   Delete branch
-                  <code className="text-xs bg-daintree-bg px-1.5 py-0.5 rounded border border-border-strong break-all">
-                    {worktree.branch}
-                  </code>
                 </span>
               </label>
             )}
@@ -531,22 +549,28 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
           </div>
 
           {isHighTier && (
-            <TypedNameConfirmInput
-              target={confirmTarget}
-              value={confirmInput}
-              onChange={setConfirmInput}
-              onMatchSubmit={handleDelete}
-              preamble={highTierPreamble}
-              data-testid="delete-worktree-confirm-input"
-            />
+            <div ref={gateRef}>
+              <TypedNameConfirmInput
+                target={confirmTarget}
+                value={confirmInput}
+                onChange={setConfirmInput}
+                onMatchSubmit={handleDelete}
+                preamble={highTierPreamble}
+                data-testid="delete-worktree-confirm-input"
+              />
+            </div>
           )}
         </div>
       </AppDialog.Body>
 
       <AppDialog.Footer
         hint={
+          // No identifier interpolated here. The gate directly above already
+          // shows the exact string to type, and putting an untruncated branch
+          // name in the footer is what broke this footer in the first place —
+          // it just moves the overflow from the button to the hint.
           isHighTier && !isConfirmMatched
-            ? `Type ${confirmTarget} above to enable`
+            ? "Confirm the name above to enable"
             : (blockedHint ?? undefined)
         }
         secondaryAction={{ label: "Cancel", onClick: onClose }}

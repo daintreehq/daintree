@@ -608,6 +608,35 @@ describe("WorktreeDeleteDialog — dialog chrome contract", () => {
     expect(container.querySelector('[data-confirm-role="confirm"]')).not.toBeNull();
   });
 
+  it("brings the D3 gate into view when the tier escalates", () => {
+    // An escalation the user cannot see is not an escalation: on a tall state
+    // the gate renders below the body's scroll fold, so the footer would
+    // report a disabled action whose cause was off-screen.
+    const spy = vi.spyOn(Element.prototype, "scrollIntoView");
+    const worktree = makeWorktree(makeChanges([{ path: "/wt/src/app.ts", status: "modified" }]));
+    render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
+
+    expect(spy).not.toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("checkbox", { name: /force delete/i }));
+
+    expect(screen.getByTestId("delete-worktree-confirm-input")).toBeDefined();
+    expect(spy).toHaveBeenCalled();
+    spy.mockRestore();
+  });
+
+  it("keeps identifiers out of the footer hint", () => {
+    // The hint is the other place an untruncated branch name can overflow the
+    // footer; the gate above already shows the exact string to type.
+    const longBranch = "feature/" + "y".repeat(120);
+    const worktree = makeWorktree(makeChanges([{ path: "/wt/a.ts", status: "modified" }]), {
+      branch: longBranch,
+    });
+    render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
+    fireEvent.click(screen.getByRole("checkbox", { name: /force delete/i }));
+
+    expect(screen.getByTestId("delete-worktree-hint").textContent).not.toContain(longBranch);
+  });
+
   it("gives the dialog a short static description for aria-describedby", () => {
     const worktree = makeWorktree(makeChanges([]));
     render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
