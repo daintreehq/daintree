@@ -473,7 +473,7 @@ describe("InlineStatusBanner", () => {
     });
   });
 
-  it("uses the 250ms entrance duration class when animated", () => {
+  it("scopes the entrance transition to the properties it animates", () => {
     const { container } = render(
       <InlineStatusBanner
         icon={Info}
@@ -497,7 +497,7 @@ describe("InlineStatusBanner", () => {
     expect(root.className).not.toContain("transition-all");
   });
 
-  it("suppresses the 250ms entrance class when data-reduce-animations is true", () => {
+  it("suppresses the entrance transition when data-reduce-animations is true", () => {
     document.body.setAttribute("data-reduce-animations", "true");
     try {
       const { container } = render(
