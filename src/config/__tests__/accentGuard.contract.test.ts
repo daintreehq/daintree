@@ -170,7 +170,6 @@ const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
     "src/components/Panel/TabButton.tsx",
     "src/components/Portal/PortalDock.tsx",
     "src/components/Portal/PortalToolbar.tsx",
-    "src/components/Project/CloneRepoDialog.tsx",
     "src/components/Project/CreateProjectFolderDialog.tsx",
     "src/components/Project/GeneralTab.tsx",
     "src/components/Project/GitInitDialog.tsx",
