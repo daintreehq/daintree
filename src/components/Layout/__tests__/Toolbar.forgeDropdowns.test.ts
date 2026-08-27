@@ -44,7 +44,7 @@ describe("Forge stats dropdown search clearing — issue #3251", () => {
   });
 });
 
-describe("Forge stats dropdown Suspense skeleton fallbacks — issue #3593", () => {
+describe("Forge stats dropdown skeleton placeholders — issue #3593", () => {
   let pluginSource: string;
 
   beforeEach(async () => {
@@ -57,23 +57,45 @@ describe("Forge stats dropdown Suspense skeleton fallbacks — issue #3593", () 
     expect(pluginSource).not.toMatch(/lazy\(\s*\(\)\s*=>\s*import.*GitHubDropdownSkeletons/);
   });
 
-  it("uses immediate skeletons in the Suspense fallbacks", () => {
+  it("uses immediate skeletons while the list chunk loads", () => {
     expect(pluginSource).toMatch(
       /<GitHubResourceListSkeleton\s+count=\{initialCount\}\s+immediate\s+type=\{type\}/
     );
     expect(pluginSource).toMatch(/<CommitListSkeleton\s+count=\{initialCount\}\s+immediate/);
   });
 
-  it("eagerly resolves the concrete components so reopen skips the Suspense pass", () => {
-    expect(pluginSource).toMatch(/setResourceList\(\(\)\s*=>\s*m\.GitHubResourceList\)/);
-    expect(pluginSource).toMatch(/setCommitList\(\(\)\s*=>\s*m\.CommitList\)/);
+  it("retains the resolved components so reopen skips the placeholder", () => {
+    expect(pluginSource).toMatch(/setResourceList\(\(\)\s*=>\s*m\)/);
+    expect(pluginSource).toMatch(/setCommitList\(\(\)\s*=>\s*m\)/);
+    // A remount (an error-boundary retry, a provider swap) re-reads the loader
+    // cache synchronously rather than flashing the skeleton again.
+    expect(pluginSource).toContain("loadResourceList.peek()");
+    expect(pluginSource).toContain("loadCommitList.peek()");
   });
 
-  it("does not use Loader2 in any Suspense fallback", () => {
-    const suspenseBlocks = pluginSource.match(/fallback=\{[\s\S]*?\}\s*>/g) ?? [];
-    for (const block of suspenseBlocks) {
-      expect(block).not.toContain("Loader2");
-    }
+  it("never falls back to a spinner", () => {
+    expect(pluginSource).not.toContain("Loader2");
+    expect(pluginSource).not.toContain("Spinner");
+  });
+});
+
+describe("Forge stats dropdown chunk-load recovery", () => {
+  let pluginSource: string;
+
+  beforeEach(async () => {
+    pluginSource = await fs.readFile(PLUGIN_DROPDOWN_PATH, "utf-8");
+  });
+
+  it("loads the list chunks through retryableImport, never React.lazy", () => {
+    // `lazy` memoizes its rejection, so a single missed chunk fetch would
+    // disable the dropdown for the rest of the session with no way back.
+    expect(pluginSource).toContain("retryableImport");
+    expect(pluginSource).not.toMatch(/\blazy\(/);
+  });
+
+  it("re-throws a failed load for the slot's error boundary instead of stalling", () => {
+    // Swallowing it would leave the skeleton pulsing forever with no recovery.
+    expect(pluginSource).toMatch(/if\s*\(loadError\)\s*throw loadError;/);
   });
 });
 

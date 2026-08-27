@@ -19,14 +19,23 @@ const GitHubSettingsTab = lazy(() =>
 // Registration stays synchronous while infrequently used views load only when rendered.
 registerBuiltinView("github.bulkCreateWorktreeDialog", BulkCreateWorktreeDialog, {
   pluginId: "daintree.github",
+  label: "Bulk worktree form",
 });
-registerBuiltinView("github.issueSelector", IssueSelector, { pluginId: "daintree.github" });
+registerBuiltinView("github.issueSelector", IssueSelector, {
+  pluginId: "daintree.github",
+  label: "Issue picker",
+});
 registerBuiltinView("github.forgeSettingsTab", GitHubSettingsTab, {
   pluginId: "daintree.github",
+  label: "GitHub settings",
 });
-registerBuiltinView("github.providerIcon", GitHubIcon, { pluginId: "daintree.github" });
+registerBuiltinView("github.providerIcon", GitHubIcon, {
+  pluginId: "daintree.github",
+  label: "GitHub icon",
+});
 registerBuiltinView("github.statsDropdown", GitHubStatsDropdown, {
   pluginId: "daintree.github",
+  label: "GitHub list",
 });
 
 // E2E backdoor (gated on the preload-injected __DAINTREE_E2E_MODE__ flag, set
