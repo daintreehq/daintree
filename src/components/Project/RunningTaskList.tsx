@@ -222,7 +222,7 @@ function TaskOverflow({
         className={cn(
           "flex w-full items-center gap-0.5 px-2 py-0.5 rounded-[var(--radius-sm)] text-3xs font-sans transition-colors",
           "text-daintree-text/40 hover:text-daintree-text/70 hover:bg-tint/[0.04]",
-          "outline-hidden focus-visible:outline focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+          "outline-hidden focus-visible:outline focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
         )}
       >
         {tasks.length} more
