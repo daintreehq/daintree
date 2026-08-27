@@ -41,6 +41,7 @@ import { dismissBlockingPalette } from "../helpers/overlays";
 import { setAppTheme } from "../helpers/theme";
 import { navigateToAgentSettings } from "../helpers/presets";
 import { SEL } from "../helpers/selectors";
+import { selectSettingsScope } from "../helpers/panels";
 
 const ENABLED = !!process.env.DAINTREE_SHOT_PRESET;
 const THEME = process.env.DAINTREE_SHOT_THEME ?? "";
@@ -499,8 +500,7 @@ test("choice-row rollout review — settings surfaces", async () => {
     await openSettings(page);
     await expect(page.locator(SEL.settings.heading)).toBeVisible({ timeout: 15_000 });
 
-    await page.locator('[aria-label="Settings scope"]').click();
-    await page.locator('[role="option"]', { hasText: "Project" }).click();
+    await selectSettingsScope(page, "Project");
     await settle(page, 800);
     await page.locator(`${SEL.settings.navSidebar} button`, { hasText: "Worktree Setup" }).click();
 

@@ -5,7 +5,7 @@ import { openAndOnboardProject } from "../../helpers/project";
 import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_SETTLE } from "../../helpers/timeouts";
 
-import { openSettings } from "../../helpers/panels";
+import { openSettings, selectSettingsScope } from "../../helpers/panels";
 let ctx: AppContext;
 let fixtureCleanup: (() => void) | undefined;
 
@@ -330,8 +330,7 @@ test.describe.serial("Core: Settings Pages Load", () => {
       await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
 
       // Switch to Project scope (Radix Select)
-      await window.locator('[aria-label="Settings scope"]').click();
-      await window.locator('[role="option"]', { hasText: "Project" }).click();
+      await selectSettingsScope(window, "Project");
       await window.waitForTimeout(T_SETTLE);
     });
 
@@ -367,8 +366,7 @@ test.describe.serial("Core: Settings Pages Load", () => {
       await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
 
       // Switch to Project scope (Radix Select)
-      await window.locator('[aria-label="Settings scope"]').click();
-      await window.locator('[role="option"]', { hasText: "Project" }).click();
+      await selectSettingsScope(window, "Project");
       await window.waitForTimeout(T_SETTLE);
     });
 

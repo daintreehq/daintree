@@ -5,14 +5,7 @@ import { openAndOnboardProject } from "../../helpers/project";
 import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
 
-import { openSettings } from "../../helpers/panels";
-
-/** Click a scope segment and wait for it to report itself checked. */
-async function selectScope(window: Page, label: "Global" | "Project"): Promise<void> {
-  const option = window.locator(SEL.settings.scopeOption(label));
-  await option.click();
-  await expect(option).toHaveAttribute("aria-checked", "true", { timeout: T_SHORT });
-}
+import { openSettings, selectSettingsScope } from "../../helpers/panels";
 
 /**
  * Every `role="tab"` must point at a panel that is actually in the document. Search
@@ -474,7 +467,7 @@ test.describe.serial("Core: Settings Advanced", () => {
       await expect(nav.locator("button", { hasText: "Variables" })).toHaveCount(0);
 
       // Switch to Project scope (segmented radiogroup) → nav swaps to project tabs.
-      await selectScope(window, "Project");
+      await selectSettingsScope(window, "Project");
 
       await expect(nav.locator("button", { hasText: "Variables" })).toBeVisible({
         timeout: T_SHORT,
@@ -488,18 +481,18 @@ test.describe.serial("Core: Settings Advanced", () => {
       });
 
       // Flip to Global and back — the project scope restores its remembered tab.
-      await selectScope(window, "Global");
+      await selectSettingsScope(window, "Global");
       await expect(nav.locator("button", { hasText: "Appearance" })).toBeVisible({
         timeout: T_SHORT,
       });
 
-      await selectScope(window, "Project");
+      await selectSettingsScope(window, "Project");
       await expect(window.locator("h3", { hasText: "Environment Variables" })).toBeVisible({
         timeout: T_SHORT,
       });
 
       // Restore global scope before closing so later state is predictable.
-      await selectScope(window, "Global");
+      await selectSettingsScope(window, "Global");
 
       await window.keyboard.press("Escape");
       await expect(window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_SHORT });
@@ -524,7 +517,7 @@ test.describe.serial("Core: Settings Advanced", () => {
 
       // And in project scope, whose panels mount on a different branch.
       await searchInput.fill("");
-      await selectScope(window, "Project");
+      await selectSettingsScope(window, "Project");
       expect(await danglingTabControls(window), "dangling aria-controls in project scope").toEqual(
         []
       );
@@ -536,7 +529,7 @@ test.describe.serial("Core: Settings Advanced", () => {
       ).toEqual([]);
 
       await searchInput.fill("");
-      await selectScope(window, "Global");
+      await selectSettingsScope(window, "Global");
       await window.keyboard.press("Escape");
       await expect(window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_SHORT });
     });

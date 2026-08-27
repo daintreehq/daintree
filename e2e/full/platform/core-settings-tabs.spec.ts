@@ -5,7 +5,7 @@ import { openAndOnboardProject } from "../../helpers/project";
 import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_SETTLE } from "../../helpers/timeouts";
 
-import { openSettings } from "../../helpers/panels";
+import { openSettings, selectSettingsScope } from "../../helpers/panels";
 
 test.describe.serial("Core: Settings Tabs Coverage", () => {
   let ctx: AppContext;
@@ -465,8 +465,7 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
     await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
 
     // Switch to Project scope (Radix Select)
-    await window.locator('[aria-label="Settings scope"]').click();
-    await window.locator('[role="option"]', { hasText: "Project" }).click();
+    await selectSettingsScope(window, "Project");
     await window.waitForTimeout(T_SETTLE);
 
     // Navigate to Resources tab — scope everything to this panel
@@ -554,8 +553,7 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
     await openSettings(window);
     await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
 
-    await window.locator('[aria-label="Settings scope"]').click();
-    await window.locator('[role="option"]', { hasText: "Project" }).click();
+    await selectSettingsScope(window, "Project");
     await window.waitForTimeout(T_SETTLE);
 
     await window
@@ -586,8 +584,7 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
     await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
 
     // Switch to Project scope
-    await window.locator('[aria-label="Settings scope"]').click();
-    await window.locator('[role="option"]', { hasText: "Project" }).click();
+    await selectSettingsScope(window, "Project");
     await window.waitForTimeout(T_SETTLE);
 
     await window
@@ -654,8 +651,7 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
     await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
 
     // Switch to Project scope
-    await window.locator('[aria-label="Settings scope"]').click();
-    await window.locator('[role="option"]', { hasText: "Project" }).click();
+    await selectSettingsScope(window, "Project");
     await window.waitForTimeout(T_SETTLE);
 
     await window
@@ -722,8 +718,7 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
     await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
 
     // Switch to Project scope
-    await window.locator('[aria-label="Settings scope"]').click();
-    await window.locator('[role="option"]', { hasText: "Project" }).click();
+    await selectSettingsScope(window, "Project");
     await window.waitForTimeout(T_SETTLE);
 
     // Navigate to Variables tab
@@ -773,8 +768,7 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
     await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
 
     // Switch to Project scope
-    await window.locator('[aria-label="Settings scope"]').click();
-    await window.locator('[role="option"]', { hasText: "Project" }).click();
+    await selectSettingsScope(window, "Project");
     await window.waitForTimeout(T_SETTLE);
 
     await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "Variables" }).click();
