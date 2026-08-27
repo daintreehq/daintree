@@ -542,11 +542,15 @@ describe("urlUtils", () => {
       }
     });
 
-    it("clamps a host long enough to push the label out of its row", () => {
-      const long = `${"a".repeat(300)}.example.com`;
-      const out = formatDialogOrigin(`https://${long}`) ?? "";
+    // The tail is what identifies the site and is the half the attacker does not
+    // control; clipping the other way would render `bank.com…` for
+    // `bank.com.<padding>.evil.example`, which reads as an endorsement.
+    it("clips a hostile-length host from the left, keeping the identifying tail", () => {
+      const out = formatDialogOrigin(`https://bank.com.${"a".repeat(300)}.evil.example:8443`) ?? "";
       expect(out.length).toBeLessThanOrEqual(65);
-      expect(out.endsWith("\u2026")).toBe(true);
+      expect(out.startsWith("\u2026")).toBe(true);
+      expect(out.endsWith("evil.example:8443")).toBe(true);
+      expect(out).not.toContain("bank.com");
     });
 
     it("names a local file rather than showing an empty host", () => {

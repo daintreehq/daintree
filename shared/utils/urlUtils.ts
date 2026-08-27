@@ -237,6 +237,18 @@ export function looksLikeOAuthUrl(url: string): boolean {
 const MAX_ORIGIN_LENGTH = 64;
 
 /**
+ * Clip a hostile-length host from the LEFT, keeping the tail.
+ *
+ * The end is the part that identifies the site — the registrable domain and the port —
+ * and it is the part the attacker does not control. The start is arbitrary subdomains
+ * they do. Truncating the other way turns `bank.com.<...>.evil.example` into a label
+ * reading `bank.com…`, which is worse than showing nothing.
+ */
+function clipOriginTail(host: string): string {
+  return host.length > MAX_ORIGIN_LENGTH ? `…${host.slice(-MAX_ORIGIN_LENGTH)}` : host;
+}
+
+/**
  * The origin to show as the source of a guest-page dialog, or `null` when there is no
  * origin worth claiming.
  *
@@ -262,7 +274,7 @@ export function formatDialogOrigin(url: string | undefined | null): string | nul
     // above as `null`. Stripping would be a defence that can never fire.
     const host = parsed.host;
     if (!host) return null;
-    return host.length > MAX_ORIGIN_LENGTH ? `${host.slice(0, MAX_ORIGIN_LENGTH)}…` : host;
+    return clipOriginTail(host);
   }
   if (parsed.protocol === "file:") return "Local file";
   // data:, blob:, about:, and anything else carry no host a user could act on.

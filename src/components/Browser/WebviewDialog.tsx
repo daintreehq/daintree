@@ -3,6 +3,7 @@ import { Globe } from "lucide-react";
 import { AccessibilityAnnouncer } from "@/components/Accessibility/AccessibilityAnnouncer";
 import { Button } from "@/components/ui/button";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
+import { SurfaceHeader } from "@/components/ui/SurfaceHeader";
 import { FIELD_INPUT } from "@/components/Worktree/views/WorktreeFormLayout";
 
 const TABBABLE_SELECTOR =
@@ -169,7 +170,7 @@ export function WebviewDialog({ dialog, onRespond }: WebviewDialogProps) {
         {/* The only line on this surface Daintree wrote. Everything below it is the
             page's. Carries no focusable control on purpose: adding one would change the
             Tab order and the initial-focus target the dialog's contract depends on. */}
-        <div className="px-4 py-2.5 border-b border-border-strong dialog-header flex items-center gap-2 shrink-0">
+        <SurfaceHeader className="px-4 py-2.5 gap-2 justify-start">
           <Globe className="h-3.5 w-3.5 shrink-0 text-text-secondary" aria-hidden="true" />
           <p id={titleId} className="text-xs text-text-secondary min-w-0 truncate">
             {dialog.origin ? (
@@ -180,7 +181,7 @@ export function WebviewDialog({ dialog, onRespond }: WebviewDialogProps) {
               "Message from this page"
             )}
           </p>
-        </div>
+        </SurfaceHeader>
 
         {/* Scrolls rather than growing: a page picks this text, and an unbounded card in a
             short pane pushes its own action row out of reach. The edge fades matter here
@@ -230,11 +231,12 @@ export function WebviewDialog({ dialog, onRespond }: WebviewDialogProps) {
               variant="ghost"
               onClick={handleCancel}
               className="text-daintree-text/70 hover:text-daintree-text"
+              data-confirm-role="cancel"
             >
               Cancel
             </Button>
           )}
-          <Button ref={okRef} variant="contrast" onClick={handleOk}>
+          <Button ref={okRef} variant="contrast" onClick={handleOk} data-confirm-role="confirm">
             OK
           </Button>
         </div>

@@ -68,6 +68,18 @@ describe("WebviewDialog accessibility", () => {
     expect(container.querySelector(`[id="${describedBy}"]`)?.textContent).toBe(hostile);
   });
 
+  // A screen reader should reach "this came from shop.example.com" before it reaches
+  // whatever the page wrote, not after.
+  it("puts the Daintree-authored label ahead of the guest message in DOM order", () => {
+    const { container } = render(<WebviewDialog dialog={baseAlert} onRespond={vi.fn()} />);
+    const panel = container.querySelector('[role="dialog"]')!;
+    const label = container.querySelector(`[id="${panel.getAttribute("aria-labelledby")}"]`)!;
+    const message = container.querySelector(`[id="${panel.getAttribute("aria-describedby")}"]`)!;
+    // eslint-disable-next-line no-bitwise
+    const relation = label.compareDocumentPosition(message);
+    expect(relation & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
+  });
+
   it("names the guest's origin in the Daintree-authored label", () => {
     const { container } = render(
       <WebviewDialog dialog={{ ...baseAlert, origin: "shop.example.com" }} onRespond={vi.fn()} />
