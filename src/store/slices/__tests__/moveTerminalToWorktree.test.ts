@@ -186,6 +186,11 @@ describe("moveTerminalToWorktree", () => {
     // palette disagree about where the very same run is (#12060).
     const t1 = createMockTerminal("t1", "wt-a");
     setTerminals([t1]);
+    // Explicit: a leftover group from a prior case would route this through
+    // `moveTabGroupToWorktree`, whose own sync would satisfy the spy and hide a
+    // regression in the single-panel path.
+    usePanelStore.setState({ tabGroups: new Map() });
+    expect(usePanelStore.getState().getPanelGroup("t1")).toBeUndefined();
 
     usePanelStore.getState().moveTerminalToWorktree("t1", "wt-b");
 
@@ -197,6 +202,7 @@ describe("moveTerminalToWorktree", () => {
     // drag must not churn the record or the fleet recompute it triggers.
     const t1 = createMockTerminal("t1", "wt-a");
     setTerminals([t1]);
+    usePanelStore.setState({ tabGroups: new Map() });
 
     usePanelStore.getState().moveTerminalToWorktree("t1", "wt-a");
 

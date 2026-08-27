@@ -17,6 +17,7 @@ import { normalizeTerminalGridDimension } from "../../../../shared/types/termina
 import { normalizeObservedTitle } from "../../../../shared/utils/isUselessTitle.js";
 import { isPanelTitleMode, type PanelTitleMode } from "../../../../shared/types/panel.js";
 import { events } from "../../../services/events.js";
+import { getProjectForWebContents } from "../../../window/webContentsRegistry.js";
 import { defineIpcNamespace, op } from "../../define.js";
 import { formatErrorMessage } from "../../../../shared/utils/errorMessage.js";
 import { AppError } from "../../../utils/errorTypes.js";
@@ -335,11 +336,13 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
     try {
       if (!payload || typeof payload !== "object") return;
       const { id, worktreeId } = payload;
-      if (typeof id !== "string" || !id) return;
+      if (typeof id !== "string" || id.trim() === "") return;
       if (worktreeId !== null && (typeof worktreeId !== "string" || worktreeId.trim() === "")) {
         return;
       }
-      ptyClient.updateWorktreeId(id, worktreeId);
+      // Resolved synchronously, so the send path keeps its FIFO ordering — an
+      // awaited ownership lookup here could land two rapid moves out of order.
+      ptyClient.updateWorktreeId(id, worktreeId, getProjectForWebContents(_event.sender.id));
       // Same reason the rename hop emits: the snapshot poll is 5s-aligned and
       // no other feed reports a move, so the palette would regroup up to a full
       // cycle after the drag that caused it.

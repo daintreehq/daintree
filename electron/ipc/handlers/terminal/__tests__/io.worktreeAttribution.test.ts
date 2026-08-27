@@ -24,9 +24,13 @@ vi.mock("electron", () => ({
   webContents: { fromId: vi.fn(() => null) },
 }));
 
+const getProjectForWebContentsMock = vi.hoisted(() =>
+  vi.fn<(id: number) => string | null>(() => "project-a")
+);
+
 vi.mock("../../../../window/webContentsRegistry.js", () => ({
   getWindowForWebContents: vi.fn(() => null),
-  getProjectForWebContents: vi.fn(() => null),
+  getProjectForWebContents: getProjectForWebContentsMock,
   getAppWebContents: vi.fn(() => null),
   getAllAppWebContents: vi.fn(() => []),
   getWebContentsForProject: vi.fn(() => []),
@@ -79,13 +83,35 @@ describe("terminal:update-worktree-id", () => {
     vi.clearAllMocks();
     _resetIpcGuardForTesting();
     markIpcSecurityReady();
+    getProjectForWebContentsMock.mockReturnValue("project-a");
     dispose = registerTerminalIOHandlers(buildDeps());
   });
 
   it("re-files a run onto a real worktree id", () => {
     send({ id: "t1", worktreeId: "/repo/.worktrees/feature" });
 
-    expect(updateWorktreeId).toHaveBeenCalledWith("t1", "/repo/.worktrees/feature");
+    expect(updateWorktreeId).toHaveBeenCalledWith("t1", "/repo/.worktrees/feature", "project-a");
+  });
+
+  it("names the sender's own project so the host can refuse a foreign terminal", () => {
+    // The fleet snapshot hands every view every run's id, so a terminal id is
+    // not a capability. Resolving the sender's project here is what lets the
+    // record refuse a write from a renderer that does not own the run.
+    getProjectForWebContentsMock.mockReturnValue("project-b");
+
+    send({ id: "t1", worktreeId: "/repo" });
+
+    expect(updateWorktreeId).toHaveBeenCalledWith("t1", "/repo", "project-b");
+  });
+
+  it("passes an unbound window's null project through as an identity", () => {
+    // Null is not a wildcard: it has to reach the record as null so a
+    // project-picker window matches only its own projectless terminals.
+    getProjectForWebContentsMock.mockReturnValue(null);
+
+    send({ id: "t1", worktreeId: "/repo" });
+
+    expect(updateWorktreeId).toHaveBeenCalledWith("t1", "/repo", null);
   });
 
   it("forwards the id verbatim rather than canonicalizing the path", () => {
@@ -95,7 +121,7 @@ describe("terminal:update-worktree-id", () => {
     const id = "/Repo/../repo/.worktrees/feature/";
     send({ id: "t1", worktreeId: id });
 
-    expect(updateWorktreeId).toHaveBeenCalledWith("t1", id);
+    expect(updateWorktreeId).toHaveBeenCalledWith("t1", id, "project-a");
   });
 
   it("treats null as an explicit clear", () => {
@@ -103,7 +129,7 @@ describe("terminal:update-worktree-id", () => {
     // dock-to-grid move deletes the id the pane adopted on its way to the grid.
     send({ id: "t1", worktreeId: null });
 
-    expect(updateWorktreeId).toHaveBeenCalledWith("t1", null);
+    expect(updateWorktreeId).toHaveBeenCalledWith("t1", null, "project-a");
   });
 
   it.each([
@@ -114,6 +140,7 @@ describe("terminal:update-worktree-id", () => {
     ["a number", { id: "t1", worktreeId: 7 }],
     ["an object", { id: "t1", worktreeId: { path: "/repo" } }],
     ["a blank terminal id", { id: "", worktreeId: "/repo" }],
+    ["a whitespace-only terminal id", { id: "   ", worktreeId: "/repo" }],
     ["a non-string terminal id", { id: 3, worktreeId: "/repo" }],
     ["no payload at all", undefined],
   ])("drops %s instead of guessing at it", (_label, payload) => {

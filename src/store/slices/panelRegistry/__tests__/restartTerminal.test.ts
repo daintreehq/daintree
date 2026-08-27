@@ -1268,6 +1268,55 @@ describe("restartTerminal carries the run's worktree onto the new pty record", (
     expect(mockSpawn.mock.calls[0]![0].worktreeId).toBe("wt-b");
   });
 
+  it("does not resurrect the old worktree when the move mid-restart was a clear", async () => {
+    // Pins the shape of the live read: `livePanel?.worktreeId ?? captured` would
+    // pass every other case here and still restore "wt-1" for a panel the user
+    // has just taken out of its worktree — the exact silent fallback the issue
+    // bans, in the direction that is easiest to miss.
+    const active = { ...agentPanelBase, agentState: "working" as const, worktreeId: "wt-1" };
+    usePanelStore.setState({ panelsById: { [active.id]: active }, panelIds: [active.id] });
+
+    const { agentSettingsClient } = await import("@/clients");
+    (agentSettingsClient.get as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      usePanelStore.setState((state) => {
+        const next = { ...state.panelsById["test-1"]! };
+        delete (next as { worktreeId?: string }).worktreeId;
+        return { panelsById: { ...state.panelsById, "test-1": next } };
+      });
+      return {};
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(mockSpawn.mock.calls[0]![0].worktreeId).toBeUndefined();
+  });
+
+  it("carries the worktree across a preset fallback hop too", async () => {
+    // The fallback hop is a second, independent respawn of the same id. It had
+    // the identical omission, so a fix that only covers `restartTerminal` still
+    // strands a fallen-back agent under "No worktree".
+    getMergedPresetMock.mockReturnValue({
+      id: "amber-provider",
+      name: "Amber Provider",
+      color: "#ffbb33",
+      args: ["--provider", "amber"],
+    });
+    const active = {
+      ...agentPanelBase,
+      agentState: "working" as const,
+      worktreeId: "/repo/.worktrees/feature",
+      agentPresetId: "blue-provider",
+    };
+    usePanelStore.setState({ panelsById: { [active.id]: active }, panelIds: [active.id] });
+
+    await usePanelStore
+      .getState()
+      .activateFallbackPreset("test-1", "amber-provider", "blue-provider");
+
+    expect(mockSpawn).toHaveBeenCalled();
+    expect(mockSpawn.mock.calls[0]![0].worktreeId).toBe("/repo/.worktrees/feature");
+  });
+
   it("leaves a genuinely worktree-less run without one rather than inventing a root", async () => {
     // The palette's "No worktree" bucket is for runs that really have none.
     // Back-filling a project root here would move them out of it and claim a

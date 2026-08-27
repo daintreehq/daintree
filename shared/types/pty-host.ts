@@ -277,7 +277,16 @@ export type PtyHostRequest =
   // worktree for none — undoing a dock->grid move deletes the adopted id
   // (`layoutUndoStore`) — and an optional field could not tell that apart from
   // a caller that simply forgot to send one (#12060).
-  | { type: "update-worktree-id"; id: string; worktreeId: string | null }
+  | {
+      type: "update-worktree-id";
+      id: string;
+      worktreeId: string | null;
+      // The sender's own project, resolved in main. The host checks it against
+      // the record before writing: the fleet snapshot hands every view every
+      // run's id, so without this any project's renderer could re-file another
+      // project's terminal. Null is an identity, not a wildcard (#11100).
+      expectedProjectId: string | null;
+    }
   | {
       type: "transition-state";
       id: string;

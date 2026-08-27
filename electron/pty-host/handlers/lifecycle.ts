@@ -232,7 +232,7 @@ export function createLifecycleHandlers(ctx: HostContext): HandlerMap {
     },
 
     "update-worktree-id": (msg) => {
-      ptyManager.updateWorktreeId(msg.id, msg.worktreeId);
+      ptyManager.updateWorktreeId(msg.id, msg.worktreeId, msg.expectedProjectId);
     },
 
     "transition-state": (msg) => {

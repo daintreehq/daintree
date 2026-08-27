@@ -121,9 +121,18 @@ describe("lifecycle update-worktree-id handler", () => {
     const ctx = makeCtx();
     const dispatch = createPtyHostMessageDispatcher(ctx);
 
-    dispatch({ type: "update-worktree-id", id: "t1", worktreeId: "/repo/.worktrees/feature" });
+    dispatch({
+      type: "update-worktree-id",
+      id: "t1",
+      worktreeId: "/repo/.worktrees/feature",
+      expectedProjectId: "project-a",
+    });
 
-    expect(ctx.ptyManager.updateWorktreeId).toHaveBeenCalledWith("t1", "/repo/.worktrees/feature");
+    expect(ctx.ptyManager.updateWorktreeId).toHaveBeenCalledWith(
+      "t1",
+      "/repo/.worktrees/feature",
+      "project-a"
+    );
   });
 
   it("passes an explicit clear through as null rather than dropping it", () => {
@@ -132,9 +141,14 @@ describe("lifecycle update-worktree-id handler", () => {
     const ctx = makeCtx();
     const dispatch = createPtyHostMessageDispatcher(ctx);
 
-    dispatch({ type: "update-worktree-id", id: "t1", worktreeId: null });
+    dispatch({
+      type: "update-worktree-id",
+      id: "t1",
+      worktreeId: null,
+      expectedProjectId: null,
+    });
 
-    expect(ctx.ptyManager.updateWorktreeId).toHaveBeenCalledWith("t1", null);
+    expect(ctx.ptyManager.updateWorktreeId).toHaveBeenCalledWith("t1", null, null);
   });
 });
 

@@ -1,7 +1,7 @@
 import type { PersistableFlowStatus, TerminalRuntimeStatus } from "@/types";
 import type { PanelKind } from "@/types";
 import type { TabGroup } from "@/types";
-import { getDefaultPanelTitle } from "@shared/config/panelKindRegistry";
+import { getDefaultPanelTitle, panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { AGENT_REGISTRY } from "@shared/config/agentRegistry";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
 import { ABSOLUTE_MAX_GRID_TERMINALS } from "@/lib/terminalLayout";
@@ -44,6 +44,33 @@ export function recordExplicitWorktreeAttribution(id: string, worktreeId: string
  * layout-undo restore all need it, and importing one from another would close a
  * cycle.
  */
+/**
+ * Close the window between reading a spawn payload's worktree and the pty-host
+ * actually holding a record for it.
+ *
+ * The renderer reads the panel immediately before calling spawn, but main then
+ * awaits rate-limit admission, settings and filesystem work before it reaches
+ * `PtyClient.spawn` — and that call overwrites the replay cache with the
+ * payload it was given. A move landing inside that window finds no record to
+ * update and is then clobbered by the spawn it raced, leaving the renderer and
+ * the host permanently disagreeing. Re-reading once the spawn has resolved is
+ * what makes the disagreement self-correcting (#12060).
+ *
+ * Takes the freshly-read panel rather than reaching for the store: this module
+ * is imported by the slices that build it, so a store import here would close
+ * a cycle.
+ */
+export function reconcileWorktreeAfterSpawn(
+  id: string,
+  spawnedWith: string | undefined,
+  livePanel: { worktreeId?: string; kind?: PanelKind } | undefined
+): void {
+  // Gone, or no longer PTY-backed — a successor incarnation owns its own filing.
+  if (!livePanel || !panelKindHasPty(livePanel.kind ?? "terminal")) return;
+  if (livePanel.worktreeId === spawnedWith) return;
+  syncWorktreeAttributionToHost(id, livePanel.worktreeId ?? null);
+}
+
 export function syncWorktreeAttributionToHost(id: string, worktreeId: string | null): void {
   try {
     terminalClient.updateWorktreeId(id, worktreeId);

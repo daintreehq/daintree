@@ -37,6 +37,7 @@ import { saveNormalized } from "./persistence";
 import { optimizeForDock } from "./layout";
 import {
   deriveRuntimeStatus,
+  reconcileWorktreeAfterSpawn,
   recordExplicitWorktreeAttribution,
   syncWorktreeAttributionToHost,
 } from "./helpers";
@@ -829,6 +830,12 @@ export const createRestartActions = (
         originalAgentPresetId: nextOriginalPresetId ?? nextAgentPresetId,
       });
 
+      // Main awaits admission, settings and filesystem work before it reaches
+      // `PtyClient.spawn`, and that call overwrites the replay cache with the
+      // payload it was handed — so a move landing after we read the panel and
+      // before the record existed would be lost for good without this.
+      reconcileWorktreeAfterSpawn(id, spawnWorktreeId, get().panelsById[id]);
+
       if (targetLocation === "dock") {
         optimizeForDock(id);
       } else {
@@ -1362,6 +1369,8 @@ export const createRestartActions = (
         agentPresetColor: nextPreset.color,
         originalAgentPresetId: originalPresetId,
       });
+
+      reconcileWorktreeAfterSpawn(id, fallbackWorktreeId, get().panelsById[id]);
 
       if (terminal.location === "dock") {
         optimizeForDock(id);

@@ -2400,9 +2400,14 @@ export class PtyClient extends EventEmitter {
    * worktree it launched in. `null` deletes the key rather than storing
    * `undefined`, so the replayed options carry no worktree at all.
    */
-  updateWorktreeId(id: string, worktreeId: string | null): void {
+  updateWorktreeId(id: string, worktreeId: string | null, expectedProjectId: string | null): void {
     const pending = this.pendingSpawns.get(id);
     if (pending) {
+      // Same gate the host applies to the live record, on the replay cache:
+      // otherwise a refused write would still come back true on the next
+      // crash respawn. Null is an identity here too, so an unbound window
+      // reaches its own projectless terminals and nothing else.
+      if ((pending.projectId ?? null) !== expectedProjectId) return;
       const next = { ...pending };
       if (worktreeId === null) {
         delete next.worktreeId;
@@ -2411,7 +2416,12 @@ export class PtyClient extends EventEmitter {
       }
       this.pendingSpawns.set(id, next);
     }
-    this.shardForTerminal(id).send({ type: "update-worktree-id", id, worktreeId });
+    this.shardForTerminal(id).send({
+      type: "update-worktree-id",
+      id,
+      worktreeId,
+      expectedProjectId,
+    });
   }
 
   async transitionState(

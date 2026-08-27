@@ -964,9 +964,14 @@ export class PtyManager extends EventEmitter {
    * a terminal that has already gone is a no-op — never a synthetic record, and
    * never a back-filled id: the renderer store keeps the attribution either way.
    */
-  updateWorktreeId(id: string, worktreeId: string | null): void {
+  updateWorktreeId(id: string, worktreeId: string | null, expectedProjectId: string | null): void {
     const terminal = this.registry.get(id);
     if (!terminal) return;
+    // The record is the only place both halves of the identity are known, so
+    // the ownership check lands here rather than in main, where naming the
+    // terminal's project would have cost an await and with it the ordering
+    // that makes two rapid moves settle on the second one.
+    if ((terminal.getInfo().projectId ?? null) !== expectedProjectId) return;
     terminal.setWorktreeId(worktreeId);
   }
 
