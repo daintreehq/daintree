@@ -962,7 +962,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
       // one — the same reason the rows do it.
       className={cn(
         "w-[360px] max-h-[min(72vh,720px,var(--fixed-dropdown-available-height,420px))] flex flex-col",
-        "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-daintree-accent"
+        "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
       )}
     >
       {/* Two rows, not one. Sharing a line with the toolbar squeezed the filter
@@ -982,7 +982,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
               dimmer than the row titles underneath it — the label naming the
               surface was quieter than the content it named, which is the
               hierarchy upside down. */}
-          <span className="min-w-0 truncate text-xs font-semibold text-daintree-text">
+          <span className="min-w-0 truncate text-xs font-semibold text-text-primary">
             Notifications
           </span>
           {/* gap-1.5, not gap-1: four controls at 4px apart, one of them a text
