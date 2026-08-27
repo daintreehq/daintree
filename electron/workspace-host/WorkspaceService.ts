@@ -382,6 +382,17 @@ export class WorkspaceService {
   private worktreeGeneration = 0;
 
   /**
+   * Worktree ids with an `addNewWorktreeMonitor` call in flight. The entry
+   * guard reads `monitors` before several awaits, so without this a second
+   * caller for the same id (a `syncMonitors` pass racing `performCreateWorktree`
+   * or a topology reconcile) sails past it and installs a second live monitor
+   * for one path — double-polling it, and breaking the invariant the removal
+   * tombstone leans on: the registered monitor holds the highest incarnation
+   * minted for its id (#11994).
+   */
+  private readonly pendingMonitorInstalls = new Set<string>();
+
+  /**
    * Epoch-scoped set of mutation IDs that have been successfully acknowledged
    * by this host run. The renderer mints a stable mutationId per delete intent
    * (#8405) and the host records each successful delete here so a replay of
@@ -1374,10 +1385,23 @@ export class WorkspaceService {
     skipInitialGitStatus: boolean,
     deferWatcherBudget: boolean = false
   ): Promise<void> {
-    if (this.monitors.has(wt.id)) {
+    if (this.monitors.has(wt.id) || this.pendingMonitorInstalls.has(wt.id)) {
       return;
     }
+    this.pendingMonitorInstalls.add(wt.id);
+    try {
+      await this.installWorktreeMonitor(wt, isActive, skipInitialGitStatus, deferWatcherBudget);
+    } finally {
+      this.pendingMonitorInstalls.delete(wt.id);
+    }
+  }
 
+  private async installWorktreeMonitor(
+    wt: Worktree,
+    isActive: boolean,
+    skipInitialGitStatus: boolean,
+    deferWatcherBudget: boolean
+  ): Promise<void> {
     const enrichedWt = await this.enrichWorktreeWithWsl(wt);
     wt = enrichedWt;
 
@@ -1391,6 +1415,14 @@ export class WorkspaceService {
       createdAt = stats.birthtimeMs > 0 ? stats.birthtimeMs : stats.ctimeMs;
     } catch {
       // If stat fails, leave undefined
+    }
+
+    // The single-flight guard in the caller covers concurrent installs; this
+    // catches any other path that registered this id across the awaits above.
+    // Minting the incarnation only once we know we will register keeps the
+    // counter aligned with the monitors that actually exist.
+    if (this.monitors.has(wt.id)) {
+      return;
     }
 
     const monitor = new WorktreeMonitor(

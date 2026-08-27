@@ -35,6 +35,33 @@ interface WorktreeTombstone {
 }
 
 /**
+ * Ceiling on retained tombstones. A stamped one outlives {@link TOMBSTONE_TTL_MS}
+ * (only a newer incarnation retires it), so age-based eviction is what keeps a
+ * long session that churns hundreds of worktrees from growing the map without
+ * bound. Insertion order tracks recency — `applyRemove` re-inserts on rewrite.
+ */
+const MAX_TOMBSTONES = 256;
+
+/**
+ * Drop the tombstones a host snapshot has settled. An id the host still reports
+ * is alive by definition, and an unstamped tombstone has no incarnation to
+ * compare against so the snapshot is the last word on it. A stamped one for an
+ * id the host does NOT report stays: the removal it records is still in force,
+ * and dropping it would let a poll that outlived the removal resurrect the row
+ * (the pre-existing #8403 hole the incarnation stamp finally closes).
+ */
+function retainTombstoneFences(
+  tombstones: ReadonlyMap<string, WorktreeTombstone>,
+  liveIds: ReadonlySet<string>
+): Map<string, WorktreeTombstone> {
+  const next = new Map<string, WorktreeTombstone>();
+  for (const [id, tombstone] of tombstones) {
+    if (tombstone.generation !== undefined && !liveIds.has(id)) next.set(id, tombstone);
+  }
+  return next;
+}
+
+/**
  * Order two host-minted version stamps. A differing epoch means the events
  * came from different host runs — UUIDv4 epochs carry no ordering, so a new
  * epoch always wins (the renderer re-hydrates from the fresh host). Within an
@@ -428,10 +455,16 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
     ) {
       const prev = get();
       if (compareVersion(version, prev.version) < 0) return;
-      // A snapshot is the host's authoritative state. Drop every tombstone:
-      // an epoch transition means the host rebuilt from scratch, and within
-      // the same epoch any id the host still reports is alive by definition.
-      const tombstonesChanged = prev.tombstones.size > 0;
+      // A snapshot is the host's authoritative state. An epoch transition means
+      // the host rebuilt from scratch, so nothing from the prior run survives;
+      // within the same epoch the snapshot settles every id it reports, but a
+      // stamped fence for an id it does NOT report still stands (see
+      // `retainTombstoneFences`).
+      const epochChanged = version.epoch !== prev.version.epoch;
+      const nextTombstones = epochChanged
+        ? new Map<string, WorktreeTombstone>()
+        : retainTombstoneFences(prev.tombstones, new Set(states.map((s) => s.id)));
+      const tombstonesChanged = nextTombstones.size !== prev.tombstones.size;
       // Atomically adopt the freshly-hydrated manual associations alongside
       // the snapshot (lesson #4958 — no separate slice update that could
       // render a half-merged state). When the caller doesn't pass them
@@ -505,7 +538,7 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
           ...(workingTreeChangedAtChanged
             ? { workingTreeChangedAtById: nextWorkingTreeChangedAt }
             : {}),
-          ...(tombstonesChanged ? { tombstones: new Map() } : {}),
+          ...(tombstonesChanged ? { tombstones: nextTombstones } : {}),
           ...(associationsChanged ? { manualAssociations: manual } : {}),
         });
         return;
@@ -523,7 +556,7 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
         ...(workingTreeChangedAtChanged
           ? { workingTreeChangedAtById: nextWorkingTreeChangedAt }
           : {}),
-        ...(tombstonesChanged ? { tombstones: new Map() } : {}),
+        ...(tombstonesChanged ? { tombstones: nextTombstones } : {}),
         ...(associationsChanged ? { manualAssociations: manual } : {}),
       });
     },
@@ -548,30 +581,33 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
         // torn-down monitor for the same path would otherwise clobber the new
         // row with pre-delete data. Only a strictly older stamp is rejected, so
         // the renderer's own overlay updates (which reuse the row's stamp) and
-        // unstamped events are unaffected.
+        // unstamped events are unaffected. The version is deliberately NOT
+        // advanced: the fence lives on the row itself, so it keeps rejecting
+        // later stale events without borrowing the event counter to do it —
+        // and advancing here would make an in-flight snapshot look stale and
+        // strand the row (the snapshot is version-gated too).
         if (
           state.generation !== undefined &&
           existing.generation !== undefined &&
           state.generation < existing.generation
         ) {
-          set({ version });
           return false;
         }
       } else {
         const tombstone = tombstones.get(state.id);
         if (tombstone !== undefined) {
-          // A strictly higher incarnation means the host built a new monitor
-          // for this path, so this is a genuine re-creation rather than the
-          // buffered update the tombstone exists to suppress (#11994). The
-          // suppression window says nothing about it — accept regardless of
-          // how much of the TTL is left.
-          const recreated =
-            state.generation !== undefined &&
-            tombstone.generation !== undefined &&
-            state.generation > tombstone.generation;
-          if (!recreated && Date.now() - tombstone.removedAt < TOMBSTONE_TTL_MS) {
-            // Still within the suppression window — drop the late update but
-            // advance the version so a subsequent stale event stays rejected.
+          if (state.generation !== undefined && tombstone.generation !== undefined) {
+            // Both stamped, so the decision is algebraic and the wall clock
+            // plays no part: only a newer monitor incarnation may claim the id
+            // back. A strictly higher stamp is the host having built a new
+            // monitor for this path — a genuine re-creation (#11994) — while
+            // anything at or below it is the buffered update the tombstone
+            // exists to suppress, however long it took to arrive.
+            if (state.generation <= tombstone.generation) return false;
+          } else if (Date.now() - tombstone.removedAt < TOMBSTONE_TTL_MS) {
+            // One side is unstamped, so fall back to the suppression window:
+            // drop the late update but advance the version so a subsequent
+            // stale event stays rejected (#8403).
             set({ version });
             return false;
           }
@@ -689,11 +725,24 @@ export function createWorktreeStore(): WorktreeViewStoreApi {
       const tombstones = epochChanged
         ? new Map<string, WorktreeTombstone>()
         : new Map(prevState.tombstones);
-      // Reap expired tombstones on write so ids that never receive a follow-up
-      // update can't accumulate unbounded over a long high-churn session.
+      // Reap on write so ids that never receive a follow-up update can't
+      // accumulate over a long high-churn session. Only unstamped tombstones
+      // expire by age — a stamped one is a durable fence and is retired by a
+      // newer incarnation, an epoch change, or the size cap below.
       for (const [id, tombstone] of tombstones) {
-        if (now - tombstone.removedAt >= TOMBSTONE_TTL_MS) tombstones.delete(id);
+        if (tombstone.generation === undefined && now - tombstone.removedAt >= TOMBSTONE_TTL_MS) {
+          tombstones.delete(id);
+        }
       }
+      while (tombstones.size >= MAX_TOMBSTONES) {
+        const oldest = tombstones.keys().next().value;
+        if (oldest === undefined) break;
+        tombstones.delete(oldest);
+      }
+      // Delete before re-inserting so insertion order tracks recency: `set` on
+      // an existing key would leave the entry at its original position and the
+      // eviction above would then evict by first-seen rather than by age.
+      tombstones.delete(worktreeId);
       // Fall back to the outgoing row's stamp when the event didn't carry one,
       // so the incarnation comparison still works for any path that removes a
       // worktree the store had already hydrated from a snapshot.
