@@ -1,12 +1,21 @@
 import { StrictMode, useEffect, useMemo, useState } from "react";
 import { createRoot } from "react-dom/client";
 import { resolveAppTheme } from "@shared/theme/themes";
+import { WorktreeStoreProvider } from "@/contexts/WorktreeStoreContext";
+import { installPreviewShims } from "./previewShims";
 import { applyAppThemeToRoot } from "@/theme/applyAppTheme";
 import { AssistantPanelView } from "../AssistantPanelView";
 import type { AssistantSessionState } from "@/store/assistantStore";
 import { CAPTURED_STATES, type CapturedStateName } from "./capturedStates";
 import { PROSE_SPECIMEN } from "./proseSpecimen";
 import "@/index.css";
+
+// As early as this module's own body runs, which is AFTER every static import above has
+// already been evaluated — ES modules give no way to run code before them. That is fine
+// and worth saying plainly rather than implying an ordering guarantee this does not
+// have: nothing here touches the bridge at module scope. The stores that need it read it
+// when a component mounts, which is later than this by a wide margin.
+installPreviewShims();
 
 /**
  * States CAPTURED from the real pipeline (`e2e/helpers/captureAssistantStates.mts`):
@@ -80,6 +89,10 @@ function Panel({ name }: { name: StateName }) {
       onSubmit={() => true}
       onInterrupt={() => {}}
       onDecideApproval={() => {}}
+      // Needed for the question sheet to render at all — the panel treats a missing
+      // handler as "this surface cannot answer" and draws nothing, so without it the
+      // captured question states would review a composer with no sheet above it.
+      onAnswerQuestion={() => true}
       // Both are needed for a reference to render as a link at all — recognition is
       // gated on the capability and rendering on the handler. Without them the
       // specimen's `PR #11250` shows as plain text and the affordance under review is
@@ -163,6 +176,12 @@ function App() {
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <App />
+    {/* The composer is the terminal's real input bar, which reads the per-view worktree
+        store — so the harness needs the real provider above it. Without one every
+        fixture threw and the page rendered blank, which is the worst way for a visual
+        review tool to fail: it looks like the panel, and it is nothing. */}
+    <WorktreeStoreProvider>
+      <App />
+    </WorktreeStoreProvider>
   </StrictMode>
 );

@@ -67,6 +67,21 @@ const CAPTURES: Capture[] = [
     prompt: "Run the tests in wt_forge",
     until: "approval:requested",
   },
+  {
+    name: "question",
+    scenario: "question",
+    prompt: "Run the migration",
+    until: "question:requested",
+  },
+  {
+    // The long form is a DIFFERENT surface — past the filter threshold the sheet grows
+    // a search box and hands it the keys the short form answers on — so it needs its
+    // own picture or half the component is never looked at.
+    name: "questionLong",
+    scenario: "questionLong",
+    prompt: "Run the migration",
+    until: "question:requested",
+  },
   { name: "asyncWork", scenario: "asyncWork", prompt: "Start a reviewer on wt_forge" },
   { name: "degraded", scenario: "degraded", prompt: "Summarise what the fleet did overnight" },
   { name: "droppedFrame", scenario: "droppedFrame", prompt: "Summarise the overnight runs" },
@@ -167,6 +182,7 @@ async function capture(spec: Capture): Promise<AssistantSessionState> {
     turnStartedAt: s.turnStartedAt,
     phaseIsWake: s.phaseIsWake,
     pendingQuestion: s.pendingQuestion,
+    awaitingLocalCommand: s.awaitingLocalCommand,
     stoppedReason: s.stoppedReason,
     error: s.error,
     turns: s.turns,

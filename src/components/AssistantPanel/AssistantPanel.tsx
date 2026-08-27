@@ -108,6 +108,7 @@ export function AssistantPanel({
       turnStartedAt: s.turnStartedAt,
       phaseIsWake: s.phaseIsWake,
       pendingQuestion: s.pendingQuestion,
+      awaitingLocalCommand: s.awaitingLocalCommand,
       autoApprove: s.autoApprove,
       stoppedReason: s.stoppedReason,
       error: s.error,
