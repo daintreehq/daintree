@@ -2,8 +2,9 @@ import React, { useCallback, useEffect, useEffectEvent, useRef, useMemo, useStat
 import { FilterX, AlertTriangle, Trash2, GitBranch } from "lucide-react";
 import { Layers, Plug } from "@/components/icons";
 import { AppDialog } from "@/components/ui/AppDialog";
-import { KBD_CLASS } from "@/components/ui/Kbd";
+import { KBD_CLASS, KbdChord } from "@/components/ui/Kbd";
 import { cn } from "@/lib/utils";
+import { getVisibleTabbableElements } from "@/lib/accessibility";
 import { useShallow } from "zustand/react/shallow";
 import { WorktreeCard } from "./WorktreeCard";
 import { WorktreeFilterPopover } from "./WorktreeFilterPopover";
@@ -178,6 +179,11 @@ function OverviewGridCell(props: OverviewWorktreeCardProps & { isCursor?: boolea
         containIntrinsicSize: "auto 240px",
       }}
       className={cn(
+        // The per-cell width cap lives on the cell, not as a `[&>*]` rule on
+        // the grid: the grouped-section headers are `col-[1/-1]` direct
+        // children too, and a 480px cap on a row spanning every track is not
+        // what that rule means.
+        "max-w-[480px]",
         "rounded-lg overflow-hidden",
         "border border-divider",
         "bg-daintree-sidebar/50",
@@ -226,6 +232,9 @@ export function WorktreeOverviewModal({
   homeDir,
 }: WorktreeOverviewModalProps) {
   const searchInputRef = useRef<HTMLInputElement>(null);
+  // First child of the dialog surface, so its parent is the surface itself —
+  // the anchor the initial-focus fallback below scopes its tabbable lookup to.
+  const liveRegionRef = useRef<HTMLDivElement>(null);
 
   // Filter store state
   const {
@@ -670,7 +679,6 @@ export function WorktreeOverviewModal({
     aggregateStats.workingCount > 0 ||
     aggregateStats.finishedCount > 0;
   const showMainToggle = (hasNonMainWorktrees || hideMainWorktree) && !hasOnlyMainWorktree;
-  const selectAllChord = navigator.platform.toLowerCase().includes("mac") ? "⌘A" : "Ctrl+A";
 
   // Section sizes drive section-aware Arrow navigation across the col-[1/-1]
   // header breaks. Undefined when ungrouped — the hook degrades to flat-list
@@ -750,7 +758,24 @@ export function WorktreeOverviewModal({
   // race this.
   useEffect(() => {
     if (!isOpen) return;
-    const timeoutId = setTimeout(() => searchInputRef.current?.focus(), SEARCH_FOCUS_DELAY_MS);
+    const timeoutId = setTimeout(() => {
+      const searchInput = searchInputRef.current;
+      if (searchInput) {
+        searchInput.focus();
+        return;
+      }
+      // No search field to take it: the toolbar only mounts when there are
+      // non-main worktrees, and it has not rendered yet while the loading
+      // skeleton is up. AppDialog's own focus pass is off, so without this
+      // focus would stay on whatever the app shell had behind the scrim. Fall
+      // back to the dialog's first tabbable — the close button, where focus
+      // landed before this surface had a search field at all.
+      const surface = liveRegionRef.current?.parentElement;
+      if (!surface) return;
+      const fallback = getVisibleTabbableElements(surface)[0];
+      if (fallback) fallback.focus();
+      else surface.focus();
+    }, SEARCH_FOCUS_DELAY_MS);
     return () => clearTimeout(timeoutId);
   }, [isOpen]);
 
@@ -766,13 +791,35 @@ export function WorktreeOverviewModal({
     return () => document.removeEventListener("keydown", handleKeyDown);
   }, [isOpen]);
 
+  // AppDialog routes every dismissal through `onBeforeClose` — Escape, the
+  // close button and a scrim click alike — but the two-stage contract below
+  // belongs to Escape alone. The X and the scrim have to leave in one click
+  // (the CAB already carries its own Clear control, so guarding them is
+  // redundant as well as surprising), so record whether the close being
+  // resolved originated from an Escape keypress. Capture phase, because both
+  // the escape stack and AppDialog's backstop dispatch on bubble; cleared on a
+  // microtask, so a later pointer dismissal can never inherit the flag.
+  const escapeDismissRef = useRef(false);
+  useEffect(() => {
+    if (!isOpen) return;
+    const markEscapeDismissal = (e: KeyboardEvent) => {
+      if (e.key !== "Escape") return;
+      escapeDismissRef.current = true;
+      queueMicrotask(() => {
+        escapeDismissRef.current = false;
+      });
+    };
+    document.addEventListener("keydown", markEscapeDismissal, true);
+    return () => document.removeEventListener("keydown", markEscapeDismissal, true);
+  }, [isOpen]);
+
   /**
    * Escape's first press clears a selection; the second closes. Returning
    * `false` cancels AppDialog's close, which is the same two-stage contract the
    * grid hook implements for when focus is inside the grid.
    */
   const handleBeforeClose = useCallback(() => {
-    if (hasSelection) {
+    if (escapeDismissRef.current && hasSelection) {
       clearSelection();
       return false;
     }
@@ -802,7 +849,13 @@ export function WorktreeOverviewModal({
             at the same moment as its content is frequently missed — and it is
             atomic so "3 of 13 selected" is read as one phrase rather than a
             stray digit. */}
-        <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+        <div
+          ref={liveRegionRef}
+          role="status"
+          aria-live="polite"
+          aria-atomic="true"
+          className="sr-only"
+        >
           {hasSelection ? `${selectedIds.size} of ${filteredWorktrees.length} selected` : ""}
         </div>
 
@@ -810,7 +863,7 @@ export function WorktreeOverviewModal({
             else. This row does not change when filters narrow the list or when
             a selection starts: it is what tells the user which surface they are
             on and how much of it they are seeing. */}
-        <AppDialog.Header plainBody>
+        <AppDialog.Header>
           <AppDialog.Title icon={<Layers className="w-5 h-5 text-daintree-text/60" />}>
             <span>Worktrees overview</span>
             <span className="text-daintree-text/50 text-sm font-normal tabular-nums">
@@ -929,7 +982,13 @@ export function WorktreeOverviewModal({
             </div>
           </div>
         ) : (
-          (hasActivitySummary || hasActiveFilters()) && (
+          // `!hasNonMainWorktrees` is part of the gate, not just of the row's
+          // contents: on a main-worktree-only project with no agent activity
+          // the fallback facet popover below is the ONLY control that can open
+          // the filters, so gating the row on activity or an active filter
+          // would make filtering permanently unreachable — no filter could be
+          // set, so `hasActiveFilters()` could never become true.
+          (hasActivitySummary || hasActiveFilters() || !hasNonMainWorktrees) && (
             <div className="flex items-center gap-2 px-[calc(1.5rem+11px)] py-2 border-b border-divider shrink-0 flex-wrap">
               {/* Aggregate activity statistics — clickable chips that set quickStateFilter.
                   Ordered waiting → working → finished: "something is asking me
@@ -1067,15 +1126,14 @@ export function WorktreeOverviewModal({
               <div
                 className={cn(
                   "grid gap-3",
-                  "grid-cols-[repeat(auto-fill,minmax(min(320px,100%),1fr))]",
-                  "[&>*]:max-w-[480px]"
+                  "grid-cols-[repeat(auto-fill,minmax(min(320px,100%),1fr))]"
                 )}
               >
                 {Array.from({ length: 6 }).map((_, i) => (
                   <SkeletonBone
                     key={i}
                     heightPx={220}
-                    className="rounded-lg border border-divider"
+                    className="max-w-[480px] rounded-lg border border-divider"
                   />
                 ))}
               </div>
@@ -1144,7 +1202,6 @@ export function WorktreeOverviewModal({
                 // whole grid slid sideways as the user typed. `1fr` with a
                 // per-cell max keeps cards from stretching on a wide display.
                 "grid-cols-[repeat(auto-fill,minmax(min(320px,100%),1fr))]",
-                "[&>*]:max-w-[480px]",
                 "auto-rows-min items-start",
                 "focus:outline-hidden"
               )}
@@ -1213,7 +1270,6 @@ export function WorktreeOverviewModal({
             count is NOT repeated here: it now lives in the contextual bar
             above, next to the actions it applies to. */}
         <AppDialog.Footer
-          plainBody
           // Container-scoped so the two lower-priority hints drop out on a
           // narrow window instead of wrapping the row onto a second line.
           className="justify-center @container/overview-footer"
@@ -1229,7 +1285,7 @@ export function WorktreeOverviewModal({
                 <kbd className={KBD_CLASS}>Space</kbd> select
               </span>
               <span className="hidden @2xl/overview-footer:inline">
-                <kbd className={KBD_CLASS}>{selectAllChord}</kbd> select all
+                <KbdChord shortcut="Cmd+A" /> select all
               </span>
               <span className="hidden @3xl/overview-footer:inline">
                 <kbd className={KBD_CLASS}>Shift</kbd>+<kbd className={KBD_CLASS}>↑↓←→</kbd> extend

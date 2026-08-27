@@ -192,7 +192,11 @@ export function WorktreeSidebarSearchBar({
         // variant supplies the inset itself rather than sitting flush against
         // the rule above it.
         "px-3 pb-3 border-b border-divider shrink-0",
-        variant === "modal" && "pt-3",
+        // In the dialog the horizontal neighbours are different too: the header,
+        // the footer and the rows below all sit on AppDialog's chrome inset
+        // (24px plus the 11px scrollbar gutter `AppDialog.Body` reserves), so
+        // the bar carries that one instead of the rail's 12px.
+        variant === "modal" && "pt-3 px-[calc(1.5rem+11px)]",
         variant === "sidebar" && "worktree-filter-bar"
       )}
     >
