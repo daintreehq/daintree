@@ -42,7 +42,7 @@ function IssueOptionRow({ issue, isSelected, isCurrentlyAttached, onClick }: Iss
         onClick={onClick}
         className={cn(
           "w-full text-left px-3 py-2.5 rounded-[var(--radius-md)] transition-colors flex items-start gap-3",
-          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
+          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]",
           isSelected
             ? "bg-overlay-soft border border-border-strong"
             : "hover:bg-tint/5 border border-transparent",

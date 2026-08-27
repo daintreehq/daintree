@@ -702,6 +702,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                   onClick={() => handleStrategyChange(id)}
                   className={cn(
                     "flex flex-col items-center justify-center p-4 rounded-[var(--radius-md)] border transition-colors",
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
                     layoutConfig.strategy === id
                       ? "bg-overlay-selected border-border-strong text-daintree-text font-medium"
                       : "border-daintree-border hover:bg-tint/5 text-daintree-text/70"
