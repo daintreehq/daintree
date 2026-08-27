@@ -32,6 +32,14 @@ const DESCRIPTION_MAX_HEIGHT = "max-h-[9rem]";
 const MICRO_LABEL = "text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60";
 
 /**
+ * The redacted payload's own treatment, shared by both tier paths. The same
+ * bytes must not change appearance because the tier changed — only whether
+ * they are shown outright or offered behind a disclosure does.
+ */
+const ARGS_PRE =
+  "text-xs font-mono whitespace-pre-wrap break-words bg-overlay-subtle border border-tint/[0.08] rounded max-h-40 overflow-y-auto px-2 py-1.5 text-daintree-text/80";
+
+/**
  * Singleton dialog driven by the plugin-MCP consent queue. Mounted once near
  * the top of `App.tsx`, sibling to `PluginConfirmDialog` and `McpConfirmDialog`.
  *
@@ -51,14 +59,18 @@ const MICRO_LABEL = "text-[11px] font-semibold uppercase tracking-wider text-dai
  * sanitisation and does not need to: React text-node interpolation escapes
  * by default, and the bytes the renderer holds are the display-safe form.
  *
- * For D2+ tiers, a redacted `argsSummary` (produced by `summarizeMcpArgs` in
- * main) appears below the description; raw call arguments are never sent
- * across IPC. That block stays expanded rather than moving behind a
- * disclosure: `docs/architecture/destructive-action-safeguards.md` records the
- * redacted summary as the content preview that satisfies this surface's D2
- * requirement, so collapsing it would weaken an audited safeguard. The
- * capability list is collapsed instead — it describes the plugin, not this
- * call, and is identical on every prompt the plugin ever raises.
+ * A redacted `argsSummary` (produced by `summarizeMcpArgs` in main) appears
+ * below the description; raw call arguments are never sent across IPC. How it
+ * appears is split by tier. On D2+ it stays expanded rather than moving behind
+ * a disclosure: `docs/architecture/destructive-action-safeguards.md` records
+ * the redacted summary as the content preview that satisfies this surface's D2
+ * requirement, so collapsing it would weaken an audited safeguard. On D0/D1
+ * there is no such requirement — the tier's safeguard is the confirm step
+ * itself — so a non-empty summary is collapsed there, matching the sibling
+ * `McpConfirmDialog` and `PluginConfirmDialog`: an inline payload on a routine
+ * prompt reads as noise, and the noise is what trains people to click through.
+ * The capability list is collapsed on every tier — it describes the plugin,
+ * not this call, and is identical on every prompt the plugin ever raises.
  */
 export function PluginMcpConfirmDialog() {
   const current = usePluginMcpConfirmStore((state) => state.current);
@@ -158,14 +170,15 @@ export function PluginMcpConfirmDialog() {
 
           <CapabilitiesDisclosure capabilities={current.declaredCapabilities} />
 
-          {showArgsPreview && (
-            <div>
-              <div className={cn(MICRO_LABEL, "mb-1")}>Arguments</div>
-              <pre className="text-xs font-mono whitespace-pre-wrap break-words bg-overlay-subtle border border-tint/[0.08] rounded max-h-40 overflow-y-auto px-2 py-1.5 text-daintree-text/80">
-                {current.argsSummary || "No arguments"}
-              </pre>
-            </div>
-          )}
+          {showArgsPreview &&
+            (isDestructive ? (
+              <div>
+                <div className={cn(MICRO_LABEL, "mb-1")}>Arguments</div>
+                <pre className={ARGS_PRE}>{current.argsSummary || "No arguments"}</pre>
+              </div>
+            ) : (
+              <ArgumentsDisclosure argsSummary={current.argsSummary} />
+            ))}
         </div>
       </ConfirmDialog>
     </ErrorBoundary>
@@ -345,6 +358,49 @@ function CapabilitiesDisclosure({
           ))}
         </ul>
       )}
+    </div>
+  );
+}
+
+/**
+ * The redacted arguments, collapsed — non-destructive tiers only.
+ *
+ * Specific to this call, so unlike the capability list it is worth reading;
+ * but on D0/D1 it is technical detail rather than the evidence the decision
+ * turns on, and a raw payload sitting open on a routine prompt is the classic
+ * driver of consent-dialog click-through. Collapsed it stays one keystroke
+ * away without competing with the consequence copy above it.
+ *
+ * The caller renders this on D0/D1 only. D2+ must show the summary outright —
+ * it is that tier's audited content preview, and there is no second piece of
+ * evidence on this surface to carry the requirement in its place.
+ */
+function ArgumentsDisclosure({ argsSummary }: { argsSummary: string }) {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <div>
+      <button
+        type="button"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((value) => !value)}
+        className={cn(
+          "flex w-full items-center gap-1.5 rounded-[var(--radius-sm)] py-1 text-left",
+          "transition-colors duration-150 ease-out hover:bg-overlay-subtle",
+          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:-outline-offset-2"
+        )}
+      >
+        <ChevronRight
+          aria-hidden="true"
+          data-animated-chevron
+          className={cn(
+            "w-3 h-3 shrink-0 text-daintree-text/40 transition-transform duration-150 ease-out",
+            expanded && "rotate-90"
+          )}
+        />
+        <span className={MICRO_LABEL}>Arguments</span>
+      </button>
+      {expanded && <pre className={cn(ARGS_PRE, "mt-1.5")}>{argsSummary}</pre>}
     </div>
   );
 }

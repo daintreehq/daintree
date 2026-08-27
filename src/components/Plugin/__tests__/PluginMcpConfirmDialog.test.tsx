@@ -305,6 +305,27 @@ describe("PluginMcpConfirmDialog structure", () => {
     expect(screen.getByText("Run shell commands")).toBeTruthy();
   });
 
+  // #12015 — on the tiers with no content-preview requirement the payload is
+  // offered rather than shown, matching McpConfirmDialog and
+  // PluginConfirmDialog. What splits the two paths is the safeguard the tier
+  // owes, not the shape of the data.
+  it.each(["D0", "D1"] as const)(
+    "keeps the redacted arguments behind a disclosure on %s",
+    (dangerTier) => {
+      enqueue({ dangerTier, argsSummary: '{\n  "path": "README.md"\n}' });
+      render(<PluginMcpConfirmDialog />);
+
+      const disclosure = screen.getByRole("button", { name: /^arguments$/i });
+      expect(disclosure.getAttribute("aria-expanded")).toBe("false");
+      expect(screen.queryByText(/README\.md/)).toBeNull();
+
+      act(() => disclosure.click());
+
+      expect(disclosure.getAttribute("aria-expanded")).toBe("true");
+      expect(screen.getByText(/README\.md/)).toBeTruthy();
+    }
+  );
+
   it("keeps the redacted arguments expanded on a destructive tier", () => {
     // docs/architecture/destructive-action-safeguards.md records the redacted
     // argsSummary as the content preview that satisfies this surface's D2

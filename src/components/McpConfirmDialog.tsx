@@ -455,6 +455,9 @@ function ArgumentsDisclosure({ argsSummary }: { argsSummary: string }) {
       >
         <ChevronRight
           aria-hidden="true"
+          // `src/index.css` drops the rotation transition for this marker under
+          // prefers-reduced-motion; every other chevron in the app carries it.
+          data-animated-chevron
           className={cn(
             "w-3 h-3 shrink-0 text-daintree-text/40 transition-transform duration-150 ease-out",
             expanded && "rotate-90"
