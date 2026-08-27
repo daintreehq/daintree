@@ -429,6 +429,10 @@ export function useMcpBridge(): void {
                   // only for unpinned external dispatch; the dialog renders a
                   // "Requested by" row when set, stays provenance-free when not.
                   callerInfo,
+                  // Origin travels with the identity so the dialog can name the
+                  // requester positively instead of inferring one from an
+                  // absence that has two very different causes.
+                  sessionOrigin,
                   previewPending,
                   ...(previewTarget ? { previewTitle: mcpConfirmPreviewTitle(previewTarget) } : {}),
                 });

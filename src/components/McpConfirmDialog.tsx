@@ -1,8 +1,12 @@
-import { useCallback, useEffect, useRef } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { AlertTriangle, ChevronRight, Plug, ShieldAlert, Sparkles } from "lucide-react";
 import type { McpConfirmationDecision } from "@shared/types/ipc/mcpServer";
+import { cn } from "@/lib/utils";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { Spinner } from "@/components/ui/Spinner";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
-import { useMcpConfirmStore } from "@/store/mcpConfirmStore";
+import { isCautionPreviewLine, stripCautionPrefix } from "@/lib/mcpPreviewLines";
+import { useMcpConfirmStore, type PendingMcpConfirm } from "@/store/mcpConfirmStore";
 
 /**
  * Renderer-side timer that beats main's 30s `pendingDispatches` deadline by
@@ -18,6 +22,10 @@ const CONFIRMATION_TIMEOUT_MS = 28_000;
  * the second click; this disables the primary button briefly after each item
  * is promoted so a click meant for the previous modal can't silently approve a
  * freshly-promoted destructive write before the user has read it.
+ *
+ * This is a click-carry-over guard, not an attention device — passive delays
+ * are known not to make anyone read. Chromium applies 500-1000ms to its own
+ * security prompts for the same hazard; 1200ms sits just above that floor.
  */
 const CONFIRM_COOLDOWN_MS = 1_200;
 
@@ -25,9 +33,22 @@ const CONFIRM_COOLDOWN_MS = 1_200;
  * Upper bound for the user-agent shown in the "Requested by" row. An external
  * client controls its own `User-Agent` header (capped at Node's ~8 KB header
  * limit, not at a sane length), so clamp the display value here so an oversized
- * string can't push the Arguments block and confirm button below the fold.
+ * string can't push the rest of the request out of view. The row is also
+ * clamped to a single line in CSS — 120 characters is still three wrapped lines
+ * in a `max-w-md` dialog, which is three lines of incidental client text
+ * sitting above the evidence that actually decides the approval.
  */
 const MAX_USER_AGENT_DISPLAY = 120;
+
+/**
+ * Height reserved for the preview body before its content lands. Sized to the
+ * common case (a heading plus ~3 rows) so the card does not grow when the fetch
+ * resolves: the dialog is centre-anchored, so a body that grows moves the
+ * confirm button — and it moves at the exact moment the button also stops being
+ * disabled. A relocating, newly-live destructive target is a misclick hazard,
+ * so the loading state reserves the space the content will occupy.
+ */
+const PREVIEW_MIN_BODY_HEIGHT = "min-h-[5.5rem]";
 
 function truncateUserAgent(userAgent: string): string {
   return userAgent.length > MAX_USER_AGENT_DISPLAY
@@ -36,13 +57,44 @@ function truncateUserAgent(userAgent: string): string {
 }
 
 /**
+ * What the fresh-preview fetch has to say, derived from the payload rather than
+ * stored as a separate field — `preview` and `previewPending` already encode
+ * all four cases and the store contract does not need to widen:
+ *
+ *   none        no preview target for this action; nothing was ever attempted.
+ *   pending     a target exists and the fetch is in flight.
+ *   ready       lines came back.
+ *   unavailable a target existed and produced nothing — the monitor was gone,
+ *               or a rejection escaped the builder and the bridge cleared the
+ *               pending flag with an empty array. Distinct from `none`, and the
+ *               distinction matters: it is the difference between "this action
+ *               has no content to show" and "we could not find out what this
+ *               affects", and a D2 approval must never read the second as the
+ *               first.
+ */
+type PreviewState = "none" | "pending" | "ready" | "unavailable";
+
+export function derivePreviewState(current: PendingMcpConfirm): PreviewState {
+  if (current.previewPending === true) return "pending";
+  if (current.preview === undefined) return "none";
+  return current.preview.length > 0 ? "ready" : "unavailable";
+}
+
+/**
  * Singleton dialog driven by the MCP confirmation queue. Mounted once near
  * the top of `App.tsx`. Reads `current` from `useMcpConfirmStore` and
  * surfaces one `ConfirmDialog` at a time — concurrent agent calls queue
  * FIFO behind the visible modal rather than stacking overlapping dialogs.
+ *
+ * Body order follows the ordering every permission surface converges on —
+ * identity, then consequence, then evidence, then technical detail. People
+ * anchor their trust judgement on who is asking before they weigh what is
+ * being asked, so provenance leads; but it leads as one compact line, because
+ * its cost in vertical space is what pushed the evidence down before.
  */
 export function McpConfirmDialog() {
   const current = useMcpConfirmStore((state) => state.current);
+  const queueDepth = useMcpConfirmStore((state) => state.queue.length);
   const resolveCurrent = useMcpConfirmStore((state) => state.resolveCurrent);
   const resetKey = current?.requestId ?? "null";
 
@@ -100,14 +152,18 @@ export function McpConfirmDialog() {
 
   // Severity follows the action's registry classification, not the fact that
   // an MCP client dispatched it; only genuinely destructive dispatches earn
-  // red. Provenance differs by dispatch origin: pinned help-session dispatch
-  // is the assistant's own panel, so `callerInfo` is absent and the dialog
-  // stays provenance-free. Unpinned external/api-key dispatch carries the
-  // requesting bearer's identity (#9157), surfaced in a "Requested by" row so
-  // the user can see which client is asking before approving.
+  // red. Daintree classifies its own actions, so unlike a remote server's
+  // self-reported tool annotations this value is trusted.
   const isDestructive = current.danger === "confirm";
   const variant = isDestructive ? "destructive" : "default";
-  const callerInfo = current.callerInfo;
+  const previewState = derivePreviewState(current);
+  const hasArgs = current.argsSummary.trim().length > 0;
+
+  // `alertdialog` is for a brief, important message; APG reserves it for text
+  // the screen reader should read out whole on open. This body carries a
+  // scrollable file list and a redacted payload, so it is a `dialog` whenever
+  // either is present — matching every sibling confirm that shows a preview.
+  const hasScrollableContent = previewState !== "none" || hasArgs;
 
   return (
     <ErrorBoundary variant="component" componentName="McpConfirmDialog" resetKeys={[resetKey]}>
@@ -120,55 +176,279 @@ export function McpConfirmDialog() {
         cancelLabel="Cancel"
         onConfirm={() => resolveOnce(current.requestId, "approved")}
         variant={variant}
-        confirmDisabled={Boolean(current.previewPending)}
+        hasPreview={hasScrollableContent}
+        confirmDisabled={previewState === "pending"}
         confirmCooldownMs={isDestructive ? CONFIRM_COOLDOWN_MS : undefined}
         cooldownKey={current.requestId}
+        hint={<GateHint previewState={previewState} queueDepth={queueDepth} />}
       >
         <div className="space-y-3">
-          {callerInfo && (
-            <div className="space-y-2">
-              <div className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60">
-                Requested by
-              </div>
-              <div className="text-xs text-daintree-text/80 break-words">
-                …{callerInfo.token4LastChars} · {truncateUserAgent(callerInfo.userAgent)}
-              </div>
-            </div>
-          )}
+          <RequesterRow current={current} />
+
           {current.dangerRationale && (
-            <div className="space-y-2">
-              <div className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60">
-                Why this is gated
-              </div>
-              <div className="text-xs text-daintree-text/80 break-words">
-                {current.dangerRationale}
-              </div>
-            </div>
+            <ConsequenceNote isDestructive={isDestructive}>
+              {current.dangerRationale}
+            </ConsequenceNote>
           )}
-          {(current.previewPending || (current.preview && current.preview.length > 0)) && (
-            <div className="space-y-2">
-              <div className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60">
-                {current.previewTitle ?? "Working tree changes"}
-              </div>
-              {current.previewPending ? (
-                <div className="text-xs text-daintree-text/60">Checking current changes…</div>
-              ) : (
-                <pre className="text-xs font-mono whitespace-pre-wrap break-words bg-overlay-subtle rounded px-2 py-1.5 text-daintree-text/80">
-                  {current.preview?.join("\n")}
-                </pre>
-              )}
-            </div>
+
+          {previewState !== "none" && (
+            <PreviewCard
+              title={current.previewTitle ?? "Working tree changes"}
+              state={previewState}
+              lines={current.preview ?? []}
+            />
           )}
-          <div className="space-y-2">
-            <div className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60">
-              Arguments
-            </div>
-            <pre className="text-xs font-mono whitespace-pre-wrap break-words bg-overlay-subtle rounded px-2 py-1.5 text-daintree-text/80">
-              {current.argsSummary || "(none)"}
-            </pre>
-          </div>
+
+          {hasArgs && <ArgumentsDisclosure argsSummary={current.argsSummary} />}
         </div>
       </ConfirmDialog>
     </ErrorBoundary>
+  );
+}
+
+/** Shared micro-label, matching the section-heading grammar used app-wide. */
+const MICRO_LABEL = "text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60";
+
+/**
+ * Who is asking, in one line.
+ *
+ * Provenance differs by dispatch origin, and an absent `callerInfo` has two
+ * causes, not one: the pinned help-session route never carries an identity
+ * (the assistant's own panel is its own context), and `getBearerInfoForSession`
+ * also returns null for a session whose token hash was never registered. So the
+ * row reads `sessionOrigin` — the field that actually records which class of
+ * surface dispatched — and names an unidentified caller as unidentified rather
+ * than letting it inherit the assistant's standing.
+ *
+ * The row is always present. It was previously dropped entirely for
+ * assistant-owned requests, which moved everything below it by ~52px whenever a
+ * queued item promoted across origins, and left the most trusted case looking
+ * like a missing section.
+ */
+function RequesterRow({ current }: { current: PendingMcpConfirm }) {
+  const { callerInfo, sessionOrigin } = current;
+  const isAssistant = sessionOrigin === "help" || sessionOrigin === "assistant-pane";
+
+  let Icon = ShieldAlert;
+  let name = "Unidentified client";
+  let detail: string | null = null;
+
+  if (callerInfo) {
+    Icon = Plug;
+    name = truncateUserAgent(callerInfo.userAgent);
+    detail = `…${callerInfo.token4LastChars}`;
+  } else if (isAssistant) {
+    Icon = Sparkles;
+    name = "Daintree Assistant";
+  }
+
+  return (
+    <div className="flex items-baseline gap-2 text-xs">
+      <span className={cn(MICRO_LABEL, "shrink-0")}>Requested by</span>
+      <span className="flex min-w-0 flex-1 items-baseline gap-1.5">
+        <Icon
+          aria-hidden="true"
+          className="w-3 h-3 shrink-0 translate-y-0.5 text-daintree-text/45"
+        />
+        <span className="truncate text-daintree-text/80" title={callerInfo?.userAgent}>
+          {name}
+        </span>
+        {detail && (
+          <span className="shrink-0 font-mono text-[11px] text-daintree-text/45">{detail}</span>
+        )}
+      </span>
+    </div>
+  );
+}
+
+/**
+ * Why the action is gated.
+ *
+ * For a destructive dispatch this is the consequence statement, so it gets a
+ * toned callout with a real icon rather than another paragraph at body weight:
+ * an icon keeps its shape under `forced-colors: active`, where the destructive
+ * button's fill is replaced by a system colour and stops distinguishing itself
+ * from Cancel. One toned block also keeps the severity signal singular — the
+ * point is a consequence hierarchy, not red spread across every section.
+ */
+function ConsequenceNote({
+  isDestructive,
+  children,
+}: {
+  isDestructive: boolean;
+  children: React.ReactNode;
+}) {
+  if (!isDestructive) {
+    return (
+      <div className="space-y-1">
+        <div className={MICRO_LABEL}>Why this is gated</div>
+        <div className="text-xs text-daintree-text/70 break-words">{children}</div>
+      </div>
+    );
+  }
+
+  return (
+    <div className="flex items-start gap-2 rounded-[var(--radius-md)] border border-status-danger/20 bg-status-danger/10 p-3">
+      <AlertTriangle aria-hidden="true" className="w-4 h-4 shrink-0 mt-px text-status-danger" />
+      <div className="min-w-0 space-y-1">
+        <div className={cn(MICRO_LABEL, "text-status-danger/80")}>What this does</div>
+        <div className="text-xs text-daintree-text/80 break-words">{children}</div>
+      </div>
+    </div>
+  );
+}
+
+/**
+ * The actual content the dispatch would affect — the decisive evidence for a
+ * D2 approval, so it gets the framed, headed, bounded card every sibling
+ * destructive confirm already uses, rather than the same bare `<pre>` well the
+ * redacted arguments sit in.
+ *
+ * Rows are rendered individually rather than joined into one wrapped block:
+ * soft-wrapping a monospace listing with no hanging indent puts continuation
+ * text at the same left edge as a new entry, so a two-commit list reads as
+ * however many visual rows it happens to wrap to.
+ */
+function PreviewCard({
+  title,
+  state,
+  lines,
+}: {
+  title: string;
+  state: Exclude<PreviewState, "none">;
+  lines: string[];
+}) {
+  const contentRows = lines.filter((line) => !isCautionPreviewLine(line));
+
+  return (
+    <div className="rounded-[var(--radius-md)] border border-tint/[0.08] bg-tint/[0.04]">
+      <div className="flex items-center justify-between gap-2 border-b border-tint/[0.08] px-3 py-2">
+        <span className={MICRO_LABEL}>{title}</span>
+        {state === "ready" && contentRows.length > 0 && (
+          <span className="shrink-0 rounded bg-tint/10 px-1 py-0.5 text-[10px] font-medium tabular-nums leading-none text-daintree-text/60">
+            {contentRows.length}
+          </span>
+        )}
+      </div>
+
+      <div className={cn("px-3 py-2", PREVIEW_MIN_BODY_HEIGHT)}>
+        {state === "pending" ? (
+          <div
+            className="flex h-full items-center justify-center py-4"
+            role="status"
+            aria-label="Checking what this affects"
+          >
+            <Spinner size="sm" className="text-daintree-text/40" />
+          </div>
+        ) : state === "unavailable" ? (
+          <CautionRow>
+            Couldn't check what this affects. Approve only if you already know what it will change.
+          </CautionRow>
+        ) : (
+          <div className="space-y-1">
+            {lines.map((line, index) =>
+              isCautionPreviewLine(line) ? (
+                <CautionRow key={index}>{stripCautionPrefix(line)}</CautionRow>
+              ) : (
+                <div
+                  key={index}
+                  className="pl-4 -indent-4 font-mono text-xs break-words text-daintree-text/80"
+                >
+                  {line}
+                </div>
+              )
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * A preview line the formatters marked as a caution — "could not verify",
+ * "this operation will be refused". It is the most safety-relevant thing the
+ * preview can say and previously rendered as an inline "⚠" character at the
+ * same weight as a filename.
+ */
+function CautionRow({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="flex items-start gap-1.5 text-xs text-status-warning">
+      <AlertTriangle aria-hidden="true" className="w-3.5 h-3.5 shrink-0 mt-px" />
+      <span className="min-w-0 break-words">{children}</span>
+    </div>
+  );
+}
+
+/**
+ * The redacted argument summary, behind a disclosure.
+ *
+ * Raw payloads shown inline are the classic driver of consent-dialog
+ * click-through: they read as noise, and the noise trains people to skip the
+ * whole surface. Collapsed, they stay one keystroke away for anyone who wants
+ * them without competing with the evidence for attention. The preview above is
+ * never collapsed — a D2 approval has to show actual content, not offer it.
+ */
+function ArgumentsDisclosure({ argsSummary }: { argsSummary: string }) {
+  const [expanded, setExpanded] = useState(false);
+
+  return (
+    <div>
+      <button
+        type="button"
+        aria-expanded={expanded}
+        onClick={() => setExpanded((value) => !value)}
+        className={cn(
+          "flex w-full items-center gap-1.5 rounded-[var(--radius-sm)] py-1 text-left",
+          "transition-colors duration-150 ease-out hover:bg-overlay-subtle",
+          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:-outline-offset-2"
+        )}
+      >
+        <ChevronRight
+          aria-hidden="true"
+          className={cn(
+            "w-3 h-3 shrink-0 text-daintree-text/40 transition-transform duration-150 ease-out",
+            expanded && "rotate-90"
+          )}
+        />
+        <span className={MICRO_LABEL}>Arguments</span>
+      </button>
+      {expanded && (
+        <pre className="mt-1 max-h-40 overflow-y-auto rounded-[var(--radius-md)] bg-overlay-subtle px-2 py-1.5 font-mono text-xs break-words whitespace-pre-wrap text-daintree-text/80">
+          {argsSummary}
+        </pre>
+      )}
+    </div>
+  );
+}
+
+/**
+ * The subdued line beside the action row, answering "can I act right now, and
+ * what happens when I do".
+ *
+ * Deliberately not a countdown. The request does expire, but a ticking clock on
+ * a security decision pushes the reader toward impulsive rather than
+ * deliberative processing, so the expiry stays silent and only the conditions
+ * the user can act on are named. Nothing here is colour-coded either — it has
+ * to survive forced-colors, where a tone would be flattened away.
+ */
+function GateHint({
+  previewState,
+  queueDepth,
+}: {
+  previewState: PreviewState;
+  queueDepth: number;
+}) {
+  const parts: string[] = [];
+  if (previewState === "pending") parts.push("Checking what this affects…");
+  if (queueDepth > 0) {
+    parts.push(`${queueDepth} more request${queueDepth === 1 ? "" : "s"} waiting`);
+  }
+  if (parts.length === 0) return null;
+
+  return (
+    <span aria-live="polite" className="min-w-0 truncate">
+      {parts.join(" · ")}
+    </span>
   );
 }

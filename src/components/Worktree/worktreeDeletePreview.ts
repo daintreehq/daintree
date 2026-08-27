@@ -1,5 +1,6 @@
 import { worktreeClient } from "@/clients";
 import type { FileChangeDetail, WorktreeChanges } from "@shared/types/git";
+import { MCP_PREVIEW_CAUTION_PREFIX } from "@/lib/mcpPreviewLines";
 
 /**
  * Canonical fresh preview for the worktree-delete confirm surfaces (#11343).
@@ -109,7 +110,7 @@ export function formatWorktreeChangeRows(
  */
 export function formatWorktreeDeletePreviewLines(preview: WorktreeDeletePreview | null): string[] {
   if (preview === null) {
-    return ["⚠ Could not verify current changes — proceed with caution."];
+    return [`${MCP_PREVIEW_CAUTION_PREFIX}Could not verify current changes — proceed with caution.`];
   }
   const { trackedChangeCount, untrackedFileCount, changes } = preview;
   if (changes.length === 0) {

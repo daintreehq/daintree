@@ -11,6 +11,7 @@
  */
 
 import type { GitPushDestination } from "@shared/types/git";
+import { MCP_PREVIEW_CAUTION_PREFIX } from "@/lib/mcpPreviewLines";
 
 /** Max commits fetched and shown before the tail is collapsed. */
 export const PREVIEW_COMMIT_LIMIT = 12;
@@ -90,7 +91,9 @@ export function formatGitRemoteOperationPreviewLines(
   operation: GitRemoteOperationKind
 ): string[] {
   if (preview === null) {
-    return ["⚠ Could not verify the branch and local commits — proceed with caution."];
+    return [
+      `${MCP_PREVIEW_CAUTION_PREFIX}Could not verify the branch and local commits — proceed with caution.`,
+    ];
   }
   const branchLine = `Branch: ${preview.branch ?? "(detached HEAD)"}`;
   // Named before the commits: which repository this writes to is the fact an
@@ -102,8 +105,8 @@ export function formatGitRemoteOperationPreviewLines(
   const destinationLine = remoteRef
     ? `${isPullRebase ? "Rebases onto" : "Destination"}: ${formatGitPushDestination(remoteRef)}`
     : isPullRebase
-      ? "⚠ This branch has no upstream to rebase onto — this operation will be refused."
-      : "⚠ No push destination is configured for this branch — this operation will be refused.";
+      ? `${MCP_PREVIEW_CAUTION_PREFIX}This branch has no upstream to rebase onto — this operation will be refused.`
+      : `${MCP_PREVIEW_CAUTION_PREFIX}No push destination is configured for this branch — this operation will be refused.`;
   if (preview.commits.length === 0) {
     return [destinationLine, branchLine, emptyNote];
   }

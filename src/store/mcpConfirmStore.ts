@@ -1,6 +1,10 @@
 import { create } from "zustand";
 import type { ActionDanger } from "@shared/types/actions";
-import type { McpBearerIdentity, McpConfirmationDecision } from "@shared/types/ipc/mcpServer";
+import type {
+  McpBearerIdentity,
+  McpConfirmationDecision,
+  McpSessionOrigin,
+} from "@shared/types/ipc/mcpServer";
 
 /**
  * One pending confirmation surfaced for a `danger: "confirm"` MCP dispatch.
@@ -33,6 +37,21 @@ export interface PendingMcpConfirm {
    * the dialog shows a "Requested by" row only for genuine external clients.
    */
   callerInfo?: McpBearerIdentity;
+  /**
+   * Which class of surface the dispatching session is (#9157 companion).
+   * Distinct from {@link callerInfo}, which names *which external client* is
+   * asking: an assistant session has no meaningful `callerInfo` and still has
+   * an origin.
+   *
+   * Load-bearing for the requester row. Absent `callerInfo` does NOT imply the
+   * in-app assistant — `getBearerInfoForSession` also returns null for a
+   * session whose token hash was never registered, so a generic pane token
+   * dispatches unpinned with no `callerInfo` and `sessionOrigin: "external"`.
+   * Without this field the dialog cannot tell the trusted assistant apart from
+   * a caller it failed to identify, and must never label the second as the
+   * first.
+   */
+  sessionOrigin?: McpSessionOrigin;
   /**
    * Fresh, human-readable preview lines describing the ACTUAL content this
    * dispatch would affect — e.g. the changed-file list a `worktree.delete`
