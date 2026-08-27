@@ -727,7 +727,15 @@ describe("CloneRepoDialog", () => {
     // `code` is undefined by the time the dialog sees it. Reading `err.code`
     // here used to classify every user stop as a failure and print the raw
     // `[AppError|CANCELLED]` prefix into the error surface.
-    cloneRepoMock.mockRejectedValue(new Error("[AppError|CANCELLED] Clone cancelled"));
+    // Resolve only once a stage has been emitted, so the stop happens with a
+    // live phase on screen — the case the unit suite previously never hit.
+    let rejectClone: ((reason: Error) => void) | null = null;
+    cloneRepoMock.mockImplementation(
+      () =>
+        new Promise((_resolve, reject) => {
+          rejectClone = reject;
+        })
+    );
 
     render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
 
@@ -744,6 +752,21 @@ describe("CloneRepoDialog", () => {
       fireEvent.click(cloneBtn);
     });
 
+    await waitFor(() => expect(progressHandler).not.toBeNull());
+    act(() => {
+      progressHandler?.({
+        stage: "receiving",
+        progress: 42,
+        message: "receiving: 42%",
+        timestamp: Date.now(),
+      });
+    });
+    expect(screen.getByRole("progressbar")).toBeTruthy();
+
+    await act(async () => {
+      rejectClone?.(new Error("[AppError|CANCELLED] Clone cancelled"));
+    });
+
     await waitFor(() => {
       expect(screen.getByText("Clone stopped")).toBeTruthy();
     });
@@ -752,6 +775,10 @@ describe("CloneRepoDialog", () => {
     expect(document.body.textContent).not.toContain("[AppError");
     // A stop leaves the form editable so Clone can simply be pressed again.
     expect(screen.getByRole("button", { name: "Clone" }).hasAttribute("disabled")).toBe(false);
+    // And the live phase is gone. A leftover stage would keep the running mode
+    // on screen, so the dialog would still look like it were cloning.
+    expect(screen.queryByRole("progressbar")).toBeNull();
+    expect(screen.queryAllByTestId("spinner")).toHaveLength(0);
   });
 
   it("states a failure once, never as both a stage row and a banner", async () => {

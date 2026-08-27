@@ -308,6 +308,12 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
     } finally {
       setIsCloning(false);
       setIsStopping(false);
+      // Drop the live phase whatever the outcome. Success and failure have
+      // modes of their own that don't render it, but a stop returns to the
+      // form — and a leftover phase would keep `isRunning` true, leaving the
+      // dialog looking like it were still cloning.
+      setStages([]);
+      setCurrentStageKey(null);
     }
   };
 
