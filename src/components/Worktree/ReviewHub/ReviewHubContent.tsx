@@ -17,7 +17,16 @@ import { isClientAppError } from "@/utils/clientAppError";
 import { cn } from "@/lib/utils";
 
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
-import { X, RefreshCw, CheckSquare, ChevronRight, AlertTriangle, GitBranch } from "lucide-react";
+import {
+  X,
+  RefreshCw,
+  CircleCheck,
+  ArrowUpFromLine,
+  ChevronRight,
+  AlertTriangle,
+  CircleAlert,
+  GitBranch,
+} from "lucide-react";
 import { isProtectedBranch } from "@shared/utils/gitConstants";
 import { useUIStore } from "@/store/uiStore";
 import { useGitPushConfirmStore } from "@/store/gitPushConfirmStore";
@@ -25,6 +34,8 @@ import { usePreferencesStore } from "@/store/preferencesStore";
 import { useDiffViewedStore, selectViewedSet } from "@/store/diffViewedStore";
 import type { DiffChangeSetEntry } from "@/components/FileViewer/diffChangeSet";
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { basename, join } from "@shared/utils/path";
@@ -45,7 +56,11 @@ import { PrStatusChip } from "./PrStatusChip";
 import { CommitPanel } from "./CommitPanel";
 import { ConflictPanel } from "./ConflictPanel";
 import { ReadinessRail } from "./ReadinessRail";
-import { deriveReviewReadiness, type ReviewReadinessCta } from "./reviewReadiness";
+import {
+  deriveReviewReadiness,
+  type ReviewReadinessCta,
+  type ReviewReadinessItem,
+} from "./reviewReadiness";
 // Lazy: these modals statically reach the DiffViewer/CodeViewer/vendor-editor
 // chunks (~223 KB gzip), and ReviewPane is a first-render preload seed — a
 // static import drags the whole editor stack into every boot's modulepreload
@@ -638,6 +653,23 @@ export function ReviewHubContent({
       }),
     [status, aheadCount, behindCount, worktreePR, providerHealth, pushError]
   );
+
+  /**
+   * What the rail actually renders. Identical to `readinessSummary` except that
+   * the `push-failed` item is dropped while the dedicated push banner is up —
+   * see the note at the `ReadinessRail` call site. Never used for gating.
+   */
+  const railSummary = useMemo(() => {
+    if (!pushError) return readinessSummary;
+    const drop = (items: ReviewReadinessItem[]) => items.filter((i) => i.id !== "push-failed");
+    return {
+      ...readinessSummary,
+      blockers: drop(readinessSummary.blockers),
+      warnings: drop(readinessSummary.warnings),
+      infos: drop(readinessSummary.infos),
+      nextActions: drop(readinessSummary.nextActions),
+    };
+  }, [readinessSummary, pushError]);
 
   const refresh = useCallback(async () => {
     if (!worktreePath) return;
@@ -1608,15 +1640,41 @@ export function ReviewHubContent({
           </div>
         </div>
 
-        {/* Merge-readiness rail — hidden until staging status resolves */}
-        <ReadinessRail summary={readinessSummary} onCta={handleReadinessCta} />
+        {/* Merge-readiness rail — hidden until staging status resolves.
+            While `PushErrorBanner` is mounted it owns the push failure outright:
+            it classifies the reason, names the remedy, and carries the only
+            actions (pull-rebase / force-push). The rail's own `push-failed` item
+            says the same thing in different words, one severity louder, with no
+            action — so the two stacked directly on top of each other and the
+            louder of the pair was the useless one. Filtered from what the RAIL
+            renders only; `readinessSummary` itself keeps the blocker so
+            readiness and push gating are unchanged. */}
+        <ReadinessRail summary={railSummary} onCta={handleReadinessCta} />
 
         {/* Inline error banners */}
         {actionError && (
-          <div className="px-4 py-2 text-xs text-status-error bg-status-error/10 flex items-start gap-2 shrink-0">
-            <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-            <span>{actionError}</span>
-          </div>
+          /* One grammar for every failure on this surface: icon, verb-noun
+             title, the git detail as supporting copy, and exactly one recovery.
+             This used to be a bespoke strip that printed raw stderr with no
+             title, no role and nothing the user could do — the message sat in
+             the layout permanently because there was not even a dismiss. It is
+             `role="status"` rather than `alert` because the pane is still fully
+             usable: the failed action is recoverable in place, and an assertive
+             interrupt for a secondary failure would fight the user's focus. */
+          <InlineStatusBanner
+            severity="error"
+            role="status"
+            ariaLive="polite"
+            icon={CircleAlert}
+            title="Action failed"
+            description={actionError}
+            onClose={() => setActionError(null)}
+            action={{
+              id: "review-hub-action-error-refresh",
+              label: "Refresh",
+              onClick: () => void refresh(),
+            }}
+          />
         )}
         {pushError && (
           <PushErrorBanner
@@ -1679,18 +1737,39 @@ export function ReviewHubContent({
                 </>
               ) : null
             ) : baseBranchError ? (
-              <div className="p-4 text-xs text-status-error">
-                <p className="mb-2">{baseBranchError}</p>
-                <Button variant="subtle" size="sm" onClick={() => void fetchBaseBranch()}>
-                  Retry
-                </Button>
-              </div>
+              /* A SECONDARY failure — the comparison could not be computed, but
+                 the pane and its chrome are intact. Announced politely and
+                 without moving focus (WCAG 2.2 SC 3.2.1/3.2.2); only the root
+                 failure below is assertive. */
+              <InlineStatusBanner
+                severity="error"
+                role="status"
+                ariaLive="polite"
+                icon={CircleAlert}
+                title={`Couldn't compare with ${mainBranch}`}
+                description={baseBranchError}
+                action={{
+                  id: "review-hub-base-branch-retry",
+                  label: "Retry",
+                  onClick: () => void fetchBaseBranch(),
+                }}
+              />
             ) : sortedBaseBranchFiles !== null && sortedBaseBranchFiles.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-12 text-daintree-text/50">
-                <CheckSquare className="w-8 h-8 mb-2 text-daintree-text/30" />
-                <p className="text-sm">No changes vs {mainBranch}</p>
-                <p className="text-xs mt-1">This branch has no commits ahead of {mainBranch}</p>
-              </div>
+              /* A completed inspection: there is genuinely nothing to review
+                 against the base branch. `user-cleared` is the Blank-Slate
+                 variant — it forbids a description and an action by design, so
+                 the redundant "This branch has no commits ahead of {main}"
+                 subtitle goes with it. The headline alone carries the meaning,
+                 and it is deliberately a DIFFERENT headline and a different
+                 icon from the working-tree clean state, which used to look
+                 identical to this one. */
+              <EmptyState
+                variant="user-cleared"
+                scale="canvas"
+                className="py-12"
+                icon={<CircleCheck />}
+                title={`No changes vs ${mainBranch}`}
+              />
             ) : sortedBaseBranchFiles !== null ? (
               <div>
                 <div className={REVIEW_HUB_STICKY_BAND}>
@@ -1754,12 +1833,26 @@ export function ReviewHubContent({
                   </>
                 ) : null
               ) : loadError ? (
-                <div className="p-4 text-xs text-status-error">
-                  <p className="mb-2">{loadError}</p>
-                  <Button variant="subtle" size="sm" onClick={() => void refresh()}>
-                    Retry
-                  </Button>
-                </div>
+                /* The ROOT failure: nothing else in the body rendered, so this
+                   is the one presentation that is genuinely blocking and the
+                   one that takes `role="alert"`. It previously rendered raw git
+                   stderr as its entire user-facing message, with no icon at
+                   all — which meant that under `forced-colors: active`, where
+                   the UA strips the tint, it was typographically identical to
+                   ordinary body text and nothing marked it as an error
+                   (WCAG 2.2 SC 1.4.1). The icon is what survives that. */
+                <InlineStatusBanner
+                  severity="error"
+                  role="alert"
+                  icon={CircleAlert}
+                  title="Couldn't load changes"
+                  description={loadError}
+                  action={{
+                    id: "review-hub-load-retry",
+                    label: "Retry",
+                    onClick: () => void refresh(),
+                  }}
+                />
               ) : status && isOperationState ? (
                 <ConflictPanel
                   status={status}
@@ -1771,35 +1864,50 @@ export function ReviewHubContent({
                   onContinue={handleContinueOperation}
                 />
               ) : status && totalChanges === 0 ? (
-                <div className="flex flex-col items-center justify-center py-12 text-daintree-text/50">
-                  <CheckSquare className="w-8 h-8 mb-2 text-daintree-text/30" />
-                  <p className="text-sm">Working tree clean</p>
-                  {status.hasRemote && (aheadCount ?? 0) > 0 ? (
-                    <>
-                      <p className="text-xs mt-1" data-testid="review-hub-clean-unpushed">
-                        {aheadCount} commit{aheadCount !== 1 ? "s" : ""} not pushed
-                      </p>
-                      {readinessSummary.pushReady && (
-                        <button
-                          type="button"
-                          onClick={() => void handlePushClean()}
-                          disabled={isPushing}
-                          data-testid="review-hub-clean-push"
-                          className={cn(
-                            "mt-3 px-2.5 py-1 rounded text-xs font-medium transition-colors",
-                            "bg-filter-selected-bg-soft hover:bg-tint/[0.14] text-daintree-text/80",
-                            "disabled:opacity-50 disabled:cursor-not-allowed",
-                            "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-accent"
-                          )}
-                        >
-                          {isPushing ? "Pushing…" : "Push"}
-                        </button>
-                      )}
-                    </>
-                  ) : (
-                    <p className="text-xs mt-1">No changes to commit</p>
-                  )}
-                </div>
+                status.hasRemote && (aheadCount ?? 0) > 0 ? (
+                  /* NOT a completed state. The working tree being clean is the
+                     inert fact here; the unpushed commits are the live one, so
+                     they own the headline and the icon rather than sitting in a
+                     12px subtitle under a completion mark. Previously this and
+                     the genuinely-finished state below rendered the same glyph,
+                     the same layout and the same type scale, which meant "you
+                     still have work to publish" and "you are done" were
+                     distinguishable only by reading the small print. */
+                  <div data-testid="review-hub-clean-unpushed">
+                    <EmptyState
+                      variant="zero-data"
+                      scale="canvas"
+                      className="py-12"
+                      icon={<ArrowUpFromLine />}
+                      title={`${aheadCount} commit${aheadCount !== 1 ? "s" : ""} ready to push`}
+                      description="Nothing left to commit — these commits just aren't on the remote yet."
+                      action={
+                        readinessSummary.pushReady ? (
+                          <Button
+                            variant="subtle"
+                            size="sm"
+                            onClick={() => void handlePushClean()}
+                            disabled={isPushing}
+                            data-testid="review-hub-clean-push"
+                          >
+                            {isPushing ? "Pushing…" : "Push"}
+                          </Button>
+                        ) : undefined
+                      }
+                    />
+                  </div>
+                ) : (
+                  /* Genuinely finished. `user-cleared` nulls the action and
+                     forbids a description, which is what removes the redundant
+                     "No changes to commit" line: the headline already says it. */
+                  <EmptyState
+                    variant="user-cleared"
+                    scale="canvas"
+                    className="py-12"
+                    icon={<CircleCheck />}
+                    title="Working tree clean"
+                  />
+                )
               ) : status ? (
                 <div>
                   {/* File-list disclosure — default collapsed so the commit
@@ -1850,18 +1958,24 @@ export function ReviewHubContent({
                         <div
                           ref={conflictSectionRef}
                           tabIndex={-1}
-                          className="px-4 py-2.5 bg-status-error/10 border-b border-divider flex items-start gap-2 outline-hidden focus:ring-2 focus:ring-daintree-accent/30"
+                          /* Focusable because `handleFocusBlocker` sends focus
+                             here from the readiness rail's "conflicts" CTA, so
+                             it keeps its own ring. The banner inside carries the
+                             shared failure grammar; this wrapper only owns
+                             focus. */
+                          className="outline-hidden focus:ring-2 focus:ring-daintree-accent/30"
                         >
-                          <AlertTriangle className="w-3.5 h-3.5 text-status-error mt-0.5 shrink-0" />
-                          <div className="text-xs text-status-error">
-                            <span className="font-medium">
-                              {status.conflicted.length} conflicted file
-                              {status.conflicted.length !== 1 ? "s" : ""}
-                            </span>
-                            <span className="text-daintree-text/60 ml-1">
-                              — resolve conflicts before committing
-                            </span>
-                          </div>
+                          <InlineStatusBanner
+                            severity="warning"
+                            role="status"
+                            ariaLive="polite"
+                            icon={AlertTriangle}
+                            title={`${status.conflicted.length} conflicted file${
+                              status.conflicted.length !== 1 ? "s" : ""
+                            }`}
+                            description="Resolve these before committing."
+                            animated={false}
+                          />
                         </div>
                       )}
 
