@@ -656,9 +656,10 @@ Performance:
               // old treatment was the loudest thing on the surface while its own body
               // text said the values above were still accurate.
               //
-              // No tinted fill: `bg-status-*/10` composites the banner's own text down
+              // No tinted fill. A 10% status tint behind this text composites it down
               // below the 4.5:1 floor, where the same token on the bare dialog surface
-              // clears it.
+              // clears it — the tint was costing the banner its legibility to look
+              // like a banner.
               className="rounded-[var(--radius-lg)] border border-status-warning/40 p-3 space-y-2"
               role="alert"
               data-testid="terminal-info-error"
