@@ -3,8 +3,9 @@ import type { CIStatus } from "@shared/types/forge";
 
 /**
  * Every state gets a glyph, terminal or not (#12000). The non-terminal states
- * used to render a `bg-status-*` disc, which `forced-colors: active` strips to
- * nothing — pending and neutral simply disappeared while passing and failing
+ * used to render a disc painted with a status background, which
+ * `forced-colors: active` strips to nothing — pending and neutral simply
+ * disappeared while passing and failing
  * stayed. A stroked icon inherits `currentColor`, which the UA repaints, so the
  * shape carries the state where the palette no longer can.
  */

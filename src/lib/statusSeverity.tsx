@@ -7,8 +7,8 @@ import { cn } from "@/lib/utils";
  * id and the severity word lives only in the accessible name.
  *
  * A glyph, not a coloured dot: `forced-colors: active` forces every author
- * background to Canvas, so a `bg-status-*` disc renders as nothing at all and
- * takes the severity distinction with it (#12000). A Lucide glyph strokes in
+ * background to Canvas, so a disc painted with a status background renders as
+ * nothing at all and takes the severity distinction with it (#12000). A glyph strokes in
  * `currentColor`, which the UA repaints rather than erases, so the shape keeps
  * the levels apart where the palette can no longer tell them apart.
  *
