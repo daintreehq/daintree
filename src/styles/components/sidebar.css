@@ -42,6 +42,24 @@
     var(--sidebar-card-shadow, 0 0 #0000);
 }
 
+/* Accent restraint: exactly one accent anchor per focus region. While a
+   control inside the active row is drawing its own accent focus ring, the
+   full-strength selection edge and that ring are two load-bearing accent
+   shapes in one frame and neither reads as the anchor. Focus wins for as long
+   as it lasts — it is the transient thing the user is steering — so the
+   selection edge recedes to the same dimmed accent it already uses when the
+   sidebar loses focus entirely, rather than the ring changing colour depending
+   on which row it lands on.
+
+   `:has(:focus-visible)` and not `:focus-within`: the keyboard-cursor row
+   draws no ring at all (#8094), so on that path there is no second accent to
+   yield to and the edge must stay at full strength. */
+.sidebar-root .sidebar-worktree-card[data-active="true"]:has(:focus-visible) {
+  box-shadow:
+    inset -2px 0 0 color-mix(in srgb, var(--theme-accent-primary) 45%, transparent),
+    var(--sidebar-card-shadow, 0 0 #0000);
+}
+
 .sidebar-worktree-card[data-hoverable="true"]:hover,
 .sidebar-worktree-card[data-hovered="true"] {
   background: var(--sidebar-hover-bg, rgba(255, 255, 255, 0.03));
