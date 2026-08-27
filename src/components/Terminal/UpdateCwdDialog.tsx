@@ -79,7 +79,9 @@ export function UpdateCwdDialog({ isOpen, terminalId, currentCwd, onClose }: Upd
   return (
     <AppDialog isOpen={isOpen} onClose={onClose} size="md">
       <AppDialog.Header>
-        <AppDialog.Title icon={<FolderOpen className="w-5 h-5 text-daintree-accent" />}>
+        {/* Neutral, not accent: the header glyph is decoration, and this focus
+            region's one load-bearing accent is the keyboard focus ring. */}
+        <AppDialog.Title icon={<FolderOpen className="w-5 h-5 text-text-secondary" />}>
           Update Working Directory
         </AppDialog.Title>
         <AppDialog.CloseButton />
