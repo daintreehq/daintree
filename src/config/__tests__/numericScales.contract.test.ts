@@ -91,6 +91,45 @@ const MATCHERS: { re: RegExp; scale: Scale }[] = [
   },
 ];
 
+/**
+ * A fixed length can hide one hop behind a custom property: `--_size: 10px`
+ * consumed by `font-size: var(--_size)` never appears in a font-size declaration
+ * at all. Resolve one hop per file so what actually lands on the element is what
+ * gets classified — that indirection is how the toolbar chip stayed at 10px.
+ */
+function indirectHits(content: string): { token: string; line: number }[] {
+  const consumed = new Map<string, Scale>();
+  const consumers: { re: RegExp; scale: Scale }[] = [
+    { re: /(?:^|[^-\w])font-size\s*:\s*([^;}\n]+)/g, scale: "type" },
+    { re: /(?:^|[^-\w])border-(?:[a-z-]+-)?radius\s*:\s*([^;}\n]+)/g, scale: "radius" },
+  ];
+
+  for (const { re, scale } of consumers) {
+    re.lastIndex = 0;
+    for (const m of content.matchAll(re)) {
+      for (const name of primaryVarRefs(m[1] ?? "")) consumed.set(name, scale);
+    }
+  }
+
+  const hits: { token: string; line: number }[] = [];
+  for (const [name, scale] of consumed) {
+    // The scale's own steps are defined in terms of fixed offsets (`--radius-md:
+    // calc(var(--radius) - 2px)`) — that IS the scale, not an escape from it.
+    // Their correctness is the derivation and ladder tests' job, not this one's.
+    if (/^--(radius|text)(-|$)/.test(name)) continue;
+    const declaration = new RegExp(`^\\s*(${name})\\s*:\\s*([^;}\\n]+)`, "gm");
+    for (const m of content.matchAll(declaration)) {
+      const value = m[2];
+      if (value === undefined || !isOffender(value, scale)) continue;
+      hits.push({
+        token: `${name}: ${value.trim()}`,
+        line: content.slice(0, m.index ?? 0).split("\n").length,
+      });
+    }
+  }
+  return hits;
+}
+
 function isOffender(payload: string, scale: Scale): boolean {
   const unquoted = payload.replace(/^["'`]|["'`]$/g, "");
   if (/^-?\d+(?:\.\d+)?$/.test(unquoted)) return Number.parseFloat(unquoted) !== 0;
@@ -323,6 +362,13 @@ describe("numeric scales contract (#12033)", () => {
     for (const file of files) {
       const content = fs.readFileSync(file, "utf8");
       const rel = relative(file);
+
+      for (const indirect of indirectHits(content)) {
+        const key = `${rel}\u0000${indirect.token}`;
+        const hit = hits.get(key) ?? { file: rel, token: indirect.token, lines: [] };
+        hit.lines.push(indirect.line);
+        hits.set(key, hit);
+      }
 
       for (const { re, scale } of MATCHERS) {
         re.lastIndex = 0;
