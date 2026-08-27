@@ -176,7 +176,16 @@ export function UpstreamSyncBadge({
           {hasBehind && <span className="text-status-warning">↓{behindCount}</span>}
           {showBaseDivergence && (
             <>
-              <span className="text-text-muted/60">&Delta; {baseBranchName}</span>
+              {/* `text-secondary`, not `text-muted/60`: this names the branch
+                  the counts beside it are counted against, so it is the only
+                  thing that makes them mean anything. `text-muted` has no
+                  contrast floor on the darkest palettes and the /60 halved
+                  what was left — 1.45:1 on namib, 2.06:1 on bondi, so the
+                  branch name dropped out of a line whose green +N stayed
+                  legible beside it. The line is already 11px and sits under
+                  two brighter rows; that is where its de-emphasis comes
+                  from. */}
+              <span className="text-text-secondary">&Delta; {baseBranchName}</span>
               {baseAheadCount != null && baseAheadCount > 0 && (
                 <span className="text-status-success">↑{baseAheadCount}</span>
               )}

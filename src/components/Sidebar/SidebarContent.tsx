@@ -1525,7 +1525,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
     return (
       <div className="flex flex-col h-full">
         {worktreeLoadErrorBanner}
-        <div className="flex h-8 items-center px-3 border-b border-divider shrink-0">
+        <div className="flex items-center px-3 py-3 border-b border-divider shrink-0">
           <h2 className="truncate text-daintree-text font-semibold text-sm tracking-wide">
             Worktrees
           </h2>
@@ -1561,7 +1561,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
       <>
         <div className="flex flex-col h-full">
           {worktreeLoadErrorBanner}
-          <div className="flex h-8 items-center px-3 border-b border-divider shrink-0">
+          <div className="flex items-center px-3 py-3 border-b border-divider shrink-0">
             <h2 className="truncate text-daintree-text font-semibold text-sm tracking-wide">
               Worktrees
             </h2>
@@ -1662,9 +1662,15 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
           with no rail the header IS the bottom of the zone and keeps it.
           Stacking a header rule on a rail rule put two hairlines in the first
           90px of the sidebar and neither was carrying hierarchy (#11991). */}
+      {/* py-3, not a fixed h-8. The zone read as cramped against the window
+          chrome above it, and an even 12px rhythm — above the title, title to
+          field, field to list — is what a control zone needs before the eye
+          will treat it as one band rather than two stacked strips. The loading
+          and error branches above carry the same box, or the sidebar jumps as
+          a project resolves. */}
       <div
         className={cn(
-          "group/header @container/header flex h-8 items-center justify-between gap-1 px-3 bg-transparent shrink-0",
+          "group/header @container/header flex items-center justify-between gap-1 px-3 py-3 bg-transparent shrink-0",
           !hasNonMainWorktrees && "border-b border-divider"
         )}
       >

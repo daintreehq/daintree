@@ -113,7 +113,14 @@ export function NonMainSecondaryRow({
   ) : null;
 
   return (
-    <div className="flex flex-col gap-0.5 mt-1.5">
+    // gap-0.5 inside, mt-2.5 outside. These lines are one thing — branch,
+    // linked PR, upstream drift — and they read fine at 2px apart; what made
+    // the card feel oppressive was that the block sat only 6px under the
+    // headline, inside the 5-7px zone where the eye cannot tell whether a line
+    // belongs to the block above it or starts a new one. 10px puts it clearly
+    // outside, and holds the 2:1-to-3:1 outer-to-inner ratio the grouping
+    // convention asks for.
+    <div className="flex flex-col gap-0.5 mt-2.5">
       {worktree.issueNumber && (isPrOriginated || !hasDisplayTitle) && (
         <IssueBadge
           issueNumber={worktree.issueNumber}

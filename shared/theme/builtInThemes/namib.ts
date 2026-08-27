@@ -148,8 +148,8 @@ export const theme: BuiltInThemeSource = {
     "settings-search-bg": "#1F1B16",
     "sidebar-action-hover-bg": "rgba(214,181,142,0.04)",
     // Registry requires white-tint rgba here — do not re-ink into the sand family.
-    "sidebar-active-bg": "rgba(255,255,255,0.05)",
-    "sidebar-hover-bg": "rgba(255,255,255,0.03)",
+    "sidebar-active-bg": "rgba(255,255,255,0.065)",
+    "sidebar-hover-bg": "rgba(255,255,255,0.048)",
     "toolbar-agent-hover-bg": "rgba(214,181,142,0.05)",
     "toolbar-control-active-bg": "rgba(214,181,142,0.10)",
     "toolbar-control-armed-bg": "rgba(214,181,142,0.10)",

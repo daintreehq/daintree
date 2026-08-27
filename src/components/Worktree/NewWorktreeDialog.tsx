@@ -2,7 +2,7 @@ import { useState, useEffect, useRef, useMemo, useCallback, Fragment } from "rea
 import { useShallow } from "zustand/react/shallow";
 import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
-import { FolderGit2, Check, AlertCircle, ArrowRight, GitBranch } from "lucide-react";
+import { FolderGit2, Check, AlertCircle, GitBranch } from "lucide-react";
 import { isMac } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
@@ -46,6 +46,7 @@ import {
   IssueLinkerView,
   AssignIssueToggle,
   BranchModeControl,
+  BranchSummary,
   BaseBranchCombobox,
   ExistingBranchPicker,
   NewBranchInput,
@@ -993,21 +994,15 @@ export function NewWorktreeDialog({
   // line that used to sit under the branch input restating its own value.
   const outcomeSummary = isExistingMode ? (
     selectedExistingBranch ? (
-      <>
-        <GitBranch className="w-3 h-3 shrink-0" aria-hidden="true" />
-        <span className="truncate font-mono">{selectedExistingBranch}</span>
-      </>
+      <BranchSummary
+        branch={selectedExistingBranch}
+        icon={<GitBranch className="w-3 h-3 shrink-0" aria-hidden="true" />}
+      />
     ) : (
       <span className="truncate">Pick a branch to continue</span>
     )
   ) : parsedBranch.fullBranchName && baseBranch ? (
-    <>
-      <span className="truncate font-mono">{baseBranch}</span>
-      <ArrowRight className="w-3 h-3 shrink-0" aria-hidden="true" />
-      <span className="truncate font-mono text-daintree-text/80">
-        {parsedBranch.fullBranchName}
-      </span>
-    </>
+    <BranchSummary base={baseBranch} branch={parsedBranch.fullBranchName} />
   ) : (
     // Submit stays enabled on purpose — clicking it names what is missing,
     // which beats a disabled button that explains nothing. This is what keeps
@@ -1290,7 +1285,7 @@ export function NewWorktreeDialog({
             </Button>
           </>
         ) : (
-          <div className="flex items-center gap-3">
+          <div className="flex items-center gap-3 shrink-0">
             <Button variant="ghost" size="sm" onClick={handleRequestClose}>
               Cancel
             </Button>

@@ -108,16 +108,25 @@ function renderDetails(overrides: Partial<WorktreeDetailsSectionProps> = {}) {
   );
 }
 
-function renderTerminals(overrides: { variant?: "sidebar" | "grid"; isExpanded?: boolean } = {}) {
+function renderTerminals(
+  overrides: {
+    variant?: "sidebar" | "grid";
+    isExpanded?: boolean;
+    total?: number;
+    onStartSession?: () => void;
+  } = {}
+) {
+  const total = overrides.total ?? 1;
   return render(
     <TooltipProvider>
       <WorktreeTerminalSection
         worktreeId="wt-1"
         variant={overrides.variant}
         isExpanded={overrides.isExpanded ?? false}
-        counts={{ total: 1, byState: {} } as never}
-        terminals={[terminal]}
+        counts={{ total, byState: {} } as never}
+        terminals={total === 0 ? [] : [terminal]}
         onToggle={noop}
+        onStartSession={"onStartSession" in overrides ? overrides.onStartSession : noop}
         onTerminalSelect={noop}
       />
     </TooltipProvider>
@@ -125,14 +134,17 @@ function renderTerminals(overrides: { variant?: "sidebar" | "grid"; isExpanded?:
 }
 
 /**
- * A "well" is the combination that makes an element read as a card: a visible
- * border AND a surface fill of its own. Either alone is a legitimate tool;
- * together, inside a row that is already a card, they add a containment level.
+ * A "well" is the combination that makes an element read as a contained
+ * region: a visible border AND a surface fill of its own.
+ *
+ * Matches any fill token, not just `bg-surface-inset`. Pinning it to one token
+ * meant a well built from a different surface passed straight through, and the
+ * assertions below silently stopped defending anything.
  */
 function isWell(el: Element): boolean {
   const cls = el.className.toString();
   const hasBorder = /(^|\s|:)border(\s|$|-[trbl]\b)/.test(cls) || /\sborder\s/.test(` ${cls} `);
-  const hasFill = /\bbg-surface-inset\b/.test(cls);
+  const hasFill = /\bbg-(surface|overlay)-[a-z-]+\b/.test(cls);
   return hasBorder && hasFill;
 }
 
@@ -140,25 +152,125 @@ function wellCount(container: HTMLElement): number {
   return Array.from(container.querySelectorAll("*")).filter(isWell).length;
 }
 
-describe("sidebar card containment", () => {
-  it("adds no bordered-and-filled plane of its own in the sidebar, in either disclosure state", () => {
-    for (const isExpanded of [false, true]) {
-      const { container, unmount } = renderDetails({ variant: "sidebar", isExpanded });
-      expect(
-        wellCount(container),
-        `sidebar Details (expanded=${isExpanded}) introduced a nested card-like well`
-      ).toBe(0);
-      unmount();
-    }
+describe("sidebar session well", () => {
+  it("still renders with no sessions, so every card in the list ends the same way", () => {
+    // An idle card that simply stops has nothing closing it off, and in a list
+    // where only some cards end on a well the rhythm breaks at exactly the
+    // cards with the least shape of their own.
+    const { container, unmount } = renderTerminals({ variant: "sidebar", total: 0 });
+    expect(container.firstElementChild, "sidebar tray vanished when empty").toBeTruthy();
+    unmount();
+  });
 
-    for (const isExpanded of [false, true]) {
-      const { container, unmount } = renderTerminals({ variant: "sidebar", isExpanded });
+  it("names the next action when empty rather than reporting the absence", () => {
+    const { container, unmount } = renderTerminals({ variant: "sidebar", total: 0 });
+    const text = container.textContent ?? "";
+    expect(
+      /no sessions/i.test(text),
+      "an empty well must not spend a row saying nothing is there — repeated down the sidebar that is all it says"
+    ).toBe(false);
+    expect(text.trim().length, "an empty tray still has to say something").toBeGreaterThan(0);
+    unmount();
+  });
+
+  it("makes the empty tray actually actionable, since it presents itself as an action", () => {
+    const onStartSession = vi.fn();
+    const { container, unmount } = renderTerminals({
+      variant: "sidebar",
+      total: 0,
+      onStartSession,
+    });
+    const control = container.querySelector("button");
+    expect(control, "the empty tray offers an action, so it must be a control").toBeTruthy();
+    control!.dispatchEvent(new MouseEvent("click", { bubbles: true }));
+    expect(onStartSession).toHaveBeenCalledTimes(1);
+    unmount();
+  });
+
+  it("drops the empty tray when the caller has no session to start", () => {
+    // The tray IS a `Start a session` button, so a caller that cannot start
+    // one (DeletedWorktreeCard — the worktree's directory is gone) must get no
+    // tray rather than a focusable control that does nothing.
+    const { container, unmount } = renderTerminals({
+      variant: "sidebar",
+      total: 0,
+      onStartSession: undefined,
+    });
+    expect(container.firstElementChild, "empty tray rendered with no action behind it").toBeNull();
+    unmount();
+  });
+
+  it("drops the section entirely in the grid variant, which needs no terminator", () => {
+    const { container, unmount } = renderTerminals({ variant: "grid", total: 0 });
+    expect(container.firstElementChild).toBeNull();
+    unmount();
+  });
+
+  it("adds no full-width rule that could be mistaken for a card boundary", () => {
+    // The card boundary is the only full-bleed line in this list. The well
+    // carries a perimeter, which is a different shape and cannot be confused
+    // with it; a stray full-width border-t could be.
+    for (const total of [0, 1]) {
+      const { container, unmount } = renderTerminals({ variant: "sidebar", total });
+      const withTopRule = Array.from(container.querySelectorAll("*")).filter((el) =>
+        /\bborder-t\b/.test(el.className.toString())
+      );
       expect(
-        wellCount(container),
-        `sidebar Active sessions (expanded=${isExpanded}) introduced a nested card-like well`
+        withTopRule.length,
+        `sidebar sessions (total=${total}) reintroduced a full-width rule that competes with the card boundary`
       ).toBe(0);
       unmount();
     }
+  });
+});
+
+describe("sidebar card containment", () => {
+  it("wells Details only once it has a body to hold", () => {
+    // Collapsed, Details is a single row, and a well around one row is a box
+    // around nothing — that is the nesting #11992 was right to remove.
+    // Expanded, it has content of its own, and the contour is what says the
+    // content belongs to it rather than to the card at large. Same rule the
+    // session well follows, which is why the two read as peers.
+    const collapsed = renderDetails({ variant: "sidebar", isExpanded: false });
+    expect(wellCount(collapsed.container), "collapsed Details should be a bare row").toBe(0);
+    collapsed.unmount();
+
+    const expanded = renderDetails({ variant: "sidebar", isExpanded: true });
+    expect(wellCount(expanded.container), "expanded Details should be exactly one well").toBe(1);
+    expanded.unmount();
+  });
+
+  it("spends exactly one well on the sidebar card, and spends it on sessions", () => {
+    // The count is the rule. #11992 flattened this to zero and the cards
+    // merged; the fixes that followed went the other way — a full-bleed tray,
+    // then a title band and a footer band — and each one grouped ACROSS cards,
+    // because a region touching both card edges binds to whatever is adjacent
+    // to it. A well cannot: its inset and perimeter close it, so it belongs to
+    // the card whose padding contains it. One, contained, at the bottom.
+    for (const isExpanded of [false, true]) {
+      for (const total of [0, 1]) {
+        const { container, unmount } = renderTerminals({ variant: "sidebar", isExpanded, total });
+        expect(
+          wellCount(container),
+          `sidebar sessions (expanded=${isExpanded}, total=${total}) should be exactly one well`
+        ).toBe(1);
+        unmount();
+      }
+    }
+  });
+
+  it("keeps the session well inset, which is what attaches it to its own card", () => {
+    // A full-bleed fill is ambiguous by construction: footer of this card, or
+    // header of the next? The inset is the whole argument for the well.
+    const { container, unmount } = renderTerminals({ variant: "sidebar", isExpanded: false });
+    const well = Array.from(container.querySelectorAll("*")).find(isWell);
+    expect(well, "no well found").toBeTruthy();
+    const cls = well!.className.toString();
+    expect(
+      /(^|\s)-m[xl]?-/.test(cls),
+      "the session well must not bleed past the card's padding"
+    ).toBe(false);
+    unmount();
   });
 
   it("keeps the well in the grid variant, where the card is a standalone surface", () => {

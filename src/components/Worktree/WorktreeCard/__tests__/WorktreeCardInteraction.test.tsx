@@ -21,6 +21,24 @@ const terminalSectionSource = readFileSync(
 );
 const envPopoverSource = readFileSync(resolve(__dirname, "../EnvironmentPopover.tsx"), "utf-8");
 
+/** The grip's transition declaration, which lives in sidebar.css because the
+ *  two stages run on two different timings. */
+function gripTransitionRule(): string {
+  // Anchored to the start of a line: the keyboard-reveal rule above ends its
+  // selector list with the same attribute and would match first.
+  const block = sidebarCss.match(/^\[data-worktree-row-drag-handle\]\s*{([^}]*)}/m);
+  const body = block?.[1];
+  if (!body) throw new Error("no [data-worktree-row-drag-handle] rule in sidebar.css");
+  return body;
+}
+
+/** Resolve `transition: <prop> var(--duration-N) ...` to milliseconds. */
+function transitionDurationMs(rule: string, property: string): number {
+  const match = rule.match(new RegExp(`${property}\\s+var\\(--duration-(\\d+)\\)`));
+  if (!match) throw new Error(`no transition entry for ${property}`);
+  return Number(match[1]);
+}
+
 describe("WorktreeCard interaction-state axes (issue #6963)", () => {
   it("marks the panel drop-target via data-drop-target, painted as an inset ring in CSS", () => {
     expect(cardSource).toMatch(/data-drop-target=\{isPanelDropTarget \? "true" : undefined\}/);
@@ -54,8 +72,22 @@ describe("WorktreeCard interaction-state axes (issue #6963)", () => {
     );
   });
 
-  it("delays the drag-handle hover reveal to filter fast cursor sweeps", () => {
-    expect(cardSource).toContain("group-hover/card:delay-[50ms]");
+  it("reveals the drag-handle dots on the fast tier, with nothing gating them", () => {
+    // Was a 50ms delay on a 150ms fade, to filter fast cursor sweeps. The
+    // dots appear directly under a pointer that is already sitting on them,
+    // so the filtering cost more than it bought: the mark arrived after the
+    // eye had landed on the spot it was going to occupy, which reads as lag
+    // rather than as motion.
+    //
+    // Assert the rule, not the number: opacity resolves faster than the
+    // 150ms state-change tier the backplate uses, and no delay stands in
+    // front of it.
+    const rule = gripTransitionRule();
+    const opacityMs = transitionDurationMs(rule, "opacity");
+    const plateMs = transitionDurationMs(rule, "background-color");
+    expect(opacityMs).toBeGreaterThan(0);
+    expect(opacityMs).toBeLessThan(plateMs);
+    expect(cardSource).not.toContain("delay-[50ms]");
   });
 });
 
@@ -179,11 +211,24 @@ describe("WorktreeCard disabled drag handle (issue #8395)", () => {
     expect(cardSource).toContain("{...dragHandleListeners}");
   });
 
-  it("preserves the group-hover delay on the enabled grip", () => {
-    expect(cardSource).toContain("group-hover/card:delay-[50ms]");
+  it("leaves the enabled grip's reveal timing to the stylesheet", () => {
+    // Two properties, two durations — a Tailwind `duration-*` utility cannot
+    // express that, so the grip must not carry one at all or it would flatten
+    // both channels onto whichever value it names.
+    expect(cardSource).not.toMatch(/data-worktree-row-drag-handle[\s\S]{0,600}?duration-\d+/);
+    expect(gripTransitionRule()).toContain("opacity");
   });
 
   it("gates the grip block on dragHandleListeners OR isDragHandleDisabled", () => {
-    expect(cardSource).toMatch(/\(dragHandleListeners\s*\|\|\s*isDragHandleDisabled\)\s*&&/);
+    // The gate is a named flag rather than the expression inlined at each use
+    // site: the card reads it three times now (the grip, the body padding, and
+    // the data attribute the footer aligns off), and three copies of the same
+    // condition is three chances for them to disagree about whether the row
+    // has a grip. Assert the definition and that nothing has drifted back to
+    // testing the raw expression in place.
+    expect(cardSource).toMatch(
+      /const hasRowDragHandle =\s*Boolean\(dragHandleListeners\)\s*\|\|\s*isDragHandleDisabled;/
+    );
+    expect(cardSource).toMatch(/\{hasRowDragHandle &&/);
   });
 });

@@ -1,4 +1,5 @@
 import { cn } from "@/lib/utils";
+import { SECTION_TEXT_COLUMN } from "./sectionChrome";
 import { isValidPastTimestamp } from "@/utils/timestamps";
 import { LiveTimeAgo } from "../LiveTimeAgo";
 
@@ -40,6 +41,9 @@ export function FocusedSubLine({
       <div
         className={cn(
           "flex min-w-0 items-center gap-1.5 pb-1 text-xs text-text-secondary",
+          // Lands on the card's text column, under the title it summarises,
+          // rather than on the glyph column one tier left of it.
+          SECTION_TEXT_COLUMN,
           "opacity-0 delay-[30ms] data-[open]:opacity-100",
           "transition-opacity duration-150 ease-out",
           "motion-reduce:transition-none motion-reduce:opacity-100 motion-reduce:delay-0"

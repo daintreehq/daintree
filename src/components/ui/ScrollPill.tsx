@@ -37,9 +37,17 @@ export const ScrollPill = forwardRef<HTMLButtonElement, ScrollPillProps>(
         ref={ref}
         className={cn(
           "pointer-events-auto rounded-full",
-          "bg-daintree-bg/90 border border-daintree-border/40 text-daintree-text shadow-[var(--theme-shadow-floating)]",
+          // Opaque, and painted in the elevated-panel surface rather than the
+          // app background. This pill floats OVER a list, so its whole job is
+          // to occlude — and at `bg-daintree-bg/90` it did not: the app
+          // background is a step BELOW the surfaces it covers, so over a
+          // sidebar card it landed roughly one level off the card's own fill
+          // and the 10% let the text through. The covered glyphs stayed
+          // legible under it, so a card headline read as its own text
+          // interleaved with the pill's chevron and count.
+          "bg-surface-panel-elevated border border-daintree-border text-daintree-text shadow-[var(--theme-shadow-floating)]",
           "text-xs font-medium cursor-pointer",
-          "hover:bg-daintree-bg hover:border-daintree-border/60",
+          "hover:bg-overlay-subtle hover:border-border-strong",
           // Tailwind v4 translate-* emits the individual `translate` property,
           // which `transform` in a transition list does NOT cover — list it
           // explicitly or the slide snaps and only the fade animates.

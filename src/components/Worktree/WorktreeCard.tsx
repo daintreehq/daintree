@@ -202,6 +202,7 @@ export function WorktreeCard({
 
   const canCollapse = variant !== "grid";
   const effectiveIsCollapsed = canCollapse && isCollapsed;
+  const hasRowDragHandle = Boolean(dragHandleListeners) || isDragHandleDisabled;
 
   const handleToggleCollapse = (e: React.MouseEvent) => {
     e.stopPropagation();
@@ -836,7 +837,11 @@ export function WorktreeCard({
           ref={droppableRef}
           className={cn(
             "sidebar-worktree-card group/card relative isolate transition-colors duration-150",
-            variant === "sidebar" && "border-b border-border-default",
+            // The sidebar card's resting plane, its 2px gutter and its
+            // selection overlay all live in sidebar.css — they have to, since
+            // that unlayered file's declarations override layered utilities on
+            // the same element.
+
             variant === "grid" && "rounded-lg border border-divider bg-overlay-subtle",
             isActive && variant !== "sidebar" && "bg-surface-panel-elevated",
             !isActive &&
@@ -855,7 +860,12 @@ export function WorktreeCard({
               "before:absolute before:right-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-l before:bg-daintree-accent before:content-['']",
             isBeingDeleted && !deleteError && "opacity-50 pointer-events-none"
           )}
+          // sidebar.css scopes the card's plane, gutter and hover states to
+          // this — the class alone is on both variants, and that file is
+          // unlayered, so an unscoped rule silently repaints the grid card.
+          data-variant={variant}
           data-active={isActive && variant === "sidebar" ? "true" : undefined}
+          data-has-grip={variant === "sidebar" && hasRowDragHandle ? "true" : undefined}
           data-hoverable={!isActive && variant === "sidebar" ? "true" : undefined}
           data-hovered={isFocused && !isActive && variant === "sidebar" ? "true" : undefined}
           data-drop-target={isPanelDropTarget ? "true" : undefined}
@@ -918,39 +928,6 @@ export function WorktreeCard({
               data-testid="worktree-card-input-receipt"
             />
           )}
-          {chipState !== null && (
-            <Tooltip>
-              <TooltipTrigger asChild>
-                <div
-                  className={cn(
-                    "status-mark absolute w-3 h-3 z-10 cursor-default",
-                    chipState === "waiting" && "bg-activity-waiting",
-                    chipState === "cleanup" && "bg-pr-merged",
-                    chipState === "complete" && "bg-category-blue",
-                    variant === "sidebar" ? "top-0 left-[1px]" : "top-0 left-0 rounded-tl-lg"
-                  )}
-                  style={{ clipPath: "polygon(0 0, 100% 0, 0 100%)" }}
-                  role="img"
-                  aria-label={
-                    {
-                      waiting: "Agent waiting for input",
-                      cleanup: "Ready for cleanup",
-                      complete: "Complete: in review",
-                    }[chipState]
-                  }
-                />
-              </TooltipTrigger>
-              <TooltipContent side="right" align="start" className="text-xs">
-                {
-                  {
-                    waiting: "Agent waiting for input",
-                    cleanup: "Ready for cleanup",
-                    complete: "Complete: in review",
-                  }[chipState]
-                }
-              </TooltipContent>
-            </Tooltip>
-          )}
           {isMultiSelectEnabled && (
             <div
               className={cn(
@@ -991,7 +968,7 @@ export function WorktreeCard({
             </div>
           )}
           <div className="relative z-10 flex">
-            {(dragHandleListeners || isDragHandleDisabled) &&
+            {hasRowDragHandle &&
               (isDragHandleDisabled ? (
                 <Tooltip>
                   <TooltipTrigger asChild>
@@ -1013,10 +990,29 @@ export function WorktreeCard({
                   ref={dragHandleActivatorRef}
                   data-worktree-row-drag-handle=""
                   className={cn(
-                    "shrink-0 w-4 flex items-center justify-center cursor-grab active:cursor-grabbing touch-none select-none transition-colors group-hover/card:delay-[50ms] motion-reduce:transition-none",
+                    // Timing lives in sidebar.css: opacity needs the 75ms
+                    // tier and the plate the 150ms one, and a Tailwind
+                    // `duration-*` utility cannot give two properties two
+                    // durations.
+                    "shrink-0 w-4 flex items-center justify-center cursor-grab active:cursor-grabbing touch-none select-none motion-reduce:transition-none",
                     isDraggingSort
                       ? "bg-overlay-emphasis text-text-primary"
-                      : "text-text-primary/25 group-hover/card:text-text-primary/40 group-hover/card:bg-overlay-soft"
+                      : // Card hover brightens the glyph only. The backplate
+                        // used to come with it, and since the grip is a
+                        // full-height column that painted a bar down the whole
+                        // card — the most prominent thing on a row whose point
+                        // is the worktree, for a control most hovers never
+                        // wanted. The plate now waits for the pointer to
+                        // actually reach the grip.
+                        // Two stages, and they are different questions. The
+                        // dots answer "can this be dragged?" — the card is the
+                        // right scope for that, so they fade in with it and
+                        // are absent at rest. The column plate answers "am I
+                        // about to drag?" and only the grip itself can answer
+                        // that; painting it on card hover ran a lit bar down
+                        // the whole card for a control most hovers never
+                        // wanted.
+                        "opacity-0 text-text-primary/40 group-hover/card:opacity-100 hover:bg-overlay-soft hover:text-text-primary/70 hover:opacity-100"
                   )}
                   // Pointer-only affordance: the grip is non-focusable (the row
                   // strips dnd-kit's role/tabIndex), so an aria-label here is
@@ -1025,65 +1021,98 @@ export function WorktreeCard({
                   aria-hidden="true"
                   {...dragHandleListeners}
                 >
+                  {/* Centred in the column, not pinned to the title row.
+                      Once the column paints a plate down the full height of
+                      the card it is an object in its own right, and its
+                      contents belong in the middle of it — dots hanging off
+                      the top of a 160px bar read as misplaced rather than as
+                      anchored. Products that align a grip to the title line
+                      (Linear, Notion) do not paint that bar.
+
+                      This is also the only version that needs no knowledge of
+                      the header's height. Pinning to the title meant sizing a
+                      box off a number the header owns, which drifts the moment
+                      its trailing buttons change — it was already 2.5px out.
+                      `items-center` on a stretched flex child has nothing to
+                      drift from. */}
                   <GripVertical className="w-3 h-3" />
                 </div>
               ))}
-            <div
-              className={cn(
-                "flex-1 min-w-0 py-3",
-                dragHandleListeners || isDragHandleDisabled ? "pl-1 pr-4" : "px-4"
-              )}
-            >
-              <WorktreeHeader
-                worktree={worktree}
-                isActive={isActive}
-                variant={variant}
-                isMuted={isMuted}
-                isProjectNotificationsMuted={isProjectNotificationsMuted}
-                isMainWorktree={isMainWorktree}
-                isMainOnStandardBranch={isMainOnStandardBranch}
-                isPinned={isPinned}
-                isCollapsed={effectiveIsCollapsed}
-                canCollapse={canCollapse}
-                onToggleCollapse={handleToggleCollapse}
-                contentId={`worktree-body-${worktree.id}`}
-                branchLabel={branchLabel}
-                sessionStates={terminalCounts.byState}
-                sessionTotal={terminalCounts.total}
-                environmentIcon={environmentIcon}
-                isLifecycleRunning={isLifecycleRunning}
-                resourceStatusLabel={resourceStatusLabel}
-                resourceStatusColor={resourceStatusColor}
-                resourceLastOutput={worktree.resourceStatus?.lastOutput}
-                resourceEndpoint={worktree.resourceStatus?.endpoint}
-                resourceLastCheckedAt={worktree.resourceStatus?.lastCheckedAt}
-                devServerSession={devServerSession}
-                lastGitStatusCheckedAt={lastGitStatusCheckedAt}
-                onRevalidateGitStatus={handleRevalidate}
-                onCheckResourceStatus={hasStatusCommand ? handleResourceStatus : undefined}
-                onCleanupWorktree={
-                  chipState === "cleanup" && !isMainWorktree
-                    ? () => setShowDeleteDialog(true)
-                    : undefined
-                }
-                badges={{
-                  onOpenIssue: worktree.issueNumber ? handleOpenIssueExternal : undefined,
-                  onOpenPR: worktree.linked?.pr ? handleOpenPRExternal : undefined,
-                  onOpenPlan: openPlanFileForThisWorktree,
-                }}
-                gitStateIndicator={gitStateIndicator}
-                menu={menuActions}
-              />
+            {/* One content column for the whole card, header and body alike,
+                and one column for every card in the list. The grip is a
+                sibling of this column rather than something the header pads
+                around, so the header used to indent past it while the body
+                indented past nothing, and the main worktree — which has no
+                grip at all — indented past neither. Three columns in one
+                list. Now the grip's own 16px IS the inset when it is there,
+                and pl-4 stands in for it when it is not, so text starts on
+                the same x in every card and the grip column can run the card
+                top to bottom. */}
+            <div className={cn("flex-1 min-w-0 pr-4", hasRowDragHandle ? "pl-0" : "pl-4")}>
+              {/* pt-2 only: the body below supplies the gap to the next row.
+                  Both spending 8px put 16px between the branch line and the
+                  commit row, which read as a break in the middle of one
+                  cluster rather than as the space between two. */}
+              <div className="pt-2">
+                <WorktreeHeader
+                  worktree={worktree}
+                  isActive={isActive}
+                  variant={variant}
+                  isMuted={isMuted}
+                  isProjectNotificationsMuted={isProjectNotificationsMuted}
+                  isMainWorktree={isMainWorktree}
+                  isMainOnStandardBranch={isMainOnStandardBranch}
+                  isPinned={isPinned}
+                  chipState={chipState}
+                  isCollapsed={effectiveIsCollapsed}
+                  canCollapse={canCollapse}
+                  onToggleCollapse={handleToggleCollapse}
+                  contentId={`worktree-body-${worktree.id}`}
+                  branchLabel={branchLabel}
+                  sessionStates={terminalCounts.byState}
+                  sessionTotal={terminalCounts.total}
+                  environmentIcon={environmentIcon}
+                  isLifecycleRunning={isLifecycleRunning}
+                  resourceStatusLabel={resourceStatusLabel}
+                  resourceStatusColor={resourceStatusColor}
+                  resourceLastOutput={worktree.resourceStatus?.lastOutput}
+                  resourceEndpoint={worktree.resourceStatus?.endpoint}
+                  resourceLastCheckedAt={worktree.resourceStatus?.lastCheckedAt}
+                  devServerSession={devServerSession}
+                  lastGitStatusCheckedAt={lastGitStatusCheckedAt}
+                  onRevalidateGitStatus={handleRevalidate}
+                  onCheckResourceStatus={hasStatusCommand ? handleResourceStatus : undefined}
+                  onCleanupWorktree={
+                    chipState === "cleanup" && !isMainWorktree
+                      ? () => setShowDeleteDialog(true)
+                      : undefined
+                  }
+                  badges={{
+                    onOpenIssue: worktree.issueNumber ? handleOpenIssueExternal : undefined,
+                    onOpenPR: worktree.linked?.pr ? handleOpenPRExternal : undefined,
+                    onOpenPlan: openPlanFileForThisWorktree,
+                  }}
+                  gitStateIndicator={gitStateIndicator}
+                  menu={menuActions}
+                />
 
-              <FocusedSubLine
-                open={!isMainWorktree && effectiveIsCollapsed && (isActive || isFocused)}
-                changedFileCount={worktree.worktreeChanges?.changedFileCount}
-                lastActivityTimestamp={worktree.lastActivityTimestamp}
-                statusLabel={lifecycleLabel ?? resourceStatusLabel ?? null}
-              />
+                <FocusedSubLine
+                  open={!isMainWorktree && effectiveIsCollapsed && (isActive || isFocused)}
+                  changedFileCount={worktree.worktreeChanges?.changedFileCount}
+                  lastActivityTimestamp={worktree.lastActivityTimestamp}
+                  statusLabel={lifecycleLabel ?? resourceStatusLabel ?? null}
+                />
+              </div>
 
+              {/* pt-2, not pt-1. With the collapsed Details row's own 4px that
+                  puts 12px between the metadata cluster and the body, against
+                  2px between the metadata lines themselves — a 6:1 outer-to-
+                  inner ratio where the convention is 2:1 to 3:1, and 8-12px is
+                  where an 11px line stops reading as part of the block above
+                  it. At 4px the cluster was crowded against the body and the
+                  whole card read as one undifferentiated mass. */}
               {!effectiveIsCollapsed && (
-                <div id={`worktree-body-${worktree.id}`}>
+                <div id={`worktree-body-${worktree.id}`} className="pb-2.5 pt-2">
                   {worktree.isWslPath && !worktree.wslGitOptIn && !worktree.wslGitDismissed && (
                     <WslGitBanner
                       worktreeId={worktree.id}
@@ -1130,6 +1159,7 @@ export function WorktreeCard({
                   <WorktreeTerminalSection
                     variant={variant}
                     worktreeId={worktree.id}
+                    onStartSession={handleOpenPanelPalette}
                     isExpanded={isTerminalsExpanded}
                     counts={terminalCounts}
                     terminals={worktreeTerminals}
@@ -1138,37 +1168,37 @@ export function WorktreeCard({
                   />
                 </div>
               )}
-
-              {deleteError && (
-                <WorktreeDeleteErrorBanner
-                  message={deleteError}
-                  onRetry={handleRetryDelete}
-                  onDismiss={handleDismissDeleteError}
-                />
-              )}
-
-              {issueError && (
-                <WorktreeIssueErrorBanner
-                  message={issueError.message}
-                  mutationType={issueError.type}
-                  onRetry={handleRetryIssue}
-                  onDismiss={handleDismissIssueError}
-                />
-              )}
-
-              <WorktreeDialogs
-                worktree={worktree}
-                confirmDialog={confirmDialog}
-                onCloseConfirm={closeConfirmDialog}
-                showDeleteDialog={showDeleteDialog}
-                onCloseDeleteDialog={() => setShowDeleteDialog(false)}
-                showIssuePicker={showIssuePicker}
-                onCloseIssuePicker={() => setShowIssuePicker(false)}
-                onAttachIssue={handleAttachIssue}
-                onDetachIssue={handleDetachIssue}
-              />
             </div>
           </div>
+
+          {deleteError && (
+            <WorktreeDeleteErrorBanner
+              message={deleteError}
+              onRetry={handleRetryDelete}
+              onDismiss={handleDismissDeleteError}
+            />
+          )}
+
+          {issueError && (
+            <WorktreeIssueErrorBanner
+              message={issueError.message}
+              mutationType={issueError.type}
+              onRetry={handleRetryIssue}
+              onDismiss={handleDismissIssueError}
+            />
+          )}
+
+          <WorktreeDialogs
+            worktree={worktree}
+            confirmDialog={confirmDialog}
+            onCloseConfirm={closeConfirmDialog}
+            showDeleteDialog={showDeleteDialog}
+            onCloseDeleteDialog={() => setShowDeleteDialog(false)}
+            showIssuePicker={showIssuePicker}
+            onCloseIssuePicker={() => setShowIssuePicker(false)}
+            onAttachIssue={handleAttachIssue}
+            onDetachIssue={handleDetachIssue}
+          />
         </div>
       </ContextMenuTrigger>
       <ContextMenuContent className="w-64">
