@@ -113,7 +113,7 @@ export function AgentSelectorDropdown({
                   {!selectedAgent.selected && (
                     <>
                       <span
-                        className="w-1.5 h-1.5 rounded-full bg-daintree-text/30"
+                        className="status-mark w-1.5 h-1.5 rounded-full bg-daintree-text/30"
                         aria-hidden="true"
                       />
                       <span className="sr-only">Not in workflow</span>
@@ -122,7 +122,7 @@ export function AgentSelectorDropdown({
                   {selectedAgent.dangerousEnabled && (
                     <>
                       <span
-                        className="w-1.5 h-1.5 rounded-full bg-status-error"
+                        className="status-mark w-1.5 h-1.5 rounded-full bg-status-error"
                         aria-hidden="true"
                       />
                       <span className="sr-only">Skip permissions enabled</span>
@@ -221,7 +221,7 @@ export function AgentSelectorDropdown({
                         {!item.agent.selected && (
                           <>
                             <span
-                              className="w-1.5 h-1.5 rounded-full bg-daintree-text/30"
+                              className="status-mark w-1.5 h-1.5 rounded-full bg-daintree-text/30"
                               aria-hidden="true"
                             />
                             <span className="sr-only">Not in workflow</span>
@@ -230,7 +230,7 @@ export function AgentSelectorDropdown({
                         {item.agent.dangerousEnabled && (
                           <>
                             <span
-                              className="w-1.5 h-1.5 rounded-full bg-status-error"
+                              className="status-mark w-1.5 h-1.5 rounded-full bg-status-error"
                               aria-hidden="true"
                             />
                             <span className="sr-only">Skip permissions enabled</span>

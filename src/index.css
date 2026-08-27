@@ -2897,6 +2897,21 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     border: 1px solid CanvasText;
   }
 
+  /* Shared hook for status marks painted as a background — the small discs and
+     the rotated anomaly diamond scattered across settings, panels, the toolbar
+     and the worktree surfaces (#12000). The UA forces every one of those fills
+     to Canvas, so the mark renders as nothing; `ring-*` is no rescue either
+     since it compiles to box-shadow, which is removed outright and cannot be
+     repainted. Repaint the fill instead.
+
+     One CanvasText disc for all of them on purpose: hue is gone here whatever we
+     do, so this rule only owes that the mark is still THERE. Marks whose
+     severity is the signal do not use this hook — they carry a glyph from
+     `src/lib/statusSeverity.ts`, whose shape survives where colour cannot. */
+  .status-mark {
+    background-color: CanvasText !important;
+  }
+
   /* Project-switcher row marks. The solid states are a CSS background, which
      forced colors pushes toward Canvas, so the whole 8px slot would read as
      empty. Repaint them as a CanvasText disc: hue is gone here either way, and

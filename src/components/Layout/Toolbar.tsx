@@ -548,7 +548,7 @@ function AgentOverflowItem({
           <span
             aria-hidden="true"
             className={cn(
-              "absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full ring-1 ring-daintree-bg",
+              "status-mark absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full ring-1 ring-daintree-bg",
               dotColor
             )}
           />

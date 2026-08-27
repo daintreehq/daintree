@@ -331,7 +331,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                     <span className="flex items-center gap-1.5 text-text-secondary">
                       <span
                         aria-hidden="true"
-                        className="inline-block w-2 h-2 rounded-full bg-text-secondary animate-pulse-immediate shrink-0"
+                        className="status-mark inline-block w-2 h-2 rounded-full bg-text-secondary animate-pulse-immediate shrink-0"
                       />
                       <span className="truncate">{lifecycleLabel}</span>
                     </span>

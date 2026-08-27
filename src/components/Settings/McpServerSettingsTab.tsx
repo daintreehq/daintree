@@ -636,7 +636,7 @@ export function McpServerSettingsTab() {
               ) : null
             ) : runtimeSnapshot.state === "starting" ? (
               <div className="flex items-center gap-2">
-                <div className="w-2 h-2 rounded-full bg-daintree-text/30 shrink-0" />
+                <div className="status-mark w-2 h-2 rounded-full bg-daintree-text/30 shrink-0" />
                 <span className="text-xs text-daintree-text/60">Server is starting…</span>
               </div>
             ) : runtimeSnapshot.state === "failed" ? (
@@ -650,7 +650,7 @@ export function McpServerSettingsTab() {
             ) : (
               <div className="contents">
                 <div className="flex items-center gap-2">
-                  <div className="w-2 h-2 rounded-full bg-status-success shrink-0" />
+                  <div className="status-mark w-2 h-2 rounded-full bg-status-success shrink-0" />
                   <span className="text-xs text-daintree-text/60">Running on port {boundPort}</span>
                 </div>
 
@@ -938,7 +938,7 @@ export function McpServerSettingsTab() {
             ) : (
               <div className="contents">
                 <div className="flex items-center gap-2 p-3 rounded-[var(--radius-md)] bg-daintree-bg border border-daintree-border">
-                  <div className="w-2 h-2 rounded-full bg-daintree-text/30" />
+                  <div className="status-mark w-2 h-2 rounded-full bg-daintree-text/30" />
                   <span className="text-xs text-daintree-text/60">
                     Key will be generated when the server starts.
                   </span>

@@ -281,11 +281,20 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
   );
 }
 
+const TASK_STATUS_LABEL: Record<TaskStatus, string> = {
+  running: "Running",
+  restarting: "Restarting",
+  success: "Finished",
+  failed: "Failed",
+};
+
 function StatusDot({ status }: { status: TaskStatus }) {
   return (
     <span
+      role="img"
+      aria-label={TASK_STATUS_LABEL[status]}
       className={cn(
-        "h-1.5 w-1.5 rounded-full shrink-0",
+        "status-mark h-1.5 w-1.5 rounded-full shrink-0",
         status === "running" && "bg-status-success animate-activity-pulse",
         status === "restarting" && "bg-status-warning animate-activity-pulse",
         status === "success" && "bg-status-success",

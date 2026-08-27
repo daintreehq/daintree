@@ -889,7 +889,7 @@ export function WorktreeOverviewModal({
                           : "hover:bg-tint/[0.04]"
                       )}
                     >
-                      <span className="w-1.5 h-1.5 rounded-full bg-status-warning" />
+                      <span className="status-mark w-1.5 h-1.5 rounded-full bg-status-warning" />
                       <span
                         className={
                           quickStateFilter === "waiting"
@@ -916,7 +916,7 @@ export function WorktreeOverviewModal({
                           : "hover:bg-tint/[0.04]"
                       )}
                     >
-                      <span className="w-1.5 h-1.5 rounded-full bg-category-blue" />
+                      <span className="status-mark w-1.5 h-1.5 rounded-full bg-category-blue" />
                       <span
                         className={
                           quickStateFilter === "finished"

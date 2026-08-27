@@ -48,7 +48,10 @@ export function TurnOutcomePip({ outcome, onDismiss }: TurnOutcomePipProps) {
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
       )}
     >
-      <span aria-hidden className="w-1.5 h-1.5 rounded-full shrink-0 bg-status-warning" />
+      <span
+        aria-hidden
+        className="status-mark w-1.5 h-1.5 rounded-full shrink-0 bg-status-warning"
+      />
       <span className="truncate font-medium">{label}</span>
     </button>
   );

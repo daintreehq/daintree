@@ -69,17 +69,9 @@ export function PrStatusChip({ hasRemote, worktreePR, onOpenExternal }: PrStatus
                   className="inline-flex items-center justify-center w-3 h-3 shrink-0"
                   aria-hidden="true"
                 >
-                  {ciVisual.kind === "icon" ? (
-                    <ciVisual.Icon className={cn("w-3 h-3", ciVisual.colorClass)} />
-                  ) : (
-                    <span className={cn("block w-2 h-2 rounded-full", ciVisual.colorClass)} />
-                  )}
+                  <ciVisual.Icon className={cn("w-3 h-3", ciVisual.colorClass)} />
                 </span>
-                <span
-                  className={ciVisual.kind === "icon" ? ciVisual.colorClass : "text-status-warning"}
-                >
-                  {ciVisual.shortLabel}
-                </span>
+                <span className={ciVisual.colorClass}>{ciVisual.shortLabel}</span>
               </span>
             </>
           )}

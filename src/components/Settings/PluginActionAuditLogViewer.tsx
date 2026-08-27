@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { Check, Copy, Download, Eye, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { SeverityMark, type StatusSeverity } from "@/lib/statusSeverity";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
@@ -26,11 +27,11 @@ const RESULT_LABEL: Record<PluginActionAuditResult, string> = {
   restricted: "Restricted",
 };
 
-const RESULT_DOT_CLASS: Record<PluginActionAuditResult, string> = {
-  success: "bg-status-success",
-  error: "bg-status-danger",
-  disabled: "bg-status-warning",
-  restricted: "bg-status-danger",
+const RESULT_SEVERITY: Record<PluginActionAuditResult, StatusSeverity> = {
+  success: "success",
+  error: "error",
+  disabled: "warning",
+  restricted: "error",
 };
 
 type TimeRange = "5m" | "1h" | "24h" | "all";
@@ -250,13 +251,10 @@ export function PluginActionAuditLogViewer({
           <ul className="divide-y divide-daintree-border">
             {filteredRecords.map((record) => (
               <li key={record.id} className="grid grid-cols-[auto_1fr_auto] gap-2 p-2 text-xs">
-                <span
-                  className={cn(
-                    "mt-1 h-2 w-2 rounded-full shrink-0",
-                    RESULT_DOT_CLASS[record.result]
-                  )}
-                  aria-label={RESULT_LABEL[record.result]}
-                  title={RESULT_LABEL[record.result]}
+                <SeverityMark
+                  severity={RESULT_SEVERITY[record.result]}
+                  label={RESULT_LABEL[record.result]}
+                  className="mt-0.5 h-3 w-3"
                 />
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">

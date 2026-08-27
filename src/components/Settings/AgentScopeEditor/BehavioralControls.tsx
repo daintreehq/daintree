@@ -92,7 +92,10 @@ export function BehavioralControls({
           <label className="text-sm font-medium text-daintree-text">Custom arguments</label>
           {scopeKind === "custom" && customFlagsOverride !== undefined && (
             <>
-              <span className="w-1.5 h-1.5 rounded-full bg-state-modified" aria-hidden="true" />
+              <span
+                className="status-mark w-1.5 h-1.5 rounded-full bg-state-modified"
+                aria-hidden="true"
+              />
               <button
                 type="button"
                 aria-label={`Reset custom arguments override for ${scopeLabel}`}

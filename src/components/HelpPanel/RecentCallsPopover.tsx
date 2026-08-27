@@ -2,20 +2,22 @@ import { useMemo, useState } from "react";
 import { ChevronRight } from "lucide-react";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
 import { cn } from "@/lib/utils";
+import { SeverityMark, type StatusSeverity } from "@/lib/statusSeverity";
 import { formatTimeAgo } from "@/utils/timeAgo";
 import type { McpAuditRecord, McpAuditResult } from "@shared/types";
 
-// Local, deliberately-minimal mirror of the Settings audit viewer's styling.
-// The popover is a simpler read-only view; cross-importing from Settings would
-// create a HelpPanel → Settings layer dependency for two stable constants.
-const RESULT_DOT_CLASS: Record<McpAuditResult, string> = {
-  success: "bg-status-success",
-  error: "bg-status-danger",
-  "confirmation-pending": "bg-status-warning",
-  unauthorized: "bg-status-danger",
-  dedup: "bg-status-info",
-  collision: "bg-status-warning",
-  rate_limited: "bg-status-warning",
+// Local mirror of the Settings audit viewer's outcome→severity mapping. The
+// popover is a simpler read-only view; cross-importing from Settings would
+// create a HelpPanel → Settings layer dependency for two stable constants. The
+// glyphs themselves are shared, so the two views still agree on shape and tone.
+const RESULT_SEVERITY: Record<McpAuditResult, StatusSeverity> = {
+  success: "success",
+  error: "error",
+  "confirmation-pending": "warning",
+  unauthorized: "error",
+  dedup: "info",
+  collision: "warning",
+  rate_limited: "warning",
 };
 
 const RESULT_LABEL: Record<McpAuditResult, string> = {
@@ -135,10 +137,11 @@ function RecentCallRow({ record }: { record: McpAuditRecord }) {
             expanded && "rotate-90"
           )}
         />
-        <span
-          aria-hidden
-          className={cn("h-1.5 w-1.5 rounded-full shrink-0", RESULT_DOT_CLASS[record.result])}
-          title={RESULT_LABEL[record.result]}
+        <SeverityMark
+          severity={RESULT_SEVERITY[record.result]}
+          label={RESULT_LABEL[record.result]}
+          className="h-3 w-3"
+          decorative
         />
         <span className="min-w-0 font-mono text-daintree-text/80 truncate">{record.toolId}</span>
         {/* Recency, not duration — calls are almost always sub-100ms, so

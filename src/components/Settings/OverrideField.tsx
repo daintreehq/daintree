@@ -49,7 +49,7 @@ export function OverrideField({
         </label>
         {isOverriding && (
           <span
-            className="w-1.5 h-1.5 rounded-full bg-status-info"
+            className="status-mark w-1.5 h-1.5 rounded-full bg-status-info"
             aria-hidden="true"
             data-testid="override-indicator"
           />

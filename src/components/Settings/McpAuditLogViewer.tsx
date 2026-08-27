@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { Check, Clock, Copy, Download, Layers, RefreshCw, ShieldOff } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { SeverityMark, type StatusSeverity } from "@/lib/statusSeverity";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
@@ -33,14 +34,14 @@ const RESULT_LABEL: Record<McpAuditResult, string> = {
   rate_limited: "Rate limited",
 };
 
-const RESULT_DOT_CLASS: Record<McpAuditResult, string> = {
-  success: "bg-status-success",
-  error: "bg-status-danger",
-  "confirmation-pending": "bg-status-warning",
-  unauthorized: "bg-status-danger",
-  dedup: "bg-status-info",
-  collision: "bg-status-warning",
-  rate_limited: "bg-status-warning",
+const RESULT_SEVERITY: Record<McpAuditResult, StatusSeverity> = {
+  success: "success",
+  error: "error",
+  "confirmation-pending": "warning",
+  unauthorized: "error",
+  dedup: "info",
+  collision: "warning",
+  rate_limited: "warning",
 };
 
 const GRANT_TYPE_LABEL: Record<McpGrantRecordType, string> = {
@@ -53,14 +54,14 @@ const GRANT_TYPE_LABEL: Record<McpGrantRecordType, string> = {
   "tier.decayed": "Tier decayed",
 };
 
-const GRANT_TYPE_DOT_CLASS: Record<McpGrantRecordType, string> = {
-  "grant.issued": "bg-status-info",
-  "grant.expired": "bg-status-warning",
-  "grant.revoked": "bg-status-danger",
-  "grant.used": "bg-status-info",
-  "grant.exhausted": "bg-status-warning",
-  "tier.elevated": "bg-status-warning",
-  "tier.decayed": "bg-status-info",
+const GRANT_TYPE_SEVERITY: Record<McpGrantRecordType, StatusSeverity> = {
+  "grant.issued": "info",
+  "grant.expired": "warning",
+  "grant.revoked": "error",
+  "grant.used": "info",
+  "grant.exhausted": "warning",
+  "tier.elevated": "warning",
+  "tier.decayed": "info",
 };
 
 type TimeRange = "5m" | "1h" | "24h" | "all";
@@ -241,10 +242,10 @@ function GrantRow({
 }) {
   return (
     <li className="grid grid-cols-[auto_1fr_auto] gap-2 py-0.5">
-      <span
-        className={cn("mt-1 h-1.5 w-1.5 rounded-full shrink-0", GRANT_TYPE_DOT_CLASS[record.type])}
-        aria-label={GRANT_TYPE_LABEL[record.type]}
-        title={GRANT_TYPE_LABEL[record.type]}
+      <SeverityMark
+        severity={GRANT_TYPE_SEVERITY[record.type]}
+        label={GRANT_TYPE_LABEL[record.type]}
+        className="mt-0.5 h-3 w-3"
       />
       <div className="min-w-0">
         <div className="flex items-center gap-2">
@@ -563,13 +564,10 @@ export function McpAuditLogViewer({
                   {group.records.map((record) =>
                     isAuditRecord(record) ? (
                       <li key={record.id} className="grid grid-cols-[auto_1fr_auto] gap-2 py-0.5">
-                        <span
-                          className={cn(
-                            "mt-1 h-1.5 w-1.5 rounded-full shrink-0",
-                            RESULT_DOT_CLASS[record.result]
-                          )}
-                          aria-label={RESULT_LABEL[record.result]}
-                          title={RESULT_LABEL[record.result]}
+                        <SeverityMark
+                          severity={RESULT_SEVERITY[record.result]}
+                          label={RESULT_LABEL[record.result]}
+                          className="mt-0.5 h-3 w-3"
                         />
                         <div className="min-w-0">
                           <div className="flex items-center gap-2">
@@ -627,13 +625,10 @@ export function McpAuditLogViewer({
                   {turnGroups.unassociated.map((record) =>
                     isAuditRecord(record) ? (
                       <li key={record.id} className="grid grid-cols-[auto_1fr_auto] gap-2 py-0.5">
-                        <span
-                          className={cn(
-                            "mt-1 h-1.5 w-1.5 rounded-full shrink-0",
-                            RESULT_DOT_CLASS[record.result]
-                          )}
-                          aria-label={RESULT_LABEL[record.result]}
-                          title={RESULT_LABEL[record.result]}
+                        <SeverityMark
+                          severity={RESULT_SEVERITY[record.result]}
+                          label={RESULT_LABEL[record.result]}
+                          className="mt-0.5 h-3 w-3"
                         />
                         <div className="min-w-0">
                           <div className="flex items-center gap-2">
@@ -684,17 +679,16 @@ export function McpAuditLogViewer({
               isAuditRecord(record) ? (
                 <li key={record.id} className="grid grid-cols-[auto_1fr_auto] gap-2 p-2 text-xs">
                   <div className="flex items-start gap-1 mt-1">
-                    <span
-                      className={cn(
-                        "h-2 w-2 rounded-full shrink-0",
-                        RESULT_DOT_CLASS[record.result]
-                      )}
-                      aria-label={RESULT_LABEL[record.result]}
-                      title={RESULT_LABEL[record.result]}
+                    <SeverityMark
+                      severity={RESULT_SEVERITY[record.result]}
+                      label={RESULT_LABEL[record.result]}
+                      className="h-3 w-3"
                     />
                     {signalRecordIds.has(record.id) && (
                       <span
-                        className="h-2 w-2 rounded-sm rotate-45 shrink-0 bg-status-danger"
+                        role="img"
+                        aria-label="Anomaly"
+                        className="status-mark h-2 w-2 rounded-sm rotate-45 shrink-0 bg-status-danger"
                         title="Anomaly"
                       />
                     )}
@@ -731,13 +725,10 @@ export function McpAuditLogViewer({
                 </li>
               ) : (
                 <li key={record.id} className="grid grid-cols-[auto_1fr_auto] gap-2 p-2 text-xs">
-                  <span
-                    className={cn(
-                      "mt-1 h-2 w-2 rounded-full shrink-0",
-                      GRANT_TYPE_DOT_CLASS[record.type]
-                    )}
-                    aria-label={GRANT_TYPE_LABEL[record.type]}
-                    title={GRANT_TYPE_LABEL[record.type]}
+                  <SeverityMark
+                    severity={GRANT_TYPE_SEVERITY[record.type]}
+                    label={GRANT_TYPE_LABEL[record.type]}
+                    className="mt-0.5 h-3 w-3"
                   />
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">

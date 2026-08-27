@@ -415,7 +415,7 @@ export function ProjectSwitcher() {
                 >
                   <span
                     className={cn(
-                      "h-2 w-2 rounded-full ring-2 ring-[var(--color-surface-panel-elevated)]",
+                      "status-mark h-2 w-2 rounded-full ring-2 ring-[var(--color-surface-panel-elevated)]",
                       badgeStatus.color
                     )}
                     data-testid="project-switcher-badge-dot"
