@@ -110,7 +110,9 @@ export function formatWorktreeChangeRows(
  */
 export function formatWorktreeDeletePreviewLines(preview: WorktreeDeletePreview | null): string[] {
   if (preview === null) {
-    return [`${MCP_PREVIEW_CAUTION_PREFIX}Could not verify current changes — proceed with caution.`];
+    return [
+      `${MCP_PREVIEW_CAUTION_PREFIX}Could not verify current changes — proceed with caution.`,
+    ];
   }
   const { trackedChangeCount, untrackedFileCount, changes } = preview;
   if (changes.length === 0) {
