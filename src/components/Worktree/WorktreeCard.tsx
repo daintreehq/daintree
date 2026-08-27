@@ -971,12 +971,10 @@ export function WorktreeCard({
                     <div
                       ref={dragHandleActivatorRef}
                       data-worktree-row-drag-handle=""
-                      className="shrink-0 w-4 flex justify-center pt-2 cursor-not-allowed opacity-30 touch-none select-none transition-colors motion-reduce:transition-none"
+                      className="shrink-0 w-4 flex items-center justify-center cursor-not-allowed opacity-30 touch-none select-none transition-colors motion-reduce:transition-none"
                       aria-hidden="true"
                     >
-                      <span className="flex h-7 items-center">
-                        <GripVertical className="w-3 h-3" />
-                      </span>
+                      <GripVertical className="w-3 h-3" />
                     </div>
                   </TooltipTrigger>
                   <TooltipContent side="left" className="text-xs">
@@ -992,7 +990,7 @@ export function WorktreeCard({
                     // tier and the plate the 150ms one, and a Tailwind
                     // `duration-*` utility cannot give two properties two
                     // durations.
-                    "shrink-0 w-4 flex justify-center pt-2 cursor-grab active:cursor-grabbing touch-none select-none motion-reduce:transition-none",
+                    "shrink-0 w-4 flex items-center justify-center cursor-grab active:cursor-grabbing touch-none select-none motion-reduce:transition-none",
                     isDraggingSort
                       ? "bg-overlay-emphasis text-text-primary"
                       : // Card hover brightens the glyph only. The backplate
@@ -1019,30 +1017,21 @@ export function WorktreeCard({
                   aria-hidden="true"
                   {...dragHandleListeners}
                 >
-                  {/* Pinned to the title row rather than centred in the card:
-                      the column runs the card's whole height, so on one with
-                      both disclosures open its middle is 150px from the name
-                      the grip belongs to, and the handle would sit at a
-                      different height on every row in the list.
+                  {/* Centred in the column, not pinned to the title row.
+                      Once the column paints a plate down the full height of
+                      the card it is an object in its own right, and its
+                      contents belong in the middle of it — dots hanging off
+                      the top of a 160px bar read as misplaced rather than as
+                      anchored. Products that align a grip to the title line
+                      (Linear, Notion) do not paint that bar.
 
-                      h-7 is the title row's ACTUAL height, not the `min-h-22`
-                      it declares — the trailing icon buttons carry their own
-                      padding and push the row to 28px. Sizing this box off the
-                      min instead put the dots 2.5px above the title glyph,
-                      measured off a render.
-
-                      This is a mirrored constant and it can drift. The clean
-                      fix is a two-column grid whose grip spans every row track
-                      and republishes them with `grid-rows-subgrid`, so the
-                      glyph names row 1 and centres on whatever the title line
-                      resolves to. Flexbox cannot do it: a flex child has no
-                      way to align its contents against a boundary that lives
-                      inside a sibling. Not landed here because the card's 8px
-                      top inset currently sits on the header wrapper, and it
-                      has to move out of the row track first. */}
-                  <span className="flex h-7 items-center">
-                    <GripVertical className="w-3 h-3" />
-                  </span>
+                      This is also the only version that needs no knowledge of
+                      the header's height. Pinning to the title meant sizing a
+                      box off a number the header owns, which drifts the moment
+                      its trailing buttons change — it was already 2.5px out.
+                      `items-center` on a stretched flex child has nothing to
+                      drift from. */}
+                  <GripVertical className="w-3 h-3" />
                 </div>
               ))}
             {/* One content column for the whole card, header and body alike,
