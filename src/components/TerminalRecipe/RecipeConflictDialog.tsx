@@ -57,7 +57,7 @@ function RecipeConflictDialogInner() {
             Overwrite recipe
           </Button>
           <Button
-            variant="default"
+            variant="contrast"
             onClick={() => resolveConflict("reload")}
             data-testid="recipe-conflict-reload"
           >

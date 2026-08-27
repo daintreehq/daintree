@@ -506,9 +506,13 @@ export function CommandBuilder({
 
       <AppDialog.Footer>
         {showSuccessState ? (
-          <Button onClick={onCancel}>Close</Button>
+          <Button variant="contrast" onClick={onCancel}>
+            Close
+          </Button>
         ) : hasEmptySteps ? (
-          <Button onClick={onCancel}>Close</Button>
+          <Button variant="contrast" onClick={onCancel}>
+            Close
+          </Button>
         ) : (
           <>
             <div className="flex-1 flex items-center gap-2">
@@ -534,7 +538,7 @@ export function CommandBuilder({
                 Cancel
               </Button>
               {isLastStep ? (
-                <Button onClick={handleExecute} disabled={isExecuting}>
+                <Button variant="contrast" onClick={handleExecute} disabled={isExecuting}>
                   {isExecuting ? (
                     <>
                       <Spinner size="md" />
@@ -545,7 +549,7 @@ export function CommandBuilder({
                   )}
                 </Button>
               ) : (
-                <Button onClick={handleNext} disabled={isExecuting}>
+                <Button variant="contrast" onClick={handleNext} disabled={isExecuting}>
                   Next
                   <ChevronRight className="h-4 w-4" />
                 </Button>

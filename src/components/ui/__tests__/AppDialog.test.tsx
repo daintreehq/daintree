@@ -2,6 +2,7 @@
 import { render, screen, act, fireEvent, waitFor } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { AppDialog } from "../AppDialog";
+import { buttonVariants } from "../button";
 import { _resetForTests } from "@/lib/escapeStack";
 import { _resetForTests as _resetBackstopForTests } from "@/lib/dialogEscapeBackstop";
 import { handleDockEscapeKeyDown } from "@/components/Layout/dockPopoverGuard";
@@ -1364,5 +1365,90 @@ describe("AppDialog.Body className placement", () => {
     const wrapper = screen.getByTestId("field-a").parentElement?.parentElement;
     expect(wrapper).not.toBeNull();
     expect(wrapper?.classList.contains("dialog-body-spacing")).toBe(false);
+  });
+});
+
+// The footer resolves the primary button's visual variant from dialog/action
+// semantics. Expectations are derived from `buttonVariants` itself rather than
+// restating utility strings, so a change to what `contrast` or `destructive`
+// paints doesn't need editing here — only a change to the *mapping* does.
+describe("AppDialog.Footer primary variant resolution", () => {
+  beforeEach(() => {
+    mockPrevOpen = false;
+    _resetForTests();
+    vi.useRealTimers();
+    vi.stubGlobal("matchMedia", vi.fn().mockReturnValue({ matches: false }));
+  });
+
+  afterEach(() => {
+    _resetForTests();
+  });
+
+  const CANDIDATES = ["default", "destructive", "contrast"] as const;
+  type Candidate = (typeof CANDIDATES)[number];
+
+  const classesOf = (variant: Candidate) =>
+    new Set(buttonVariants({ variant }).split(/\s+/).filter(Boolean));
+
+  /** The classes that belong to this variant and to none of the others. */
+  const fingerprint = (variant: Candidate): string[] => {
+    const own = classesOf(variant);
+    for (const other of CANDIDATES) {
+      if (other === variant) continue;
+      for (const shared of classesOf(other)) own.delete(shared);
+    }
+    return [...own];
+  };
+
+  function renderFooter(props: {
+    dialogVariant?: "default" | "destructive" | "info";
+    intent?: "default" | "destructive";
+  }) {
+    render(
+      <AppDialog isOpen={true} onClose={() => {}} variant={props.dialogVariant}>
+        <AppDialog.Body>
+          <p>Content</p>
+        </AppDialog.Body>
+        <AppDialog.Footer
+          primaryAction={{ label: "Proceed", onClick: () => {}, intent: props.intent }}
+        />
+      </AppDialog>
+    );
+    return screen.getByRole("button", { name: "Proceed" });
+  }
+
+  function expectVariant(button: HTMLElement, expected: Candidate) {
+    const own = fingerprint(expected);
+    // Guard against the assertion going vacuous if the variants ever converge.
+    expect(own.length).toBeGreaterThan(0);
+    for (const className of own) {
+      expect(button.classList.contains(className)).toBe(true);
+    }
+    for (const other of CANDIDATES) {
+      if (other === expected) continue;
+      for (const className of fingerprint(other)) {
+        expect(button.classList.contains(className)).toBe(false);
+      }
+    }
+  }
+
+  it("paints a plain confirmation with the high-contrast neutral CTA, not the accent fill", () => {
+    expectVariant(renderFooter({}), "contrast");
+  });
+
+  it("keeps the contrast CTA for an info dialog", () => {
+    expectVariant(renderFooter({ dialogVariant: "info" }), "contrast");
+  });
+
+  it("lets a destructive action outrank the contrast CTA", () => {
+    expectVariant(renderFooter({ intent: "destructive" }), "destructive");
+  });
+
+  it("lets a destructive dialog outrank the contrast CTA even with a default action", () => {
+    expectVariant(renderFooter({ dialogVariant: "destructive", intent: "default" }), "destructive");
+  });
+
+  it("resolves destructive from dialog context when the action states no intent", () => {
+    expectVariant(renderFooter({ dialogVariant: "destructive" }), "destructive");
   });
 });

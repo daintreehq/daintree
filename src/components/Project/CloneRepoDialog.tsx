@@ -504,7 +504,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
 
       <AppDialog.Footer>
         {isComplete ? (
-          <Button onClick={handleClose} className="gap-2">
+          <Button variant="contrast" onClick={handleClose} className="gap-2">
             <Check className="h-4 w-4" />
             Open Project
           </Button>
@@ -513,7 +513,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
             <Button variant="outline" onClick={onCancel}>
               Close
             </Button>
-            <Button onClick={() => void startClone()} disabled={isCloning}>
+            <Button variant="contrast" onClick={() => void startClone()} disabled={isCloning}>
               Retry
             </Button>
           </>
@@ -525,7 +525,12 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
             >
               {isCloning ? "Stop clone" : "Cancel"}
             </Button>
-            <Button onClick={() => void startClone()} disabled={!canClone} loading={isCloning}>
+            <Button
+              variant="contrast"
+              onClick={() => void startClone()}
+              disabled={!canClone}
+              loading={isCloning}
+            >
               Clone
             </Button>
           </>

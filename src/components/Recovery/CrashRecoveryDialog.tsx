@@ -320,6 +320,7 @@ export function CrashRecoveryDialog({
 
               <div className="flex gap-2">
                 <Button
+                  variant="contrast"
                   onClick={handleRestoreSelected}
                   disabled={resolving || selectedCount === 0}
                   className="flex-1"
@@ -567,6 +568,7 @@ export function CrashRecoveryDialog({
                     )}
                     <div className="flex gap-2">
                       <Button
+                        variant="contrast"
                         size="sm"
                         className="text-xs h-7"
                         onClick={() => void handleSubmitReport()}

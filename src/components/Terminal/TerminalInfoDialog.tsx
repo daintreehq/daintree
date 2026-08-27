@@ -464,7 +464,9 @@ Performance & Diagnostics:
           <Button variant="ghost" onClick={onClose}>
             Close
           </Button>
-          <Button onClick={copyToClipboard}>Copy to Clipboard</Button>
+          <Button variant="contrast" onClick={copyToClipboard}>
+            Copy to Clipboard
+          </Button>
         </AppDialog.Footer>
       )}
     </AppDialog>

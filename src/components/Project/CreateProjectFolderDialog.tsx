@@ -214,7 +214,11 @@ export function CreateProjectFolderDialog({ isOpen, onClose }: CreateProjectFold
         <Button variant="outline" onClick={onClose} disabled={isCreating}>
           Cancel
         </Button>
-        <Button onClick={handleCreate} disabled={isCreating || !parentPath || !folderName.trim()}>
+        <Button
+          variant="contrast"
+          onClick={handleCreate}
+          disabled={isCreating || !parentPath || !folderName.trim()}
+        >
           {isCreating ? "Creating…" : "Create folder"}
         </Button>
       </AppDialog.Footer>

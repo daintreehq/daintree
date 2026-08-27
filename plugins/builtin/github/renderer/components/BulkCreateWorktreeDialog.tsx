@@ -1317,7 +1317,7 @@ export function BulkCreateWorktreeDialog({
                 Retry failed
               </Button>
             )}
-            <Button onClick={handleDone} data-testid="bulk-create-done-button">
+            <Button variant="contrast" onClick={handleDone} data-testid="bulk-create-done-button">
               <Check />
               Done
             </Button>
@@ -1331,6 +1331,7 @@ export function BulkCreateWorktreeDialog({
               Cancel
             </Button>
             <Button
+              variant="contrast"
               onClick={handleCreate}
               disabled={isExecuting || creatableCount === 0}
               className="min-w-[100px]"

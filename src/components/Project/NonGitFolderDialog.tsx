@@ -85,7 +85,9 @@ export function NonGitFolderDialog({
         <Button variant="outline" onClick={() => setStep("initialize")}>
           Initialize repository
         </Button>
-        <Button onClick={onOpenWithoutGit}>Open without git</Button>
+        <Button variant="contrast" onClick={onOpenWithoutGit}>
+          Open without git
+        </Button>
       </AppDialog.Footer>
     </AppDialog>
   );

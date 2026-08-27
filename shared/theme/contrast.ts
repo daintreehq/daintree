@@ -106,6 +106,23 @@ const CONTRAST_PAIRS: Array<{
   { foreground: "status-info", background: "surface-canvas", minimum: 3.0 },
   { foreground: "status-info", background: "surface-panel-elevated", minimum: 3.0 },
   ACCENT_CONTRAST_PAIR,
+  // The high-contrast neutral CTA — the standard dialog primary action (#11963) — fills
+  // itself with the theme's own body-text colour and paints its label in the inverse.
+  // That is the one pair where those two roles meet as foreground and background, and no
+  // other entry covers it: every other text-primary pair puts it on a surface. Both
+  // polarities, because the button renders in both and its label is normal-sized text,
+  // so AA 4.5:1 is the right floor. The built-ins clear it by a wide margin (weakest
+  // ~12:1); a theme that fails here cannot carry a legible primary button.
+  //
+  // LIMIT: this checks the resting fill only. The variant's hover and active states mix
+  // the fill 90%/82% toward the label (`color-mix(in oklab, ...)` in button.tsx), so a
+  // theme sitting just over this floor at rest can dip under it while pressed — e.g.
+  // #767676/#ffffff is 4.54:1 at rest, ~3.8:1 hovered, ~3.3:1 pressed. Modelling that
+  // exactly needs an OKLab round-trip, which means either hand-rolling one here or
+  // pulling culori (a devDependency) into code the main process loads. Not worth it yet:
+  // every built-in is ~3x clear of the floor (weakest interaction state ~8:1), and the
+  // consequence for a custom theme is an advisory warning, never a rejected import.
+  { foreground: "text-inverse", background: "text-primary", minimum: 4.5 },
   { foreground: "search-highlight-text", background: "search-highlight-background", minimum: 3.0 },
 ];
 
