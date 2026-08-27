@@ -86,7 +86,7 @@ export function AssignIssueToggle({
         />
         <span
           className={cn(
-            "pointer-events-none absolute top-1/2 h-3 w-3 -translate-y-1/2 rounded-full",
+            "status-mark pointer-events-none absolute top-1/2 h-3 w-3 -translate-y-1/2 rounded-full",
             "transition-[left] duration-150 ease-out",
             assignWorktreeToSelf ? "left-[0.875rem] bg-text-inverse" : "left-0.5 bg-text-secondary"
           )}

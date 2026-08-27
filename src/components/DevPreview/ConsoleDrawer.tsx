@@ -274,7 +274,12 @@ export function ConsoleDrawer({
         </button>
 
         <div className={statusClass} role="status" aria-live="polite">
-          <span className={cn("mr-2 h-1.5 w-1.5 shrink-0 rounded-full", statusLabel.dotClass)} />
+          <span
+            className={cn(
+              "status-mark mr-2 h-1.5 w-1.5 shrink-0 rounded-full",
+              statusLabel.dotClass
+            )}
+          />
           {statusLabel.label}
         </div>
 

@@ -72,7 +72,7 @@ function DevServerRow({
   return (
     <li className="flex items-center gap-2 px-3 py-1.5 hover:bg-overlay-subtle transition-colors">
       <span
-        className={cn("flex-shrink-0 w-1.5 h-1.5 rounded-full", presentation.dotClass)}
+        className={cn("status-mark flex-shrink-0 w-1.5 h-1.5 rounded-full", presentation.dotClass)}
         aria-hidden="true"
       />
       <div className="flex flex-col min-w-0 flex-1">

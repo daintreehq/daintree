@@ -56,7 +56,10 @@ export function SettingsInput({
         </label>
         {scopeBadge}
         {isModified && (
-          <span className="w-1.5 h-1.5 rounded-full bg-state-modified" aria-hidden="true" />
+          <span
+            className="status-mark w-1.5 h-1.5 rounded-full bg-state-modified"
+            aria-hidden="true"
+          />
         )}
         {showReset && (
           <button

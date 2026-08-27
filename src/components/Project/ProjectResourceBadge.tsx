@@ -548,7 +548,7 @@ export function ProjectResourceBadge() {
           <div className="flex items-center gap-2 min-w-0">
             <span
               key={memoryState}
-              className={`inline-flex h-2 w-2 rounded-full ${STATE_DOT_CLASSES[memoryState]} animate-diagnostics-flash shrink-0`}
+              className={`status-mark inline-flex h-2 w-2 rounded-full ${STATE_DOT_CLASSES[memoryState]} animate-diagnostics-flash shrink-0`}
             />
             <span className="text-[10px] tabular-nums text-daintree-text/40 font-medium truncate">
               {stats.runningProjects} project{stats.runningProjects !== 1 ? "s" : ""} active

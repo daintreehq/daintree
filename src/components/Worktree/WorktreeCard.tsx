@@ -923,7 +923,7 @@ export function WorktreeCard({
               <TooltipTrigger asChild>
                 <div
                   className={cn(
-                    "absolute w-3 h-3 z-10 cursor-default",
+                    "status-mark absolute w-3 h-3 z-10 cursor-default",
                     chipState === "waiting" && "bg-activity-waiting",
                     chipState === "cleanup" && "bg-pr-merged",
                     chipState === "complete" && "bg-category-blue",

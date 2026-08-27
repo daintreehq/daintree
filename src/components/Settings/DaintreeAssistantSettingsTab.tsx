@@ -1179,7 +1179,7 @@ export function DaintreeAssistantSettingsTab() {
           </div>
         ) : runtimeSnapshot.state === "starting" ? (
           <div className="flex items-center gap-2">
-            <div className="w-2 h-2 rounded-full bg-daintree-text/30 shrink-0" />
+            <div className="status-mark w-2 h-2 rounded-full bg-daintree-text/30 shrink-0" />
             <span className="text-xs text-daintree-text/60">Server is starting…</span>
           </div>
         ) : runtimeSnapshot.state === "failed" ? (
@@ -1206,7 +1206,7 @@ export function DaintreeAssistantSettingsTab() {
         ) : (
           <div className="contents">
             <div className="flex items-center gap-2">
-              <div className="w-2 h-2 rounded-full bg-status-success shrink-0" />
+              <div className="status-mark w-2 h-2 rounded-full bg-status-success shrink-0" />
               <span className="text-xs text-daintree-text/60">
                 {runtimeSnapshot.port ? `Running on port ${runtimeSnapshot.port}` : "Running"}
               </span>
@@ -1542,7 +1542,7 @@ function SessionLiveStatusCard({ configuredTier }: SessionLiveStatusCardProps) {
         <span className="flex items-center gap-2">
           <span
             className={cn(
-              "w-1.5 h-1.5 rounded-full shrink-0",
+              "status-mark w-1.5 h-1.5 rounded-full shrink-0",
               connected ? "bg-status-success" : "bg-daintree-text/30"
             )}
             aria-hidden="true"

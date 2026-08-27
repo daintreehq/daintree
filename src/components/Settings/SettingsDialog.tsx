@@ -1303,7 +1303,7 @@ export function NavItem({
         {(hasError || modified) && (
           <span
             className={cn(
-              "absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full",
+              "status-mark absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full",
               hasError ? "bg-status-warning" : "bg-state-modified"
             )}
             role="img"

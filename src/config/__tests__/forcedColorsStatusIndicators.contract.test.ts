@@ -119,6 +119,65 @@ describe("forced-colors status-indicator contract (#8936)", () => {
   });
 });
 
+// #12000: forty-odd status marks across the app were an empty span whose only
+// visual was a background colour, so forced colors rendered every one of them as
+// nothing. The fix is one shared `.status-mark` hook repainted in the same block
+// — but a rule with no emitter is as silent a regression as an emitter with no
+// rule, so both halves are guarded here.
+describe("forced-colors shared status-mark contract (#12000)", () => {
+  it("index.css repaints the shared status mark with CanvasText !important", () => {
+    const block = readForcedColorsBlocks(INDEX_CSS);
+    // !important for the reason ActivityLight needs it: it has to beat the
+    // author background the UA otherwise forces to Canvas.
+    expect(block).toMatch(/\.status-mark\s*\{[^}]*background-color:\s*CanvasText[^}]*!important/);
+  });
+
+  // Canvas and ButtonFace are the same colour in the stock high-contrast themes,
+  // so dropping this rule looks harmless in testing and only breaks for users on
+  // a palette that separates them.
+  it("repaints marks inside a control with ButtonText, the pair that matches ButtonFace", () => {
+    const block = readForcedColorsBlocks(INDEX_CSS);
+    expect(block).toMatch(
+      /button\s+\.status-mark,[\s\S]{0,80}?\.status-mark\s*\{[^}]*background-color:\s*ButtonText[^}]*!important/
+    );
+  });
+
+  it("does not reach for forced-color-adjust, which would opt out of the user's palette", () => {
+    const block = readForcedColorsBlocks(INDEX_CSS);
+    const rule = block.match(/\.status-mark\s*\{([^}]*)\}/);
+    expect(rule).not.toBeNull();
+    expect(rule?.[1]).not.toMatch(/forced-color-adjust/);
+  });
+
+  // The plugin dot is the sharpest case: `host.setPanelBadge` lets a plugin ask
+  // for a bare dot with no adjacent text, so without the hook a forced-colors
+  // user sees nothing where the plugin reported something.
+  it("is actually emitted: the plugin panel dot carries the class the rule targets", () => {
+    const badges = fs.readFileSync(
+      path.join(REPO_ROOT, "src/components/Panel/PluginPanelBadges.tsx"),
+      "utf8"
+    );
+    // Bound to the className the dot branch actually builds, not a loose
+    // substring — a passing mention in a comment would prove nothing.
+    expect(badges).toMatch(/className=\{`[^`]*\bstatus-mark\b[^`]*\$\{DOT_COLOR\[/);
+  });
+
+  // Whatever `DOT_COLOR` resolves to is still a background, so the hook stays
+  // load-bearing; if that map ever stops painting backgrounds this assertion
+  // should be revisited rather than deleted.
+  it("still needs the hook: the plugin dot is painted as a background, not a glyph", () => {
+    const badges = fs.readFileSync(
+      path.join(REPO_ROOT, "src/components/Panel/PluginPanelBadges.tsx"),
+      "utf8"
+    );
+    const map = badges.match(/const DOT_COLOR[^=]*=\s*\{([^}]*)\}/);
+    expect(map).not.toBeNull();
+    const values = [...(map?.[1] ?? "").matchAll(/"([^"]+)"/g)].map((m) => m[1]!);
+    expect(values.length).toBeGreaterThan(0);
+    expect(values.every((v) => v.startsWith("bg-"))).toBe(true);
+  });
+});
+
 // #11981: a destructive button is distinguished from Cancel only by its fill,
 // and forced-colors replaces every fill with a system colour — so the two
 // render as identical pills and nothing marks which one destroys. The fallback

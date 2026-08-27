@@ -1353,7 +1353,7 @@ function DockLaunchOption({
             <span
               data-testid={`launcher-new-pill-${agent.id}`}
               aria-hidden="true"
-              className="ml-2 shrink-0 size-1.5 rounded-full bg-status-info ring-1 ring-daintree-sidebar"
+              className="status-mark ml-2 shrink-0 size-1.5 rounded-full bg-status-info ring-1 ring-daintree-sidebar"
             />
           )}
         </span>

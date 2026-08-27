@@ -399,7 +399,7 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
             <Tooltip>
               <TooltipTrigger asChild>
                 <span
-                  className="w-2 h-2 rounded-full bg-status-danger shrink-0"
+                  className="status-mark w-2 h-2 rounded-full bg-status-danger shrink-0"
                   aria-label="Launched with dangerous permissions"
                 />
               </TooltipTrigger>

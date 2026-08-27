@@ -67,7 +67,7 @@ export function FleetDraftingPill(): ReactElement | null {
               <span
                 data-testid="fleet-drafting-pill-divergence-dot"
                 aria-label={`${overridesCount + skippedCount} per-target edit${overridesCount + skippedCount === 1 ? "" : "s"} pending`}
-                className="ml-0.5 inline-block h-1.5 w-1.5 rounded-full bg-category-amber-border"
+                className="status-mark ml-0.5 inline-block h-1.5 w-1.5 rounded-full bg-category-amber-border"
               />
             )}
             {hasVariables && (

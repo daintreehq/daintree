@@ -299,7 +299,7 @@ export function TerminalHeaderContent({
               </div>
               {errorCount > 0 && (
                 <span
-                  className="absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-status-error"
+                  className="status-mark absolute -top-0.5 -right-0.5 w-2 h-2 rounded-full bg-status-error"
                   aria-label={`${errorCount} error${errorCount > 1 ? "s" : ""}`}
                 />
               )}

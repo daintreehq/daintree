@@ -1567,7 +1567,7 @@ export function HelpPanel({
                 >
                   <span
                     aria-hidden
-                    className="w-1.5 h-1.5 rounded-full shrink-0 bg-status-warning"
+                    className="status-mark w-1.5 h-1.5 rounded-full shrink-0 bg-status-warning"
                   />
                   <span className="truncate">
                     {[pinnedContext.worktreeName, pinnedContext.worktreeBranch]
@@ -1582,7 +1582,7 @@ export function HelpPanel({
                 >
                   <span
                     aria-hidden
-                    className="w-1.5 h-1.5 rounded-full shrink-0 bg-daintree-text/30"
+                    className="status-mark w-1.5 h-1.5 rounded-full shrink-0 bg-daintree-text/30"
                   />
                   <span className="truncate">
                     {[pinnedContext.worktreeName, pinnedContext.worktreeBranch]

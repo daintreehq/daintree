@@ -833,7 +833,7 @@ function PanelHeaderComponent({
             <Tooltip>
               <TooltipTrigger asChild>
                 <span
-                  className="w-2 h-2 rounded-full bg-status-danger shrink-0"
+                  className="status-mark w-2 h-2 rounded-full bg-status-danger shrink-0"
                   aria-label="Launched with dangerous permissions"
                 />
               </TooltipTrigger>
@@ -855,7 +855,7 @@ function PanelHeaderComponent({
                   onPointerDown={(e) => e.stopPropagation()}
                   aria-label="Last fleet broadcast failed on this terminal — click to acknowledge"
                   data-testid="panel-fleet-failure-dot"
-                  className="w-2 h-2 rounded-full bg-status-error shrink-0 hover:scale-125 transition-transform"
+                  className="status-mark w-2 h-2 rounded-full bg-status-error shrink-0 hover:scale-125 transition-transform"
                 />
               </TooltipTrigger>
               <TooltipContent side="bottom">

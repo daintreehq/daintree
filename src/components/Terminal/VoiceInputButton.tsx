@@ -357,13 +357,13 @@ export function VoiceInputButton({
             className="flex h-2.5 w-2.5 items-stretch justify-between"
             aria-hidden="true"
           >
-            <span className="block w-[2px] rounded-[1px] bg-current opacity-70" />
-            <span className="block w-[2px] rounded-[1px] bg-current opacity-70" />
+            <span className="status-mark block w-[2px] rounded-[1px] bg-current opacity-70" />
+            <span className="status-mark block w-[2px] rounded-[1px] bg-current opacity-70" />
           </span>
         ) : showOrbit ? (
           <span
             ref={iconRef}
-            className="block h-2 w-2 rounded-[1.5px] bg-current transition-transform duration-100"
+            className="status-mark block h-2 w-2 rounded-[1.5px] bg-current transition-transform duration-100"
           />
         ) : (
           <Mic className="h-3.5 w-3.5 relative" />

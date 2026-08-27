@@ -860,7 +860,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                               <ChevronDown className="w-3 h-3" aria-hidden="true" />
                               {activeTabIsHidden && (
                                 <span
-                                  className="absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-daintree-text/70"
+                                  className="status-mark absolute top-0.5 right-0.5 w-1.5 h-1.5 rounded-full bg-daintree-text/70"
                                   aria-hidden="true"
                                 />
                               )}

@@ -1,6 +1,7 @@
 import { useMemo, useState } from "react";
 import { Check, Clock, Copy, Download, Eye, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { SeverityMark, type StatusSeverity } from "@/lib/statusSeverity";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
@@ -22,10 +23,10 @@ const RESULT_LABEL: Record<ForgeAuditResult, string> = {
   error: "Error",
 };
 
-const RESULT_DOT_CLASS: Record<ForgeAuditResult, string> = {
-  success: "bg-status-success",
-  "not-found": "bg-status-info",
-  error: "bg-status-danger",
+const RESULT_SEVERITY: Record<ForgeAuditResult, StatusSeverity> = {
+  success: "success",
+  "not-found": "info",
+  error: "error",
 };
 
 const ANOMALY_KIND_LABEL: Record<ForgeAnomalyKind, string> = {
@@ -290,15 +291,17 @@ export function ForgeAuditLogViewer({
           <ul className="divide-y divide-daintree-border">
             {filteredRecords.map((record) => (
               <li key={record.id} className="grid grid-cols-[auto_1fr_auto] gap-2 p-2 text-xs">
-                <div className="flex items-start gap-1 mt-1">
-                  <span
-                    className={cn("h-2 w-2 rounded-full shrink-0", RESULT_DOT_CLASS[record.result])}
-                    aria-label={RESULT_LABEL[record.result]}
-                    title={RESULT_LABEL[record.result]}
+                <div className="flex self-start items-center gap-1 mt-0.5">
+                  <SeverityMark
+                    severity={RESULT_SEVERITY[record.result]}
+                    label={RESULT_LABEL[record.result]}
+                    className="h-3 w-3"
                   />
                   {signalRecordIds.has(record.id) && (
                     <span
-                      className="h-2 w-2 rounded-sm rotate-45 shrink-0 bg-status-danger"
+                      role="img"
+                      aria-label="Anomaly"
+                      className="status-mark h-2 w-2 rounded-sm rotate-45 shrink-0 bg-status-danger"
                       title="Anomaly"
                     />
                   )}

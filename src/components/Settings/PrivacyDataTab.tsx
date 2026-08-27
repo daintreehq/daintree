@@ -381,7 +381,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                     )}
                   >
                     {telemetryLevel === option.level && (
-                      <div className="w-2 h-2 rounded-full bg-daintree-text" />
+                      <div className="status-mark w-2 h-2 rounded-full bg-daintree-text" />
                     )}
                   </div>
                   <div>
