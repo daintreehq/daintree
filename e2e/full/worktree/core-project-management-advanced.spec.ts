@@ -142,7 +142,7 @@ test.describe.serial("Core: Project Management Advanced", () => {
 
       const modal = window.locator(SEL.worktree.overviewModal);
       await expect(modal).toBeVisible({ timeout: T_LONG });
-      await expect(modal.locator("h2", { hasText: "Worktrees Overview" })).toBeVisible();
+      await expect(modal.locator("h2", { hasText: "Worktrees overview" })).toBeVisible();
 
       // At least one worktree card should be visible (main + feature branch = 2)
       const cards = modal.locator("[data-worktree-branch]");

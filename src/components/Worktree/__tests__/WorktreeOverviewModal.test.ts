@@ -311,7 +311,19 @@ describe("WorktreeOverviewModal — clickable aggregate stats (#8385)", () => {
     });
 
     it("Escape with selection clears it instead of closing the modal", () => {
-      expect(source).toMatch(/if\s*\(hasSelection\)\s*\{[\s\S]*?clearSelection\(\)/);
+      expect(source).toMatch(
+        /escapeDismissRef\.current\s*&&\s*hasSelection\)\s*\{[\s\S]*?clearSelection\(\)/
+      );
+    });
+
+    it("scopes the two-stage clear-then-close guard to Escape", () => {
+      // AppDialog routes the close button and a scrim click through
+      // `onBeforeClose` as well, and both have to dismiss in one click with a
+      // selection active — so the guard reads a flag set only by an Escape
+      // keypress, recorded in capture phase ahead of the bubble-phase escape
+      // stack.
+      expect(source).toMatch(/"keydown",\s*markEscapeDismissal,\s*true\)/);
+      expect(source).toMatch(/e\.key\s*!==\s*"Escape"/);
     });
 
     it("Cmd/Ctrl+A triggers selectAllVisible", () => {
@@ -362,7 +374,14 @@ describe("WorktreeOverviewModal — clickable aggregate stats (#8385)", () => {
     });
 
     it("imports the bulk-remove hook so the modal owns the orchestrator state", () => {
-      expect(modalSource).toMatch(/import\s*\{\s*useWorktreeBulkRemove\s*\}/);
+      // Matches the named import wherever it sits in the specifier list. The
+      // original pattern required `useWorktreeBulkRemove` to be the ONLY name
+      // in the braces, which asserted the punctuation of an import statement
+      // rather than the fact under test — adding a second export from the same
+      // module broke it without changing any behaviour.
+      expect(modalSource).toMatch(
+        /import\s*\{[^}]*\buseWorktreeBulkRemove\b[^}]*\}\s*from\s*"\.\/useWorktreeBulkRemove"/
+      );
     });
 
     it("imports ConfirmDialog for the D1 close-sessions and D3 remove gates", () => {

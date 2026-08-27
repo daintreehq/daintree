@@ -2820,6 +2820,24 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     opacity: 1;
   }
 
+  /* The worktree overview grid has the same two states as the forge rows, and
+     both of its normal-mode marks are stripped here: membership paints a tint
+     plus a Tailwind `ring` (a box-shadow), and the keyboard cursor paints an
+     accent outline that the UA recolours. Split them the same way — membership
+     keeps the outline, the cursor moves to the cell's border, which is a
+     property nothing else on the cell is using. Giving both an outline would
+     let the later rule win and a selected cell under the cursor would lose the
+     cursor. */
+  [role="gridcell"][aria-selected="true"][data-worktree-overview-cell] {
+    outline: 2px solid SelectedItem;
+    outline-offset: -2px;
+  }
+
+  [data-worktree-overview-cell][data-overview-cursor="true"] {
+    border-color: Highlight;
+    border-width: 2px;
+  }
+
   /* The project switcher's command rows run full-bleed, so their border box
      reaches the palette's own clipped edge. The blanket `outline-offset: 2px`
      above would draw their focus ring outside that clip and lose its left and
@@ -3084,6 +3102,15 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
   .terminal-selected-quiet,
   .terminal-focused {
     border-width: 2px;
+  }
+
+  /* Overview grid membership: the neutral inset ring is deliberately quiet at
+     normal contrast (accent restraint reserves the loud mark for the keyboard
+     cursor), which leaves it thin here. Widen the ring rather than recolour it
+     — the mark stays neutral, it just stops being a hairline. */
+  [role="gridcell"][aria-selected="true"][data-worktree-overview-cell] {
+    --tw-ring-offset-width: 0px;
+    box-shadow: inset 0 0 0 2px var(--color-border-strong);
   }
 
   /* Track the widened border so the cue's hairline stays inside it rather

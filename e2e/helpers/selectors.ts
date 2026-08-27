@@ -129,7 +129,9 @@ export const SEL = {
     filterButton: '[aria-label="Filter and sort worktrees"]',
     filterPopover: '[data-testid="worktree-filter-popover"]',
     openOverviewButton: '[aria-label="Open worktrees overview"]',
-    overviewModal: '[role="dialog"][aria-labelledby="worktree-overview-title"]',
+    // Keyed on the test id rather than `aria-labelledby`: the overview is
+    // composed from AppDialog now, which mints its own title id via `useId()`.
+    overviewModal: '[data-testid="worktree-overview-modal"]',
     overviewClose: '[aria-label="Close overview"]',
     quickCreatePalette: '[role="dialog"][aria-label="Quick create worktree palette"]',
     quickCreateCustomize: "#quick-create-option-__customize__",

@@ -52,14 +52,14 @@ test.describe.serial("Full: Worktree Dashboard Cards", () => {
     // Ctrl/Cmd-click selects a single cell and surfaces the bulk-action bar.
     await first.click({ modifiers: ["ControlOrMeta"], position: { x: 20, y: 20 } });
     await expect(first).toHaveAttribute("aria-selected", "true", { timeout: T_MEDIUM });
-    await expect(window.locator(SEL.worktree.overviewModal)).toContainText("1 selected");
+    await expect(window.locator(SEL.worktree.overviewModal)).toContainText("1 of 2 selected");
     await expect(window.locator(SEL.worktree.bulkRemove)).toBeVisible();
     await expect(window.locator(SEL.worktree.bulkCloseSessions)).toBeVisible();
 
     // Shift-click extends the selection range from the anchor to the target.
     await second.click({ modifiers: ["Shift"], position: { x: 20, y: 20 } });
     await expect(second).toHaveAttribute("aria-selected", "true", { timeout: T_MEDIUM });
-    await expect(window.locator(SEL.worktree.overviewModal)).toContainText("2 selected");
+    await expect(window.locator(SEL.worktree.overviewModal)).toContainText("2 of 2 selected");
 
     // Clearing the selection dismisses the bulk-action bar and deselects both cells.
     await window.locator(SEL.worktree.clearSelection).click();
@@ -67,6 +67,11 @@ test.describe.serial("Full: Worktree Dashboard Cards", () => {
     await expect(first).toHaveAttribute("aria-selected", "false", { timeout: T_MEDIUM });
     await expect(second).toHaveAttribute("aria-selected", "false", { timeout: T_MEDIUM });
 
+    // The close button dismisses in ONE click even with a selection active:
+    // only Escape carries the clear-then-close contract, and the bar above has
+    // its own Clear control.
+    await first.click({ modifiers: ["ControlOrMeta"], position: { x: 20, y: 20 } });
+    await expect(window.locator(SEL.worktree.overviewModal)).toContainText("1 of 2 selected");
     await window.locator(SEL.worktree.overviewClose).click();
     await expect(window.locator(SEL.worktree.overviewModal)).toBeHidden({ timeout: T_MEDIUM });
   });

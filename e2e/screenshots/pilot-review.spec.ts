@@ -467,7 +467,7 @@ test("pilot review — the fleet overview, with a fleet", async () => {
 
         await closeOverlay(page);
       } finally {
-        if (ctx) await closeApp(ctx).catch(() => {});
+        if (ctx) await closeApp(ctx.app).catch(() => {});
       }
     }
   } finally {

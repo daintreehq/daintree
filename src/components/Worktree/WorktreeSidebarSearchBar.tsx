@@ -16,6 +16,13 @@ interface WorktreeSidebarSearchBarProps {
    */
   variant?: "sidebar" | "modal";
   /**
+   * Controls rendered on the trailing edge of the field row, after the facet
+   * button. For callers whose view-scope controls belong with the filters
+   * rather than in their own band — the overview passes its main-worktree
+   * switch here so the whole working toolbar stays one line.
+   */
+  trailing?: React.ReactNode;
+  /**
    * Filter scope / sort status ("1 of 2 worktrees · Sorting disabled while
    * searching") rendered under the field, sharing a row with "Clear all".
    * Visual-only — screen readers are served by the caller's debounced
@@ -41,6 +48,7 @@ export function WorktreeSidebarSearchBar({
   chipCounts,
   variant = "sidebar",
   statusText,
+  trailing,
 }: WorktreeSidebarSearchBarProps) {
   const query = useWorktreeFilterStore((state) => state.query);
   const liveQuery = useWorktreeFilterStore((state) => state.liveQuery);
@@ -184,7 +192,11 @@ export function WorktreeSidebarSearchBar({
         // variant supplies the inset itself rather than sitting flush against
         // the rule above it.
         "px-3 pb-3 border-b border-divider shrink-0",
-        variant === "modal" && "pt-3",
+        // In the dialog the horizontal neighbours are different too: the header,
+        // the footer and the rows below all sit on AppDialog's chrome inset
+        // (24px plus the 11px scrollbar gutter `AppDialog.Body` reserves), so
+        // the bar carries that one instead of the rail's 12px.
+        variant === "modal" && "pt-3 px-[calc(1.5rem+11px)]",
         variant === "sidebar" && "worktree-filter-bar"
       )}
     >
@@ -240,6 +252,7 @@ export function WorktreeSidebarSearchBar({
           open={isPopoverOpen}
           onOpenChange={setIsPopoverOpen}
         />
+        {trailing}
       </div>
       {(statusText || showClearAll) && (
         // pt-2, not pt-1: the rail's own bottom padding is 12px, so a 4px gap

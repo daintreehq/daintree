@@ -574,7 +574,7 @@ test("readiness rail review — ready, attention and blocked states", async () =
       }
     }
   } finally {
-    if (ctx) await closeApp(ctx).catch(() => {});
+    if (ctx) await closeApp(ctx.app).catch(() => {});
     repo.cleanup();
     rmSync(userDataDir, { recursive: true, force: true });
   }
