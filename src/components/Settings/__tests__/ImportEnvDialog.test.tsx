@@ -124,6 +124,18 @@ describe("ImportEnvDialog", () => {
     });
 
     /**
+     * The caption pairs a label with a count pill, and the gap between them is
+     * margin — which name computation does not see. Asserting the count reads
+     * as its own word keeps the heading from announcing "Conflicts2"; the
+     * label itself is free to change, so nothing here pins the wording.
+     */
+    it("separates the caption's count from its label in the announced name", () => {
+      renderDialog();
+      const list = goToConflicts();
+      expect(within(list).getByRole("heading", { name: /\s\d+$/ })).toBeTruthy();
+    });
+
+    /**
      * The list is capped, so some of it is off-screen whenever there are more
      * conflicts than fit — which makes reaching the rest by keyboard part of
      * the destructive preview, not a nicety.

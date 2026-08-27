@@ -369,7 +369,16 @@ export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDia
             </RadioChoiceGroup>
             <div className={PREVIEW_FRAME} data-testid="import-env-conflict-list">
               <div className={PREVIEW_STRIP}>
-                <span role="heading" aria-level={4} className={PREVIEW_CAPTION}>
+                {/* The count sits in its own inline pill, so name computation
+                    would run the two text nodes together as "Conflicts2" —
+                    the gap is CSS margin, and margins are not text. The label
+                    stays first so voice control still matches what is shown. */}
+                <span
+                  role="heading"
+                  aria-level={4}
+                  aria-label={`Conflicts ${conflicts.length}`}
+                  className={PREVIEW_CAPTION}
+                >
                   Conflicts
                   <span className={PREVIEW_COUNT}>{conflicts.length}</span>
                 </span>
