@@ -304,9 +304,15 @@ describe("PluginConfirmDialog", () => {
     void enqueue({ argsSummary: '{"key":"value"}' });
     render(<PluginConfirmDialog />);
 
-    const disclosure = screen.getByRole("button", { name: /arguments/i });
+    const disclosure = screen.getByRole("button", { name: /^arguments$/i });
     expect(disclosure.getAttribute("aria-expanded")).toBe("false");
     expect(screen.queryByText('{"key":"value"}')).toBeNull();
+    // The role is fixed by whether a payload exists, not by whether it is
+    // currently revealed. Asserted on both sides of the toggle: wiring
+    // `hasPreview` to the disclosure's own state would start this destructive
+    // request as an alertdialog and flip it to a dialog mid-decision, which a
+    // post-click assertion alone would wave through.
+    expect(screen.getByRole("dialog")).toBeTruthy();
 
     act(() => {
       disclosure.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -314,9 +320,7 @@ describe("PluginConfirmDialog", () => {
 
     expect(disclosure.getAttribute("aria-expanded")).toBe("true");
     expect(screen.getByText('{"key":"value"}')).toBeTruthy();
-    // The role is fixed by whether a payload exists, not by whether it is
-    // currently revealed — toggling must not move the dialog between the two
-    // ARIA roles under a screen reader mid-decision.
+    expect(screen.getByRole("dialog")).toBeTruthy();
     expect(screen.queryByRole("alertdialog")).toBeNull();
   });
 
@@ -335,7 +339,7 @@ describe("PluginConfirmDialog", () => {
 
     act(() => {
       screen
-        .getByRole("button", { name: /arguments/i })
+        .getByRole("button", { name: /^arguments$/i })
         .dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
     expect(screen.getByText('{"first":"payload"}')).toBeTruthy();
@@ -346,8 +350,8 @@ describe("PluginConfirmDialog", () => {
         .dispatchEvent(new MouseEvent("click", { bubbles: true }));
     });
 
-    expect(screen.getByText("Run 'Push branch'?")).toBeTruthy();
-    expect(screen.getByRole("button", { name: /arguments/i }).getAttribute("aria-expanded")).toBe(
+    expect(screen.getByRole("button", { name: "Push branch" })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /^arguments$/i }).getAttribute("aria-expanded")).toBe(
       "false"
     );
     expect(screen.queryByText('{"second":"payload"}')).toBeNull();
@@ -374,7 +378,7 @@ describe("PluginConfirmDialog", () => {
     void enqueue({ argsSummary: "null" });
     render(<PluginConfirmDialog />);
 
-    const disclosure = screen.getByRole("button", { name: /arguments/i });
+    const disclosure = screen.getByRole("button", { name: /^arguments$/i });
     expect(disclosure.getAttribute("aria-expanded")).toBe("false");
 
     act(() => {

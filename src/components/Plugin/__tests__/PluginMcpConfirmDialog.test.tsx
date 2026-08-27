@@ -326,6 +326,28 @@ describe("PluginMcpConfirmDialog structure", () => {
     }
   );
 
+  // The tier split made the empty-summary path conditional for the first time.
+  // D2+ owes a content preview even when there is nothing to preview — saying
+  // so IS the preview — while the tiers that owe nothing drop the section
+  // rather than offer a disclosure over an empty payload.
+  it.each([
+    ["D0", false],
+    ["D1", false],
+    ["D2", true],
+    ["D3", true],
+  ] as const)("with no arguments, %s states the absence inline: %s", (dangerTier, statesIt) => {
+    enqueue({ dangerTier, argsSummary: "" });
+    render(<PluginMcpConfirmDialog />);
+
+    // Never a disclosure over nothing, on any tier.
+    expect(screen.queryByRole("button", { name: /^arguments$/i })).toBeNull();
+    if (statesIt) {
+      expect(screen.getByText(/^no arguments$/i)).toBeTruthy();
+    } else {
+      expect(screen.queryByText(/^no arguments$/i)).toBeNull();
+    }
+  });
+
   it("keeps the redacted arguments expanded on a destructive tier", () => {
     // docs/architecture/destructive-action-safeguards.md records the redacted
     // argsSummary as the content preview that satisfies this surface's D2
