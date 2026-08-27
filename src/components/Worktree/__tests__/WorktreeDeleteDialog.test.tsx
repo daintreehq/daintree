@@ -241,7 +241,7 @@ describe("WorktreeDeleteDialog — warning messages", () => {
     const worktree = makeWorktree(makeChanges([]));
     render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
 
-    expect(screen.queryByText(/Standard deletion will fail/)).toBeNull();
+    expect(screen.queryByText(/Select Force delete to continue/)).toBeNull();
   });
 
   it("shows untracked-file count when only untracked files exist", () => {
@@ -253,7 +253,7 @@ describe("WorktreeDeleteDialog — warning messages", () => {
     );
     render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
 
-    const warning = screen.getByText(/Standard deletion will fail/);
+    const warning = screen.getByText(/Select Force delete to continue/);
     expect(warning.textContent).toContain("2 untracked files");
     expect(warning.textContent).not.toContain("uncommitted file");
   });
@@ -267,7 +267,7 @@ describe("WorktreeDeleteDialog — warning messages", () => {
     );
     render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
 
-    const warning = screen.getByText(/Standard deletion will fail/);
+    const warning = screen.getByText(/Select Force delete to continue/);
     expect(warning.textContent).toContain("2 uncommitted files");
     expect(warning.textContent).not.toContain("untracked file");
   });
@@ -282,7 +282,7 @@ describe("WorktreeDeleteDialog — warning messages", () => {
     );
     render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
 
-    const warning = screen.getByText(/Standard deletion will fail/);
+    const warning = screen.getByText(/Select Force delete to continue/);
     expect(warning.textContent).toContain("2 uncommitted files and 1 untracked file");
   });
 
@@ -290,7 +290,7 @@ describe("WorktreeDeleteDialog — warning messages", () => {
     const worktree = makeWorktree(makeChanges([{ path: "src/app.ts", status: "modified" }]));
     render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
 
-    const warning = screen.getByText(/Standard deletion will fail/);
+    const warning = screen.getByText(/Select Force delete to continue/);
     expect(warning.textContent).toContain("1 uncommitted file ");
     expect(warning.textContent).not.toContain("1 uncommitted files");
   });
@@ -299,7 +299,7 @@ describe("WorktreeDeleteDialog — warning messages", () => {
     const worktree = makeWorktree(makeChanges([{ path: "new.txt", status: "untracked" }]));
     render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
 
-    const warning = screen.getByText(/Standard deletion will fail/);
+    const warning = screen.getByText(/Select Force delete to continue/);
     expect(warning.textContent).toContain("1 untracked file ");
     expect(warning.textContent).not.toContain("1 untracked files");
   });
@@ -313,7 +313,7 @@ describe("WorktreeDeleteDialog — warning messages", () => {
     );
     render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
 
-    const warning = screen.getByText(/Standard deletion will fail/);
+    const warning = screen.getByText(/Select Force delete to continue/);
     expect(warning.textContent).toContain("1 uncommitted file ");
   });
 
@@ -321,12 +321,12 @@ describe("WorktreeDeleteDialog — warning messages", () => {
     const worktree = makeWorktree(makeChanges([{ path: "src/app.ts", status: "modified" }]));
     render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
 
-    expect(screen.getByText(/Standard deletion will fail/)).toBeDefined();
+    expect(screen.getByText(/Select Force delete to continue/)).toBeDefined();
 
     const forceCheckbox = screen.getByRole("checkbox", { name: /force delete/i });
     fireEvent.click(forceCheckbox);
 
-    expect(screen.queryByText(/Standard deletion will fail/)).toBeNull();
+    expect(screen.queryByText(/Select Force delete to continue/)).toBeNull();
     // The separate red banner is gone: it repeated counts the consequence list
     // already carries, and stated irreversibility a third time. The loss is now
     // one danger-toned consequence row.
@@ -337,12 +337,12 @@ describe("WorktreeDeleteDialog — warning messages", () => {
     const worktree = makeWorktree(makeChanges([{ path: "new.txt", status: "untracked" }]));
     render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
 
-    expect(screen.getByText(/Standard deletion will fail/)).toBeDefined();
+    expect(screen.getByText(/Select Force delete to continue/)).toBeDefined();
 
     const forceCheckbox = screen.getByRole("checkbox", { name: /force delete/i });
     fireEvent.click(forceCheckbox);
 
-    expect(screen.queryByText(/Standard deletion will fail/)).toBeNull();
+    expect(screen.queryByText(/Select Force delete to continue/)).toBeNull();
     expect(screen.getByText(/1 untracked file will be permanently lost/)).toBeDefined();
   });
 
@@ -420,7 +420,7 @@ describe("WorktreeDeleteDialog — consequence list", () => {
     const worktree = makeWorktree(makeChanges([]));
     render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
 
-    const list = screen.getByRole("list");
+    const list = screen.getByTestId("delete-worktree-consequences");
     expect(within(list).getAllByRole("listitem")).toHaveLength(1);
     expect(within(list).getByText(DIRECTORY_ROW)).toBeDefined();
   });
@@ -433,7 +433,9 @@ describe("WorktreeDeleteDialog — consequence list", () => {
 
     fireEvent.click(screen.getByRole("checkbox", { name: /force delete/i }));
 
-    for (const row of within(screen.getByRole("list")).getAllByRole("listitem")) {
+    for (const row of within(screen.getByTestId("delete-worktree-consequences")).getAllByRole(
+      "listitem"
+    )) {
       expect(row.className).not.toContain("line-through");
     }
   });
@@ -503,7 +505,7 @@ describe("WorktreeDeleteDialog — consequence list", () => {
     render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
     fireEvent.click(screen.getByRole("checkbox", { name: /force delete/i }));
 
-    const danger = within(screen.getByRole("list"))
+    const danger = within(screen.getByTestId("delete-worktree-consequences"))
       .getAllByRole("listitem")
       .filter((row) => row.className.includes("text-status-error"));
     expect(danger).toHaveLength(1);
@@ -533,7 +535,7 @@ describe("WorktreeDeleteDialog — consequence list", () => {
     const worktree = makeWorktree(makeChanges([]));
     render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
 
-    const list = () => screen.getByRole("list");
+    const list = () => screen.getByTestId("delete-worktree-consequences");
     expect(
       within(list())
         .getAllByRole("listitem")
@@ -635,6 +637,56 @@ describe("WorktreeDeleteDialog — dialog chrome contract", () => {
     fireEvent.click(screen.getByRole("checkbox", { name: /force delete/i }));
 
     expect(screen.getByTestId("delete-worktree-hint").textContent).not.toContain(longBranch);
+  });
+
+  it("never states a count it could not verify", () => {
+    // Fail-closed forces `hasTrackedChanges` true while the counts still come
+    // from a possibly-clean seed, which rendered "0 uncommitted files will be
+    // permanently lost" in exactly the state the dialog knows least about.
+    buildPreviewMock.mockRejectedValue(new Error("workspace host gone"));
+    const worktree = makeWorktree(makeChanges([]));
+    render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
+
+    return waitFor(() => {
+      expect(screen.getByText(/Couldn't check this worktree/)).toBeDefined();
+    }).then(() => {
+      // Force ON is where the count is actually interpolated ("N ... will be
+      // permanently lost"), so the assertion has to reach that state or it
+      // proves nothing — the first version of this test passed against the bug.
+      fireEvent.click(screen.getByRole("checkbox", { name: /force delete/i }));
+      const dialog = screen.getByTestId("delete-worktree-dialog");
+      expect(dialog.textContent).toMatch(/will be permanently lost/);
+      // No fabricated zero anywhere in the unverified state.
+      expect(dialog.textContent).not.toMatch(/\b0 (uncommitted|untracked) file/);
+    });
+  });
+
+  it("does not offer a standard delete that is known to fail", () => {
+    // A non-force delete on a verified-dirty tree is rejected by the backend,
+    // so presenting it as the primary action ships a button whose only
+    // outcome is a toast and a reopened dialog.
+    const worktree = makeWorktree(makeChanges([{ path: "/wt/a.ts", status: "modified" }]));
+    render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
+
+    const confirm = screen.getByTestId("delete-worktree-confirm") as HTMLButtonElement;
+    expect(confirm.disabled).toBe(true);
+    expect(screen.getByTestId("delete-worktree-hint").textContent).toContain("Force delete");
+  });
+
+  it("still offers the safe non-force attempt when verification failed", () => {
+    // The inverse of the rule above: after a failed check, disabling the safe
+    // attempt would coerce the user into force on the very state we could not
+    // verify. Force is required, not assumed.
+    buildPreviewMock.mockRejectedValue(new Error("workspace host gone"));
+    const worktree = makeWorktree(makeChanges([]));
+    render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
+
+    return waitFor(() => {
+      expect(screen.getByText(/Couldn't check this worktree/)).toBeDefined();
+      expect((screen.getByTestId("delete-worktree-confirm") as HTMLButtonElement).disabled).toBe(
+        false
+      );
+    });
   });
 
   it("gives the dialog a short static description for aria-describedby", () => {
@@ -1151,16 +1203,23 @@ describe("WorktreeDeleteDialog — fresh status verification (#11343)", () => {
     const worktree = makeWorktree(makeChanges([]), { branch: "feature/x", name: "feature/x" });
     render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
 
-    // No list until the destructive path is armed.
+    // Nothing to show until the fresh status resolves — the prop seed is clean.
     expect(screen.queryByTestId("delete-worktree-file-list")).toBeNull();
 
-    fireEvent.click(screen.getByRole("checkbox", { name: /force delete/i }));
-
+    // The list appears on the fresh dirty status WITHOUT force being armed: a
+    // D2 confirm owes actual content, and the user needs it to decide whether
+    // forcing is safe at all.
     await waitFor(() => {
-      const list = screen.getByTestId("delete-worktree-file-list");
-      expect(list.textContent).toContain("M src/app.ts");
-      expect(list.textContent).toContain("? new.txt");
+      expect(screen.getByTestId("delete-worktree-file-list")).toBeDefined();
     });
+
+    // Structured rows, not a joined string: the glyph lives in its own column
+    // so a wrapped path cannot detach from it. Assert per row rather than on
+    // concatenated textContent, which no longer carries the separator.
+    const rows = within(screen.getByTestId("delete-worktree-file-list")).getAllByRole("listitem");
+    const cells = rows.map((row) => Array.from(row.children).map((c) => c.textContent));
+    expect(cells).toContainEqual(["M", "src/app.ts"]);
+    expect(cells).toContainEqual(["?", "new.txt"]);
   });
 
   it("hides the file list and shows the warning when verification fails", async () => {

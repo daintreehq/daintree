@@ -8,7 +8,7 @@ import { collectRunningAgentTerminals } from "@/utils/destructiveSessionConfirm"
 import { deriveEffectiveTier } from "@/services/actions/deriveEffectiveTier";
 import {
   buildWorktreeDeletePreview,
-  formatWorktreeChangeRows,
+  buildWorktreeChangeRows,
   summarizeWorktreeChanges,
   PREVIEW_FILE_LIMIT,
   type WorktreeDeletePreview,
@@ -85,7 +85,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   // from the producer, so the root is passed to render them worktree-relative:
   // repeating the full path on every row buries the filename past the wrap,
   // which is the one part of a row that distinguishes it (#11977).
-  const previewChangeRows = formatWorktreeChangeRows(
+  const previewChangeRows = buildWorktreeChangeRows(
     freshPreview?.changes ?? worktree.worktreeChanges?.changes ?? [],
     PREVIEW_FILE_LIMIT,
     freshPreview?.rootPath ?? worktree.worktreeChanges?.rootPath ?? worktree.path
@@ -109,7 +109,14 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
       hasTrackedChanges,
     }) === "D3";
   const isConfirmMatched = confirmInput === confirmTarget;
-  const canSubmit = (!isHighTier || isConfirmMatched) && !isDeleting;
+  // A standard (non-force) delete on a tree we KNOW is dirty is rejected by
+  // the backend, so offering it as the primary action ships a button whose
+  // only outcome is a toast and a reopened dialog. Gate it — but only when the
+  // dirtiness is verified: after a failed verification the safe non-force
+  // attempt is still the right first move, and disabling it would coerce the
+  // user into force on the very state we could not check.
+  const blockedByDirtyTree = hasChanges && !force && !verifyFailed;
+  const canSubmit = (!isHighTier || isConfirmMatched) && !isDeleting && !blockedByDirtyTree;
 
   useEffect(() => {
     if (isOpen) {
@@ -267,8 +274,19 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
 
   const trackedLabel = `${trackedChangeCount} uncommitted file${trackedChangeCount === 1 ? "" : "s"}`;
   const untrackedLabel = `${untrackedFileCount} untracked file${untrackedFileCount === 1 ? "" : "s"}`;
-  const changeSummaryLabel =
-    hasTrackedChanges && hasUntrackedFiles
+  /**
+   * Never state a count we could not verify.
+   *
+   * `hasTrackedChanges` is forced true when the fresh status fetch fails, so
+   * the tier fails closed — but the counts still come from the (possibly
+   * clean, possibly stale) prop seed. Interpolating them anyway produced
+   * "0 uncommitted files will be permanently lost" in exactly the state where
+   * the dialog knows least, which reads as false precision at the worst
+   * possible moment. When unverified, say so instead of inventing a number.
+   */
+  const changeSummaryLabel = verifyFailed
+    ? "unverified uncommitted work"
+    : hasTrackedChanges && hasUntrackedFiles
       ? `${trackedLabel} and ${untrackedLabel}`
       : hasTrackedChanges
         ? trackedLabel
@@ -349,8 +367,13 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
   // Standard (non-force) deletion is rejected by the backend when the tree is
   // dirty, so the primary action would fail. Say so where the decision is made
   // rather than letting the user find out from a toast.
-  const blockedHint =
-    hasChanges && !force ? `Standard deletion will fail — ${changeSummaryLabel} present` : null;
+  const blockedHint = !hasChanges
+    ? null
+    : force
+      ? null
+      : verifyFailed
+        ? "Couldn't verify this worktree — force delete to proceed anyway"
+        : `Select Force delete to continue — ${changeSummaryLabel} present`;
 
   const changesHeadingId = "worktree-delete-changes-heading";
   const consequencesHeadingId = "worktree-delete-consequences-heading";
@@ -390,12 +413,16 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
             {worktree.branch && (
               <div className="flex gap-2">
                 <dt className="w-14 shrink-0 text-daintree-text/50">Branch</dt>
-                <dd className="font-mono text-daintree-text break-all">{worktree.branch}</dd>
+                <dd className="font-mono text-daintree-text [overflow-wrap:anywhere]">
+                  {worktree.branch}
+                </dd>
               </div>
             )}
             <div className={cn("flex gap-2", worktree.branch && "mt-1.5")}>
               <dt className="w-14 shrink-0 text-daintree-text/50">Path</dt>
-              <dd className="font-mono text-daintree-text/70 break-all">{worktree.path}</dd>
+              <dd className="font-mono text-daintree-text/70 [overflow-wrap:anywhere]">
+                {worktree.path}
+              </dd>
             </div>
           </dl>
 
@@ -420,14 +447,32 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                   {changeSummaryLabel}
                 </span>
               </div>
-              <pre
+              {/* Rows, not a wrapping <pre> of joined strings. A path longer
+                  than the box used to continue at the left edge, under the
+                  status column, so two long paths read as four files and the
+                  glyph detached from the name it belonged to. The glyph now
+                  sits in its own fixed column and the wrap hangs under the
+                  path. */}
+              <ul
                 data-testid="delete-worktree-file-list"
                 aria-labelledby={changesHeadingId}
                 tabIndex={0}
-                className="mt-2 max-h-32 overflow-auto text-xs text-daintree-text/70 bg-daintree-bg p-3 rounded-[var(--radius-md)] border border-border-strong font-mono whitespace-pre-wrap break-all"
+                className="mt-2 max-h-32 overflow-auto text-xs text-daintree-text/70 bg-daintree-bg p-3 rounded-[var(--radius-md)] border border-border-strong font-mono space-y-0.5"
               >
-                {previewChangeRows.join("\n")}
-              </pre>
+                {previewChangeRows.map((row) => (
+                  <li
+                    key={row.isOverflow ? "__overflow" : `${row.glyph}:${row.label}`}
+                    className={cn("flex gap-2", row.isOverflow && "text-daintree-text/50 italic")}
+                  >
+                    {!row.isOverflow && (
+                      <span aria-hidden="true" className="w-3 shrink-0 text-daintree-text/50">
+                        {row.glyph}
+                      </span>
+                    )}
+                    <span className="[overflow-wrap:anywhere]">{row.label}</span>
+                  </li>
+                ))}
+              </ul>
             </div>
           )}
 
@@ -445,7 +490,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                 type="checkbox"
                 checked={force}
                 onChange={(e) => setForce(e.target.checked)}
-                className="mt-0.5 rounded border-border-strong bg-daintree-bg"
+                className="checkbox-neutral mt-0.5 rounded border-border-strong bg-daintree-bg"
               />
               <span className="text-sm text-daintree-text">
                 {/* Constant by rule — a toggle label never changes with state
@@ -458,7 +503,9 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                 Force delete
                 {hasChanges && (
                   <span className="block text-xs text-daintree-text/60 mt-0.5">
-                    Required to delete this worktree — {changeSummaryLabel} present
+                    {verifyFailed
+                      ? "Required because this worktree's status couldn't be verified"
+                      : `Required to delete this worktree — ${changeSummaryLabel} present`}
                   </span>
                 )}
               </span>
@@ -470,7 +517,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                   type="checkbox"
                   checked={closeTerminals}
                   onChange={(e) => setCloseTerminals(e.target.checked)}
-                  className="mt-0.5 rounded border-border-strong bg-daintree-bg"
+                  className="checkbox-neutral mt-0.5 rounded border-border-strong bg-daintree-bg"
                 />
                 <span className="text-sm text-daintree-text">
                   Close all terminals
@@ -487,7 +534,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                   type="checkbox"
                   checked={deleteBranch}
                   onChange={(e) => setDeleteBranch(e.target.checked)}
-                  className="mt-0.5 rounded border-border-strong bg-daintree-bg"
+                  className="checkbox-neutral mt-0.5 rounded border-border-strong bg-daintree-bg"
                 />
                 <span className="flex items-center gap-1.5 text-sm text-daintree-text">
                   <FolderGit2 className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
@@ -517,6 +564,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                 each consequence twice. `polite` (not `alert`) because these
                 change on every checkbox toggle and must not interrupt. */}
             <ul
+              data-testid="delete-worktree-consequences"
               aria-labelledby={consequencesHeadingId}
               aria-live="polite"
               aria-relevant="all"

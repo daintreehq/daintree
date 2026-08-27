@@ -186,8 +186,20 @@ async function step(name: string, fn: () => Promise<void>): Promise<void> {
     await fn();
   } catch (error) {
     console.warn(`[delete-shots] step "${name}" FAILED:`, String(error).slice(0, 400));
+    // A step that threw mid-dialog leaves the modal open, and the next step
+    // then spends 30s failing to click a worktree card the dialog is covering.
+    // One failure should cost one shot, not the rest of the run.
+    if (activePage) {
+      for (let i = 0; i < 3; i++) {
+        await activePage.keyboard.press("Escape").catch(() => {});
+        await activePage.waitForTimeout(200);
+      }
+    }
   }
 }
+
+/** Set once the app is up, so `step` can recover the UI after a failure. */
+let activePage: Page | undefined;
 
 /**
  * Open the card's actions menu — the same route `core-worktree-lifecycle`
@@ -280,6 +292,7 @@ test("worktree-delete dialog review — every consequence tier", async () => {
       extraArgs: ["--disable-gpu", "--in-process-gpu", "--disable-breakpad", "--noerrdialogs"],
     });
     const page = await openAndOnboardProject(ctx.app, ctx.window, repo.dir, "Helios Dashboard");
+    activePage = page;
     if (THEME) await setAppTheme(page, THEME);
     await page.addStyleTag({ content: POLISH_CSS }).catch(() => {});
     await dismissBlockingPalette(page);
@@ -372,29 +385,6 @@ test("worktree-delete dialog review — every consequence tier", async () => {
       await closeDialog(page);
     });
 
-    // 8b. Dev preview running — the other cascade the dialog discloses. Opened
-    //     through the same Launch submenu so the real IPC session exists.
-    await step("dev-preview", async () => {
-      await launchFromMenu(page, WT_CLEAN, /^Open Dev Preview$/);
-      await settle(page, 5000);
-      await dismissBlockingPalette(page);
-      await openDialog(page, WT_CLEAN);
-      // The row only un-strikes when a session exists and is not "stopped".
-      // Assert it rather than writing a PNG identical to the previous state —
-      // a lookalike shot is worse than a missing one, because it reads as
-      // evidence for a state nobody actually reached.
-      const devRow = page
-        .locator(`${SEL.worktree.deleteDialog} li`, { hasText: "Dev server will be stopped" })
-        .first();
-      const struck = await devRow.evaluate(
-        (el) => getComputedStyle(el).textDecorationLine.includes("line-through"),
-        undefined
-      );
-      if (struck) throw new Error("dev preview never reported running — row still struck through");
-      await snap(page, "65-with-dev-preview", PANEL);
-      await closeDialog(page);
-    });
-
     // 9. Fail-closed verification. The fresh status ride is a MessagePort
     //    request, not an IPC invoke, so the fault goes in at that seam — the
     //    same one `worktreeClient.getFreshChanges` calls — rather than at the
@@ -420,7 +410,7 @@ test("worktree-delete dialog review — every consequence tier", async () => {
       // write a PNG that does not contain it rather than ship a lookalike.
       await page
         .locator(SEL.worktree.deleteDialog)
-        .getByText(/Couldn't verify/i)
+        .getByText(/Couldn't (verify|check)/i)
         .waitFor({ state: "visible", timeout: 8000 });
       await snap(page, "70-verify-failed", PANEL);
       await closeDialog(page);
@@ -451,7 +441,13 @@ test("worktree-delete dialog review — every consequence tier", async () => {
       console.log(`[delete-shots] initial focus: ${initial}`);
       console.log(`[delete-shots] focus after Tab: ${next}`);
       if (initial === next) {
-        throw new Error(`Tab did not move focus (still ${initial}) — 80/81 are duplicates`);
+        // Recorded, not thrown: in the packaged app the dialog lives in a
+        // per-project WebContentsView, so `document.activeElement` read from
+        // the top frame is not authoritative. The real focus contract is
+        // asserted against the actual AppDialog in
+        // `WorktreeDeleteDialog.focus.test.tsx`; this line is a hint, not a
+        // verdict, and it must not cost the later shots.
+        console.warn(`[delete-shots] Tab did not move focus in this frame (${initial})`);
       }
       await closeDialog(page);
     });
@@ -476,6 +472,28 @@ test("worktree-delete dialog review — every consequence tier", async () => {
       await snap(page, "95-high-contrast", PANEL);
       await closeDialog(page);
       await page.emulateMedia({ contrast: "no-preference" }).catch(() => {});
+    });
+    // LAST. Dev preview running — the other cascade the dialog discloses. Opened
+    //     through the same Launch submenu so the real IPC session exists.
+    await step("dev-preview", async () => {
+      await launchFromMenu(page, WT_CLEAN, /^Open Dev Preview$/);
+      await settle(page, 5000);
+      await dismissBlockingPalette(page);
+      await openDialog(page, WT_CLEAN);
+      // The row only un-strikes when a session exists and is not "stopped".
+      // Assert it rather than writing a PNG identical to the previous state —
+      // a lookalike shot is worse than a missing one, because it reads as
+      // evidence for a state nobody actually reached.
+      const devRow = page
+        .locator(`${SEL.worktree.deleteDialog} li`, { hasText: "Dev server will be stopped" })
+        .first();
+      const struck = await devRow.evaluate(
+        (el) => getComputedStyle(el).textDecorationLine.includes("line-through"),
+        undefined
+      );
+      if (struck) throw new Error("dev preview never reported running — row still struck through");
+      await snap(page, "65-with-dev-preview", PANEL);
+      await closeDialog(page);
     });
   } finally {
     if (ctx) await closeApp(ctx.app).catch(() => {});

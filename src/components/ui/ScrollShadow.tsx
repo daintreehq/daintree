@@ -39,6 +39,12 @@ function ScrollShadowOverlay({ edge, visible }: { edge: "top" | "bottom"; visibl
       className={cn(
         "pointer-events-none absolute inset-x-0 z-10 h-8 transition-opacity duration-150 ease-out",
         "forced-colors:h-0",
+        // A fade-to-transparent overlay lowers the contrast of real content at
+        // the scrolling edge, which is the opposite of what a reader who asked
+        // for more contrast wants — the affordance is decorative and the
+        // scrollbar still communicates scrollability. `forced-colors` is left
+        // to its own block by design (the two are deliberately separate).
+        "contrast-more:hidden",
         edge === "top"
           ? "top-0 bg-gradient-to-b from-[var(--scroll-shadow-color)] to-transparent forced-colors:border-t-2"
           : "bottom-0 bg-gradient-to-t from-[var(--scroll-shadow-color)] to-transparent forced-colors:border-b-2",

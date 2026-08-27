@@ -131,6 +131,49 @@ export function formatWorktreeChangeRows(
   return rows;
 }
 
+/** One row of the rendered change preview, split so the UI can lay it out. */
+export interface WorktreeChangeRow {
+  /** Status glyph (`M`, `D`, `?`…) or `null` for the overflow tail row. */
+  glyph: string | null;
+  /** Worktree-relative path, or the "…and N more" text on the tail row. */
+  label: string;
+  /** True for the synthesised overflow row, which is not a file. */
+  isOverflow: boolean;
+}
+
+/**
+ * The same capped, relativised preview as {@link formatWorktreeChangeRows},
+ * but structured rather than pre-joined.
+ *
+ * The string form has to stay for the MCP confirm surface, which renders plain
+ * text. A UI rendering those strings in a wrapping `<pre>` loses the row
+ * boundary the moment a path is longer than the box: the continuation line
+ * starts at the left edge, under the status column, so two long paths read as
+ * four files and the glyph detaches from the name it belongs to. Structured
+ * rows let the surface pin the glyph in its own column and hang the wrap under
+ * the path (#11977).
+ */
+export function buildWorktreeChangeRows(
+  changes: FileChangeDetail[],
+  limit: number = PREVIEW_FILE_LIMIT,
+  rootPath?: string
+): WorktreeChangeRow[] {
+  const shown = changes.filter((c) => c.status !== "ignored");
+  const rows: WorktreeChangeRow[] = shown.slice(0, limit).map((c) => ({
+    glyph: STATUS_GLYPH[c.status] ?? "?",
+    label: toDisplayPath(c.path, rootPath),
+    isOverflow: false,
+  }));
+  if (shown.length > limit) {
+    rows.push({
+      glyph: null,
+      label: `…and ${shown.length - limit} more`,
+      isOverflow: true,
+    });
+  }
+  return rows;
+}
+
 /**
  * Render a preview as plain lines for the MCP confirm surface — a header
  * naming the tracked/untracked counts, then the actual file list (capped), so
