@@ -470,7 +470,12 @@ export function CommitPanel({
       <ConfirmDialog
         isOpen={pushConfirmOpen}
         onClose={handleClosePushConfirm}
-        title={`Push to '${destinationLabel ?? currentBranch ?? ""}'?`}
+        // Fixed, matching `GitPushConfirmDialog` (#11979/#11980). It used to
+        // interpolate `destinationLabel ?? currentBranch ?? ""`, which asked
+        // `Push to ''?` before the destination resolved and silently changed the
+        // quoted string from naming a REMOTE ref to naming a LOCAL branch between
+        // states. The destination belongs in the body, which can say "not resolved".
+        title="Push commits?"
         description={
           isProtected ? (
             <span>
