@@ -2638,6 +2638,106 @@ describe("recipeStore", () => {
       expect(state.recipes).toHaveLength(1);
     });
 
+    it("deleteRecipe drops the ProjectFileStore mirror so no ghost row survives (#11993)", async () => {
+      // The mirror shares the canonical recipe's id and carries the frecency the
+      // git-tracked file deliberately omits. `mergeRecipes` only hides it while
+      // the canonical row exists, so a delete that spares it renders it as an
+      // ordinary project-local recipe until the next load.
+      const inRepoRecipe = {
+        id: "recipe-opaque-abc",
+        name: "Team Recipe",
+        scope: "inrepo" as const,
+        terminals: [{ type: "terminal" as const, title: "Shell", env: { TOKEN: "" } }],
+        createdAt: 500,
+      };
+      const mirror = {
+        ...inRepoRecipe,
+        projectId: "project-1",
+        lastUsedAt: 900,
+        usageHistory: [800, 900],
+        terminals: [{ type: "terminal" as const, title: "Shell", env: { TOKEN: "secret" } }],
+      };
+      const sameNameLocal = {
+        id: "recipe-local",
+        name: "Team Recipe",
+        projectId: "project-1",
+        terminals: [{ type: "terminal" as const, title: "Local" }],
+        createdAt: 100,
+      };
+      globalGetRecipesMock.mockResolvedValueOnce([]);
+      getRecipesMock.mockResolvedValueOnce({ recipes: [mirror, sameNameLocal], collisions: [] });
+      getInRepoRecipesMock.mockResolvedValueOnce([inRepoRecipe]);
+      await useRecipeStore.getState().loadRecipes("project-1");
+
+      await useRecipeStore.getState().deleteRecipe("recipe-opaque-abc");
+
+      expect(deleteInRepoRecipeMock).toHaveBeenCalledWith("project-1", "Team Recipe");
+      const state = useRecipeStore.getState();
+      expect(state.inRepoRecipes.map((r) => r.id)).not.toContain("recipe-opaque-abc");
+      expect(state.projectRecipes.map((r) => r.id)).not.toContain("recipe-opaque-abc");
+      expect(state.recipes.map((r) => r.id)).not.toContain("recipe-opaque-abc");
+      // The same-named local recipe is a different recipe, not the mirror: it
+      // survives and stops being shadowed now that the team recipe is gone.
+      const survivor = state.recipes.find((r) => r.id === "recipe-local");
+      expect(survivor).toBeDefined();
+      expect(survivor?.shadowedBy).toBeUndefined();
+      // The ghost also made a repeat delete a silent no-op; now the id is gone.
+      await expect(useRecipeStore.getState().deleteRecipe("recipe-opaque-abc")).rejects.toThrow(
+        /not found/
+      );
+    });
+
+    it("deleteRecipe prunes the mirror optimistically and restores it on failure (#11993)", async () => {
+      const inRepoRecipe = {
+        id: "recipe-opaque-abc",
+        name: "Team Recipe",
+        scope: "inrepo" as const,
+        terminals: [{ type: "terminal" as const, title: "Shell", env: { TOKEN: "" } }],
+        createdAt: 500,
+      };
+      // The blanked env is the one thing `loadRecipes` does not hydrate onto the
+      // canonical copy, so it identifies which of the two restored rows the
+      // rollback re-merge actually rendered.
+      const mirror = {
+        ...inRepoRecipe,
+        projectId: "project-1",
+        terminals: [{ type: "terminal" as const, title: "Shell", env: { TOKEN: "secret" } }],
+      };
+      globalGetRecipesMock.mockResolvedValueOnce([]);
+      getRecipesMock.mockResolvedValueOnce({ recipes: [mirror], collisions: [] });
+      getInRepoRecipesMock.mockResolvedValueOnce([inRepoRecipe]);
+      await useRecipeStore.getState().loadRecipes("project-1");
+
+      // Hold the IPC open so the optimistic slice can be inspected before the
+      // rollback runs — a post-rejection assertion alone passes either way.
+      let rejectDelete!: (error: Error) => void;
+      const deleteInFlight = new Promise<void>((_resolve, reject) => {
+        rejectDelete = reject;
+      });
+      deleteInRepoRecipeMock.mockReturnValueOnce(deleteInFlight);
+
+      const pending = useRecipeStore.getState().deleteRecipe("recipe-opaque-abc");
+      // Proves the IPC was reached synchronously, so the assertions below read
+      // the optimistic slice rather than hanging if that sequencing changes.
+      expect(deleteInRepoRecipeMock).toHaveBeenCalledWith("project-1", "Team Recipe");
+      const optimistic = useRecipeStore.getState();
+      expect(optimistic.inRepoRecipes).toHaveLength(0);
+      expect(optimistic.projectRecipes).toHaveLength(0);
+      expect(optimistic.recipes).toHaveLength(0);
+
+      const settled = expect(pending).rejects.toThrow("disk error");
+      rejectDelete(new Error("disk error"));
+      await settled;
+
+      const state = useRecipeStore.getState();
+      expect(state.inRepoRecipes.map((r) => r.id)).toEqual(["recipe-opaque-abc"]);
+      expect(state.projectRecipes.map((r) => r.id)).toEqual(["recipe-opaque-abc"]);
+      // Restoring both copies must re-collapse into the single mirror-backed
+      // row, not a duplicate and not the redacted canonical copy.
+      expect(state.recipes).toHaveLength(1);
+      expect(state.recipes[0]?.terminals[0]?.env).toEqual({ TOKEN: "secret" });
+    });
+
     describe("RECIPE_STALE_CONFLICT handling (#9186)", () => {
       function makeConflictError(name: string) {
         // Mirror the `[AppError|<code>|<urlencoded userMessage>] <message>`
