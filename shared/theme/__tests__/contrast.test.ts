@@ -477,7 +477,10 @@ describe("getThemeContrastWarnings", () => {
     const messages = getThemeContrastWarnings(scheme)
       .filter((w) => w.message.includes("selection-outline against"))
       .map((w) => w.message);
-    expect(messages.some((m) => m.includes("the surrounding palette surface"))).toBe(true);
+    expect(messages.some((m) => m.includes("the surface behind a destructive row"))).toBe(true);
+    // Named separately from the ordinary pair on purpose: that one passes here, and
+    // pointing an author at a pair they can measure as compliant wastes the warning.
+    expect(messages.some((m) => m.includes("the surrounding palette surface"))).toBe(false);
   });
 
   it("scores the dark palette surface as translucent, not as the solid sidebar", () => {

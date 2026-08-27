@@ -859,9 +859,10 @@ function getPaletteSelectionWarnings(scheme: AppColorScheme): AppThemeValidation
     // The ring is inset by its own width, so its outer edge sits on the row's
     // boundary and its ink still meets the surface — and a translucent rail
     // composited over the danger wash is not the same pixel as one composited
-    // over the raised fill. Fold it into the surface pair rather than inventing
-    // a fourth label: it is the same fault, seen on a second row.
-    record("the surrounding palette surface", dangerRail, surface);
+    // over the raised fill. Its own label, not the ordinary surface pair's: an
+    // author sent to a pair that measures 3:1 on the row they are looking at has
+    // been sent to the wrong row.
+    record("the surface behind a destructive row", dangerRail, surface);
   }
 
   for (const [label, ratio] of worstByLabel) {

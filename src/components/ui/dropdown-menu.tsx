@@ -198,11 +198,11 @@ type DropdownMenuSubTriggerProps = React.ComponentPropsWithoutRef<
  * rather than a heavier fill. Keyboard focus gets the indicator instead.
  *
  * `selection-outline` rather than the accent the generic inset-ring recipe names:
- * `getPaletteSelectionWarnings` already holds that token to 3:1 against both the
- * raised fill and the `.surface-overlay` behind it, which is exactly the pair an
- * inset ring on a highlighted row sits between. Accent is only scored against the
- * display surfaces — it has no guarantee against either of the two colours this
- * ring actually touches.
+ * `getPaletteSelectionWarnings` holds that token to 3:1 against all three colours an
+ * inset ring on one of these rows can touch — the raised fill, the `status-danger`
+ * wash a destructive row swaps in for it, and the `.surface-overlay` behind both.
+ * Accent is only scored against the display surfaces, so it has no guarantee against
+ * any of them.
  *
  * `outline-solid` is load-bearing, not decorative: `outline-hidden` sets
  * `--tw-outline-style: none` on this element and `outline-2` reads that same
