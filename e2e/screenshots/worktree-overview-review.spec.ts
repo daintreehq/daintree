@@ -347,7 +347,11 @@ async function resetSurface(page: Page): Promise<void> {
   }
 
   const clear = page.locator(`${MODAL} [aria-label="Clear all filters"]`).first();
-  if (await clear.isVisible().catch(() => false)) await clear.click();
+  if (await clear.isVisible().catch(() => false)) {
+    // This control unmounts itself the instant the filters clear, so a strict
+    // click can resolve the element and then lose it mid-actionability check.
+    await clear.click({ timeout: 5000 }).catch(() => {});
+  }
 
   await ensureMainVisible(page);
   // Grouping is not reset here: only `09-grouped` changes it and it restores
@@ -358,8 +362,11 @@ async function resetSurface(page: Page): Promise<void> {
 
 /** The `main` visibility switch lives in the default header. */
 async function ensureMainVisible(page: Page): Promise<void> {
-  const show = page.locator(`${MODAL} [aria-label="Show main worktree"]`).first();
-  if (await show.isVisible().catch(() => false)) await show.click();
+  // The switch keeps one accessible name and carries its state on
+  // `aria-checked`, so the state — not the label — is what to read.
+  const sw = page.locator(`${MODAL} [role="switch"][aria-label="Show main worktree"]`).first();
+  if (!(await sw.isVisible().catch(() => false))) return;
+  if ((await sw.getAttribute("aria-checked")) === "false") await sw.click();
 }
 
 async function openFilterPopover(page: Page): Promise<void> {
@@ -584,7 +591,9 @@ const STATES: OverviewState[] = [
     header: true,
     verify: async (page) => {
       await cellsAtLeast(page, 8);
-      await expect(page.locator(`${MODAL} #worktree-overview-title`)).toBeVisible();
+      // Identity, asserted by what the user sees rather than by an id: the
+      // surface composes AppDialog now, which mints its own title id.
+      await expect(page.locator(MODAL)).toContainText("Worktrees overview");
     },
   },
   {
@@ -616,9 +625,7 @@ const STATES: OverviewState[] = [
     arrange: async (page) => typeQuery(page, "retry"),
     verify: async (page) => {
       await cellsAtLeast(page, 1);
-      await expect(
-        page.locator(`${MODAL} #worktree-overview-title`).locator("xpath=..")
-      ).toContainText(/of \d+/);
+      await expect(page.locator(MODAL)).toContainText(/\(\d+ of \d+\)/);
     },
   },
   {
@@ -688,14 +695,16 @@ const STATES: OverviewState[] = [
     slug: "10-main-hidden",
     header: true,
     arrange: async (page) => {
-      const hide = page.locator(`${MODAL} [aria-label="Hide main worktree"]`).first();
-      await hide.waitFor({ state: "visible", timeout: T_LONG });
-      await hide.click();
+      const sw = page.locator(`${MODAL} [role="switch"][aria-label="Show main worktree"]`).first();
+      await sw.waitFor({ state: "visible", timeout: T_LONG });
+      if ((await sw.getAttribute("aria-checked")) === "true") await sw.click();
       await settle(page, 400);
     },
     verify: async (page) => {
       await cellsAtLeast(page, 8);
-      await expect(page.locator(`${MODAL} [aria-label="Show main worktree"]`)).toBeVisible();
+      await expect(
+        page.locator(`${MODAL} [role="switch"][aria-label="Show main worktree"]`)
+      ).toHaveAttribute("aria-checked", "false", { timeout: T_LONG });
     },
     restore: async (page) => ensureMainVisible(page),
   },
@@ -706,7 +715,7 @@ const STATES: OverviewState[] = [
     arrange: async (page) => selectCells(page, 1),
     verify: async (page) => {
       await modalVisible(page);
-      await expect(page.locator(MODAL)).toContainText("1 selected");
+      await expect(page.locator(MODAL)).toContainText(/\b1 of \d+ selected/);
     },
     restore: async (page) => clearSelection(page),
   },
@@ -718,7 +727,7 @@ const STATES: OverviewState[] = [
     arrange: async (page) => selectCells(page, 5),
     verify: async (page) => {
       await modalVisible(page);
-      await expect(page.locator(MODAL)).toContainText("5 selected");
+      await expect(page.locator(MODAL)).toContainText(/\b5 of \d+ selected/);
       await expect(page.locator(SEL.worktree.bulkRemove)).toBeVisible();
     },
     restore: async (page) => clearSelection(page),
@@ -731,7 +740,7 @@ const STATES: OverviewState[] = [
     arrange: async (page) => selectCells(page, 5),
     verify: async (page) => {
       await modalVisible(page);
-      await expect(page.locator(MODAL)).toContainText("5 selected");
+      await expect(page.locator(MODAL)).toContainText(/\b5 of \d+ selected/);
     },
     restore: async (page) => clearSelection(page),
   },
@@ -846,7 +855,7 @@ const STATES: OverviewState[] = [
     },
     verify: async (page) => {
       await modalVisible(page);
-      await expect(page.locator(MODAL)).toContainText("3 selected");
+      await expect(page.locator(MODAL)).toContainText(/\b3 of \d+ selected/);
     },
     restore: async (page) => {
       await page.emulateMedia({ forcedColors: "none" });
@@ -864,7 +873,7 @@ const STATES: OverviewState[] = [
     },
     verify: async (page) => {
       await modalVisible(page);
-      await expect(page.locator(MODAL)).toContainText("3 selected");
+      await expect(page.locator(MODAL)).toContainText(/\b3 of \d+ selected/);
     },
     restore: async (page) => {
       await page.emulateMedia({ contrast: "no-preference" });

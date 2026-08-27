@@ -830,6 +830,51 @@ export function WorktreeOverviewModal({
             variant="modal"
             inputRef={searchInputRef}
             chipCounts={chipCounts}
+            trailing={
+              // Main-worktree visibility rides with the facets rather than in a
+              // band of its own: it is a filter, and next to the funnel is
+              // where the rest of them live. The accessible name is fixed —
+              // `aria-checked` carries the state — because a toggle whose label
+              // flips is announced as a different control each time it is used.
+              showMainToggle ? (
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={!hideMainWorktree}
+                      aria-label="Show main worktree"
+                      onClick={() => setHideMainWorktree(!hideMainWorktree)}
+                      className={cn(
+                        "flex shrink-0 items-center gap-1.5 px-2 rounded-full text-xs transition-colors",
+                        "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent",
+                        hideMainWorktree
+                          ? "bg-tint/[0.06] text-daintree-text/40 hover:text-daintree-text/60"
+                          : "bg-tint/[0.10] text-daintree-text/70 hover:text-daintree-text/90"
+                      )}
+                    >
+                      <Plug
+                        className={cn(
+                          "w-3 h-3 transition-colors",
+                          hideMainWorktree ? "text-daintree-text/30" : "text-daintree-text/50"
+                        )}
+                      />
+                      <span
+                        className={cn(
+                          "transition-colors",
+                          hideMainWorktree && "line-through decoration-daintree-text/30"
+                        )}
+                      >
+                        main
+                      </span>
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">
+                    {hideMainWorktree ? "Main worktree hidden" : "Main worktree shown"}
+                  </TooltipContent>
+                </Tooltip>
+              ) : null
+            }
           />
         )}
 
@@ -884,7 +929,7 @@ export function WorktreeOverviewModal({
             </div>
           </div>
         ) : (
-          (hasActivitySummary || showMainToggle || hasActiveFilters()) && (
+          (hasActivitySummary || hasActiveFilters()) && (
             <div className="flex items-center gap-2 px-[calc(1.5rem+11px)] py-2 border-b border-divider shrink-0 flex-wrap">
               {/* Aggregate activity statistics — clickable chips that set quickStateFilter.
                   Ordered waiting → working → finished: "something is asking me
@@ -981,48 +1026,6 @@ export function WorktreeOverviewModal({
               )}
 
               <div className="ml-auto flex items-center gap-2">
-                {/* Main-worktree visibility. The accessible name is fixed —
-                    `aria-checked` carries the state — because a toggle whose
-                    label flips is announced as a different control each time
-                    it is used. */}
-                {showMainToggle && (
-                  <Tooltip>
-                    <TooltipTrigger asChild>
-                      <button
-                        type="button"
-                        role="switch"
-                        aria-checked={!hideMainWorktree}
-                        aria-label="Show main worktree"
-                        onClick={() => setHideMainWorktree(!hideMainWorktree)}
-                        className={cn(
-                          "flex items-center gap-1.5 px-2 py-1 rounded-full text-xs transition-colors",
-                          "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent",
-                          hideMainWorktree
-                            ? "bg-tint/[0.06] text-daintree-text/40 hover:text-daintree-text/60"
-                            : "bg-tint/[0.10] text-daintree-text/70 hover:text-daintree-text/90"
-                        )}
-                      >
-                        <Plug
-                          className={cn(
-                            "w-3 h-3 transition-colors",
-                            hideMainWorktree ? "text-daintree-text/30" : "text-daintree-text/50"
-                          )}
-                        />
-                        <span
-                          className={cn(
-                            "transition-colors",
-                            hideMainWorktree && "line-through decoration-daintree-text/30"
-                          )}
-                        >
-                          main
-                        </span>
-                      </button>
-                    </TooltipTrigger>
-                    <TooltipContent side="bottom">
-                      {hideMainWorktree ? "Main worktree hidden" : "Main worktree shown"}
-                    </TooltipContent>
-                  </Tooltip>
-                )}
                 {/* Clear Filters Button - only shown when filters are active */}
                 {hasActiveFilters() && (
                   <Tooltip>
