@@ -93,12 +93,18 @@ vi.mock("@/components/ui/AppDialog", () => {
     className?: string;
   }
 
+  // The synthetic close button stands in for Escape and the backdrop, both of
+  // which the real AppDialog withholds when `dismissible` is false. Rendering it
+  // unconditionally made the mock unable to express the one thing the completed
+  // mode changed.
   const AppDialog = ({ isOpen, children, onClose, dismissible = true }: AppDialogMockProps) =>
     isOpen ? (
       <div data-testid="app-dialog" data-dismissible={dismissible ? "true" : "false"}>
-        <button type="button" onClick={onClose}>
-          dialog-close
-        </button>
+        {dismissible && (
+          <button type="button" onClick={onClose}>
+            dialog-close
+          </button>
+        )}
         {children}
       </div>
     ) : null;
@@ -305,6 +311,29 @@ describe("CloneRepoDialog", () => {
     });
 
     expect((await findProgressBar()).getAttribute("aria-label")).toBe("receiving");
+  });
+
+  it("stops offering a dismissal once the only thing it can do is open the project", async () => {
+    const onCancel = vi.fn();
+    render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={onCancel} />);
+
+    fireEvent.change(screen.getByPlaceholderText("owner/repo or repository URL"), {
+      target: { value: "https://github.com/user/my-repo.git" },
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByText("Browse"));
+    });
+    await act(async () => {
+      fireEvent.click(screen.getByText("Clone"));
+    });
+
+    await waitFor(() => expect(screen.getByText("Open project")).toBeTruthy());
+    // Escape, the backdrop and the header X all route to the same handler, and
+    // in this mode that handler OPENS the project. A control that presents as a
+    // dismissal must not be the forward action wearing a disguise.
+    expect(screen.getByTestId("app-dialog").getAttribute("data-dismissible")).toBe("false");
+    expect(screen.queryByText("dialog-close")).toBeNull();
+    expect(onCancel).not.toHaveBeenCalled();
   });
 
   it("calls onSuccess with clonedPath after successful clone", async () => {
