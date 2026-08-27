@@ -227,6 +227,9 @@ vi.mock("@/components/ui/popover", () => ({
   PopoverTrigger: ({ children }: { children: React.ReactNode; asChild?: boolean }) => (
     <>{children}</>
   ),
+  PopoverAnchor: ({ children }: { children: React.ReactNode; asChild?: boolean }) => (
+    <>{children}</>
+  ),
   PopoverContent: ({
     children,
   }: {

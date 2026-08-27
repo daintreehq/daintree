@@ -18,6 +18,14 @@ export type BranchOptionRow = BranchPickerRow & { kind: "option" };
  */
 export interface BranchPickerKeyEvent {
   key: string;
+  /**
+   * Read so a modified Enter is left alone. The dialog advertises Cmd/Ctrl+Enter
+   * as "submit from anywhere, pickers included"; a search field that swallowed
+   * it would break the shortcut printed on the dialog's own button.
+   */
+  metaKey: boolean;
+  ctrlKey: boolean;
+  altKey: boolean;
   nativeEvent: { isComposing: boolean; keyCode: number };
   preventDefault: () => void;
   stopPropagation: () => void;
@@ -162,6 +170,10 @@ export function useBranchPicker({
         setOpen(false);
         return;
       }
+
+      // The list owns the bare navigation keys only. A modified chord belongs to
+      // whatever bound it — Cmd+Enter to the dialog's submit.
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
 
       if (selectableRows.length === 0) return;
 

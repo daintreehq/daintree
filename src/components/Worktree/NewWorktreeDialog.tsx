@@ -316,10 +316,12 @@ export function NewWorktreeDialog({
     prefixPickerOpen,
     setPrefixPickerOpen,
     prefixSelectedIndex,
+    setPrefixSelectedIndex,
     prefixSuggestions,
     prefixListRef,
     handlePrefixKeyDown,
     handlePrefixSelect,
+    handleInputFocus: handleBranchInputFocus,
   } = usePrefixPicker({
     branchInput,
     onSelectPrefix,
@@ -1163,6 +1165,8 @@ export function NewWorktreeDialog({
                       prefixSelectedIndex={prefixSelectedIndex}
                       onPrefixKeyDown={handlePrefixKeyDown}
                       onPrefixSelect={handlePrefixSelectWrap}
+                      onPrefixCursorChange={setPrefixSelectedIndex}
+                      onPrefixInputFocus={handleBranchInputFocus}
                       prefixListRef={prefixListRef}
                       inputRef={newBranchInputRef}
                     />

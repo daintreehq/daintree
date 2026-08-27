@@ -234,6 +234,12 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
       "Path input and its browse button are one compound control — the ring is painted once on the wrapper via has-[input:focus-visible], so an element-owned ring here would draw a second ring around the pair",
   },
   {
+    file: "src/components/ui/PopoverSearchField.tsx",
+    fragment: "h-10 min-w-0 flex-1 bg-transparent text-sm text-daintree-text",
+    reason:
+      "The field is the popover's whole top strip, so its indicator is painted once on the wrapping label via focus-within — it has to span the panel's full width and take its rounded top corners, which a ring on the bare input cannot do (that ring is precisely what this component replaced)",
+  },
+  {
     file: "src/components/HelpPanel/HelpPanel.tsx",
     fragment: "relative shrink-0 flex flex-col h-full overflow-hidden outline-hidden",
     reason:

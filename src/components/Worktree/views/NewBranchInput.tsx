@@ -1,6 +1,7 @@
-import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import { Popover, PopoverAnchor, PopoverContent } from "@/components/ui/popover";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { Spinner } from "@/components/ui/Spinner";
+import { PALETTE_ROW_CLASS } from "@/components/ui/paletteRowStyles";
 import { cn } from "@/lib/utils";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { FIELD_INPUT } from "./WorktreeFormLayout";
@@ -20,6 +21,8 @@ interface NewBranchInputProps {
   prefixSelectedIndex: number;
   onPrefixKeyDown: (e: React.KeyboardEvent) => void;
   onPrefixSelect: (suggestion: PrefixSuggestion) => void;
+  onPrefixCursorChange: (index: number) => void;
+  onPrefixInputFocus: () => void;
   prefixListRef: React.RefObject<HTMLDivElement | null>;
   inputRef: React.RefObject<HTMLInputElement | null>;
 }
@@ -46,6 +49,8 @@ export function NewBranchInput({
   prefixSelectedIndex,
   onPrefixKeyDown,
   onPrefixSelect,
+  onPrefixCursorChange,
+  onPrefixInputFocus,
   prefixListRef,
   inputRef,
 }: NewBranchInputProps) {
@@ -57,8 +62,14 @@ export function NewBranchInput({
 
   return (
     <div className="space-y-1.5">
+      {/* Anchor, not trigger: this list is opened by typing, never by clicking.
+          As a trigger, Radix bound a toggle to the field itself, so clicking
+          into your own text to fix a typo dismissed the suggestions. An anchor
+          alone is not enough — with no trigger registered, Radix reads a click
+          in the input as an interaction OUTSIDE the list — so the content below
+          also vetoes dismissal for targets inside the field. */}
       <Popover open={prefixPickerOpen} onOpenChange={onPrefixPickerOpenChange}>
-        <PopoverTrigger asChild>
+        <PopoverAnchor asChild>
           <div className="relative">
             <input
               ref={inputRef}
@@ -68,6 +79,7 @@ export function NewBranchInput({
               value={value}
               onChange={(e) => onChange(e.target.value)}
               onBlur={onBlur}
+              onFocus={onPrefixInputFocus}
               onKeyDown={onPrefixKeyDown}
               placeholder="feature/add-user-auth"
               className={cn(
@@ -89,6 +101,11 @@ export function NewBranchInput({
               aria-autocomplete="list"
               aria-controls="prefix-list"
               aria-expanded={prefixPickerOpen}
+              aria-activedescendant={
+                prefixPickerOpen && prefixSuggestions.length > 0
+                  ? `prefix-option-${prefixSelectedIndex}`
+                  : undefined
+              }
             />
             {showCheckingSpinner && (
               <Spinner
@@ -97,12 +114,18 @@ export function NewBranchInput({
               />
             )}
           </div>
-        </PopoverTrigger>
+        </PopoverAnchor>
         <PopoverContent
           align="start"
           className="w-[var(--radix-popover-trigger-width)] p-0"
           onOpenAutoFocus={(e) => e.preventDefault()}
           onEscapeKeyDown={(e) => e.stopPropagation()}
+          onInteractOutside={(event) => {
+            const target = event.detail.originalEvent.target;
+            if (target instanceof Node && inputRef.current?.contains(target)) {
+              event.preventDefault();
+            }
+          }}
         >
           <ScrollShadow
             ref={prefixListRef}
@@ -119,12 +142,17 @@ export function NewBranchInput({
               prefixSuggestions.map((suggestion, index) => (
                 <div
                   key={suggestion.type.prefix}
+                  id={`prefix-option-${index}`}
                   role="option"
                   aria-selected={index === prefixSelectedIndex}
+                  // Pointer-move rather than hover styling, so the pointer and
+                  // the arrow keys drive one cursor — the same model the branch
+                  // picker uses two rows up in this form.
+                  onPointerMove={() => onPrefixCursorChange(index)}
                   onClick={() => onPrefixSelect(suggestion)}
                   className={cn(
-                    "flex items-center gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer hover:bg-overlay-hover",
-                    index === prefixSelectedIndex && "bg-overlay-selected"
+                    PALETTE_ROW_CLASS,
+                    "flex items-center gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer"
                   )}
                 >
                   <span className="font-mono text-xs text-daintree-text">

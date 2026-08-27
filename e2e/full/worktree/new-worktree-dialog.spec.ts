@@ -273,4 +273,101 @@ test.describe.serial("Full: New Worktree Dialog", () => {
     await expect(window.locator(SEL.worktree.newDialog)).toBeVisible();
     await expect(trigger).toContainText(chosen, { timeout: T_MEDIUM });
   });
+  test("a click elsewhere in the form dismisses an open picker", async () => {
+    const { window } = ctx;
+    await openDialog(window);
+
+    // AppDialog stops click propagation on its panel, which used to swallow the
+    // click Radix defers its outside-dismissal to: every picker in every dialog
+    // stayed open until you pressed Escape or clicked its own trigger again.
+    const baseTrigger = window.locator(SEL.worktree.baseBranchTrigger);
+    await baseTrigger.click();
+    const branchList = window.locator(SEL.worktree.baseBranchListbox);
+    await expect(branchList).toBeVisible({ timeout: T_MEDIUM });
+
+    await window.locator("h3", { hasText: "Destination" }).first().click();
+    await expect(branchList).toHaveCount(0, { timeout: T_MEDIUM });
+    // The click lands inside the dialog, so the dialog itself must survive it.
+    await expect(window.locator(SEL.worktree.newDialog)).toBeVisible();
+
+    const recipeTrigger = window.locator(SEL.worktree.recipeTrigger);
+    await recipeTrigger.click();
+    const recipeList = window.locator(SEL.worktree.recipeListbox);
+    await expect(recipeList).toBeVisible({ timeout: T_MEDIUM });
+
+    await window.locator("h3", { hasText: "Destination" }).first().click();
+    await expect(recipeList).toHaveCount(0, { timeout: T_MEDIUM });
+    await expect(window.locator(SEL.worktree.newDialog)).toBeVisible();
+  });
+
+  test("the base-branch and recipe pickers open at their trigger's width", async () => {
+    const { window } = ctx;
+    await openDialog(window);
+
+    // The recipe and issue panels were pinned at 400px while the branch pickers
+    // tracked their trigger, so working down the form stepped the surface width.
+    const widthOf = async (locator: ReturnType<Page["locator"]>) => {
+      const box = await locator.boundingBox();
+      return Math.round(box?.width ?? 0);
+    };
+
+    for (const [triggerSel, listSel] of [
+      [SEL.worktree.baseBranchTrigger, SEL.worktree.baseBranchListbox],
+      [SEL.worktree.recipeTrigger, SEL.worktree.recipeListbox],
+    ] as const) {
+      const trigger = window.locator(triggerSel);
+      await trigger.click();
+      const list = window.locator(listSel);
+      await expect(list).toBeVisible({ timeout: T_MEDIUM });
+      // The panel itself, not the listbox inside it (which gives up a few
+      // pixels to the scrollbar) and not the popper wrapper around it (which
+      // carries Radix's own `min-width: max-content`). Polled, not read once:
+      // Radix parks the panel off-screen at content width until Floating UI's
+      // first pass publishes the anchor width it sizes from, and `toBeVisible`
+      // is already true by then.
+      const panel = window.locator(
+        `[data-radix-popper-content-wrapper]:has(${listSel}) > [role="dialog"]`
+      );
+      await expect
+        .poll(async () => Math.abs((await widthOf(panel)) - (await widthOf(trigger))), {
+          timeout: T_MEDIUM,
+        })
+        .toBeLessThanOrEqual(2);
+      await window.keyboard.press("Escape");
+      await expect(list).toHaveCount(0, { timeout: T_SHORT });
+    }
+  });
+  test("the dialog body reserves its scrollbar so fields cannot resize under it", async () => {
+    const { window } = ctx;
+    await openDialog(window);
+
+    // The app's scrollbar is 11px of real layout (`scrollbar-width: thin` in
+    // index.css outranks the 6px ::-webkit-scrollbar rule), so a body that only
+    // makes room for it once it overflows resizes every control in the form the
+    // moment a hint row or a validation banner tips it over the fold.
+    //
+    // Asserted as the mechanism rather than by forcing an overflow: the window
+    // has a 600px minimum, and at that height this form still fits, so a
+    // shrink-until-it-scrolls test would pass without ever scrolling. Reserved
+    // space is directly observable — the content box is already narrower than
+    // the border box while nothing is scrolling, which is the whole point.
+    const body = window.locator(`${SEL.worktree.newDialog} .overflow-y-auto`).first();
+    const { reserved, scrolling } = await body.evaluate((el) => ({
+      reserved: el.getBoundingClientRect().width - el.clientWidth,
+      scrolling: el.scrollHeight > el.clientHeight + 1,
+    }));
+
+    expect(scrolling).toBe(false);
+    // Both edges, so the padding stays symmetric — hence two gutters, not one.
+    expect(reserved).toBeGreaterThan(0);
+
+    // And the fields actually live inside that reserved box.
+    const fieldWidth = Math.round(
+      (await window.locator(SEL.worktree.baseBranchTrigger).boundingBox())?.width ?? 0
+    );
+    const contentWidth = await body.evaluate(
+      (el) => el.clientWidth - parseFloat(getComputedStyle(el).paddingLeft) * 2
+    );
+    expect(fieldWidth).toBeLessThanOrEqual(Math.round(contentWidth));
+  });
 });

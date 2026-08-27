@@ -11,6 +11,7 @@ import {
   ESCAPE_BACKSTOP_DIALOG_ATTR,
   _resetForTests,
 } from "@/lib/dialogEscapeBackstop";
+import { APP_DIALOG_SURFACE_ATTR } from "@/lib/appDialogSurface";
 
 function makeEvent(target: EventTarget | null): Event & { preventDefault: () => void } {
   const preventDefault = vi.fn();
@@ -36,6 +37,32 @@ function makeRadixOutsideEvent(
 }
 
 describe("handleDockInteractOutside", () => {
+  it("keeps the popover open when the click lands in a dialog it opened", () => {
+    // A dialog opened from a dock popover portals to the body, so every click
+    // inside it is "outside" the popover. It has to stay open behind the dialog
+    // it spawned (#11505) — the Escape path guards the same invariant below.
+    const dialog = document.createElement("div");
+    dialog.setAttribute(APP_DIALOG_SURFACE_ATTR, "");
+    const confirmButton = document.createElement("button");
+    dialog.appendChild(confirmButton);
+    document.body.appendChild(dialog);
+
+    const event = makeRadixOutsideEvent(confirmButton, confirmButton);
+    handleDockInteractOutside(event, document.createElement("div"));
+
+    expect(event.preventDefault).toHaveBeenCalled();
+  });
+
+  it("still dismisses for a click that is in neither the portal nor a dialog", () => {
+    const elsewhere = document.createElement("button");
+    document.body.appendChild(elsewhere);
+
+    const event = makeRadixOutsideEvent(elsewhere, elsewhere);
+    handleDockInteractOutside(event, document.createElement("div"));
+
+    expect(event.preventDefault).not.toHaveBeenCalled();
+  });
+
   it("prevents dismissal when target is inside the portal container", () => {
     const container = document.createElement("div");
     const button = document.createElement("button");

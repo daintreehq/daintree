@@ -1,6 +1,7 @@
 import {
   useEffect,
   useRef,
+  useState,
   useCallback,
   useId,
   createContext,
@@ -22,11 +23,13 @@ import {
   markBackstopConsumedEscape,
   ESCAPE_BACKSTOP_DIALOG_ATTR,
 } from "@/lib/dialogEscapeBackstop";
+import { APP_DIALOG_SURFACE_ATTR } from "@/lib/appDialogSurface";
 import { useDockPopoverOpen } from "@/lib/dockPopoverLayer";
 import { usePortalStore } from "@/store";
 import { clearDialogOverlays } from "@/lib/dialogOverlayDismissal";
 import { useAnimatedPresence } from "@/hooks/useAnimatedPresence";
 import { AccessibilityAnnouncer } from "@/components/Accessibility/AccessibilityAnnouncer";
+import { DialogDismissSurface } from "./DialogDismissSurface";
 import {
   UI_ENTER_DURATION,
   UI_EXIT_DURATION,
@@ -143,6 +146,9 @@ export function AppDialog({
     initialFocus ?? (variant === "destructive" ? "cancel" : "first");
   const previousActiveElement = useRef<HTMLElement | null>(null);
   const backdropPointerRef = useRef<number | null>(null);
+  // State, not a ref: `DialogDismissSurface` has to re-render once the node
+  // exists, and a ref would leave it registering `null` forever.
+  const [backdropNode, setBackdropNode] = useState<HTMLDivElement | null>(null);
   const closeInFlightRef = useRef(false);
   const dialogRef = useRef<HTMLDivElement>(null);
   const titleId = useId();
@@ -401,6 +407,7 @@ export function AppDialog({
           transitionDuration: isVisible ? `${UI_ENTER_DURATION}ms` : `${UI_EXIT_DURATION}ms`,
           transitionTimingFunction: UI_SCRIM_EASING,
         }}
+        ref={setBackdropNode}
         onPointerDown={handleBackdropPointerDown}
         onPointerUp={handleBackdropPointerUp}
         onPointerCancel={resetBackdropPointer}
@@ -413,6 +420,9 @@ export function AppDialog({
         // (`isOpen && dismissible`), not merely being mounted: a dialog mid-exit
         // has already unregistered and could not take the keypress.
         {...(isOpen && dismissible ? { [ESCAPE_BACKSTOP_DIALOG_ATTR]: "" } : {})}
+        // Unconditional, unlike the Escape backstop above: `handleDockInteractOutside`
+        // needs to recognise this surface whether or not the dialog is dismissible.
+        {...{ [APP_DIALOG_SURFACE_ATTR]: "" }}
         data-testid={dataTestId}
       >
         <div
@@ -446,6 +456,10 @@ export function AppDialog({
           onClick={(e) => e.stopPropagation()}
         >
           {children}
+          {/* A click anywhere on this surface dismisses a popover the dialog
+              hosts — see `DialogDismissSurface`. Registered on the backdrop so
+              the scrim counts too. */}
+          <DialogDismissSurface node={backdropNode} />
           {/* Co-located live region: VoiceOver suppresses announcements made
               from `aria-live` regions outside the focused `aria-modal` subtree
               when `document.ariaNotify` is unavailable (Chromium 354736464). */}
@@ -515,7 +529,18 @@ AppDialog.Body = function AppDialogBody({ children, className }: AppDialogBodyPr
     // the scroll box, so a caller's `space-y-*` there styled the overlays and
     // hung a stray margin off the scroll box while the actual fields got no
     // spacing at all. Matches where `BodyScroll` puts it.
-    <ScrollShadow className="flex-1 min-h-0" scrollClassName={cn("p-6", className)}>
+    //
+    // The gutter is reserved, and on both edges. The app's scrollbar is 11px of
+    // real layout (`scrollbar-width: thin` in `index.css`, which outranks the
+    // 6px `::-webkit-scrollbar` rule), so without this every control in a
+    // dialog resizes by 11px the moment its body crosses the overflow
+    // threshold — a hint row appearing, a validation banner clearing, a form
+    // swapping sections. `both-edges` keeps the padding symmetric; reserving
+    // one side only trades a jump for a permanent lopsided inset.
+    <ScrollShadow
+      className="flex-1 min-h-0"
+      scrollClassName={cn("p-6 [scrollbar-gutter:stable_both-edges]", className)}
+    >
       {children}
     </ScrollShadow>
   );
@@ -530,6 +555,11 @@ AppDialog.BodyScroll = function AppDialogBodyScroll({
   children,
   className,
 }: AppDialogBodyScrollProps) {
+  // Deliberately NOT carrying `Body`'s reserved gutter. This variant is the
+  // escape hatch for callers that own their own scrolling and padding, and
+  // `scrollbar-gutter` reserves its space on an `overflow: hidden` box too — so
+  // it would put 22px of dead inset inside `PanelDialogHost`'s edge-to-edge
+  // panel host, which sets `overflow-hidden p-0` precisely to fill the dialog.
   return <div className={cn("flex-1 overflow-auto min-h-0 p-6", className)}>{children}</div>;
 };
 

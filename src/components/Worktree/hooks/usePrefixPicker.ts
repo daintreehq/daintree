@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useMemo } from "react";
+import { useState, useEffect, useRef, useMemo, useCallback } from "react";
 import { suggestPrefixes } from "../branchPrefixUtils";
 
 export interface UsePrefixPickerResult {
@@ -10,6 +10,7 @@ export interface UsePrefixPickerResult {
   prefixListRef: React.RefObject<HTMLDivElement | null>;
   handlePrefixKeyDown: (e: React.KeyboardEvent) => void;
   handlePrefixSelect: (prefix: string) => void;
+  handleInputFocus: () => void;
 }
 
 export function usePrefixPicker({
@@ -38,14 +39,33 @@ export function usePrefixPicker({
     setPrefixSelectedIndex(0);
   }, [prefixPickerOpen]);
 
-  // Auto-open prefix picker
+  // Whether the input's current contents are worth suggesting a prefix for.
+  // Read from two places: the value effect below, and the field's own focus
+  // handler.
+  const isEligible =
+    branchInput.trim().length > 0 &&
+    branchInput.indexOf("/") === -1 &&
+    prefixSuggestions.length > 0 &&
+    prefixSuggestions.length < 12;
+
+  // Auto-open on typing, gated on the field actually holding focus: the branch
+  // name is also written for you — by picking an issue, by the project's
+  // configured prefix, by opening the dialog on a PR — and a suggestion list
+  // popping open over a form nobody is typing in reads as a glitch.
   useEffect(() => {
-    const hasTyped = branchInput.trim().length > 0;
-    const hasNoSlash = branchInput.indexOf("/") === -1;
-    const hasSuggestions = prefixSuggestions.length > 0 && prefixSuggestions.length < 12;
-    const shouldShowPrefixPicker = hasTyped && hasNoSlash && hasSuggestions;
-    setPrefixPickerOpen(shouldShowPrefixPicker);
-  }, [prefixSuggestions, branchInput]);
+    const isFocused =
+      typeof document !== "undefined" && document.activeElement === newBranchInputRef.current;
+    setPrefixPickerOpen(isEligible && isFocused);
+  }, [isEligible, newBranchInputRef]);
+
+  // Focus is not a dependency of the effect above, so returning to an unchanged
+  // input would otherwise leave the list shut until the next keystroke. There is
+  // deliberately no blur counterpart: blur fires on pointer-down over a
+  // suggestion, so closing there would pull the row out from under the click.
+  // Radix's own focus-outside handling closes the list.
+  const handleInputFocus = useCallback(() => {
+    setPrefixPickerOpen(isEligible);
+  }, [isEligible]);
 
   const handlePrefixSelect = (prefix: string) => {
     const currentInput = branchInput.trim();
@@ -109,5 +129,6 @@ export function usePrefixPicker({
     prefixListRef,
     handlePrefixKeyDown,
     handlePrefixSelect,
+    handleInputFocus,
   };
 }

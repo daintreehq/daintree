@@ -3,7 +3,8 @@ import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { HighlightedText } from "@/components/ui/HighlightedText";
 import { PALETTE_ROW_CLASS, PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
-import { Check, Search } from "lucide-react";
+import { PopoverSearchField } from "@/components/ui/PopoverSearchField";
+import { Check } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatTimeAgo } from "@/utils/timeAgo";
 import type { BranchPickerRow } from "../branchPickerUtils";
@@ -69,17 +70,10 @@ export function BranchPickerPanel({
 
   return (
     <PopoverContent
-      // Sized off the trigger rather than a magic number, matching the sibling
-      // NewBranchInput field and three other selectors.
-      //
-      // Caveat measured in the e2e harness: Radix's popper wrapper shrink-wraps
-      // to this element's CONTENT and does not respond to a width set here — not
-      // even a concrete `!important` pixel value — so in practice the panel still
-      // renders at content width, exactly as it did under the old `w-[400px]`.
-      // Making the panel genuinely track its trigger means teaching the shared
-      // `popover.tsx` wrapper to carry the width, which is every popover in the
-      // app and so its own change. This keeps the declaration honest and drops
-      // the dead constant.
+      // Sized off the trigger, like every other picker in this dialog. An
+      // earlier note here claimed the popper wrapper shrink-wrapped to content
+      // and ignored this; re-measured in the harness, the wrapper reports the
+      // trigger's own width (546px for both), so the declaration does hold.
       className="w-[var(--radix-popover-trigger-width)] p-0"
       align="start"
       // The popover portals out of the dialog's subtree; without this its own
@@ -92,29 +86,19 @@ export function BranchPickerPanel({
         inputRef.current?.focus();
       }}
     >
-      <div className="flex items-center border-b border-daintree-border px-3">
-        <Search className="mr-2 h-4 w-4 text-text-muted shrink-0" aria-hidden="true" />
-        <input
-          ref={inputRef}
-          // The field opts out of the global ring, so it owns its own indicator —
-          // required by the focus-ring fallback contract, which only exempts
-          // elements that delegate focus elsewhere, and this one is autofocused.
-          // Neutral `selection-outline` at ring-1 inset, the same token the palette
-          // input's focus border uses: the previous treatment was a 2px accent ring
-          // that read as a green box floating inside the panel (#11724).
-          className="flex h-10 w-full bg-transparent py-3 text-sm outline-hidden placeholder:text-text-placeholder disabled:cursor-not-allowed disabled:opacity-50 focus-visible:ring-1 focus-visible:ring-inset focus-visible:ring-selection-outline/60"
-          placeholder={searchPlaceholder}
-          value={query}
-          onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={handleKeyDown}
-          role="combobox"
-          aria-label={searchAriaLabel}
-          aria-autocomplete="list"
-          aria-controls={listId}
-          aria-expanded
-          aria-activedescendant={activeIndex >= 0 ? `${optionIdPrefix}${activeIndex}` : undefined}
-        />
-      </div>
+      <PopoverSearchField
+        ref={inputRef}
+        placeholder={searchPlaceholder}
+        value={query}
+        onChange={(e) => setQuery(e.target.value)}
+        onKeyDown={handleKeyDown}
+        role="combobox"
+        aria-label={searchAriaLabel}
+        aria-autocomplete="list"
+        aria-controls={listId}
+        aria-expanded
+        aria-activedescendant={activeIndex >= 0 ? `${optionIdPrefix}${activeIndex}` : undefined}
+      />
       <ScrollShadow
         ref={listRef}
         id={listId}
