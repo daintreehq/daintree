@@ -441,11 +441,21 @@ export function WorktreeTerminalSection({
                 isSidebar ? SECTION_LABEL : "text-[11px] font-medium text-text-muted"
               )}
             >
-              {SummaryIcon ? (
-                <SummaryIcon className="w-3 h-3" />
-              ) : (
-                <SquareTerminal className="w-3 h-3" />
-              )}
+              {/* The expanded sidebar trigger drops the summary glyph. It led
+                  a row whose only other leading mark is the chevron, so this
+                  section's label started ~20px right of Details' — two rows
+                  the card presents as siblings, sitting on two columns — and
+                  it spent that measure on agent identity the child rows
+                  directly below already carry, one glyph each, in a 240px
+                  column. The collapsed trigger keeps it (no children to read
+                  it off), and so does the grid, which has the width and treats
+                  this row as a header rather than a peer. */}
+              {!isSidebar &&
+                (SummaryIcon ? (
+                  <SummaryIcon className="w-3 h-3" />
+                ) : (
+                  <SquareTerminal className="w-3 h-3" />
+                ))}
               <span>Active sessions ({counts.total})</span>
             </span>
             {!isSidebar && <ChevronRight className="h-3 w-3 rotate-90 text-text-muted" />}
@@ -534,6 +544,10 @@ export function WorktreeTerminalSection({
             {isSidebar && (
               <ChevronRight className="h-3 w-3 shrink-0 text-text-secondary" aria-hidden="true" />
             )}
+            {/* Kept here, unlike the expanded trigger: collapsed, this glyph
+                is the ONLY thing on screen saying which agent is running. The
+                expanded trigger can drop it because its own child rows are
+                directly below it, each carrying that agent's glyph. */}
             {SummaryIcon ? (
               <SummaryIcon className="w-3 h-3" />
             ) : (

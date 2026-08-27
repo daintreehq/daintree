@@ -83,7 +83,7 @@
    and a dimmed right-edge accent border rather than zeroing the box-shadow. */
 .sidebar-root:not(:focus-within) .sidebar-worktree-card[data-active="true"] {
   background: var(--sidebar-active-bg, rgba(255, 255, 255, 0.065));
-  --card-edge: inset -2px 0 0 color-mix(in srgb, var(--theme-accent-primary) 45%, transparent);
+  --card-edge: inset -2px 0 0 color-mix(in srgb, var(--theme-accent-primary) 65%, transparent);
 }
 
 /* Accent restraint: exactly one accent anchor per focus region. While a
@@ -95,11 +95,19 @@
    sidebar loses focus entirely, rather than the ring changing colour depending
    on which row it lands on.
 
+   65%, not 45%. The receded edge is still the SOLE indicator that a row is
+   selected — the neutral lift measures about 1.03:1 and cannot carry the state
+   on its own — so it owes WCAG 1.4.11's 3:1. Alpha-mixing to transparent is
+   what broke that: on the light palettes 45% of the accent composited over a
+   white selected card measured 2.33:1. At 65% it clears 3:1 there and still
+   sits visibly under full strength on the dark palettes, which is the only
+   thing the recede has to say.
+
    `:has(:focus-visible)` and not `:focus-within`: the keyboard-cursor row
    draws no ring at all (#8094), so on that path there is no second accent to
    yield to and the edge must stay at full strength. */
 .sidebar-root .sidebar-worktree-card[data-active="true"]:has(:focus-visible) {
-  --card-edge: inset -2px 0 0 color-mix(in srgb, var(--theme-accent-primary) 45%, transparent);
+  --card-edge: inset -2px 0 0 color-mix(in srgb, var(--theme-accent-primary) 65%, transparent);
 }
 
 .sidebar-worktree-card[data-hoverable="true"]:hover,

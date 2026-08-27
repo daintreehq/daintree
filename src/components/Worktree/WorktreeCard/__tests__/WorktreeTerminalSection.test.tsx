@@ -105,7 +105,22 @@ describe("WorktreeTerminalSection summary icon", () => {
     expect(screen.getByTestId("agent-icon")).toBeDefined();
   });
 
-  it("shows agent icon when all terminals share the same detectedAgentId (expanded)", () => {
+  it("drops the summary glyph once expanded, where the child rows carry agent identity", () => {
+    // The glyph earns its ~18px of a 240px column only while the sessions it
+    // summarises are hidden. Expanded, every child row is directly below the
+    // trigger carrying its own agent glyph, and the trigger's copy pushed
+    // "Active sessions" onto a different column from "Details" — the row the
+    // card presents as its sibling. Collapsed it stays, which the test above
+    // pins; this asserts the pair, not either value.
+    const collapsed = renderSection({
+      terminals: [
+        makeTerminal({ detectedAgentId: "claude" }),
+        makeTerminal({ detectedAgentId: "claude" }),
+      ],
+    });
+    expect(screen.getByTestId("agent-icon")).toBeDefined();
+    collapsed.unmount();
+
     renderSection({
       isExpanded: true,
       terminals: [
@@ -113,7 +128,7 @@ describe("WorktreeTerminalSection summary icon", () => {
         makeTerminal({ detectedAgentId: "claude" }),
       ],
     });
-    expect(screen.getByTestId("agent-icon")).toBeDefined();
+    expect(screen.queryByTestId("agent-icon")).toBeNull();
   });
 
   it("falls back to SquareTerminal when agents are mixed", () => {
