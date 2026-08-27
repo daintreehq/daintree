@@ -18,7 +18,7 @@ const buttonVariants = cva(
         default:
           "bg-primary text-primary-foreground ring-1 ring-tint/20 shadow-[var(--theme-shadow-ambient)] inset-shadow-[0_1px_0_rgba(255,255,255,0.15)] hover:brightness-110 active:brightness-95 active:inset-shadow-none",
         destructive:
-          "bg-destructive text-text-inverse [text-shadow:0_1px_0_rgba(255,255,255,0.15)] ring-1 ring-tint/20 shadow-[var(--theme-shadow-ambient)] inset-shadow-[0_1px_0_rgba(255,255,255,0.15)] hover:brightness-110 active:brightness-95 active:inset-shadow-none focus-visible:outline-destructive",
+          "bg-destructive text-text-inverse [text-shadow:0_1px_0_rgba(255,255,255,0.15)] ring-1 ring-tint/20 shadow-[var(--theme-shadow-ambient)] inset-shadow-[0_1px_0_rgba(255,255,255,0.15)] hover:brightness-110 active:brightness-95 active:inset-shadow-none",
         outline:
           "ring-1 ring-border-strong bg-surface-panel-elevated/95 backdrop-blur-md text-daintree-text shadow-[var(--theme-shadow-ambient)] inset-shadow-[0_1px_0_var(--color-overlay-soft)] hover:bg-surface-panel-elevated hover:ring-border-default hover:text-daintree-text active:bg-overlay-soft active:shadow-none",
         // High-contrast INVERSE CTA: a near-white fill + off-black text on dark
@@ -164,6 +164,13 @@ const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(
         aria-busy={loading || undefined}
         aria-disabled={resolvedAriaDisabled}
         data-loading={loading || undefined}
+        // A durable hook for the forced-colors rule in index.css. In
+        // forced-colors the UA replaces every button's background with a system
+        // colour, so `bg-destructive` stops distinguishing this button from
+        // Cancel — an attribute survives where a fill does not, and unlike
+        // keying the CSS off the fill utility it cannot silently stop matching
+        // if the variant's classes are restyled.
+        data-variant={variant ?? "default"}
       >
         {spinner}
         {/* asChild + loading: overlay renders alongside the slotted child;
