@@ -511,12 +511,27 @@ test("sidebar worktree card review — states and themes", async () => {
       await snap(page, "55-card-plain-branch", plain);
     });
 
-    // 7. Selected. The right-edge accent, the background lift, and how the
-    //    expanded chrome reads on the elevated surface.
+    // 7. Selected vs inactive. The right-edge accent and the background lift
+    //    only mean anything as a comparison, so shoot the selected card and an
+    //    unselected sibling from the same frame, and assert which is which —
+    //    otherwise a card that was incidentally selected by an earlier step
+    //    reads as "selection is invisible".
     await step("selected", async () => {
-      await flagship.click({ position: { x: 120, y: 12 } });
+      const flagshipCard = flagship.locator(".sidebar-worktree-card").first();
+      const quietCard = quiet.locator(".sidebar-worktree-card").first();
+      await flagshipCard.click();
+      await expect(flagshipCard, "flagship did not become active").toHaveAttribute(
+        "data-active",
+        "true",
+        { timeout: T_LONG }
+      );
+      await expect(quietCard, "sibling card should not be active").not.toHaveAttribute(
+        "data-active",
+        "true"
+      );
       await page.waitForTimeout(600);
       await snap(page, "60-card-selected", flagship);
+      await snap(page, "62-card-inactive", quiet);
       await snap(page, "61-sidebar-selected", sidebar);
     });
 
@@ -528,11 +543,32 @@ test("sidebar worktree card review — states and themes", async () => {
       await setCardCollapsed(flagship, false);
     });
 
-    // 9. Keyboard focus. The row draws no ring by design (#8094); the toolbar
-    //    and drag handle revealing IS the affordance, so it has to be legible.
+    // 9. Keyboard focus. The row draws no ring by design (#8094); the toolbar,
+    //    drag handle and the disclosure's own outline are the affordance, so
+    //    they have to be legible.
+    //
+    //    This must be driven by real Tab presses. A scripted `.focus()` on a
+    //    <button> does not satisfy Chromium's `:focus-visible` heuristic, so a
+    //    shot taken that way shows the surface with NO focus styling and looks
+    //    exactly like a missing focus ring — a capture that lies about the very
+    //    state it is named for. Tab until the target matches `:focus-visible`,
+    //    and refuse to shoot if it never does.
     await step("focus", async () => {
-      await sectionButton(flagship, "details").focus();
+      const target = sectionButton(flagship, "details");
+      await expect(target, "details disclosure is missing").toBeVisible({ timeout: T_LONG });
+      await page.locator(SEL.worktree.searchInput).first().click();
+      let reached = false;
+      for (let i = 0; i < 60 && !reached; i++) {
+        await page.keyboard.press("Tab");
+        reached = await target
+          .evaluate((el) => el === document.activeElement && el.matches(":focus-visible"))
+          .catch(() => false);
+      }
+      if (!reached) {
+        throw new Error("never reached :focus-visible on the details disclosure by Tab");
+      }
       await snap(page, "80-card-keyboard-focus", flagship);
+      await snap(page, "81-sidebar-keyboard-focus", sidebar);
     });
 
     // 10. Sessions. Real PTYs in the flagship worktree so Active Sessions has
@@ -559,14 +595,21 @@ test("sidebar worktree card review — states and themes", async () => {
         await page.waitForTimeout(1500);
         await dismissBlockingPalette(page);
 
+        // Details stays collapsed for the session shots. A card with both
+        // sections open is taller than the sidebar viewport, and an element
+        // screenshot of that stitches the list's sticky overlays across the
+        // very rows being reviewed — 101 keeps that combined shot for the
+        // nesting evidence, but the session rows have to be legible somewhere.
+        await setSection(flagship, "details", false);
         await setSection(flagship, "terminals", true);
         await snap(page, "100-card-sessions-expanded", flagship, "Active Sessions");
-        await setSection(flagship, "details", true);
-        await snap(page, "101-card-details-and-sessions", flagship, "Active Sessions");
         await snap(page, "102-sidebar-loaded", sidebar);
         await setSection(flagship, "terminals", false);
         await snap(page, "103-card-sessions-collapsed", flagship, "active");
         await setSection(flagship, "terminals", true);
+        await setSection(flagship, "details", true);
+        await snap(page, "101-card-details-and-sessions", flagship, "Active Sessions");
+        await setSection(flagship, "details", false);
       });
     }
 
