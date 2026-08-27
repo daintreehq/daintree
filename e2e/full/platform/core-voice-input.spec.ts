@@ -321,10 +321,10 @@ test.describe.serial("E2E: Voice Input — Settings UI", () => {
     await openSettings(window);
     await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "Voice Input" }).click();
 
-    // Configured-state indicators: "Enter new key to replace" placeholder + "Configured" badge + Clear button.
+    // Configured-state indicators: "Enter new key to replace" placeholder + Clear
+    // button. The green "Configured" badge was ambient chrome and is gone (#12002).
     const keyInput = window.locator('input[placeholder="Enter new key to replace"]');
     await expect(keyInput).toBeVisible({ timeout: T_SHORT });
-    await expect(window.getByText("Configured", { exact: true })).toBeVisible();
     const clearButton = window.getByRole("button", { name: "Clear", exact: true });
     await expect(clearButton).toBeVisible();
 
@@ -334,14 +334,12 @@ test.describe.serial("E2E: Voice Input — Settings UI", () => {
     await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "Voice Input" }).click();
 
     await expect(keyInput).toBeVisible({ timeout: T_SHORT });
-    await expect(window.getByText("Configured", { exact: true })).toBeVisible();
+    await expect(clearButton).toBeVisible();
 
     // Clear reverts to unconfigured (placeholder returns to "sk-...").
     await clearButton.click();
     await expect(window.locator('input[placeholder="sk-..."]')).toBeVisible({ timeout: T_SHORT });
-    await expect(window.getByText("Configured", { exact: true })).not.toBeVisible({
-      timeout: T_SHORT,
-    });
+    await expect(clearButton).not.toBeVisible({ timeout: T_SHORT });
 
     // And the underlying store now reflects the empty key.
     const settings = await ipcGetSettings(window);

@@ -806,13 +806,15 @@ export function GeneralTab({
                       // is installed but can't run, and reads distinctly from
                       // the authentication-needed case so the user doesn't
                       // waste time re-authenticating a binary that an endpoint
-                      // security tool is blocking.
-                      const status = ready
-                        ? null
-                        : blocked
-                          ? { label: "Blocked", Icon: ShieldBan }
-                          : unauthenticated
-                            ? { label: "Login required", Icon: KeyRound }
+                      // security tool is blocking. Attention states are tested
+                      // before `ready` so a probe that ever reports both still
+                      // surfaces the problem rather than falling silent.
+                      const status = blocked
+                        ? { label: "Blocked", Icon: ShieldBan }
+                        : unauthenticated
+                          ? { label: "Login required", Icon: KeyRound }
+                          : ready
+                            ? null
                             : { label: "Needs setup", Icon: Wrench };
 
                       return (

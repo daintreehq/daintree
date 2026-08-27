@@ -155,12 +155,13 @@ describe("McpServerSettingsTab", () => {
     );
 
   // The key section used to announce itself with an ambient "API key active"
-  // line; issue #12002 removed it, so gate on the controls that only exist
-  // once a key has loaded.
+  // line; issue #12002 removed it, so gate on a control that only exists once
+  // a key has loaded. Copy is the right anchor — the reveal button's label
+  // flips to "Hide API key" the moment a test reveals the key.
   const waitForApiKeyControls = (container: HTMLElement) =>
     waitFor(
       () => {
-        expect(container.querySelector('button[aria-label="Show API key"]')).toBeTruthy();
+        expect(container.querySelector('button[aria-label="Copy API key"]')).toBeTruthy();
       },
       { timeout: 5000 }
     );

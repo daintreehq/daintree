@@ -320,22 +320,33 @@ describe("GeneralTab — System Status filtering (issue #5072)", () => {
 
     await renderGeneralTab();
 
-    await waitFor(() => {
-      expect(screen.getByText("Blocked")).toBeTruthy();
-    });
-    expect(screen.getByText("Login required")).toBeTruthy();
-    expect(screen.getByText("Needs setup")).toBeTruthy();
+    const rowFor = (name: string) => screen.getByLabelText(`Go to ${name} agent settings`);
+    const attention = [
+      { name: "Claude", label: "Blocked" },
+      { name: "Gemini", label: "Login required" },
+      { name: "Codex", label: "Needs setup" },
+    ];
 
-    const glyphs = ["Claude", "Gemini", "Codex"].map((name) => {
-      const svg = screen.getByLabelText(`Go to ${name} agent settings`).querySelector("svg");
+    await waitFor(() => {
+      expect(rowFor("Claude").textContent).toContain("Blocked");
+    });
+
+    // Each attention state must own both its label and a glyph nothing else uses.
+    const glyphs = attention.map(({ name, label }) => {
+      const row = rowFor(name);
+      expect(row.textContent).toContain(label);
+      const svg = row.querySelector("svg");
       expect(svg).toBeTruthy();
       return svg!.innerHTML;
     });
     expect(new Set(glyphs).size).toBe(3);
 
-    const readyRow = screen.getByLabelText("Go to Opencode agent settings");
+    const readyRow = rowFor("Opencode");
     expect(readyRow.querySelector("svg")).toBeNull();
-    expect(readyRow.textContent).toBe("Opencode");
+    for (const { label } of attention) {
+      expect(readyRow.textContent).not.toContain(label);
+    }
+    expect(readyRow.textContent).not.toContain("Ready");
   });
 
   it("renders empty-state CTA when no agents installed", async () => {
