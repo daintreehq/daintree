@@ -308,10 +308,10 @@ describe("GitPullRebaseConfirmDialog", () => {
     expect(screen.getByTestId("app-dialog-hint").textContent?.trim()).toBeTruthy();
   });
 
-  // Both a level branch and a purely-behind branch measure an empty replay set, and
-  // only one of them "already matches". Saying so of the other is a plain factual
-  // error about what the operation is going to do.
-  it("separates a branch that is level from one that is only behind", async () => {
+  // A branch level with its upstream and a branch behind it both measure an empty
+  // replay set, and only the first "already matches". Saying so of the second is a
+  // plain factual error about what the operation is going to do.
+  it("separates a branch that is level from one that is behind with nothing to replay", async () => {
     mocks.buildPreview.mockResolvedValue(
       loaded({ commits: [], rebaseRange: { total: 0, rangeBasis: "tracked" as const, behind: 6 } })
     );
@@ -322,9 +322,11 @@ describe("GitPullRebaseConfirmDialog", () => {
     });
 
     expect(screen.queryByTestId("git-pull-rebase-in-sync")).toBeNull();
-    expect(screen.getByTestId("git-pull-rebase-behind-only")).toBeTruthy();
-    // Still approvable: a fast-forward is a real, wanted outcome — it just does
-    // not rewrite anything, which is the part the copy has to get right.
+    expect(screen.getByTestId("git-pull-rebase-behind-nothing-to-replay")).toBeTruthy();
+    // Still approvable: pulling in what the upstream has is a real, wanted outcome
+    // — it just replays nothing, which is the part the copy has to get right. What
+    // it must NOT do is promise a fast-forward, which `behind` alone can't establish.
+    expect(screen.queryByText(/fast-forward/i)).toBeNull();
     expect(rebaseButton().hasAttribute("disabled")).toBe(false);
   });
 

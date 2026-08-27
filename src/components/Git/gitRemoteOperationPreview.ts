@@ -274,6 +274,14 @@ export function formatGitRemoteOperationPreviewLines(
  * measured against the upstream's remote-tracking ref, so an `unfetched` upstream
  * means "never fetched here, nothing to subtract from" — which is not the same
  * statement as "nothing would be replayed" and must not borrow its note.
+ *
+ * A measured-empty pull-rebase range also splits on `behind`, exactly as the human
+ * dialog splits it: level with the upstream, or behind it with nothing to replay.
+ * The caller's flat note only covers the first, and the two approvers reading one
+ * story is what this module owns. Neither line claims a fast-forward — `behind` is
+ * measured in the other direction, and the replay set is measured with
+ * `--no-merges --cherry-pick --right-only`, so an empty one is not evidence the
+ * branch carries no local-only commits.
  */
 function emptyLines(
   preview: GitRemoteOperationPreview,
@@ -285,6 +293,12 @@ function emptyLines(
     if (preview.rebaseRange?.rangeBasis === "unfetched") {
       return [
         `${MCP_PREVIEW_CAUTION_PREFIX}${formatGitPushDestination(preview.pullSource)} has never been fetched into this worktree, so what would be replayed could not be measured.`,
+      ];
+    }
+    const behind = preview.rebaseRange?.behind ?? 0;
+    if (behind > 0) {
+      return [
+        `This branch is ${behind} behind ${formatGitPushDestination(preview.pullSource)} and has no commit the rebase would replay on top of it.`,
       ];
     }
     return [emptyNote];

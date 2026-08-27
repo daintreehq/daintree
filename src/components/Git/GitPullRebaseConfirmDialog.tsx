@@ -174,12 +174,16 @@ function GitPullRebaseConfirmDialogInner() {
   const isLoaded = isSettled && commits !== null;
   const isUnfetched = rebaseRange?.rangeBasis === "unfetched";
   const isMeasuredEmpty = isLoaded && commits.length === 0 && upstream !== null && !isUnfetched;
-  // A measured-empty range is produced by two different repositories: one level
-  // with its upstream, and one purely behind it. Both replay nothing, but only the
-  // second is moved by the rebase, so "already matches" is true of exactly one of
-  // them and the `behind` count is the only thing that separates them.
+  // A measured-empty range means the rebase would replay nothing, and the `behind`
+  // count is the only thing that separates a branch already level with its upstream
+  // from one the rebase would move. It does NOT separate "purely behind" from
+  // anything else: the replay set is measured with `--no-merges --cherry-pick
+  // --right-only`, so a branch carrying merge commits, or commits the upstream
+  // already holds as equivalent patches, measures empty here too — and those are
+  // local-only commits the rebase drops rather than fast-forwards past. Neither
+  // line below may claim a fast-forward on the strength of `behind` alone.
   const isInSync = isMeasuredEmpty && (rebaseRange?.behind ?? 0) === 0;
-  const isBehindOnly = isMeasuredEmpty && (rebaseRange?.behind ?? 0) > 0;
+  const isBehindWithNothingToReplay = isMeasuredEmpty && (rebaseRange?.behind ?? 0) > 0;
   const isEmptyUnfetched = isLoaded && upstream !== null && isUnfetched;
   const total = rebaseRange?.total ?? commits?.length ?? 0;
   const hiddenCount = commits ? Math.max(0, total - commits.length) : 0;
@@ -248,10 +252,10 @@ function GitPullRebaseConfirmDialogInner() {
             it applies to. Same local-then-remote order as the sibling's From/To,
             with the vocabulary that keeps a rewrite from reading as a transfer. */}
         <dl className="px-3 py-2 space-y-1.5" data-testid="git-pull-rebase-upstream-summary">
-          {/* "Rewrites" only where a rewrite is actually on the table. The panel
-              below it says in as many words that a level or behind-only branch
-              has no commit change hash, and a label asserting the opposite two
-              rows above is the same contradiction the caution note had. */}
+          {/* "Rewrites" only where a rewrite is actually on the table. With an
+              empty replay set the panel below says nothing would be replayed,
+              and a label asserting a rewrite two rows above is the same
+              contradiction the caution note had. */}
           <SummaryRow label={isLoaded && commits.length > 0 ? "Rewrites" : "Branch"}>
             {branch && isSettled ? (
               <RefChip value={branch} emphasis />
@@ -381,13 +385,13 @@ function GitPullRebaseConfirmDialogInner() {
           </div>
         )}
 
-        {isBehindOnly && (
+        {isBehindWithNothingToReplay && (
           <div
             className="px-3 py-3 text-daintree-text/60"
-            data-testid="git-pull-rebase-behind-only"
+            data-testid="git-pull-rebase-behind-nothing-to-replay"
           >
-            Nothing of yours to replay &mdash; {branch} is {rebaseRange?.behind} behind{" "}
-            {upstreamLabel} and would fast-forward onto it. No commit changes hash.
+            Nothing to replay &mdash; {branch} is {rebaseRange?.behind} behind {upstreamLabel} and
+            has no commit the rebase would replay on top of it.
           </div>
         )}
 
@@ -443,11 +447,6 @@ function GitPullRebaseConfirmDialogInner() {
                   </span>
                 </li>
               ))}
-              {isUnfetched && (
-                <li className="text-[11px] text-status-error pt-0.5">
-                  {upstreamLabel} isn&apos;t available locally, so this list is unverified.
-                </li>
-              )}
               {hiddenCount > 0 && (
                 <li className="text-[11px] text-daintree-text/55 italic pt-0.5">
                   &hellip;and {hiddenCount} more

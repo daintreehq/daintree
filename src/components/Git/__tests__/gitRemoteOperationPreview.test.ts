@@ -620,6 +620,27 @@ describe("formatGitRemoteOperationPreviewLines", () => {
     expect(lines[2]).toBe("No local commits to replay.");
   });
 
+  // The human dialog splits a measured-empty range on `behind`, so the MCP approver
+  // has to read the same split — the flat note says nothing about the branch being
+  // moved. And neither surface may promise a fast-forward from `behind` alone.
+  it("tells the MCP approver the branch is behind rather than reusing the flat empty note", () => {
+    const lines = formatGitRemoteOperationPreviewLines(
+      {
+        branch: "topic",
+        destination: null,
+        pullSource: { remote: "origin", branch: "topic" },
+        commits: [],
+        pushRange: null,
+        rebaseRange: { total: 0, rangeBasis: "tracked", behind: 4 },
+      },
+      "No local commits to replay.",
+      "pull-rebase"
+    );
+    expect(lines.join(" ")).not.toContain("No local commits to replay.");
+    expect(lines[2]).toContain("4 behind origin/topic");
+    expect(lines.join(" ")).not.toContain("fast-forward");
+  });
+
   // An unfetched upstream is not a measurement either: there was no local ref to
   // subtract from, so empty means "not measured", never "nothing would be replayed".
   it("refuses the empty note when the upstream has never been fetched", () => {
