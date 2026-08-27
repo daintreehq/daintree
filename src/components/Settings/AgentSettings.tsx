@@ -420,9 +420,8 @@ export function AgentSettings({
             </div>
             <div id="agents-skip-permissions">
               <SettingsSwitchCard
-                variant="compact"
                 title="Skip permission prompts for agents"
-                subtitle="Agents run commands and edit files without asking — faster, but they act without confirmation. Sets the default for every agent; override per agent below. Applies to agent terminals, not Assistant sessions"
+                subtitle="Agents run commands and edit files without asking — faster, but you won't get a chance to review first. Sets the default for every agent that supports it; override per agent below. Assistant sessions aren't affected"
                 ariaLabel="Skip permission prompts for agents"
                 isEnabled={settings?.globalSkipPermissions ?? false}
                 onChange={() => {

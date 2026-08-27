@@ -1,3 +1,4 @@
+import { useId } from "react";
 import type { ComponentType } from "react";
 import { RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
@@ -44,6 +45,7 @@ export function SettingsSwitchCard({
   lifecycleBadge,
   scope,
 }: SettingsSwitchCardProps) {
+  const descriptionId = useId();
   const scheme = COLOR_SCHEMES[colorScheme] ?? COLOR_SCHEMES.accent;
   const isCard = variant === "card";
   const showReset = isModified && onReset && !disabled;
@@ -97,7 +99,9 @@ export function SettingsSwitchCard({
               </span>
             )}
           </div>
-          <div className="text-xs opacity-70">{subtitle}</div>
+          <div id={descriptionId} className="text-xs opacity-70">
+            {subtitle}
+          </div>
         </div>
       </div>
       <SettingsSwitch
@@ -105,6 +109,7 @@ export function SettingsSwitchCard({
         onCheckedChange={onChange}
         disabled={disabled}
         aria-label={ariaLabel}
+        aria-describedby={descriptionId}
         colorScheme={colorScheme}
       />
     </div>
