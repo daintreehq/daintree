@@ -23,6 +23,19 @@ export interface PendingMcpConfirm {
    * `danger !== "safe"` actions carry a rationale.
    */
   dangerRationale?: string;
+  /**
+   * Human-readable name of the thing this dispatch acts on — the worktree's
+   * branch or folder name, the recipe's name. Resolved from the renderer's own
+   * stores at request time, NEVER by reparsing {@link argsSummary}: that value
+   * is already redacted for display and widening it here would leak past the
+   * boundary main drew.
+   *
+   * Absent when no subject can be resolved synchronously. The git actions are
+   * the notable case — their branch and destination only exist on the async
+   * preview, and a title that changes after the dialog opens is worse than a
+   * stable generic one, because a dialog's accessible name is not re-announced.
+   */
+  subject?: string;
   argsSummary: string;
   /**
    * The dispatched action's registry `danger` classification. Drives the

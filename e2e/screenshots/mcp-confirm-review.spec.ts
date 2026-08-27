@@ -173,6 +173,7 @@ type ShotPayload = {
   actionDescription: string;
   argsSummary: string;
   danger: "safe" | "confirm" | "restricted";
+  sessionOrigin?: "help" | "assistant-pane" | "external";
   dangerRationale?: string;
   callerInfo?: { token4LastChars: string; userAgent: string };
   preview?: string[];
@@ -181,6 +182,7 @@ type ShotPayload = {
 };
 
 const EXTERNAL_CALLER = { token4LastChars: "8f3a", userAgent: "Claude Code 2.4.1 (darwin)" };
+const EXTERNAL_ORIGIN = "external" as const;
 
 /** Mirrors CONFIRM_COOLDOWN_MS in src/components/McpConfirmDialog.tsx. */
 const CONFIRM_COOLDOWN_MS = 1_200;
@@ -360,6 +362,9 @@ test("MCP approval dialog review — trust hierarchy across caller, danger, and 
           actionDescription: "List every git worktree in the current project.",
           argsSummary: "(none)",
           danger: "safe",
+          // Without an origin these render the "Unidentified client" fallback,
+          // so the shot named "assistant" would prove the wrong branch.
+          sessionOrigin: "help",
         },
       ]);
       await snap(page, "10-assistant-safe-no-preview", DIALOG);
@@ -368,6 +373,7 @@ test("MCP approval dialog review — trust hierarchy across caller, danger, and 
       await park(page, [
         deleteWorktree({
           requestId: "shot-assist-destructive",
+          sessionOrigin: "help",
           preview: PREVIEW_DIRTY,
           previewTitle: "Working tree changes",
         }),
@@ -375,6 +381,19 @@ test("MCP approval dialog review — trust hierarchy across caller, danger, and 
       await snap(page, "11-assistant-destructive-with-preview", DIALOG);
       await snap(page, "12-assistant-destructive-in-window");
       expectedShots += 2;
+
+      // Neither an external client nor the assistant: a session whose token
+      // hash was never registered. It must not borrow the assistant's standing.
+      await park(page, [
+        deleteWorktree({
+          requestId: "shot-unidentified",
+          sessionOrigin: "external",
+          preview: PREVIEW_DIRTY,
+          previewTitle: "Working tree changes",
+        }),
+      ]);
+      await snap(page, "13-unidentified-caller", DIALOG);
+      expectedShots++;
     });
 
     // ---- External client: the "Requested by" identity ----------------------

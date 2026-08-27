@@ -94,3 +94,39 @@ describe("forced-colors status-indicator contract (#8936)", () => {
     );
   });
 });
+
+// #11981: a destructive button is distinguished from Cancel only by its fill,
+// and forced-colors replaces every fill with a system colour — so the two
+// render as identical pills and nothing marks which one destroys. The fallback
+// is a heavier border (stroke weight is one of the few things the UA leaves
+// alone) keyed off `data-variant`, which `Button` emits. Both halves are
+// guarded: a rule with no emitter, or an emitter with no rule, is a silent
+// regression for High Contrast users.
+describe("forced-colors destructive button distinction (#11981)", () => {
+  it("keeps a heavier border on the destructive variant inside the forced-colors block", () => {
+    const blocks = readForcedColorsBlocks(INDEX_CSS);
+    const rule =
+      /button\[data-variant=["']destructive["']\]\s*\{[^}]*border:\s*2px\s+solid\s+ButtonText/;
+    expect(blocks).toMatch(rule);
+  });
+
+  it("does not use outline for that distinction — the focus ring owns outline and would win", () => {
+    const blocks = readForcedColorsBlocks(INDEX_CSS);
+    const match = blocks.match(/button\[data-variant=["']destructive["']\]\s*\{([^}]*)\}/);
+    expect(match).not.toBeNull();
+    expect(match?.[1]).not.toMatch(/outline\s*:/);
+  });
+
+  it("is actually emitted: Button renders the data-variant attribute the rule targets", () => {
+    const button = fs.readFileSync(path.join(REPO_ROOT, "src/components/ui/button.tsx"), "utf8");
+    expect(button).toMatch(/data-variant=\{/);
+  });
+
+  // The destructive focus ring used to be `focus-visible:outline-destructive`,
+  // which resolves through the same variable chain as `bg-destructive` — a
+  // focus indicator in exactly the colour of the thing it indicates.
+  it("does not paint the destructive focus ring in the button's own fill colour", () => {
+    const button = fs.readFileSync(path.join(REPO_ROOT, "src/components/ui/button.tsx"), "utf8");
+    expect(button).not.toMatch(/focus-visible:outline-destructive/);
+  });
+});

@@ -18,6 +18,16 @@ import { useMcpConfirmStore, type PendingMcpConfirm } from "@/store/mcpConfirmSt
 const CONFIRMATION_TIMEOUT_MS = 28_000;
 
 /**
+ * Main's own hard deadline, mirrored from `MCP_DISPATCH_TIMEOUT_MS` in
+ * `electron/services/mcp-server/shared.ts` (main-process only, so it cannot be
+ * imported here). Nothing this modal does may outlive it: past this point main
+ * has already failed the dispatch and told the agent it timed out, so an
+ * approval landing afterwards would run the action anyway — the destructive
+ * write happens while the caller was told it did not.
+ */
+const MAIN_DISPATCH_DEADLINE_MS = 30_000;
+
+/**
  * Lower-bound read-time gate for destructive dispatches. `resolveOnce` guards
  * the second click; this disables the primary button briefly after each item
  * is promoted so a click meant for the previous modal can't silently approve a
@@ -49,6 +59,15 @@ const MAX_USER_AGENT_DISPLAY = 120;
  * so the loading state reserves the space the content will occupy.
  */
 const PREVIEW_MIN_BODY_HEIGHT = "min-h-[5.5rem]";
+
+/**
+ * Ceiling for the same body. A worktree with forty changed files is exactly the
+ * case the preview exists for, but an unbounded listing pushes the argument
+ * summary and the rest of the card back below the fold — the containment
+ * problem the framed card was meant to solve. Bound it and scroll in place, as
+ * every sibling preview does; the content is all still there.
+ */
+const PREVIEW_MAX_BODY_HEIGHT = "max-h-[13rem]";
 
 function truncateUserAgent(userAgent: string): string {
   return userAgent.length > MAX_USER_AGENT_DISPLAY
@@ -129,7 +148,18 @@ export function McpConfirmDialog() {
     // under main's 30s deadline (28s budget + ~1.5s), preserving the clean
     // CONFIRMATION_TIMEOUT outcome.
     const floor = current.danger === "confirm" ? CONFIRM_COOLDOWN_MS + 300 : 500;
-    const remaining = Math.max(floor, CONFIRMATION_TIMEOUT_MS - elapsed);
+    // The floor keeps a deeply-queued destructive item approvable for at least
+    // as long as its own cooldown. But the floor must never push the modal past
+    // main's deadline: an item promoted at ~29s would otherwise sit open until
+    // 30.5s and re-enable its confirm button at 30.2s — after main had already
+    // failed the dispatch — so a click would run the destructive action while
+    // the agent had been told it timed out. Clamp to whatever budget is
+    // genuinely left; a non-positive clamp fires the timeout immediately, which
+    // is the honest outcome for a request that can no longer be approved.
+    const remaining = Math.min(
+      Math.max(floor, CONFIRMATION_TIMEOUT_MS - elapsed),
+      MAIN_DISPATCH_DEADLINE_MS - elapsed
+    );
     const timer = setTimeout(() => {
       resolveOnce(requestId, "timeout");
     }, remaining);
@@ -170,7 +200,7 @@ export function McpConfirmDialog() {
       <ConfirmDialog
         isOpen={true}
         onClose={() => resolveOnce(current.requestId, "rejected")}
-        title={`Run '${current.actionTitle}'?`}
+        title={confirmTitle(current)}
         description={current.actionDescription}
         confirmLabel={current.actionTitle}
         cancelLabel="Cancel"
@@ -204,6 +234,21 @@ export function McpConfirmDialog() {
       </ConfirmDialog>
     </ErrorBoundary>
   );
+}
+
+/**
+ * The dialog title, naming the affected entity when one is known.
+ *
+ * `Run 'Delete worktree'?` says which registry action will execute but not
+ * which worktree — and under multi-agent interruption the target is the thing
+ * the approver most needs and can least infer. Where a subject resolved, the
+ * title names it; where none did, it stays the stable generic form rather than
+ * changing after open.
+ */
+export function confirmTitle(current: PendingMcpConfirm): string {
+  return current.subject
+    ? `${current.actionTitle} '${current.subject}'?`
+    : `Run '${current.actionTitle}'?`;
 }
 
 /** Shared micro-label, matching the section-heading grammar used app-wide. */
@@ -304,6 +349,11 @@ function ConsequenceNote({
  * destructive confirm already uses, rather than the same bare `<pre>` well the
  * redacted arguments sit in.
  *
+ * The card carries no row-count badge: these lines are freeform, and the first
+ * one is usually the formatter's own summary ("3 files with uncommitted
+ * changes:"), so a count of rendered rows sits next to a sentence stating a
+ * different number.
+ *
  * Rows are rendered individually rather than joined into one wrapped block:
  * soft-wrapping a monospace listing with no hanging indent puts continuation
  * text at the same left edge as a new entry, so a two-commit list reads as
@@ -318,20 +368,19 @@ function PreviewCard({
   state: Exclude<PreviewState, "none">;
   lines: string[];
 }) {
-  const contentRows = lines.filter((line) => !isCautionPreviewLine(line));
-
   return (
     <div className="rounded-[var(--radius-md)] border border-tint/[0.08] bg-tint/[0.04]">
-      <div className="flex items-center justify-between gap-2 border-b border-tint/[0.08] px-3 py-2">
+      <div className="border-b border-tint/[0.08] px-3 py-2">
         <span className={MICRO_LABEL}>{title}</span>
-        {state === "ready" && contentRows.length > 0 && (
-          <span className="shrink-0 rounded bg-tint/10 px-1 py-0.5 text-[10px] font-medium tabular-nums leading-none text-daintree-text/60">
-            {contentRows.length}
-          </span>
-        )}
       </div>
 
-      <div className={cn("px-3 py-2", PREVIEW_MIN_BODY_HEIGHT)}>
+      <div
+        className={cn(
+          "overflow-y-auto px-3 py-2",
+          PREVIEW_MIN_BODY_HEIGHT,
+          PREVIEW_MAX_BODY_HEIGHT
+        )}
+      >
         {state === "pending" ? (
           <div
             className="flex h-full items-center justify-center py-4"
@@ -352,7 +401,7 @@ function PreviewCard({
               ) : (
                 <div
                   key={index}
-                  className="pl-4 -indent-4 font-mono text-xs break-words text-daintree-text/80"
+                  className="pl-4 -indent-4 font-mono text-xs break-words whitespace-pre-wrap text-daintree-text/80"
                 >
                   {line}
                 </div>

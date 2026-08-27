@@ -23,6 +23,7 @@ import type { McpConfirmationDecision, McpSessionOrigin } from "@shared/types/ip
 import type { TerminalSpawnSource } from "@shared/types/panel";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { summarizeMcpArgs } from "@shared/utils/mcpArgsSummary";
+import { getCurrentViewStore } from "@/store/createWorktreeStore";
 
 const REJECTION_RESULT: ActionDispatchResult = {
   ok: false,
@@ -207,6 +208,46 @@ export function resolveMcpConfirmPreviewTarget(
       resolvedRecipeId: resolved?.id ?? recipeId,
       spawns: RECIPE_SPAWNING_ACTIONS.has(actionId),
     };
+  }
+  return undefined;
+}
+
+/**
+ * A display-safe name for what a confirm target acts on, for the dialog title.
+ *
+ * Read from the renderer's own stores, never from the dispatch arguments: the
+ * `argsSummary` the modal shows is already redacted, and deriving a title by
+ * reparsing it would widen what main chose to expose.
+ *
+ * Deliberately synchronous and deliberately partial. `git.push` /
+ * `git.pullRebase` resolve their branch and destination only on the async
+ * preview, so they get no subject and keep a stable generic title — the preview
+ * card names the branch and destination as its first two lines anyway, and
+ * approval is gated until those land. A title that mutated after open would be
+ * worse than a generic one: the dialog's accessible name would change without
+ * being re-announced.
+ */
+export function resolveMcpConfirmSubject(
+  target: McpConfirmPreviewTarget | undefined
+): string | undefined {
+  if (target === undefined) return undefined;
+  // Fails soft, and that is load-bearing. This only sharpens a title;
+  // `getCurrentViewStore()` throws when no worktree view store is mounted, and
+  // letting that escape would turn a destructive confirmation into an
+  // EXECUTION_ERROR — the dispatch would fail instead of asking the user. A
+  // missing subject costs the generic title and nothing else.
+  try {
+    if (target.kind === "worktreeDelete") {
+      const worktree = getCurrentViewStore().getState().worktrees.get(target.worktreeId);
+      const name = worktree?.branch ?? worktree?.name;
+      return name !== undefined && name.length > 0 ? name : undefined;
+    }
+    if (target.kind === "recipe") {
+      const recipe = useRecipeStore.getState().getRecipeById(target.resolvedRecipeId);
+      return recipe?.name !== undefined && recipe.name.length > 0 ? recipe.name : undefined;
+    }
+  } catch {
+    return undefined;
   }
   return undefined;
 }
@@ -424,6 +465,14 @@ export function useMcpBridge(): void {
                     ? { dangerRationale: definition.dangerRationale }
                     : {}),
                   argsSummary: summarizeMcpArgs(args),
+                  // Names WHICH worktree/recipe in the title. Resolved from the
+                  // renderer's stores, not from the redacted args summary.
+                  ...(previewTarget
+                    ? (() => {
+                        const subject = resolveMcpConfirmSubject(previewTarget);
+                        return subject ? { subject } : {};
+                      })()
+                    : {}),
                   danger: definition.danger,
                   // Display-only requesting-bearer identity (#9157). Present
                   // only for unpinned external dispatch; the dialog renders a

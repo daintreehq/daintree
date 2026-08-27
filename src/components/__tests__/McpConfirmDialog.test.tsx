@@ -51,6 +51,7 @@ function enqueue(
     previewPending?: boolean;
     sessionOrigin?: "help" | "assistant-pane" | "external";
     argsSummary?: string;
+    subject?: string;
   } = {}
 ) {
   return requestMcpConfirmation({
@@ -62,6 +63,7 @@ function enqueue(
     danger: overrides.danger ?? "confirm",
     callerInfo: overrides.callerInfo,
     ...(overrides.sessionOrigin ? { sessionOrigin: overrides.sessionOrigin } : {}),
+    ...(overrides.subject ? { subject: overrides.subject } : {}),
     ...(overrides.dangerRationale ? { dangerRationale: overrides.dangerRationale } : {}),
     ...(overrides.preview ? { preview: overrides.preview } : {}),
     ...(overrides.previewTitle ? { previewTitle: overrides.previewTitle } : {}),
@@ -556,6 +558,53 @@ describe("McpConfirmDialog", () => {
       vi.runOnlyPendingTimers();
       vi.useRealTimers();
     }
+  });
+
+  // #11981 — the cooldown floor must not push the modal past main's own 30s
+  // deadline. An item promoted at ~29s used to stay open to 30.5s and re-enable
+  // its confirm button at 30.2s, after main had already failed the dispatch and
+  // told the agent it timed out — so a click ran the destructive action anyway.
+  it("never leaves approval possible after main's dispatch deadline has passed", async () => {
+    vi.useFakeTimers();
+    try {
+      const p = enqueue({ actionTitle: "Delete worktree", danger: "confirm" });
+
+      // ~29s spent queued behind earlier modals before promotion.
+      act(() => {
+        vi.advanceTimersByTime(29_000);
+      });
+      render(<McpConfirmDialog />);
+
+      // Run out the remaining budget to main's deadline and no further.
+      await act(async () => {
+        await vi.advanceTimersByTimeAsync(1_000);
+      });
+
+      await expect(p).resolves.toBe("timeout");
+    } finally {
+      vi.runOnlyPendingTimers();
+      vi.useRealTimers();
+    }
+  });
+
+  // #11981 — "Run 'Delete worktree'?" names the registry action but not which
+  // worktree, and under multi-agent interruption the target is what the
+  // approver most needs and can least infer.
+  it("names the affected entity in the title when one resolved", () => {
+    void enqueue({ actionTitle: "Delete worktree", subject: "feature/agent-fanout" });
+    render(<McpConfirmDialog />);
+
+    expect(screen.getByText("Delete worktree 'feature/agent-fanout'?")).toBeTruthy();
+  });
+
+  // A title that changes after open is worse than a stable generic one: the
+  // dialog's accessible name is not re-announced. Actions whose subject only
+  // exists on the async preview keep the generic form.
+  it("keeps the stable generic title when no subject resolved", () => {
+    void enqueue({ actionTitle: "Push branch" });
+    render(<McpConfirmDialog />);
+
+    expect(screen.getByText("Run 'Push branch'?")).toBeTruthy();
   });
 
   it("keeps the auto-timeout window above the cooldown for a long-queued destructive item", async () => {

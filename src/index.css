@@ -2839,6 +2839,17 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     border: 1px solid ButtonText;
   }
 
+  /* A destructive button is distinguished only by its fill, and the UA replaces
+   * every fill with a system colour — so "Delete worktree" and "Cancel" render
+   * as the same white pill with the same border, and nothing marks which one
+   * destroys. Stroke WEIGHT is one of the few things the UA leaves alone, so
+   * the destructive action takes a heavier border. Deliberately not an outline:
+   * the focus ring above already owns `outline` and the later rule would win,
+   * erasing the distinction on the button the user is most likely focused on. */
+  button[data-variant="destructive"] {
+    border: 2px solid ButtonText;
+  }
+
   input,
   select,
   textarea {
