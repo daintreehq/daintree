@@ -333,7 +333,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         .string()
         .optional()
         .describe(
-          "Identifies the worktree to launch in, using an id from the worktree-listing capability. Defaults to the active worktree."
+          "Identifies the worktree to launch in, using an id from the worktree-listing capability. Required when an agent or MCP client is calling; a person driving the UI gets the active worktree by default."
         ),
       prompt: z
         .string()
@@ -430,7 +430,7 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
       cwd: z.string().nullable(),
     }),
     mcpOutputSchema: true,
-    run: async (args: unknown) => {
+    run: async (args: unknown, ctx: ActionContext) => {
       const {
         agentId,
         location,
@@ -470,6 +470,19 @@ export function registerAgentActions(actions: ActionRegistry, callbacks: ActionC
         force?: boolean;
         name?: string;
       };
+      // Fail closed when a headless caller omits the worktree. An omitted id is
+      // resolved against the LIVE active-worktree selection at the instant this call
+      // lands — right for a palette pick, where the person can see which row is
+      // highlighted, and wrong for an agent, which cannot (#11722). It bites harder
+      // here than anywhere else the guard is used: launches fan out, so a batch
+      // dispatched while the user switches worktrees splits ACROSS worktrees, and the
+      // terminals exist in the wrong place by the time any caller could re-read.
+      //
+      // Reads the destructured selector, which is still the RAW argument — nothing in
+      // this action resolves a worktree; the launcher does, downstream. Passing the
+      // resolved value would defeat the guard, which cannot tell an asserted target
+      // from an inherited one once the substitution has happened.
+      requireExplicitWorktreeForAgentDispatch("agent.launch", { worktreeId }, ctx);
       const result = await callbacks.onLaunchAgent(agentId, {
         location,
         cwd,
