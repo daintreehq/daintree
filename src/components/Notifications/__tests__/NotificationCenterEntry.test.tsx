@@ -650,7 +650,10 @@ describe("NotificationCenterEntry roving focus props", () => {
 
   it("carries the forced-colors repaint handle on the thread-count chip", () => {
     render(<NotificationCenterEntry entry={makeEntry()} threadCount={3} />);
-    expect(screen.getByLabelText(/3/).getAttribute("data-notification-count")).toBe("true");
+    // Exact label, not /3/: the timestamp's aria-label is an absolute datetime,
+    // so a loose match also hits it whenever the wall clock happens to contain
+    // the digit — a test that only fails for part of the day.
+    expect(screen.getByLabelText("3 events").getAttribute("data-notification-count")).toBe("true");
   });
 
   it("invokes onDropdownOpenChange when the kebab menu opens and closes", async () => {

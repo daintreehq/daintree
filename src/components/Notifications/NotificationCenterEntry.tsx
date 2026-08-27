@@ -224,6 +224,90 @@ export function NotificationCenterEntry({
         <Icon className="h-4 w-4" />
       </div>
       <div className="flex-1 min-w-0">
+        {/* One stable rail, floated rather than a flex sibling.
+
+            The old build cross-faded the metadata out and covered it with an
+            absolutely positioned layer carrying its own `bg-overlay-raised`
+            fill, so time — the orientation cue the inbox exists to provide —
+            vanished at exactly the moment the user was inspecting the row, and
+            on the Snoozed tab took the snooze state with it. It was also the
+            only metadata-covering action layer in the app; every other row here
+            reserves a stable box instead. So now nothing moves and nothing is
+            covered: the controls hold their place at every state, quiet at rest
+            and stronger under the pointer, which is the "quiet at rest,
+            stronger on hover" treatment the worktree card's action toolbar
+            already uses here. Keeping them in flow is also what makes them
+            reachable on a touch screen, where there is no hover to reveal
+            anything.
+
+            Float, not a flex sibling, because a sibling subtracts its width
+            from *every* line of the row rather than the one it sits on. At its
+            widest the rail is about 138px of a 360px popover, so as a sibling
+            it pushed the default message from two lines to three and the dense
+            one from four to six. Floated, the title shrinks beside it (the
+            title's `truncate` gives it its own formatting context, so it clears
+            the float rather than running under), the first message line wraps
+            around it, and every line below reclaims the full width. */}
+        <div className="float-right ml-2 mt-0.5 flex items-center gap-1.5">
+          {isSnoozed && snoozedUntil !== undefined && (
+            <>
+              <span
+                data-testid="notification-snoozed-indicator"
+                title={`Snoozed until ${formatSnoozedUntil(snoozedUntil)}`}
+                aria-label={`Snoozed until ${formatSnoozedUntil(snoozedUntil)}`}
+                className="inline-flex h-4 w-4 items-center justify-center text-text-secondary"
+              >
+                <Clock className="h-3 w-3" aria-hidden="true" />
+              </span>
+              {/* The clock means "snoozed until later"; the stamp beside it means
+                  "arrived at". Abutting they read as one fact, so they get a
+                  separator. */}
+              <span aria-hidden="true" className="text-[10px] leading-none text-text-secondary">
+                ·
+              </span>
+            </>
+          )}
+          {(() => {
+            const ts = formatNotificationTimestamp(entry.timestamp);
+            return (
+              <span
+                data-testid="notification-timestamp"
+                title={ts.absolute}
+                aria-label={ts.absolute}
+                // A solid token, not `text-daintree-text/40`: slash-alpha
+                // composites against whatever is behind it and read at ~3.2:1
+                // here. `theme-tokens.md` gates `text-secondary` at >=3:1 across
+                // every theme and prefers a solid token for exactly this.
+                className="text-[10px] text-text-secondary tabular-nums"
+              >
+                {ts.label}
+              </span>
+            );
+          })()}
+          <RowOptionsMenu
+            entry={entry}
+            onDropdownOpenChange={onDropdownOpenChange}
+            isSnoozePending={isSnoozePending}
+            isSnoozed={isSnoozed}
+            snoozedUntil={snoozedUntil}
+            onConsumeSnoozePending={onConsumeSnoozePending}
+            onSnooze={onSnooze}
+            onUnsnooze={onUnsnooze}
+          />
+          {onDismiss && (
+            <button
+              type="button"
+              aria-label="Dismiss notification"
+              onClick={(e) => {
+                e.stopPropagation();
+                onDismiss();
+              }}
+              className={ROW_CONTROL_CLASS}
+            >
+              <X className="h-3.5 w-3.5" />
+            </button>
+          )}
+        </div>
         {entry.title && (
           <div className="flex items-center gap-1.5">
             <p
@@ -314,80 +398,6 @@ export function NotificationCenterEntry({
               );
             })}
           </div>
-        )}
-      </div>
-      {/* One stable rail. The previous build cross-faded the metadata out and
-          covered it with an absolutely positioned layer carrying its own
-          `bg-overlay-raised` fill, which meant time — the orientation cue the
-          inbox exists to provide — vanished at exactly the moment the user was
-          inspecting the row, and on the Snoozed tab took the snooze state with
-          it. It was also the only metadata-covering action layer in the app;
-          every other row here reserves a stable box instead.
-
-          So: nothing moves and nothing is covered. The controls hold their
-          place in flow at every state, quiet at rest and stronger under the
-          pointer — the "quiet at rest, stronger on hover" treatment this repo
-          already uses on the worktree card's action toolbar. Keeping them
-          visible is also what makes them reachable at all on a touch screen,
-          where there is no hover to reveal anything. */}
-      <div className="shrink-0 self-start mt-0.5 flex items-center gap-1.5">
-        {isSnoozed && snoozedUntil !== undefined && (
-          <>
-            <span
-              data-testid="notification-snoozed-indicator"
-              title={`Snoozed until ${formatSnoozedUntil(snoozedUntil)}`}
-              aria-label={`Snoozed until ${formatSnoozedUntil(snoozedUntil)}`}
-              className="inline-flex h-4 w-4 items-center justify-center text-text-secondary"
-            >
-              <Clock className="h-3 w-3" aria-hidden="true" />
-            </span>
-            {/* The clock means "snoozed until later"; the stamp beside it means
-                "arrived at". Abutting they read as one fact, so they get a
-                separator. */}
-            <span aria-hidden="true" className="text-[10px] leading-none text-text-secondary">
-              ·
-            </span>
-          </>
-        )}
-        {(() => {
-          const ts = formatNotificationTimestamp(entry.timestamp);
-          return (
-            <span
-              data-testid="notification-timestamp"
-              title={ts.absolute}
-              aria-label={ts.absolute}
-              // A solid token, not `text-daintree-text/40`: slash-alpha
-              // composites against whatever is behind it and read at ~3.2:1
-              // here. `theme-tokens.md` gates `text-secondary` at >=3:1 across
-              // every theme and prefers a solid token for exactly this.
-              className="text-[10px] text-text-secondary tabular-nums"
-            >
-              {ts.label}
-            </span>
-          );
-        })()}
-        <RowOptionsMenu
-          entry={entry}
-          onDropdownOpenChange={onDropdownOpenChange}
-          isSnoozePending={isSnoozePending}
-          isSnoozed={isSnoozed}
-          snoozedUntil={snoozedUntil}
-          onConsumeSnoozePending={onConsumeSnoozePending}
-          onSnooze={onSnooze}
-          onUnsnooze={onUnsnooze}
-        />
-        {onDismiss && (
-          <button
-            type="button"
-            aria-label="Dismiss notification"
-            onClick={(e) => {
-              e.stopPropagation();
-              onDismiss();
-            }}
-            className={ROW_CONTROL_CLASS}
-          >
-            <X className="h-3.5 w-3.5" />
-          </button>
         )}
       </div>
     </div>
