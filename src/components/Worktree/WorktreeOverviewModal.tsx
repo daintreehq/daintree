@@ -1,12 +1,14 @@
 import React, { useCallback, useEffect, useEffectEvent, useRef, useMemo, useState } from "react";
-import { X, FilterX, AlertTriangle, Trash2, GitBranch } from "lucide-react";
+import { FilterX, AlertTriangle, Trash2, GitBranch } from "lucide-react";
 import { Layers, Plug } from "@/components/icons";
+import { AppDialog } from "@/components/ui/AppDialog";
+import { KBD_CLASS } from "@/components/ui/Kbd";
 import { cn } from "@/lib/utils";
 import { useShallow } from "zustand/react/shallow";
 import { WorktreeCard } from "./WorktreeCard";
 import { WorktreeFilterPopover } from "./WorktreeFilterPopover";
 import { WorktreeSidebarSearchBar } from "./WorktreeSidebarSearchBar";
-import { useWorktreeBulkRemove } from "./useWorktreeBulkRemove";
+import { useWorktreeBulkRemove, describeBulkRemoveRisks } from "./useWorktreeBulkRemove";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import {
   useWorktreeOverviewKeyboard,
@@ -17,7 +19,6 @@ import type { UseAgentLauncherReturn } from "@/hooks/useAgentLauncher";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 import { useWorktreeDevServerStore } from "@/store/worktreeDevServerStore";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
-import { AccessibilityAnnouncer } from "@/components/Accessibility/AccessibilityAnnouncer";
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel } from "@shared/types/panel";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
@@ -40,6 +41,12 @@ import { isAgentTerminal } from "@/utils/terminalType";
 import { isTerminalVisible } from "@/lib/terminalVisibility";
 import { useWorktreeIds } from "@/hooks/useTerminalSelectors";
 import { computeChipState } from "@/components/Worktree/utils/computeChipState";
+
+/**
+ * One frame past the dialog's mount so the search input exists and AppDialog's
+ * own focus pass (disabled here via `initialFocus="none"`) cannot race it.
+ */
+const SEARCH_FOCUS_DELAY_MS = 50;
 
 interface OverviewWorktreeCardProps {
   worktreeId: string;
@@ -145,16 +152,27 @@ function OverviewWorktreeCard({
  * styling uses `bg-overlay-subtle` + a neutral inset ring per CLAUDE.md's
  * accent-color restraint — accent is reserved for one load-bearing signal
  * per active focus region and is never used as a multi-select indicator.
+ *
+ * Two independent states live on this box and they are deliberately drawn with
+ * different marks, the same way `.palette-row` and `.forge-row` separate theirs
+ * in `index.css`: MEMBERSHIP is the neutral tint plus inset ring, and the
+ * KEYBOARD CURSOR is the accent outline. The grid is its own arrow-key domain,
+ * so the cursor is that region's single load-bearing accent — which is what the
+ * accent-restraint rule reserves it for. Drawing both as an outline would let
+ * the later one overwrite the earlier, and a selected cell under the cursor
+ * would lose the cursor.
  */
-function OverviewGridCell(props: OverviewWorktreeCardProps) {
+function OverviewGridCell(props: OverviewWorktreeCardProps & { isCursor?: boolean }) {
   const cellId = getWorktreeOverviewCellId(props.worktreeId);
   const isSelected = props.isSelected ?? false;
+  const isCursor = props.isCursor ?? false;
   return (
     <div
       id={cellId}
       role="gridcell"
       aria-selected={isSelected}
       data-worktree-overview-cell={props.worktreeId}
+      data-overview-cursor={isCursor ? "true" : undefined}
       style={{
         contentVisibility: "auto",
         containIntrinsicSize: "auto 240px",
@@ -163,9 +181,12 @@ function OverviewGridCell(props: OverviewWorktreeCardProps) {
         "rounded-lg overflow-hidden",
         "border border-divider",
         "bg-daintree-sidebar/50",
-        "transition duration-150",
+        // Narrowest property set the states here actually animate — a bare
+        // `transition` would also cover transform, filter and backdrop-filter.
+        "transition-[background-color,box-shadow,outline-color] duration-150 ease-out",
         "hover:bg-overlay-subtle hover:shadow-[var(--theme-shadow-ambient)]",
-        isSelected && "bg-overlay-subtle ring-1 ring-inset ring-border-default"
+        isSelected && "bg-overlay-subtle ring-1 ring-inset ring-border-default",
+        isCursor && "outline outline-2 -outline-offset-2 outline-daintree-accent"
       )}
     >
       <OverviewWorktreeCard {...props} variant="grid" />
@@ -204,8 +225,7 @@ export function WorktreeOverviewModal({
   agentSettings,
   homeDir,
 }: WorktreeOverviewModalProps) {
-  const modalRef = useRef<HTMLDivElement>(null);
-  const closeButtonRef = useRef<HTMLButtonElement>(null);
+  const searchInputRef = useRef<HTMLInputElement>(null);
 
   // Filter store state
   const {
@@ -645,6 +665,13 @@ export function WorktreeOverviewModal({
   const gridRef = useRef<HTMLDivElement | null>(null);
   const closeModal = useCallback(() => onClose(), [onClose]);
 
+  const hasActivitySummary =
+    aggregateStats.waitingCount > 0 ||
+    aggregateStats.workingCount > 0 ||
+    aggregateStats.finishedCount > 0;
+  const showMainToggle = (hasNonMainWorktrees || hideMainWorktree) && !hasOnlyMainWorktree;
+  const selectAllChord = navigator.platform.toLowerCase().includes("mac") ? "⌘A" : "Ctrl+A";
+
   // Section sizes drive section-aware Arrow navigation across the col-[1/-1]
   // header breaks. Undefined when ungrouped — the hook degrades to flat-list
   // stride math.
@@ -670,6 +697,18 @@ export function WorktreeOverviewModal({
     hasSelection,
   });
 
+  // Keep the keyboard cursor on screen. `aria-activedescendant` moves a cursor
+  // that is not DOM focus, so the browser does no scrolling of its own — without
+  // this, arrowing past the visible rows walked the cursor off the bottom of the
+  // scroll box and the user was selecting cards they could not see.
+  useEffect(() => {
+    if (!isOpen || !activeDescendantId) return;
+    const cell = gridRef.current?.querySelector<HTMLElement>(
+      `[id="${CSS.escape(activeDescendantId)}"]`
+    );
+    cell?.scrollIntoView({ block: "nearest", inline: "nearest" });
+  }, [isOpen, activeDescendantId]);
+
   // Reset modifier-driven anchor state when the window loses focus (lesson
   // #4591) — prevents a stuck Shift after Cmd+Tab from producing phantom
   // range selections on the next click.
@@ -685,22 +724,10 @@ export function WorktreeOverviewModal({
     return () => window.removeEventListener("blur", handleWindowBlur);
   }, [isOpen]);
 
-  // Document-level keydown — fallback for keys fired outside the grid (e.g.
-  // when focus is on the close button or filter popover trigger). The grid
-  // hook handles Escape / Cmd+A when the grid is focused.
+  // Document-level keydown — fallback for Cmd/Ctrl+A fired outside the grid
+  // (e.g. when focus is on the search field or the filter popover trigger).
+  // The grid hook handles Cmd+A when the grid itself is focused.
   const handleKeyDown = useEffectEvent((e: KeyboardEvent) => {
-    if (e.key === "Escape") {
-      if (hasSelection) {
-        e.preventDefault();
-        e.stopPropagation();
-        clearSelection();
-        return;
-      }
-      e.preventDefault();
-      e.stopPropagation();
-      onClose();
-      return;
-    }
     if ((e.metaKey || e.ctrlKey) && (e.key === "a" || e.key === "A")) {
       // Only intercept when focus is inside the modal but not in a text
       // input — otherwise Cmd+A in a filter input must select the text.
@@ -716,65 +743,109 @@ export function WorktreeOverviewModal({
     }
   });
 
+  // Initial focus goes to search, not to Close. This is a browse-and-search
+  // surface, so the APG dialog guidance puts first focus on the primary input;
+  // landing on the dismiss control spent the one accent focus ring in the
+  // region on "leave". AppDialog is told `initialFocus="none"` so it does not
+  // race this.
   useEffect(() => {
     if (!isOpen) return;
-    const timeoutId = setTimeout(() => closeButtonRef.current?.focus(), 50);
+    const timeoutId = setTimeout(() => searchInputRef.current?.focus(), SEARCH_FOCUS_DELAY_MS);
     return () => clearTimeout(timeoutId);
   }, [isOpen]);
 
+  // Cmd/Ctrl+A only. Escape is deliberately NOT handled here any more: this
+  // listener used to run on `document` in the CAPTURE phase and swallow the key
+  // before the facet popover or a confirmation could act on it, so dismissing a
+  // nested layer tore down the whole overview. AppDialog's layer-aware escape
+  // stack owns dismissal now, and `onBeforeClose` keeps the two-stage
+  // clear-selection-then-close behaviour.
   useEffect(() => {
     if (!isOpen) return;
-    document.addEventListener("keydown", handleKeyDown, { capture: true });
-    return () => document.removeEventListener("keydown", handleKeyDown, { capture: true });
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
   }, [isOpen]);
 
-  const handleBackdropClick = useCallback(
-    (e: React.MouseEvent) => {
-      if (e.target === e.currentTarget) {
-        onClose();
-      }
-    },
-    [onClose]
-  );
-
-  if (!isOpen) return null;
+  /**
+   * Escape's first press clears a selection; the second closes. Returning
+   * `false` cancels AppDialog's close, which is the same two-stage contract the
+   * grid hook implements for when focus is inside the grid.
+   */
+  const handleBeforeClose = useCallback(() => {
+    if (hasSelection) {
+      clearSelection();
+      return false;
+    }
+    return true;
+  }, [hasSelection, clearSelection]);
 
   return (
-    <div
-      ref={modalRef}
-      className={cn(
-        "fixed inset-0 z-[var(--z-modal)] flex items-center justify-center",
-        "bg-scrim-medium backdrop-blur-sm",
-        "motion-safe:animate-in motion-safe:fade-in motion-safe:duration-150"
-      )}
-      onClick={handleBackdropClick}
-      role="dialog"
-      aria-modal="true"
-      aria-labelledby="worktree-overview-title"
-    >
-      <div
-        className={cn(
-          "relative flex flex-col",
-          "w-[calc(100vw-80px)] h-[calc(100vh-80px)]",
-          "max-w-[1800px] max-h-[1200px]",
-          "bg-daintree-bg rounded-xl",
-          "border border-divider",
-          "shadow-[var(--theme-shadow-dialog)]",
-          "motion-safe:animate-in motion-safe:zoom-in-95 motion-safe:duration-200"
-        )}
-        onClick={(e) => e.stopPropagation()}
+    <>
+      <AppDialog
+        isOpen={isOpen}
+        onClose={onClose}
+        onBeforeClose={handleBeforeClose}
+        // The app-scale tier the shared primitive already declares. It was
+        // added for a workspace-sized surface and had no consumer; this is the
+        // surface it was sized for, and its width lands within ~2% of the
+        // hand-rolled box it replaces.
+        size="workspace"
+        maxHeight="h-[calc(100vh-80px)] max-h-[1200px]"
+        // Focus is placed on the search field by this component; AppDialog must
+        // not race it onto the first tabbable (the close button).
+        initialFocus="none"
+        data-testid="worktree-overview-modal"
       >
-        {/* Header — swaps to a contextual action bar while a selection
-            is active. The Clear control and Close button always remain
-            so the user can escape selection mode without keyboard. */}
+        {/* Selection is a mode change, and a screen reader has to hear it.
+            The region is rendered unconditionally so it exists in the
+            accessibility tree BEFORE its text changes — a live region mounted
+            at the same moment as its content is frequently missed — and it is
+            atomic so "3 of 13 selected" is read as one phrase rather than a
+            stray digit. */}
+        <div role="status" aria-live="polite" aria-atomic="true" className="sr-only">
+          {hasSelection ? `${selectedIds.size} of ${filteredWorktrees.length} selected` : ""}
+        </div>
+
+        {/* Tier 1 — identity. Title, result context and close, and nothing
+            else. This row does not change when filters narrow the list or when
+            a selection starts: it is what tells the user which surface they are
+            on and how much of it they are seeing. */}
+        <AppDialog.Header plainBody>
+          <AppDialog.Title icon={<Layers className="w-5 h-5 text-daintree-text/60" />}>
+            <span>Worktrees overview</span>
+            <span className="text-daintree-text/50 text-sm font-normal tabular-nums">
+              ({filteredWorktrees.length}
+              {filteredWorktrees.length !== worktrees.length && ` of ${worktrees.length}`})
+            </span>
+          </AppDialog.Title>
+          <AppDialog.CloseButton aria-label="Close overview" />
+        </AppDialog.Header>
+
+        {/* Tier 2 — the working toolbar: search and facets. Stays mounted
+            during selection so the user can refine the target set without
+            losing what they picked (visible-id sync drops hidden selections
+            naturally — see the selectedIds reconciliation). */}
+        {hasNonMainWorktrees && (
+          <WorktreeSidebarSearchBar
+            variant="modal"
+            inputRef={searchInputRef}
+            chipCounts={chipCounts}
+          />
+        )}
+
+        {/* Tier 3 — quick controls, and the contextual action bar that replaces
+            them while a selection is active. The CAB displaces this tier and
+            not the identity row above it: that is the data-dense desktop
+            convention (Carbon batch-action toolbar, Primer, Atlassian), and it
+            is what keeps the title and the `N of M` count on screen while a
+            destructive bulk action is one click away. */}
         {hasSelection ? (
-          <div className="flex items-center justify-between px-6 py-4 border-b border-divider shrink-0">
-            <div className="flex items-center gap-3">
-              <span
-                className="text-daintree-text font-semibold text-base tracking-wide tabular-nums"
-                aria-live="polite"
-              >
-                {selectedIds.size} selected
+          <div className="flex items-center justify-between gap-3 px-[calc(1.5rem+11px)] py-2 border-b border-divider shrink-0">
+            <div className="flex items-center gap-3 min-w-0">
+              {/* Visual only — the announcement is owned by the status region
+                  above, so this must not be a second live region. */}
+              <span className="text-daintree-text font-medium text-sm tabular-nums">
+                {selectedIds.size} of {filteredWorktrees.length} selected
               </span>
               <button
                 type="button"
@@ -807,73 +878,24 @@ export function WorktreeOverviewModal({
                 disabled={bulkRemove.isExecuting}
                 data-testid="worktree-bulk-remove"
               >
+                <Trash2 className="w-3.5 h-3.5" />
                 Remove worktrees
               </Button>
-              <button
-                ref={closeButtonRef}
-                onClick={onClose}
-                className={cn(
-                  "p-2 rounded-lg transition-colors",
-                  "text-daintree-text/60 hover:text-daintree-text",
-                  "hover:bg-tint/[0.06]",
-                  "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
-                )}
-                aria-label="Close overview"
-              >
-                <X className="w-5 h-5" />
-              </button>
             </div>
           </div>
         ) : (
-          <div className="flex items-center justify-between px-6 py-4 border-b border-divider shrink-0">
-            <div className="flex items-center gap-3">
-              <Layers className="w-5 h-5 text-daintree-text/60" />
-              <h2
-                id="worktree-overview-title"
-                className="text-daintree-text font-semibold text-base tracking-wide"
-              >
-                Worktrees Overview
-              </h2>
-              <span className="text-daintree-text/50 text-sm tabular-nums">
-                ({filteredWorktrees.length}
-                {filteredWorktrees.length !== worktrees.length && ` of ${worktrees.length}`})
-              </span>
-              {/* Aggregate activity statistics — clickable chips that set quickStateFilter */}
-              {(aggregateStats.workingCount > 0 ||
-                aggregateStats.waitingCount > 0 ||
-                aggregateStats.finishedCount > 0) && (
+          (hasActivitySummary || showMainToggle || hasActiveFilters()) && (
+            <div className="flex items-center gap-2 px-[calc(1.5rem+11px)] py-2 border-b border-divider shrink-0 flex-wrap">
+              {/* Aggregate activity statistics — clickable chips that set quickStateFilter.
+                  Ordered waiting → working → finished: "something is asking me
+                  for input" is the highest-value signal on this surface, so it
+                  reads first. */}
+              {hasActivitySummary && (
                 <div
-                  className="flex items-center gap-1 ml-2 pl-3 border-l border-divider"
+                  className="flex items-center gap-1"
                   role="group"
                   aria-label="Filter by agent state"
                 >
-                  {aggregateStats.workingCount > 0 && (
-                    <button
-                      type="button"
-                      aria-pressed={quickStateFilter === "working"}
-                      onClick={() =>
-                        setQuickStateFilter(quickStateFilter === "working" ? "all" : "working")
-                      }
-                      className={cn(
-                        "flex items-center gap-1 text-xs tabular-nums rounded-full px-2 py-0.5 transition-colors",
-                        "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent",
-                        quickStateFilter === "working"
-                          ? "bg-overlay-subtle shadow-[inset_0_-2px_0_0_var(--color-text-secondary)]"
-                          : "hover:bg-tint/[0.04]"
-                      )}
-                    >
-                      <span className="status-mark w-1.5 h-1.5 rounded-full bg-[var(--color-state-working)] motion-safe:animate-pulse" />
-                      <span
-                        className={
-                          quickStateFilter === "working"
-                            ? "text-daintree-text"
-                            : "text-daintree-text/60"
-                        }
-                      >
-                        {aggregateStats.workingCount} working
-                      </span>
-                    </button>
-                  )}
                   {aggregateStats.waitingCount > 0 && (
                     <button
                       type="button"
@@ -882,7 +904,7 @@ export function WorktreeOverviewModal({
                         setQuickStateFilter(quickStateFilter === "waiting" ? "all" : "waiting")
                       }
                       className={cn(
-                        "flex items-center gap-1 text-xs tabular-nums rounded-full px-2 py-0.5 transition-colors",
+                        "flex items-center gap-1 text-xs tabular-nums rounded-full px-2 py-1 transition-colors",
                         "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent",
                         quickStateFilter === "waiting"
                           ? "bg-overlay-subtle shadow-[inset_0_-2px_0_0_var(--color-text-secondary)]"
@@ -901,6 +923,33 @@ export function WorktreeOverviewModal({
                       </span>
                     </button>
                   )}
+                  {aggregateStats.workingCount > 0 && (
+                    <button
+                      type="button"
+                      aria-pressed={quickStateFilter === "working"}
+                      onClick={() =>
+                        setQuickStateFilter(quickStateFilter === "working" ? "all" : "working")
+                      }
+                      className={cn(
+                        "flex items-center gap-1 text-xs tabular-nums rounded-full px-2 py-1 transition-colors",
+                        "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent",
+                        quickStateFilter === "working"
+                          ? "bg-overlay-subtle shadow-[inset_0_-2px_0_0_var(--color-text-secondary)]"
+                          : "hover:bg-tint/[0.04]"
+                      )}
+                    >
+                      <span className="status-mark w-1.5 h-1.5 rounded-full bg-[var(--color-state-working)] motion-safe:animate-pulse" />
+                      <span
+                        className={
+                          quickStateFilter === "working"
+                            ? "text-daintree-text"
+                            : "text-daintree-text/60"
+                        }
+                      >
+                        {aggregateStats.workingCount} working
+                      </span>
+                    </button>
+                  )}
                   {aggregateStats.finishedCount > 0 && (
                     <button
                       type="button"
@@ -909,7 +958,7 @@ export function WorktreeOverviewModal({
                         setQuickStateFilter(quickStateFilter === "finished" ? "all" : "finished")
                       }
                       className={cn(
-                        "flex items-center gap-1 text-xs tabular-nums rounded-full px-2 py-0.5 transition-colors",
+                        "flex items-center gap-1 text-xs tabular-nums rounded-full px-2 py-1 transition-colors",
                         "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent",
                         quickStateFilter === "finished"
                           ? "bg-overlay-subtle shadow-[inset_0_-2px_0_0_var(--color-text-secondary)]"
@@ -930,108 +979,93 @@ export function WorktreeOverviewModal({
                   )}
                 </div>
               )}
-            </div>
-            <div className="flex items-center gap-2">
-              {/* Hide main worktree toggle - show if there are non-main worktrees OR if filter is active (to allow recovery) */}
-              {(hasNonMainWorktrees || hideMainWorktree) && !hasOnlyMainWorktree && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={!hideMainWorktree}
-                      aria-label={hideMainWorktree ? "Show main worktree" : "Hide main worktree"}
-                      onClick={() => setHideMainWorktree(!hideMainWorktree)}
-                      className={cn(
-                        "flex items-center gap-1.5 px-2 py-1 rounded-full text-xs transition-colors",
-                        "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent",
-                        hideMainWorktree
-                          ? "bg-tint/[0.06] text-daintree-text/40 hover:text-daintree-text/60"
-                          : "bg-tint/[0.10] text-daintree-text/70 hover:text-daintree-text/90"
-                      )}
-                    >
-                      <Plug
+
+              <div className="ml-auto flex items-center gap-2">
+                {/* Main-worktree visibility. The accessible name is fixed —
+                    `aria-checked` carries the state — because a toggle whose
+                    label flips is announced as a different control each time
+                    it is used. */}
+                {showMainToggle && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        type="button"
+                        role="switch"
+                        aria-checked={!hideMainWorktree}
+                        aria-label="Show main worktree"
+                        onClick={() => setHideMainWorktree(!hideMainWorktree)}
                         className={cn(
-                          "w-3 h-3 transition-colors",
-                          hideMainWorktree ? "text-daintree-text/30" : "text-daintree-text/50"
-                        )}
-                      />
-                      <span
-                        className={cn(
-                          "transition-colors",
-                          hideMainWorktree && "line-through decoration-daintree-text/30"
+                          "flex items-center gap-1.5 px-2 py-1 rounded-full text-xs transition-colors",
+                          "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent",
+                          hideMainWorktree
+                            ? "bg-tint/[0.06] text-daintree-text/40 hover:text-daintree-text/60"
+                            : "bg-tint/[0.10] text-daintree-text/70 hover:text-daintree-text/90"
                         )}
                       >
-                        main
-                      </span>
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">
-                    {hideMainWorktree ? "Show main worktree" : "Hide main worktree"}
-                  </TooltipContent>
-                </Tooltip>
-              )}
-              {/* Filter Popover — only shown in header when the search bar (with its own popover) is absent */}
-              {!hasNonMainWorktrees && (
-                <WorktreeFilterPopover hideSearchInput chipCounts={chipCounts} />
-              )}
-              {/* Clear Filters Button - only shown when filters are active */}
-              {hasActiveFilters() && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <button
-                      onClick={clearAllFilters}
-                      className={cn(
-                        "flex items-center gap-1.5 px-2 py-1.5 rounded text-xs",
-                        "text-daintree-text/60 hover:text-daintree-text",
-                        "hover:bg-tint/[0.06]",
-                        "transition-colors",
-                        "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
-                      )}
-                      aria-label="Clear all filters"
-                    >
-                      <FilterX className="w-3.5 h-3.5" />
-                      <span>Clear</span>
-                    </button>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">Clear all filters</TooltipContent>
-                </Tooltip>
-              )}
-              {/* Close Button */}
-              <button
-                ref={closeButtonRef}
-                onClick={onClose}
-                className={cn(
-                  "p-2 rounded-lg transition-colors",
-                  "text-daintree-text/60 hover:text-daintree-text",
-                  "hover:bg-tint/[0.06]",
-                  "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
+                        <Plug
+                          className={cn(
+                            "w-3 h-3 transition-colors",
+                            hideMainWorktree ? "text-daintree-text/30" : "text-daintree-text/50"
+                          )}
+                        />
+                        <span
+                          className={cn(
+                            "transition-colors",
+                            hideMainWorktree && "line-through decoration-daintree-text/30"
+                          )}
+                        >
+                          main
+                        </span>
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">
+                      {hideMainWorktree ? "Main worktree hidden" : "Main worktree shown"}
+                    </TooltipContent>
+                  </Tooltip>
                 )}
-                aria-label="Close overview"
-              >
-                <X className="w-5 h-5" />
-              </button>
+                {/* Clear Filters Button - only shown when filters are active */}
+                {hasActiveFilters() && (
+                  <Tooltip>
+                    <TooltipTrigger asChild>
+                      <button
+                        onClick={clearAllFilters}
+                        className={cn(
+                          "flex items-center gap-1.5 px-2 py-1 rounded text-xs",
+                          "text-daintree-text/60 hover:text-daintree-text",
+                          "hover:bg-tint/[0.06]",
+                          "transition-colors",
+                          "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
+                        )}
+                        aria-label="Clear all filters"
+                      >
+                        <FilterX className="w-3.5 h-3.5" />
+                        <span>Clear</span>
+                      </button>
+                    </TooltipTrigger>
+                    <TooltipContent side="bottom">Clear all filters</TooltipContent>
+                  </Tooltip>
+                )}
+                {/* Filter Popover — only shown here when the search bar (with its own popover) is absent */}
+                {!hasNonMainWorktrees && (
+                  <WorktreeFilterPopover hideSearchInput chipCounts={chipCounts} />
+                )}
+              </div>
             </div>
-          </div>
+          )
         )}
 
-        {/* Search bar — always visible when there are non-main worktrees.
-            Stays mounted during selection mode so the user can refine the
-            target set without losing the selection (visible-id sync drops
-            hidden selections naturally — see selectedIds reconciliation). */}
-        {hasNonMainWorktrees && (
-          <WorktreeSidebarSearchBar variant="modal" chipCounts={chipCounts} />
-        )}
-
-        {/* Content */}
-        <div className="flex-1 overflow-y-auto p-6">
+        {/* Content. `AppDialog.Body` brings the shared scroll box: a
+            ScrollShadow at both edges, so content no longer just stops
+            mid-glyph against the footer, and a reserved scrollbar gutter so
+            the grid does not shift by 11px the moment it starts to overflow. */}
+        <AppDialog.Body className="p-6">
           {isLoading && worktrees.length === 0 ? (
             <Skeleton label="Loading worktrees">
               <div
                 className={cn(
                   "grid gap-3",
-                  "grid-cols-[repeat(auto-fit,minmax(min(320px,100%),480px))]",
-                  "justify-center"
+                  "grid-cols-[repeat(auto-fill,minmax(min(320px,100%),1fr))]",
+                  "[&>*]:max-w-[480px]"
                 )}
               >
                 {Array.from({ length: 6 }).map((_, i) => (
@@ -1076,7 +1110,13 @@ export function WorktreeOverviewModal({
               }
               description={
                 worktrees.length > 0
-                  ? `${worktrees.length} worktree${worktrees.length !== 1 ? "s" : ""} hidden by active filters`
+                  ? `${worktrees.length} worktree${worktrees.length !== 1 ? "s" : ""} hidden by ${
+                      query.trim() && !hasFacetFiltersActive
+                        ? "your search"
+                        : hasFacetFiltersActive && !query.trim()
+                          ? "active filters"
+                          : "your search and filters"
+                    }`
                   : undefined
               }
               action={
@@ -1096,8 +1136,12 @@ export function WorktreeOverviewModal({
               onFocus={handleGridFocus}
               className={cn(
                 "grid gap-3",
-                "grid-cols-[repeat(auto-fit,minmax(min(320px,100%),480px))]",
-                "justify-center",
+                // `auto-fill`, not `auto-fit`: auto-fit collapses the empty
+                // tracks, so the track count followed the RESULT count and the
+                // whole grid slid sideways as the user typed. `1fr` with a
+                // per-cell max keeps cards from stretching on a wide display.
+                "grid-cols-[repeat(auto-fill,minmax(min(320px,100%),1fr))]",
+                "[&>*]:max-w-[480px]",
                 "auto-rows-min items-start",
                 "focus:outline-hidden"
               )}
@@ -1132,6 +1176,7 @@ export function WorktreeOverviewModal({
                         homeDir={homeDir}
                         onClose={onClose}
                         isSelected={selectedIds.has(worktree.id)}
+                        isCursor={activeDescendantId === getWorktreeOverviewCellId(worktree.id)}
                         onToggleSelect={handleCardToggleSelect}
                       />
                     )),
@@ -1152,37 +1197,48 @@ export function WorktreeOverviewModal({
                       homeDir={homeDir}
                       onClose={onClose}
                       isSelected={selectedIds.has(worktree.id)}
+                      isCursor={activeDescendantId === getWorktreeOverviewCellId(worktree.id)}
                       onToggleSelect={handleCardToggleSelect}
                     />
                   ))}
             </div>
           )}
-        </div>
+        </AppDialog.Body>
 
-        {/* Footer hint */}
-        <div className="px-6 py-3 border-t border-divider shrink-0">
-          <div className="flex items-center justify-center gap-x-4 gap-y-1 flex-wrap text-xs text-daintree-text/40">
-            <span>
-              <kbd className="px-1.5 py-0.5 bg-tint/[0.06] rounded text-[10px]">↑↓←→</kbd> navigate
-            </span>
-            <span>
-              <kbd className="px-1.5 py-0.5 bg-tint/[0.06] rounded text-[10px]">Enter</kbd> switch
-            </span>
-            <span>
-              <kbd className="px-1.5 py-0.5 bg-tint/[0.06] rounded text-[10px]">Space</kbd> select
-            </span>
-            <span>
-              <kbd className="px-1.5 py-0.5 bg-tint/[0.06] rounded text-[10px]">Esc</kbd>
-              {hasSelection ? " clear selection" : " close"}
-            </span>
-            {hasSelection && (
-              <span className="text-daintree-text/60 tabular-nums">
-                {selectedIds.size} selected
+        {/* Footer — the keyboard contract, in the shared chip style, plus the
+            two operations that make a 5-to-30 item cleanup quick. The selected
+            count is NOT repeated here: it now lives in the contextual bar
+            above, next to the actions it applies to. */}
+        <AppDialog.Footer
+          plainBody
+          // Container-scoped so the two lower-priority hints drop out on a
+          // narrow window instead of wrapping the row onto a second line.
+          className="justify-center @container/overview-footer"
+          hint={
+            <div className="flex items-center justify-center gap-x-4 gap-y-1 flex-wrap text-daintree-text/50">
+              <span>
+                <kbd className={KBD_CLASS}>↑↓←→</kbd> navigate
               </span>
-            )}
-          </div>
-        </div>
-      </div>
+              <span>
+                <kbd className={KBD_CLASS}>Enter</kbd> switch
+              </span>
+              <span>
+                <kbd className={KBD_CLASS}>Space</kbd> select
+              </span>
+              <span className="hidden @2xl/overview-footer:inline">
+                <kbd className={KBD_CLASS}>{selectAllChord}</kbd> select all
+              </span>
+              <span className="hidden @3xl/overview-footer:inline">
+                <kbd className={KBD_CLASS}>Shift</kbd>+<kbd className={KBD_CLASS}>↑↓←→</kbd> extend
+              </span>
+              <span>
+                <kbd className={KBD_CLASS}>Esc</kbd>
+                {hasSelection ? " clear selection" : " close"}
+              </span>
+            </div>
+          }
+        />
+      </AppDialog>
 
       {/* D1 — close sessions confirm. No typed-name gate (action is local,
           reversible by re-launching the agent), but the explicit yes/no
@@ -1200,6 +1256,7 @@ export function WorktreeOverviewModal({
         confirmLabel="Close sessions"
         cancelLabel="Cancel"
         variant="default"
+        zIndex="nested"
         onConfirm={handleCloseSessionsConfirm}
       />
 
@@ -1218,9 +1275,13 @@ export function WorktreeOverviewModal({
             : `Remove ${bulkRemove.targets.length} worktrees?`
         }
         description={
+          // The consequence sentence is never traded away for the exclusion
+          // note. It used to be an either/or, so selecting a main worktree
+          // alongside real targets silently removed the only line telling the
+          // user that directories are deleted and uncommitted work discarded.
           bulkRemove.excludedMainCount > 0
-            ? `${bulkRemove.excludedMainCount} main worktree${bulkRemove.excludedMainCount === 1 ? "" : "s"} excluded — only non-main worktrees can be removed here.`
-            : "Each worktree directory is deleted from disk and the branch worktree association is removed. Uncommitted changes are discarded."
+            ? `Each worktree directory is deleted from disk and the branch worktree association is removed. Uncommitted and untracked changes are discarded. ${bulkRemove.excludedMainCount} main worktree${bulkRemove.excludedMainCount === 1 ? " is" : "s are"} excluded — only non-main worktrees can be removed here.`
+            : "Each worktree directory is deleted from disk and the branch worktree association is removed. Uncommitted and untracked changes are discarded."
         }
         confirmLabel={
           bulkRemove.targets.length === 1
@@ -1232,6 +1293,7 @@ export function WorktreeOverviewModal({
         // Scrollable per-worktree table of what is about to be deleted — a
         // dialog, not an alertdialog.
         hasPreview={bulkRemove.targets.length > 0}
+        zIndex="nested"
         typedNameTarget={bulkRemove.typedNameTarget}
         onConfirm={bulkRemove.handleConfirm}
         isConfirmLoading={bulkRemove.isExecuting}
@@ -1239,26 +1301,25 @@ export function WorktreeOverviewModal({
         {bulkRemove.targets.length > 0 && (
           <div className="border border-divider rounded max-h-64 overflow-y-auto divide-y divide-divider">
             {bulkRemove.targets.map((target) => {
-              const hasTrackedChanges = target.trackedChangeCount > 0;
-              const hasUnpushed = target.aheadCount > 0;
+              const risks = describeBulkRemoveRisks(target);
               return (
                 <div key={target.id} className="flex flex-col gap-1 px-3 py-2 bg-daintree-bg/40">
                   <div className="flex items-center gap-2 text-sm text-daintree-text">
                     <GitBranch className="w-3.5 h-3.5 shrink-0 text-daintree-text/50" />
-                    <span className="font-mono truncate" title={target.path}>
+                    {/* The branch is what truncates, so the branch is what the
+                        tooltip has to reveal — it used to show the path, which
+                        is not the string being clipped. */}
+                    <span
+                      className="font-mono truncate"
+                      title={`${target.branch ?? target.name}\n${target.path}`}
+                    >
                       {target.branch ?? target.name}
                     </span>
                   </div>
-                  {(hasTrackedChanges || hasUnpushed) && (
+                  {risks.length > 0 && (
                     <div className="flex items-start gap-1.5 text-xs text-status-warning">
                       <AlertTriangle className="w-3 h-3 shrink-0 mt-0.5" />
-                      <span>
-                        {hasTrackedChanges &&
-                          `${target.trackedChangeCount} uncommitted file${target.trackedChangeCount === 1 ? "" : "s"}`}
-                        {hasTrackedChanges && hasUnpushed && " · "}
-                        {hasUnpushed &&
-                          `${target.aheadCount} unpushed commit${target.aheadCount === 1 ? "" : "s"}`}
-                      </span>
+                      <span>{risks.join(" · ")}</span>
                     </div>
                   )}
                 </div>
@@ -1271,10 +1332,6 @@ export function WorktreeOverviewModal({
           <span>This is irreversible. Type the count to confirm.</span>
         </div>
       </ConfirmDialog>
-      {/* Co-located live region: VoiceOver suppresses announcements made
-          from `aria-live` regions outside the focused `aria-modal` subtree
-          when `document.ariaNotify` is unavailable (Chromium 354736464). */}
-      <AccessibilityAnnouncer />
-    </div>
+    </>
   );
 }
