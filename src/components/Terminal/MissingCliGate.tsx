@@ -44,8 +44,8 @@ function StateBanner({ state, detail }: { state: AgentAvailabilityState; detail:
   // sends the user hunting through endpoint security for a sign-in prompt.
   if (state === "unauthenticated") {
     return (
-      <div className="flex items-start gap-3 px-4 py-3 rounded-[var(--radius-md)] border border-status-success/20 bg-status-success/5">
-        <KeyRound className="w-5 h-5 text-status-success shrink-0 mt-px" />
+      <div className="flex items-start gap-3 px-4 py-3 rounded-[var(--radius-md)] border border-daintree-border bg-overlay-subtle">
+        <KeyRound className="w-5 h-5 text-daintree-text/60 shrink-0 mt-px" />
         <div>
           <p className="text-sm font-medium">Sign-in not detected</p>
           <p className="text-xs text-daintree-text/60 mt-1">

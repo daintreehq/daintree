@@ -3,7 +3,6 @@ import {
   Copy,
   Check,
   AlertCircle,
-  Key,
   Hash,
   Shield,
   Eye,
@@ -882,11 +881,6 @@ export function McpServerSettingsTab() {
           >
             {status.apiKey ? (
               <div className="contents">
-                <div className="flex items-center gap-1.5 text-xs text-status-success">
-                  <Key className="w-3 h-3" />
-                  API key active — clients must send an Authorization header
-                </div>
-
                 <div className="flex items-center gap-2">
                   <div className="flex-1 flex items-center gap-2 rounded-[var(--radius-md)] bg-surface-disabled border border-daintree-border px-3 py-2 font-mono text-xs text-daintree-text/80 select-all">
                     <span className="flex-1 truncate">

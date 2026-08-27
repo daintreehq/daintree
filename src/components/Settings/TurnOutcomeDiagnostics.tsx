@@ -42,7 +42,7 @@ const OUTCOME_ORDER: TurnOutcomeClass[] = [
 const RATE_THRESHOLD = { low: 5, medium: 20 } as const;
 
 function rateColor(rate: number): string {
-  if (rate <= RATE_THRESHOLD.low) return "text-status-success";
+  if (rate <= RATE_THRESHOLD.low) return "text-daintree-text/60";
   if (rate <= RATE_THRESHOLD.medium) return "text-status-warning";
   return "text-status-danger";
 }

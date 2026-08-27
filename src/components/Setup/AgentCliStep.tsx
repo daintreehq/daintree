@@ -249,11 +249,9 @@ export function AgentCliStep({
                 className={`flex items-center gap-3 w-full px-3 py-2 rounded-[var(--radius-md)] border transition-colors ${
                   isInstalling
                     ? "bg-overlay-soft border-border-strong"
-                    : isInstalled
-                      ? "bg-status-success/5 border-status-success/20"
-                      : isError
-                        ? "bg-status-error/5 border-status-error/20"
-                        : "bg-daintree-bg/30 border-daintree-border"
+                    : isError
+                      ? "bg-status-error/5 border-status-error/20"
+                      : "bg-daintree-bg/30 border-daintree-border"
                 }`}
               >
                 {/* The box only aligns the row; the mark carries its own colour and

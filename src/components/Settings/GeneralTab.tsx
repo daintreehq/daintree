@@ -2,7 +2,8 @@ import { useState, useEffect, useRef } from "react";
 import {
   ChevronRight,
   Moon,
-  CheckCircle,
+  ShieldBan,
+  KeyRound,
   Wrench,
   LayoutGrid,
   PanelBottom,
@@ -799,38 +800,38 @@ export function GeneralTab({
                       const ready = isAgentReady(cliAvailability[id]);
                       const unauthenticated = isAgentUnauthenticated(cliAvailability[id]);
                       const blocked = isAgentBlocked(cliAvailability[id]);
-                      // A blocked agent is installed but can't run — show it
-                      // distinctly from the authentication-needed case so the
-                      // user doesn't waste time re-authenticating a binary
-                      // that an endpoint security tool is blocking.
-                      const statusLabel = blocked
-                        ? "Blocked"
+                      // Ready is the expected state, so it gets no chrome at
+                      // all — only states needing the user's attention are
+                      // labelled. Each carries its own glyph: a blocked agent
+                      // is installed but can't run, and reads distinctly from
+                      // the authentication-needed case so the user doesn't
+                      // waste time re-authenticating a binary that an endpoint
+                      // security tool is blocking. Attention states are tested
+                      // before `ready` so a probe that ever reports both still
+                      // surfaces the problem rather than falling silent.
+                      const status = blocked
+                        ? { label: "Blocked", Icon: ShieldBan }
                         : unauthenticated
-                          ? "Login required"
+                          ? { label: "Login required", Icon: KeyRound }
                           : ready
-                            ? "Ready"
-                            : "Needs setup";
-                      const statusClass = blocked
-                        ? "text-status-warning"
-                        : unauthenticated
-                          ? "text-status-warning"
-                          : ready
-                            ? "text-status-success"
-                            : "text-status-warning";
+                            ? null
+                            : { label: "Needs setup", Icon: Wrench };
 
                       return (
                         <button
                           type="button"
                           key={id}
                           className="settings-list-item border-daintree-border hover:bg-[var(--settings-nav-hover-bg,var(--theme-overlay-hover))] flex items-center justify-between text-sm px-3 py-2 rounded-[var(--radius-md)] border w-full text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
-                          aria-label={`Go to ${name} agent settings`}
+                          aria-label={`Go to ${name} agent settings${status ? ` — ${status.label}` : ""}`}
                           onClick={() => onNavigateToAgents?.(id)}
                         >
                           <span className="text-text-secondary">{name}</span>
-                          <span className="flex items-center gap-2">
-                            <CheckCircle className={cn("w-3.5 h-3.5", statusClass)} />
-                            <span className={cn("text-xs", statusClass)}>{statusLabel}</span>
-                          </span>
+                          {status && (
+                            <span className="flex items-center gap-2 text-status-warning">
+                              <status.Icon className="w-3.5 h-3.5" aria-hidden="true" />
+                              <span className="text-xs">{status.label}</span>
+                            </span>
+                          )}
                         </button>
                       );
                     })}

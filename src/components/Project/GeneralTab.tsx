@@ -697,7 +697,7 @@ export function GeneralTab({
 
         {currentProject?.daintreeConfigPresent && (
           <div className="flex items-center gap-2 mb-3 text-xs text-daintree-text/60">
-            <FolderOpen className="h-3.5 w-3.5 text-status-success shrink-0" />
+            <FolderOpen className="h-3.5 w-3.5 text-daintree-text/60 shrink-0" />
             <span>
               Settings loaded from{" "}
               <code className="font-mono text-daintree-text/80">.daintree/</code>

@@ -556,7 +556,7 @@ function GenericCredentialForm({ providerId, providerName, fields }: GenericCred
       </div>
 
       {hasCredential && (
-        <div className="flex items-center gap-1 text-xs text-status-success">
+        <div className="flex items-center gap-1 text-xs text-daintree-text/60">
           <Check className="w-3 h-3" />
           {providerName} connected
         </div>

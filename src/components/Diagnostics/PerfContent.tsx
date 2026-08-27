@@ -125,11 +125,11 @@ function BudgetRow({ row }: { row: PerfSummaryRow }) {
       </td>
       <td className="px-3 py-1.5 text-xs">
         {row.failedBudget ? (
-          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium uppercase tracking-wide bg-status-error/15 text-status-error">
+          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium uppercase tracking-wide border border-status-error/30 bg-status-error/15 text-status-error">
             Over budget
           </span>
         ) : (
-          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium uppercase tracking-wide bg-status-success/15 text-status-success">
+          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium uppercase tracking-wide border border-daintree-border bg-overlay-subtle text-daintree-text/60">
             Within budget
           </span>
         )}
