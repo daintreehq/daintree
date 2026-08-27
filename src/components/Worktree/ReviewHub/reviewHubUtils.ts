@@ -355,6 +355,43 @@ export function sortFiles(
   return sorted;
 }
 
+export type BulkScope = "selection" | "shown" | "all";
+
+/**
+ * The single source of truth for what a section's bulk action targets.
+ *
+ * Both the button's label and the handler the hub dispatches read this, because
+ * they used to decide independently: the label branched on `filterQuery` alone
+ * while the handler branched on `filterQuery || !showGenerated`. With generated
+ * files hidden and no query, the button therefore read "Stage all (12)" and then
+ * staged only the twelve shown, leaving the hidden ones behind. Any new thing
+ * that narrows a section has to be added here, once, or that divergence returns.
+ */
+export function resolveBulkScope(view: SectionViewState, hasSelection: boolean): BulkScope {
+  if (hasSelection) return "selection";
+  return view.filterQuery || !view.showGenerated ? "shown" : "all";
+}
+
+/**
+ * How many of a section's view settings differ from the defaults, so a collapsed
+ * trigger can admit it is holding state. Sort key and direction count as one
+ * setting — flipping direction is not a second decision the user made.
+ *
+ * `filterQuery` is deliberately excluded: it has its own always-visible field.
+ */
+export function countNonDefaultView(view: SectionViewState): number {
+  let n = 0;
+  if (
+    view.sortKey !== DEFAULT_SECTION_STATE.sortKey ||
+    view.sortDir !== DEFAULT_SECTION_STATE.sortDir
+  ) {
+    n += 1;
+  }
+  if (view.density !== DEFAULT_SECTION_STATE.density) n += 1;
+  if (view.showGenerated !== DEFAULT_SECTION_STATE.showGenerated) n += 1;
+  return n;
+}
+
 export function isSortKey(v: string): v is SortKey {
   return v === "path" || v === "status" || v === "churn";
 }

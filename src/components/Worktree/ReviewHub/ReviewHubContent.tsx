@@ -75,6 +75,7 @@ import {
   DEFAULT_SECTION_STATE,
   matchesFilter,
   readGitErrorFields,
+  resolveBulkScope,
   sortFiles,
   sumChurn,
 } from "./reviewHubUtils";
@@ -363,10 +364,6 @@ export function ReviewHubContent({
     );
     row?.scrollIntoView({ behavior: "instant", block: "nearest" });
   }, [focusedIndex]);
-
-  const stagedChurn = useMemo(() => sumChurn(derivedStaged), [derivedStaged]);
-
-  const unstagedChurn = useMemo(() => sumChurn(derivedUnstaged), [derivedUnstaged]);
 
   const sortedBaseBranchFiles = useMemo(
     () =>
@@ -1870,7 +1867,6 @@ export function ReviewHubContent({
                         isStaged={true}
                         files={derivedStaged}
                         allFiles={status.staged}
-                        churn={stagedChurn}
                         indexOffset={0}
                         focusedIndex={focusedIndex}
                         selectionSection={selectionSection}
@@ -1883,13 +1879,14 @@ export function ReviewHubContent({
                         clearFilter={clearStagedFilter}
                         onToggle={handleToggleStaged}
                         onRowClick={handleRowClick}
-                        onBulkAction={() =>
-                          void (hasStagedSelection
+                        onBulkAction={() => {
+                          const scope = resolveBulkScope(stagedView, hasStagedSelection);
+                          void (scope === "selection"
                             ? handleUnstageSelection()
-                            : stagedView.filterQuery || !stagedView.showGenerated
+                            : scope === "shown"
                               ? handleUnstageFiltered()
-                              : handleUnstageAll())
-                        }
+                              : handleUnstageAll());
+                        }}
                         viewedFiles={viewedFiles}
                         onViewedChange={handleViewedChange}
                         renderRowMenu={renderRowMenu}
@@ -1901,7 +1898,6 @@ export function ReviewHubContent({
                         isStaged={false}
                         files={derivedUnstaged}
                         allFiles={status.unstaged}
-                        churn={unstagedChurn}
                         indexOffset={derivedStaged.length}
                         focusedIndex={focusedIndex}
                         selectionSection={selectionSection}
@@ -1914,13 +1910,14 @@ export function ReviewHubContent({
                         clearFilter={clearChangesFilter}
                         onToggle={handleToggleUnstaged}
                         onRowClick={handleRowClick}
-                        onBulkAction={() =>
-                          void (hasUnstagedSelection
+                        onBulkAction={() => {
+                          const scope = resolveBulkScope(changesView, hasUnstagedSelection);
+                          void (scope === "selection"
                             ? handleStageSelection()
-                            : changesView.filterQuery || !changesView.showGenerated
+                            : scope === "shown"
                               ? handleStageFiltered()
-                              : handleStageAll())
-                        }
+                              : handleStageAll());
+                        }}
                         viewedFiles={viewedFiles}
                         onViewedChange={handleViewedChange}
                         renderRowMenu={renderRowMenu}

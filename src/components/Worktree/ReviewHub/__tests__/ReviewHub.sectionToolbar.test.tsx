@@ -747,6 +747,134 @@ describe("ReviewHub", () => {
       });
     });
 
+    /**
+     * A fixture whose Changes section contains a generated file, so hiding
+     * generated output actually narrows that section.
+     */
+    const generatedInChangesStatus = (): StagingStatus =>
+      makeStatus({
+        staged: [{ path: "src/index.ts", status: "modified", insertions: null, deletions: null }],
+        unstaged: [
+          { path: "src/app.ts", status: "modified", insertions: null, deletions: null },
+          { path: "dist/bundle.js", status: "modified", insertions: null, deletions: null },
+        ],
+      });
+
+    /**
+     * The invariant behind #11984's worst defect: the word in the bulk label and
+     * the IPC the same button dispatches are two readings of one decision, and
+     * they must never disagree. Previously the label branched on the filter
+     * query alone while the handler also branched on generated visibility, so
+     * hiding generated files produced "Stage all (N)" over a stage-shown call.
+     *
+     * Asserted as an equivalence rather than a fixed pair, so it keeps holding
+     * when new ways to narrow a section are added.
+     */
+    it("bulk label's scope word agrees with the IPC the button dispatches", async () => {
+      const narrowings: { name: string; narrow: () => void }[] = [
+        {
+          name: "no narrowing at all",
+          narrow: () => {},
+        },
+        {
+          name: "an active filter query",
+          narrow: () => {
+            const filters = screen.getAllByPlaceholderText("Filter…");
+            fireEvent.change(filters[1]!, { target: { value: "app" } });
+          },
+        },
+        {
+          name: "generated files hidden",
+          narrow: () => {
+            // [0] is Staged's toggle, [1] is Changes'.
+            const checkboxes = screen.getAllByRole("menuitemcheckbox");
+            fireEvent.click(checkboxes[1]!);
+          },
+        },
+      ];
+
+      for (const { name, narrow } of narrowings) {
+        stageFilesMock.mockClear();
+        stageAllMock.mockClear();
+        getStagingStatusMock.mockResolvedValue(generatedInChangesStatus());
+
+        const { unmount } = render(
+          <ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
+        );
+        await waitFor(() => screen.getByText("app.ts"));
+
+        narrow();
+
+        const button = await screen.findByTestId("review-hub-stage-section-button");
+        const claimsWholeSection = /\ball\b/.test(button.textContent ?? "");
+        fireEvent.click(button);
+
+        await waitFor(() => {
+          expect(stageAllMock.mock.calls.length + stageFilesMock.mock.calls.length).toBe(1);
+        });
+
+        // The equivalence. `stageAll` acts on the section; `stageFiles` acts on
+        // an explicit path list. Saying "all" and calling the second is the bug.
+        expect(
+          stageAllMock.mock.calls.length === 1,
+          `with ${name}, label was "${button.textContent ?? ""}"`
+        ).toBe(claimsWholeSection);
+
+        unmount();
+      }
+    });
+
+    it("keeps reporting the section's full population when rows are hidden", async () => {
+      const status = generatedInChangesStatus();
+      getStagingStatusMock.mockResolvedValue(status);
+
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      await waitFor(() => screen.getByText("app.ts"));
+
+      const total = status.unstaged.length;
+      const chip = screen.getByTestId("changes-section-count-chip");
+      expect(chip.textContent).toContain(`${total} files`);
+      // Nothing hidden yet, so nothing to disclose.
+      expect(screen.queryByTestId("unstaged-section-shown-chip")).toBeNull();
+
+      const checkboxes = screen.getAllByRole("menuitemcheckbox");
+      fireEvent.click(checkboxes[1]!);
+
+      await waitFor(() => {
+        expect(screen.queryByText("bundle.js")).toBeNull();
+      });
+
+      // The headline count must NOT have followed the visible rows down.
+      expect(screen.getByTestId("changes-section-count-chip").textContent).toContain(
+        `${total} files`
+      );
+      const shown = screen.getByTestId("unstaged-section-shown-chip");
+      expect(shown.textContent).toBe(`${total - 1} shown`);
+    });
+
+    it("offers a recovery that can actually reveal the matches when a query only matches hidden generated files", async () => {
+      getStagingStatusMock.mockResolvedValue(generatedInChangesStatus());
+
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      await waitFor(() => screen.getByText("app.ts"));
+
+      const checkboxes = screen.getAllByRole("menuitemcheckbox");
+      fireEvent.click(checkboxes[1]!);
+
+      const filters = screen.getAllByPlaceholderText("Filter…");
+      fireEvent.change(filters[1]!, { target: { value: "dist" } });
+
+      // "dist/bundle.js" matches the query and exists; it is hidden as
+      // generated. Blaming the filter here names the wrong cause and offers a
+      // recovery that cannot bring it back.
+      const reveal = await screen.findByText("Show generated files", { selector: "button" });
+      expect(reveal).toBeTruthy();
+      expect(screen.queryByText("Clear filter")).toBeNull();
+
+      fireEvent.click(reveal);
+      await waitFor(() => screen.getByText("bundle.js"));
+    });
+
     it("shows bulk button hidden when no files in section", async () => {
       getStagingStatusMock.mockResolvedValue(
         makeStatus({

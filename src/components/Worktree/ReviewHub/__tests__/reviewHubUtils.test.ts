@@ -1,6 +1,13 @@
 import { describe, expect, it } from "vitest";
 import type { StagingFileEntry } from "@shared/types";
-import { isSortKey, readGitErrorFields, sortFiles } from "../reviewHubUtils";
+import {
+  DEFAULT_SECTION_STATE,
+  countNonDefaultView,
+  isSortKey,
+  readGitErrorFields,
+  resolveBulkScope,
+  sortFiles,
+} from "../reviewHubUtils";
 
 function file(
   path: string,
@@ -263,5 +270,71 @@ describe("sortFiles", () => {
     const before = files.map((f) => f.path);
     sortFiles(files, "path", "asc");
     expect(files.map((f) => f.path)).toEqual(before);
+  });
+});
+
+describe("resolveBulkScope", () => {
+  const view = (overrides: Partial<typeof DEFAULT_SECTION_STATE> = {}) => ({
+    ...DEFAULT_SECTION_STATE,
+    ...overrides,
+  });
+
+  it("reports 'shown' for every way a section can be narrowed, not just a query", () => {
+    // The rule: if ANYTHING is hiding rows, the scope is 'shown'. The bug this
+    // pins is a scope that considered only `filterQuery`, so hiding generated
+    // files produced an "all" label over a shown-only action.
+    const narrowed = [view({ filterQuery: "src" }), view({ showGenerated: false })];
+    for (const v of narrowed) {
+      expect(resolveBulkScope(v, false)).toBe("shown");
+    }
+  });
+
+  it("only reports 'all' when nothing is narrowing the section", () => {
+    expect(resolveBulkScope(view(), false)).toBe("all");
+  });
+
+  it("lets selection win over every narrowing cause", () => {
+    const combos = [
+      view(),
+      view({ filterQuery: "src" }),
+      view({ showGenerated: false }),
+      view({ filterQuery: "src", showGenerated: false }),
+    ];
+    for (const v of combos) {
+      expect(resolveBulkScope(v, true)).toBe("selection");
+    }
+  });
+
+  it("never reports 'all' while any narrowing flag is set, across the whole state space", () => {
+    for (const filterQuery of ["", "src"]) {
+      for (const showGenerated of [true, false]) {
+        const v = view({ filterQuery, showGenerated });
+        const isNarrowed = filterQuery !== "" || !showGenerated;
+        expect(resolveBulkScope(v, false) === "all").toBe(!isNarrowed);
+      }
+    }
+  });
+});
+
+describe("countNonDefaultView", () => {
+  it("returns zero for the defaults", () => {
+    expect(countNonDefaultView(DEFAULT_SECTION_STATE)).toBe(0);
+  });
+
+  it("counts each diverging setting once, and sort key+direction as one", () => {
+    const bump = (overrides: Partial<typeof DEFAULT_SECTION_STATE>) =>
+      countNonDefaultView({ ...DEFAULT_SECTION_STATE, ...overrides });
+
+    expect(bump({ sortKey: "churn" })).toBe(1);
+    expect(bump({ sortDir: "desc" })).toBe(1);
+    // Both halves of the same decision still count once.
+    expect(bump({ sortKey: "churn", sortDir: "desc" })).toBe(1);
+    expect(bump({ density: "compact" })).toBe(1);
+    expect(bump({ showGenerated: false })).toBe(1);
+    expect(bump({ sortKey: "churn", density: "compact", showGenerated: false })).toBe(3);
+  });
+
+  it("ignores the filter query, which has its own always-visible field", () => {
+    expect(countNonDefaultView({ ...DEFAULT_SECTION_STATE, filterQuery: "src" })).toBe(0);
   });
 });
