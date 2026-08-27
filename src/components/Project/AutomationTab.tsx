@@ -10,7 +10,17 @@ import {
   LayoutGrid,
   RefreshCw,
 } from "lucide-react";
+import { useId } from "react";
 import { Button } from "@/components/ui/button";
+import {
+  RadioChoiceGroup,
+  RadioChoiceRow,
+  CHOICE_SHELL,
+  CHOICE_PAD,
+  CHOICE_SELECTED,
+  CHOICE_UNSELECTED,
+  CHOICE_LABEL_INSET,
+} from "@/components/ui/RadioChoice";
 import { cn } from "@/lib/utils";
 import { SCROLLBACK_MIN, SCROLLBACK_MAX } from "@shared/config/scrollback";
 import { validatePathPattern, previewPathPattern } from "@shared/utils/pathPattern";
@@ -83,6 +93,7 @@ export function AutomationTab({
   onDefaultWorktreeModeChange,
   isOpen,
 }: AutomationTabProps) {
+  const branchPrefixFieldId = useId();
   const trimmedWorktreePathPattern = worktreePathPattern.trim();
   const hasPathPatternError =
     trimmedWorktreePathPattern.length > 0 && !validatePathPattern(trimmedWorktreePathPattern).valid;
@@ -271,7 +282,7 @@ export function AutomationTab({
           Automatically prefix new branch names when creating worktrees.
         </p>
 
-        <div className="space-y-2">
+        <RadioChoiceGroup legend="Branch prefix" legendHidden>
           {(
             [
               { value: "none", label: "None", description: "No prefix added" },
@@ -286,38 +297,59 @@ export function AutomationTab({
                 description: "Use a custom prefix string",
               },
             ] as const
-          ).map(({ value, label, description }) => (
-            <label
-              key={value}
-              className="flex items-start gap-3 p-2.5 rounded-[var(--radius-md)] border border-daintree-border cursor-pointer hover:bg-daintree-border/30 transition-colors"
-            >
-              <input
-                type="radio"
+          ).map(({ value, label, description }) =>
+            value === "custom" ? (
+              // The custom prefix field belongs to this option, so it renders
+              // inside the card and outside the label — nesting is what carries
+              // the dependency once forced-colors has flattened fills.
+              <div
+                key={value}
+                className={cn(
+                  CHOICE_SHELL,
+                  branchPrefixMode === value ? CHOICE_SELECTED : CHOICE_UNSELECTED
+                )}
+              >
+                <RadioChoiceRow
+                  name="branchPrefixMode"
+                  value={value}
+                  checked={branchPrefixMode === value}
+                  onChange={() => onBranchPrefixModeChange(value)}
+                  label={label}
+                  description={description}
+                  bare
+                />
+                {branchPrefixMode === "custom" && (
+                  <div className={cn(CHOICE_PAD, "pt-0 space-y-1.5", CHOICE_LABEL_INSET)}>
+                    <label
+                      htmlFor={branchPrefixFieldId}
+                      className="block text-xs font-medium text-text-secondary"
+                    >
+                      Prefix
+                    </label>
+                    <input
+                      id={branchPrefixFieldId}
+                      type="text"
+                      value={branchPrefixCustom}
+                      onChange={(e) => onBranchPrefixCustomChange(e.target.value)}
+                      placeholder="e.g. feature/ or myteam/"
+                      className="w-full px-3 py-1.5 bg-surface-input border border-border-strong rounded-[var(--radius-md)] text-sm text-daintree-text font-mono transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+                    />
+                  </div>
+                )}
+              </div>
+            ) : (
+              <RadioChoiceRow
+                key={value}
                 name="branchPrefixMode"
                 value={value}
                 checked={branchPrefixMode === value}
                 onChange={() => onBranchPrefixModeChange(value)}
-                className="mt-0.5 accent-daintree-accent"
+                label={label}
+                description={description}
               />
-              <div>
-                <span className="text-sm font-medium text-daintree-text">{label}</span>
-                <p className="text-xs text-daintree-text/50">{description}</p>
-              </div>
-            </label>
-          ))}
-        </div>
-
-        {branchPrefixMode === "custom" && (
-          <div className="mt-3">
-            <input
-              type="text"
-              value={branchPrefixCustom}
-              onChange={(e) => onBranchPrefixCustomChange(e.target.value)}
-              placeholder="e.g. feature/ or myteam/"
-              className="w-full px-3 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-sm text-daintree-text font-mono focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/30"
-            />
-          </div>
-        )}
+            )
+          )}
+        </RadioChoiceGroup>
 
         {branchPrefixMode !== "none" && (
           <div className="mt-3 p-3 rounded-[var(--radius-md)] bg-daintree-bg/50 border border-daintree-border">

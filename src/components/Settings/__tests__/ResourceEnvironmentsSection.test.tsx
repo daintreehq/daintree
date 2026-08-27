@@ -171,7 +171,7 @@ describe("ResourceEnvironmentsSection", () => {
       />
     );
 
-    expect(screen.getByText("Default Worktree Mode")).toBeTruthy();
+    expect(screen.getByText("Default worktree mode")).toBeTruthy();
     expect(screen.getByText("Default mode when creating new worktrees")).toBeTruthy();
 
     const localRadio = screen.getByRole("radio", { name: "Local" });

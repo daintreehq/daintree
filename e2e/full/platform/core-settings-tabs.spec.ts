@@ -578,7 +578,7 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
     await expect(window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_SHORT });
   });
 
-  // ── Project Resources Tab: Default Worktree Mode ──────────
+  // ── Project Resources Tab: Default worktree mode ──────────
 
   test("Project Resources tab: toggle default worktree mode", async () => {
     const { window } = ctx;
@@ -615,8 +615,8 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
     // rest of the test — gate on it rather than continuing against a broken state.
     await expect(selectorBar).toBeVisible({ timeout: T_MEDIUM });
 
-    // Default Worktree Mode should be visible
-    await expect(panel.locator("text=Default Worktree Mode")).toBeVisible({ timeout: T_SHORT });
+    // Default worktree mode should be visible
+    await expect(panel.locator("text=Default worktree mode")).toBeVisible({ timeout: T_SHORT });
 
     // Scope radios to the worktreeMode group — AutomationTab also renders a
     // branchPrefixMode radio group in this panel, so an unscoped lookup would

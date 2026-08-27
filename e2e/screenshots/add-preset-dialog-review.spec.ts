@@ -1,0 +1,591 @@
+/**
+ * Add-preset dialog visual-review harness.
+ *
+ * Boots a minimal fixture repo, walks to Settings → CLI Agents, and writes PNGs
+ * of every state the "Start from" chooser carries design weight in — blank,
+ * clone with and without a current preset, template with the provider selector,
+ * the two-option shape agents without provider templates get, plus hover,
+ * keyboard focus, an overlong preset name, high contrast and forced colors — so
+ * the dialog can be judged against real rendered pixels (#11972).
+ *
+ * Opt-in only, like theme-review and worktree-dialog-review: skips itself unless
+ * DAINTREE_SHOT_PRESET is set, so the marketing screenshots workflow never
+ * executes it.
+ *
+ *   DAINTREE_SHOT_PRESET=1 npx playwright test --project=screenshots add-preset-dialog-review
+ *
+ * Env knobs:
+ *   DAINTREE_SHOT_PRESET  required — any truthy value runs the capture
+ *   DAINTREE_SHOT_THEME   optional theme id (default: the app default)
+ *   DAINTREE_SHOT_TAG     optional suffix so rounds sit side by side
+ *   DAINTREE_SHOT_ONLY    comma-separated step filter (see step names below)
+ *   DAINTREE_SHOT_SWEEP   set to run the all-themes sweep instead of the state matrix
+ *   DAINTREE_SHOT_OUT     optional absolute output dir (default artifacts/preset-shots)
+ *
+ * Output: artifacts/preset-shots/<NN-slug>[-tag].png (gitignored).
+ *
+ * Steps never swallow their own failures. A state that cannot be reached throws
+ * rather than leaving a stale or plausible-but-wrong PNG behind, and the run
+ * writes MANIFEST.txt so the caller can count captures without trusting the
+ * exit code.
+ */
+
+import { test, expect, type Page } from "@playwright/test";
+import { execSync } from "child_process";
+import { mkdtempSync, writeFileSync, mkdirSync, rmSync, appendFileSync } from "fs";
+import { tmpdir } from "os";
+import path from "path";
+import { launchApp, closeApp, type AppContext } from "../helpers/launch";
+import { openAndOnboardProject } from "../helpers/project";
+import { dismissBlockingPalette } from "../helpers/overlays";
+import { setAppTheme } from "../helpers/theme";
+import { navigateToAgentSettings } from "../helpers/presets";
+import { SEL } from "../helpers/selectors";
+
+const ENABLED = !!process.env.DAINTREE_SHOT_PRESET;
+const THEME = process.env.DAINTREE_SHOT_THEME ?? "";
+const TAG = process.env.DAINTREE_SHOT_TAG ? `-${process.env.DAINTREE_SHOT_TAG}` : "";
+const SCALE = process.env.DAINTREE_SCREENSHOT_SCALE ?? "2";
+const SWEEP = !!process.env.DAINTREE_SHOT_SWEEP;
+const OUTPUT_DIR =
+  process.env.DAINTREE_SHOT_OUT ?? path.resolve(process.cwd(), "artifacts", "preset-shots");
+
+/** The testid sits on the backdrop; the dialog panel is its first child. */
+const DIALOG = '[data-testid="add-preset-dialog"]';
+const PANEL = `${DIALOG} > div`;
+
+/** Freeze animations and hide carets so captures are deterministic. */
+const POLISH_CSS = `
+  ::-webkit-scrollbar { display: none !important; width: 0 !important; height: 0 !important; }
+  *, *::before, *::after {
+    animation-duration: 0s !important;
+    animation-delay: 0s !important;
+    transition-duration: 0s !important;
+    transition-delay: 0s !important;
+    caret-color: transparent !important;
+  }
+`;
+
+/**
+ * Every built-in theme. Switching themes reloads the renderer, so the sweep
+ * re-walks to the dialog after each switch rather than booting once per theme.
+ */
+export const ALL_THEMES = [
+  "arashiyama",
+  "atacama",
+  "bali",
+  "bondi",
+  "daintree",
+  "fiordland",
+  "galapagos",
+  "highlands",
+  "hokkaido",
+  "movile",
+  "namib",
+  "redwoods",
+  "serengeti",
+  "svalbard",
+  "table-mountain",
+];
+
+function git(cmd: string, cwd: string): void {
+  execSync(`git ${cmd}`, { cwd, stdio: "ignore" });
+}
+
+/** Minimal repo — the dialog lives in Settings, so no worktree topology is needed. */
+function createFixtureRepo(): { dir: string; cleanup: () => void } {
+  const dir = mkdtempSync(path.join(tmpdir(), "daintree-preset-shots-"));
+  git("init -b main", dir);
+  git('config user.email "test@daintree.dev"', dir);
+  git('config user.name "Daintree Test"', dir);
+  writeFileSync(path.join(dir, "README.md"), "# Helios Dashboard\n");
+  git("add -A", dir);
+  git('commit -m "initial commit"', dir);
+  return { dir, cleanup: () => rmSync(dir, { recursive: true, force: true }) };
+}
+
+async function settle(page: Page, ms = 400): Promise<void> {
+  await page.evaluate(
+    () => new Promise<void>((r) => requestAnimationFrame(() => requestAnimationFrame(() => r())))
+  );
+  await page.waitForTimeout(ms);
+}
+
+/**
+ * Seed an agent's custom presets through the real settings seam, then reload so
+ * the renderer rebuilds from persisted state rather than a live patch.
+ */
+async function seedPresets(
+  page: Page,
+  agentId: string,
+  presets: { id: string; name: string; env?: Record<string, string>; args?: string[] }[],
+  selectedId: string | null
+): Promise<void> {
+  await page.evaluate(
+    async ({ targetAgentId, nextPresets, presetId }) => {
+      type AgentEntry = Record<string, unknown>;
+      type AgentSettings = { agents?: Record<string, AgentEntry | undefined> };
+      const settings = (await window.electron.agentSettings.get()) as AgentSettings;
+      const entry = settings.agents?.[targetAgentId] ?? {};
+      await window.electron.agentSettings.set(targetAgentId, {
+        ...entry,
+        customPresets: nextPresets,
+        presetId: presetId ?? undefined,
+      } as never);
+    },
+    { targetAgentId: agentId, nextPresets: presets, presetId: selectedId }
+  );
+  await page.reload({ waitUntil: "domcontentloaded" });
+  await page.addStyleTag({ content: POLISH_CSS });
+  await dismissBlockingPalette(page).catch(() => undefined);
+}
+
+/** Walk to an agent's settings and open the Add preset dialog. */
+async function openDialog(page: Page, agentId: string): Promise<void> {
+  await navigateToAgentSettings(page, agentId);
+  const section = page.locator(SEL.preset.section);
+  await expect(section).toBeVisible({ timeout: 15_000 });
+  await section.locator(SEL.preset.addButton).click({ force: true, noWaitAfter: true });
+  await expect(page.locator(DIALOG)).toBeVisible({ timeout: 10_000 });
+  await settle(page, 500);
+}
+
+/**
+ * Walk focus into the choice group with real Tab presses so `:focus-visible`
+ * actually applies, and fail loudly if it never lands there.
+ */
+async function tabToRadioGroup(page: Page): Promise<void> {
+  for (let i = 0; i < 8; i++) {
+    await page.keyboard.press("Tab");
+    await settle(page, 150);
+    const onRadio = await page.evaluate(() => {
+      const el = document.activeElement as HTMLInputElement | null;
+      return el?.tagName === "INPUT" && el.type === "radio" && el.matches(":focus-visible");
+    });
+    if (onRadio) return;
+  }
+  throw new Error("Tab never reached a keyboard-focused radio in the choice group");
+}
+
+async function closeDialog(page: Page): Promise<void> {
+  const dialog = page.locator(DIALOG);
+  if (!(await dialog.isVisible().catch(() => false))) return;
+  await dialog.getByRole("button", { name: "Cancel" }).click({ force: true });
+  await expect(dialog).not.toBeVisible({ timeout: 5000 });
+}
+
+const written: string[] = [];
+
+/**
+ * Capture one state.
+ *
+ * `requiredText` is asserted AFTER the settle and immediately before the
+ * screenshot: it is what stops the harness writing a plausible-looking PNG of a
+ * dialog that never reached the state the filename claims.
+ */
+async function snap(
+  page: Page,
+  slug: string,
+  requiredText: string[],
+  locator: string = PANEL
+): Promise<void> {
+  await settle(page);
+  const target = page.locator(locator).first();
+  await expect(target, `"${slug}": capture target is not visible — refusing to write`).toBeVisible({
+    timeout: 5000,
+  });
+  for (const text of requiredText) {
+    await expect(
+      target,
+      `"${slug}": expected ${JSON.stringify(text)} on screen — refusing to write`
+    ).toContainText(text, { timeout: 5000 });
+  }
+  const file = path.join(OUTPUT_DIR, `${slug}${TAG}.png`);
+  await target.screenshot({ path: file, type: "png", animations: "disabled", caret: "hide" });
+  written.push(path.basename(file));
+}
+
+/**
+ * Measure what the option descriptions actually resolve to against the surface
+ * behind them. The descriptions answer the dialog's primary question, so their
+ * contrast is a design decision rather than a detail — and an alpha-modified
+ * utility resolves to a number no token guard measures. Reported, not asserted:
+ * the tier this text sits in is a judgement call, and the number is the input
+ * to it.
+ */
+async function measureDescriptionContrast(page: Page): Promise<string> {
+  return page.evaluate((panelSel) => {
+    type Rgba = { r: number; g: number; b: number; a: number };
+
+    const parse = (input: string): Rgba => {
+      const probe = document.createElement("div");
+      probe.style.color = input;
+      document.body.appendChild(probe);
+      const resolved = getComputedStyle(probe).color;
+      probe.remove();
+      const m = resolved.match(/[\d.]+/g) ?? [];
+      return {
+        r: Number(m[0] ?? 0),
+        g: Number(m[1] ?? 0),
+        b: Number(m[2] ?? 0),
+        a: m[3] === undefined ? 1 : Number(m[3]),
+      };
+    };
+
+    /** Composite `fg` over `bg` — the card fills are alpha washes, not opaque. */
+    const over = (fg: Rgba, bg: Rgba): Rgba => {
+      const a = fg.a + bg.a * (1 - fg.a);
+      if (a <= 0) return { r: 0, g: 0, b: 0, a: 0 };
+      return {
+        r: (fg.r * fg.a + bg.r * bg.a * (1 - fg.a)) / a,
+        g: (fg.g * fg.a + bg.g * bg.a * (1 - fg.a)) / a,
+        b: (fg.b * fg.a + bg.b * bg.a * (1 - fg.a)) / a,
+        a,
+      };
+    };
+
+    const lum = (c: Rgba) => {
+      const f = (v: number) => {
+        const x = v / 255;
+        return x <= 0.04045 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4;
+      };
+      return 0.2126 * f(c.r) + 0.7152 * f(c.g) + 0.0722 * f(c.b);
+    };
+
+    const ratio = (fg: Rgba, bg: Rgba) => {
+      const composited = over(fg, bg);
+      const [hi, lo] = [lum(composited), lum(bg)].sort((x, y) => y - x);
+      return ((hi as number) + 0.05) / ((lo as number) + 0.05);
+    };
+
+    /** Every wash between the text and the first opaque surface, flattened. */
+    const effectiveBackground = (el: Element | null): Rgba => {
+      let acc: Rgba = { r: 255, g: 255, b: 255, a: 1 };
+      const chain: Rgba[] = [];
+      for (let node: Element | null = el; node; node = node.parentElement) {
+        chain.push(parse(getComputedStyle(node).backgroundColor));
+      }
+      for (let i = chain.length - 1; i >= 0; i--) acc = over(chain[i]!, acc);
+      return acc;
+    };
+
+    const panel = document.querySelector(panelSel);
+    if (!panel) return "no panel";
+
+    const which = (globalThis as { __shotContrastTarget?: string }).__shotContrastTarget;
+    const label = Array.from(panel.querySelectorAll("label")).find((l) =>
+      l.querySelector('input[type="radio"]')
+    );
+    const desc =
+      which === "provider"
+        ? panel.querySelector('[data-testid="template-choice-row"] p')
+        : label?.querySelectorAll("span span")[1];
+    if (!desc) return "no description node";
+
+    const fg = parse(getComputedStyle(desc).color);
+    const bg = effectiveBackground(desc.parentElement);
+    const theme = document.documentElement.getAttribute("data-theme");
+    return `${theme}: fg=${getComputedStyle(desc).color} bg=rgb(${Math.round(bg.r)}, ${Math.round(bg.g)}, ${Math.round(bg.b)}) ratio=${ratio(fg, bg).toFixed(2)}:1`;
+  }, PANEL);
+}
+
+const ONLY = (process.env.DAINTREE_SHOT_ONLY ?? "").split(",").filter(Boolean);
+
+/**
+ * Run a named capture step. Unlike the older dialog harness this does NOT
+ * swallow errors — a step that cannot reach its state fails the run, because a
+ * silently missing capture sends the whole review off reviewing a screen that
+ * does not exist.
+ */
+async function step(name: string, fn: () => Promise<void>): Promise<void> {
+  if (ONLY.length > 0 && !ONLY.includes(name)) return;
+  await test.step(name, fn);
+}
+
+async function boot(): Promise<{
+  ctx: AppContext;
+  page: Page;
+  cleanup: () => Promise<void>;
+}> {
+  const repo = createFixtureRepo();
+  const userDataDir = mkdtempSync(path.join(tmpdir(), "daintree-presetshot-"));
+  const ctx = await launchApp({
+    userDataDir,
+    screenshotScale: SCALE,
+    windowSize: { width: 1680, height: 1050 },
+    extraArgs: ["--disable-gpu", "--in-process-gpu", "--disable-breakpad", "--noerrdialogs"],
+  });
+  const page = await openAndOnboardProject(ctx.app, ctx.window, repo.dir, "Helios Dashboard");
+  if (THEME) await setAppTheme(page, THEME);
+  await page.addStyleTag({ content: POLISH_CSS });
+  await dismissBlockingPalette(page).catch(() => undefined);
+  await settle(page, 1500);
+  return {
+    ctx,
+    page,
+    cleanup: async () => {
+      if (ctx.app) await closeApp(ctx.app);
+      repo.cleanup();
+      rmSync(userDataDir, { recursive: true, force: true });
+    },
+  };
+}
+
+function writeManifest(): void {
+  const manifest = path.join(OUTPUT_DIR, `MANIFEST${TAG}.txt`);
+  appendFileSync(manifest, written.map((f) => f).join("\n") + "\n");
+}
+
+test("add-preset dialog review — start-from states", async () => {
+  test.info().annotations.push({
+    type: "conditional-skip",
+    description: "DAINTREE_SHOT_PRESET is required for the add-preset capture",
+  });
+  test.skip(!ENABLED || SWEEP, "Set DAINTREE_SHOT_PRESET, and unset SWEEP, for the state matrix");
+
+  mkdirSync(OUTPUT_DIR, { recursive: true });
+  const { page, cleanup } = await boot();
+  try {
+    // ---- Shape A: claude, no custom presets. The rest state, and the shape a
+    // first-time user actually meets. Nothing can be cloned, so the clone
+    // option is absent and the decision is Blank vs template.
+    await seedPresets(page, "claude", [], null);
+
+    await step("blank", async () => {
+      await openDialog(page, "claude");
+      await snap(page, "10-blank-no-current", ["Start from", "Blank", "From template"]);
+      await snap(page, "11-blank-no-current-window", ["Blank"], "body");
+      await closeDialog(page);
+    });
+
+    // The provider selector's dependency on "From template" — the state the
+    // issue calls visually dishonest.
+    await step("template", async () => {
+      await openDialog(page, "claude");
+      await page.getByText("From template", { exact: true }).click();
+      await settle(page, 400);
+      await snap(page, "20-template-selected", ["From template", "Provider"]);
+      await closeDialog(page);
+    });
+
+    // Keyboard focus on the choice group — the affordance a pointer-only
+    // review never sees.
+    //
+    // Tab, never `.focus()`: Chromium only sets `:focus-visible` when focus
+    // arrives by keyboard, so a programmatic focus captures a frame that looks
+    // exactly like rest and reads as "there is no focus ring" when there is.
+    await step("focus", async () => {
+      await openDialog(page, "claude");
+      await tabToRadioGroup(page);
+      await snap(page, "30-focus-visible-blank", ["Blank"]);
+      // Arrow must move selection with focus — native radio behaviour, and the
+      // reason this group is not built on the app's roving-tabindex primitive.
+      await page.keyboard.press("ArrowDown");
+      await settle(page, 300);
+      await snap(page, "31-focus-visible-arrowed", ["From template"]);
+      await closeDialog(page);
+    });
+
+    // Hover on a row that is not the selected one — the click-target question.
+    await step("hover", async () => {
+      await openDialog(page, "claude");
+      await page.getByText("From template", { exact: true }).hover();
+      await settle(page, 300);
+      await snap(page, "35-hover-unselected", ["From template"]);
+      await closeDialog(page);
+    });
+
+    // High contrast and forced colors, on the state that carries the most
+    // custom styling.
+    await step("contrast", async () => {
+      await openDialog(page, "claude");
+      await page.getByText("From template", { exact: true }).click();
+      await settle(page, 300);
+      await page.emulateMedia({ contrast: "more" });
+      await settle(page, 400);
+      await snap(page, "40-high-contrast", ["From template", "Provider"]);
+      await page.emulateMedia({ contrast: null, forcedColors: "active" });
+      await settle(page, 400);
+      await snap(page, "41-forced-colors", ["From template", "Provider"]);
+      await page.emulateMedia({ forcedColors: null });
+      await settle(page, 300);
+      await closeDialog(page);
+    });
+
+    // ---- Shape B: an agent with no provider templates and nothing to clone.
+    // Every branch but Blank is unavailable, so there is no decision left to
+    // present — the state most easily forgotten, and the one the old dialog
+    // rendered as two options that did exactly the same thing.
+    await step("no-templates", async () => {
+      await openDialog(page, "codex");
+      await snap(page, "50-single-path", ["The new preset starts empty"]);
+      await closeDialog(page);
+    });
+
+    // ---- Shape B2: the same agent once a preset exists — a real two-option
+    // decision, with no template branch.
+    await step("clone-no-templates", async () => {
+      await seedPresets(
+        page,
+        "codex",
+        [{ id: "shot-codex-1", name: "Sandboxed", env: {}, args: [] }],
+        "shot-codex-1"
+      );
+      await openDialog(page, "codex");
+      await snap(page, "55-clone-no-templates", ["Start from", "Blank", "Clone current"]);
+      await closeDialog(page);
+    });
+
+    // ---- Shape C: a current preset exists and is selected, so "Clone current"
+    // is genuinely available and names its source.
+    await step("clone", async () => {
+      await seedPresets(
+        page,
+        "claude",
+        [{ id: "shot-preset-1", name: "Z.AI (GLM-5.2)", env: {}, args: [] }],
+        "shot-preset-1"
+      );
+      await openDialog(page, "claude");
+      await page.getByText("Clone current", { exact: true }).click();
+      await settle(page, 400);
+      await snap(page, "60-clone-with-current", ["Clone current", "Z.AI"]);
+      await closeDialog(page);
+    });
+
+    // ---- Shape D: extreme density. The longest name a user can actually
+    // produce, to expose truncation and wrapping.
+    await step("long-name", async () => {
+      await seedPresets(
+        page,
+        "claude",
+        [
+          {
+            id: "shot-preset-long",
+            name: "OpenRouter — Claude Opus 4.6 with extended thinking and a 1M context window",
+            env: {},
+            args: [],
+          },
+        ],
+        "shot-preset-long"
+      );
+      await openDialog(page, "claude");
+      await page.getByText("Clone current", { exact: true }).click();
+      await settle(page, 400);
+      await snap(page, "70-clone-long-name", ["Clone current"]);
+      await closeDialog(page);
+    });
+  } finally {
+    writeManifest();
+    await cleanup();
+  }
+});
+
+/**
+ * The choice-row treatment is shared, so the surfaces it was rolled out to need
+ * eyes on them too — particularly this one, where the group sits in the narrow
+ * right column of a two-column label rail rather than across a dialog.
+ */
+test("choice-row rollout review — settings surfaces", async () => {
+  test.info().annotations.push({
+    type: "conditional-skip",
+    description: "DAINTREE_SHOT_PRESET and DAINTREE_SHOT_ROLLOUT are required",
+  });
+  test.skip(!ENABLED || !process.env.DAINTREE_SHOT_ROLLOUT, "Set DAINTREE_SHOT_ROLLOUT");
+
+  mkdirSync(OUTPUT_DIR, { recursive: true });
+  const { page, cleanup } = await boot();
+  try {
+    const { openSettings } = await import("../helpers/panels");
+    await openSettings(page);
+    await expect(page.locator(SEL.settings.heading)).toBeVisible({ timeout: 15_000 });
+
+    await page.locator('[aria-label="Settings scope"]').click();
+    await page.locator('[role="option"]', { hasText: "Project" }).click();
+    await settle(page, 800);
+    await page.locator(`${SEL.settings.navSidebar} button`, { hasText: "Worktree Setup" }).click();
+
+    const panel = page.locator("#settings-panel-project\\:automation");
+    await expect(panel).toBeVisible({ timeout: 15_000 });
+
+    // Seed one resource environment so the worktree-mode group has a second option.
+    const selectorBar = panel.locator('[data-testid="environment-selector-bar"]');
+    if (!(await selectorBar.isVisible().catch(() => false))) {
+      await panel.locator('[aria-label="Add environment"]').click();
+      const nameInput = panel.locator("#new-environment-name");
+      await expect(nameInput).toBeVisible({ timeout: 10_000 });
+      await nameInput.fill("docker-local");
+      await panel
+        .locator('[data-testid="add-environment-form"]')
+        .locator("button", { hasText: "Add" })
+        .click();
+    }
+    await expect(selectorBar).toBeVisible({ timeout: 15_000 });
+
+    await page
+      .locator("#project-branch-prefix")
+      .scrollIntoViewIfNeeded()
+      .catch(() => undefined);
+    await settle(page, 600);
+    await snap(page, "90-branch-prefix", ["Branch Prefix", "Username"], "#project-branch-prefix");
+
+    // The custom option's dependent field, nested in its own card.
+    await panel
+      .locator('input[type="radio"][name="branchPrefixMode"][value="custom"]')
+      .click({ force: true });
+    await settle(page, 500);
+    await snap(page, "91-branch-prefix-custom", ["Custom", "Prefix"], "#project-branch-prefix");
+
+    await panel
+      .locator('input[type="radio"][name="worktreeMode"]')
+      .first()
+      .scrollIntoViewIfNeeded();
+    await settle(page, 600);
+    await snap(page, "92-worktree-mode", ["Default worktree mode", "Local"], "body");
+  } finally {
+    writeManifest();
+    await cleanup();
+  }
+});
+
+test("add-preset dialog review — every theme", async () => {
+  test.info().annotations.push({
+    type: "conditional-skip",
+    description: "DAINTREE_SHOT_PRESET and DAINTREE_SHOT_SWEEP are required for the theme sweep",
+  });
+  test.skip(!ENABLED || !SWEEP, "Set DAINTREE_SHOT_PRESET and DAINTREE_SHOT_SWEEP for the sweep");
+
+  mkdirSync(OUTPUT_DIR, { recursive: true });
+  const { page, cleanup } = await boot();
+  try {
+    await seedPresets(
+      page,
+      "claude",
+      [{ id: "shot-preset-1", name: "Z.AI (GLM-5.2)", env: {}, args: [] }],
+      "shot-preset-1"
+    );
+
+    for (const theme of ALL_THEMES) {
+      await test.step(theme, async () => {
+        await setAppTheme(page, theme);
+        await page.addStyleTag({ content: POLISH_CSS });
+        await dismissBlockingPalette(page).catch(() => undefined);
+        await openDialog(page, "claude");
+        await page.getByText("From template", { exact: true }).click();
+        await settle(page, 400);
+        await snap(page, `80-theme-${theme}`, ["From template", "Provider"]);
+        console.log(`[preset-shots] option ${await measureDescriptionContrast(page)}`);
+        await page.evaluate(() => {
+          (globalThis as { __shotContrastTarget?: string }).__shotContrastTarget = "provider";
+        });
+        console.log(`[preset-shots] provider ${await measureDescriptionContrast(page)}`);
+        await page.evaluate(() => {
+          (globalThis as { __shotContrastTarget?: string }).__shotContrastTarget = undefined;
+        });
+        await closeDialog(page);
+      });
+    }
+  } finally {
+    writeManifest();
+    await cleanup();
+  }
+});

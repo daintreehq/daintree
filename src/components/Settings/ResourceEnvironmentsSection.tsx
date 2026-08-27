@@ -20,6 +20,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { cn } from "@/lib/utils";
 import type { ResourceEnvironment } from "@shared/types/project";
 import { FIELD_INPUT, FormGrid, FormRow, FormSection } from "@/components/Worktree/views";
+import { RadioChoiceRow } from "@/components/ui/RadioChoice";
 
 interface EnvironmentSettingsTabProps {
   resourceEnvironments?: Record<string, ResourceEnvironment>;
@@ -551,35 +552,34 @@ export function ResourceEnvironmentsSection({
           {/* No htmlFor: a set of radios has no single control to name, so the
               rail's label names the group instead. */}
           <FormRow
-            label="Default Worktree Mode"
+            label="Default worktree mode"
+            labelClassName="self-start pt-2.5"
             hint={
               <p className="text-xs text-text-muted">Default mode when creating new worktrees</p>
             }
           >
-            <div className="flex items-center gap-4 flex-wrap">
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="radio"
-                  name="worktreeMode"
-                  value="local"
-                  checked={(defaultWorktreeMode ?? "local") === "local"}
-                  onChange={() => onDefaultWorktreeModeChange("local")}
-                  className="accent-daintree-accent"
-                />
-                <span className="text-sm text-daintree-text">Local</span>
-              </label>
+            {/* No RadioChoiceGroup here: FormRow already renders the rail label
+                and wires `role="group"`/`aria-labelledby` to it, so a second
+                legend would name the group twice. */}
+            <div className="space-y-2">
+              <RadioChoiceRow
+                name="worktreeMode"
+                value="local"
+                checked={(defaultWorktreeMode ?? "local") === "local"}
+                onChange={() => onDefaultWorktreeModeChange("local")}
+                label="Local"
+                description="Run worktrees directly on this machine"
+              />
               {envKeys.map((key) => (
-                <label key={key} className="flex items-center gap-2 cursor-pointer">
-                  <input
-                    type="radio"
-                    name="worktreeMode"
-                    value={key}
-                    checked={defaultWorktreeMode === key}
-                    onChange={() => onDefaultWorktreeModeChange(key)}
-                    className="accent-daintree-accent"
-                  />
-                  <span className="text-sm text-daintree-text">{key}</span>
-                </label>
+                <RadioChoiceRow
+                  key={key}
+                  name="worktreeMode"
+                  value={key}
+                  checked={defaultWorktreeMode === key}
+                  onChange={() => onDefaultWorktreeModeChange(key)}
+                  label={key}
+                  description="Run worktrees in this resource environment"
+                />
               ))}
             </div>
           </FormRow>

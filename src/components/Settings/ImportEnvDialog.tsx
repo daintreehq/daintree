@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { RadioChoiceGroup, RadioChoiceRow } from "@/components/ui/RadioChoice";
 import { AlertTriangle } from "lucide-react";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { parseEnvPaste, type ParseEnvResult } from "@/utils/parseEnvPaste";
@@ -188,23 +189,26 @@ export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDia
               {conflicts.length} key{conflicts.length === 1 ? "" : "s"} already exist
               {conflicts.length === 1 ? "s" : ""}. Choose how to merge.
             </AppDialog.Description>
-            <fieldset className="space-y-2">
-              <legend className="sr-only">Conflict resolution</legend>
-              <ConflictOption
+            <RadioChoiceGroup legend="Conflict resolution" legendHidden>
+              <RadioChoiceRow
+                name="import-env-conflict-mode"
+                value="keep"
                 checked={conflictResolution === "keep"}
                 onChange={() => setConflictResolution("keep")}
                 label="Keep existing"
-                description="Only add new keys — leave colliding values untouched."
+                description="Only add new keys — leave colliding values untouched"
                 testId="import-env-mode-keep"
               />
-              <ConflictOption
+              <RadioChoiceRow
+                name="import-env-conflict-mode"
+                value="overwrite"
                 checked={conflictResolution === "overwrite"}
                 onChange={() => setConflictResolution("overwrite")}
                 label="Overwrite conflicts"
-                description="Replace colliding values with the pasted ones."
+                description="Replace colliding values with the pasted ones"
                 testId="import-env-mode-overwrite"
               />
-            </fieldset>
+            </RadioChoiceGroup>
             <div
               className="rounded-[var(--radius-md)] border border-daintree-border overflow-hidden"
               data-testid="import-env-conflict-list"
@@ -238,38 +242,5 @@ export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDia
         }}
       />
     </AppDialog>
-  );
-}
-
-function ConflictOption({
-  checked,
-  onChange,
-  label,
-  description,
-  testId,
-}: {
-  checked: boolean;
-  onChange: () => void;
-  label: string;
-  description: string;
-  testId: string;
-}) {
-  return (
-    <label className="flex items-start gap-3 cursor-pointer group">
-      <input
-        type="radio"
-        name="import-env-conflict-mode"
-        checked={checked}
-        onChange={onChange}
-        className="mt-0.5 shrink-0 accent-daintree-accent"
-        data-testid={testId}
-      />
-      <div>
-        <span className="text-sm font-medium text-daintree-text group-hover:text-daintree-text transition-colors">
-          {label}
-        </span>
-        <p className="text-xs text-daintree-text/40">{description}</p>
-      </div>
-    </label>
   );
 }
