@@ -221,6 +221,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
   const [snoozePendingIndex, setSnoozePendingIndex] = useState<number | null>(null);
   const [frozenUnreadIds, setFrozenUnreadIds] = useState<Set<string> | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
+  const dialogRef = useRef<HTMLDivElement>(null);
   const [dividerEl, setDividerEl] = useState<HTMLDivElement | null>(null);
   const [showJumpPill, setShowJumpPill] = useState(false);
   const prevShowJumpPillRef = useRef(false);
@@ -723,6 +724,47 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
     ]
   );
 
+  // Take focus into the panel when it opens. The bell keeps `aria-haspopup` and
+  // the panel is portalled to the end of `document.body`, so without this the
+  // next Tab walks the whole rest of the app instead of entering the surface
+  // the user just asked for — the rows are reachable in principle and not in
+  // practice. Deliberately the ROOT and not the first row: focusing a row on
+  // open is a separate, settled decision (see the row-count effect above) and
+  // this leaves it alone.
+  useEffect(() => {
+    if (!open) return;
+    dialogRef.current?.focus({ preventScroll: true });
+  }, [open]);
+
+  // The first arrow press hands off from the panel root into the list. The
+  // list's own handler bails unless `document.activeElement` is already a row,
+  // so without this bridge a keyboard user who has just opened the panel
+  // presses Down and nothing happens.
+  const handleDialogKeyDown = useCallback(
+    (e: React.KeyboardEvent<HTMLDivElement>) => {
+      if (e.target !== e.currentTarget) return;
+      if (dropdownOpenCountRef.current > 0) return;
+      if (rowCount === 0) return;
+      switch (e.key) {
+        case "j":
+        case "ArrowDown":
+        case "Home":
+          e.preventDefault();
+          moveFocusTo(0);
+          return;
+        case "k":
+        case "ArrowUp":
+        case "End":
+          e.preventDefault();
+          moveFocusTo(rowCount - 1);
+          return;
+        default:
+          return;
+      }
+    },
+    [rowCount, moveFocusTo]
+  );
+
   const handleSnoozeForRow = useCallback(
     (row: FlatRow, option: SnoozeDurationOption) => {
       if (!row.correlationId) return;
@@ -882,6 +924,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
 
   return (
     <div
+      ref={dialogRef}
       data-testid="notification-center"
       // The bell advertises `aria-haspopup="dialog"`, so the thing it opens has
       // to actually be one, with a name — otherwise assistive tech is promised
@@ -890,6 +933,19 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
       // Matches CopyTreeRecentsPanel, the other FixedDropdown panel.
       role="dialog"
       aria-label="Notifications"
+      // Focused on open, and it has to be: the panel is portalled to the end of
+      // `document.body` while the bell sits in the toolbar, so leaving focus on
+      // the bell means the next Tab walks the rest of the application instead
+      // of entering the surface that just opened. The rows are then reachable
+      // only in principle. -1 so it takes programmatic focus without joining
+      // the tab ring, and no trap: Tab still leaves.
+      //
+      // This is NOT the "focus the first row on open" behaviour the code below
+      // deliberately avoids — the row set is untouched, and a pointer user sees
+      // no ring, because `:focus-visible` only matches when the last input was
+      // a key.
+      tabIndex={-1}
+      onKeyDown={handleDialogKeyDown}
       // Width stays 360px — the row grid is tuned for it and it reads well.
       // Height was the problem: a flat 420px meant the same small box on a 27"
       // display as on a laptop, with a third of the window sitting empty below
@@ -900,7 +956,14 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
       // the bottom of the screen. `--fixed-dropdown-available-height` comes
       // from FixedDropdown's own positioning pass; the 420px fallback keeps
       // the old behaviour if this ever renders outside that shell.
-      className="w-[360px] max-h-[min(72vh,720px,var(--fixed-dropdown-available-height,420px))] flex flex-col"
+      //
+      // The focus ring uses a negative offset because the panel is full-bleed
+      // inside FixedDropdown's `overflow-hidden` shell, which clips an outset
+      // one — the same reason the rows do it.
+      className={cn(
+        "w-[360px] max-h-[min(72vh,720px,var(--fixed-dropdown-available-height,420px))] flex flex-col",
+        "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-daintree-accent"
+      )}
     >
       {/* Two rows, not one. Sharing a line with the toolbar squeezed the filter
           group down to about 120px, so all four chips wrapped onto three lines

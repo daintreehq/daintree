@@ -2068,6 +2068,38 @@ describe("NotificationCenter — keyboard navigation", () => {
     expect(chainClasses).toMatch(/\bmin-h-0\b/);
   });
 
+  it("takes focus into the panel on open, without landing on a row", () => {
+    setEntries([makeEntry(), makeEntry({ id: "entry-2" })]);
+    const { container } = render(<NotificationCenter open onClose={vi.fn()} />);
+    const panel = container.querySelector('[data-testid="notification-center"]')!;
+
+    // The panel is portalled to the end of document.body while the bell sits in
+    // the toolbar, so leaving focus on the bell means the next Tab walks the
+    // rest of the app rather than entering the surface just opened — the rows
+    // become reachable in principle only (#12061).
+    expect(panel.getAttribute("tabindex")).toBe("-1");
+    expect(document.activeElement).toBe(panel);
+
+    // But NOT a row. Focusing the first row on open is a separate decision the
+    // code deliberately avoids, and this must not quietly reverse it.
+    expect(document.activeElement).not.toBe(getRows(container)[0]);
+  });
+
+  it("hands off from the panel root to the list on the first arrow press", () => {
+    setEntries([makeEntry(), makeEntry({ id: "entry-2" })]);
+    const { container } = render(<NotificationCenter open onClose={vi.fn()} />);
+    const panel = container.querySelector('[data-testid="notification-center"]')!;
+    const rows = getRows(container);
+
+    // The list's own handler bails unless activeElement is already a row, so
+    // without a bridge on the root the first Down after opening does nothing.
+    fireEvent.keyDown(panel, { key: "ArrowDown" });
+    expect(document.activeElement).toBe(rows[0]);
+
+    fireEvent.keyDown(panel, { key: "End" });
+    expect(document.activeElement).toBe(rows[rows.length - 1]);
+  });
+
   it("delivers the dialog its trigger advertises, without claiming to be modal", () => {
     setEntries([makeEntry()]);
     const { container } = render(<NotificationCenter open onClose={vi.fn()} />);
