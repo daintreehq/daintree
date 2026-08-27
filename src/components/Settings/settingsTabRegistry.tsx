@@ -1037,6 +1037,7 @@ export const SETTINGS_REGISTRY = [
           "dangerous",
           "allow",
           "bypass",
+          "review",
         ],
       },
       {

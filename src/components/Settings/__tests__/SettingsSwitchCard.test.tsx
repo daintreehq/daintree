@@ -3,6 +3,12 @@ import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { SettingsSwitchCard } from "../SettingsSwitchCard";
 
+// Resolve within the render container rather than `document`, so the assertion
+// survives a custom/detached container and doesn't pin the useId format.
+function describedElement(container: HTMLElement, id: string | null | undefined) {
+  return id ? Array.from(container.querySelectorAll("[id]")).find((el) => el.id === id) : undefined;
+}
+
 const defaultProps = {
   title: "Test Setting",
   subtitle: "A test subtitle",
@@ -71,7 +77,7 @@ describe("SettingsSwitchCard", () => {
     const switchEl = container.querySelector('[role="switch"]');
     const describedBy = switchEl?.getAttribute("aria-describedby");
     expect(describedBy, "switch must describe itself with the subtitle").toBeTruthy();
-    expect(document.getElementById(describedBy!)).toBe(screen.getByText(defaultProps.subtitle));
+    expect(describedElement(container, describedBy)?.textContent).toBe(defaultProps.subtitle);
   });
 
   it("gives each card its own description id", () => {
@@ -86,7 +92,7 @@ describe("SettingsSwitchCard", () => {
     );
     expect(ids).toHaveLength(2);
     expect(new Set(ids).size).toBe(2);
-    expect(document.getElementById(ids[0]!)?.textContent).toBe("First subtitle");
-    expect(document.getElementById(ids[1]!)?.textContent).toBe("Second subtitle");
+    expect(describedElement(container, ids[0])?.textContent).toBe("First subtitle");
+    expect(describedElement(container, ids[1])?.textContent).toBe("Second subtitle");
   });
 });
