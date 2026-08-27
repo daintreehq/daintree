@@ -24,6 +24,7 @@ import {
   PanelBottom,
   PanelTopClose,
   SquareTerminal,
+  X,
 } from "lucide-react";
 import {
   SortableWorktreeTerminal,
@@ -32,6 +33,7 @@ import {
 import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
 import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
 import { useKeybindingScope } from "@/hooks/useKeybinding";
+import { SECTION_LABEL, SECTION_TRIGGER_SURFACE } from "./sectionChrome";
 
 interface MarqueeBox {
   x: number;
@@ -76,7 +78,7 @@ function TerminalRow({ term, onClick }: TerminalRowProps) {
         isArmed && !isPrimary && "outline-dashed outline-border-strong"
       )}
     >
-      <div className="worktree-section-button group/termrow flex items-center justify-between gap-2.5 px-3 py-2 transition-colors">
+      <div className="worktree-section-button group/termrow flex items-center justify-between gap-2.5 py-2 pl-[18px] pr-1 transition-colors">
         <TruncatedTooltip content={term.title} isTruncated={isTruncated}>
           <button
             type="button"
@@ -148,7 +150,7 @@ function TerminalRow({ term, onClick }: TerminalRowProps) {
               </div>
             </TooltipTrigger>
             <TooltipContent side="bottom">
-              {term.location === "dock" ? "Docked" : "On Grid"}
+              {term.location === "dock" ? "Docked" : "On grid"}
             </TooltipContent>
           </Tooltip>
 
@@ -170,6 +172,8 @@ function TerminalRow({ term, onClick }: TerminalRowProps) {
 
 export interface WorktreeTerminalSectionProps {
   worktreeId: string;
+  /** See {@link WorktreeDetailsSectionProps.variant} — same reasoning. */
+  variant?: "sidebar" | "grid";
   isExpanded: boolean;
   counts: WorktreeTerminalCounts;
   terminals: PtyPanelData[];
@@ -181,6 +185,7 @@ const FLEET_HINT_DISMISSED_KEY = "daintree:fleet-selection-hint-dismissed";
 
 export function WorktreeTerminalSection({
   worktreeId,
+  variant = "sidebar",
   isExpanded,
   counts,
   terminals,
@@ -189,6 +194,7 @@ export function WorktreeTerminalSection({
 }: WorktreeTerminalSectionProps) {
   useKeybindingScope("worktreeGrid", isExpanded);
 
+  const isSidebar = variant === "sidebar";
   const showMetaFooter = counts.total > 0;
 
   const terminalsId = `worktree-${worktreeId}-terminals`;
@@ -377,7 +383,13 @@ export function WorktreeTerminalSection({
   return (
     <div
       id={terminalsId}
-      className="mt-3 rounded-[var(--radius-lg)] border border-border-default bg-surface-inset"
+      className={cn(
+        isSidebar
+          ? // Flat on the card surface, and separated from Details by a peer
+            // divider rather than by each section carrying its own well.
+            "mt-2 border-t border-border-subtle pt-2"
+          : "mt-3 rounded-[var(--radius-lg)] border border-border-default bg-surface-inset"
+      )}
     >
       {isExpanded ? (
         <>
@@ -385,18 +397,29 @@ export function WorktreeTerminalSection({
             onClick={onToggle}
             aria-expanded={true}
             aria-controls={terminalsPanelId}
-            className="worktree-section-button flex w-full items-center justify-between rounded-t-[var(--radius-lg)] border-b border-border-default bg-surface-inset px-3 py-1.5 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]"
+            className={cn(
+              "worktree-section-button flex w-full items-center text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]",
+              isSidebar
+                ? cn(SECTION_TRIGGER_SURFACE, "gap-1.5 py-1")
+                : "justify-between rounded-t-[var(--radius-lg)] border-b border-border-default bg-surface-inset px-3 py-1.5"
+            )}
             id={`${terminalsId}-button`}
           >
-            <span className="flex items-center gap-1.5 text-[11px] font-medium text-text-muted">
+            {isSidebar && <ChevronRight className="h-3 w-3 shrink-0 rotate-90 text-text-muted" />}
+            <span
+              className={cn(
+                "flex items-center gap-1.5",
+                isSidebar ? SECTION_LABEL : "text-[11px] font-medium text-text-muted"
+              )}
+            >
               {SummaryIcon ? (
                 <SummaryIcon className="w-3 h-3" />
               ) : (
                 <SquareTerminal className="w-3 h-3" />
               )}
-              <span>Active Sessions ({counts.total})</span>
+              <span>Active sessions ({counts.total})</span>
             </span>
-            <ChevronRight className="h-3 w-3 rotate-90 text-text-muted" />
+            {!isSidebar && <ChevronRight className="h-3 w-3 rotate-90 text-text-muted" />}
           </button>
           <SortableContext
             id={`worktree-${worktreeId}-accordion`}
@@ -404,7 +427,12 @@ export function WorktreeTerminalSection({
             strategy={verticalListSortingStrategy}
           >
             {eligibleTerminals.length >= 2 && armedIdsSize === 0 && !hintDismissed && (
-              <div className="flex items-center justify-between px-3 py-1.5 text-[11px] text-text-muted bg-surface-inset border-b border-border-default">
+              <div
+                className={cn(
+                  "flex items-center justify-between py-1.5 text-[11px] text-text-muted",
+                  isSidebar ? "" : "border-b border-border-default bg-surface-inset px-3"
+                )}
+              >
                 <span>Drag to select multiple, ⇧-click to add</span>
                 <button
                   type="button"
@@ -418,7 +446,7 @@ export function WorktreeTerminalSection({
                     setHintDismissed(true);
                   }}
                 >
-                  ✕
+                  <X className="h-3 w-3" aria-hidden="true" />
                 </button>
               </div>
             )}
@@ -432,7 +460,10 @@ export function WorktreeTerminalSection({
               onPointerMove={handlePointerMove}
               onPointerUp={handlePointerUp}
               onPointerCancel={handlePointerCancel}
-              className="relative max-h-[300px] overflow-y-auto bg-surface-inset cursor-crosshair"
+              className={cn(
+                "relative max-h-[300px] cursor-crosshair overflow-y-auto",
+                isSidebar ? "mt-1" : "bg-surface-inset"
+              )}
             >
               {orderedWorktreeTerminals.map((term, index) => (
                 <SortableWorktreeTerminal
@@ -464,10 +495,18 @@ export function WorktreeTerminalSection({
           onClick={onToggle}
           aria-expanded={false}
           aria-controls={terminalsPanelId}
-          className="worktree-section-button flex w-full items-center justify-between rounded-[var(--radius-lg)] px-3 py-1.5 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]"
+          className={cn(
+            "worktree-section-button flex w-full items-center justify-between text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]",
+            isSidebar
+              ? cn(SECTION_TRIGGER_SURFACE, "py-1.5")
+              : "rounded-[var(--radius-lg)] px-3 py-1.5"
+          )}
           id={`${terminalsId}-button`}
         >
           <div className="flex items-center gap-1.5 text-[11px] text-text-secondary">
+            {isSidebar && (
+              <ChevronRight className="h-3 w-3 shrink-0 text-text-muted" aria-hidden="true" />
+            )}
             {SummaryIcon ? (
               <SummaryIcon className="w-3 h-3" />
             ) : (

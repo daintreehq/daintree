@@ -310,7 +310,7 @@ describe("WorktreeDetailsSection — reviewState surfaces", () => {
       reviewState: "has-changes",
       onOpenReviewHub,
     });
-    const button = screen.getByLabelText("Open Review & Commit");
+    const button = screen.getByLabelText("Open Review & commit");
     expect(button).toBeDefined();
     fireEvent.click(button);
     expect(onOpenReviewHub).toHaveBeenCalledTimes(1);
@@ -332,10 +332,10 @@ describe("WorktreeDetailsSection — reviewState surfaces", () => {
         } as WorktreeChanges,
       },
     });
-    expect(screen.queryByLabelText("Open Review & Commit")).toBeNull();
+    expect(screen.queryByLabelText("Open Review & commit")).toBeNull();
     expect(screen.queryByText("Conflicts need review")).toBeNull();
     expect(screen.getByText("fix: stuff")).toBeDefined();
-    const button = screen.getByLabelText("Open Review & Push");
+    const button = screen.getByLabelText("Open Review & push");
     fireEvent.click(button);
     expect(onOpenReviewHub).toHaveBeenCalledTimes(1);
   });
@@ -354,8 +354,8 @@ describe("WorktreeDetailsSection — reviewState surfaces", () => {
         } as WorktreeChanges,
       },
     });
-    expect(screen.queryByLabelText("Open Review & Commit")).toBeNull();
-    expect(screen.queryByLabelText("Open Review & Push")).toBeNull();
+    expect(screen.queryByLabelText("Open Review & commit")).toBeNull();
+    expect(screen.queryByLabelText("Open Review & push")).toBeNull();
   });
 });
 
@@ -414,9 +414,14 @@ describe("WorktreeDetailsSection activity chip (collapsed row)", () => {
     const worktree = withCommit({
       lastCommitAuthor: { name: "Codex", email: "noreply@codex.openai.com" },
     });
-    const { container } = renderSection({ worktree, hasChanges: false });
-    expect(container.querySelector("svg")).toBeNull();
-    expect(container.querySelector("img")).toBeNull();
+    renderSection({ worktree, hasChanges: false });
+    // Scoped to the chip itself. The row legitimately carries other icons —
+    // the disclosure chevron, the Review Hub control — so asserting "no svg
+    // anywhere in the row" tested the surrounding chrome rather than the rule,
+    // which is that the activity chip never paints committer identity.
+    const chip = screen.getByRole("group", { name: "Last activity" });
+    expect(chip.querySelector("svg")).toBeNull();
+    expect(chip.querySelector("img")).toBeNull();
   });
 
   it("renders activity for a worktree with no commit", () => {

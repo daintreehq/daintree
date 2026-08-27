@@ -124,8 +124,11 @@ export function NonMainSecondaryRow({
           underlineOnHover={underlineOnHover}
         />
       )}
-      {upstreamFirst ? upstreamBadge : prBadge}
-      {upstreamFirst ? prBadge : upstreamBadge}
+      {/* Branch before upstream delta: the branch is identity, the delta is
+          state, and the card answers "which worktree is this?" before "how far
+          has it drifted?". The upstream/PR pair still swaps between itself by
+          alarm tier — that ordering is about which alarm outranks which, not
+          about outranking the branch name. */}
       {hasDisplayTitle && (
         <BranchLabel
           label={branchLabel}
@@ -134,6 +137,8 @@ export function NonMainSecondaryRow({
           isMainWorktree={false}
         />
       )}
+      {upstreamFirst ? upstreamBadge : prBadge}
+      {upstreamFirst ? prBadge : upstreamBadge}
       {hasPlanFile && badges.onOpenPlan && (
         <button
           type="button"

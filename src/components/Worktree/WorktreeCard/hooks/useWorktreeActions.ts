@@ -231,10 +231,10 @@ export function useWorktreeActions({
     );
     setConfirmDialog({
       isOpen: true,
-      title: `Teardown resource for '${label}'?`,
+      title: `Tear down resource for '${label}'?`,
       description:
         "This runs the project's resource-teardown commands for this worktree. Tearing down a remote or shared environment may require manual steps to recreate.",
-      confirmLabel: "Teardown resource",
+      confirmLabel: "Tear down resource",
       variant: "destructive",
       children: preview,
       onConfirm: () => {

@@ -42,6 +42,24 @@
     var(--sidebar-card-shadow, 0 0 #0000);
 }
 
+/* Accent restraint: exactly one accent anchor per focus region. While a
+   control inside the active row is drawing its own accent focus ring, the
+   full-strength selection edge and that ring are two load-bearing accent
+   shapes in one frame and neither reads as the anchor. Focus wins for as long
+   as it lasts — it is the transient thing the user is steering — so the
+   selection edge recedes to the same dimmed accent it already uses when the
+   sidebar loses focus entirely, rather than the ring changing colour depending
+   on which row it lands on.
+
+   `:has(:focus-visible)` and not `:focus-within`: the keyboard-cursor row
+   draws no ring at all (#8094), so on that path there is no second accent to
+   yield to and the edge must stay at full strength. */
+.sidebar-root .sidebar-worktree-card[data-active="true"]:has(:focus-visible) {
+  box-shadow:
+    inset -2px 0 0 color-mix(in srgb, var(--theme-accent-primary) 45%, transparent),
+    var(--sidebar-card-shadow, 0 0 #0000);
+}
+
 .sidebar-worktree-card[data-hoverable="true"]:hover,
 .sidebar-worktree-card[data-hovered="true"] {
   background: var(--sidebar-hover-bg, rgba(255, 255, 255, 0.03));
@@ -80,8 +98,9 @@ html[data-dragging="true"]
     var(--sidebar-card-shadow, 0 0 #0000);
 }
 
-/* No focus/cursor ring on the rows: the only visual signal in this list is the
-   active-worktree left marker. Suppress the default browser outline so clicking
+/* No focus/cursor ring on the rows: the only visual signals in this list are
+   the active row's neutral lift and its right-edge marker. Suppress the default
+   browser outline so clicking
    or tabbing through rows doesn't paint an outline. The per-row toolbar/drag
    handle still reveal on keyboard focus (below) so keyboard users keep a usable
    affordance, and forced-colors mode still gets a system outline (it can't be
@@ -165,11 +184,15 @@ html[data-dragging="true"]
     outline-offset: -2px;
   }
 
-  /* The active row's left-edge indicator is an inset box-shadow, which is
-     stripped here. Fall back to a system-color left border so the selected
-     worktree stays distinguishable from idle rows. */
+  /* The active row's right-edge indicator is an inset box-shadow, which is
+     stripped here. Fall back to a system-color border on the SAME edge so the
+     selected worktree stays distinguishable from idle rows without moving the
+     marker across the card — a left fallback contradicted the all-theme
+     right-edge vocabulary (#9711 round 3) and read as a second, different
+     selection signal for exactly the high-contrast users least able to
+     absorb one. */
   .sidebar-worktree-card[data-active="true"] {
-    border-left: 2px solid SelectedItem;
+    border-right: 2px solid SelectedItem;
   }
 
   /* The panel drag-over ring is also an inset box-shadow; restore it as a

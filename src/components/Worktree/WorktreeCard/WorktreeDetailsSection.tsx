@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import { actionService } from "@/services/ActionService";
 import type { ComputedSubtitle, WorktreeReviewState } from "./hooks/useWorktreeStatus";
+import { SECTION_LABEL, SECTION_TRIGGER_SURFACE } from "./sectionChrome";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   ContextMenu,
@@ -36,6 +37,15 @@ import {
 export interface WorktreeDetailsSectionProps {
   worktree: WorktreeState;
   homeDir?: string;
+  /**
+   * Sidebar cards flatten this section into the card surface; grid cards keep
+   * the bordered, filled well. The sidebar row is already a container, and a
+   * second bordered plane inside it (with a third for the note and a fourth
+   * for the file list) reads as a stack of nested cards and eats ~34px of a
+   * 240-360px column per level. The grid card sits on a wider, standalone
+   * surface where the well still earns its keep.
+   */
+  variant?: "sidebar" | "grid";
   isExpanded: boolean;
   hasChanges: boolean;
   computedSubtitle: ComputedSubtitle;
@@ -70,6 +80,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
   const {
     worktree,
     homeDir,
+    variant = "sidebar",
     isExpanded,
     hasChanges,
     computedSubtitle,
@@ -144,7 +155,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
   // push — so the opener stays visible; only the label shifts to match.
   const isUnpushedClean = reviewState === "unpushed-clean" && !hasChanges;
   const showReviewHubButton = !!onOpenReviewHub && (hasChanges || isUnpushedClean);
-  const reviewHubButtonLabel = isUnpushedClean ? "Review & Push" : "Review & Commit";
+  const reviewHubButtonLabel = isUnpushedClean ? "Review & push" : "Review & commit";
   const rightButtonGroupShown = showReviewHubButton;
 
   const lifecycleState = worktree.lifecycleStatus?.state;
@@ -182,24 +193,43 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
   const showResourcePause = hasResourceConfig && (rsLower === "running" || rsLower === "starting");
   const showResourceConnect = hasResourceConfig && !!onResourceConnect && rsLower === "running";
 
+  const isSidebar = variant === "sidebar";
+
   return (
     <>
       <div
         id={detailsId}
-        className="mt-2 rounded-[var(--radius-lg)] border border-border-default bg-surface-inset p-3"
+        className={cn(
+          isSidebar
+            ? "mt-2"
+            : "mt-2 rounded-[var(--radius-lg)] border border-border-default bg-surface-inset p-3"
+        )}
       >
         {isExpanded ? (
-          <div className="-m-3">
+          <div className={cn(!isSidebar && "-m-3")}>
             <button
               onClick={onToggleExpand}
               aria-expanded={true}
               aria-controls={detailsPanelId}
-              className="worktree-section-button flex w-full items-center justify-between rounded-t-[var(--radius-lg)] border-b border-border-default bg-surface-inset px-3 py-2.5 text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]"
+              className={cn(
+                "worktree-section-button flex w-full items-center text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]",
+                isSidebar
+                  ? // Leading chevron, no fill, no rule under it: the trigger has
+                    // to stay attached to the body it just revealed. A divider
+                    // there cuts the two apart and they read as separate
+                    // components.
+                    cn(SECTION_TRIGGER_SURFACE, "gap-1.5 py-1")
+                  : "justify-between rounded-t-[var(--radius-lg)] border-b border-border-default bg-surface-inset px-3 py-2.5"
+              )}
               id={`${detailsId}-button`}
             >
+              {isSidebar && <ChevronRight className="h-3 w-3 shrink-0 rotate-90 text-text-muted" />}
               {isBeingDeleted && !deleteError ? (
                 <span
-                  className="flex items-center gap-1.5 text-xs font-medium text-text-secondary"
+                  className={cn(
+                    "flex items-center gap-1.5 text-xs font-medium text-text-secondary",
+                    isSidebar && SECTION_LABEL
+                  )}
                   role="status"
                   aria-live="polite"
                 >
@@ -207,17 +237,22 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                   <span>Deleting…</span>
                 </span>
               ) : (
-                <span className="text-xs font-medium text-text-muted">Details</span>
+                <span
+                  className={cn(isSidebar ? SECTION_LABEL : "text-xs font-medium text-text-muted")}
+                >
+                  Details
+                </span>
               )}
-              <ChevronRight className="h-3 w-3 rotate-90 text-text-muted" />
+              {!isSidebar && <ChevronRight className="h-3 w-3 rotate-90 text-text-muted" />}
             </button>
             <div
               id={detailsPanelId}
               role="region"
               aria-labelledby={`${detailsId}-button`}
-              className="p-3"
+              className={cn(isSidebar ? "mt-2" : "p-3")}
             >
               <WorktreeDetails
+                variant={variant}
                 worktree={worktree}
                 homeDir={homeDir}
                 effectiveNote={effectiveNote}
@@ -237,15 +272,23 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
             </div>
           </div>
         ) : (
-          <div className="-m-3 flex flex-col">
+          <div className={cn("flex flex-col", !isSidebar && "-m-3")}>
             <div className="flex items-stretch">
               <div
                 onClick={onToggleExpand}
                 className={cn(
-                  "worktree-section-button relative flex min-w-0 flex-1 items-center justify-between px-3 py-2.5 text-left transition-colors",
-                  rightButtonGroupShown
-                    ? "rounded-l-[var(--radius-lg)]"
-                    : "rounded-[var(--radius-lg)]"
+                  "worktree-section-button relative flex min-w-0 flex-1 items-center justify-between text-left transition-colors",
+                  // Sidebar: a flat row on the card surface with a hover
+                  // backplate, not a permanent bordered well. Same hit area,
+                  // same content, one less container.
+                  isSidebar
+                    ? "-ml-1.5 rounded-[var(--radius-md)] py-1.5 pl-1.5 pr-1"
+                    : cn(
+                        "px-3 py-2.5",
+                        rightButtonGroupShown
+                          ? "rounded-l-[var(--radius-lg)]"
+                          : "rounded-[var(--radius-lg)]"
+                      )
                 )}
               >
                 <button
@@ -256,12 +299,24 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                   aria-label="Show details"
                   className={cn(
                     "absolute inset-0",
-                    rightButtonGroupShown
-                      ? "rounded-l-[var(--radius-lg)]"
-                      : "rounded-[var(--radius-lg)]",
+                    isSidebar
+                      ? "rounded-[var(--radius-md)]"
+                      : rightButtonGroupShown
+                        ? "rounded-l-[var(--radius-lg)]"
+                        : "rounded-[var(--radius-lg)]",
                     "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]"
                   )}
                 />
+                {isSidebar && (
+                  // The closed half of the same disclosure vocabulary the
+                  // expanded state uses. Flattening removed the well that used
+                  // to say "this is a thing you open", so without a chevron the
+                  // resting row is just a line of metadata.
+                  <ChevronRight
+                    className="pointer-events-none relative z-10 mr-1.5 h-3 w-3 shrink-0 text-text-muted"
+                    aria-hidden="true"
+                  />
+                )}
                 <span className="relative z-10 text-xs truncate min-w-0 flex-1 pointer-events-none">
                   {isBeingDeleted && !deleteError ? (
                     <span
@@ -337,19 +392,19 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                       {showResourceResume && onResourceResume && (
                         <ContextMenuItem onClick={onResourceResume}>
                           <Play className="w-3.5 h-3.5 mr-2" />
-                          Resume
+                          Resume resource
                         </ContextMenuItem>
                       )}
                       {showResourcePause && onResourcePause && (
                         <ContextMenuItem onClick={onResourcePause}>
                           <Square className="w-3.5 h-3.5 mr-2" />
-                          Pause
+                          Pause resource
                         </ContextMenuItem>
                       )}
                       {showResourceConnect && (
                         <ContextMenuItem onClick={onResourceConnect}>
                           <Plug className="w-3.5 h-3.5 mr-2" />
-                          Connect
+                          Connect to resource
                         </ContextMenuItem>
                       )}
                       {(showResourceResume || showResourcePause || showResourceConnect) &&
@@ -357,7 +412,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                       {onResourceStatus && (
                         <ContextMenuItem onClick={onResourceStatus}>
                           <Activity className="w-3.5 h-3.5 mr-2" />
-                          Check Status
+                          Check status
                         </ContextMenuItem>
                       )}
                       {onResourceTeardown && (
@@ -368,7 +423,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                             className="text-status-error"
                           >
                             <Trash2 className="w-3.5 h-3.5 mr-2" />
-                            Teardown
+                            Tear down resource
                           </ContextMenuItem>
                         </>
                       )}
@@ -388,12 +443,12 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                                 onResourceResume();
                               }}
                               className="shrink-0 p-1 rounded transition-colors text-status-success/70 hover:text-status-success hover:bg-overlay-emphasis focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
-                              aria-label="Resume Resource"
+                              aria-label="Resume resource"
                             >
                               <Play className="w-3 h-3" />
                             </button>
                           </TooltipTrigger>
-                          <TooltipContent side="bottom">Resume Resource</TooltipContent>
+                          <TooltipContent side="bottom">Resume resource</TooltipContent>
                         </Tooltip>
                       )}
                       {showResourcePause && onResourcePause && (
@@ -405,12 +460,12 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                                 onResourcePause();
                               }}
                               className="shrink-0 p-1 rounded transition-colors text-status-error/70 hover:text-status-error hover:bg-overlay-emphasis focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
-                              aria-label="Pause Resource"
+                              aria-label="Pause resource"
                             >
                               <Square className="w-3 h-3" />
                             </button>
                           </TooltipTrigger>
-                          <TooltipContent side="bottom">Pause Resource</TooltipContent>
+                          <TooltipContent side="bottom">Pause resource</TooltipContent>
                         </Tooltip>
                       )}
                       {showResourceConnect && (
@@ -422,12 +477,12 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                                 onResourceConnect!();
                               }}
                               className="shrink-0 p-1 rounded transition-colors text-status-info/70 hover:text-status-info hover:bg-overlay-emphasis focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
-                              aria-label="Connect to Resource"
+                              aria-label="Connect to resource"
                             >
                               <Plug className="w-3 h-3" />
                             </button>
                           </TooltipTrigger>
-                          <TooltipContent side="bottom">Connect to Resource</TooltipContent>
+                          <TooltipContent side="bottom">Connect to resource</TooltipContent>
                         </Tooltip>
                       )}
                     </span>
@@ -448,9 +503,14 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                     <button
                       onClick={onOpenReviewHub}
                       className={cn(
-                        "shrink-0 border-l border-border-default px-2 py-1 transition-colors",
+                        "shrink-0 transition-colors",
                         "text-[var(--color-state-active)]/70 hover:bg-[var(--color-state-active)]/10 hover:text-[var(--color-state-active)]",
-                        "rounded-r-[var(--radius-lg)]",
+                        // Sidebar: a trailing icon button in the same row. The
+                        // fenced right segment made one summary read as a split
+                        // pill with an unlabelled second half.
+                        isSidebar
+                          ? "ml-0.5 rounded-[var(--radius-md)] px-1.5 py-1"
+                          : "rounded-r-[var(--radius-lg)] border-l border-border-default px-2 py-1",
                         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]"
                       )}
                       aria-label={`Open ${reviewHubButtonLabel}`}
@@ -464,7 +524,12 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
             </div>
 
             {lifecycleFailed && (
-              <div className="flex flex-col gap-2 border-t border-border-default px-3 py-2">
+              <div
+                className={cn(
+                  "flex flex-col gap-2",
+                  isSidebar ? "mt-1 py-1" : "border-t border-border-default px-3 py-2"
+                )}
+              >
                 <div className="flex items-center justify-between gap-2">
                   <span className="text-xs text-text-muted truncate">
                     Setup didn't finish. Re-run when you're ready.
