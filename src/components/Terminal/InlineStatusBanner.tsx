@@ -242,7 +242,11 @@ export function InlineStatusBanner({
         hasDescription
           ? "flex flex-col gap-2 px-3 py-2 shrink-0"
           : "flex items-center justify-between gap-3 px-3 py-2 shrink-0",
-        shouldAnimate && "transition duration-250",
+        // Scoped, not bare: `transition` carries box-shadow, every colour
+        // property and filter along with it, and this banner's entry is an
+        // opacity-and-slide. 250ms is BANNER_ENTER_DURATION from the motion
+        // scale, which is what generates this utility.
+        shouldAnimate && "transition-[opacity,translate] duration-250",
         shouldAnimate && (isVisible ? "opacity-100 translate-y-0" : "opacity-0 -translate-y-2"),
         isNeutral && "bg-overlay-subtle",
         // The native caption strip is a fixed 48px tall. A shorter banner would
