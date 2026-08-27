@@ -358,6 +358,9 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
           title="Empty trash?"
           description={`${trashedTerminals.length} panel${trashedTerminals.length === 1 ? "" : "s"} will be permanently removed.`}
           variant="destructive"
+          // Scrollable list of the panels being destroyed — a dialog, not an
+          // alertdialog, which APG reserves for a brief message read whole.
+          hasPreview={trashedTerminals.length > 0}
           confirmLabel="Empty trash"
           onConfirm={() => {
             if (isExecutingRef.current) return;

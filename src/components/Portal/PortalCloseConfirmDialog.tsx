@@ -94,6 +94,9 @@ export function PortalCloseConfirmDialog(): ReactElement | null {
       description={copy.description}
       confirmLabel={copy.confirmLabel}
       variant="destructive"
+      // Scrollable list of the tabs being closed — a dialog, not an
+      // alertdialog, which APG reserves for a brief message read whole.
+      hasPreview={pending.tabsToClose.length > 0}
       onConfirm={handleConfirm}
     >
       <ul className="max-h-48 space-y-1 overflow-y-auto rounded border border-daintree-border bg-daintree-bg/50 p-2">

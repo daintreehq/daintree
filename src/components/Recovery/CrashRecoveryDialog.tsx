@@ -637,6 +637,9 @@ export function CrashRecoveryDialog({
         }
         confirmLabel="Reset to clean layout"
         variant="destructive"
+        // Only the panel-listing branch carries structured content; the
+        // no-panels branch really is the brief message alertdialog is for.
+        hasPreview={hasPanels}
         zIndex="nested"
         onConfirm={handleFreshConfirm}
       >
