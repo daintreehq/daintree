@@ -103,7 +103,15 @@ export function SkeletonBone({
       {...rest}
       aria-hidden="true"
       className={cn(
-        "bg-muted rounded",
+        // `bg-tint/[0.08]`, not `bg-muted`. `--muted` is aliased to
+        // `--theme-surface-panel` (src/index.css:734) and is never redefined by any
+        // theme, so a bone painted with it is EXACTLY its own background on any panel
+        // surface — all 15 themes — and on any dialog body on the 8 dark ones. The
+        // pulse animates opacity only, so it cannot rescue a same-colour bone: the
+        // composite is the background at every frame. `--theme-tint` is white on dark
+        // and black on light, so an alpha tint contrasts with whatever it is laid over
+        // by construction and cannot collide with a surface again.
+        "bg-tint/[0.08] rounded",
         pulseClass(immediate),
         shimmer && "animate-skeleton-shimmer",
         className
@@ -150,7 +158,8 @@ export function SkeletonText({
         <div
           key={i}
           className={cn(
-            "bg-muted rounded",
+            // Same surface collision as `SkeletonBone` — see the note there.
+            "bg-tint/[0.08] rounded",
             lineHeightClassName,
             TEXT_LINE_WIDTHS[i % TEXT_LINE_WIDTHS.length],
             pulseClass(immediate),
