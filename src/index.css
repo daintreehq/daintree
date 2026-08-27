@@ -2676,6 +2676,16 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     background-color: Canvas;
   }
 
+  /* Empty-state icons carry a 30%-opacity text colour, which the UA maps to a
+     near-Canvas value in forced-colors — measured at roughly 1.06:1 on white,
+     i.e. invisible. These states are often icon-plus-one-line, so losing the
+     icon removes half the state. Repaint with CanvasText and drop the opacity
+     mixing that caused it. */
+  [data-empty-state-icon] {
+    color: CanvasText !important;
+    opacity: 1 !important;
+  }
+
   .terminal-selected {
     outline: 2px solid Highlight;
     outline-offset: -2px;

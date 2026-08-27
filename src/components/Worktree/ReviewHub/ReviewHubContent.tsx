@@ -17,7 +17,16 @@ import { isClientAppError } from "@/utils/clientAppError";
 import { cn } from "@/lib/utils";
 
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
-import { X, RefreshCw, CheckSquare, ChevronRight, AlertTriangle, GitBranch } from "lucide-react";
+import {
+  X,
+  RefreshCw,
+  CircleCheck,
+  ArrowUpFromLine,
+  ChevronRight,
+  AlertTriangle,
+  CircleAlert,
+  GitBranch,
+} from "lucide-react";
 import { isProtectedBranch } from "@shared/utils/gitConstants";
 import { useUIStore } from "@/store/uiStore";
 import { useGitPushConfirmStore } from "@/store/gitPushConfirmStore";
@@ -25,6 +34,8 @@ import { usePreferencesStore } from "@/store/preferencesStore";
 import { useDiffViewedStore, selectViewedSet } from "@/store/diffViewedStore";
 import type { DiffChangeSetEntry } from "@/components/FileViewer/diffChangeSet";
 import { Skeleton, SkeletonBone, SkeletonHint } from "@/components/ui/Skeleton";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
 import { SpinningIcon } from "@/components/ui/SpinningIcon";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { basename, join } from "@shared/utils/path";
@@ -38,14 +49,22 @@ import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeIdForPath } from "@/panels/diff/useWorktreeIdForPath";
 import { type FileStageRowSection } from "./FileStageRow";
 import { FileSection } from "./FileSection";
-import { useReviewHubStagingActions } from "./useReviewHubStagingActions";
+import {
+  useReviewHubStagingActions,
+  type ReviewHubActionFailure,
+} from "./useReviewHubStagingActions";
 import { BaseBranchFileRow } from "./BaseBranchFileRow";
 import { PushErrorBanner } from "./PushErrorBanner";
 import { PrStatusChip } from "./PrStatusChip";
 import { CommitPanel } from "./CommitPanel";
 import { ConflictPanel } from "./ConflictPanel";
 import { ReadinessRail } from "./ReadinessRail";
-import { deriveReviewReadiness, type ReviewReadinessCta } from "./reviewReadiness";
+import {
+  deriveReviewReadiness,
+  type ReviewReadinessCta,
+  type ReviewReadinessItem,
+  type ReviewReadinessSummary,
+} from "./reviewReadiness";
 // Lazy: these modals statically reach the DiffViewer/CodeViewer/vendor-editor
 // chunks (~223 KB gzip), and ReviewPane is a first-render preload seed — a
 // static import drags the whole editor stack into every boot's modulepreload
@@ -81,6 +100,14 @@ import {
   sumChurn,
 } from "./reviewHubUtils";
 import { isGeneratedFile } from "../generatedFileClassifier";
+
+/**
+ * Floor for the dialog-hosted body, so the pane stops resizing itself around
+ * its own content as it moves between loading, failure, empty and resolved.
+ * Named rather than inlined to match `McpConfirmDialog`'s
+ * `PREVIEW_MIN_BODY_HEIGHT`, which reserves a dialog body for the same reason.
+ */
+const DIALOG_MIN_BODY_HEIGHT = "min-h-[22rem]";
 
 export interface ReviewHubContentProps {
   /**
@@ -155,7 +182,7 @@ export function ReviewHubContent({
   const [loading, setLoading] = useState(false);
   const [isBackgroundRefreshing, setIsBackgroundRefreshing] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<ReviewHubActionFailure | null>(null);
   const [pushError, setPushError] = useState<PushErrorState | null>(null);
   // Provider-classified push-error state, resolved async via the active forge
   // provider (ForgeProviderImpl lives in main). `forgeErrorCode` is a stable,
@@ -639,6 +666,39 @@ export function ReviewHubContent({
     [status, aheadCount, behindCount, worktreePR, providerHealth, pushError]
   );
 
+  /**
+   * What the rail actually renders. Identical to `readinessSummary` except that
+   * the `push-failed` item is dropped while the dedicated push banner is up —
+   * see the note at the `ReadinessRail` call site. Never used for gating.
+   */
+  const railSummary = useMemo<ReviewReadinessSummary>(() => {
+    if (!pushError) return readinessSummary;
+    const drop = (items: ReviewReadinessItem[]) => items.filter((i) => i.id !== "push-failed");
+    const blockers = drop(readinessSummary.blockers);
+    const warnings = drop(readinessSummary.warnings);
+    return {
+      ...readinessSummary,
+      // Re-derived from what SURVIVES the filter, by the same rule
+      // `deriveReviewReadiness` uses. The rail takes its glyph and copy from
+      // the first remaining item but announces `level` sr-only, so carrying the
+      // unfiltered verdict here would say "Blocked" beside a warning row
+      // whenever push-failed was the only blocker. `unknown` is passed through:
+      // it means staging status hasn't resolved, and the rail renders nothing.
+      level:
+        readinessSummary.level === "unknown"
+          ? readinessSummary.level
+          : blockers.length > 0
+            ? "blocked"
+            : warnings.length > 0
+              ? "needs-review"
+              : "ready",
+      blockers,
+      warnings,
+      infos: drop(readinessSummary.infos),
+      nextActions: drop(readinessSummary.nextActions),
+    };
+  }, [readinessSummary, pushError]);
+
   const refresh = useCallback(async () => {
     if (!worktreePath) return;
     const requestId = ++refreshIdRef.current;
@@ -823,7 +883,10 @@ export function ReviewHubContent({
         await refresh();
       } catch (err) {
         hasAutoStagedRef.current = false;
-        setActionError(formatErrorMessage(err, "Failed to stage all files"));
+        setActionError({
+          title: "Couldn't stage all files",
+          detail: formatErrorMessage(err, "Failed to stage all files"),
+        });
       }
     })();
   }, [isOpen, autoStageOnOpen, status, refresh, worktreePath]);
@@ -932,7 +995,10 @@ export function ReviewHubContent({
         useDiffViewedStore.getState().clearWorktree(worktreePath);
         await refresh();
       } catch (err) {
-        setActionError(formatErrorMessage(err, "Failed to commit changes"));
+        setActionError({
+          title: "Couldn't commit changes",
+          detail: formatErrorMessage(err, "Failed to commit changes"),
+        });
         throw err;
       }
     },
@@ -946,7 +1012,10 @@ export function ReviewHubContent({
       await window.electron.git.abortRepositoryOperation(worktreePath);
       await refresh();
     } catch (err) {
-      setActionError(formatErrorMessage(err, "Failed to abort repository operation"));
+      setActionError({
+        title: "Couldn't abort repository operation",
+        detail: formatErrorMessage(err, "Failed to abort repository operation"),
+      });
       throw err;
     }
   }, [worktreePath, refresh]);
@@ -958,7 +1027,10 @@ export function ReviewHubContent({
       await window.electron.git.continueRepositoryOperation(worktreePath);
       await refresh();
     } catch (err) {
-      setActionError(formatErrorMessage(err, "Failed to continue repository operation"));
+      setActionError({
+        title: "Couldn't continue repository operation",
+        detail: formatErrorMessage(err, "Failed to continue repository operation"),
+      });
       throw err;
     }
   }, [worktreePath, refresh]);
@@ -977,7 +1049,10 @@ export function ReviewHubContent({
         }
         await window.electron.system.openInEditor(payload);
       } catch (err) {
-        setActionError(formatErrorMessage(err, "Failed to open file in editor"));
+        setActionError({
+          title: "Couldn't open file in editor",
+          detail: formatErrorMessage(err, "Failed to open file in editor"),
+        });
       }
     },
     [worktreePath]
@@ -991,9 +1066,13 @@ export function ReviewHubContent({
         await window.electron.git.checkoutOursTheirs(worktreePath, filePath, side);
         await refresh();
       } catch (err) {
-        setActionError(
-          formatErrorMessage(err, side === "ours" ? "Failed to take ours" : "Failed to take theirs")
-        );
+        setActionError({
+          title: side === "ours" ? "Couldn't take ours" : "Couldn't take theirs",
+          detail: formatErrorMessage(
+            err,
+            side === "ours" ? "Failed to take ours" : "Failed to take theirs"
+          ),
+        });
         throw err;
       }
     },
@@ -1012,7 +1091,10 @@ export function ReviewHubContent({
         await window.electron.git.stageFile(worktreePath, filePath);
         await refresh();
       } catch (err) {
-        setActionError(formatErrorMessage(err, "Failed to mark file resolved"));
+        setActionError({
+          title: "Couldn't mark file resolved",
+          detail: formatErrorMessage(err, "Failed to mark file resolved"),
+        });
         throw err;
       }
     },
@@ -1077,7 +1159,10 @@ export function ReviewHubContent({
       try {
         await window.electron.git.commit(worktreePath, message);
       } catch (err) {
-        setActionError(formatErrorMessage(err, "Failed to commit changes"));
+        setActionError({
+          title: "Couldn't commit changes",
+          detail: formatErrorMessage(err, "Failed to commit changes"),
+        });
         throw err;
       }
       // Same review reset as handleCommit — the changeset starts over.
@@ -1608,15 +1693,41 @@ export function ReviewHubContent({
           </div>
         </div>
 
-        {/* Merge-readiness rail — hidden until staging status resolves */}
-        <ReadinessRail summary={readinessSummary} onCta={handleReadinessCta} />
+        {/* Merge-readiness rail — hidden until staging status resolves.
+            While `PushErrorBanner` is mounted it owns the push failure outright:
+            it classifies the reason, names the remedy, and carries the only
+            actions (pull-rebase / force-push). The rail's own `push-failed` item
+            says the same thing in different words, one severity louder, with no
+            action — so the two stacked directly on top of each other and the
+            louder of the pair was the useless one. Filtered from what the RAIL
+            renders only; `readinessSummary` itself keeps the blocker so
+            readiness and push gating are unchanged. */}
+        <ReadinessRail summary={railSummary} onCta={handleReadinessCta} />
 
         {/* Inline error banners */}
         {actionError && (
-          <div className="px-4 py-2 text-xs text-status-error bg-status-error/10 flex items-start gap-2 shrink-0">
-            <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
-            <span>{actionError}</span>
-          </div>
+          /* One grammar for every failure on this surface: icon, verb-noun
+             title, the git detail as supporting copy, and exactly one recovery.
+             This used to be a bespoke strip that printed raw stderr with no
+             title, no role and nothing the user could do — the message sat in
+             the layout permanently because there was not even a dismiss. It is
+             `role="status"` rather than `alert` because the pane is still fully
+             usable: the failed action is recoverable in place, and an assertive
+             interrupt for a secondary failure would fight the user's focus. */
+          <InlineStatusBanner
+            severity="error"
+            role="status"
+            ariaLive="polite"
+            icon={CircleAlert}
+            title={actionError.title}
+            description={actionError.detail}
+            onClose={() => setActionError(null)}
+            action={{
+              id: "review-hub-action-error-retry",
+              label: "Retry",
+              onClick: () => void refresh(),
+            }}
+          />
         )}
         {pushError && (
           <PushErrorBanner
@@ -1645,292 +1756,398 @@ export function ReviewHubContent({
           ref={scrollContainerRef}
           data-testid="review-hub-scroll-container"
           className={cn(
+            // `min-h-0` is load-bearing and stays alone in its Tailwind group:
+            // it is what lets the scroller shrink inside a dialog body capped
+            // at 85vh. A `min-h-*` floor added here would not sit beside it —
+            // tailwind-merge collapses the group and keeps the last one — so
+            // the reservation below lives on the content wrapper instead.
             "flex-1 overflow-y-auto min-h-0",
             isBackgroundRefreshing && "surface-stale"
           )}
           aria-busy={isBackgroundRefreshing || undefined}
           onScroll={handleScrollContainer}
         >
-          {diffMode === "base-branch" ? (
-            /* Base-branch diff panel */
-            baseBranchLoading ? (
-              showBaseBranchSkeleton ? (
-                <>
-                  <Skeleton label={`Loading changes vs ${mainBranch}`}>
-                    <SkeletonBone immediate className="h-8 mx-4 my-2" />
-                    <div className="px-2 py-1 flex flex-col gap-0.5">
-                      {Array.from({ length: 8 }).map((_, i) => (
-                        <div key={i} className="flex items-center gap-2 px-1.5 py-1.5">
-                          <SkeletonBone immediate className="h-4 w-4 shrink-0 rounded-sm" />
-                          <SkeletonBone
-                            immediate
-                            className={cn(
-                              "h-2.5",
-                              ["w-48", "w-32", "w-56", "w-24", "w-40", "w-36", "w-52", "w-28"][
-                                i % 8
-                              ]
-                            )}
-                          />
-                        </div>
-                      ))}
-                    </div>
-                  </Skeleton>
-                  <SkeletonHint className="px-4 py-2" onRetry={() => void fetchBaseBranch()} />
-                </>
-              ) : null
-            ) : baseBranchError ? (
-              <div className="p-4 text-xs text-status-error">
-                <p className="mb-2">{baseBranchError}</p>
-                <Button variant="subtle" size="sm" onClick={() => void fetchBaseBranch()}>
-                  Retry
-                </Button>
-              </div>
-            ) : sortedBaseBranchFiles !== null && sortedBaseBranchFiles.length === 0 ? (
-              <div className="flex flex-col items-center justify-center py-12 text-daintree-text/50">
-                <CheckSquare className="w-8 h-8 mb-2 text-daintree-text/30" />
-                <p className="text-sm">No changes vs {mainBranch}</p>
-                <p className="text-xs mt-1">This branch has no commits ahead of {mainBranch}</p>
-              </div>
-            ) : sortedBaseBranchFiles !== null ? (
-              <div>
-                <div className={REVIEW_HUB_STICKY_BAND}>
-                  <div className="flex items-center justify-between px-4 py-2 bg-overlay-subtle border-b border-divider">
-                    <span className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60">
-                      Changed vs {mainBranch}
-                      <span className="ml-1.5 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-[10px] font-medium normal-case tracking-normal">
-                        {sortedBaseBranchFiles.length} file
-                        {sortedBaseBranchFiles.length !== 1 ? "s" : ""}
-                        {(baseBranchChurn.ins > 0 || baseBranchChurn.del > 0) && (
-                          <>
-                            {" "}
-                            <span className="text-status-success/80">
-                              +{baseBranchChurn.ins}
-                            </span>{" "}
-                            <span className="text-status-error/80">-{baseBranchChurn.del}</span>
-                          </>
-                        )}
-                      </span>
-                    </span>
-                  </div>
-                </div>
-                <div className="px-2 py-1 flex flex-col gap-0.5">
-                  {sortedBaseBranchFiles.map((file) => {
-                    const decoration = reviewDecorations[file.path];
-                    return (
-                      <BaseBranchFileRow
-                        key={`${file.status}:${file.path}`}
-                        file={file}
-                        onClick={(e) => {
-                          diffTriggerRef.current = e.currentTarget;
-                          setSelectedBaseBranchFile(file);
-                        }}
-                        unresolvedDecoration={decoration}
-                        onBadgeClick={
-                          decoration?.url
-                            ? () => void systemClient.openExternal(decoration.url as string)
-                            : undefined
-                        }
-                      />
-                    );
-                  })}
-                </div>
-              </div>
-            ) : null
-          ) : (
-            /* Working-tree panel */
-            <>
-              {loading && !status ? (
-                showWorkingTreeSkeleton ? (
+          {/* Reserve the body in the DIALOG host so the pane stops resizing
+              itself around its own content. Loading, failure, empty and
+              resolved states used to produce wildly different dialog heights
+              — the same "Working tree clean" composition measured 458px on one
+              route and 522px on another — so a retry or a mode switch read as
+              a major transition rather than as the same surface updating.
+              Long content still scrolls inside this block, and the Doherty
+              gate still paints nothing before 400ms: the space is reserved,
+              not filled.
+
+              The floor is on the CONTENT, not on the scrollport: as scrollable
+              content it grows the dialog while there is room and scrolls once
+              there isn't, so a short window (the 600px minimum, 85vh = 510px)
+              still shrinks the scroller instead of pushing the commit button
+              out through the dialog body's `overflow-hidden`.
+
+              Grid-hosted panes are deliberately excluded. There the tile owns
+              its own height from the layout, so a floor here would fight the
+              grid instead of stabilising anything. */}
+          <div
+            data-testid="review-hub-body-reservation"
+            className={cn(isDialog && DIALOG_MIN_BODY_HEIGHT)}
+          >
+            {diffMode === "base-branch" ? (
+              /* Base-branch diff panel */
+              baseBranchLoading ? (
+                showBaseBranchSkeleton ? (
                   <>
-                    {/* File-list disclosure header — mirrors the collapsed-by-
-                        default list bar. The commit-panel skeleton lives outside
-                        this scroll container (below), matching the real layout. */}
-                    <Skeleton label="Loading review changes">
-                      <div className="px-4 py-2 bg-overlay-subtle border-b border-divider">
-                        <SkeletonBone immediate className="h-3.5 w-28" />
+                    <Skeleton label={`Loading changes vs ${mainBranch}`}>
+                      <SkeletonBone immediate className="h-8 mx-4 my-2" />
+                      <div className="px-2 py-1 flex flex-col gap-0.5">
+                        {Array.from({ length: 8 }).map((_, i) => (
+                          <div key={i} className="flex items-center gap-2 px-1.5 py-1.5">
+                            <SkeletonBone immediate className="h-4 w-4 shrink-0 rounded-sm" />
+                            <SkeletonBone
+                              immediate
+                              className={cn(
+                                "h-2.5",
+                                ["w-48", "w-32", "w-56", "w-24", "w-40", "w-36", "w-52", "w-28"][
+                                  i % 8
+                                ]
+                              )}
+                            />
+                          </div>
+                        ))}
                       </div>
                     </Skeleton>
-                    <SkeletonHint className="px-4 py-2" onRetry={() => void refresh()} />
+                    <SkeletonHint className="px-4 py-2" onRetry={() => void fetchBaseBranch()} />
                   </>
                 ) : null
-              ) : loadError ? (
-                <div className="p-4 text-xs text-status-error">
-                  <p className="mb-2">{loadError}</p>
-                  <Button variant="subtle" size="sm" onClick={() => void refresh()}>
-                    Retry
-                  </Button>
-                </div>
-              ) : status && isOperationState ? (
-                <ConflictPanel
-                  status={status}
-                  worktreePath={worktreePath}
-                  onMarkResolved={handleMarkResolved}
-                  onOpenInEditor={handleOpenInEditor}
-                  onCheckoutOursTheirs={handleCheckoutOursTheirs}
-                  onAbort={handleAbortOperation}
-                  onContinue={handleContinueOperation}
+              ) : baseBranchError ? (
+                /* A SECONDARY failure — the comparison could not be computed, but
+                 the pane and its chrome are intact. Announced politely and
+                 without moving focus (WCAG 2.2 SC 3.2.1/3.2.2); only the root
+                 failure below is assertive. */
+                <InlineStatusBanner
+                  severity="error"
+                  role="status"
+                  ariaLive="polite"
+                  icon={CircleAlert}
+                  title={`Couldn't compare with ${mainBranch}`}
+                  description={baseBranchError}
+                  action={{
+                    id: "review-hub-base-branch-retry",
+                    label: "Retry",
+                    onClick: () => void fetchBaseBranch(),
+                  }}
                 />
-              ) : status && totalChanges === 0 ? (
-                <div className="flex flex-col items-center justify-center py-12 text-daintree-text/50">
-                  <CheckSquare className="w-8 h-8 mb-2 text-daintree-text/30" />
-                  <p className="text-sm">Working tree clean</p>
-                  {status.hasRemote && (aheadCount ?? 0) > 0 ? (
-                    <>
-                      <p className="text-xs mt-1" data-testid="review-hub-clean-unpushed">
-                        {aheadCount} commit{aheadCount !== 1 ? "s" : ""} not pushed
-                      </p>
-                      {readinessSummary.pushReady && (
-                        <button
-                          type="button"
-                          onClick={() => void handlePushClean()}
-                          disabled={isPushing}
-                          data-testid="review-hub-clean-push"
-                          className={cn(
-                            "mt-3 px-2.5 py-1 rounded text-xs font-medium transition-colors",
-                            "bg-filter-selected-bg-soft hover:bg-tint/[0.14] text-daintree-text/80",
-                            "disabled:opacity-50 disabled:cursor-not-allowed",
-                            "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-accent"
-                          )}
-                        >
-                          {isPushing ? "Pushing…" : "Push"}
-                        </button>
-                      )}
-                    </>
-                  ) : (
-                    <p className="text-xs mt-1">No changes to commit</p>
-                  )}
-                </div>
-              ) : status ? (
+              ) : sortedBaseBranchFiles !== null && sortedBaseBranchFiles.length === 0 ? (
+                /* A completed inspection: there is genuinely nothing to review
+                 against the base branch. `user-cleared` is the Blank-Slate
+                 variant — it forbids a description and an action by design, so
+                 the redundant "This branch has no commits ahead of {main}"
+                 subtitle goes with it. The headline alone carries the meaning,
+                 and it is deliberately a DIFFERENT headline and a different
+                 icon from the working-tree clean state, which used to look
+                 identical to this one. */
+                <EmptyState
+                  variant="user-cleared"
+                  scale="canvas"
+                  className="py-12"
+                  icon={<CircleCheck />}
+                  title={`No changes vs ${mainBranch}`}
+                />
+              ) : sortedBaseBranchFiles !== null ? (
                 <div>
-                  {/* File-list disclosure — default collapsed so the commit
-                      textarea is the focal point on open. State lives per
-                      worktree in uiStore (session-scoped, in-memory only). */}
-                  <div className="px-4 py-2 bg-overlay-subtle border-b border-divider flex items-center justify-between">
-                    <button
-                      type="button"
-                      onClick={() => setFileListExpanded(worktreePath, !fileListExpanded)}
-                      aria-expanded={fileListExpanded}
-                      aria-controls={`review-hub-files-${worktreePath}`}
-                      data-testid="review-hub-file-list-toggle"
-                      className={cn(
-                        "inline-flex items-center gap-1 text-[11px] font-medium text-daintree-text/70 hover:text-daintree-text transition-colors",
-                        "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-accent rounded"
-                      )}
-                    >
-                      <ChevronRight
-                        className={cn(
-                          "w-3 h-3 transition-transform duration-150",
-                          fileListExpanded && "rotate-90"
-                        )}
-                        aria-hidden="true"
-                      />
-                      <span>
-                        {fileListExpanded ? "Hide" : "Show"} files ({totalChanges})
+                  <div className={REVIEW_HUB_STICKY_BAND}>
+                    <div className="flex items-center justify-between px-4 py-2 bg-overlay-subtle border-b border-divider">
+                      <span className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60">
+                        Changed vs {mainBranch}
+                        <span className="ml-1.5 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-[10px] font-medium normal-case tracking-normal">
+                          {sortedBaseBranchFiles.length} file
+                          {sortedBaseBranchFiles.length !== 1 ? "s" : ""}
+                          {(baseBranchChurn.ins > 0 || baseBranchChurn.del > 0) && (
+                            <>
+                              {" "}
+                              <span className="text-status-success/80">
+                                +{baseBranchChurn.ins}
+                              </span>{" "}
+                              <span className="text-status-error/80">-{baseBranchChurn.del}</span>
+                            </>
+                          )}
+                        </span>
                       </span>
-                    </button>
+                    </div>
                   </div>
-                  {fileListExpanded && (
-                    <div
-                      id={`review-hub-files-${worktreePath}`}
-                      ref={fileListRef}
-                      role="listbox"
-                      aria-label="Changed files"
-                      tabIndex={-1}
-                      // Stands the global Shift+F10 / Menu-key handler down so
-                      // the focused row's own menu opens instead of the focused
-                      // panel's (`useGlobalKeybindings`).
-                      data-row-menu=""
-                      aria-activedescendant={
-                        focusedIndex >= 0 ? `review-hub-row-${focusedIndex}` : undefined
-                      }
-                      className="outline-hidden"
-                    >
-                      {/* Conflict warning */}
-                      {hasConflicts && (
-                        <div
-                          ref={conflictSectionRef}
-                          tabIndex={-1}
-                          className="px-4 py-2.5 bg-status-error/10 border-b border-divider flex items-start gap-2 outline-hidden focus:ring-2 focus:ring-daintree-accent/30"
-                        >
-                          <AlertTriangle className="w-3.5 h-3.5 text-status-error mt-0.5 shrink-0" />
-                          <div className="text-xs text-status-error">
-                            <span className="font-medium">
-                              {status.conflicted.length} conflicted file
-                              {status.conflicted.length !== 1 ? "s" : ""}
-                            </span>
-                            <span className="text-daintree-text/60 ml-1">
-                              — resolve conflicts before committing
-                            </span>
-                          </div>
+                  <div className="px-2 py-1 flex flex-col gap-0.5">
+                    {sortedBaseBranchFiles.map((file) => {
+                      const decoration = reviewDecorations[file.path];
+                      return (
+                        <BaseBranchFileRow
+                          key={`${file.status}:${file.path}`}
+                          file={file}
+                          onClick={(e) => {
+                            diffTriggerRef.current = e.currentTarget;
+                            setSelectedBaseBranchFile(file);
+                          }}
+                          unresolvedDecoration={decoration}
+                          onBadgeClick={
+                            decoration?.url
+                              ? () => void systemClient.openExternal(decoration.url as string)
+                              : undefined
+                          }
+                        />
+                      );
+                    })}
+                  </div>
+                </div>
+              ) : null
+            ) : (
+              /* Working-tree panel */
+              <>
+                {loading && !status ? (
+                  showWorkingTreeSkeleton ? (
+                    <>
+                      {/* File-list disclosure header — mirrors the collapsed-by-
+                        default list bar. The commit-panel skeleton lives outside
+                        this scroll container (below), matching the real layout. */}
+                      <Skeleton label="Loading review changes">
+                        <div className="px-4 py-2 bg-overlay-subtle border-b border-divider">
+                          <SkeletonBone immediate className="h-3.5 w-28" />
                         </div>
-                      )}
-
-                      {/* Staged section */}
-                      <FileSection
-                        isStaged={true}
-                        files={derivedStaged}
-                        allFiles={status.staged}
-                        indexOffset={0}
-                        focusedIndex={focusedIndex}
-                        selectionSection={selectionSection}
-                        selectedPaths={selectedPaths}
-                        hasSelection={hasStagedSelection}
-                        view={stagedView}
-                        setView={setStagedView}
-                        inputRef={stagedInputRef}
-                        setFilterQuery={setStagedFilterQuery}
-                        clearFilter={clearStagedFilter}
-                        onToggle={handleToggleStaged}
-                        onRowClick={handleRowClick}
-                        onBulkAction={() => {
-                          const scope = resolveBulkScope(stagedView, hasStagedSelection);
-                          void (scope === "selection"
-                            ? handleUnstageSelection()
-                            : scope === "shown"
-                              ? handleUnstageFiltered()
-                              : handleUnstageAll());
-                        }}
-                        viewedFiles={viewedFiles}
-                        onViewedChange={handleViewedChange}
-                        renderRowMenu={renderRowMenu}
-                      />
-
-                      {/* Unstaged section */}
-                      <FileSection
-                        sectionRef={unstagedSectionRef}
-                        isStaged={false}
-                        files={derivedUnstaged}
-                        allFiles={status.unstaged}
-                        indexOffset={derivedStaged.length}
-                        focusedIndex={focusedIndex}
-                        selectionSection={selectionSection}
-                        selectedPaths={selectedPaths}
-                        hasSelection={hasUnstagedSelection}
-                        view={changesView}
-                        setView={setChangesView}
-                        inputRef={changesInputRef}
-                        setFilterQuery={setChangesFilterQuery}
-                        clearFilter={clearChangesFilter}
-                        onToggle={handleToggleUnstaged}
-                        onRowClick={handleRowClick}
-                        onBulkAction={() => {
-                          const scope = resolveBulkScope(changesView, hasUnstagedSelection);
-                          void (scope === "selection"
-                            ? handleStageSelection()
-                            : scope === "shown"
-                              ? handleStageFiltered()
-                              : handleStageAll());
-                        }}
-                        viewedFiles={viewedFiles}
-                        onViewedChange={handleViewedChange}
-                        renderRowMenu={renderRowMenu}
+                      </Skeleton>
+                      <SkeletonHint className="px-4 py-2" onRetry={() => void refresh()} />
+                    </>
+                  ) : null
+                ) : loadError ? (
+                  /* The ROOT failure: nothing else in the body rendered, so this
+                   is the one presentation that is genuinely blocking and the
+                   one that takes `role="alert"`. It previously rendered raw git
+                   stderr as its entire user-facing message, with no icon at
+                   all — which meant that under `forced-colors: active`, where
+                   the UA strips the tint, it was typographically identical to
+                   ordinary body text and nothing marked it as an error
+                   (WCAG 2.2 SC 1.4.1). The icon is what survives that. */
+                  <InlineStatusBanner
+                    severity="error"
+                    role="alert"
+                    icon={CircleAlert}
+                    title="Couldn't load changes"
+                    description={loadError}
+                    action={{
+                      id: "review-hub-load-retry",
+                      label: "Retry",
+                      onClick: () => void refresh(),
+                    }}
+                  />
+                ) : status && isOperationState ? (
+                  <ConflictPanel
+                    status={status}
+                    worktreePath={worktreePath}
+                    onMarkResolved={handleMarkResolved}
+                    onOpenInEditor={handleOpenInEditor}
+                    onCheckoutOursTheirs={handleCheckoutOursTheirs}
+                    onAbort={handleAbortOperation}
+                    onContinue={handleContinueOperation}
+                  />
+                ) : status && totalChanges === 0 ? (
+                  status.hasRemote && (aheadCount ?? 0) > 0 ? (
+                    /* NOT a completed state. The working tree being clean is the
+                     inert fact here; the unpushed commits are the live one, so
+                     they own the headline and the icon rather than sitting in a
+                     12px subtitle under a completion mark. Previously this and
+                     the genuinely-finished state below rendered the same glyph,
+                     the same layout and the same type scale, which meant "you
+                     still have work to publish" and "you are done" were
+                     distinguishable only by reading the small print. */
+                    <div data-testid="review-hub-clean-unpushed">
+                      <EmptyState
+                        variant="zero-data"
+                        scale="canvas"
+                        className="py-12"
+                        // The copy below is conditional on `pushError`, and
+                        // EmptyState's fade-through keeps the OUTGOING text
+                        // visually dominant for ~150ms. That is long enough to
+                        // show "ready to push" underneath a banner that has
+                        // already said the push failed, so this one transition
+                        // has to be atomic rather than animated.
+                        instant={pushError !== null}
+                        icon={<ArrowUpFromLine />}
+                        title={
+                          pushError
+                            ? `${aheadCount} commit${aheadCount !== 1 ? "s" : ""} not pushed`
+                            : `${aheadCount} commit${aheadCount !== 1 ? "s" : ""} ready to push`
+                        }
+                        // "Ready to push" is a readiness claim, so it must not
+                        // survive a rejection: after a push fails, `pushReady`
+                        // goes false and the remedy moves to the push banner's
+                        // pull-rebase / force-push. Claiming readiness while the
+                        // banner directly above explains why it is not ready is
+                        // the pane contradicting itself.
+                        description={
+                          pushError
+                            ? "Nothing left to commit — resolve the push above to publish them."
+                            : "Nothing left to commit — these commits just aren't on the remote yet."
+                        }
+                        action={
+                          readinessSummary.pushReady ? (
+                            <Button
+                              variant="subtle"
+                              size="sm"
+                              onClick={() => void handlePushClean()}
+                              disabled={isPushing}
+                              data-testid="review-hub-clean-push"
+                            >
+                              {isPushing ? "Pushing…" : "Push"}
+                            </Button>
+                          ) : undefined
+                        }
                       />
                     </div>
-                  )}
-                </div>
-              ) : null}
-            </>
-          )}
+                  ) : (
+                    /* Genuinely finished. `user-cleared` nulls the action and
+                     forbids a description, which is what removes the redundant
+                     "No changes to commit" line: the headline already says it. */
+                    <EmptyState
+                      variant="user-cleared"
+                      scale="canvas"
+                      className="py-12"
+                      icon={<CircleCheck />}
+                      title="Working tree clean"
+                    />
+                  )
+                ) : status ? (
+                  <div>
+                    {/* File-list disclosure — default collapsed so the commit
+                      textarea is the focal point on open. State lives per
+                      worktree in uiStore (session-scoped, in-memory only). */}
+                    <div className="px-4 py-2 bg-overlay-subtle border-b border-divider flex items-center justify-between">
+                      <button
+                        type="button"
+                        onClick={() => setFileListExpanded(worktreePath, !fileListExpanded)}
+                        aria-expanded={fileListExpanded}
+                        aria-controls={`review-hub-files-${worktreePath}`}
+                        data-testid="review-hub-file-list-toggle"
+                        className={cn(
+                          "inline-flex items-center gap-1 text-[11px] font-medium text-daintree-text/70 hover:text-daintree-text transition-colors",
+                          "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-accent rounded"
+                        )}
+                      >
+                        <ChevronRight
+                          className={cn(
+                            "w-3 h-3 transition-transform duration-150",
+                            fileListExpanded && "rotate-90"
+                          )}
+                          aria-hidden="true"
+                        />
+                        <span>
+                          {fileListExpanded ? "Hide" : "Show"} files ({totalChanges})
+                        </span>
+                      </button>
+                    </div>
+                    {fileListExpanded && (
+                      <div
+                        id={`review-hub-files-${worktreePath}`}
+                        ref={fileListRef}
+                        role="listbox"
+                        aria-label="Changed files"
+                        tabIndex={-1}
+                        // Stands the global Shift+F10 / Menu-key handler down so
+                        // the focused row's own menu opens instead of the focused
+                        // panel's (`useGlobalKeybindings`).
+                        data-row-menu=""
+                        aria-activedescendant={
+                          focusedIndex >= 0 ? `review-hub-row-${focusedIndex}` : undefined
+                        }
+                        className="outline-hidden"
+                      >
+                        {/* Conflict warning */}
+                        {hasConflicts && (
+                          <div
+                            ref={conflictSectionRef}
+                            tabIndex={-1}
+                            /* Focusable because `handleFocusBlocker` sends focus
+                             here from the readiness rail's "conflicts" CTA, so
+                             it keeps its own ring. The banner inside carries the
+                             shared failure grammar; this wrapper only owns
+                             focus. */
+                            className="outline-hidden focus:ring-2 focus:ring-daintree-accent/30"
+                          >
+                            <InlineStatusBanner
+                              severity="warning"
+                              role="status"
+                              ariaLive="polite"
+                              icon={AlertTriangle}
+                              title={`${status.conflicted.length} conflicted file${
+                                status.conflicted.length !== 1 ? "s" : ""
+                              }`}
+                              description="Resolve these before committing."
+                              animated={false}
+                            />
+                          </div>
+                        )}
+
+                        {/* Staged section */}
+                        <FileSection
+                          isStaged={true}
+                          files={derivedStaged}
+                          allFiles={status.staged}
+                          indexOffset={0}
+                          focusedIndex={focusedIndex}
+                          selectionSection={selectionSection}
+                          selectedPaths={selectedPaths}
+                          hasSelection={hasStagedSelection}
+                          view={stagedView}
+                          setView={setStagedView}
+                          inputRef={stagedInputRef}
+                          setFilterQuery={setStagedFilterQuery}
+                          clearFilter={clearStagedFilter}
+                          onToggle={handleToggleStaged}
+                          onRowClick={handleRowClick}
+                          onBulkAction={() => {
+                            const scope = resolveBulkScope(stagedView, hasStagedSelection);
+                            void (scope === "selection"
+                              ? handleUnstageSelection()
+                              : scope === "shown"
+                                ? handleUnstageFiltered()
+                                : handleUnstageAll());
+                          }}
+                          viewedFiles={viewedFiles}
+                          onViewedChange={handleViewedChange}
+                          renderRowMenu={renderRowMenu}
+                        />
+
+                        {/* Unstaged section */}
+                        <FileSection
+                          sectionRef={unstagedSectionRef}
+                          isStaged={false}
+                          files={derivedUnstaged}
+                          allFiles={status.unstaged}
+                          indexOffset={derivedStaged.length}
+                          focusedIndex={focusedIndex}
+                          selectionSection={selectionSection}
+                          selectedPaths={selectedPaths}
+                          hasSelection={hasUnstagedSelection}
+                          view={changesView}
+                          setView={setChangesView}
+                          inputRef={changesInputRef}
+                          setFilterQuery={setChangesFilterQuery}
+                          clearFilter={clearChangesFilter}
+                          onToggle={handleToggleUnstaged}
+                          onRowClick={handleRowClick}
+                          onBulkAction={() => {
+                            const scope = resolveBulkScope(changesView, hasUnstagedSelection);
+                            void (scope === "selection"
+                              ? handleStageSelection()
+                              : scope === "shown"
+                                ? handleStageFiltered()
+                                : handleStageAll());
+                          }}
+                          viewedFiles={viewedFiles}
+                          onViewedChange={handleViewedChange}
+                          renderRowMenu={renderRowMenu}
+                        />
+                      </div>
+                    )}
+                  </div>
+                ) : null}
+              </>
+            )}
+          </div>
         </div>
 
         {/* Commit-panel skeleton — sibling of the scroll container so it occupies

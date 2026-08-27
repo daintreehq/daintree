@@ -90,7 +90,7 @@ function renderInner(
   return (
     <>
       {icon ? (
-        <div className={iconClass} aria-hidden="true">
+        <div className={iconClass} data-empty-state-icon="" aria-hidden="true">
           {icon}
         </div>
       ) : null}

@@ -154,7 +154,14 @@ export function InlineStatusBanner({
 }: InlineStatusBannerProps) {
   const prefersReducedMotion =
     typeof window !== "undefined" &&
-    (window.matchMedia("(prefers-reduced-motion: reduce)").matches ||
+    // `matchMedia` is guarded separately from `window`: the SSR check above only
+    // covers `window` being absent entirely, but a jsdom environment has a
+    // `window` with no `matchMedia` implementation. Calling it there threw and
+    // took the whole banner subtree down with it — which, for a component this
+    // widely mounted, turns one missing test-env stub into an unrelated-looking
+    // render failure somewhere else on the page.
+    ((typeof window.matchMedia === "function" &&
+      window.matchMedia("(prefers-reduced-motion: reduce)").matches) ||
       (typeof document !== "undefined" &&
         (document.body.getAttribute("data-reduce-animations") === "true" ||
           document.body.getAttribute("data-performance-mode") === "true")));

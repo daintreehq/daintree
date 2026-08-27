@@ -902,13 +902,23 @@ describe("ReviewHub", () => {
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
     }
 
+    /**
+     * These assert the RULE — an unfinished state must not present itself as a
+     * finished one — rather than the exact words, so a later copy change does
+     * not force an identical edit here. The pair that matters is: the unpushed
+     * state never shows the completion headline, and the completed state never
+     * shows an action.
+     */
+    const COMPLETION_HEADLINE = "Working tree clean";
+
     it("names the unpushed commits and gates Push behind the D2 preview dialog", async () => {
       renderCleanHub({ aheadCount: 2, behindCount: 0 });
-      await waitFor(() => screen.getByText("Working tree clean"));
+      const unpushed = await screen.findByTestId("review-hub-clean-unpushed");
 
-      expect(screen.getByTestId("review-hub-clean-unpushed").textContent).toBe(
-        "2 commits not pushed"
-      );
+      // The count is what the user acts on, so it leads.
+      expect(unpushed.textContent).toContain("2 commits");
+      // ...and this state must NOT read as finished.
+      expect(screen.queryByText(COMPLETION_HEADLINE)).toBeNull();
 
       act(() => void fireEvent.click(screen.getByTestId("review-hub-clean-push")));
       // The click only requests the push confirmation — nothing reaches the
@@ -924,7 +934,7 @@ describe("ReviewHub", () => {
 
     it("does not push when the preview dialog is declined", async () => {
       renderCleanHub({ aheadCount: 1, behindCount: 0 });
-      await waitFor(() => screen.getByText("Working tree clean"));
+      await screen.findByTestId("review-hub-clean-unpushed");
 
       act(() => void fireEvent.click(screen.getByTestId("review-hub-clean-push")));
       await act(async () => {
@@ -937,40 +947,45 @@ describe("ReviewHub", () => {
       // behindCount undefined — an unknown divergence state must never read
       // as pushable (mirrors deriveReviewReadiness.pushReady).
       renderCleanHub({ aheadCount: 3, behindCount: undefined });
-      await waitFor(() => screen.getByText("Working tree clean"));
+      const unpushed = await screen.findByTestId("review-hub-clean-unpushed");
 
-      expect(screen.getByTestId("review-hub-clean-unpushed").textContent).toBe(
-        "3 commits not pushed"
-      );
+      expect(unpushed.textContent).toContain("3 commits");
       expect(screen.queryByTestId("review-hub-clean-push")).toBeNull();
+      expect(screen.queryByText(COMPLETION_HEADLINE)).toBeNull();
     });
 
     it("offers no Push while behind the remote", async () => {
       renderCleanHub({ aheadCount: 2, behindCount: 1 });
-      await waitFor(() => screen.getByText("Working tree clean"));
+      const unpushed = await screen.findByTestId("review-hub-clean-unpushed");
       // The unpushed copy proves the divergence fixture reached the component
       // — without it the missing button would pass vacuously.
-      expect(screen.getByTestId("review-hub-clean-unpushed").textContent).toBe(
-        "2 commits not pushed"
-      );
+      expect(unpushed.textContent).toContain("2 commits");
       expect(screen.queryByTestId("review-hub-clean-push")).toBeNull();
     });
 
-    it("keeps the quiet no-changes copy when there is nothing to push", async () => {
+    it("renders the completed state quietly when there is nothing to push", async () => {
       renderCleanHub({ aheadCount: 0, behindCount: 0 });
-      await waitFor(() => screen.getByText("Working tree clean"));
+      await waitFor(() => screen.getByText(COMPLETION_HEADLINE));
 
-      expect(screen.getByText("No changes to commit")).toBeDefined();
+      // A completed-work state carries no next action and no restatement of
+      // its own headline — the EmptyState `user-cleared` contract.
       expect(screen.queryByTestId("review-hub-clean-unpushed")).toBeNull();
       expect(screen.queryByTestId("review-hub-clean-push")).toBeNull();
     });
 
-    it("keeps the quiet copy when unpushed commits exist but there is no remote", async () => {
+    it("stays quiet when unpushed commits exist but there is no remote", async () => {
       renderCleanHub({ aheadCount: 2, behindCount: 0 }, false);
-      await waitFor(() => screen.getByText("Working tree clean"));
-
-      expect(screen.getByText("No changes to commit")).toBeDefined();
+      await waitFor(() => screen.getByText(COMPLETION_HEADLINE));
       expect(screen.queryByTestId("review-hub-clean-push")).toBeNull();
+    });
+
+    it("never renders the unpushed state and the completed state together", async () => {
+      // The defect this closes: both states shared one composition, so the
+      // only thing distinguishing "you still have work to publish" from "you
+      // are done" was a 12px subtitle. They must now be mutually exclusive.
+      renderCleanHub({ aheadCount: 2, behindCount: 0 });
+      await screen.findByTestId("review-hub-clean-unpushed");
+      expect(screen.queryByText(COMPLETION_HEADLINE)).toBeNull();
     });
   });
 });
