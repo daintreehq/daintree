@@ -335,6 +335,110 @@ describe("a turn keeps the order it happened in", () => {
     store.applyEvent({ sessionId: "s1", seq: 1, ...e } as never);
   }
 
+  it("stays owed past a LOCAL question's answer, until its command reports", () => {
+    // `awaitingLocalCommand` is the STORE half of the composer lease; the view half —
+    // that a set flag actually disables the bar — is asserted in the panel E2E suite.
+    //
+    // The gap it exists for is real and small: `question:answered` is posted before the
+    // parked command is woken, so the sheet clears while the command is still applying
+    // what was chosen. A prompt sent in that beat is
+    // refused by the engine's endpoint reservation, which makes a liar of a question
+    // that promised the choice applies from the next message.
+    const store = useAssistantStore.getState();
+    store.reset("s1");
+    ev(store, {
+      type: "question:requested",
+      questionId: "q1",
+      question: "Which backend should answer?",
+      options: [
+        { label: "A", text: "official" },
+        { label: "B", text: "local" },
+      ],
+      default: 1,
+      requestedAt: 1,
+      // NO turnId: a command's question belongs to no turn. That absence is the whole
+      // signal — it is what says a command is behind this and still owes a result.
+    });
+    expect(useAssistantStore.getState().pendingQuestion?.questionId).toBe("q1");
+
+    ev(store, {
+      type: "question:answered",
+      questionId: "q1",
+      choiceIndex: 0,
+      cancelled: false,
+      answeredAt: 2,
+      label: "A",
+      text: "official",
+    });
+    expect(useAssistantStore.getState().pendingQuestion).toBeNull();
+    expect(useAssistantStore.getState().awaitingLocalCommand).toBe(true);
+
+    ev(store, { type: "command:result", command: "/backend", text: "Backend is now official." });
+    expect(useAssistantStore.getState().awaitingLocalCommand).toBe(false);
+  });
+
+  it("is not owed for a question the MODEL asked", () => {
+    // A model's question is answered inside a turn that carries on by itself, with
+    // nothing else owed. Holding the composer there would disable it for the rest of a
+    // turn that is perfectly happy to take an interjection.
+    const store = useAssistantStore.getState();
+    store.reset("s1");
+    ev(store, { type: "turn:start", turnId: "t1", role: "assistant", startedAt: 1 });
+    ev(store, {
+      type: "question:requested",
+      questionId: "q1",
+      turnId: "t1",
+      toolCallId: "c1",
+      question: "Which worktree?",
+      options: [
+        { label: "A", text: "main" },
+        { label: "B", text: "feature" },
+      ],
+      default: 0,
+      requestedAt: 1,
+    });
+    ev(store, {
+      type: "question:answered",
+      questionId: "q1",
+      choiceIndex: 0,
+      cancelled: false,
+      answeredAt: 2,
+      label: "A",
+      text: "main",
+    });
+    expect(useAssistantStore.getState().awaitingLocalCommand).toBe(false);
+  });
+
+  it("stops being owed when the engine goes away mid-command", () => {
+    // Nothing is owed by an engine that is gone. Without this the composer would stay
+    // disabled for the rest of the session, waiting on a result that cannot arrive.
+    const store = useAssistantStore.getState();
+    store.reset("s1");
+    ev(store, {
+      type: "question:requested",
+      questionId: "q1",
+      question: "Which backend should answer?",
+      options: [
+        { label: "A", text: "official" },
+        { label: "B", text: "local" },
+      ],
+      default: 0,
+      requestedAt: 1,
+    });
+    ev(store, {
+      type: "question:answered",
+      questionId: "q1",
+      choiceIndex: 0,
+      cancelled: false,
+      answeredAt: 2,
+      label: "A",
+      text: "official",
+    });
+    expect(useAssistantStore.getState().awaitingLocalCommand).toBe(true);
+    useAssistantStore.getState().endLiveState();
+    expect(useAssistantStore.getState().awaitingLocalCommand).toBe(false);
+  });
+
   it("preserves prose written BEFORE a tool call", () => {
     const store = useAssistantStore.getState();
     store.reset("s1");

@@ -309,8 +309,16 @@ export interface AssistantQuestionOption {
 }
 
 /**
- * The model asked the user a multiple-choice question and the turn is BLOCKED until
- * the host answers with `question:answer` naming this `questionId`.
+ * The engine is asking the user a multiple-choice question, and whoever asked is BLOCKED
+ * until the host answers with `question:answer` naming this `questionId`.
+ *
+ * Usually the model mid-turn (`user.askMultipleChoice`), but not only: a slash command
+ * that exists to pick one of a short list — `/backend` is the first — asks on the same
+ * channel. Those carry NO `turnId`, because they belong to no turn; the host needs to
+ * know nothing about where a question came from beyond that.
+ *
+ * ONE at a time. The engine refuses a second question while one is outstanding rather
+ * than letting it replace the live sheet, so a host may model this as a single slot.
  *
  * Labels (A, B, C…) come from the engine so every surface shows the same letter for
  * the same option, and so the model never spells them itself.

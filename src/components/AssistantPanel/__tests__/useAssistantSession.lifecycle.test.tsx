@@ -232,4 +232,49 @@ describe("useAssistantSession — a mid-turn message main refuses", () => {
 
     expect(useAssistantStore.getState().queuedInterjections).toEqual([]);
   });
+
+  /**
+   * Answering a question reports whether the answer was ACCEPTED for delivery.
+   *
+   * The sheet latches on the first answer so a double-click cannot send two, and it
+   * stays on screen until the engine confirms — so an answer that never left would
+   * strand a live sheet that ignores every retry until the question times out. Every
+   * route to "it never left" has to come back as false.
+   */
+  it("reports a question answer as undelivered when it did not leave", async () => {
+    const { result } = renderHook(() => useAssistantSession(OPTS));
+    await waitFor(() => expect(start).toHaveBeenCalledTimes(1));
+
+    // NO SESSION yet: the start has not resolved, which is also the shape of an engine
+    // that died or was hibernated while the sheet was up.
+    await act(async () => {
+      expect(await result.current.answerQuestion("q1", 0)).toBe(false);
+    });
+    expect(send).not.toHaveBeenCalled();
+
+    await act(async () => {
+      releaseStart({ sessionId: "ses_q", ready: null });
+    });
+
+    // Main refused it — the session is no longer owned, or its process is gone.
+    send.mockResolvedValueOnce({ delivered: false });
+    await act(async () => {
+      expect(await result.current.answerQuestion("q1", 0)).toBe(false);
+    });
+
+    // The invoke itself rejected.
+    send.mockRejectedValueOnce(new Error("ipc gone"));
+    await act(async () => {
+      expect(await result.current.answerQuestion("q1", 0)).toBe(false);
+    });
+
+    // …and the ordinary case still reports true, or the latch would never close.
+    send.mockResolvedValueOnce({ delivered: true });
+    await act(async () => {
+      expect(await result.current.answerQuestion("q1", 1)).toBe(true);
+    });
+    expect(send).toHaveBeenLastCalledWith(
+      expect.objectContaining({ type: "question:answer", questionId: "q1", choiceIndex: 1 })
+    );
+  });
 });

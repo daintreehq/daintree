@@ -76,6 +76,19 @@ function composer(window: AppContext["window"]) {
 }
 
 /**
+ * The composer's own shell — the element HybridInputBar puts `aria-disabled` on.
+ *
+ * Separate from `composer()`, which is the CodeMirror content node: the disabled state
+ * is a property of the bar, not of the editor inside it, and a question sheet blocking
+ * the turn is now expressed by disabling the bar rather than by removing it.
+ */
+function composerShell(window: AppContext["window"]) {
+  return window
+    .locator("#daintree-assistant-panel [data-hybrid-input-root] [aria-disabled]")
+    .first();
+}
+
+/**
  * Types into the composer.
  *
  * `fill()` does not work on a CodeMirror surface: it is a contenteditable, not a form
@@ -97,8 +110,7 @@ async function type(window: AppContext["window"], text: string) {
  * prompt that sent perfectly well looks like a prompt that was refused. The placeholder
  * is present only while the document is empty, so its presence is the reliable signal.
  *
- * A missing composer is also empty: a question sheet takes its place while a turn is
- * blocked, and the draft being gone is the same proof it was accepted.
+ * A missing composer is also empty: the panel renders it only once boot is finished.
  */
 async function composerText(window: AppContext["window"]): Promise<string> {
   const input = composer(window);
@@ -120,9 +132,7 @@ async function ask(window: AppContext["window"], text: string) {
   await type(window, text);
   await window.keyboard.press("Enter");
   // The composer clears only on ACCEPTANCE, so an empty box is proof the prompt was
-  // taken rather than refused. It can also be REPLACED outright: a question sheet
-  // takes the composer's place while the turn is blocked, and a vanished composer is
-  // the same proof — the draft was accepted and the turn moved on.
+  // taken rather than refused.
   await expect.poll(() => composerText(window), { timeout: T_MEDIUM }).toBe("");
 }
 
@@ -632,20 +642,116 @@ test.describe.serial("Assistant: native panel", () => {
     const card = window.getByRole("group", { name: "Question" });
     await expect(card).toBeVisible({ timeout: T_MEDIUM });
 
-    // The sheet REPLACES the composer while the dispatch is parked. A live composer
-    // beside it would offer a way to type at an assistant that cannot read.
-    await expect(composer(window)).toHaveCount(0);
+    // The composer STAYS, and is disabled. The invariant the sheet used to enforce by
+    // replacing it — no typing at an engine that cannot read — is enforced by the
+    // disabled state instead, and the bottom of the panel no longer moves under the
+    // user twice per question. `aria-disabled` is on the bar's own wrapper.
+    const bar = composerShell(window);
+    await expect(bar).toBeVisible();
+    await expect(bar).toHaveAttribute("aria-disabled", "true");
+    // And it says WHY, rather than still inviting a question nothing can receive.
+    await expect(composer(window).locator(".cm-placeholder")).toHaveText(
+      /Answer the question above/
+    );
 
     // Letters come from the ENGINE. A surface that generated its own would disagree
     // with the transcript and the debug log about which option "B" was.
     await expect(card.getByRole("option", { name: /A\s+feature\/db-migrate/ })).toBeVisible();
-    await card.getByRole("option", { name: /B\s+main/ }).click();
+
+    // Arrow to the second option and take it with Enter — the keyboard path is the one
+    // a picker is judged on, and clicking would never exercise the cursor at all.
+    //
+    // NOT focused by hand. The sheet takes the keys when it appears, and a test that
+    // calls .focus() first proves the handlers work while saying nothing about whether
+    // anyone can reach them — which is the half that actually broke (a click on the
+    // question text pushed focus into the disabled composer).
+    await expect(card.getByRole("listbox")).toBeFocused();
+    await window.keyboard.press("ArrowDown");
+    await expect(card.getByRole("option", { name: /B\s+main/ })).toHaveAttribute(
+      "aria-selected",
+      "true"
+    );
+    await window.keyboard.press("Enter");
 
     await expect(window.getByText(/Running the migration in main/)).toBeVisible({
       timeout: T_MEDIUM,
     });
-    // The composer comes back once the turn is no longer blocked.
-    await expect(composer(window)).toBeVisible();
+    // The composer is live again once the turn is no longer blocked on the user.
+    await expect(bar).toHaveAttribute("aria-disabled", "false");
+  });
+
+  test("a number key answers a short question outright", async () => {
+    const { window } = ctx;
+    await openAssistant(window);
+    await ask(window, "/scenario question");
+
+    const card = window.getByRole("group", { name: "Question" });
+    await expect(card).toBeVisible({ timeout: T_MEDIUM });
+
+    // Clicking the QUESTION TEXT must not cost the sheet its keyboard. The panel focuses
+    // its composer on any click that is not a control, and while a question is pending
+    // that composer is disabled — so this used to drop the keys into an editor that
+    // takes no input, leaving the arrows, the digits and Escape all dead.
+    await card.getByText("Which worktree should the migration run in?").click();
+    await expect(card.getByRole("listbox")).toBeFocused();
+
+    // Three options, so no filter box, so plain keys are accelerators. "3" is the third
+    // option by position — the engine's own letters answer too, and both are stated in
+    // the sheet's footer rather than being folklore.
+    await window.keyboard.press("3");
+
+    await expect(window.getByText(/Running the migration in Create a new worktree/)).toBeVisible({
+      timeout: T_MEDIUM,
+    });
+  });
+
+  test("/backend asks a real question instead of printing a terminal menu", async () => {
+    // The complaint this whole surface exists to answer: `/backend` used to reply with a
+    // hard-wrapped numbered menu drawn for an 80-column terminal, re-wrapped again by a
+    // 400px rail. It is a picker, and the engine has had a picker channel all along.
+    //
+    // Driven through the COMMAND path, not `/scenario question`, because that is the
+    // half nothing else covers: a question with no turn behind it, a command parked on
+    // the answer while the loop stays live enough to deliver it, and a result that
+    // reflects what was chosen.
+    const { window } = ctx;
+    await openAssistant(window);
+    await ask(window, "/backend");
+
+    const card = window.getByRole("group", { name: "Question" });
+    await expect(card).toBeVisible({ timeout: T_MEDIUM });
+    // The whole point: options as rows, not as text.
+    await expect(card.getByRole("option")).toHaveCount(2);
+    // The highlight starts on the endpoint that is actually answering, so Enter — the
+    // fastest key here — never switches away from it by default.
+    await expect(card.getByRole("option", { name: /B\s+local/ })).toHaveAttribute(
+      "aria-selected",
+      "true"
+    );
+    // And the question discloses that answering it writes something down.
+    await expect(card.getByText(/remembered for future sessions/)).toBeVisible();
+
+    await card.getByRole("option", { name: /A\s+official/ }).click();
+
+    // The sheet goes as soon as the ENGINE confirms the answer — a beat before the
+    // command that asked has finished applying it. The composer stays leased across
+    // that beat and says why, because a prompt sent in it is refused by the engine's
+    // own endpoint reservation, which would make a liar of a question that promised the
+    // choice applies from the next message.
+    await expect(card).toHaveCount(0, { timeout: T_MEDIUM });
+    await expect(composerShell(window)).toHaveAttribute("aria-disabled", "true");
+    await expect(composer(window).locator(".cm-placeholder")).toHaveText(/Applying your answer/);
+
+    // The ENDPOINT that was chosen, in the result — the row read "official", so that is
+    // where the session must now be. The surrounding sentence is microcopy.
+    await expect(window.getByText(/https:\/\/assistant\.daintree\.org/).last()).toBeVisible({
+      timeout: T_MEDIUM,
+    });
+    // The composer comes back live, and takes the keyboard with it — the sheet held it
+    // and unmounts, so without a hand-off focus falls to <body> and the next keystroke
+    // goes nowhere.
+    await expect(composerShell(window)).toHaveAttribute("aria-disabled", "false");
+    await expect(composer(window)).toBeFocused({ timeout: T_MEDIUM });
   });
 
   test("paragraphs are separated, and the separation is visible", async () => {
@@ -1212,12 +1318,13 @@ test.describe.serial("Assistant: native panel", () => {
     await expect(card).toBeVisible({ timeout: T_MEDIUM });
     // Escape dismisses — the turn continues without a choice, which is a different
     // answer from picking an option and the only one that was never exercised.
-    await card.focus();
     await window.keyboard.press("Escape");
 
     await expect(card).toHaveCount(0, { timeout: T_MEDIUM });
-    // The composer comes back either way: the turn is no longer blocked on the user.
-    await expect(composer(window)).toBeVisible({ timeout: T_MEDIUM });
+    // The composer is live again either way: the turn is no longer blocked on the user.
+    await expect(composerShell(window)).toHaveAttribute("aria-disabled", "false", {
+      timeout: T_MEDIUM,
+    });
     // And the PANEL is still open. Escape used to be swallowed in the capture phase by
     // the global keybinding handler, which closed the whole assistant instead — hiding
     // the panel while the engine stayed parked on a question nobody could now answer.

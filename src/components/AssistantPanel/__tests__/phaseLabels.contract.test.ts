@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { readFileSync } from "node:fs";
 import path from "node:path";
-import { LIVE_STATUS_LABEL } from "../AssistantPanelView";
+import { LIVE_STATUS_LABEL, PHASES_WAITING_ON_THE_USER } from "../AssistantPanelView";
 
 /**
  * The phase labels, against the engine's own list of phase names.
@@ -83,6 +83,34 @@ describe("phase label contract", () => {
   it("gives every silent-work phase an inline live label", () => {
     const missing = phases.filter((p) => !NO_LIVE_LABEL.has(p) && !LIVE_STATUS_LABEL[p]);
     expect(missing, `phases with no live label: ${missing.join(", ")}`).toEqual([]);
+  });
+
+  it("treats every awaiting_* phase as the USER's silence, not a stall", () => {
+    // The stall warning asks "has this been quiet longer than working usually is?",
+    // which is a real question about a model or a tool and a meaningless one about a
+    // sheet someone is reading. Derived from the engine's own list rather than
+    // hand-listed, so a phase added there — `awaiting_input`, say — is covered the day
+    // it lands instead of turning the panel amber five seconds into a decision.
+    const waiting = phases.filter((p) => p.startsWith("awaiting_"));
+    expect(waiting.length, "the engine has no awaiting_* phases at all").toBeGreaterThan(0);
+    const uncovered = waiting.filter((p) => !PHASES_WAITING_ON_THE_USER.has(p));
+    expect(
+      uncovered,
+      `awaiting phases that still warn as stalled: ${uncovered.join(", ")}`
+    ).toEqual([]);
+  });
+
+  it("suppresses the stall warning for nothing else", () => {
+    // The other half: a phase in the set that the engine cannot emit excuses nothing,
+    // and one that IS working ("thinking", a running tool) would hide the exact hang
+    // the warning exists to surface.
+    const known = new Set(phases);
+    const strays = [...PHASES_WAITING_ON_THE_USER].filter(
+      (p) => !known.has(p) || !p.startsWith("awaiting_")
+    );
+    expect(strays, `phases wrongly exempt from the stall warning: ${strays.join(", ")}`).toEqual(
+      []
+    );
   });
 
   it("labels nothing the engine cannot emit", () => {
