@@ -1022,6 +1022,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
         type: "alert" | "confirm" | "prompt";
         message: string;
         defaultValue: string;
+        /**
+         * Host of the frame that raised the dialog, or null when it has no host worth
+         * claiming (data:, blob:, about:). Never guessed — an attribution that can lie
+         * is worse than none.
+         */
+        origin: string | null;
       }) => void
     ): () => void;
     /** Subscribe to dialog-dismiss events — guest navigated away or its renderer crashed */

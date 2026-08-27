@@ -1,5 +1,6 @@
 import { describe, it, expect } from "vitest";
 import {
+  formatDialogOrigin,
   extractLocalhostUrls,
   normalizeBrowserUrl,
   isLocalhostUrl,
@@ -504,6 +505,52 @@ describe("urlUtils", () => {
 
     it("trims whitespace before parsing", () => {
       expect(isSafeNavigationUrl("  https://example.com  ")).toBe(true);
+    });
+  });
+
+  // This string is a user's only evidence about who raised a page dialog, so the rules
+  // under test are "never guess" and "never let the host reorder the label".
+  describe("formatDialogOrigin", () => {
+    it("keeps the port, because two dev servers differ only by it", () => {
+      expect(formatDialogOrigin("http://127.0.0.1:5173/x")).toBe("127.0.0.1:5173");
+      expect(formatDialogOrigin("https://example.com/a/b?c=d#e")).toBe("example.com");
+    });
+
+    it("returns null for schemes that have no host to attribute", () => {
+      for (const url of [
+        "data:text/html,<p>hi",
+        "about:blank",
+        "blob:https://x/y",
+        "javascript:0",
+      ]) {
+        expect(formatDialogOrigin(url)).toBeNull();
+      }
+    });
+
+    it("returns null rather than guessing when the URL will not parse", () => {
+      for (const url of ["", "   ", "not a url", null, undefined]) {
+        expect(formatDialogOrigin(url)).toBeNull();
+      }
+    });
+
+    // A right-to-left override can repaint `evil.com<RLO>moc.knab` as `bank.com`. WHATWG
+    // URL parsing rejects such a host, so the guarantee is that nothing is rendered at
+    // all — not that the label is sanitised. Pinned so a permissive fallback would fail.
+    it("renders nothing for a host carrying bidi controls", () => {
+      for (const host of ["evil.com\u202Emoc.knab", "ex\u200Fample.com", "a\u061Cb.com"]) {
+        expect(formatDialogOrigin(`https://${host}/`)).toBeNull();
+      }
+    });
+
+    it("clamps a host long enough to push the label out of its row", () => {
+      const long = `${"a".repeat(300)}.example.com`;
+      const out = formatDialogOrigin(`https://${long}`) ?? "";
+      expect(out.length).toBeLessThanOrEqual(65);
+      expect(out.endsWith("\u2026")).toBe(true);
+    });
+
+    it("names a local file rather than showing an empty host", () => {
+      expect(formatDialogOrigin("file:///Users/x/report.html")).toBe("Local file");
     });
   });
 });

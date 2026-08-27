@@ -292,7 +292,8 @@ test("contained webview dialog review — alert, confirm and prompt over a brows
     async function raise(
       type: "alert" | "confirm" | "prompt",
       message: string,
-      defaultValue = ""
+      defaultValue = "",
+      origin: string | null = `127.0.0.1:${port}`
     ): Promise<void> {
       const payload = {
         dialogId: `shot-${++dialogSeq}`,
@@ -300,6 +301,9 @@ test("contained webview dialog review — alert, confirm and prompt over a brows
         type,
         message,
         defaultValue,
+        // Matches what `formatDialogOrigin` derives from the URL the guest is actually on,
+        // so the provenance line under review shows a real host rather than its fallback.
+        origin,
       };
       await ctx!.app.evaluate(({ webContents }, data) => {
         for (const wc of webContents.getAllWebContents()) {
@@ -385,6 +389,16 @@ test("contained webview dialog review — alert, confirm and prompt over a brows
       await snap(page, "30-prompt-spoof-card", dialog);
       await snap(page, "31-prompt-spoof-in-panel", panel);
       captured += 2;
+    });
+
+    // A guest on data:/blob:/about: has no host worth claiming, so the label has to
+    // degrade to something true rather than invent one. That fallback is a security
+    // surface of its own and gets a shot.
+    await step("alert-no-origin", async () => {
+      await showPage("alert-short");
+      await raise("alert", "Changes saved.", "", null);
+      await snap(page, "32-alert-no-origin-card", dialog);
+      captured += 1;
     });
 
     // ---- 4. Keyboard: where initial focus lands, and where Tab takes it. ----

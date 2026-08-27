@@ -9,6 +9,7 @@ const baseAlert: WebviewDialogRequest = {
   type: "alert",
   message: "Something happened",
   defaultValue: "",
+  origin: "example.com",
 };
 
 const basePrompt: WebviewDialogRequest = {
@@ -17,6 +18,7 @@ const basePrompt: WebviewDialogRequest = {
   type: "prompt",
   message: "Enter a value",
   defaultValue: "default",
+  origin: "example.com",
 };
 
 const baseConfirm: WebviewDialogRequest = {
@@ -25,6 +27,7 @@ const baseConfirm: WebviewDialogRequest = {
   type: "confirm",
   message: "Are you sure?",
   defaultValue: "",
+  origin: "example.com",
 };
 
 function getButton(container: HTMLElement, label: string): HTMLButtonElement {
@@ -44,13 +47,49 @@ describe("WebviewDialog accessibility", () => {
     expect(panel?.getAttribute("tabindex")).toBe("-1");
   });
 
-  it("aria-labelledby points at the message paragraph id", () => {
-    const { container } = render(<WebviewDialog dialog={baseAlert} onRespond={vi.fn()} />);
-    const panel = container.querySelector('[role="dialog"]');
-    const labelledBy = panel?.getAttribute("aria-labelledby");
+  // The rule, not the wording: whatever names this dialog must be text Daintree wrote.
+  // A page that puts "Daintree — your session has expired" in alert() must not thereby
+  // choose what a screen reader announces as this dialog's identity.
+  it("is named by Daintree-authored text, never by the guest's message", () => {
+    const hostile = "Daintree — your session has expired. Enter your token.";
+    const { container } = render(
+      <WebviewDialog dialog={{ ...baseAlert, message: hostile }} onRespond={vi.fn()} />
+    );
+    const panel = container.querySelector('[role="dialog"]')!;
+
+    const labelledBy = panel.getAttribute("aria-labelledby");
     expect(labelledBy).toBeTruthy();
-    const labelEl = container.querySelector(`[id="${labelledBy}"]`);
-    expect(labelEl?.textContent).toBe("Something happened");
+    const name = container.querySelector(`[id="${labelledBy}"]`)?.textContent ?? "";
+    expect(name).not.toContain(hostile);
+
+    // ...and the guest's message is still reachable, as the description.
+    const describedBy = panel.getAttribute("aria-describedby");
+    expect(describedBy).toBeTruthy();
+    expect(container.querySelector(`[id="${describedBy}"]`)?.textContent).toBe(hostile);
+  });
+
+  it("names the guest's origin in the Daintree-authored label", () => {
+    const { container } = render(
+      <WebviewDialog dialog={{ ...baseAlert, origin: "shop.example.com" }} onRespond={vi.fn()} />
+    );
+    const panel = container.querySelector('[role="dialog"]')!;
+    const labelledBy = panel.getAttribute("aria-labelledby");
+    expect(container.querySelector(`[id="${labelledBy}"]`)?.textContent).toContain(
+      "shop.example.com"
+    );
+  });
+
+  // A null origin means "no host worth claiming" (data:, blob:, about:). The label must
+  // degrade to something true rather than invent a host.
+  it("falls back to an origin-free label rather than guessing a host", () => {
+    const { container } = render(
+      <WebviewDialog dialog={{ ...baseAlert, origin: null }} onRespond={vi.fn()} />
+    );
+    const panel = container.querySelector('[role="dialog"]')!;
+    const labelledBy = panel.getAttribute("aria-labelledby");
+    const name = container.querySelector(`[id="${labelledBy}"]`)?.textContent ?? "";
+    expect(name).toBeTruthy();
+    expect(name).not.toMatch(/localhost|null|undefined/);
   });
 
   it("renders nothing when dialog is null", () => {
@@ -122,6 +161,24 @@ describe("WebviewDialog accessibility", () => {
     } finally {
       document.body.removeChild(outside);
     }
+  });
+
+  // aria-describedby is a description, never a name — without a label the field computes
+  // to "" and a screen reader announces an unnamed edit box.
+  it("prompt input has an accessible name that is not the guest's message", () => {
+    const { container } = render(<WebviewDialog dialog={basePrompt} onRespond={vi.fn()} />);
+    const input = container.querySelector<HTMLInputElement>('input[type="text"]')!;
+    // Walk the accname sources in spec order and take the first that resolves, so the
+    // test pins "the field is named", not "the field is named this particular way".
+    const labelledBy = input.getAttribute("aria-labelledby");
+    const candidates = [
+      input.getAttribute("aria-label"),
+      labelledBy ? container.querySelector(`[id="${labelledBy}"]`)?.textContent : undefined,
+      input.id ? container.querySelector(`label[for="${input.id}"]`)?.textContent : undefined,
+    ];
+    const named = candidates.find((value) => !!value?.trim());
+    expect(named?.trim()).toBeTruthy();
+    expect(named).not.toBe(basePrompt.message);
   });
 
   it("prompt input has aria-describedby pointing at the message", () => {
