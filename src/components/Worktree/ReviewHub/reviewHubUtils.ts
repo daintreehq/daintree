@@ -355,6 +355,21 @@ export function sortFiles(
   return sorted;
 }
 
+/**
+ * The pin for a Review Hub band header inside `review-hub-scroll-container`.
+ *
+ * Four band headers share this: both `FileSection` instances, the base-branch
+ * "Changed vs <main>" header, and the conflict panel's two rails. They all sit
+ * in the same scroll container, so one of them sticking while the others scroll
+ * away is visible the moment a user switches diff mode.
+ *
+ * `bg-daintree-bg` is the hub root's own surface (`ReviewHubContent`) and is
+ * here only to make the band opaque over rows passing underneath — the visible
+ * tint is still the `bg-overlay-subtle` on the band itself, so a pinned header
+ * looks exactly like an unpinned one.
+ */
+export const REVIEW_HUB_STICKY_BAND = "sticky top-0 z-10 bg-daintree-bg";
+
 export type BulkScope = "selection" | "shown" | "all";
 
 /**

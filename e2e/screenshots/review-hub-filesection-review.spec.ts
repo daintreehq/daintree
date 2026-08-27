@@ -22,6 +22,7 @@
  *   generated   the "only generated files" empty state, reached by hiding them.
  *   emptystaged "Nothing staged" — the section header with a zero count and no bulk action.
  *   narrow      the window squeezed to where the header has to give something up.
+ *   sticky      the list scrolled, shot as a viewport, so the pinned header is visible.
  *   keyboard    focus rings on the filter field and on a row.
  *   contrast    forced-colors and prefers-contrast: more.
  *
@@ -66,6 +67,7 @@ const NARROW = { width: 900, height: 1050 };
 const STAGED = '[data-testid="review-hub-file-section-staged"]';
 const UNSTAGED = '[data-testid="review-hub-file-section-unstaged"]';
 const FILE_LIST = '[role="listbox"][aria-label="Changed files"]';
+const SCROLLER = '[data-testid="review-hub-scroll-container"]';
 
 const POLISH_CSS = `
   ::-webkit-scrollbar { display: none !important; width: 0 !important; height: 0 !important; }
@@ -244,7 +246,10 @@ async function step(name: string, fn: () => Promise<void>, reset: () => Promise<
 function controls(page: Page, root: string) {
   return {
     filter: page.locator(`${root} input[type="text"]`),
-    viewButton: page.locator(`${root} [aria-label="View options"]`),
+    // NOT [aria-label="View options"] — the label gains a "(N changed from
+    // default)" suffix as soon as a setting diverges, so it stops matching
+    // exactly when the later steps need it.
+    viewButton: page.locator(`${root} [data-testid$="-section-view-trigger"]`),
     bulk: page.locator(
       `${root} [data-testid="review-hub-stage-section-button"], ${root} [data-testid="review-hub-unstage-section-button"]`
     ),
@@ -254,6 +259,27 @@ function controls(page: Page, root: string) {
 async function openViewMenu(page: Page, root: string): Promise<void> {
   await controls(page, root).viewButton.click();
   await page.locator('[role="menu"]').waitFor({ state: "visible", timeout: 5000 });
+  await settle(page, 250);
+}
+
+/**
+ * Put one section's view settings back to the defaults.
+ *
+ * Sort needs two clicks on `Path`: switching key away from `churn` keeps the
+ * current direction (`applySortChange`), so the first click restores the key
+ * with `desc` still set and the second flips it back to `asc`.
+ */
+async function restoreDefaultView(page: Page, root: string): Promise<void> {
+  for (let i = 0; i < 2; i++) {
+    await openViewMenu(page, root);
+    await page.getByRole("menuitemradio", { name: "Path" }).click();
+  }
+  await openViewMenu(page, root);
+  await page.getByRole("menuitemradio", { name: "Comfortable" }).click();
+  await openViewMenu(page, root);
+  const generated = page.getByRole("menuitemcheckbox", { name: "Show generated files" });
+  if ((await generated.getAttribute("aria-checked")) !== "true") await generated.click();
+  else await closeMenus(page);
   await settle(page, 250);
 }
 
@@ -481,7 +507,11 @@ test("review hub file-section review — header density across states", async ()
         await snapList(page, "42-non-default-view-at-rest");
         await snap(page, "43-non-default-changes-header", UNSTAGED);
       },
-      rest
+      async () => {
+        await closeMenus(page);
+        await restoreDefaultView(page, UNSTAGED).catch(() => {});
+        await rest();
+      }
     );
 
     await step(
@@ -522,7 +552,12 @@ test("review hub file-section review — header density across states", async ()
         await snapList(page, "61-generated-hidden-empty");
         await snap(page, "62-generated-hidden-changes", UNSTAGED);
       },
-      rest
+      async () => {
+        await closeMenus(page);
+        await clearFilters(page);
+        await restoreDefaultView(page, UNSTAGED).catch(() => {});
+        await rest();
+      }
     );
 
     await step(
@@ -563,6 +598,35 @@ test("review hub file-section review — header density across states", async ()
         await snap(page, "84-narrow-filter-header", UNSTAGED);
       },
       rest
+    );
+
+    // The header is sticky; the only way to see that is to scroll the list and
+    // shoot the VIEWPORT, not the section element (an element screenshot always
+    // contains its own header and would show a pass either way).
+    await step(
+      "sticky",
+      async () => {
+        await page
+          .locator(SCROLLER)
+          .evaluate((el) => {
+            el.scrollTop = el.scrollHeight;
+          })
+          .catch(async () => {
+            await page.mouse.move(700, 500);
+            for (let i = 0; i < 12; i++) await page.mouse.wheel(0, 300);
+          });
+        await settle(page, 600);
+        await snap(page, "85-scrolled-header-pinned");
+      },
+      async () => {
+        await page
+          .locator(SCROLLER)
+          .evaluate((el) => {
+            el.scrollTop = 0;
+          })
+          .catch(() => {});
+        await rest();
+      }
     );
 
     await step(

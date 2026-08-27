@@ -19,6 +19,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { Spinner } from "@/components/ui/Spinner";
 import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
+import { REVIEW_HUB_STICKY_BAND } from "./reviewHubUtils";
 
 type ConflictOperationState = Exclude<RepoState, "CLEAN" | "DIRTY">;
 
@@ -92,13 +93,15 @@ function RebaseSequenceRail({ entries }: { entries: RebaseEntry[] }) {
 
   return (
     <div className="border-b border-divider" data-testid="conflict-rebase-sequence">
-      <div className="px-4 py-2 bg-overlay-subtle flex items-center">
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60">
-          Rebase sequence
-          <span className="ml-1.5 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-[10px] font-medium normal-case tracking-normal">
-            {display.length}
+      <div className={REVIEW_HUB_STICKY_BAND}>
+        <div className="px-4 py-2 bg-overlay-subtle flex items-center">
+          <span className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60">
+            Rebase sequence
+            <span className="ml-1.5 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-[10px] font-medium normal-case tracking-normal">
+              {display.length}
+            </span>
           </span>
-        </span>
+        </div>
       </div>
       <ul
         className="px-2 py-1 flex flex-col gap-0.5 max-h-48 overflow-y-auto"
@@ -479,13 +482,15 @@ export function ConflictPanel({
 
       {/* Region 2: Conflict worklist */}
       <div className="border-b border-divider">
-        <div className="flex items-center justify-between px-4 py-2 bg-overlay-subtle">
-          <span className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60">
-            Conflicted
-            <span className="ml-1.5 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-[10px] font-medium normal-case tracking-normal">
-              {conflictCount}
+        <div className={REVIEW_HUB_STICKY_BAND}>
+          <div className="flex items-center justify-between px-4 py-2 bg-overlay-subtle">
+            <span className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60">
+              Conflicted
+              <span className="ml-1.5 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-[10px] font-medium normal-case tracking-normal">
+                {conflictCount}
+              </span>
             </span>
-          </span>
+          </div>
         </div>
         {conflictCount > 0 ? (
           <ul className="px-2 py-1 flex flex-col gap-0.5" role="list">

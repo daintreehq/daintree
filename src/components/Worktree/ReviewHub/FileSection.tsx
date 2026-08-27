@@ -18,6 +18,7 @@ import { EmptyState } from "@/components/ui/EmptyState";
 import { FileStageRow, type FileStageRowSection } from "./FileStageRow";
 import { isGeneratedFile } from "../generatedFileClassifier";
 import {
+  REVIEW_HUB_STICKY_BAND,
   type SectionViewState,
   applySortChange,
   countNonDefaultView,
@@ -156,16 +157,8 @@ export function FileSection({
       className={cn(isStaged && "border-b border-divider")}
     >
       {/* Sticky so identity, count and the scoped bulk action stay reachable
-          while a long changeset scrolls. `bg-daintree-bg` is the hub's own
-          surface (ReviewHubContent's root) and only exists to make the band
-          opaque over passing rows — the visible tint is still the
-          `bg-overlay-subtle` below, so the header looks unchanged at rest. */}
-      <div
-        className={cn(
-          "@container/file-section sticky top-0 z-10 bg-daintree-bg",
-          isStaged ? "" : "border-t border-divider/0"
-        )}
-      >
+          while a long changeset scrolls. */}
+      <div className={cn("@container/file-section", REVIEW_HUB_STICKY_BAND)}>
         <div className="flex items-center justify-between px-4 py-2 bg-overlay-subtle gap-2">
           <span className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60 shrink-0 flex items-center">
             {title}
@@ -210,6 +203,12 @@ export function FileSection({
                 "bg-tint/[0.04] border border-border-strong",
                 "hover:bg-tint/[0.06] transition-colors",
                 "focus-within:border-daintree-accent",
+                // The strip IS the field, so it owns the forced-colors focus
+                // boundary. Without this the inner input painted its own
+                // rectangle inside the wrapper and the pair read as two
+                // separate controls.
+                "forced-colors:focus-within:outline forced-colors:focus-within:outline-2",
+                "forced-colors:focus-within:outline-[Highlight]",
                 filterDropClass
               )}
             >
@@ -227,7 +226,12 @@ export function FileSection({
                 className={cn(
                   "w-[104px] min-w-0 bg-transparent text-[11px]",
                   "text-daintree-text placeholder:text-text-placeholder",
-                  "outline-hidden"
+                  // The transparent-outline utility below is what forced
+                  // colors would normally turn into a visible box. That is
+                  // right for a standalone control and wrong inside a strip
+                  // whose wrapper already draws the boundary, so its width is
+                  // zeroed there and the wrapper paints the focus ring.
+                  "outline-hidden forced-colors:outline-0"
                 )}
               />
             </div>
@@ -236,7 +240,10 @@ export function FileSection({
                 <button
                   type="button"
                   className={cn(
-                    "toolbar-icon-button inline-flex items-center gap-1 p-1 rounded",
+                    // Fixed width, not min-width: the count appears and
+                    // disappears as settings change, and an intrinsically-sized
+                    // trigger drags the filter field with it every time.
+                    "toolbar-icon-button inline-flex w-8 shrink-0 items-center justify-center gap-1 rounded p-1",
                     nonDefaultViewCount > 0 && "text-daintree-text"
                   )}
                   data-testid={`${section}-section-view-trigger`}
@@ -333,9 +340,13 @@ export function FileSection({
                 // min-w holds the trailing rail still. The label legitimately
                 // changes width as its scope changes, and without a floor every
                 // such change dragged the filter field and the view trigger
-                // sideways with it — 33px between "all" and "selection", and a
-                // visible jitter from nothing more than a digit.
-                className="h-5 px-1.5 text-[10px] shrink-0 min-w-[7.25rem] justify-center"
+                // sideways with it. Sized for the longest label the component
+                // can produce — "Unstage selection (NNN)" — because a floor that
+                // merely narrows the travel still leaves the rail moving.
+                // justify-start so the glyph keeps the same x in both stacked
+                // sections; the ghost button has no chrome at rest, so the
+                // reserved trailing space is invisible.
+                className="h-5 px-1.5 text-[10px] shrink-0 min-w-[9rem] justify-start"
                 data-testid={bulkActionTestId}
               >
                 <BulkActionIcon className="w-3 h-3 mr-1" />
