@@ -30,7 +30,7 @@ const ROW_PAD = "px-3 py-2.5";
  */
 const ROW_SELECTED =
   "border-border-strong bg-overlay-selected outline outline-2 outline-transparent";
-const ROW_UNSELECTED = "border-daintree-border hover:bg-overlay-soft";
+const ROW_UNSELECTED = "border-daintree-border hover:bg-overlay-soft hover:border-daintree-text/30";
 /** Radio (~13px) + `gap-3`, so a nested control lines up with the label column. */
 const LABEL_COLUMN_INSET = "ml-[25px]";
 
@@ -183,8 +183,12 @@ export function AddPresetDialog({
                       ))}
                     </select>
                     {selectedTemplate?.description && (
-                      <p className="text-xs text-text-muted select-text">
-                        {selectedTemplate.description}
+                      <p className="text-xs text-text-secondary select-text">
+                        {/* Trimmed at render, not at the source: these strings
+                            are agent-facing through the MCP preset schema and
+                            pinned by the registry contract test, but as a
+                            single-clause subtitle here the period is wrong. */}
+                        {selectedTemplate.description.replace(/\.$/, "")}
                       </p>
                     )}
                   </div>

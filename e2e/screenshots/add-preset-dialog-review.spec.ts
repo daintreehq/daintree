@@ -215,48 +215,77 @@ async function snap(
  */
 async function measureDescriptionContrast(page: Page): Promise<string> {
   return page.evaluate((panelSel) => {
-    const parse = (input: string): [number, number, number] => {
-      const el = document.createElement("div");
-      el.style.color = input;
-      document.body.appendChild(el);
-      const resolved = getComputedStyle(el).color;
-      el.remove();
-      const m = resolved.match(/(\d+(?:\.\d+)?)/g) ?? [];
-      return [Number(m[0] ?? 0), Number(m[1] ?? 0), Number(m[2] ?? 0)];
-    };
-    const lum = ([r, g, b]: [number, number, number]) => {
-      const f = (c: number) => {
-        const s = c / 255;
-        return s <= 0.04045 ? s / 12.92 : ((s + 0.055) / 1.055) ** 2.4;
+    type Rgba = { r: number; g: number; b: number; a: number };
+
+    const parse = (input: string): Rgba => {
+      const probe = document.createElement("div");
+      probe.style.color = input;
+      document.body.appendChild(probe);
+      const resolved = getComputedStyle(probe).color;
+      probe.remove();
+      const m = resolved.match(/[\d.]+/g) ?? [];
+      return {
+        r: Number(m[0] ?? 0),
+        g: Number(m[1] ?? 0),
+        b: Number(m[2] ?? 0),
+        a: m[3] === undefined ? 1 : Number(m[3]),
       };
-      return 0.2126 * f(r) + 0.7152 * f(g) + 0.0722 * f(b);
     };
-    const ratio = (a: [number, number, number], b: [number, number, number]) => {
-      const [l1, l2] = [lum(a), lum(b)].sort((x, y) => y - x);
-      return ((l1 as number) + 0.05) / ((l2 as number) + 0.05);
+
+    /** Composite `fg` over `bg` — the card fills are alpha washes, not opaque. */
+    const over = (fg: Rgba, bg: Rgba): Rgba => {
+      const a = fg.a + bg.a * (1 - fg.a);
+      if (a <= 0) return { r: 0, g: 0, b: 0, a: 0 };
+      return {
+        r: (fg.r * fg.a + bg.r * bg.a * (1 - fg.a)) / a,
+        g: (fg.g * fg.a + bg.g * bg.a * (1 - fg.a)) / a,
+        b: (fg.b * fg.a + bg.b * bg.a * (1 - fg.a)) / a,
+        a,
+      };
+    };
+
+    const lum = (c: Rgba) => {
+      const f = (v: number) => {
+        const x = v / 255;
+        return x <= 0.04045 ? x / 12.92 : ((x + 0.055) / 1.055) ** 2.4;
+      };
+      return 0.2126 * f(c.r) + 0.7152 * f(c.g) + 0.0722 * f(c.b);
+    };
+
+    const ratio = (fg: Rgba, bg: Rgba) => {
+      const composited = over(fg, bg);
+      const [hi, lo] = [lum(composited), lum(bg)].sort((x, y) => y - x);
+      return ((hi as number) + 0.05) / ((lo as number) + 0.05);
+    };
+
+    /** Every wash between the text and the first opaque surface, flattened. */
+    const effectiveBackground = (el: Element | null): Rgba => {
+      let acc: Rgba = { r: 255, g: 255, b: 255, a: 1 };
+      const chain: Rgba[] = [];
+      for (let node: Element | null = el; node; node = node.parentElement) {
+        chain.push(parse(getComputedStyle(node).backgroundColor));
+      }
+      for (let i = chain.length - 1; i >= 0; i--) acc = over(chain[i]!, acc);
+      return acc;
     };
 
     const panel = document.querySelector(panelSel);
     if (!panel) return "no panel";
-    // The description is the second line inside an option's text column.
+
+    const which = (globalThis as { __shotContrastTarget?: string }).__shotContrastTarget;
     const label = Array.from(panel.querySelectorAll("label")).find((l) =>
       l.querySelector('input[type="radio"]')
     );
-    const desc = label?.querySelectorAll("span span")[1];
+    const desc =
+      which === "provider"
+        ? panel.querySelector('[data-testid="template-choice-row"] p')
+        : label?.querySelectorAll("span span")[1];
     if (!desc) return "no description node";
 
-    let bgEl: Element | null = desc;
-    let bg = "rgba(0, 0, 0, 0)";
-    while (bgEl) {
-      const c = getComputedStyle(bgEl).backgroundColor;
-      if (c && !c.endsWith(", 0)") && c !== "transparent") {
-        bg = c;
-        break;
-      }
-      bgEl = bgEl.parentElement;
-    }
-    const fg = getComputedStyle(desc).color;
-    return `${getComputedStyle(document.documentElement).getPropertyValue("--theme-name") || document.documentElement.getAttribute("data-theme")}: fg=${fg} bg=${bg} ratio=${ratio(parse(fg), parse(bg)).toFixed(2)}:1`;
+    const fg = parse(getComputedStyle(desc).color);
+    const bg = effectiveBackground(desc.parentElement);
+    const theme = document.documentElement.getAttribute("data-theme");
+    return `${theme}: fg=${getComputedStyle(desc).color} bg=rgb(${Math.round(bg.r)}, ${Math.round(bg.g)}, ${Math.round(bg.b)}) ratio=${ratio(fg, bg).toFixed(2)}:1`;
   }, PANEL);
 }
 
@@ -477,7 +506,14 @@ test("add-preset dialog review — every theme", async () => {
         await page.getByText("From template", { exact: true }).click();
         await settle(page, 400);
         await snap(page, `80-theme-${theme}`, ["From template", "Provider"]);
-        console.log(`[preset-shots] contrast ${await measureDescriptionContrast(page)}`);
+        console.log(`[preset-shots] option ${await measureDescriptionContrast(page)}`);
+        await page.evaluate(() => {
+          (globalThis as { __shotContrastTarget?: string }).__shotContrastTarget = "provider";
+        });
+        console.log(`[preset-shots] provider ${await measureDescriptionContrast(page)}`);
+        await page.evaluate(() => {
+          (globalThis as { __shotContrastTarget?: string }).__shotContrastTarget = undefined;
+        });
         await closeDialog(page);
       });
     }
