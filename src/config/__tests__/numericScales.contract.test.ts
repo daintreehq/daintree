@@ -7,7 +7,6 @@ const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(TEST_DIR, "../../..");
 const INDEX_CSS = path.join(REPO_ROOT, "src/index.css");
 const TAILWIND_THEME_CSS = path.join(REPO_ROOT, "node_modules/tailwindcss/theme.css");
-const TOOLBAR_CSS = path.join(REPO_ROOT, "src/styles/components/toolbar.css");
 const BUILT_IN_THEMES = path.join(REPO_ROOT, "shared/theme/builtInThemes");
 
 /**
@@ -25,67 +24,99 @@ const BUILT_IN_THEMES = path.join(REPO_ROOT, "shared/theme/builtInThemes");
 const SOURCE_ROOTS = ["src", "plugins"];
 const SKIP_DIRS = new Set(["node_modules", "dist", "__tests__", "__mocks__"]);
 
-/**
- * A fixed step is one that cannot follow the scale. `em` and `%` are deliberately
- * absent: they resolve against an ancestor that IS on the scale, so they track it.
- * `rem` is not — it is an absolute step in disguise, which is how `text-[0.65rem]`
- * (a 10.4px tier invented by eye) got in. Zero and the `9999px` "fully round"
- * idiom are topology, not steps.
- */
-const FIXED_LENGTH = /^(?:length:)?\s*(-?\d*\.?\d+)(px|rem|pt|pc|in|cm|mm|q|ex|ch)?\s*$/i;
+/** Which scale a value is supposed to be following. */
+type Scale = "type" | "radius";
 
-function isFixedLength(raw: string): boolean {
-  const m = FIXED_LENGTH.exec(raw.trim());
-  if (!m) return false;
+/**
+ * Whether a unit still tracks its scale. This is deliberately different per
+ * scale, because the same unit can be honest for one and a disguise for the
+ * other:
+ *   - `em`/`%` resolve against the parent's font size, so they follow the TYPE
+ *     scale. For radius they follow the type scale instead of the radius one,
+ *     which is precisely a corner that moves for the wrong reason.
+ *   - `%` on a radius is topology ("half the box"), not a step, so it is fine.
+ *   - `rem` follows neither: it is an absolute step in disguise, which is how
+ *     `text-[0.65rem]` (a 10.4px tier invented by eye) got in.
+ *   - viewport and container units follow neither.
+ */
+const FOLLOWS_SCALE: Record<Scale, Set<string>> = {
+  type: new Set(["em", "%"]),
+  radius: new Set(["%"]),
+};
+
+const LENGTH = /^(?:length:)?\s*(-?\d*\.?\d+)\s*(%|[a-z]+)?$/i;
+
+function isFixedLength(raw: string, scale: Scale): boolean {
+  const m = LENGTH.exec(raw.trim());
+  if (!m?.[1]) return false;
   const value = Number.parseFloat(m[1]);
-  if (value === 0) return false;
-  if (m[2]?.toLowerCase() === "px" && Math.abs(value) >= 9999) return false;
+  if (value === 0) return false; // zero is the same at every scale
+  const unit = m[2]?.toLowerCase();
+  if (unit && FOLLOWS_SCALE[scale].has(unit)) return false;
+  // The "fully round" idiom is topology, not a step.
+  if (unit === "px" && Math.abs(value) >= 9999) return false;
   return true;
 }
 
-/** Any fixed length inside a value, including one hiding in a `var()` fallback. */
-const hasFixedLength = (value: string): boolean => value.split(/[\s,()]+/).some(isFixedLength);
+/**
+ * Any fixed length anywhere in a value — inside `calc()`, inside a `var()`
+ * fallback, inside a shorthand. Splitting on separators is enough because a
+ * length is always its own token.
+ */
+const containsFixedLength = (value: string, scale: Scale): boolean =>
+  value
+    .split(/[\s,()]+/)
+    .filter(Boolean)
+    .some((token) => isFixedLength(token, scale));
 
 /**
- * Each matcher captures the payload, then classifies it. Classifying rather than
- * banning outright is what lets `text-[CanvasText]` and `text-[var(--x)]` through
- * while still catching `text-[0.65rem]` and `text-[length:11px]`.
+ * Each matcher captures a payload, then classifies it. Classifying rather than
+ * banning outright is what lets `text-[CanvasText]`, `text-[var(--x)]` and
+ * `border-radius: 50%` through while still catching `text-[0.65rem]`,
+ * `text-[length:11px]`, `rounded-[calc(4px)]` and `text-[var(--x, 11px)]`.
  */
-const MATCHERS: { name: string; re: RegExp; isOffender: (payload: string) => boolean }[] = [
-  { name: "text-[…]", re: /\btext-\[([^\]]+)\]/g, isOffender: isFixedLength },
+const MATCHERS: { re: RegExp; scale: Scale }[] = [
+  { re: /\btext-\[([^\]]+)\]/g, scale: "type" },
   // `-[a-z]{1,2}` covers every corner/side form: -t, -r, -tl, -ss, -ee …
-  { name: "rounded-[…]", re: /\brounded(?:-[a-z]{1,2})?-\[([^\]]+)\]/g, isOffender: isFixedLength },
+  { re: /\brounded(?:-[a-z]{1,2})?-\[([^\]]+)\]/g, scale: "radius" },
+  { re: /\[font-size\s*:\s*([^\]]+)\]/g, scale: "type" },
+  { re: /\[border-[a-z-]*radius\s*:\s*([^\]]+)\]/g, scale: "radius" },
+  { re: /(?:^|[^-\w])font-size\s*:\s*([^;}\n]+)/g, scale: "type" },
+  { re: /(?:^|[^-\w])border-(?:[a-z-]+-)?radius\s*:\s*([^;}\n]+)/g, scale: "radius" },
+  // A bare number in a style object is a fixed pixel size — React serialises it as px.
+  { re: /\bfontSize\s*(?:=|:)\s*(-?\d+(?:\.\d+)?|"[^"]*"|'[^']*'|`[^`]*`)/g, scale: "type" },
   {
-    name: "[font-size:…] / [border-radius:…]",
-    re: /\[(?:font-size|border-radius)\s*:\s*([^\]]+)\]/g,
-    isOffender: isFixedLength,
-  },
-  {
-    name: "css declaration",
-    re: /(?:^|[^-\w])(?:font-size|border-radius|border-[a-z-]+-radius)\s*:\s*([^;}\n]+)/g,
-    isOffender: hasFixedLength,
-  },
-  {
-    // A bare number here is a fixed pixel size — React serialises it as px.
-    name: "style object",
-    re: /\b(?:fontSize|borderRadius)\s*:\s*(-?\d+(?:\.\d+)?|"[^"]*"|'[^']*'|`[^`]*`)/g,
-    isOffender: (payload) =>
-      /^-?\d+(?:\.\d+)?$/.test(payload)
-        ? Number.parseFloat(payload) !== 0
-        : hasFixedLength(payload.replace(/^["\'`]|["\'`]$/g, "")),
+    re: /\b(?:borderRadius|border[A-Z][a-zA-Z]*Radius)\s*(?:=|:)\s*(-?\d+(?:\.\d+)?|"[^"]*"|'[^']*'|`[^`]*`)/g,
+    scale: "radius",
   },
 ];
+
+function isOffender(payload: string, scale: Scale): boolean {
+  const unquoted = payload.replace(/^["'`]|["'`]$/g, "");
+  if (/^-?\d+(?:\.\d+)?$/.test(unquoted)) return Number.parseFloat(unquoted) !== 0;
+  return containsFixedLength(unquoted, scale);
+}
 
 /**
  * Exact-count allowlist. Counting rather than just naming the file means a new
  * offender slipped into an already-listed file still fails, and an entry left
  * behind after its site is removed fails too — without pinning line numbers.
  */
+/**
+ * Exact-count allowlist. Counting rather than just naming the file means a new
+ * offender slipped into an already-listed file still fails, and an entry left
+ * behind after its site is removed fails too — without pinning line numbers.
+ *
+ * `match` is compared exactly by default so an entry cannot quietly cover a
+ * different value in the same file; `prefix: true` opts into covering a whole
+ * property, which only makes sense when the exemption is the file, not the value.
+ */
 const EXCEPTIONS: {
   file: string;
   match: string;
   count: number;
   reason: string;
+  prefix?: boolean;
 }[] = [
   {
     file: "src/components/Setup/AgentSetupWizard.tsx",
@@ -170,6 +201,7 @@ const EXCEPTIONS: {
   {
     file: "src/utils/renderBootstrapError.ts",
     match: "font-size:",
+    prefix: true,
     count: 4,
     reason:
       "Paints the fatal-boot error screen, which is exactly the case where the app stylesheet may not have loaded — it cannot reference tokens that might not exist",
@@ -177,6 +209,7 @@ const EXCEPTIONS: {
   {
     file: "src/utils/renderBootstrapError.ts",
     match: "border-radius:",
+    prefix: true,
     count: 2,
     reason: "Same fatal-boot screen; see above",
   },
@@ -283,53 +316,52 @@ describe("numeric scales contract (#12033)", () => {
   });
 
   it("keeps type and radius sizes on the shared scales", () => {
-    const seen = new Map<string, { count: number; lines: number[] }>();
+    type Hit = { file: string; token: string; lines: number[] };
+    const hits = new Map<string, Hit>();
     const offenders: string[] = [];
 
     for (const file of files) {
       const content = fs.readFileSync(file, "utf8");
-      const lineStarts = [...content.matchAll(/\n/g)].map((m) => m.index ?? 0);
-      const lineOf = (index: number) => lineStarts.filter((start) => start < index).length + 1;
+      const rel = relative(file);
 
-      for (const { re, isOffender } of MATCHERS) {
+      for (const { re, scale } of MATCHERS) {
         re.lastIndex = 0;
         for (const m of content.matchAll(re)) {
-          if (!isOffender(m[1])) continue;
-          // The css-declaration matcher consumes the delimiter before the property
-          // (`;`, `{`, whitespace); drop it so a token reads as the declaration itself.
+          const payload = m[1];
+          if (payload === undefined || !isOffender(payload, scale)) continue;
+          // The css-declaration matchers consume the delimiter before the
+          // property (`;`, `{`, whitespace); drop it so the token reads as the
+          // declaration itself.
           const token = m[0]
             .trim()
             .replace(/\s+/g, " ")
             .replace(/^[^\w[]+/, "");
-          const key = `${relative(file)}|${token}`;
-          const entry = seen.get(key) ?? { count: 0, lines: [] };
-          entry.count += 1;
-          entry.lines.push(lineOf(m.index ?? 0));
-          seen.set(key, entry);
+          const key = `${rel}\u0000${token}`;
+          const hit = hits.get(key) ?? { file: rel, token, lines: [] };
+          hit.lines.push(content.slice(0, m.index ?? 0).split("\n").length);
+          hits.set(key, hit);
         }
       }
     }
 
-    // An exception is keyed by a token PREFIX so a whole-declaration match
-    // (`font-size: 0.875rem`) can be allowlisted by its property alone.
-    const findException = (file: string, token: string) =>
-      EXCEPTIONS.find((e) => e.file === file && token.startsWith(e.match));
+    const matches = (exception: (typeof EXCEPTIONS)[number], hit: Hit) =>
+      exception.file === hit.file &&
+      (exception.prefix ? hit.token.startsWith(exception.match) : hit.token === exception.match);
 
     const used = new Map<(typeof EXCEPTIONS)[number], number>();
 
-    for (const [key, { count, lines }] of seen) {
-      const [file, token] = key.split("|");
-      const exception = findException(file, token);
+    for (const hit of hits.values()) {
+      const exception = EXCEPTIONS.find((e) => matches(e, hit));
       if (!exception) {
         offenders.push(
-          `  ${file}:${lines.join(",")} — ${token}\n` +
+          `  ${hit.file}:${hit.lines.join(",")} — ${hit.token}\n` +
             `    Not on a scale. Use text-4xs/3xs/2xs/xs/sm (or var(--text-*)) for type and\n` +
             `    var(--radius-xs…4xl) / rounded-xs…4xl for radius. If it genuinely cannot follow\n` +
             `    the scale, add an EXCEPTIONS entry saying why — do not widen an existing one.`
         );
         continue;
       }
-      used.set(exception, (used.get(exception) ?? 0) + count);
+      used.set(exception, (used.get(exception) ?? 0) + hit.lines.length);
     }
 
     for (const exception of EXCEPTIONS) {
@@ -337,11 +369,15 @@ describe("numeric scales contract (#12033)", () => {
       if (actual === exception.count) continue;
       offenders.push(
         actual === 0
-          ? `  ${exception.file} — stale EXCEPTIONS entry for "${exception.match}" (expected ${exception.count}). ` +
-              `It is gone, so drop the entry; if the file moved, update the path.`
-          : `  ${exception.file} — "${exception.match}" appears ${actual}×, allowlisted for ${exception.count}.\n` +
+          ? `  ${exception.file} — stale EXCEPTIONS entry for "${exception.match}" ` +
+              `(expected ${exception.count}). It is gone, so drop the entry; if the file moved, update the path.`
+          : `  ${exception.file} — "${exception.match}" appears ${actual}x, allowlisted for ${exception.count}.\n` +
               `    Existing reason: ${exception.reason}\n` +
-              `    ${actual > exception.count ? "Each NEW site must independently satisfy that reason — do not just raise the number." : "Lower the count to match."}`
+              `    ${
+                actual > exception.count
+                  ? "Each NEW site must independently satisfy that reason — do not just raise the number."
+                  : "Lower the count to match."
+              }`
       );
     }
 
@@ -390,20 +426,21 @@ describe("numeric scales contract (#12033)", () => {
     // Names alone would let the three steps be equal, reversed, or arbitrary.
     // Comparing them to each other and to Tailwind's own floor tests the shape of
     // the scale without copying any of its values into the test.
-    const rem = (value: string) => {
-      const m = /^(-?\d*\.?\d+)rem$/.exec(value.trim());
-      return m ? Number.parseFloat(m[1]) : Number.NaN;
+    const rem = (value: string | undefined) => {
+      const m = value === undefined ? null : /^(-?\d*\.?\d+)rem$/.exec(value.trim());
+      return m?.[1] === undefined ? Number.NaN : Number.parseFloat(m[1]);
     };
+    const ours = readDeclarations(INDEX_CSS, "--text-");
     const ladder = [
-      rem(readDeclarations(TAILWIND_THEME_CSS, "--text-xs").get("--text-xs") ?? ""),
-      ...["--text-2xs", "--text-3xs", "--text-4xs"].map((step) =>
-        rem(readDeclarations(INDEX_CSS, "--text-").get(step) ?? "")
-      ),
+      rem(readDeclarations(TAILWIND_THEME_CSS, "--text-xs").get("--text-xs")),
+      ...["--text-2xs", "--text-3xs", "--text-4xs"].map((step) => rem(ours.get(step))),
     ];
 
     expect(ladder.filter(Number.isNaN)).toEqual([]);
-    const gaps = ladder.slice(1).map((value, i) => Number((ladder[i] - value).toFixed(6)));
-    expect(gaps.filter((gap) => gap <= 0)).toEqual([]); // strictly descending
+    const gaps = ladder
+      .slice(1)
+      .map((value, i) => Number(((ladder[i] ?? Number.NaN) - value).toFixed(6)));
+    expect(gaps.filter((gap) => !(gap > 0))).toEqual([]); // strictly descending
     expect(new Set(gaps).size).toBe(1); // evenly spaced
   });
 
@@ -438,32 +475,28 @@ describe("numeric scales contract (#12033)", () => {
     // Every theme that set this token set it to the same 0.5rem literal, and the
     // fallback was that literal too — so the pill was the one piece of chrome that
     // never moved with the theme's radius. Both halves have to stay on the scale.
-    //
-    // Each consumer is checked by name: a global "at least one is fine" count would
-    // still pass if one call site quietly dropped its fallback.
-    const CONSUMERS = [
-      "src/styles/components/toolbar.css",
-      "src/components/Layout/Toolbar.tsx",
-      "src/components/Layout/ForgeStatsToolbarButton.tsx",
-    ];
+    const TOKEN = "--toolbar-pill-radius";
 
-    const fallbacks = CONSUMERS.map((file) => {
-      const source = fs.readFileSync(path.join(REPO_ROOT, file), "utf8");
-      // Every reference in the file, not just the first — one call site quietly
-      // dropping its fallback is exactly the regression this is here to catch.
-      const references = [...source.matchAll(/--toolbar-pill-radius/g)].map((m) =>
-        varFallback(source.slice(m.index ?? 0), "--toolbar-pill-radius")
-      );
-      return {
-        file,
-        fallback:
-          references.length > 0 && references.every((f) => f?.includes("var(--radius"))
-            ? references[0]
-            : null,
-      };
+    // Discovered repo-wide, not from a fixed list: a fourth consumer added later
+    // with a hardcoded fallback has to fail too.
+    const references = files.flatMap((file) => {
+      const source = fs.readFileSync(file, "utf8");
+      return [...source.matchAll(new RegExp(`var\\(\\s*${TOKEN}`, "g"))].map((m) => ({
+        file: relative(file),
+        fallback: varFallback(source.slice(m.index ?? 0), TOKEN),
+      }));
     });
 
-    expect(fallbacks.filter((f) => !f.fallback?.includes("var(--radius"))).toEqual([]);
+    expect(references.length).toBeGreaterThan(0);
+
+    // A fallback only tracks the scale if a radius token is its PRIMARY reference —
+    // `var(--fixed, var(--radius-md))` is the same disguise reaches() rejects.
+    const detached = references.filter(
+      (ref) =>
+        ref.fallback === null ||
+        !primaryVarRefs(ref.fallback).some((name) => name.startsWith("--radius"))
+    );
+    expect(detached).toEqual([]);
 
     const pinned = fs
       .readdirSync(BUILT_IN_THEMES)
@@ -472,10 +505,10 @@ describe("numeric scales contract (#12033)", () => {
         [
           ...fs
             .readFileSync(path.join(BUILT_IN_THEMES, f), "utf8")
-            .matchAll(/"toolbar-pill-radius":\s*"([^"]*)"/g),
-        ].map((m) => ({ theme: f, value: m[1] }))
+            .matchAll(new RegExp(`"${TOKEN.slice(2)}":\\s*"([^"]*)"`, "g")),
+        ].map((m) => ({ theme: f, value: m[1] ?? "" }))
       )
-      .filter((entry) => !entry.value.includes("var(--radius"));
+      .filter((entry) => !primaryVarRefs(entry.value).some((n) => n.startsWith("--radius")));
 
     expect(pinned).toEqual([]);
   });

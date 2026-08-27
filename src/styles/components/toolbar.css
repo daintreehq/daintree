@@ -309,7 +309,7 @@
   --_bg: var(--toolbar-project-chip-bg, var(--theme-overlay-hover));
   --_border: var(--toolbar-project-chip-border, var(--theme-border-subtle));
   --_fg: var(--toolbar-project-meta-fg, var(--theme-text-secondary));
-  --_size: var(--toolbar-project-chip-size, 10px);
+  --_size: var(--toolbar-project-chip-size, var(--text-3xs));
   background: var(--_bg);
   border-color: var(--_border);
   color: var(--_fg);
