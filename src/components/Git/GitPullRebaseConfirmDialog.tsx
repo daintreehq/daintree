@@ -248,7 +248,11 @@ function GitPullRebaseConfirmDialogInner() {
             it applies to. Same local-then-remote order as the sibling's From/To,
             with the vocabulary that keeps a rewrite from reading as a transfer. */}
         <dl className="px-3 py-2 space-y-1.5" data-testid="git-pull-rebase-upstream-summary">
-          <SummaryRow label="Rewrites">
+          {/* "Rewrites" only where a rewrite is actually on the table. The panel
+              below it says in as many words that a level or behind-only branch
+              has no commit change hash, and a label asserting the opposite two
+              rows above is the same contradiction the caution note had. */}
+          <SummaryRow label={isLoaded && commits.length > 0 ? "Rewrites" : "Branch"}>
             {branch && isSettled ? (
               <RefChip value={branch} emphasis />
             ) : !isSettled && !loadError ? (
@@ -358,8 +362,13 @@ function GitPullRebaseConfirmDialogInner() {
                     Wraps rather than scrolls: a ref that decides which repository gets
                     replayed onto must never be half-shown, and a clipped command reads
                     as a rendering fault rather than as something scrollable. */}
+                {/* Both halves left as placeholders. The remote branch is the one
+                    fact this state definitionally does not have, and substituting
+                    the local name for it is a silent fallback default on a
+                    destructive surface (#7880) that is simply wrong for every
+                    branch whose upstream is named differently. */}
                 <span className="mt-1 block font-mono text-daintree-text/80 break-all">
-                  git branch --set-upstream-to=&lt;remote&gt;/{branch ?? "<branch>"}
+                  git branch --set-upstream-to=&lt;remote&gt;/&lt;branch&gt;
                 </span>
               </div>
             </div>
@@ -391,8 +400,8 @@ function GitPullRebaseConfirmDialogInner() {
             <div className="flex-1 min-w-0" data-testid="git-pull-rebase-empty-unfetched">
               <div className="font-medium">Nothing to compare against yet</div>
               <div className="mt-0.5 text-daintree-text/70">
-                {upstreamLabel} has never been fetched into this worktree, so which of your commits
-                would be rewritten can&apos;t be worked out. Fetch it and try again:
+                {upstreamLabel} isn&apos;t available locally, so which of your commits would be
+                rewritten can&apos;t be worked out. Fetch it and try again:
                 <span className="mt-1 block font-mono text-daintree-text/80 break-all">
                   git fetch {upstream?.remote}
                 </span>
@@ -436,7 +445,7 @@ function GitPullRebaseConfirmDialogInner() {
               ))}
               {isUnfetched && (
                 <li className="text-[11px] text-status-error pt-0.5">
-                  {upstreamLabel} hasn&apos;t been fetched here, so this list is unverified.
+                  {upstreamLabel} isn&apos;t available locally, so this list is unverified.
                 </li>
               )}
               {hiddenCount > 0 && (
