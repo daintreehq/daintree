@@ -128,19 +128,32 @@ function assertAllocated(slot: string, id: string | undefined): string {
 
 // Render-time scan rather than effect-based registration: an effect would leave
 // the first paint pointing `aria-describedby` at an id that does not exist yet.
-function hasSlot(children: React.ReactNode, type: React.ElementType): boolean {
-  let found = false;
+function countSlot(children: React.ReactNode, type: React.ElementType): number {
+  let count = 0;
   React.Children.forEach(children, (child) => {
-    if (found || !React.isValidElement(child)) return;
+    if (!React.isValidElement(child)) return;
     if (child.type === type) {
-      found = true;
+      count += 1;
       return;
     }
     if (child.type === React.Fragment) {
-      found = hasSlot((child.props as { children?: React.ReactNode }).children, type);
+      count += countSlot((child.props as { children?: React.ReactNode }).children, type);
     }
   });
-  return found;
+  return count;
+}
+
+/**
+ * One of each: every slot of a kind shares a single generated id, so a second
+ * one would emit a duplicate id and leave the control described by whichever the
+ * document happened to reach first.
+ */
+function hasSlot(children: React.ReactNode, type: React.ElementType, name: string): boolean {
+  const count = countSlot(children, type);
+  if (count > 1) {
+    throw new Error(`<Field> takes at most one ${name}, found ${count}`);
+  }
+  return count === 1;
 }
 
 const fieldVariants = cva("min-w-0", {
@@ -198,9 +211,9 @@ function Field({
   const generatedId = React.useId();
   const resolvedControlId = controlId ?? `${generatedId}control`;
 
-  const hasLabel = hasSlot(children, FieldLabel);
-  const hasDescription = hasSlot(children, FieldDescription);
-  const hasError = hasSlot(children, FieldError);
+  const hasLabel = hasSlot(children, FieldLabel, "FieldLabel");
+  const hasDescription = hasSlot(children, FieldDescription, "FieldDescription");
+  const hasError = hasSlot(children, FieldError, "FieldError");
   // A caller holding an untouched error keeps the field clean by simply not
   // rendering `FieldError` — presence of the slot is the signal.
   const resolvedInvalid = invalid ?? hasError;

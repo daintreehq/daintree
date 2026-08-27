@@ -16,7 +16,7 @@ import { useFieldControl } from "@/components/ui/field";
  * fields use. On dark themes `surface-input` derives from
  * `surface-panel-elevated`, which several palettes (Galapagos) also give the
  * settings dialog — the box would dissolve into the surface it sits on, leaving
- * a 20%-alpha border as the only edge. Canvas is the recessed surface in every
+ * a low-alpha border as its only edge. Canvas is the recessed surface in every
  * bundled theme, so a 16px box keeps a boundary wherever it is dropped.
  */
 const checkboxVariants = cva(
@@ -43,10 +43,17 @@ const checkboxVariants = cva(
   }
 );
 
+// Radix's `asChild` and `children` are not ours to re-expose: this component
+// supplies its own Indicator, so a caller's child would be silently dropped and
+// `asChild` would slot the trigger onto an element that does not exist while the
+// box is unchecked.
+type CheckboxRootProps = Omit<
+  React.ComponentPropsWithoutRef<typeof CheckboxPrimitive.Root>,
+  "asChild" | "children"
+>;
+
 export interface CheckboxProps
-  extends
-    React.ComponentPropsWithoutRef<typeof CheckboxPrimitive.Root>,
-    Omit<VariantProps<typeof checkboxVariants>, "invalid"> {
+  extends CheckboxRootProps, Omit<VariantProps<typeof checkboxVariants>, "invalid"> {
   /** Overrides the enclosing `Field`'s state when given. */
   invalid?: boolean;
   ref?: React.Ref<React.ComponentRef<typeof CheckboxPrimitive.Root>>;

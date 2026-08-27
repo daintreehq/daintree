@@ -74,13 +74,15 @@ describe("cardVariants", () => {
     }
   });
 
-  it("keeps padding on an axis of its own, ordered and distinct", () => {
-    const sizes = PADDINGS.map(
-      (padding) => utilitiesInGroup(cardVariants({ padding }), "paddingX")[0] ?? "none"
-    );
-    // A table that collapsed every padding onto one value would still satisfy
-    // the single-winner check above, so pin that they actually differ.
-    expect(new Set(sizes).size).toBe(PADDINGS.length);
+  it("keeps padding on an axis of its own, distinct on both sides", () => {
+    for (const axis of ["paddingX", "paddingY"] as const) {
+      const sizes = PADDINGS.map(
+        (padding) => utilitiesInGroup(cardVariants({ padding }), axis)[0] ?? "none"
+      );
+      // A table that collapsed every padding onto one value would still satisfy
+      // the at-most-one check above, so pin that they actually differ.
+      expect(new Set(sizes).size, axis).toBe(PADDINGS.length);
+    }
   });
 
   it("varies only paint between variants, never the box it draws", () => {

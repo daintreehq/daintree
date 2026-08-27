@@ -59,10 +59,15 @@ const switchThumbVariants = cva(
   }
 );
 
-export interface SwitchProps
-  extends
-    React.ComponentPropsWithoutRef<typeof SwitchPrimitive.Root>,
-    VariantProps<typeof switchVariants> {
+// This component supplies its own Thumb, so Radix's `asChild` would slot the
+// trigger onto that inner span — a switch that cannot take focus — and a
+// caller's `children` would be dropped. Neither belongs on the public surface.
+type SwitchRootProps = Omit<
+  React.ComponentPropsWithoutRef<typeof SwitchPrimitive.Root>,
+  "asChild" | "children"
+>;
+
+export interface SwitchProps extends SwitchRootProps, VariantProps<typeof switchVariants> {
   ref?: React.Ref<React.ComponentRef<typeof SwitchPrimitive.Root>>;
 }
 

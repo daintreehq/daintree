@@ -10,9 +10,10 @@ import { cn } from "@/lib/utils";
  * on top of it.
  */
 const GROUP_PATTERNS = {
-  // `p-` and the logical `ps-`/`pe-` shorthands set both axes.
-  paddingX: /^p([xse]|[lr])?-/,
-  paddingY: /^p([yse]|[tb])?-/,
+  // `p-` sets both axes; `ps-`/`pe-` are the logical inline pair, so they belong
+  // to X alongside `pl-`/`pr-` and never to Y.
+  paddingX: /^p([xselr])?-/,
+  paddingY: /^p([ytb])?-/,
   fontSize: /^text-(xs|sm|base|lg|[2-9]?xl|\[[\d.]+(px|rem|em)\])$/,
   radius: /^rounded(-|$)/,
   resize: /^resize(-|$)/,
@@ -30,9 +31,10 @@ export function baseUtilities(classes: string): string[] {
     .filter((token) => token.length > 0)
     .filter((token) => {
       // A colon inside an arbitrary value (`bg-[url(data:…)]`) is data, not a
-      // variant separator; only a colon outside brackets marks a variant.
-      const bracket = token.indexOf("[");
-      const scan = bracket === -1 ? token : token.slice(0, bracket);
+      // variant separator; only a colon outside brackets marks a variant. Strip
+      // every bracketed run first, so `data-[state=checked]:p-2` still reads as
+      // the variant-prefixed utility it is.
+      const scan = token.replace(/\[[^\]]*\]/g, "");
       return !scan.includes(":");
     });
 }

@@ -216,6 +216,26 @@ describe("Field slot guards", () => {
     }
   });
 
+  // Both would render the same generated id, leaving the control described by
+  // whichever the document reached first.
+  it("refuses to allocate one id to two slots of the same kind", () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    try {
+      expect(() =>
+        render(
+          <Field>
+            <FieldLabel>Endpoint</FieldLabel>
+            <Input />
+            <FieldDescription>First</FieldDescription>
+            <FieldDescription>Second</FieldDescription>
+          </Field>
+        )
+      ).toThrow(/at most one FieldDescription/);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
   it("refuses to render its parts outside a Field", () => {
     // React logs the thrown error before it propagates; silence the noise.
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});

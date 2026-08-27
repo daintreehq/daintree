@@ -815,6 +815,27 @@ describe("SettingsCheckbox", () => {
     expect(screen.getByRole("checkbox", { name: "Test Setting" })).toBeTruthy();
   });
 
+  it("puts the control first so the row's two-column grid resolves", () => {
+    const { container } = render(
+      <SettingsCheckbox
+        label="Test Setting"
+        description="A test description"
+        checked={false}
+        onChange={vi.fn()}
+      />
+    );
+    const row = container.querySelector("label")!;
+    const children = [...row.children];
+    // The checkbox lands in column one purely by being first; everything after
+    // it is pushed to column two by selector. Reorder these and the row breaks
+    // with no other test noticing.
+    expect(children[0]!.getAttribute("data-field-control")).toBe("");
+    expect(children.slice(1).map((el) => el.getAttribute("data-slot"))).toEqual([
+      "field-label",
+      "field-description",
+    ]);
+  });
+
   it("keeps the whole row clickable", () => {
     const onChange = vi.fn();
     render(
@@ -993,9 +1014,12 @@ describe("SettingsCheckbox", () => {
     expect(restingFill).toHaveLength(1);
     expect(checkedFill).toHaveLength(1);
     expect(restingFill).not.toEqual(checkedFill);
-    // Dark themes derive `surface-input` from `surface-panel-elevated`, which
-    // several palettes also give the settings dialog — the box would dissolve.
-    expect(restingFill[0]).not.toBe("bg-surface-input");
+    // Dark themes derive `surface-input` from `surface-panel-elevated`, and the
+    // settings shell falls back to `surface-panel` — a box painted with any of
+    // the three can dissolve into the dialog behind it.
+    expect(["bg-surface-input", "bg-surface-panel", "bg-surface-panel-elevated"]).not.toContain(
+      restingFill[0]
+    );
     // And a boundary of its own, so it never depends on fill alone.
     expect(classes.some((name) => /^border-/.test(name))).toBe(true);
   });
@@ -1261,7 +1285,7 @@ describe("SettingsSwitch", () => {
     expect(track?.className).toMatch(/(^|\s)(border|ring-\d)(\s|-|$)/);
   });
 
-  it("toggles with keyboard (Space key)", () => {
+  it("toggles on activation", () => {
     const onChange = vi.fn();
     render(<SettingsSwitch checked={false} onCheckedChange={onChange} aria-label="Test switch" />);
 
