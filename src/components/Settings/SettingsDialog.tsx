@@ -50,6 +50,7 @@ import {
   getSettingsNavGroups,
   preloadAllSettingsTabs,
   scopeForTab,
+  contentScopeForTab,
   type SettingsTab,
   type SettingsScope,
   type LazySettingsTabEntry,
@@ -580,6 +581,13 @@ function SettingsDialogInner({
     tabs[nextIndex]!.focus();
   };
 
+  // What the header says the change lands on. Derived from the ACTIVE TAB's content
+  // scope, not the nav scope: `integrations` is filed under the global nav but every
+  // control in it writes against the current project, and a header that announced
+  // "Daintree" over it would state the wrong scope outright. While search owns the
+  // pane there is no active tab to speak for, so the nav scope is the honest answer.
+  const headerScope: SettingsScope = isSearching ? activeScope : contentScopeForTab(activeTab);
+
   const tabTitles: Record<SettingsTab, string> = {
     ...globalTabTitles,
     ...projectTabTitles,
@@ -720,7 +728,7 @@ function SettingsDialogInner({
                 rather than the scrollport, which is the only part of the pane that
                 survives the user scrolling into a long form. */}
             <div className="flex flex-col gap-1 min-w-0">
-              <ScopeContext scope={activeScope} projectLabel={hasProject ? projectLabel : null} />
+              <ScopeContext scope={headerScope} projectLabel={hasProject ? projectLabel : null} />
               <AppDialog.Title
                 as="h3"
                 icon={
@@ -736,7 +744,7 @@ function SettingsDialogInner({
                     and never says whose General. The visible line above is decorative
                     for the same reason: saying it twice is worse than saying it once. */}
                 <span className="sr-only">
-                  {activeScope === "project" && hasProject
+                  {headerScope === "project" && hasProject
                     ? `Project settings for ${projectLabel}, `
                     : "Global settings for Daintree, "}
                 </span>

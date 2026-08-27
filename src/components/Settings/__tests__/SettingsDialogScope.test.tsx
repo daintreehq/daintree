@@ -3,7 +3,12 @@ import React from "react";
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
 import { ScopeContext, ScopeChip, NavItem } from "../SettingsDialog";
-import type { SettingsTab } from "../settingsTabRegistry";
+import {
+  contentScopeForTab,
+  scopeForTab,
+  SETTINGS_REGISTRY,
+  type SettingsTab,
+} from "../settingsTabRegistry";
 
 vi.mock("framer-motion", () => ({
   LayoutGroup: ({ children }: { children: React.ReactNode }) => <>{children}</>,
@@ -146,5 +151,28 @@ describe("settings scope orientation", () => {
       const { container } = render(<NavItem {...base} />);
       expect(container.querySelector('[role="img"]')).toBeNull();
     });
+  });
+});
+
+describe("contentScopeForTab", () => {
+  /**
+   * The rule: the shell's context line follows what a tab WRITES to, not the nav list
+   * it is filed under. Every tab whose content saves per-project must report "project"
+   * here, or the header states the wrong scope over it.
+   */
+  it("reports the nav scope for a tab that does not declare otherwise", () => {
+    expect(contentScopeForTab("general")).toBe("global");
+    expect(contentScopeForTab("project:general")).toBe("project");
+  });
+
+  it("reports the content scope for a globally-filed tab that writes per-project", () => {
+    expect(scopeForTab("integrations")).toBe("global");
+    expect(contentScopeForTab("integrations")).toBe("project");
+  });
+
+  it("never reports a scope outside the two the shell knows about", () => {
+    for (const entry of SETTINGS_REGISTRY) {
+      expect(["global", "project"]).toContain(contentScopeForTab(entry.id as SettingsTab));
+    }
   });
 });
