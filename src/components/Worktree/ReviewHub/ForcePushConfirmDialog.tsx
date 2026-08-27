@@ -2,6 +2,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { Spinner } from "@/components/ui/Spinner";
+import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
@@ -19,7 +20,14 @@ interface ForcePushConfirmDialogProps {
   onError: (err: unknown) => void;
 }
 
-const COMMIT_LIMIT = 20;
+/**
+ * The main handler clamps this to 100 (`git-write.ts`, `list-remote-commits`),
+ * so asking for its ceiling is what makes the preview complete for every
+ * divergence a force-push realistically discards. It used to ask for 20 and
+ * print "…and N more" for the rest — a count, on the one dialog where D2 says
+ * a count is not enough, naming commits nothing could open (#12001).
+ */
+const COMMIT_LIMIT = 100;
 const SHORT_HASH_LEN = 7;
 
 export function ForcePushConfirmDialog({
@@ -180,32 +188,53 @@ export function ForcePushConfirmDialog({
           )}
 
           {!isLoading && !loadError && commits && commits.length > 0 && (
-            <ul className="px-3 py-2 space-y-1.5 max-h-[180px] overflow-y-auto">
-              {commits.map((commit) => (
-                <li
-                  key={commit.hash}
-                  className="flex items-baseline gap-2"
-                  data-testid="force-push-commit-row"
-                >
-                  <span
-                    className={cn(
-                      "font-mono text-[10px] text-daintree-text/40 shrink-0 tabular-nums"
-                    )}
+            // A scrollable region with no focusable children of its own has to
+            // be reachable by keyboard in its own right (WCAG 2.1.1), and the
+            // fades are what say "there is more" — the same shape
+            // `GitPushConfirmDialog` uses for the identical problem.
+            <ScrollShadow
+              className="max-h-[180px]"
+              scrollClassName="scroll-py-8"
+              tabIndex={0}
+              role="region"
+              aria-label={`Remote commits to discard${
+                destinationLabel ? ` from ${destinationLabel}` : ""
+              }`}
+            >
+              <ul className="px-3 py-2 space-y-1.5">
+                {commits.map((commit) => (
+                  <li
+                    key={commit.hash}
+                    className="flex items-baseline gap-2"
+                    data-testid="force-push-commit-row"
                   >
-                    {commit.hash.slice(0, SHORT_HASH_LEN)}
-                  </span>
-                  <span className="text-daintree-text/80 truncate min-w-0">{commit.message}</span>
-                  <span className="text-[10px] text-daintree-text/40 shrink-0 ml-auto">
-                    {commit.author}
-                  </span>
-                </li>
-              ))}
-              {hiddenCount > 0 && (
-                <li className="text-[10px] text-daintree-text/40 italic pt-1">
-                  …and {hiddenCount} more
-                </li>
-              )}
-            </ul>
+                    <span
+                      className={cn(
+                        "font-mono text-[10px] text-daintree-text/40 shrink-0 tabular-nums"
+                      )}
+                    >
+                      {commit.hash.slice(0, SHORT_HASH_LEN)}
+                    </span>
+                    <span className="text-daintree-text/80 truncate min-w-0">{commit.message}</span>
+                    <span className="text-[10px] text-daintree-text/40 shrink-0 ml-auto">
+                      {commit.author}
+                    </span>
+                  </li>
+                ))}
+                {hiddenCount > 0 && (
+                  // Past the fetch ceiling the tail states a fact rather than
+                  // promising a list: at this magnitude what decides the answer
+                  // is that the divergence runs to hundreds of commits, not
+                  // what the hundred-and-first one says.
+                  <li
+                    className="text-[10px] text-daintree-text/40 italic pt-1"
+                    data-testid="force-push-commit-cap"
+                  >
+                    Listing the {commits.length} most recent of {totalRemote}
+                  </li>
+                )}
+              </ul>
+            </ScrollShadow>
           )}
         </div>
       </div>

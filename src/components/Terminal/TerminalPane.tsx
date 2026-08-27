@@ -45,7 +45,7 @@ import { useTerminalSubmitStatus } from "./useTerminalSubmitStatus";
 import { TerminalAttachErrorBanner } from "./TerminalAttachErrorBanner";
 import { useShouldSuppressLocalError } from "@/components/Recovery/useShouldSuppressLocalError";
 import { UpdateCwdDialog } from "./UpdateCwdDialog";
-import { ErrorBanner } from "../Errors/ErrorBanner";
+import { CompactErrorList } from "../Errors/CompactErrorList";
 import { AgentCompletionBanner } from "./AgentCompletionBanner";
 import { ContentPanel } from "@/components/Panel";
 import { useWorktreeStore } from "@/hooks/useWorktreeStore";
@@ -1333,22 +1333,14 @@ function TerminalPaneComponent({
       })()}
     >
       {terminalErrors.length > 0 && (
-        <div className="px-2 py-1 border-b border-daintree-border bg-[color-mix(in_oklab,var(--color-status-error)_5%,transparent)] space-y-1 shrink-0">
-          {terminalErrors.slice(0, 2).map((error) => (
-            <ErrorBanner
-              key={error.id}
-              error={error}
-              onDismiss={dismissError}
-              onRetry={handleErrorRetry}
-              onCancelRetry={handleCancelRetry}
-              compact
-            />
-          ))}
-          {terminalErrors.length > 2 && (
-            <div className="text-xs text-daintree-text/40 px-2">
-              +{terminalErrors.length - 2} more errors
-            </div>
-          )}
+        <div className="px-2 py-1 border-b border-daintree-border bg-[color-mix(in_oklab,var(--color-status-error)_5%,transparent)] shrink-0">
+          <CompactErrorList
+            errors={terminalErrors}
+            maxInline={2}
+            onDismiss={dismissError}
+            onRetry={handleErrorRetry}
+            onCancelRetry={handleCancelRetry}
+          />
         </div>
       )}
 

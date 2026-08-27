@@ -925,9 +925,12 @@ export interface PluginArchiveManifestPreview {
   capabilities: PluginCapability[];
   /**
    * Contributed recipes, disclosed by name because a recipe is executable
-   * content that ships with no capability to advertise it (#11860). `count` is
-   * the manifest's true total; `names` is the (clamped, sanitized) subset the
-   * dialog lists, so a manifest declaring dozens can't flood the surface.
+   * content that ships with no capability to advertise it (#11860). `names` is
+   * the complete (clamped, sanitized) list — bounded by the manifest schema at
+   * 50 recipes and 200 characters each, so it can't flood the surface, and the
+   * dialog bounds its own viewport rather than the data (#12001). `count` is
+   * the same total, kept as the cross-process invariant the dialog's prose
+   * reads.
    */
   recipes: { count: number; names: string[] };
 }

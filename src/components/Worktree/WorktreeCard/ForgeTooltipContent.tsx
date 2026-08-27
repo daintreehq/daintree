@@ -1,4 +1,4 @@
-import type { ForgeUser, IssueTooltipData, PRTooltipData } from "@shared/types/forge";
+import type { ForgeLabel, ForgeUser, IssueTooltipData, PRTooltipData } from "@shared/types/forge";
 import { Calendar, KeyRound, PenLine, UserCheck, Clock, CirclePause } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { BadgeFreshnessCause } from "@/components/Layout/FreshnessUtils";
@@ -188,7 +188,7 @@ interface LabelBadgeProps {
 function LabelBadge({ name, color }: LabelBadgeProps) {
   return (
     <span
-      className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium"
+      className="inline-flex items-center max-w-full min-w-0 break-words px-1.5 py-0.5 rounded-full text-[10px] font-medium"
       style={{
         backgroundColor: `#${color}20`,
         color: `#${color}`,
@@ -197,6 +197,27 @@ function LabelBadge({ name, color }: LabelBadgeProps) {
     >
       {name}
     </span>
+  );
+}
+
+/**
+ * Every label, not the first four.
+ *
+ * The row used to cut off at four and count the rest, which put the tail behind
+ * a "+N more" that sits inside a hover tooltip — there is no further surface to
+ * open from there, so the count named content the user could not reach
+ * (#12001). The forge queries already bound this: `labels(first: 10)`, so the
+ * honest version adds at most six chips to a wrapping row. `LabelBadge` wraps
+ * rather than widens, so a single long provider-supplied label can't push the
+ * tooltip past its `max-w-[280px]`.
+ */
+function LabelRow({ labels }: { labels: readonly ForgeLabel[] }) {
+  return (
+    <div className="flex flex-wrap gap-1 pt-1">
+      {labels.map((label) => (
+        <LabelBadge key={label.name} name={label.name} color={label.color ?? "8b949e"} />
+      ))}
+    </div>
   );
 }
 
@@ -239,18 +260,7 @@ export function IssueTooltipContent({ data, freshness }: IssueTooltipContentProp
         <FreshnessMetaItem freshness={freshness} />
       </div>
 
-      {data.labels.length > 0 && (
-        <div className="flex flex-wrap gap-1 pt-1">
-          {data.labels.slice(0, 4).map((label) => (
-            <LabelBadge key={label.name} name={label.name} color={label.color ?? "8b949e"} />
-          ))}
-          {data.labels.length > 4 && (
-            <span className="text-[10px] text-daintree-text/40">
-              +{data.labels.length - 4} more
-            </span>
-          )}
-        </div>
-      )}
+      {data.labels.length > 0 && <LabelRow labels={data.labels} />}
     </div>
   );
 }
@@ -313,18 +323,7 @@ export function PRTooltipContent({ data, freshness }: PRTooltipContentProps) {
         <FreshnessMetaItem freshness={freshness} />
       </div>
 
-      {data.labels.length > 0 && (
-        <div className="flex flex-wrap gap-1 pt-1">
-          {data.labels.slice(0, 4).map((label) => (
-            <LabelBadge key={label.name} name={label.name} color={label.color ?? "8b949e"} />
-          ))}
-          {data.labels.length > 4 && (
-            <span className="text-[10px] text-daintree-text/40">
-              +{data.labels.length - 4} more
-            </span>
-          )}
-        </div>
-      )}
+      {data.labels.length > 0 && <LabelRow labels={data.labels} />}
     </div>
   );
 }

@@ -274,3 +274,43 @@ describe("PRTooltipContent freshness item", () => {
     expect(screen.getByText(/data may be stale/)).toBeTruthy();
   });
 });
+
+describe("ForgeTooltipContent labels", () => {
+  // The forge queries ask for `labels(first: 10)`, so this is the widest row
+  // either tooltip can be handed.
+  const manyLabels = Array.from({ length: 10 }, (_, i) => ({
+    name: `label-${i}`,
+    color: "8b949e",
+  }));
+
+  it("renders every issue label rather than counting the tail (#12001)", () => {
+    // The row used to stop at four and print "+N more" — a count inside a
+    // hover tooltip, which has no further surface to open.
+    render(<IssueTooltipContent data={{ ...issueData, labels: manyLabels }} />);
+    for (const label of manyLabels) {
+      expect(screen.getByText(label.name)).toBeTruthy();
+    }
+    expect(screen.queryByText(/more$/)).toBeNull();
+  });
+
+  it("renders every PR label rather than counting the tail (#12001)", () => {
+    render(<PRTooltipContent data={{ ...prData, labels: manyLabels }} />);
+    for (const label of manyLabels) {
+      expect(screen.getByText(label.name)).toBeTruthy();
+    }
+    expect(screen.queryByText(/more$/)).toBeNull();
+  });
+
+  it("renders no label row when there are no labels", () => {
+    const { container } = render(<IssueTooltipContent data={{ ...issueData, labels: [] }} />);
+    expect(container.textContent).not.toContain("label-");
+  });
+
+  it("falls back to a neutral colour for a label the provider left uncoloured", () => {
+    render(<IssueTooltipContent data={{ ...issueData, labels: [{ name: "uncoloured" }] }} />);
+    const badge = screen.getByText("uncoloured");
+    // Any resolved colour beats none: an unset `color` used to produce
+    // `#undefined20`, which paints nothing.
+    expect(badge.getAttribute("style") ?? "").not.toContain("undefined");
+  });
+});

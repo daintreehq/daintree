@@ -514,4 +514,74 @@ describe("PluginArchiveInstallConfirmDialog", () => {
       expect.objectContaining({ type: "success", title: "Plugin installed" })
     );
   });
+
+  describe("contributed recipes", () => {
+    const recipeIntent = (count: number) =>
+      intent({
+        manifest: {
+          ...intent().manifest,
+          recipes: {
+            count,
+            names: Array.from({ length: count }, (_, i) => `Recipe ${i}`),
+          },
+        },
+      });
+
+    it("lists every contributed recipe rather than counting a tail (#12001)", () => {
+      // A recipe runs shell commands and launches agents, so this D2 confirm is
+      // the only place the user reads them before approving. The list used to
+      // stop at ten with "+N more" underneath.
+      render(<PluginArchiveInstallConfirmDialog />);
+      enqueue(recipeIntent(24));
+
+      for (const i of [0, 9, 10, 23]) {
+        expect(screen.getByText(`Recipe ${i}`)).toBeTruthy();
+      }
+    });
+
+    it("leaves no overflow count beside the recipe list", () => {
+      render(<PluginArchiveInstallConfirmDialog />);
+      enqueue(recipeIntent(24));
+
+      const list = screen.getByTestId("archive-recipe-list");
+      expect(list.textContent).not.toMatch(/\+\d+ more/);
+    });
+
+    it("bounds the recipe list in a keyboard-reachable region, not by dropping rows", () => {
+      // A scrollable region with no focusable children of its own has to be
+      // reachable in its own right (WCAG 2.1.1) — that is what replaced the
+      // source-side truncation.
+      render(<PluginArchiveInstallConfirmDialog />);
+      enqueue(recipeIntent(24));
+
+      const list = screen.getByTestId("archive-recipe-list");
+      expect(list.getAttribute("tabindex")).toBe("0");
+      expect(list.getAttribute("role")).toBe("region");
+      expect(list.getAttribute("aria-label")).toContain("24");
+    });
+
+    it("renders no recipe block for an archive that contributes none", () => {
+      render(<PluginArchiveInstallConfirmDialog />);
+      enqueue(intent());
+
+      expect(screen.queryByTestId("archive-recipe-list")).toBeNull();
+      expect(screen.queryByText("Recipes")).toBeNull();
+    });
+
+    it("agrees in number between the prose and the rows it introduces", () => {
+      render(<PluginArchiveInstallConfirmDialog />);
+      enqueue(recipeIntent(3));
+
+      const list = screen.getByTestId("archive-recipe-list");
+      expect(list.querySelectorAll("li")).toHaveLength(3);
+      expect(screen.getByText(/Adds 3 launch recipes/)).toBeTruthy();
+    });
+
+    it("says 'recipe' for a single contribution", () => {
+      render(<PluginArchiveInstallConfirmDialog />);
+      enqueue(recipeIntent(1));
+
+      expect(screen.getByText(/Adds 1 launch recipe,/)).toBeTruthy();
+    });
+  });
 });

@@ -817,7 +817,7 @@ describe("ReviewHub", () => {
 
       // Dialog opens; commit list loads.
       await waitFor(() =>
-        expect(listRemoteCommitsMock).toHaveBeenCalledWith(WORKTREE_PATH, "feature/x", 20)
+        expect(listRemoteCommitsMock).toHaveBeenCalledWith(WORKTREE_PATH, "feature/x", 100)
       );
       await waitFor(() => screen.getByText("first remote commit"));
 

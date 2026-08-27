@@ -1,5 +1,6 @@
 import { useState, useEffect, useRef, useCallback } from "react";
-import { X, Eye, RotateCw } from "lucide-react";
+import { ChevronDown, X, Eye, RotateCw } from "lucide-react";
+import { Popover, PopoverTrigger, PopoverContent } from "@/components/ui/popover";
 import { useShallow } from "zustand/react/shallow";
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel, type PtyPanelData } from "@shared/types/panel";
@@ -149,7 +150,7 @@ export function RunningTaskList({ worktreeId }: RunningTaskListProps) {
   if (visibleTasks.length === 0) return null;
 
   const displayTasks = visibleTasks.slice(0, MAX_VISIBLE);
-  const overflowCount = visibleTasks.length - displayTasks.length;
+  const overflowTasks = visibleTasks.slice(MAX_VISIBLE);
 
   return (
     <div className="mb-2 space-y-0.5">
@@ -168,12 +169,92 @@ export function RunningTaskList({ worktreeId }: RunningTaskListProps) {
           />
         );
       })}
-      {overflowCount > 0 && (
-        <div className="text-[10px] text-daintree-text/30 px-2 py-0.5 font-sans">
-          +{overflowCount} more
-        </div>
+      {overflowTasks.length > 0 && (
+        <TaskOverflow
+          tasks={overflowTasks}
+          now={now}
+          onStop={handleStop}
+          onFocus={handleFocus}
+          onRestart={handleRestart}
+          onDismiss={handleDismiss}
+        />
       )}
     </div>
+  );
+}
+
+/**
+ * The tasks past the visible cap.
+ *
+ * This used to be "+N more" as static text, which named running processes the
+ * user could then neither watch, stop, nor restart — every handler the rows
+ * need was already in scope, only the rows weren't rendered (#12001). Mounted
+ * only while a tail exists, so the popover can't reopen against a stale one
+ * after the list shrinks.
+ */
+function TaskOverflow({
+  tasks,
+  now,
+  onStop,
+  onFocus,
+  onRestart,
+  onDismiss,
+}: {
+  tasks: PtyPanelData[];
+  now: number;
+  onStop: (id: string) => void;
+  onFocus: (id: string) => void;
+  onRestart: (id: string) => void;
+  onDismiss: (id: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+
+  return (
+    <Popover open={open} onOpenChange={setOpen}>
+      <PopoverTrigger
+        type="button"
+        data-testid="running-task-overflow"
+        aria-label={`${tasks.length} more ${tasks.length === 1 ? "task" : "tasks"}: ${tasks
+          .map((t) => t.command || t.title)
+          .join(", ")}`}
+        className={cn(
+          "flex w-full items-center gap-0.5 px-2 py-0.5 rounded-[var(--radius-sm)] text-[10px] font-sans transition-colors",
+          "text-daintree-text/40 hover:text-daintree-text/70 hover:bg-tint/[0.04]",
+          "outline-hidden focus-visible:outline focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+        )}
+      >
+        {tasks.length} more
+        <ChevronDown className="w-2.5 h-2.5 shrink-0" aria-hidden="true" />
+      </PopoverTrigger>
+      <PopoverContent
+        align="start"
+        sideOffset={6}
+        aria-label="More running tasks"
+        className="p-1 min-w-64 max-w-sm max-h-[var(--radix-popover-content-available-height)] overflow-y-auto"
+      >
+        <ul className="flex flex-col gap-0.5">
+          {tasks.map((t) => (
+            <li key={t.id}>
+              <TaskRow
+                terminal={t}
+                status={deriveTaskStatus(t)}
+                now={now}
+                // Focusing a terminal moves the user out of this surface, so
+                // the popover has nothing left to anchor; stop, restart and
+                // dismiss all keep it open so several can be handled in a row.
+                onStop={onStop}
+                onFocus={(id) => {
+                  setOpen(false);
+                  onFocus(id);
+                }}
+                onRestart={onRestart}
+                onDismiss={onDismiss}
+              />
+            </li>
+          ))}
+        </ul>
+      </PopoverContent>
+    </Popover>
   );
 }
 
