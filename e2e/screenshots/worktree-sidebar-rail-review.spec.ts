@@ -704,6 +704,7 @@ test("worktrees sidebar rail — state matrix", async () => {
 
     // 14. Narrow + hover — the header cluster's worst case for crowding.
     await cap.step("width-min-hover", async () => {
+      await blurAll(page);
       await page.locator(SIDEBAR).getByRole("heading", { name: "Worktrees" }).hover();
       await settle(page, 400);
       await expect(page.locator(SEL.worktree.openOverviewButton)).toBeVisible();

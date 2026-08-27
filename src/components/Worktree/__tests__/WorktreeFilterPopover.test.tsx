@@ -2,7 +2,7 @@
 import { describe, it, expect, beforeEach, afterEach } from "vitest";
 import fs from "fs";
 import path from "path";
-import { render, screen, cleanup } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent } from "@testing-library/react";
 import { WorktreeFilterPopover } from "../WorktreeFilterPopover";
 import { useWorktreeFilterStore } from "@/store/worktreeFilterStore";
 
@@ -79,7 +79,11 @@ describe("WorktreeFilterPopover derives its filter state from one snapshot", () 
 
 describe("WorktreeFilterPopover keyboard and focus surfaces", () => {
   beforeEach(() => {
+    // clearAll() resets the project-scoped filters; sort order and grouping are
+    // global preferences and would otherwise leak between tests.
     useWorktreeFilterStore.getState().clearAll();
+    useWorktreeFilterStore.getState().setGroupByType(false);
+    useWorktreeFilterStore.getState().setOrderBy("created");
   });
   afterEach(cleanup);
 
@@ -111,5 +115,43 @@ describe("WorktreeFilterPopover keyboard and focus surfaces", () => {
     openPopover();
     const radios = screen.getAllByRole("radio");
     expect(radios.filter((r) => r.getAttribute("aria-checked") === "true")).toHaveLength(1);
+  });
+
+  it("is one tab stop, with the checked option holding it", () => {
+    // A radio group is a single stop; without a roving index every option was
+    // its own stop, so Tab walked four times through one choice.
+    openPopover();
+    const radios = screen.getAllByRole("radio");
+    const tabbable = radios.filter((r) => r.getAttribute("tabindex") === "0");
+    expect(tabbable).toHaveLength(1);
+    expect(tabbable[0]?.getAttribute("aria-checked")).toBe("true");
+  });
+
+  it("moves selection and focus with the arrows, and wraps at the ends", () => {
+    // Selection follows focus, which is the APG default for a radio group.
+    openPopover();
+    const radios = () => screen.getAllByRole("radio");
+    const checkedIndex = () => radios().findIndex((r) => r.getAttribute("aria-checked") === "true");
+    const count = radios().length;
+    const start = checkedIndex();
+
+    fireEvent.keyDown(radios()[start]!, { key: "ArrowDown" });
+    expect(checkedIndex()).toBe((start + 1) % count);
+    expect(document.activeElement).toBe(radios()[(start + 1) % count]);
+
+    fireEvent.keyDown(radios()[0]!, { key: "ArrowLeft" });
+    expect(checkedIndex()).toBe(count - 1);
+    expect(document.activeElement).toBe(radios()[count - 1]);
+  });
+
+  it("keeps exactly one tabbable option when grouping removes an option", () => {
+    // "Custom order" leaves the list while grouping is on. Whatever the store
+    // does with the selection, the group must never end up with no tab stop.
+    useWorktreeFilterStore.getState().setOrderBy("manual");
+    useWorktreeFilterStore.getState().setGroupByType(true);
+    openPopover();
+    const radios = screen.getAllByRole("radio");
+    expect(radios.map((r) => r.textContent)).not.toContain("Custom order");
+    expect(radios.filter((r) => r.getAttribute("tabindex") === "0")).toHaveLength(1);
   });
 });

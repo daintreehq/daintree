@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState, useRef } from "react";
+import { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import { Filter, X, ChevronDown } from "lucide-react";
 import { useShallow } from "zustand/react/shallow";
 import { cn } from "@/lib/utils";
@@ -190,6 +190,14 @@ const ORDER_OPTIONS: { value: OrderBy; label: string }[] = [
   { value: "manual", label: "Custom order" },
 ];
 
+/** Both orientations, because the group reads as a vertical list of choices. */
+const SORT_ARROW_STEPS: Record<string, number | undefined> = {
+  ArrowDown: 1,
+  ArrowRight: 1,
+  ArrowUp: -1,
+  ArrowLeft: -1,
+};
+
 interface WorktreeFilterPopoverProps {
   hideSearchInput?: boolean;
   chipCounts?: ChipCounts;
@@ -332,6 +340,37 @@ export function WorktreeFilterPopover({
     clearAll();
   }, [clearAll]);
 
+  // Sort options are a real radio group, so they take one tab stop and the
+  // arrows move (and select) within it — ARIA APG. Exposing `role="radio"`
+  // without this promised keyboard behaviour the component did not have.
+  // "Custom order" drops out while grouping is on, so the roving index has to
+  // track the VISIBLE list, not ORDER_OPTIONS.
+  const sortOptions = useMemo(
+    () => ORDER_OPTIONS.filter((option) => !(option.value === "manual" && groupByType)),
+    [groupByType]
+  );
+  const sortRefs = useRef<Array<HTMLButtonElement | null>>([]);
+  const checkedSortIndex = sortOptions.findIndex((option) => option.value === orderBy);
+  // Defence, not a live path: `setGroupByType` already moves the selection off
+  // "manual" when grouping turns on, so nothing reachable through the store
+  // leaves the group with no checked option. If that guard ever slips, this
+  // keeps the group tabbable instead of stranding it.
+  const tabbableSortIndex = checkedSortIndex >= 0 ? checkedSortIndex : 0;
+
+  const handleSortKeyDown = useCallback(
+    (event: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
+      const step = SORT_ARROW_STEPS[event.key];
+      if (step === undefined) return;
+      event.preventDefault();
+      const next = (index + step + sortOptions.length) % sortOptions.length;
+      const option = sortOptions[next];
+      if (!option) return;
+      setOrderBy(option.value);
+      sortRefs.current[next]?.focus();
+    },
+    [sortOptions, setOrderBy]
+  );
+
   const isField = appearance === "field";
   const filtersActive = showBadge;
   const hasAnyFilter = fullFilterCount > 0;
@@ -424,40 +463,44 @@ export function WorktreeFilterPopover({
               aria-labelledby="worktree-sort-by-label"
               className="flex flex-col"
             >
-              {ORDER_OPTIONS.filter((option) => !(option.value === "manual" && groupByType)).map(
-                (option) => (
-                  <button
-                    key={option.value}
-                    type="button"
-                    onClick={() => setOrderBy(option.value)}
-                    role="radio"
-                    aria-checked={orderBy === option.value}
+              {sortOptions.map((option, index) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  ref={(el) => {
+                    sortRefs.current[index] = el;
+                  }}
+                  onClick={() => setOrderBy(option.value)}
+                  onKeyDown={(event) => handleSortKeyDown(event, index)}
+                  role="radio"
+                  aria-checked={orderBy === option.value}
+                  // One tab stop for the whole group, arrows move within it.
+                  tabIndex={index === tabbableSortIndex ? 0 : -1}
+                  className={cn(
+                    "flex items-center gap-2 px-2 py-1 text-xs rounded",
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-daintree-accent",
+                    orderBy === option.value
+                      ? "bg-overlay-raised text-daintree-text"
+                      : "text-daintree-text/70 hover:bg-overlay-medium"
+                  )}
+                >
+                  <div
                     className={cn(
-                      "flex items-center gap-2 px-2 py-1 text-xs rounded",
-                      "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-daintree-accent",
+                      "w-3 h-3 rounded-full border",
                       orderBy === option.value
-                        ? "bg-overlay-raised text-daintree-text"
-                        : "text-daintree-text/70 hover:bg-overlay-medium"
+                        ? "border-daintree-text bg-daintree-text"
+                        : "border-daintree-border"
                     )}
                   >
-                    <div
-                      className={cn(
-                        "w-3 h-3 rounded-full border",
-                        orderBy === option.value
-                          ? "border-daintree-text bg-daintree-text"
-                          : "border-daintree-border"
-                      )}
-                    >
-                      {orderBy === option.value && (
-                        <div className="w-full h-full flex items-center justify-center">
-                          <div className="w-1.5 h-1.5 bg-text-inverse rounded-full" />
-                        </div>
-                      )}
-                    </div>
-                    {option.label}
-                  </button>
-                )
-              )}
+                    {orderBy === option.value && (
+                      <div className="w-full h-full flex items-center justify-center">
+                        <div className="w-1.5 h-1.5 bg-text-inverse rounded-full" />
+                      </div>
+                    )}
+                  </div>
+                  {option.label}
+                </button>
+              ))}
             </div>
           </div>
 
