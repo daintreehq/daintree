@@ -417,7 +417,7 @@ export function AssistantQuestionCard({ question, onAnswer }: AssistantQuestionC
         "px-3 pb-2 pt-2.5 outline-hidden"
       )}
     >
-      <div className="flex items-center gap-2">
+      <div className="flex shrink-0 items-center gap-2">
         <ListChecks
           aria-hidden="true"
           className="size-3.5 shrink-0 text-[var(--assistant-fg-dim)]"
@@ -440,8 +440,12 @@ export function AssistantQuestionCard({ question, onAnswer }: AssistantQuestionC
       {filtering && (
         <div
           className={cn(
-            "mt-2 flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1",
-            "border border-[var(--assistant-border)] bg-[var(--assistant-inset)]",
+            "mt-2.5 flex shrink-0 items-center gap-1.5 rounded-md px-2 py-1",
+            // The same recessed ground as the well below it. The filter belongs to the
+            // ANSWERS, not to the question, and a field that sat on `inset` — a lighter
+            // surface than the card — read as a third layer stacked on top of the sheet
+            // rather than as the top of the region it filters.
+            "border border-[var(--assistant-border)] bg-[var(--assistant-surface)]",
             // The ring hangs off :focus-within rather than the input's own :focus-visible
             // so the whole field lights up, which is what a user reads as "typing goes
             // here" — the input itself is borderless inside it.
@@ -453,7 +457,13 @@ export function AssistantQuestionCard({ question, onAnswer }: AssistantQuestionC
             ref={filterRef}
             type="text"
             role="combobox"
-            aria-expanded="true"
+            // Told the truth rather than fixed at true. The list HIDES when a filter
+            // matches nothing (see `empty:hidden` below), and a combobox claiming an
+            // expanded popup while pointing `aria-controls` at a display:none element
+            // is a state a screen reader cannot make sense of — it announces a list
+            // that is not there. Expanded means "there is a popup showing", which is
+            // exactly `visible.length > 0`.
+            aria-expanded={visible.length > 0}
             aria-controls={listId}
             aria-activedescendant={activeId}
             aria-label="Filter options"
@@ -508,13 +518,38 @@ export function AssistantQuestionCard({ question, onAnswer }: AssistantQuestionC
         // AssistantPanelView), because a ceiling here could only ever be a guess about
         // how much room the panel has.
         //
-        // The ring hangs off plain `:focus`, not `:focus-visible`: focus arrives here
-        // PROGRAMMATICALLY when the sheet mounts, which never counts as visible focus,
-        // and the highlighted row otherwise looks identical whether the list is holding
-        // the keys or has lost them.
+        // A RECESSED WELL, and the reason is legibility before it is decoration. The
+        // card is the raised surface, so a highlighted row painted in `hover` sat 2% of
+        // a lift above the ground it was on — near-invisible, which is what forced an
+        // accent ring around the whole list to say where the keyboard was. Dropping the
+        // options back onto the panel's own ground gives the highlight the full lift to
+        // work with, and the ring stops being load-bearing. It is also the separation
+        // the sheet was missing: the question is on the card, the answers are in the
+        // well, and the border between them is where one stops and the other starts.
+        //
+        // What replaces the ring is a border that STRENGTHENS on focus — neutral, not
+        // accent. Focus arrives here programmatically when the sheet mounts, so this
+        // hangs off plain `:focus` rather than `:focus-visible`, which such a focus
+        // never satisfies. The row highlight is the actual focus indicator (this is an
+        // `aria-activedescendant` listbox; the cursor is the thing that moves), and the
+        // border only answers "does this region still hold the keys".
+        //
+        // `empty:hidden` because a filter that matches nothing would otherwise leave a
+        // bordered 8px sliver above the status line — the well should be absent when it
+        // has nothing in it, not present and empty.
         className={cn(
-          "mt-2 min-h-0 flex-1 overflow-y-auto rounded-md",
-          "focus:outline-2 focus:outline-offset-1 focus:outline-[var(--assistant-focus)]"
+          // `scroll-p-1` matches the padding: without it `scrollIntoView` parks the
+          // highlighted row flush against the well's border and clips the rounded
+          // corner it just drew, which reads as the row being cut off by the frame.
+          filtering ? "mt-1.5" : "mt-2.5",
+          // The class is a STYLE HOOK, not decoration: `assistant-panel.css` hangs the
+          // forced-colors and raised-contrast cursor off it, where a background-only
+          // highlight cannot survive.
+          "assistant-answers min-h-0 flex-1 overflow-y-auto rounded-md p-1 scroll-p-1",
+          "empty:hidden",
+          "border border-[var(--assistant-border)] bg-[var(--assistant-surface)]",
+          "outline-hidden transition-colors duration-150 ease-out",
+          "focus:border-[var(--assistant-border-strong)]"
         )}
       >
         {visible.length === 0
@@ -622,12 +657,26 @@ export function AssistantQuestionCard({ question, onAnswer }: AssistantQuestionC
         to know that what they typed matched nothing. `role="status"` is polite, so it
         never cuts across the keystroke that produced it. */}
       {visible.length === 0 && (
-        <p role="status" className="mt-2 px-2 py-2 text-[1em] text-[var(--assistant-fg-secondary)]">
+        <p
+          role="status"
+          // Wearing the WELL, because it is standing in for it. The options region is
+          // where the eye already is when a filter empties it, so the message has to
+          // arrive in that space rather than as loose text on the card below where the
+          // list used to be.
+          className={cn(
+            "mt-2.5 shrink-0 rounded-md border border-[var(--assistant-border)]",
+            "bg-[var(--assistant-surface)] px-3 py-2.5",
+            "text-[1em] text-[var(--assistant-fg-secondary)]"
+          )}
+        >
           No option matches
         </p>
       )}
 
-      <div className="mt-1.5 flex shrink-0 items-center justify-between gap-2 border-t border-[var(--assistant-border)] pt-1.5 text-[0.92em] text-[var(--assistant-fg-secondary)]">
+      {/* No rule above it any more. The well below the question now closes with a border
+        of its own, and a second hairline six pixels under the first read as a ruling
+        mistake rather than as structure. Space separates the footer instead. */}
+      <div className="mt-2 flex shrink-0 items-center justify-between gap-2 text-[0.92em] text-[var(--assistant-fg-secondary)]">
         {/* The hint states what is ACTUALLY bound right now. A fixed line promising
             number keys on a sheet where they type into the filter is worse than no hint:
             it is an instruction that silently does something else. */}

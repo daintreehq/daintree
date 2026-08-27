@@ -152,8 +152,19 @@ describe("assistant palette contrast floors", () => {
       it("keeps the surfaces distinguishable from the ground without becoming grounds", () => {
         // A raised surface nobody can see is not a surface; one that reads as a second
         // background makes the panel look like two panes stitched together.
+        //
+        // `hover` is here for a specific surface: the question sheet's option list is a
+        // WELL cut back to the ground, so the highlighted row is `hover` painted
+        // directly on `surface`. A leading rail marks the row as well, so this delta is
+        // not the whole cue — but it is the one that says how far the highlight EXTENDS,
+        // and it used to sit on `raised`, a two-point gap, which is what forced an
+        // accent ring around the entire list to say where the cursor was.
         const palette = paletteFor(scheme);
-        for (const surface of ["--assistant-raised", "--assistant-inset"] as const) {
+        for (const surface of [
+          "--assistant-raised",
+          "--assistant-inset",
+          "--assistant-hover",
+        ] as const) {
           const delta = Math.abs(
             luminance(parse(palette[surface]!)) - luminance(parse(palette["--assistant-surface"]!))
           );
@@ -239,7 +250,11 @@ describe("adversarial themes", () => {
       // string" is not the test, because one 8-bit step apart is invisible.
       const palette = buildAssistantPalette(resolveInputBarColors(theme.colors));
       const ground = luminance(parse(palette["--assistant-surface"]!));
-      for (const surface of ["--assistant-raised", "--assistant-inset"] as const) {
+      for (const surface of [
+        "--assistant-raised",
+        "--assistant-inset",
+        "--assistant-hover",
+      ] as const) {
         const delta = Math.abs(luminance(parse(palette[surface]!)) - ground);
         expect(delta, `${surface} is not visibly separated from the ground`).toBeGreaterThan(
           0.0015
