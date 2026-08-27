@@ -21,9 +21,19 @@ const MAX_VISIBLE_FILES = 100;
  * The narrative slot's shared shell. A quiet left rail marks derived
  * commentary as a distinct content role without adding another container.
  */
-const NARRATIVE_RAIL = "border-l-2 border-border-default pl-2.5";
+// `border-strong`, not `border-default`: the well's border reads because it
+// sits between two different fills, but this rail sits on one, and at
+// `border-default` it measured ~1.05:1 against the well on the dark palettes —
+// present in the light themes, invisible in the dark ones. It is the only
+// thing binding the label to the prose under it.
+const NARRATIVE_RAIL = "border-l-2 border-border-strong pl-2.5";
+// `text-secondary`, not `text-muted`: this label is the only thing that says
+// whether the prose under it is an AI note, a summary, or a commit message,
+// and `text-muted` has no contrast floor on the darkest palettes — 2.22:1 on
+// namib, where it drops out of the rail entirely. The 10px uppercase size and
+// the tracking already do the de-emphasis.
 const NARRATIVE_LABEL =
-  "flex items-center gap-1 text-[10px] font-medium uppercase tracking-[0.06em] text-text-muted";
+  "flex items-center gap-1 text-[10px] font-medium uppercase tracking-[0.06em] text-text-secondary";
 
 export interface WorktreeDetailsProps {
   worktree: WorktreeState;

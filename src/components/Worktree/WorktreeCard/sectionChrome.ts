@@ -7,29 +7,19 @@
  * muted), so two equal sections looked like two different components. One
  * label token here is what keeps them in step.
  *
- * The sidebar deliberately drops the well: the card row is already a
- * container, and nesting a second bordered plane inside it — with a third for
- * the note and a fourth for the file list — reads as a stack of cards and
- * costs roughly 34px of a 240-360px column per level. The grid card keeps the
- * well, because it sits on a wider standalone surface where containment still
- * earns its keep.
- *
- * Active sessions is the one exception, and it is not a well: it is the card's
- * footer, a full-bleed recessed tray rendered as a sibling of the body row
- * (see WorktreeCard). Flattening it along with the rest removed the only thing
- * separating two cards in a full-bleed list, which is what #11992 traded away
- * without meaning to.
+ * Both sit inside the card's single content column, so every row here shares
+ * one leading inset and one trailing inset no matter which section it belongs
+ * to or whether it sits on the card or inside a well.
  */
 
 /**
  * The section trigger's label. A quiet micro-label rather than a heading:
- * these name a region, they are not content, and at this size tracking is what
- * keeps uppercase legible.
+ * these name a region, they are not content.
  *
  * `text-secondary`, not `text-muted`: this labels an interactive disclosure,
  * and on the darkest palettes the muted tone dropped it to the weight of
- * passive metadata. The 10px uppercase size does the de-emphasis; the tone
- * does not have to as well.
+ * passive metadata. The 11px size does the de-emphasis; the tone does not have
+ * to as well.
  */
 export const SECTION_LABEL = "text-[11px] font-medium text-text-secondary";
 
@@ -48,7 +38,13 @@ export const SECTION_LABEL = "text-[11px] font-medium text-text-secondary";
  * card it is not. Carrying an invisible border in both cases puts every row's
  * text on the same x regardless of which case it is in.
  *
- * The padding is deliberately asymmetric — 6px leading, 10px trailing. What
+ * The vertical padding is 4px, not 6: with a 16px line box that still clears
+ * the 24px target floor, and the two rows it governs are the ones the card
+ * spends most of its height on. Six put 27px of nothing between the branch
+ * line and the commit row, against 6-14px everywhere else in the card.
+ *
+ * The horizontal padding is deliberately asymmetric — 6px leading, 10px
+ * trailing. What
  * leads these rows is a chevron or a plus, and a glyph carries its own
  * whitespace inside its box: padded to match the trailing edge it measures
  * equal but reads over-indented, and the label after it drifts visibly away
@@ -57,8 +53,18 @@ export const SECTION_LABEL = "text-[11px] font-medium text-text-secondary";
  * not metric alignment; the icon is an indicator for the row, not its
  * subject.
  */
-export const SECTION_ROW =
-  "worktree-section-button flex w-full items-center rounded-[var(--radius-lg)] border border-transparent py-1.5 pl-1.5 pr-2.5 text-left";
+/**
+ * The row's box on its own, without `w-full` or the flex reset. The collapsed
+ * Details row cannot use `SECTION_ROW` — it is a `flex-1` sibling of a trailing
+ * button group rather than a full-width row — so it composes this instead. The
+ * two used to carry the same values written out twice, and they drifted: this
+ * exists so a change to the row's geometry cannot land on one and miss the
+ * other.
+ */
+export const SECTION_ROW_BOX =
+  "rounded-[var(--radius-lg)] border border-transparent py-1 pl-1.5 pr-2.5";
+
+export const SECTION_ROW = `worktree-section-button flex w-full items-center text-left ${SECTION_ROW_BOX}`;
 
 /**
  * The disclosure well — the card's one fill, and the only closed contour
@@ -93,3 +99,15 @@ export const DISCLOSURE_WELL =
  */
 export const GRID_SESSION_WELL =
   "mt-3 rounded-[var(--radius-lg)] border border-border-default bg-surface-inset";
+
+/**
+ * The card's text column, expressed relative to the content column.
+ *
+ * Every line in the header leads with a 14px glyph and an 8px gap, so its text
+ * starts 22px in. A line that carries no glyph has to spend that 22px as
+ * padding or it lands back on the glyph column and reads as a different tier
+ * from the row directly above it — which is what the collapsed summary line
+ * did: the same "6 files" text sat at x16 collapsed and x42 expanded, so
+ * toggling a card slid it 26px sideways.
+ */
+export const SECTION_TEXT_COLUMN = "pl-[22px]";

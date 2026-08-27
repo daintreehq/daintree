@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 import { actionService } from "@/services/ActionService";
 import type { ComputedSubtitle, WorktreeReviewState } from "./hooks/useWorktreeStatus";
-import { SECTION_LABEL, SECTION_ROW, DISCLOSURE_WELL } from "./sectionChrome";
+import { SECTION_LABEL, SECTION_ROW, SECTION_ROW_BOX, DISCLOSURE_WELL } from "./sectionChrome";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   ContextMenu,
@@ -207,7 +207,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
               // row, and a well around one row is a box around nothing.
               isExpanded
               ? DISCLOSURE_WELL
-              : "mt-2"
+              : "mt-1"
             : "mt-2 rounded-[var(--radius-lg)] border border-border-default bg-surface-inset p-3"
         )}
       >
@@ -290,12 +290,12 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                   // backplate, not a permanent bordered well. Same hit area,
                   // same content, one less container.
                   isSidebar
-                    ? // Same geometry as SECTION_ROW (it cannot use the class
+                    ? // Shares SECTION_ROW's box (it cannot use the class
                       // itself — this row is a flex-1 sibling of the right
                       // button group, not a full-width row). The old -ml-1.5
                       // chip put this line's chevron 16px left of the session
                       // row's directly beneath it.
-                      "rounded-[var(--radius-lg)] border border-transparent py-1.5 pl-1.5 pr-2.5"
+                      SECTION_ROW_BOX
                     : cn(
                         "px-3 py-2.5",
                         rightButtonGroupShown

@@ -199,6 +199,28 @@ html[data-dragging="true"]
   }
 }
 
+/* The grip's two stages run on two timings, and a Tailwind `duration-*`
+   utility cannot give two properties two durations.
+
+   Opacity gets the 75ms tier because the dots appear directly under a pointer
+   that is already there: at 150ms the mark arrives after the eye has landed
+   on the spot it was going to occupy, which reads as lag rather than as
+   motion. The backplate keeps the 150ms state-change tier — by the time it
+   paints, the pointer has committed to the grip, and there is nothing to
+   catch up with. */
+[data-worktree-row-drag-handle] {
+  transition:
+    opacity var(--duration-75) var(--ease-out-expo),
+    color var(--duration-150) var(--ease-out-expo),
+    background-color var(--duration-150) var(--ease-out-expo);
+}
+
+@variant reduce-motion {
+  [data-worktree-row-drag-handle] {
+    transition: none;
+  }
+}
+
 .sidebar-action-button:hover {
   background: var(--sidebar-action-hover-bg, var(--theme-overlay-hover));
 }

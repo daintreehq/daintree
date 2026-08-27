@@ -79,7 +79,11 @@ function TerminalRow({ term, onClick }: TerminalRowProps) {
         isArmed && !isPrimary && "outline-dashed outline-border-strong"
       )}
     >
-      <div className="worktree-section-button group/termrow flex items-center justify-between gap-2.5 py-2 pl-[18px] pr-1 transition-colors">
+      {/* pl-6 puts a session's own glyph under the trigger's glyph and its
+          name under the trigger's label. At 18px the children sat 6px LEFT of
+          the row that owns them, so two identical rows read as loose peers
+          rather than as the contents of the disclosure above them. */}
+      <div className="worktree-section-button group/termrow flex items-center justify-between gap-2.5 py-2 pl-6 pr-1 transition-colors">
         <TruncatedTooltip content={term.title} isTruncated={isTruncated}>
           <button
             type="button"

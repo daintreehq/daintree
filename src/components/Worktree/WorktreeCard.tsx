@@ -837,9 +837,10 @@ export function WorktreeCard({
           ref={droppableRef}
           className={cn(
             "sidebar-worktree-card group/card relative isolate transition-colors duration-150",
-            // The sidebar card's bottom seam lives in sidebar.css so it can
-            // be themed against the bands on either side of it — see
-            // `.sidebar-root .sidebar-worktree-card`.
+            // The sidebar card's resting plane, its 2px gutter and its
+            // selection overlay all live in sidebar.css — they have to, since
+            // that unlayered file's declarations override layered utilities on
+            // the same element.
 
             variant === "grid" && "rounded-lg border border-divider bg-overlay-subtle",
             isActive && variant !== "sidebar" && "bg-surface-panel-elevated",
@@ -970,10 +971,12 @@ export function WorktreeCard({
                     <div
                       ref={dragHandleActivatorRef}
                       data-worktree-row-drag-handle=""
-                      className="shrink-0 w-4 flex items-center justify-center cursor-not-allowed opacity-30 touch-none select-none transition-colors motion-reduce:transition-none"
+                      className="shrink-0 w-4 flex justify-center pt-2 cursor-not-allowed opacity-30 touch-none select-none transition-colors motion-reduce:transition-none"
                       aria-hidden="true"
                     >
-                      <GripVertical className="w-3 h-3" />
+                      <span className="flex h-[22px] items-center">
+                        <GripVertical className="w-3 h-3" />
+                      </span>
                     </div>
                   </TooltipTrigger>
                   <TooltipContent side="left" className="text-xs">
@@ -985,7 +988,11 @@ export function WorktreeCard({
                   ref={dragHandleActivatorRef}
                   data-worktree-row-drag-handle=""
                   className={cn(
-                    "shrink-0 w-4 flex items-center justify-center cursor-grab active:cursor-grabbing touch-none select-none transition-[color,background-color,opacity] duration-150 ease-out group-hover/card:delay-[50ms] motion-reduce:transition-none",
+                    // Timing lives in sidebar.css: opacity needs the 75ms
+                    // tier and the plate the 150ms one, and a Tailwind
+                    // `duration-*` utility cannot give two properties two
+                    // durations.
+                    "shrink-0 w-4 flex justify-center pt-2 cursor-grab active:cursor-grabbing touch-none select-none motion-reduce:transition-none",
                     isDraggingSort
                       ? "bg-overlay-emphasis text-text-primary"
                       : // Card hover brightens the glyph only. The backplate
@@ -1012,134 +1019,140 @@ export function WorktreeCard({
                   aria-hidden="true"
                   {...dragHandleListeners}
                 >
-                  <GripVertical className="w-3 h-3" />
+                  {/* Pinned to the title row rather than centred: the column
+                      runs the whole card, and on a card with both disclosures
+                      open its middle is 150px from the name the grip belongs
+                      to. h-[22px] is the title row's own min height. */}
+                  <span className="flex h-[22px] items-center">
+                    <GripVertical className="w-3 h-3" />
+                  </span>
                 </div>
               ))}
-            {/* pt-2 only: the body below supplies the gap to the next row.
-                Both spending 8px put 16px between the branch line and the
-                commit row, which read as a break in the middle of one
-                cluster rather than as the space between two. */}
-            <div className={cn("flex-1 min-w-0 pt-2", hasRowDragHandle ? "pl-1 pr-4" : "px-4")}>
-              <WorktreeHeader
-                worktree={worktree}
-                isActive={isActive}
-                variant={variant}
-                isMuted={isMuted}
-                isProjectNotificationsMuted={isProjectNotificationsMuted}
-                isMainWorktree={isMainWorktree}
-                isMainOnStandardBranch={isMainOnStandardBranch}
-                isPinned={isPinned}
-                chipState={chipState}
-                isCollapsed={effectiveIsCollapsed}
-                canCollapse={canCollapse}
-                onToggleCollapse={handleToggleCollapse}
-                contentId={`worktree-body-${worktree.id}`}
-                branchLabel={branchLabel}
-                sessionStates={terminalCounts.byState}
-                sessionTotal={terminalCounts.total}
-                environmentIcon={environmentIcon}
-                isLifecycleRunning={isLifecycleRunning}
-                resourceStatusLabel={resourceStatusLabel}
-                resourceStatusColor={resourceStatusColor}
-                resourceLastOutput={worktree.resourceStatus?.lastOutput}
-                resourceEndpoint={worktree.resourceStatus?.endpoint}
-                resourceLastCheckedAt={worktree.resourceStatus?.lastCheckedAt}
-                devServerSession={devServerSession}
-                lastGitStatusCheckedAt={lastGitStatusCheckedAt}
-                onRevalidateGitStatus={handleRevalidate}
-                onCheckResourceStatus={hasStatusCommand ? handleResourceStatus : undefined}
-                onCleanupWorktree={
-                  chipState === "cleanup" && !isMainWorktree
-                    ? () => setShowDeleteDialog(true)
-                    : undefined
-                }
-                badges={{
-                  onOpenIssue: worktree.issueNumber ? handleOpenIssueExternal : undefined,
-                  onOpenPR: worktree.linked?.pr ? handleOpenPRExternal : undefined,
-                  onOpenPlan: openPlanFileForThisWorktree,
-                }}
-                gitStateIndicator={gitStateIndicator}
-                menu={menuActions}
-              />
-
-              <FocusedSubLine
-                open={!isMainWorktree && effectiveIsCollapsed && (isActive || isFocused)}
-                changedFileCount={worktree.worktreeChanges?.changedFileCount}
-                lastActivityTimestamp={worktree.lastActivityTimestamp}
-                statusLabel={lifecycleLabel ?? resourceStatusLabel ?? null}
-              />
-            </div>
-          </div>
-
-          {!effectiveIsCollapsed && (
-            <div
-              id={`worktree-body-${worktree.id}`}
-              className={cn(
-                // The body is the untinted tier between the two bands, and it
-                // carries no grip column of its own — the grip lives on the
-                // title row now, so the body indents to the same text column
-                // with plain padding.
-                "relative z-10 pb-2.5 pt-1 pr-4",
-                hasRowDragHandle ? "pl-5" : "pl-4"
-              )}
-            >
-              <div>
-                {worktree.isWslPath && !worktree.wslGitOptIn && !worktree.wslGitDismissed && (
-                  <WslGitBanner
-                    worktreeId={worktree.id}
-                    wslDistro={worktree.wslDistro}
-                    wslGitEligible={worktree.wslGitEligible}
-                  />
-                )}
-                {isMainWorktree && <MainWorktreeSummaryRows health={projectHealth ?? null} />}
-
-                <WorktreeDetailsSection
-                  variant={variant}
+            {/* One content column for the whole card, header and body alike,
+                and one column for every card in the list. The grip is a
+                sibling of this column rather than something the header pads
+                around, so the header used to indent past it while the body
+                indented past nothing, and the main worktree — which has no
+                grip at all — indented past neither. Three columns in one
+                list. Now the grip's own 16px IS the inset when it is there,
+                and pl-4 stands in for it when it is not, so text starts on
+                the same x in every card and the grip column can run the card
+                top to bottom. */}
+            <div className={cn("flex-1 min-w-0 pr-4", hasRowDragHandle ? "pl-0" : "pl-4")}>
+              {/* pt-2 only: the body below supplies the gap to the next row.
+                  Both spending 8px put 16px between the branch line and the
+                  commit row, which read as a break in the middle of one
+                  cluster rather than as the space between two. */}
+              <div className="pt-2">
+                <WorktreeHeader
                   worktree={worktree}
-                  homeDir={homeDir}
-                  isExpanded={isExpanded}
-                  hasChanges={hasChanges}
-                  computedSubtitle={computedSubtitle}
-                  reviewState={reviewState}
-                  effectiveNote={effectiveNote}
-                  effectiveSummary={effectiveSummary}
-                  worktreeErrors={worktreeErrors}
-                  isFocused={isFocused}
-                  isStale={isStaleCard}
-                  onToggleExpand={handleToggleExpand}
-                  onPathClick={handlePathClick}
-                  onDismissError={dismissError}
-                  onRetryError={handleErrorRetry}
-                  onOpenReviewHub={openReviewHubForThisWorktree}
+                  isActive={isActive}
+                  variant={variant}
+                  isMuted={isMuted}
+                  isProjectNotificationsMuted={isProjectNotificationsMuted}
+                  isMainWorktree={isMainWorktree}
+                  isMainOnStandardBranch={isMainOnStandardBranch}
+                  isPinned={isPinned}
+                  chipState={chipState}
+                  isCollapsed={effectiveIsCollapsed}
+                  canCollapse={canCollapse}
+                  onToggleCollapse={handleToggleCollapse}
+                  contentId={`worktree-body-${worktree.id}`}
+                  branchLabel={branchLabel}
+                  sessionStates={terminalCounts.byState}
+                  sessionTotal={terminalCounts.total}
+                  environmentIcon={environmentIcon}
                   isLifecycleRunning={isLifecycleRunning}
-                  lifecycleLabel={lifecycleLabel}
-                  isBeingDeleted={isBeingDeleted}
-                  deleteError={deleteError}
-                  hasResourceConfig={hasResourceConfig}
-                  resourceStatus={worktree.resourceStatus?.lastStatus}
-                  onResourceResume={hasResumeCommand ? handleResourceResume : undefined}
-                  onResourcePause={hasPauseCommand ? handleResourcePause : undefined}
-                  onResourceConnect={
-                    worktree.resourceConnectCommand ? handleResourceConnect : undefined
+                  resourceStatusLabel={resourceStatusLabel}
+                  resourceStatusColor={resourceStatusColor}
+                  resourceLastOutput={worktree.resourceStatus?.lastOutput}
+                  resourceEndpoint={worktree.resourceStatus?.endpoint}
+                  resourceLastCheckedAt={worktree.resourceStatus?.lastCheckedAt}
+                  devServerSession={devServerSession}
+                  lastGitStatusCheckedAt={lastGitStatusCheckedAt}
+                  onRevalidateGitStatus={handleRevalidate}
+                  onCheckResourceStatus={hasStatusCommand ? handleResourceStatus : undefined}
+                  onCleanupWorktree={
+                    chipState === "cleanup" && !isMainWorktree
+                      ? () => setShowDeleteDialog(true)
+                      : undefined
                   }
-                  onResourceProvision={hasProvisionCommand ? handleResourceProvision : undefined}
-                  onResourceTeardown={hasTeardownCommand ? handleResourceTeardown : undefined}
-                  onResourceStatus={hasStatusCommand ? handleResourceStatus : undefined}
+                  badges={{
+                    onOpenIssue: worktree.issueNumber ? handleOpenIssueExternal : undefined,
+                    onOpenPR: worktree.linked?.pr ? handleOpenPRExternal : undefined,
+                    onOpenPlan: openPlanFileForThisWorktree,
+                  }}
+                  gitStateIndicator={gitStateIndicator}
+                  menu={menuActions}
                 />
 
-                <WorktreeTerminalSection
-                  variant={variant}
-                  worktreeId={worktree.id}
-                  onStartSession={handleOpenPanelPalette}
-                  isExpanded={isTerminalsExpanded}
-                  counts={terminalCounts}
-                  terminals={worktreeTerminals}
-                  onToggle={handleToggleTerminals}
-                  onTerminalSelect={handleTerminalSelect}
+                <FocusedSubLine
+                  open={!isMainWorktree && effectiveIsCollapsed && (isActive || isFocused)}
+                  changedFileCount={worktree.worktreeChanges?.changedFileCount}
+                  lastActivityTimestamp={worktree.lastActivityTimestamp}
+                  statusLabel={lifecycleLabel ?? resourceStatusLabel ?? null}
                 />
               </div>
+
+              {!effectiveIsCollapsed && (
+                <div id={`worktree-body-${worktree.id}`} className="pb-2.5 pt-1">
+                  {worktree.isWslPath && !worktree.wslGitOptIn && !worktree.wslGitDismissed && (
+                    <WslGitBanner
+                      worktreeId={worktree.id}
+                      wslDistro={worktree.wslDistro}
+                      wslGitEligible={worktree.wslGitEligible}
+                    />
+                  )}
+                  {isMainWorktree && <MainWorktreeSummaryRows health={projectHealth ?? null} />}
+
+                  <WorktreeDetailsSection
+                    variant={variant}
+                    worktree={worktree}
+                    homeDir={homeDir}
+                    isExpanded={isExpanded}
+                    hasChanges={hasChanges}
+                    computedSubtitle={computedSubtitle}
+                    reviewState={reviewState}
+                    effectiveNote={effectiveNote}
+                    effectiveSummary={effectiveSummary}
+                    worktreeErrors={worktreeErrors}
+                    isFocused={isFocused}
+                    isStale={isStaleCard}
+                    onToggleExpand={handleToggleExpand}
+                    onPathClick={handlePathClick}
+                    onDismissError={dismissError}
+                    onRetryError={handleErrorRetry}
+                    onOpenReviewHub={openReviewHubForThisWorktree}
+                    isLifecycleRunning={isLifecycleRunning}
+                    lifecycleLabel={lifecycleLabel}
+                    isBeingDeleted={isBeingDeleted}
+                    deleteError={deleteError}
+                    hasResourceConfig={hasResourceConfig}
+                    resourceStatus={worktree.resourceStatus?.lastStatus}
+                    onResourceResume={hasResumeCommand ? handleResourceResume : undefined}
+                    onResourcePause={hasPauseCommand ? handleResourcePause : undefined}
+                    onResourceConnect={
+                      worktree.resourceConnectCommand ? handleResourceConnect : undefined
+                    }
+                    onResourceProvision={hasProvisionCommand ? handleResourceProvision : undefined}
+                    onResourceTeardown={hasTeardownCommand ? handleResourceTeardown : undefined}
+                    onResourceStatus={hasStatusCommand ? handleResourceStatus : undefined}
+                  />
+
+                  <WorktreeTerminalSection
+                    variant={variant}
+                    worktreeId={worktree.id}
+                    onStartSession={handleOpenPanelPalette}
+                    isExpanded={isTerminalsExpanded}
+                    counts={terminalCounts}
+                    terminals={worktreeTerminals}
+                    onToggle={handleToggleTerminals}
+                    onTerminalSelect={handleTerminalSelect}
+                  />
+                </div>
+              )}
             </div>
-          )}
+          </div>
 
           {deleteError && (
             <WorktreeDeleteErrorBanner
