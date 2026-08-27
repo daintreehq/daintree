@@ -43,7 +43,7 @@ export function MainWorktreeSecondaryRow({
   const fetchIntervalMs = isActive ? fetchIntervalActiveMs : fetchIntervalBackgroundMs;
 
   return (
-    <div className="flex items-center gap-2 mt-1" data-testid="main-worktree-meta-row">
+    <div className="flex items-center gap-2 mt-2.5" data-testid="main-worktree-meta-row">
       <BranchLabel
         label={branchLabel}
         isActive={isActive}

@@ -974,7 +974,7 @@ export function WorktreeCard({
                       className="shrink-0 w-4 flex justify-center pt-2 cursor-not-allowed opacity-30 touch-none select-none transition-colors motion-reduce:transition-none"
                       aria-hidden="true"
                     >
-                      <span className="flex h-[22px] items-center">
+                      <span className="flex h-7 items-center">
                         <GripVertical className="w-3 h-3" />
                       </span>
                     </div>
@@ -1019,11 +1019,28 @@ export function WorktreeCard({
                   aria-hidden="true"
                   {...dragHandleListeners}
                 >
-                  {/* Pinned to the title row rather than centred: the column
-                      runs the whole card, and on a card with both disclosures
-                      open its middle is 150px from the name the grip belongs
-                      to. h-[22px] is the title row's own min height. */}
-                  <span className="flex h-[22px] items-center">
+                  {/* Pinned to the title row rather than centred in the card:
+                      the column runs the card's whole height, so on one with
+                      both disclosures open its middle is 150px from the name
+                      the grip belongs to, and the handle would sit at a
+                      different height on every row in the list.
+
+                      h-7 is the title row's ACTUAL height, not the `min-h-22`
+                      it declares — the trailing icon buttons carry their own
+                      padding and push the row to 28px. Sizing this box off the
+                      min instead put the dots 2.5px above the title glyph,
+                      measured off a render.
+
+                      This is a mirrored constant and it can drift. The clean
+                      fix is a two-column grid whose grip spans every row track
+                      and republishes them with `grid-rows-subgrid`, so the
+                      glyph names row 1 and centres on whatever the title line
+                      resolves to. Flexbox cannot do it: a flex child has no
+                      way to align its contents against a boundary that lives
+                      inside a sibling. Not landed here because the card's 8px
+                      top inset currently sits on the header wrapper, and it
+                      has to move out of the row track first. */}
+                  <span className="flex h-7 items-center">
                     <GripVertical className="w-3 h-3" />
                   </span>
                 </div>
@@ -1094,8 +1111,15 @@ export function WorktreeCard({
                 />
               </div>
 
+              {/* pt-2, not pt-1. With the collapsed Details row's own 4px that
+                  puts 12px between the metadata cluster and the body, against
+                  2px between the metadata lines themselves — a 6:1 outer-to-
+                  inner ratio where the convention is 2:1 to 3:1, and 8-12px is
+                  where an 11px line stops reading as part of the block above
+                  it. At 4px the cluster was crowded against the body and the
+                  whole card read as one undifferentiated mass. */}
               {!effectiveIsCollapsed && (
-                <div id={`worktree-body-${worktree.id}`} className="pb-2.5 pt-1">
+                <div id={`worktree-body-${worktree.id}`} className="pb-2.5 pt-2">
                   {worktree.isWslPath && !worktree.wslGitOptIn && !worktree.wslGitDismissed && (
                     <WslGitBanner
                       worktreeId={worktree.id}

@@ -184,10 +184,16 @@ html[data-dragging="true"]
   [data-worktree-row-drag-handle] {
   /* opacity as well as colour: the grip rests at opacity 0 and fades in with
      the card on pointer hover, so a keyboard user reaching it via the row
-     needs the same reveal or the affordance is pointer-only. */
+     needs the same reveal or the affordance is pointer-only.
+
+     No backplate here, deliberately. The plate answers "am I about to drag?"
+     and only the pointer arriving on the grip itself can answer that. This
+     rule fires whenever the row holds the keyboard cursor — which the selected
+     row does — so painting the plate here ran a lit bar down the full height
+     of the selected card and never went away. The dots are the affordance;
+     the plate is the commitment. */
   opacity: 1;
   color: color-mix(in srgb, var(--theme-text-primary) 30%, transparent);
-  background-color: var(--theme-overlay-soft);
 }
 
 /* High-contrast only: forced-colors users rely on a system focus outline, so
