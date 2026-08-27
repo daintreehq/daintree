@@ -19,13 +19,6 @@ interface RecipePickerPopoverProps {
   onMarkTouched: () => void;
   disabled?: boolean;
   listId: string;
-  /**
-   * Renders a stacked label above the trigger. The create-worktree dialog — the
-   * only caller today — omits it, since that form carries labels on its own
-   * rail. Reserved for the bulk-create dialog (issue #11964), which stacks
-   * them.
-   */
-  label?: string;
 }
 
 export function RecipePickerPopover({
@@ -39,7 +32,6 @@ export function RecipePickerPopover({
   onMarkTouched,
   disabled,
   listId,
-  label,
 }: RecipePickerPopoverProps) {
   const handleSelect = (id: string | null) => {
     onMarkTouched();
@@ -47,7 +39,7 @@ export function RecipePickerPopover({
     onOpenChange(false);
   };
 
-  const picker = (
+  return (
     <Popover open={open} onOpenChange={onOpenChange}>
       <PopoverTrigger asChild>
         <Button
@@ -177,16 +169,5 @@ export function RecipePickerPopover({
         </ScrollShadow>
       </PopoverContent>
     </Popover>
-  );
-
-  if (!label) return picker;
-
-  return (
-    <div className="space-y-2">
-      <label htmlFor={`${listId}-trigger`} className="block text-sm text-text-secondary">
-        {label}
-      </label>
-      {picker}
-    </div>
   );
 }

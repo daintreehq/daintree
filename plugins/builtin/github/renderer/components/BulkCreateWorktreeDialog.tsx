@@ -33,6 +33,7 @@ import {
   CLONE_LAYOUT_ID,
 } from "@/components/Worktree/hooks/useRecipePicker";
 import { RecipePickerPopover } from "@/components/Worktree/views/RecipePickerPopover";
+import { FormGrid, FormRow, FormSection } from "@/components/Worktree/views/WorktreeFormLayout";
 import { useNewWorktreeProjectSettings } from "@/components/Worktree/hooks/useNewWorktreeProjectSettings";
 import { spawnPanelsFromRecipe } from "@/components/Worktree/panelSpawning";
 import { progressReducer, getStageLabel } from "./bulkCreateReducer";
@@ -157,9 +158,13 @@ export function BulkCreateWorktreeDialog({
   // Viewer identity through the forge identity capability — drives the
   // "assign to me" affordance and the run-loop assignment below.
   const [viewer, setViewer] = useState<{ login: string; avatarUrl?: string } | null>(null);
+  // A null viewer means two different things — still looking, and looked and
+  // found nothing — and only the second one should read as a dead end.
+  const [viewerResolved, setViewerResolved] = useState(false);
   const viewerRef = useRef<{ login: string; avatarUrl?: string } | null>(null);
   const currentUser = viewer?.login;
   const currentUserAvatar = viewer?.avatarUrl;
+  const assignUnavailable = viewerResolved && !currentUser;
 
   const { projectSettings } = useNewWorktreeProjectSettings({ isOpen });
   const persistedDefaultRecipeId = projectSettings?.defaultWorktreeRecipeId;
@@ -191,11 +196,12 @@ export function BulkCreateWorktreeDialog({
     if (!isOpen || !projectPath) return;
     let cancelled = false;
     // Clear stale identity up front: until this fetch resolves the run loop
-    // must not assign to the previous project's viewer. A null viewer skips
-    // self-assignment (visible: the "assign to me" row hides) rather than
-    // assigning the wrong account.
+    // must not assign to the previous project's viewer. A viewer that resolves
+    // to nothing skips self-assignment (visible: the "assign to me" row goes
+    // disabled and unchecked) rather than assigning the wrong account.
     setViewer(null);
     viewerRef.current = null;
+    setViewerResolved(false);
     void forgeClient
       .getCurrentUser(projectPath)
       .then((user) => {
@@ -203,11 +209,13 @@ export function BulkCreateWorktreeDialog({
         const next = user ? { login: user.login, avatarUrl: user.avatarUrl } : null;
         setViewer(next);
         viewerRef.current = next;
+        setViewerResolved(true);
       })
       .catch(() => {
         if (!cancelled) {
           setViewer(null);
           viewerRef.current = null;
+          setViewerResolved(true);
         }
       });
     return () => {
@@ -233,6 +241,18 @@ export function BulkCreateWorktreeDialog({
   }, [mode, selectedIssues, selectedPRs, worktreeMap]);
 
   const creatableCount = planned.filter((p) => !p.skipped).length;
+  const selectedCount = planned.length;
+  const skippedCount = selectedCount - creatableCount;
+  const itemNoun = mode === "pr" ? "pull request" : "issue";
+
+  // The footer says what the button can't: how much of the selection is coming
+  // through. The button already names the worktree count, so restating it here
+  // would spend the one summary line on a number the user is looking at.
+  const batchSummary =
+    selectedCount === 0
+      ? `Select ${mode === "pr" ? "a pull request" : "an issue"} to continue`
+      : `${selectedCount} ${selectedCount === 1 ? itemNoun : `${itemNoun}s`} selected` +
+        (skippedCount > 0 ? ` \u00b7 ${skippedCount} skipped` : "");
 
   const isExecuting = progress.phase === "executing";
   const isDone = progress.phase === "done";
@@ -1127,72 +1147,87 @@ export function BulkCreateWorktreeDialog({
 
       <AppDialog.Body>
         {progress.phase === "idle" ? (
-          <div className="space-y-4">
-            {/* Assign to self (issues only) */}
-            {mode === "issue" && currentUser && (
-              <div className="flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] border bg-daintree-bg border-border-strong transition-colors">
-                {currentUserAvatar ? (
-                  <img
-                    src={`${currentUserAvatar}${currentUserAvatar.includes("?") ? "&" : "?"}s=64`}
-                    alt={currentUser}
-                    className="w-8 h-8 rounded-full shrink-0"
-                  />
-                ) : (
-                  <div className="flex items-center justify-center w-8 h-8 rounded-full shrink-0 bg-overlay-medium text-daintree-text/60">
-                    <UserPlus className="w-4 h-4" />
-                  </div>
-                )}
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2">
-                    <span className="text-sm font-medium text-daintree-text">Assign to me</span>
-                    <span className="text-xs text-daintree-text/50 font-mono">@{currentUser}</span>
-                  </div>
-                </div>
-                <label className="relative inline-flex items-center cursor-pointer">
-                  <input
-                    type="checkbox"
-                    checked={assignWorktreeToSelf}
-                    onChange={(e) => setAssignWorktreeToSelf(e.target.checked)}
-                    className="sr-only peer"
-                    aria-label="Assign issues to me when creating worktrees"
-                  />
-                  <div
-                    className={cn(
-                      "w-9 h-5 rounded-full transition-colors",
-                      "peer-focus-visible:ring-2 peer-focus-visible:ring-daintree-accent",
-                      "after:content-[''] after:absolute after:top-0.5 after:left-0.5",
-                      "after:rounded-full after:h-4 after:w-4",
-                      "after:transition-transform after:duration-150",
-                      assignWorktreeToSelf
-                        ? "bg-daintree-accent after:translate-x-4 after:bg-text-inverse"
-                        : "bg-daintree-border after:translate-x-0 after:bg-daintree-text"
+          <FormGrid>
+            <FormSection title="Setup">
+              {/* Rendered for every issue-mode batch, not just once identity
+                  resolves: the row is the same height either way, so a viewer
+                  arriving mid-open populates it instead of inserting it. The
+                  toggle keeps tracking the preference while the lookup is in
+                  flight — the run loop reads the viewer per item, so identity
+                  landing mid-run still assigns — and only goes dead once the
+                  lookup has come back with no account to assign to. */}
+              {mode === "issue" && (
+                <FormRow label="Assign to me" htmlFor="bulk-assign-to-self">
+                  <div className="flex items-center gap-2 text-xs text-text-secondary">
+                    <span className="relative inline-flex shrink-0">
+                      <input
+                        id="bulk-assign-to-self"
+                        type="checkbox"
+                        checked={assignWorktreeToSelf && !assignUnavailable}
+                        onChange={(e) => setAssignWorktreeToSelf(e.target.checked)}
+                        disabled={assignUnavailable}
+                        className={cn(
+                          "h-4 w-7 appearance-none rounded-full border transition-colors duration-150 ease-out",
+                          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
+                          assignWorktreeToSelf && !assignUnavailable
+                            ? "border-daintree-text bg-daintree-text"
+                            : "border-border-strong bg-surface-inset",
+                          assignUnavailable && "cursor-not-allowed opacity-50"
+                        )}
+                      />
+                      <span
+                        className={cn(
+                          "pointer-events-none absolute top-1/2 h-3 w-3 -translate-y-1/2 rounded-full",
+                          "transition-[left] duration-150 ease-out",
+                          assignWorktreeToSelf && !assignUnavailable
+                            ? "left-[0.875rem] bg-text-inverse"
+                            : "left-0.5 bg-text-secondary"
+                        )}
+                        aria-hidden="true"
+                      />
+                    </span>
+                    {currentUserAvatar ? (
+                      <img
+                        src={`${currentUserAvatar}${currentUserAvatar.includes("?") ? "&" : "?"}s=48`}
+                        alt=""
+                        className="h-4 w-4 shrink-0 rounded-full"
+                      />
+                    ) : (
+                      <UserPlus className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                     )}
-                  />
-                </label>
-              </div>
-            )}
+                    {/* Blank while the lookup is still out: naming a failure
+                        before there is one is worse than naming nothing. */}
+                    {(currentUser || assignUnavailable) && (
+                      <span className="truncate">
+                        {currentUser ? `@${currentUser}` : "Account unavailable"}
+                      </span>
+                    )}
+                  </div>
+                </FormRow>
+              )}
 
-            <RecipePickerPopover
-              recipes={startingLayoutRecipes}
-              selectedRecipeId={selectedRecipeId}
-              selectedRecipe={selectedRecipe}
-              defaultRecipeId={defaultRecipeId}
-              open={recipePickerOpen}
-              onOpenChange={setRecipePickerOpen}
-              onSelectRecipe={handleRecipeSelectCombined}
-              onMarkTouched={() => {}}
-              label="Starting Layout"
-              listId="bulk-recipe-selector"
-            />
+              <FormRow label="Recipe" htmlFor="bulk-recipe-selector-trigger">
+                <RecipePickerPopover
+                  recipes={startingLayoutRecipes}
+                  selectedRecipeId={selectedRecipeId}
+                  selectedRecipe={selectedRecipe}
+                  defaultRecipeId={defaultRecipeId}
+                  open={recipePickerOpen}
+                  onOpenChange={setRecipePickerOpen}
+                  onSelectRecipe={handleRecipeSelectCombined}
+                  onMarkTouched={() => {}}
+                  listId="bulk-recipe-selector"
+                />
+              </FormRow>
+            </FormSection>
 
-            {/* Worktree list */}
-            <div className="space-y-2">
-              <label className="block text-sm font-medium text-daintree-text">
-                Worktrees to create
-              </label>
-              <div className="max-h-[300px] overflow-y-auto rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg divide-y divide-daintree-border">
+            {/* Spans both columns: the batch preview is content, not a field, and
+                a 300px scroller pinned beside a 4rem label rail would give up the
+                width the branch names need. */}
+            <FormSection title="Worktrees to create">
+              <ul className="col-span-2 max-h-[300px] overflow-y-auto rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg divide-y divide-daintree-border">
                 {planned.map((item) => (
-                  <div
+                  <li
                     key={item.item.number}
                     className={cn(
                       "px-3 py-2 flex items-center gap-3 text-sm",
@@ -1220,11 +1255,11 @@ export function BulkCreateWorktreeDialog({
                         {item.skipReason}
                       </span>
                     )}
-                  </div>
+                  </li>
                 ))}
-              </div>
-            </div>
-          </div>
+              </ul>
+            </FormSection>
+          </FormGrid>
         ) : (
           <div className="space-y-4">
             {/* Per-item status list */}
@@ -1304,44 +1339,50 @@ export function BulkCreateWorktreeDialog({
         )}
       </AppDialog.Body>
 
-      <AppDialog.Footer>
-        {isDone ? (
-          <>
-            {failedCount > 0 && (
-              <Button
-                variant="ghost"
-                onClick={handleRetryFailed}
-                data-testid="bulk-create-retry-button"
-              >
-                <RotateCcw />
-                Retry failed
+      {/* Only while idle: once the run starts, the body's own progress line is
+          the authority on counts and a second tally would drift from it. */}
+      <AppDialog.Footer hint={progress.phase === "idle" ? batchSummary : undefined}>
+        {/* One container, because a hint switches the footer to justify-between
+            and loose button children would scatter across it. */}
+        <div className="flex items-center gap-3">
+          {isDone ? (
+            <>
+              {failedCount > 0 && (
+                <Button
+                  variant="ghost"
+                  onClick={handleRetryFailed}
+                  data-testid="bulk-create-retry-button"
+                >
+                  <RotateCcw />
+                  Retry failed
+                </Button>
+              )}
+              <Button variant="contrast" onClick={handleDone} data-testid="bulk-create-done-button">
+                <Check />
+                Done
               </Button>
-            )}
-            <Button variant="contrast" onClick={handleDone} data-testid="bulk-create-done-button">
-              <Check />
-              Done
-            </Button>
-          </>
-        ) : (
-          // The primary stays mounted while executing: dropping it made Cancel
-          // the rightmost button, so it inherited the CTA's hit area one render
-          // after the click that started the run.
-          <>
-            <Button variant="ghost" onClick={handleClose}>
-              Cancel
-            </Button>
-            <Button
-              variant="contrast"
-              onClick={handleCreate}
-              disabled={isExecuting || creatableCount === 0}
-              className="min-w-[100px]"
-              data-testid="bulk-create-confirm-button"
-            >
-              <Check />
-              Create {creatableCount} worktree{creatableCount !== 1 ? "s" : ""}
-            </Button>
-          </>
-        )}
+            </>
+          ) : (
+            // The primary stays mounted while executing: dropping it made Cancel
+            // the rightmost button, so it inherited the CTA's hit area one render
+            // after the click that started the run.
+            <>
+              <Button variant="ghost" onClick={handleClose}>
+                Cancel
+              </Button>
+              <Button
+                variant="contrast"
+                onClick={handleCreate}
+                disabled={isExecuting || creatableCount === 0}
+                className="min-w-[100px]"
+                data-testid="bulk-create-confirm-button"
+              >
+                <Check />
+                Create {creatableCount} worktree{creatableCount !== 1 ? "s" : ""}
+              </Button>
+            </>
+          )}
+        </div>
       </AppDialog.Footer>
     </AppDialog>
   );

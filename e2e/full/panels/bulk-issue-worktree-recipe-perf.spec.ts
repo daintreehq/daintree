@@ -440,10 +440,14 @@ async function runSample(scale: number, round: number, warmup: boolean): Promise
     await expect(dialog).toBeVisible({ timeout: T_LONG });
     dialogOpenMs = Date.now() - flowStartedAt;
 
-    const assignmentToggle = dialog.getByRole("checkbox", {
-      name: "Assign issues to me when creating worktrees",
-    });
-    if (await assignmentToggle.isChecked()) await assignmentToggle.uncheck();
+    // The row now renders for every issue batch, so this waits for the control
+    // rather than for it to appear. Unchecking is unconditional and asserted:
+    // a snapshot `isChecked()` could sample before the persisted preference is
+    // reflected and leave real assignment IPC in the middle of the benchmark.
+    const assignmentToggle = dialog.getByRole("checkbox", { name: "Assign to me" });
+    await expect(assignmentToggle).toBeEnabled({ timeout: T_MEDIUM });
+    await assignmentToggle.uncheck();
+    await expect(assignmentToggle).not.toBeChecked();
 
     const recipeTrigger = ctx.window.locator("#bulk-recipe-selector-trigger");
     await expect(recipeTrigger).toBeVisible({ timeout: T_LONG });
