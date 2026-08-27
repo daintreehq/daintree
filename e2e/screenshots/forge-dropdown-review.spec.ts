@@ -328,7 +328,7 @@ test("forge dropdown review — issues and pull requests", async () => {
       }
     });
   } finally {
-    if (ctx) await closeApp(ctx);
+    if (ctx) await closeApp(ctx.app);
     repo.cleanup();
   }
 
