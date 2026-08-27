@@ -52,7 +52,7 @@ function QuarantinedPanelRow({ panel }: QuarantinedPanelRowProps) {
   return (
     <li className="flex items-start justify-between gap-3 py-1.5">
       <div className="min-w-0 flex-1">
-        <p className="truncate text-daintree-text" title={displayTitle}>
+        <p className="truncate text-text-primary" title={displayTitle}>
           {displayTitle}
         </p>
         {subtitle && (
@@ -149,7 +149,7 @@ export function SafeModeBanner() {
       <PopoverContent
         align="end"
         sideOffset={8}
-        className="p-3 text-xs max-w-xs space-y-2 text-daintree-text"
+        className="p-3 text-xs max-w-xs space-y-2 text-text-primary"
       >
         {crashMetaText && <p className="font-medium">{crashMetaText}</p>}
         {hasQuarantineList ? (
@@ -215,7 +215,7 @@ export function SafeModeBanner() {
           onClick={() => {
             void actionService.dispatch("logs.openFile", undefined, { source: "user" });
           }}
-          className="text-xs text-daintree-text/60 hover:text-daintree-text transition-colors underline decoration-daintree-text/30 underline-offset-2"
+          className="text-xs text-daintree-text/60 hover:text-text-primary transition-colors underline decoration-daintree-text/30 underline-offset-2"
         >
           View logs
         </button>

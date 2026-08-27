@@ -204,7 +204,7 @@ export function TwoPaneSplitDivider({
           // drops the focus accent to a strong neutral — the focus ring is
           // already the single accent anchor for this region, so the grip need
           // not double it.
-          "bg-daintree-text/20 group-hover:bg-daintree-text/35 group-focus-visible:bg-daintree-accent",
+          "bg-daintree-text/20 group-hover:bg-daintree-text/35 group-focus-visible:bg-accent-primary",
           "[.light_&]:bg-daintree-text/25 [.light_&]:group-hover:bg-daintree-text/45",
           "[.light_&]:group-focus-visible:bg-daintree-text/55",
           isDragging && "bg-daintree-text/50 [.light_&]:bg-daintree-text/55"

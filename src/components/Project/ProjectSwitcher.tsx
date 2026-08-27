@@ -385,7 +385,7 @@ export function ProjectSwitcher() {
                 )}
 
                 <div className="flex flex-col min-w-0 gap-0.5">
-                  <span className="truncate font-semibold text-daintree-text text-sm leading-none">
+                  <span className="truncate font-semibold text-text-primary text-sm leading-none">
                     {workspaceIdentity.name}
                   </span>
                   <span

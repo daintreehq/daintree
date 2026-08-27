@@ -128,7 +128,7 @@ export function UpstreamSyncBadge({
             onClick={handleSignInClick}
             data-no-dnd
             className={cn(
-              "flex items-center text-3xs font-mono tabular-nums cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent",
+              "flex items-center text-3xs font-mono tabular-nums cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
               containerGapClass
             )}
             data-testid="upstream-sync-indicator"

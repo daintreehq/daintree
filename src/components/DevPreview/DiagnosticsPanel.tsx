@@ -213,7 +213,7 @@ export function DiagnosticsPanel({ paneId, projectId, status }: DiagnosticsPanel
             <button
               type="button"
               onClick={fetchDiagnostics}
-              className="rounded p-1 text-daintree-text/60 transition-colors hover:bg-overlay-medium hover:text-daintree-text focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-status-info"
+              className="rounded p-1 text-daintree-text/60 transition-colors hover:bg-overlay-medium hover:text-text-primary focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-status-info"
               aria-label="Refresh diagnostics"
             >
               <RotateCw className="h-3.5 w-3.5" />

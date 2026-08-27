@@ -218,7 +218,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
               aria-expanded={true}
               aria-controls={detailsPanelId}
               className={cn(
-                "worktree-section-button flex w-full items-center text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]",
+                "worktree-section-button flex w-full items-center text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]",
                 isSidebar
                   ? // Leading chevron, no fill, no rule under it: the trigger has
                     // to stay attached to the body it just revealed. A divider
@@ -317,7 +317,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                       : rightButtonGroupShown
                         ? "rounded-l-[var(--radius-lg)]"
                         : "rounded-[var(--radius-lg)]",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]"
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]"
                   )}
                 />
                 {isSidebar && (
@@ -455,7 +455,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                                 e.stopPropagation();
                                 onResourceResume();
                               }}
-                              className="shrink-0 p-1 rounded transition-colors text-status-success/70 hover:text-status-success hover:bg-overlay-emphasis focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+                              className="shrink-0 p-1 rounded transition-colors text-status-success/70 hover:text-status-success hover:bg-overlay-emphasis focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
                               aria-label="Resume resource"
                             >
                               <Play className="w-3 h-3" />
@@ -472,7 +472,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                                 e.stopPropagation();
                                 onResourcePause();
                               }}
-                              className="shrink-0 p-1 rounded transition-colors text-status-error/70 hover:text-status-error hover:bg-overlay-emphasis focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+                              className="shrink-0 p-1 rounded transition-colors text-status-error/70 hover:text-status-error hover:bg-overlay-emphasis focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
                               aria-label="Pause resource"
                             >
                               <Square className="w-3 h-3" />
@@ -489,7 +489,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                                 e.stopPropagation();
                                 onResourceConnect!();
                               }}
-                              className="shrink-0 p-1 rounded transition-colors text-status-info/70 hover:text-status-info hover:bg-overlay-emphasis focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+                              className="shrink-0 p-1 rounded transition-colors text-status-info/70 hover:text-status-info hover:bg-overlay-emphasis focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
                               aria-label="Connect to resource"
                             >
                               <Plug className="w-3 h-3" />
@@ -524,7 +524,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                         isSidebar
                           ? "ml-0.5 rounded-[var(--radius-md)] px-1.5 py-1"
                           : "rounded-r-[var(--radius-lg)] border-l border-border-default px-2 py-1",
-                        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]"
+                        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]"
                       )}
                       aria-label={`Open ${reviewHubButtonLabel}`}
                     >
@@ -555,7 +555,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                       "shrink-0 inline-flex items-center gap-1 rounded px-2 py-1 text-xs font-medium transition-colors",
                       "text-status-error hover:bg-status-error/10",
                       "disabled:opacity-50 disabled:cursor-not-allowed",
-                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]"
+                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]"
                     )}
                     aria-label="Retry setup"
                   >
@@ -619,7 +619,7 @@ export function WorktreeDeleteErrorBanner({
               type="button"
               onClick={onRetry}
               data-testid="worktree-delete-retry"
-              className="rounded border border-status-error/30 px-2 py-1 text-status-error transition-colors hover:bg-status-error/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+              className="rounded border border-status-error/30 px-2 py-1 text-status-error transition-colors hover:bg-status-error/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
             >
               Retry
             </button>
@@ -629,7 +629,7 @@ export function WorktreeDeleteErrorBanner({
               type="button"
               onClick={onDismiss}
               data-testid="worktree-delete-dismiss"
-              className="rounded px-2 py-1 text-text-secondary transition-colors hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+              className="rounded px-2 py-1 text-text-secondary transition-colors hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
             >
               Dismiss
             </button>
@@ -679,7 +679,7 @@ export function WorktreeIssueErrorBanner({
               type="button"
               onClick={onRetry}
               data-testid="worktree-issue-retry"
-              className="rounded border border-status-error/30 px-2 py-1 text-status-error transition-colors hover:bg-status-error/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+              className="rounded border border-status-error/30 px-2 py-1 text-status-error transition-colors hover:bg-status-error/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
             >
               Retry
             </button>
@@ -689,7 +689,7 @@ export function WorktreeIssueErrorBanner({
               type="button"
               onClick={onDismiss}
               data-testid="worktree-issue-dismiss"
-              className="rounded px-2 py-1 text-text-secondary transition-colors hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+              className="rounded px-2 py-1 text-text-secondary transition-colors hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
             >
               Dismiss
             </button>

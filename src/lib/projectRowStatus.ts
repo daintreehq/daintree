@@ -142,8 +142,8 @@ export const ROW_MARK_COLOR: Record<ProjectRowTone, string> = {
   review: "var(--color-activity-completed)",
   working: "var(--color-activity-working)",
   running: "var(--color-status-success)",
-  snoozed: "rgb(from var(--color-daintree-text) r g b / 0.4)",
-  muted: "rgb(from var(--color-daintree-text) r g b / 0.2)",
+  snoozed: "rgb(from var(--color-text-primary) r g b / 0.4)",
+  muted: "rgb(from var(--color-text-primary) r g b / 0.2)",
   assistant: "var(--color-status-warning)",
   "assistant-blocked": "var(--color-status-danger)",
 };

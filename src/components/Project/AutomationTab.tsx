@@ -101,7 +101,7 @@ export function AutomationTab({
 
   return (
     <>
-      <div id="project-run-commands" className="mb-6 pb-6 border-b border-daintree-border">
+      <div id="project-run-commands" className="mb-6 pb-6 border-b border-border-default">
         <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
           <SquareTerminal className="h-4 w-4" />
           Run Commands
@@ -112,14 +112,14 @@ export function AutomationTab({
 
         <div className="space-y-3">
           {runCommands.length === 0 ? (
-            <div className="text-sm text-daintree-text/60 text-center py-8 border border-dashed border-daintree-border rounded-[var(--radius-md)]">
+            <div className="text-sm text-daintree-text/60 text-center py-8 border border-dashed border-border-default rounded-[var(--radius-md)]">
               No run commands configured yet
             </div>
           ) : (
             runCommands.map((cmd, index) => (
               <div
                 key={cmd.id}
-                className="p-3 rounded-[var(--radius-md)] bg-daintree-bg border border-daintree-border"
+                className="p-3 rounded-[var(--radius-md)] bg-surface-canvas border border-border-default"
               >
                 <div className="flex items-start gap-3">
                   <div className="flex-1 min-w-0">
@@ -132,7 +132,7 @@ export function AutomationTab({
                           updated[index] = { ...cmd, name: e.target.value };
                           onRunCommandsChange(updated);
                         }}
-                        className="flex-1 bg-transparent border border-daintree-border rounded px-2 py-1 text-sm text-daintree-text focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
+                        className="flex-1 bg-transparent border border-border-default rounded px-2 py-1 text-sm text-text-primary focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
                         placeholder="Command name"
                         aria-label="Run command name"
                       />
@@ -146,7 +146,7 @@ export function AutomationTab({
                         updated[index] = { ...cmd, command: e.target.value };
                         onRunCommandsChange(updated);
                       }}
-                      className="w-full bg-daintree-sidebar border border-daintree-border rounded px-2 py-1 text-xs text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
+                      className="w-full bg-surface-sidebar border border-border-default rounded px-2 py-1 text-xs text-text-primary font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
                       placeholder="npm run build"
                       aria-label="Run command"
                     />
@@ -168,8 +168,8 @@ export function AutomationTab({
                         className={cn(
                           "flex items-center gap-1.5 px-2 py-1 rounded text-xs transition-colors",
                           cmd.preferredLocation === "dock"
-                            ? "bg-tint/[0.12] text-daintree-text"
-                            : "text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-border/30"
+                            ? "bg-tint/[0.12] text-text-primary"
+                            : "text-daintree-text/60 hover:text-text-primary hover:bg-daintree-border/30"
                         )}
                       >
                         {cmd.preferredLocation === "dock" ? (
@@ -192,8 +192,8 @@ export function AutomationTab({
                         className={cn(
                           "flex items-center gap-1.5 px-2 py-1 rounded text-xs transition-colors",
                           cmd.preferredAutoRestart
-                            ? "bg-tint/[0.12] text-daintree-text"
-                            : "text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-border/30"
+                            ? "bg-tint/[0.12] text-text-primary"
+                            : "text-daintree-text/60 hover:text-text-primary hover:bg-daintree-border/30"
                         )}
                       >
                         <RefreshCw className="h-3 w-3" />
@@ -332,7 +332,7 @@ export function AutomationTab({
                       value={branchPrefixCustom}
                       onChange={(e) => onBranchPrefixCustomChange(e.target.value)}
                       placeholder="e.g. feature/ or myteam/"
-                      className="w-full px-3 py-1.5 bg-surface-input border border-border-strong rounded-[var(--radius-md)] text-sm text-daintree-text font-mono transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+                      className="w-full px-3 py-1.5 bg-surface-input border border-border-strong rounded-[var(--radius-md)] text-sm text-text-primary font-mono transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                     />
                   </div>
                 )}
@@ -352,9 +352,9 @@ export function AutomationTab({
         </RadioChoiceGroup>
 
         {branchPrefixMode !== "none" && (
-          <div className="mt-3 p-3 rounded-[var(--radius-md)] bg-daintree-bg/50 border border-daintree-border">
+          <div className="mt-3 p-3 rounded-[var(--radius-md)] bg-daintree-bg/50 border border-border-default">
             <span className="block text-xs font-medium text-daintree-text/70 mb-1">Preview:</span>
-            <code className="text-xs text-daintree-text">
+            <code className="text-xs text-text-primary">
               {branchPrefixMode === "username"
                 ? "alice/fix-bug"
                 : branchPrefixCustom.trim()
@@ -385,7 +385,7 @@ export function AutomationTab({
           value={worktreePathPattern}
           onChange={(e) => onWorktreePathPatternChange(e.target.value)}
           placeholder="e.g. {parent-dir}/{base-folder}-worktrees/{branch-slug}"
-          className="w-full px-3 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-sm text-daintree-text font-mono focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/30"
+          className="w-full px-3 py-2 bg-surface-canvas border border-border-default rounded-[var(--radius-md)] text-sm text-text-primary font-mono focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/30"
         />
 
         {worktreePathPattern.trim() &&
@@ -397,11 +397,11 @@ export function AutomationTab({
             const rootPath = currentProject?.path ?? "/Users/name/Projects/my-project";
             const preview = previewPathPattern(worktreePathPattern.trim(), rootPath);
             return (
-              <div className="mt-2 p-3 rounded-[var(--radius-md)] bg-daintree-bg/50 border border-daintree-border">
+              <div className="mt-2 p-3 rounded-[var(--radius-md)] bg-daintree-bg/50 border border-border-default">
                 <span className="block text-xs font-medium text-daintree-text/70 mb-1">
                   Preview:
                 </span>
-                <code className="text-xs text-daintree-text break-all">{preview}</code>
+                <code className="text-xs text-text-primary break-all">{preview}</code>
               </div>
             );
           })()}
@@ -415,7 +415,7 @@ export function AutomationTab({
           ].map(({ var: v, desc }) => (
             <div
               key={v}
-              className="text-xs p-2 rounded-[var(--radius-md)] bg-daintree-bg/30 border border-daintree-border"
+              className="text-xs p-2 rounded-[var(--radius-md)] bg-daintree-bg/30 border border-border-default"
             >
               <code className="text-text-secondary">{v}</code>
               <span className="text-daintree-text/50 ml-1">{desc}</span>
@@ -424,7 +424,7 @@ export function AutomationTab({
         </div>
       </div>
 
-      <div id="project-terminal-settings" className="mt-6 pt-6 border-t border-daintree-border">
+      <div id="project-terminal-settings" className="mt-6 pt-6 border-t border-border-default">
         <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
           <SquareTerminal className="h-4 w-4" />
           Terminal Defaults
@@ -506,7 +506,7 @@ export function AutomationTab({
       {onResourceEnvironmentsChange &&
         onActiveResourceEnvironmentChange &&
         onDefaultWorktreeModeChange && (
-          <div className="mt-6 pt-6 border-t border-daintree-border">
+          <div className="mt-6 pt-6 border-t border-border-default">
             <ResourceEnvironmentsSection
               resourceEnvironments={resourceEnvironments}
               onResourceEnvironmentsChange={onResourceEnvironmentsChange}

@@ -109,7 +109,7 @@ function CommandList({
               onChange={(e) => updateCommand(index, e.target.value)}
               placeholder={placeholder}
               spellCheck={false}
-              className="flex-1 px-3 py-1.5 text-sm bg-surface-inset border border-border-default rounded-[var(--radius-md)] text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
+              className="flex-1 px-3 py-1.5 text-sm bg-surface-inset border border-border-default rounded-[var(--radius-md)] text-text-primary font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
             />
             <div className="flex flex-col">
               <button
@@ -119,7 +119,7 @@ function CommandList({
                 className="p-0.5 rounded hover:bg-surface-hover disabled:opacity-30 disabled:cursor-not-allowed disabled:pointer-events-none transition-colors"
                 aria-label={`Move command ${index + 1} up`}
               >
-                <ChevronUp className="h-3 w-3 text-daintree-text" />
+                <ChevronUp className="h-3 w-3 text-text-primary" />
               </button>
               <button
                 type="button"
@@ -128,7 +128,7 @@ function CommandList({
                 className="p-0.5 rounded hover:bg-surface-hover disabled:opacity-30 disabled:cursor-not-allowed disabled:pointer-events-none transition-colors"
                 aria-label={`Move command ${index + 1} down`}
               >
-                <ChevronDown className="h-3 w-3 text-daintree-text" />
+                <ChevronDown className="h-3 w-3 text-text-primary" />
               </button>
             </div>
             <button
@@ -144,7 +144,7 @@ function CommandList({
         <button
           type="button"
           onClick={addCommand}
-          className="flex items-center gap-1.5 text-xs text-daintree-text/60 hover:text-daintree-text transition-colors px-1 py-1"
+          className="flex items-center gap-1.5 text-xs text-daintree-text/60 hover:text-text-primary transition-colors px-1 py-1"
         >
           <Plus className="h-3.5 w-3.5" />
           Add command
@@ -175,7 +175,7 @@ function IconPickerButton({ currentIcon, onChange }: IconPickerButtonProps) {
         className="p-1.5 rounded hover:bg-surface-inset border border-border-default transition-colors flex items-center justify-center"
         aria-label="Select environment icon"
       >
-        <DisplayIcon className="h-4 w-4 text-daintree-text" />
+        <DisplayIcon className="h-4 w-4 text-text-primary" />
       </button>
 
       {isOpen && (
@@ -199,7 +199,7 @@ function IconPickerButton({ currentIcon, onChange }: IconPickerButtonProps) {
                 )}
                 title={label}
               >
-                <IconComp className="h-4 w-4 text-daintree-text" />
+                <IconComp className="h-4 w-4 text-text-primary" />
               </button>
             );
           })}
@@ -337,7 +337,7 @@ export function ResourceEnvironmentsSection({
                   setAddEnvironmentError(null);
                 }}
                 aria-label="Add environment"
-                className="flex items-center gap-1 px-2 py-1.5 text-xs text-daintree-text/60 hover:text-daintree-text transition-colors"
+                className="flex items-center gap-1 px-2 py-1.5 text-xs text-daintree-text/60 hover:text-text-primary transition-colors"
               >
                 <Plus className="h-3.5 w-3.5" />
               </button>
@@ -354,7 +354,7 @@ export function ResourceEnvironmentsSection({
               setAddEnvironmentError(null);
             }}
             aria-label="Add environment"
-            className="col-span-2 flex w-fit items-center gap-1.5 text-xs text-daintree-text/60 hover:text-daintree-text transition-colors px-1 py-1"
+            className="col-span-2 flex w-fit items-center gap-1.5 text-xs text-daintree-text/60 hover:text-text-primary transition-colors px-1 py-1"
           >
             <Plus className="h-3.5 w-3.5" />
             Add environment

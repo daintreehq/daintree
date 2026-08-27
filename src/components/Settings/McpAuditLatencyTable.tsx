@@ -113,14 +113,14 @@ export function McpAuditLatencyTable({ records, includeRecord }: McpAuditLatency
   };
 
   return (
-    <div className="rounded-[var(--radius-md)] border border-daintree-border bg-overlay-subtle/40">
+    <div className="rounded-[var(--radius-md)] border border-border-default bg-overlay-subtle/40">
       <button
         type="button"
         onClick={() => setIsOpen((v) => !v)}
         aria-expanded={isOpen}
         className={cn(
           "w-full flex items-center justify-between gap-3 px-3 py-2 text-xs",
-          "text-daintree-text/80 hover:text-daintree-text transition-colors"
+          "text-daintree-text/80 hover:text-text-primary transition-colors"
         )}
       >
         <span className="flex items-center gap-2">

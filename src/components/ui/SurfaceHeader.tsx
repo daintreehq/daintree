@@ -67,7 +67,7 @@ const SurfaceHeaderTitle = React.forwardRef<HTMLHeadingElement, SurfaceHeaderTit
       // close button. `overflow-wrap: break-word` only ever acts on a word that
       // cannot fit on a line by itself, so a title that fits is untouched.
       className={cn(
-        "text-lg font-semibold text-daintree-text flex items-center gap-2 min-w-0 break-words",
+        "text-lg font-semibold text-text-primary flex items-center gap-2 min-w-0 break-words",
         className
       )}
       {...props}
@@ -93,8 +93,8 @@ const SurfaceHeaderCloseButton = React.forwardRef<HTMLButtonElement, SurfaceHead
     <button
       ref={ref}
       className={cn(
-        "text-daintree-text/60 hover:text-daintree-text hover:bg-overlay-raised transition-colors p-1 rounded",
-        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent",
+        "text-daintree-text/60 hover:text-text-primary hover:bg-overlay-raised transition-colors p-1 rounded",
+        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
         className
       )}
       {...props}

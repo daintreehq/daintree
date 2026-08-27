@@ -984,7 +984,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
             />
             {isDragOverFiles && (
               <div className="absolute inset-0 z-10 flex items-center justify-center rounded-md bg-daintree-bg/80 pointer-events-none">
-                <span className="text-xs font-medium text-daintree-accent">Drop to attach</span>
+                <span className="text-xs font-medium text-accent-primary">Drop to attach</span>
               </div>
             )}
             {isVoiceSubmitting && (
@@ -993,7 +993,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 aria-live="polite"
                 className="absolute inset-0 z-10 flex items-center justify-center gap-2 rounded-md bg-daintree-bg/80 pointer-events-none"
               >
-                <Loader2 className="h-4 w-4 animate-spin text-daintree-accent" />
+                <Loader2 className="h-4 w-4 animate-spin text-accent-primary" />
                 <span className="text-xs text-daintree-text/70">Finishing dictation…</span>
               </div>
             )}
@@ -1126,7 +1126,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                       node.appendChild(view.dom);
                     }
                   }}
-                  className="flex-1 min-h-[200px] overflow-auto text-daintree-text p-4"
+                  className="flex-1 min-h-[200px] overflow-auto text-text-primary p-4"
                 />
               </ContextMenuTrigger>
               <ContextMenuContent>

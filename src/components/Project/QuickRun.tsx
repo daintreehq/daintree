@@ -373,7 +373,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
             <span
               className={cn(
                 "truncate",
-                isWorktreeValid ? "text-daintree-text" : "text-daintree-text/50"
+                isWorktreeValid ? "text-text-primary" : "text-daintree-text/50"
               )}
             >
               {activeWorktreeName}
@@ -417,7 +417,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                   placeholder="Execute command..."
                   aria-label="Command input"
                   className={cn(
-                    "flex-1 bg-transparent py-2.5 text-xs font-mono text-daintree-text placeholder:text-text-placeholder",
+                    "flex-1 bg-transparent py-2.5 text-xs font-mono text-text-primary placeholder:text-text-placeholder",
                     "focus:outline-hidden min-w-0"
                   )}
                   autoComplete="off"
@@ -434,7 +434,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                         className={cn(
                           "p-1.5 rounded-[var(--radius-sm)] transition-colors",
                           autoRestart
-                            ? "bg-overlay-medium text-daintree-text"
+                            ? "bg-overlay-medium text-text-primary"
                             : "text-text-muted hover:bg-overlay-soft hover:text-text-secondary"
                         )}
                         aria-label={autoRestart ? "Disable auto-restart" : "Enable auto-restart"}
@@ -457,7 +457,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                         className={cn(
                           "p-1.5 rounded-[var(--radius-sm)] transition-colors",
                           runAsDocked
-                            ? "bg-overlay-medium text-daintree-text"
+                            ? "bg-overlay-medium text-text-primary"
                             : "text-text-muted hover:bg-overlay-soft hover:text-text-secondary"
                         )}
                         aria-label={
@@ -524,7 +524,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                           className={cn(
                             "group flex w-full items-center gap-3 px-3 py-2 text-left text-xs font-mono transition-colors",
                             index === focusedSuggestionIndex
-                              ? "bg-accent-soft text-daintree-text"
+                              ? "bg-accent-soft text-text-primary"
                               : "text-text-secondary hover:bg-overlay-soft"
                           )}
                           onClick={() => {
@@ -543,8 +543,8 @@ export function QuickRun({ projectId }: QuickRunProps) {
                             <div className="truncate">
                               <span
                                 className={cn(
-                                  "group-hover:text-daintree-text",
-                                  item.type === "saved" ? "font-semibold text-daintree-text" : ""
+                                  "group-hover:text-text-primary",
+                                  item.type === "saved" ? "font-semibold text-text-primary" : ""
                                 )}
                               >
                                 {item.type === "saved" ? item.label : item.value}
@@ -583,7 +583,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                                 className="ml-2 shrink-0 rounded p-1 opacity-0 transition-opacity group-hover:opacity-100 hover:bg-overlay-soft"
                                 aria-label="Pin this command"
                               >
-                                <Pin className="h-3 w-3 text-text-muted hover:text-daintree-text" />
+                                <Pin className="h-3 w-3 text-text-muted hover:text-text-primary" />
                               </button>
                             )}
                           </div>

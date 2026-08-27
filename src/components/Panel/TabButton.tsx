@@ -279,10 +279,10 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
           className={cn(
             "relative flex items-center gap-1.5 px-2 py-1 text-xs font-medium select-none cursor-pointer group/tab",
             "border-r border-divider transition-colors",
-            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]",
+            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]",
             isActive
-              ? "bg-tint/[0.04] text-daintree-text"
-              : "text-daintree-text/60 hover:text-daintree-text hover:bg-overlay-subtle"
+              ? "bg-tint/[0.04] text-text-primary"
+              : "text-daintree-text/60 hover:text-text-primary hover:bg-overlay-subtle"
           )}
           data-tab-id={id}
           {...mergedAttributes}
@@ -293,7 +293,7 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
             <m.div
               layoutId="panel-tab-indicator"
               layout="position"
-              className="absolute inset-x-0 bottom-0 h-0.5 bg-daintree-accent pointer-events-none"
+              className="absolute inset-x-0 bottom-0 h-0.5 bg-accent-primary pointer-events-none"
               transition={{ duration: UI_ANIMATION_DURATION / 1000, ease: EASE_OUT_EXPO_FM }}
               aria-hidden="true"
             />
@@ -322,7 +322,7 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
               initial={{ opacity: 0 }}
               animate={{ opacity: 1 }}
               transition={{ duration: 0.1 }}
-              className="text-xs bg-overlay-soft border border-transparent px-1 h-4 min-w-[60px] max-w-[100px] text-daintree-text select-text focus:outline-hidden"
+              className="text-xs bg-overlay-soft border border-transparent px-1 h-4 min-w-[60px] max-w-[100px] text-text-primary select-text focus:outline-hidden"
               aria-label={`Rename tab ${title}`}
             />
           ) : (
@@ -420,7 +420,7 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
                   "shrink-0 p-0.5 -mr-1 rounded transition-[opacity,color,background-color,border-color]",
                   "opacity-0 group-hover/tab:opacity-100 group-focus-visible/tab:opacity-100 focus-visible:opacity-100",
                   "hover:bg-[color-mix(in_oklab,var(--color-status-error)_15%,transparent)]",
-                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1",
+                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-1",
                   "text-daintree-text/40 hover:text-status-error"
                 )}
                 aria-label={`Close ${title}`}

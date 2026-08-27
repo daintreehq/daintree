@@ -193,7 +193,7 @@ function BuilderTextareaField({
           FIELD_SURFACE,
           FIELD_FOCUS,
           "w-full px-2.5 py-2 text-sm resize-y min-h-[100px]",
-          "text-daintree-text placeholder:text-text-placeholder",
+          "text-text-primary placeholder:text-text-placeholder",
           error && "border-status-error"
         )}
       />
@@ -274,8 +274,8 @@ function BuilderCheckboxField({
         onChange={(e) => onChange(e.target.checked)}
         aria-describedby={field.helpText ? helpId : undefined}
         className={cn(
-          "h-4 w-4 rounded border-daintree-border bg-daintree-bg",
-          "text-daintree-accent focus:ring-daintree-accent/30 focus:ring-offset-0",
+          "h-4 w-4 rounded border-border-default bg-surface-canvas",
+          "text-accent-primary focus:ring-daintree-accent/30 focus:ring-offset-0",
           "cursor-pointer"
         )}
       />
@@ -464,7 +464,7 @@ export function CommandBuilder({
           <div className="flex flex-col items-center justify-center py-8 space-y-4">
             <CheckCircle className="h-12 w-12 text-status-success" />
             <div className="text-center">
-              <h3 className="text-lg font-medium text-daintree-text">Command Executed</h3>
+              <h3 className="text-lg font-medium text-text-primary">Command Executed</h3>
               <p className="text-sm text-daintree-text/70 mt-1">
                 {executionResult.message ?? "Command completed."}
               </p>
@@ -474,7 +474,7 @@ export function CommandBuilder({
           <div className="flex flex-col items-center justify-center py-8 space-y-4">
             <AlertCircle className="h-12 w-12 text-status-error" />
             <div className="text-center">
-              <h3 className="text-lg font-medium text-daintree-text">Configuration Error</h3>
+              <h3 className="text-lg font-medium text-text-primary">Configuration Error</h3>
               <p className="text-sm text-daintree-text/70 mt-1">
                 This command has no builder steps configured.
               </p>
@@ -485,9 +485,7 @@ export function CommandBuilder({
             {currentStep && (
               <>
                 {currentStep.title && (
-                  <h3 className="text-base font-semibold text-daintree-text">
-                    {currentStep.title}
-                  </h3>
+                  <h3 className="text-base font-semibold text-text-primary">{currentStep.title}</h3>
                 )}
                 {currentStep.description && (
                   <p className="text-sm text-daintree-text/70">{currentStep.description}</p>

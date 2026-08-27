@@ -381,7 +381,7 @@ describe("AppLayout portal viewport coverage — issue #6629", () => {
     );
     // The old in-<main> absolute wrapper must not be reintroduced.
     expect(source).not.toContain(
-      '"absolute right-0 top-0 bottom-0 z-50 shadow-2xl border-l border-daintree-border"'
+      '"absolute right-0 top-0 bottom-0 z-50 shadow-2xl border-l border-border-default"'
     );
   });
 

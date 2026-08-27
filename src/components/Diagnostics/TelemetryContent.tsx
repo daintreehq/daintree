@@ -57,7 +57,7 @@ function TelemetryRow({ event, isSelected, onSelect }: RowProps) {
         >
           {kindLabel(event.kind)}
         </span>
-        <span className="font-mono text-xs text-daintree-text truncate flex-1">{event.label}</span>
+        <span className="font-mono text-xs text-text-primary truncate flex-1">{event.label}</span>
         <span className="text-3xs text-daintree-text/50 font-mono tabular-nums shrink-0">
           {formatClockTime(event.timestamp)}
         </span>
@@ -137,7 +137,7 @@ function TelemetryDetail({ event }: DetailProps) {
               >
                 {kindLabel(event.kind)}
               </span>
-              <span className="font-mono text-sm text-daintree-text truncate">{event.label}</span>
+              <span className="font-mono text-sm text-text-primary truncate">{event.label}</span>
             </div>
             <div className="flex items-center gap-2 text-2xs text-daintree-text/50 font-mono">
               <span>{new Date(event.timestamp).toISOString()}</span>

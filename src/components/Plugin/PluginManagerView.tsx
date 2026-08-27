@@ -116,9 +116,9 @@ function PluginRow({
     <div
       ref={innerRef}
       className={cn(
-        "relative flex items-center gap-2 rounded-[var(--radius-md)] border text-daintree-text transition-colors",
+        "relative flex items-center gap-2 rounded-[var(--radius-md)] border text-text-primary transition-colors",
         selected
-          ? "bg-overlay-soft border-overlay before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-daintree-accent before:content-['']"
+          ? "bg-overlay-soft border-overlay before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-accent-primary before:content-['']"
           : highlighted
             ? "border-daintree-text/40 bg-overlay-subtle"
             : "border-transparent hover:bg-overlay-subtle"
@@ -129,7 +129,7 @@ function PluginRow({
         role="option"
         aria-selected={selected}
         onClick={onSelect}
-        className="flex items-start gap-2.5 min-w-0 flex-1 py-2.5 pl-3 pr-1 text-left rounded-[var(--radius-md)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+        className="flex items-start gap-2.5 min-w-0 flex-1 py-2.5 pl-3 pr-1 text-left rounded-[var(--radius-md)] focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
       >
         <PluginIconTile manifest={plugin.manifest} size="sm" dimmed={!enabled} />
         <span className="min-w-0">
@@ -453,9 +453,9 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
       role="region"
       aria-label="Plugin manager"
       data-testid="plugin-manager-view"
-      className="fixed inset-0 z-[var(--z-modal)] flex flex-col bg-daintree-bg motion-safe:animate-in motion-safe:fade-in motion-safe:duration-150"
+      className="fixed inset-0 z-[var(--z-modal)] flex flex-col bg-surface-canvas motion-safe:animate-in motion-safe:fade-in motion-safe:duration-150"
     >
-      <header className="flex items-center justify-between gap-3 px-6 h-12 shrink-0 border-b border-daintree-border app-drag-region">
+      <header className="flex items-center justify-between gap-3 px-6 h-12 shrink-0 border-b border-border-default app-drag-region">
         <div className="flex items-center gap-2 min-w-0">
           {isMac() && (
             <div
@@ -477,7 +477,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
             <ChevronLeft />
           </Button>
           <Package className="w-5 h-5 text-daintree-text/70 shrink-0" aria-hidden="true" />
-          <h2 className="text-sm font-medium text-daintree-text truncate">Plugins</h2>
+          <h2 className="text-sm font-medium text-text-primary truncate">Plugins</h2>
         </div>
         <div className="flex items-center gap-3 shrink-0">
           <Button
@@ -539,17 +539,17 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
         onDrop={pm.handleDrop}
       >
         {pm.isDragOverFiles && (
-          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-daintree-bg/80 border-2 border-dashed border-daintree-border pointer-events-none">
+          <div className="absolute inset-0 z-10 flex flex-col items-center justify-center gap-2 bg-daintree-bg/80 border-2 border-dashed border-border-default pointer-events-none">
             <Download className="w-6 h-6 text-daintree-text/60" aria-hidden="true" />
-            <p className="text-sm font-medium text-daintree-text">Drop a .dntr file to install</p>
+            <p className="text-sm font-medium text-text-primary">Drop a .dntr file to install</p>
           </div>
         )}
 
         {/* Master: installed-plugin list + install controls. */}
-        <div className="w-80 shrink-0 border-r border-daintree-border flex flex-col overflow-hidden">
-          <div className="p-4 border-b border-daintree-border shrink-0 space-y-3">
+        <div className="w-80 shrink-0 border-r border-border-default flex flex-col overflow-hidden">
+          <div className="p-4 border-b border-border-default shrink-0 space-y-3">
             <div>
-              <h3 className="text-sm font-medium text-daintree-text">Installed plugins</h3>
+              <h3 className="text-sm font-medium text-text-primary">Installed plugins</h3>
               <p className="text-xs text-daintree-text/50 mt-1 select-text">
                 Extend Daintree with panels, commands, and integrations. Turn one off to keep its
                 settings without loading it.
@@ -589,7 +589,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                 onChange={(e) => setQuery(e.target.value)}
                 placeholder="Search plugins"
                 aria-label="Search plugins"
-                className="w-full px-3 py-2 text-sm rounded-[var(--radius-md)] bg-daintree-bg border border-daintree-border text-daintree-text placeholder:text-text-placeholder focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+                className="w-full px-3 py-2 text-sm rounded-[var(--radius-md)] bg-surface-canvas border border-border-default text-text-primary placeholder:text-text-placeholder focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
               />
               <div className="flex flex-wrap gap-1">
                 {PLUGIN_FILTER_CHIPS.map(({ token, label }) => {
@@ -603,8 +603,8 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                       className={cn(
                         "px-1.5 py-0.5 rounded-sm text-3xs font-medium border transition-colors",
                         active
-                          ? "bg-overlay-strong border-daintree-border text-daintree-text"
-                          : "bg-overlay-subtle border-daintree-border/50 text-daintree-text/60 hover:text-daintree-text/80 hover:border-daintree-border"
+                          ? "bg-overlay-strong border-border-default text-text-primary"
+                          : "bg-overlay-subtle border-daintree-border/50 text-daintree-text/60 hover:text-daintree-text/80 hover:border-border-default"
                       )}
                     >
                       {label}
@@ -614,7 +614,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
               </div>
             </div>
             {pm.notice && (
-              <div className="flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-overlay-subtle border border-daintree-border">
+              <div className="flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-default">
                 <Info className="w-3.5 h-3.5 text-daintree-text/50 shrink-0 mt-0.5" />
                 <p className="text-2xs text-daintree-text/70">{pm.notice}</p>
               </div>
@@ -655,7 +655,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                   <button
                     type="button"
                     onClick={() => setQuery("")}
-                    className="text-xs text-daintree-text/60 hover:text-daintree-text underline underline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent rounded-sm"
+                    className="text-xs text-daintree-text/60 hover:text-text-primary underline underline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary rounded-sm"
                   >
                     Clear search
                   </button>
@@ -742,7 +742,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
           {/* Reserved footer for the browse/discovery catalog (#9305). The
               network-backed catalog ships separately; the slot keeps its place
               in the master column so the layout doesn't shift when it lands. */}
-          <div className="px-4 py-3 border-t border-daintree-border shrink-0">
+          <div className="px-4 py-3 border-t border-border-default shrink-0">
             <p className="text-3xs font-medium uppercase tracking-wider text-text-secondary select-none">
               Browse
             </p>
@@ -813,7 +813,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
             checked={pm.deleteSettings}
             onChange={(e) => pm.setDeleteSettings(e.target.checked)}
             disabled={pm.isUninstalling}
-            className="size-3.5 rounded-sm border border-daintree-border bg-daintree-bg accent-daintree-text/70"
+            className="size-3.5 rounded-sm border border-border-default bg-surface-canvas accent-daintree-text/70"
           />
           Also delete this plugin's saved settings
         </label>
@@ -835,7 +835,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
           <div className="mt-3 space-y-1.5 text-xs text-daintree-text/70">
             <div>
               <span className="text-daintree-text/50">New version</span>{" "}
-              <span className="font-medium text-daintree-text">
+              <span className="font-medium text-text-primary">
                 v{pm.pendingUpdate.result.version}
               </span>
               {pm.pendingUpdate.result.displayName &&
@@ -906,7 +906,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
               if (e.key === "Enter" && pm.urlInput.trim()) void pm.handleInstallFromUrl();
             }}
             placeholder="https://example.com/plugin.dntr"
-            className="w-full px-3 py-2 text-sm rounded-[var(--radius-md)] bg-daintree-bg border border-daintree-border text-daintree-text placeholder:text-text-placeholder focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+            className="w-full px-3 py-2 text-sm rounded-[var(--radius-md)] bg-surface-canvas border border-border-default text-text-primary placeholder:text-text-placeholder focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
             aria-label="Plugin URL"
           />
         </AppDialog.Body>

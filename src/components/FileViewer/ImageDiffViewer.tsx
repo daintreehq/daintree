@@ -52,7 +52,7 @@ function SideChip({ label, floating }: { label: string; floating?: boolean }) {
   return (
     <span
       className={cn(
-        "rounded bg-daintree-sidebar px-1.5 py-0.5 text-3xs font-medium text-muted-foreground",
+        "rounded bg-surface-sidebar px-1.5 py-0.5 text-3xs font-medium text-muted-foreground",
         floating && "bg-daintree-sidebar/90"
       )}
     >
@@ -164,7 +164,7 @@ function ImagePane({
         {caption ? <span className="text-xs text-muted-foreground">{caption}</span> : null}
       </div>
       <div
-        className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-md border border-daintree-border"
+        className="relative flex min-h-0 flex-1 items-center justify-center overflow-hidden rounded-md border border-border-default"
         style={side.ok && !decodeFailed ? CHECKERBOARD_STYLE : undefined}
       >
         {side.ok && !decodeFailed ? (
@@ -267,7 +267,7 @@ function SwipeCompare({ sides, relPath }: { sides: OkSides; relPath: string }) {
   return (
     <div
       ref={containerRef}
-      className="relative min-h-0 flex-1 touch-none overflow-hidden rounded-md border border-daintree-border"
+      className="relative min-h-0 flex-1 touch-none overflow-hidden rounded-md border border-border-default"
       style={CHECKERBOARD_STYLE}
       onPointerDown={(event) => {
         draggingRef.current = true;
@@ -308,8 +308,8 @@ function SwipeCompare({ sides, relPath }: { sides: OkSides; relPath: string }) {
           setPosition((prev) => Math.min(100, Math.max(0, prev + delta)));
         }}
       >
-        <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-daintree-text/60 shadow-[0_0_0_1px_var(--color-daintree-bg)]" />
-        <div className="relative flex h-6 w-3.5 items-center justify-center rounded border border-daintree-border bg-daintree-sidebar">
+        <div className="absolute inset-y-0 left-1/2 w-px -translate-x-1/2 bg-daintree-text/60 shadow-[0_0_0_1px_var(--color-surface-canvas)]" />
+        <div className="relative flex h-6 w-3.5 items-center justify-center rounded border border-border-default bg-surface-sidebar">
           <GripVertical className="h-3 w-3 text-muted-foreground" />
         </div>
       </div>
@@ -328,7 +328,7 @@ function OnionCompare({
 }) {
   return (
     <div
-      className="relative min-h-0 flex-1 overflow-hidden rounded-md border border-daintree-border"
+      className="relative min-h-0 flex-1 overflow-hidden rounded-md border border-border-default"
       style={CHECKERBOARD_STYLE}
     >
       {/* HEAD as the base layer; the working-tree layer fades in on top. */}
@@ -521,7 +521,7 @@ export function ImageDiffViewer({ relPath, worktreePath, status }: ImageDiffView
                 aria-label="Working tree opacity"
                 onChange={(event) => setOnionOpacity(Number(event.currentTarget.value))}
                 className="w-36 cursor-pointer"
-                style={{ accentColor: "var(--color-daintree-text)" }}
+                style={{ accentColor: "var(--color-text-primary)" }}
               />
             </label>
           ) : null}

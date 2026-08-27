@@ -32,9 +32,9 @@ export function HelpPanelVersionGate({
         onClick={onOpenSettings}
         className={cn(
           "mt-1 inline-flex items-center gap-1.5 px-3 py-1.5 rounded-[var(--radius-md)]",
-          "text-xs font-medium border border-daintree-border text-daintree-text/80",
-          "hover:bg-overlay-soft hover:text-daintree-text transition-colors",
-          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+          "text-xs font-medium border border-border-default text-daintree-text/80",
+          "hover:bg-overlay-soft hover:text-text-primary transition-colors",
+          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
         )}
       >
         <Settings2 className="w-3.5 h-3.5" />
@@ -48,7 +48,7 @@ export function HelpPanelVersionGate({
           "text-2xs text-daintree-text/40 transition-colors",
           "hover:text-daintree-text/60",
           "disabled:opacity-50 disabled:cursor-default disabled:hover:text-daintree-text/40",
-          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
         )}
       >
         Check again

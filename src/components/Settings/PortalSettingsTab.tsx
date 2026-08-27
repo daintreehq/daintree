@@ -210,13 +210,13 @@ export function PortalSettingsTab() {
       return (
         <div
           key={link.id}
-          className="flex items-center gap-2 p-3 rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg/30"
+          className="flex items-center gap-2 p-3 rounded-[var(--radius-md)] border border-border-default bg-daintree-bg/30"
         >
           <input
             type="text"
             value={editName}
             onChange={(e) => setEditName(e.target.value)}
-            className="bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-sm text-daintree-text w-32 focus:border-daintree-accent/40 focus:outline-hidden"
+            className="bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-sm text-text-primary w-32 focus:border-daintree-accent/40 focus:outline-hidden"
             placeholder="e.g. My portal"
             aria-label="Edit link name"
           />
@@ -224,7 +224,7 @@ export function PortalSettingsTab() {
             type="text"
             value={editUrl}
             onChange={(e) => setEditUrl(e.target.value)}
-            className="bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-sm text-daintree-text flex-1 focus:border-daintree-accent/40 focus:outline-hidden"
+            className="bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-sm text-text-primary flex-1 focus:border-daintree-accent/40 focus:outline-hidden"
             placeholder="e.g. https://github.com/owner/repo"
             aria-label="Edit link URL"
           />
@@ -249,12 +249,12 @@ export function PortalSettingsTab() {
     return (
       <div
         key={link.id}
-        className="flex items-center justify-between p-3 rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg/30"
+        className="flex items-center justify-between p-3 rounded-[var(--radius-md)] border border-border-default bg-daintree-bg/30"
       >
         <div className="flex items-center gap-3">
           {allowDelete ? <FaviconIcon url={link.url} /> : <ServiceIcon name={link.icon} />}
           <div className="flex flex-col">
-            <span className="text-sm text-daintree-text">{link.title}</span>
+            <span className="text-sm text-text-primary">{link.title}</span>
             {!allowDelete && (
               <Tooltip>
                 <TooltipTrigger asChild>
@@ -271,7 +271,7 @@ export function PortalSettingsTab() {
         <div className="flex items-center gap-2">
           <button
             onClick={() => handleStartEdit(link.id, link.title, link.url)}
-            className="text-xs text-daintree-text/50 hover:text-daintree-text px-2 py-1 rounded hover:bg-daintree-border/50"
+            className="text-xs text-daintree-text/50 hover:text-text-primary px-2 py-1 rounded hover:bg-daintree-border/50"
           >
             Edit
           </button>
@@ -359,7 +359,7 @@ export function PortalSettingsTab() {
                   setCustomDefaultUrl(e.target.value);
                   setCustomUrlError("");
                 }}
-                className="flex-1 bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text focus:border-daintree-accent/40 focus:outline-hidden transition-colors"
+                className="flex-1 bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-text-primary focus:border-daintree-accent/40 focus:outline-hidden transition-colors"
                 onKeyDown={(e) => {
                   if (e.key === "Enter") handleCustomUrlSave();
                   if (e.key === "Escape") handleCustomUrlCancel();
@@ -373,7 +373,7 @@ export function PortalSettingsTab() {
                 type="button"
                 onClick={handleCustomUrlSave}
                 aria-label="Save custom URL"
-                className="px-3 py-1.5 rounded-[var(--radius-md)] bg-daintree-accent text-accent-primary-foreground text-sm hover:bg-daintree-accent/90 transition-colors"
+                className="px-3 py-1.5 rounded-[var(--radius-md)] bg-accent-primary text-accent-primary-foreground text-sm hover:bg-daintree-accent/90 transition-colors"
               >
                 <Check className="w-4 h-4" />
               </button>
@@ -381,7 +381,7 @@ export function PortalSettingsTab() {
                 type="button"
                 onClick={handleCustomUrlCancel}
                 aria-label="Cancel custom URL"
-                className="px-3 py-1.5 rounded-[var(--radius-md)] border border-daintree-border text-daintree-text/70 text-sm hover:bg-daintree-border/50 transition-colors"
+                className="px-3 py-1.5 rounded-[var(--radius-md)] border border-border-default text-daintree-text/70 text-sm hover:bg-daintree-border/50 transition-colors"
               >
                 <X className="w-4 h-4" />
               </button>
@@ -428,7 +428,7 @@ export function PortalSettingsTab() {
                 setNewLinkName(e.target.value);
                 setUrlError("");
               }}
-              className="bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text w-32 focus:border-daintree-accent/40 focus:outline-hidden transition-colors"
+              className="bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-text-primary w-32 focus:border-daintree-accent/40 focus:outline-hidden transition-colors"
               aria-label="New link name"
             />
             <input
@@ -439,7 +439,7 @@ export function PortalSettingsTab() {
                 setNewLinkUrl(e.target.value);
                 setUrlError("");
               }}
-              className="bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text flex-1 focus:border-daintree-accent/40 focus:outline-hidden transition-colors"
+              className="bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-text-primary flex-1 focus:border-daintree-accent/40 focus:outline-hidden transition-colors"
               onKeyDown={(e) => {
                 if (e.key === "Enter") handleAddLink();
               }}
@@ -450,7 +450,7 @@ export function PortalSettingsTab() {
             <button
               onClick={handleAddLink}
               disabled={!newLinkName.trim() || !newLinkUrl.trim()}
-              className="flex items-center gap-1.5 px-3 py-1.5 rounded-[var(--radius-md)] bg-daintree-accent text-accent-primary-foreground text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none hover:bg-daintree-accent/90 transition-colors"
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-[var(--radius-md)] bg-accent-primary text-accent-primary-foreground text-sm font-medium disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none hover:bg-daintree-accent/90 transition-colors"
             >
               <Plus className="w-4 h-4" />
               Add

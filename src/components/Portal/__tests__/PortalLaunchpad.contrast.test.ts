@@ -7,7 +7,7 @@ const FILE_PATH = resolve(__dirname, "../PortalLaunchpad.tsx");
 describe("PortalLaunchpad — hover contrast (issue #4611)", () => {
   it("portal card hover uses daintree-text, not text-inverse", async () => {
     const content = await readFile(FILE_PATH, "utf-8");
-    expect(content).toContain("group-hover:text-daintree-text");
+    expect(content).toContain("group-hover:text-text-primary");
     expect(content).not.toContain("group-hover:text-text-inverse");
   });
 });

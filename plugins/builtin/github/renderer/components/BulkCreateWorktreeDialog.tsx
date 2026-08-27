@@ -1168,9 +1168,9 @@ export function BulkCreateWorktreeDialog({
                         disabled={assignUnavailable}
                         className={cn(
                           "h-4 w-7 appearance-none rounded-full border transition-colors duration-150 ease-out",
-                          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
+                          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
                           assignWorktreeToSelf && !assignUnavailable
-                            ? "border-daintree-text bg-daintree-text"
+                            ? "border-text-primary bg-text-primary"
                             : "border-border-strong bg-surface-inset",
                           assignUnavailable && "cursor-not-allowed opacity-50"
                         )}
@@ -1225,7 +1225,7 @@ export function BulkCreateWorktreeDialog({
                 a 300px scroller pinned beside a 4rem label rail would give up the
                 width the branch names need. */}
             <FormSection title="Worktrees to create">
-              <ul className="col-span-2 max-h-[300px] overflow-y-auto rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg divide-y divide-daintree-border">
+              <ul className="col-span-2 max-h-[300px] overflow-y-auto rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas divide-y divide-border-default">
                 {planned.map((item) => (
                   <li
                     key={item.item.number}
@@ -1239,7 +1239,7 @@ export function BulkCreateWorktreeDialog({
                         <span className="text-daintree-text/50 text-xs font-mono shrink-0">
                           #{item.item.number}
                         </span>
-                        <span className="text-daintree-text truncate">{item.item.title}</span>
+                        <span className="text-text-primary truncate">{item.item.title}</span>
                       </div>
                       {!item.skipped && (
                         <div className="flex items-center gap-1.5 mt-0.5">
@@ -1263,7 +1263,7 @@ export function BulkCreateWorktreeDialog({
         ) : (
           <div className="space-y-4">
             {/* Per-item status list */}
-            <div className="max-h-[300px] overflow-y-auto rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg divide-y divide-daintree-border">
+            <div className="max-h-[300px] overflow-y-auto rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas divide-y divide-border-default">
               {planned
                 .filter((p) => progress.items.has(p.item.number))
                 .map((item) => {
@@ -1287,7 +1287,7 @@ export function BulkCreateWorktreeDialog({
                         ) : itemStatus?.stage === "failed" ? (
                           <AlertTriangle className="w-4 h-4 text-status-warning" />
                         ) : (
-                          <div className="w-4 h-4 rounded-full border border-daintree-border" />
+                          <div className="w-4 h-4 rounded-full border border-border-default" />
                         )}
                       </div>
                       <div className="flex-1 min-w-0">
@@ -1295,7 +1295,7 @@ export function BulkCreateWorktreeDialog({
                           <span className="text-daintree-text/50 text-xs font-mono shrink-0">
                             #{item.item.number}
                           </span>
-                          <span className="text-daintree-text truncate">{item.item.title}</span>
+                          <span className="text-text-primary truncate">{item.item.title}</span>
                           {isInProgress && itemStatus.attempt > 1 && (
                             <span className="text-3xs px-1.5 py-0.5 rounded bg-status-info/10 text-status-info shrink-0">
                               retry {itemStatus.attempt - 1}

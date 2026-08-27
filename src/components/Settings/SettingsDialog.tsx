@@ -601,9 +601,9 @@ function SettingsDialogInner({
       className="settings-shell min-h-[500px] max-h-[800px]"
     >
       <div className="flex h-full overflow-hidden">
-        <div className="settings-sidebar w-52 border-r border-daintree-border p-3 flex flex-col shrink-0">
+        <div className="settings-sidebar w-52 border-r border-border-default p-3 flex flex-col shrink-0">
           <div className="mb-3 px-2 space-y-2">
-            <h2 className="text-sm font-semibold text-daintree-text">Settings</h2>
+            <h2 className="text-sm font-semibold text-text-primary">Settings</h2>
             {hasProject && (
               <SegmentedRadioGroup
                 // A radiogroup, not the Select it replaced: two mutually exclusive
@@ -640,7 +640,7 @@ function SettingsDialogInner({
               onChange={(e) => setSearchQuery(e.target.value)}
               onKeyDown={handleSearchKeyDown}
               aria-label="Search settings"
-              className="settings-search-input flex-1 min-w-0 text-xs bg-transparent text-daintree-text focus:outline-hidden"
+              className="settings-search-input flex-1 min-w-0 text-xs bg-transparent text-text-primary focus:outline-hidden"
             />
             {searchQuery && (
               <button
@@ -650,7 +650,7 @@ function SettingsDialogInner({
                   searchInputRef.current?.focus();
                 }}
                 aria-label="Clear search"
-                className="flex items-center justify-center w-5 h-5 rounded shrink-0 text-daintree-text/40 hover:text-daintree-text"
+                className="flex items-center justify-center w-5 h-5 rounded shrink-0 text-daintree-text/40 hover:text-text-primary"
               >
                 <X className="w-3 h-3" />
               </button>
@@ -708,7 +708,7 @@ function SettingsDialogInner({
             </LayoutGroup>
           </ScrollShadow>
 
-          <div className="pt-2 mt-2 border-t border-daintree-border px-2">
+          <div className="pt-2 mt-2 border-t border-border-default px-2">
             <span className="settings-meta font-mono">{appVersion}</span>
           </div>
         </div>
@@ -1317,9 +1317,9 @@ export function NavItem({
       onBlur={onLeave}
       className={cn(
         "relative text-left px-3 py-1.5 rounded-[var(--radius-md)] text-sm transition-colors flex items-center gap-2 w-full",
-        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
+        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
         "settings-nav-item",
-        active ? "text-daintree-text" : "text-text-secondary hover:text-daintree-text"
+        active ? "text-text-primary" : "text-text-secondary hover:text-text-primary"
       )}
       data-active={active ? "true" : undefined}
     >
@@ -1337,7 +1337,7 @@ export function NavItem({
         <m.span
           layoutId={`active-indicator-${scopeForTab(tab)}`}
           layout="position"
-          className="pointer-events-none absolute left-0 top-1.5 bottom-1.5 w-[2px] rounded-r bg-daintree-accent"
+          className="pointer-events-none absolute left-0 top-1.5 bottom-1.5 w-[2px] rounded-r bg-accent-primary"
           transition={{ duration: getUiAnimationDuration() / 1000, ease: EASE_OUT_EXPO_FM }}
           aria-hidden="true"
           data-settings-nav-indicator="true"
@@ -1550,8 +1550,8 @@ function SearchResults({
             "group w-full text-left p-3 rounded-[var(--radius-md)] border transition-colors",
             index === activeIndex
               ? "bg-overlay-selected border-border-strong"
-              : "border-transparent hover:bg-overlay-soft hover:border-daintree-border",
-            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+              : "border-transparent hover:bg-overlay-soft hover:border-border-default",
+            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
           )}
         >
           <div className="flex items-center gap-3">
@@ -1580,7 +1580,7 @@ function SearchResults({
                   </span>
                 )}
               </div>
-              <div className="text-sm font-medium text-daintree-text">
+              <div className="text-sm font-medium text-text-primary">
                 <HighlightText text={result.title} query={query} />
               </div>
               <div className="text-xs text-daintree-text/50 mt-0.5 leading-relaxed">

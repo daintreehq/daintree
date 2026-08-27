@@ -110,7 +110,7 @@ export function DevPreviewWebviewOverlays({
         </div>
       )}
       {webviewLoadError && (
-        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-daintree-bg text-daintree-text p-6">
+        <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-surface-canvas text-text-primary p-6">
           <AlertTriangle className="w-6 h-6 text-status-warning mb-3" />
           <h3 className="text-sm font-medium text-daintree-text/70 mb-1">
             {webviewLoadErrorHeading(webviewLoadError.code)}

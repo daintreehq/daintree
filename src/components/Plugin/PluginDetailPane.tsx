@@ -311,7 +311,7 @@ export function PluginDetailPane({
   }, [currentTab, activeTab]);
 
   return (
-    <div className="text-daintree-text">
+    <div className="text-text-primary">
       <div className="flex items-start justify-between gap-3">
         <div className="flex items-start gap-3.5 min-w-0">
           <PluginIconTile manifest={plugin.manifest} size="lg" dimmed={plugin.disabled === true} />

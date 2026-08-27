@@ -87,7 +87,7 @@ export function TrashBinItem({ terminal, trashedInfo, worktreeName }: TrashBinIt
       </div>
 
       <div className="flex-1 min-w-0">
-        <div className="text-xs font-medium text-daintree-text/70 group-hover:text-daintree-text truncate transition-colors">
+        <div className="text-xs font-medium text-daintree-text/70 group-hover:text-text-primary truncate transition-colors">
           {terminalName}
           {worktreeName ? (
             <span className="text-daintree-text/50 ml-1 font-normal">({worktreeName})</span>

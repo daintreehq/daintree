@@ -93,7 +93,7 @@ export function EnvironmentPopover({
         <button
           type="button"
           data-no-dnd
-          className="shrink-0 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+          className="shrink-0 rounded focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
           aria-label={`${worktreeMode ?? "Remote"} environment status`}
         >
           <EnvironmentIcon className={cn(iconClass, className)} />

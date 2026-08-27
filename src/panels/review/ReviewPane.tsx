@@ -118,7 +118,7 @@ export function ReviewPane({
       data-panel-id={id}
       data-panel-location={location}
       tabIndex={-1}
-      className="flex h-full min-h-0 w-full flex-1 flex-col bg-daintree-bg"
+      className="flex h-full min-h-0 w-full flex-1 flex-col bg-surface-canvas"
     >
       <ReviewHubContent
         isOpen={true}

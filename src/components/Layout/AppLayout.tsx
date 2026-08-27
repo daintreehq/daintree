@@ -852,14 +852,14 @@ export function AppLayout({
 
   return (
     <div
-      className="h-screen flex flex-col bg-daintree-bg"
+      className="h-screen flex flex-col bg-surface-canvas"
       style={{
         height: "100vh",
         width: "100vw",
-        backgroundColor: "var(--color-daintree-bg)",
+        backgroundColor: "var(--color-surface-canvas)",
         display: "flex",
         flexDirection: "column",
-        color: "var(--color-daintree-text)",
+        color: "var(--color-text-primary)",
       }}
     >
       <PortalVisibilityController />
@@ -958,13 +958,13 @@ export function AppLayout({
           <ErrorBoundary variant="section" componentName="MainContent">
             <main
               aria-label="Content"
-              className="flex-1 flex flex-col overflow-hidden bg-daintree-bg relative"
+              className="flex-1 flex flex-col overflow-hidden bg-surface-canvas relative"
               style={{
                 flex: 1,
                 display: "flex",
                 flexDirection: "column",
                 overflow: "hidden",
-                backgroundColor: "var(--color-daintree-bg)",
+                backgroundColor: "var(--color-surface-canvas)",
               }}
             >
               <div className="flex-1 overflow-hidden min-h-0">{children}</div>
@@ -1086,7 +1086,7 @@ export function AppLayout({
                 WebContentsView is already hidden via PortalVisibilityController. */}
             <div
               {...(chromeInert ? { inert: true } : {})}
-              className="fixed right-0 bottom-0 z-50 shadow-2xl border-l border-daintree-border"
+              className="fixed right-0 bottom-0 z-50 shadow-2xl border-l border-border-default"
               style={{ top: OVERLAY_TOP_OFFSET }}
             >
               <Suspense fallback={null}>

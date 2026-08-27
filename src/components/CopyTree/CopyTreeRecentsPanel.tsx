@@ -45,7 +45,7 @@ export function formatRecentMeta(record: CopyTreeHistoryRecord, now?: number): s
 // left in place rather than replaced.
 const rowClass = cn(
   "w-full flex items-center gap-2.5 px-3 py-2 text-left",
-  "text-daintree-text hover:bg-overlay-raised focus-visible:bg-overlay-raised",
+  "text-text-primary hover:bg-overlay-raised focus-visible:bg-overlay-raised",
   "transition-colors"
 );
 
@@ -55,7 +55,7 @@ const rowClass = cn(
 // the focus ring it takes on open is the region's one emphasis signal.
 const primaryButtonClass = cn(
   "w-full flex items-center gap-2.5 rounded-[var(--radius-md)] px-3 py-2 text-left",
-  "border border-divider bg-overlay-subtle text-daintree-text hover:bg-overlay-raised",
+  "border border-divider bg-overlay-subtle text-text-primary hover:bg-overlay-raised",
   "transition-colors"
 );
 

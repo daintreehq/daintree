@@ -45,7 +45,7 @@ export function TurnOutcomePip({ outcome, onDismiss }: TurnOutcomePipProps) {
       className={cn(
         "flex items-center gap-1.5 min-w-0 shrink-0 text-status-warning",
         "transition-colors duration-150 ease-out hover:text-status-warning/80",
-        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
       )}
     >
       <span

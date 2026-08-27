@@ -48,7 +48,7 @@ export function WorktreePathPicker({
           "flex h-8 items-center overflow-hidden",
           // Scoped to the input rather than focus-within: the browse button paints
           // its own ring, and focus-within would stack a second one around the pair.
-          "has-[input:focus-visible]:outline has-[input:focus-visible]:outline-2 has-[input:focus-visible]:outline-daintree-accent has-[input:focus-visible]:outline-offset-2",
+          "has-[input:focus-visible]:outline has-[input:focus-visible]:outline-2 has-[input:focus-visible]:outline-accent-primary has-[input:focus-visible]:outline-offset-2",
           hasError && "border-status-error"
         )}
       >
@@ -59,7 +59,7 @@ export function WorktreePathPicker({
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder="/path/to/worktree"
-          className="min-w-0 flex-1 bg-transparent px-2.5 font-mono text-xs text-daintree-text placeholder:text-text-placeholder focus:outline-hidden disabled:opacity-50"
+          className="min-w-0 flex-1 bg-transparent px-2.5 font-mono text-xs text-text-primary placeholder:text-text-placeholder focus:outline-hidden disabled:opacity-50"
           disabled={isPending}
           aria-invalid={hasError ? true : undefined}
           aria-describedby={hasError ? "validation-error" : undefined}
@@ -77,8 +77,8 @@ export function WorktreePathPicker({
               className={cn(
                 "flex h-full w-8 shrink-0 items-center justify-center border-l border-border-subtle",
                 "text-text-secondary transition-colors duration-150 ease-out",
-                "hover:bg-overlay-hover hover:text-daintree-text",
-                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:-outline-offset-2",
+                "hover:bg-overlay-hover hover:text-text-primary",
+                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2",
                 "disabled:opacity-50 disabled:cursor-not-allowed"
               )}
             >

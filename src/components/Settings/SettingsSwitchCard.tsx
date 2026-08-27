@@ -5,7 +5,7 @@ import { cn } from "@/lib/utils";
 import { SettingsSwitch } from "./SettingsSwitch";
 
 const COLOR_SCHEMES = {
-  accent: { icon: "text-daintree-accent" },
+  accent: { icon: "text-accent-primary" },
   amber: { icon: "text-status-warning" },
   danger: { icon: "text-status-error" },
 };
@@ -69,8 +69,8 @@ export function SettingsSwitchCard({
       className={cn(
         "relative w-full flex items-center justify-between transition-colors",
         isCard ? "p-4 rounded-[var(--radius-lg)] border hover:bg-tint/5" : "py-2",
-        "border-daintree-border text-daintree-text/70",
-        isEnabled && "border-daintree-border text-daintree-text",
+        "border-border-default text-daintree-text/70",
+        isEnabled && "border-border-default text-text-primary",
         !disabled && "cursor-pointer",
         disabled && "opacity-50"
       )}
@@ -131,8 +131,8 @@ export function SettingsSwitchCard({
           aria-label={resetAriaLabel ?? `Reset ${title} to default`}
           className={cn(
             "absolute top-1/2 -translate-y-1/2 z-10 p-1 rounded-sm",
-            "text-daintree-text/40 hover:text-daintree-text",
-            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent",
+            "text-daintree-text/40 hover:text-text-primary",
+            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
             "transition-colors",
             isCard ? "right-[4.5rem]" : "right-[3.25rem]"
           )}

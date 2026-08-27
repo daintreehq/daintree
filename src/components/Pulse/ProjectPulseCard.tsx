@@ -220,11 +220,11 @@ function PulseSkeleton({ className }: { className?: string }) {
   return (
     <div
       className={cn(
-        "pulse-card w-full min-w-0 rounded-[var(--radius-lg)] border border-daintree-border min-h-[240px]",
+        "pulse-card w-full min-w-0 rounded-[var(--radius-lg)] border border-border-default min-h-[240px]",
         className
       )}
     >
-      <div className="pulse-card-header animate-pulse-delayed px-4 py-3 border-b border-daintree-border flex items-center justify-between">
+      <div className="pulse-card-header animate-pulse-delayed px-4 py-3 border-b border-border-default flex items-center justify-between">
         <div className="flex items-center gap-2">
           <div className="w-4 h-4 rounded-[2px] pulse-skeleton-shimmer shrink-0" />
           <div className="h-4 pulse-skeleton-shimmer rounded w-36" />
@@ -251,7 +251,7 @@ function PulseSkeleton({ className }: { className?: string }) {
 
         <div className="h-3 pulse-skeleton-shimmer rounded w-72" />
 
-        <div className="border-t border-daintree-border pt-3 min-h-9">
+        <div className="border-t border-border-default pt-3 min-h-9">
           <div className="flex items-center gap-2">
             <div className="h-5 w-16 rounded-full pulse-skeleton-shimmer" />
             <div className="h-5 w-12 rounded-full pulse-skeleton-shimmer" />
@@ -260,7 +260,7 @@ function PulseSkeleton({ className }: { className?: string }) {
           </div>
         </div>
 
-        <div className="border-t border-daintree-border pt-3">
+        <div className="border-t border-border-default pt-3">
           <div className="flex items-center gap-4">
             <div className="h-4 pulse-skeleton-shimmer rounded w-20" />
             <div className="h-4 pulse-skeleton-shimmer rounded w-24" />
@@ -484,7 +484,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
     return (
       <div
         className={cn(
-          "pulse-card w-full min-w-0 p-4 rounded-[var(--radius-lg)] border border-daintree-border",
+          "pulse-card w-full min-w-0 p-4 rounded-[var(--radius-lg)] border border-border-default",
           // Hold the slot at PulseSkeleton's natural height so the empty-state
           // column doesn't reflow when the skeleton swaps to this one-liner
           // (#7671). The card centers its short message inside the reserved
@@ -509,7 +509,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
     return (
       <div
         className={cn(
-          "pulse-card w-full min-w-0 p-4 rounded-[var(--radius-lg)] border border-daintree-border",
+          "pulse-card w-full min-w-0 p-4 rounded-[var(--radius-lg)] border border-border-default",
           // Match PulseSkeleton height so the error swap doesn't collapse the
           // card and shift siblings up (#7671).
           "min-h-[240px] flex items-center",
@@ -569,7 +569,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
   return (
     <div
       className={cn(
-        "pulse-card w-full min-w-0 rounded-[var(--radius-lg)] border border-daintree-border min-h-[240px]",
+        "pulse-card w-full min-w-0 rounded-[var(--radius-lg)] border border-border-default min-h-[240px]",
         className
       )}
       aria-busy={isLoading}
@@ -577,7 +577,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
       <span role="status" aria-live="polite" className="sr-only">
         {refreshAnnouncement}
       </span>
-      <div className="pulse-card-header px-4 py-3 border-b border-daintree-border flex items-center justify-between">
+      <div className="pulse-card-header px-4 py-3 border-b border-border-default flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Activity className="w-4 h-4 text-status-success" />
           <span className="text-sm font-medium text-daintree-text/90">{title}</span>
@@ -605,7 +605,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
                   className={cn(
                     "rounded-md border px-2 py-1 transition-colors",
                     isActive
-                      ? "bg-overlay-selected border-border-strong text-daintree-text"
+                      ? "bg-overlay-selected border-border-strong text-text-primary"
                       : "pulse-control border-transparent text-daintree-text/55 hover:text-daintree-text/80"
                   )}
                   aria-checked={isActive}
@@ -664,10 +664,10 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
             failed to load. Reserve while a variant is still possible; render
             nothing once it settles empty. */}
         {healthSection !== null && (
-          <div className="border-t border-daintree-border pt-3 min-h-9">{healthSection}</div>
+          <div className="border-t border-border-default pt-3 min-h-9">{healthSection}</div>
         )}
 
-        <div className="border-t border-daintree-border pt-3">
+        <div className="border-t border-border-default pt-3">
           <PulseSummary pulse={pulse} />
           <button
             type="button"

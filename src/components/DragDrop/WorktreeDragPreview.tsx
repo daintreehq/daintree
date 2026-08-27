@@ -15,8 +15,8 @@ export function WorktreeDragPreview({ worktree }: WorktreeDragPreviewProps) {
     <div
       style={{
         width: 220,
-        backgroundColor: "var(--color-daintree-sidebar)",
-        border: "1px solid var(--color-daintree-border)",
+        backgroundColor: "var(--color-surface-sidebar)",
+        border: "1px solid var(--color-border-default)",
         borderRadius: "var(--radius-lg)",
         boxShadow: "var(--theme-shadow-floating)",
         overflow: "hidden",
@@ -61,7 +61,7 @@ export function WorktreeDragPreview({ worktree }: WorktreeDragPreviewProps) {
             style={{
               fontFamily: "var(--font-mono)",
               fontSize: "var(--text-3xs)",
-              color: "color-mix(in srgb, var(--color-daintree-text) 50%, transparent)",
+              color: "color-mix(in srgb, var(--color-text-primary) 50%, transparent)",
               whiteSpace: "nowrap",
               overflow: "hidden",
               textOverflow: "ellipsis",
@@ -82,7 +82,7 @@ export function WorktreeDragPreview({ worktree }: WorktreeDragPreviewProps) {
             style={{
               width: 12,
               height: 12,
-              color: "color-mix(in srgb, var(--color-daintree-text) 50%, transparent)",
+              color: "color-mix(in srgb, var(--color-text-primary) 50%, transparent)",
               flexShrink: 0,
             }}
             aria-hidden="true"
@@ -92,7 +92,7 @@ export function WorktreeDragPreview({ worktree }: WorktreeDragPreviewProps) {
               fontFamily: "var(--font-mono)",
               fontSize: "var(--text-2xs)",
               fontWeight: 500,
-              color: "var(--color-daintree-text)",
+              color: "var(--color-text-primary)",
               whiteSpace: "nowrap",
               overflow: "hidden",
               textOverflow: "ellipsis",

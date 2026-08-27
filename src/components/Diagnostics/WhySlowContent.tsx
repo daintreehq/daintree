@@ -110,7 +110,7 @@ function MetricTile({ label, value, unit, tone = "default" }: MetricTileProps) {
       <div className="flex items-baseline gap-1">
         <span
           className={cn(
-            "text-lg font-mono tabular-nums text-daintree-text",
+            "text-lg font-mono tabular-nums text-text-primary",
             tone === "warn" && "text-status-warning",
             tone === "alert" && "text-status-error"
           )}
@@ -216,7 +216,7 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
         (memoryWorkloads.totalMemoryMb > 0 || memoryWorkloads.processCount > 0)));
 
   return (
-    <div className={cn("h-full overflow-auto p-3 text-sm text-daintree-text", className)}>
+    <div className={cn("h-full overflow-auto p-3 text-sm text-text-primary", className)}>
       <div className="flex items-center justify-between mb-3">
         <div className="flex items-center gap-2">
           <Gauge className="w-4 h-4 text-daintree-text/60" />
@@ -243,7 +243,7 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
           <button
             onClick={() => void refresh()}
             disabled={isRefreshing}
-            className="flex items-center gap-1.5 px-2 py-1 rounded-[var(--radius-md)] text-xs text-daintree-text/70 hover:text-daintree-text hover:bg-tint/[0.06] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent disabled:opacity-50"
+            className="flex items-center gap-1.5 px-2 py-1 rounded-[var(--radius-md)] text-xs text-daintree-text/70 hover:text-text-primary hover:bg-tint/[0.06] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary disabled:opacity-50"
             aria-label="Refresh diagnostics snapshot"
           >
             <SpinningIcon icon={RefreshCw} active={isRefreshing} className="w-3.5 h-3.5" />
@@ -320,7 +320,7 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
                           // Bottleneck-first: the top contributor is the likely
                           // answer, so it reads at full strength; the rest recede.
                           index === 0 && sortedReasons.length > 1
-                            ? "text-daintree-text font-medium"
+                            ? "text-text-primary font-medium"
                             : "text-daintree-text/75"
                         )}
                       >

@@ -51,7 +51,7 @@ function RecipeListItem({
           // with it; takes the selected treatment from the family now.
           PALETTE_ROW_CLASS,
           "w-full text-left px-3 py-2 rounded-[var(--radius-lg)] flex items-center gap-2",
-          "bg-daintree-bg hover:bg-surface"
+          "bg-surface-canvas hover:bg-surface"
         )}
         aria-selected={isSelected}
         role="option"
@@ -76,14 +76,14 @@ function RecipeListItem({
       className={cn(
         PALETTE_ROW_CLASS,
         "w-full text-left px-3 py-2 rounded-[var(--radius-lg)] flex flex-col gap-0.5",
-        "bg-daintree-bg hover:bg-surface",
+        "bg-surface-canvas hover:bg-surface",
         recipe.shadowedBy && "opacity-60"
       )}
       aria-selected={isSelected}
       role="option"
     >
       <div className="flex items-center justify-between gap-2 text-sm">
-        <span className="font-medium text-daintree-text truncate">{recipe.name}</span>
+        <span className="font-medium text-text-primary truncate">{recipe.name}</span>
         <div className="flex items-center gap-1 shrink-0">
           {uniqueTypes.map((type) => (
             <span
@@ -182,7 +182,7 @@ export function QuickCreatePalette({ palette }: QuickCreatePaletteProps) {
                 type="checkbox"
                 checked={palette.assignToSelf}
                 onChange={(e) => palette.setAssignToSelf(e.target.checked)}
-                className="w-3.5 h-3.5 rounded border-daintree-border bg-daintree-bg checked:bg-daintree-accent"
+                className="w-3.5 h-3.5 rounded border-border-default bg-surface-canvas checked:bg-accent-primary"
               />
               Assign issue to me
             </label>

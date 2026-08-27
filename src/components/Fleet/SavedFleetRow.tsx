@@ -52,7 +52,7 @@ export function SavedFleetRow({
           // delete from triggering recall by stopping propagation early.
           e.stopPropagation();
         }}
-        className="inline-flex shrink-0 items-center rounded p-0.5 text-daintree-text/50 transition-colors hover:bg-tint/[0.08] hover:text-daintree-text"
+        className="inline-flex shrink-0 items-center rounded p-0.5 text-daintree-text/50 transition-colors hover:bg-tint/[0.08] hover:text-text-primary"
       >
         <Trash2 className="h-3 w-3" />
       </button>

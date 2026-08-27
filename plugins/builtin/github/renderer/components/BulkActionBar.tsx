@@ -76,7 +76,7 @@ export function BulkActionBar({
       <span className="ps-2 text-xs text-text-secondary tabular-nums truncate">
         {/* Neutral count. A `status-info` chip on a multi-select membership
             total was reading as an alert about nothing. */}
-        <span className="font-medium text-daintree-text">{count}</span>{" "}
+        <span className="font-medium text-text-primary">{count}</span>{" "}
         {count === 1 ? noun : `${noun}s`} selected{hiddenNote}
       </span>
       <div className="flex-1" />
@@ -95,7 +95,7 @@ export function BulkActionBar({
         size="icon-sm"
         onClick={onClear}
         aria-label="Clear selection"
-        className="text-text-secondary hover:text-daintree-text"
+        className="text-text-secondary hover:text-text-primary"
       >
         <X className="w-3.5 h-3.5" />
       </Button>

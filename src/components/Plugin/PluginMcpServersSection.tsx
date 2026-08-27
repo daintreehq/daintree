@@ -284,7 +284,7 @@ export function PluginMcpServersSection({ pluginId, declared }: PluginMcpServers
           return (
             <li
               key={key}
-              className="rounded-[var(--radius-md)] border border-daintree-border overflow-hidden"
+              className="rounded-[var(--radius-md)] border border-border-default overflow-hidden"
             >
               <div className="flex items-center gap-3 px-3 py-2.5">
                 <span
@@ -294,7 +294,7 @@ export function PluginMcpServersSection({ pluginId, declared }: PluginMcpServers
                   aria-hidden
                 />
                 <div className="min-w-0 flex-1">
-                  <div className="text-sm text-daintree-text truncate">{row.name}</div>
+                  <div className="text-sm text-text-primary truncate">{row.name}</div>
                   <div className="text-2xs text-text-secondary">
                     {STATUS_LABEL[status]}
                     {row.info?.pid != null && status === "ready" && ` · pid ${row.info.pid}`}
@@ -378,7 +378,7 @@ function StderrView({ state }: { state: StderrState | undefined }) {
           Showing the most recent {result.lines.length} of {result.totalLines} lines.
         </p>
       )}
-      <pre className="max-h-48 overflow-auto rounded-[var(--radius-md)] bg-daintree-bg border border-daintree-border p-2 font-mono text-2xs leading-relaxed text-daintree-text/80 whitespace-pre-wrap break-words select-text">
+      <pre className="max-h-48 overflow-auto rounded-[var(--radius-md)] bg-surface-canvas border border-border-default p-2 font-mono text-2xs leading-relaxed text-daintree-text/80 whitespace-pre-wrap break-words select-text">
         {result.lines.join("\n")}
       </pre>
     </div>

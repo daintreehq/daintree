@@ -179,7 +179,7 @@ export function ProjectIdentityEditor({ project }: ProjectIdentityEditorProps) {
             // entirely, which is not a valid `relatedTarget` to construct with.
             replayOnPill("pointerout", { relatedTarget: next instanceof Element ? next : null });
           }}
-          className="pointer-events-auto absolute left-1.5 top-1/2 z-10 h-7 w-7 -translate-y-1/2 rounded-[var(--radius-md)] bg-transparent transition-colors hover:bg-overlay-subtle focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
+          className="pointer-events-auto absolute left-1.5 top-1/2 z-10 h-7 w-7 -translate-y-1/2 rounded-[var(--radius-md)] bg-transparent transition-colors hover:bg-overlay-subtle focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-1"
         />
       </PopoverTrigger>
       <PopoverContent
@@ -203,7 +203,7 @@ export function ProjectIdentityEditor({ project }: ProjectIdentityEditorProps) {
         }}
       >
         <div className="flex flex-col">
-          <div className="flex flex-col gap-1.5 border-b border-daintree-border p-3">
+          <div className="flex flex-col gap-1.5 border-b border-border-default p-3">
             <label
               htmlFor="project-identity-name"
               className="text-xs font-medium text-daintree-text/60"
@@ -230,7 +230,7 @@ export function ProjectIdentityEditor({ project }: ProjectIdentityEditorProps) {
                   setIsOpen(false);
                 }
               }}
-              className="w-[280px] rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg px-3 py-1.5 text-sm text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
+              className="w-[280px] rounded-[var(--radius-md)] border border-border-default bg-surface-canvas px-3 py-1.5 text-sm text-text-primary placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
               placeholder={project.name}
             />
             {suggestion && (

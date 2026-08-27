@@ -398,7 +398,7 @@ export function GitInitDialog({
   }, [isOpen, mode]);
 
   const summary = (
-    <div className="space-y-2.5 rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg px-3 py-3">
+    <div className="space-y-2.5 rounded-[var(--radius-md)] border border-border-default bg-surface-canvas px-3 py-3">
       <div className="space-y-1">
         <span className="text-xs font-medium text-daintree-text/60">Repository</span>
         <p className="truncate text-xs text-daintree-text/80">
@@ -471,7 +471,7 @@ export function GitInitDialog({
                 <Check className="h-6 w-6 text-status-success" />
               </div>
               <div className="space-y-1">
-                <h3 className="text-base font-semibold text-daintree-text">
+                <h3 className="text-base font-semibold text-text-primary">
                   Repository initialized
                 </h3>
                 {/* Says what is about to happen, not merely what is possible:
@@ -509,7 +509,7 @@ export function GitInitDialog({
                 data-testid={currentPhase ? "git-init-step" : "git-init-connecting"}
               >
                 <Spinner size="sm" className="shrink-0 text-text-secondary" />
-                <span aria-hidden="true" className="text-sm text-daintree-text">
+                <span aria-hidden="true" className="text-sm text-text-primary">
                   {currentPhase?.live ?? "Starting…"}
                 </span>
                 {currentPhase && (
@@ -698,7 +698,7 @@ export function GitInitDialog({
               {createInitialCommit && (
                 <div
                   id={commitOptionsId}
-                  className="ml-6 space-y-1.5 border-l border-daintree-border pl-4"
+                  className="ml-6 space-y-1.5 border-l border-border-default pl-4"
                 >
                   <label htmlFor="git-init-commit-message" className={FIELD_LABEL_CLASS}>
                     Initial commit message

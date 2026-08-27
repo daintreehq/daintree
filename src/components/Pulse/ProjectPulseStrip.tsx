@@ -125,7 +125,7 @@ export function ProjectPulseStrip({ worktreeId }: ProjectPulseStripProps) {
           ref={collapseButtonRef}
           type="button"
           onClick={collapse}
-          className="inline-flex items-center gap-1 self-start rounded-[var(--radius-md)] px-2 py-1 text-xs text-text-secondary transition-colors hover:text-daintree-text focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
+          className="inline-flex items-center gap-1 self-start rounded-[var(--radius-md)] px-2 py-1 text-xs text-text-secondary transition-colors hover:text-text-primary focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
           aria-expanded={true}
         >
           <ChevronUp className="h-3.5 w-3.5" aria-hidden="true" />
@@ -153,7 +153,7 @@ export function ProjectPulseStrip({ worktreeId }: ProjectPulseStripProps) {
       onClick={expand}
       aria-expanded={false}
       aria-label={activityLabel}
-      className="group flex w-full items-center gap-3 rounded-[var(--radius-md)] border border-border-subtle px-3 py-2 text-left transition-colors hover:bg-overlay-subtle focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
+      className="group flex w-full items-center gap-3 rounded-[var(--radius-md)] border border-border-subtle px-3 py-2 text-left transition-colors hover:bg-overlay-subtle focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
     >
       <Activity className="h-3.5 w-3.5 shrink-0 text-status-success/70" aria-hidden="true" />
       <span className="shrink-0 text-xs font-medium text-text-secondary">Project pulse</span>
@@ -175,7 +175,7 @@ export function ProjectPulseStrip({ worktreeId }: ProjectPulseStripProps) {
           <span className="text-xs text-text-secondary">View activity</span>
         )}
         <ChevronDown
-          className="h-4 w-4 text-text-secondary transition-colors group-hover:text-daintree-text"
+          className="h-4 w-4 text-text-secondary transition-colors group-hover:text-text-primary"
           aria-hidden="true"
         />
       </span>

@@ -614,7 +614,7 @@ AppPaletteDialog.Body = function AppPaletteBody({
         // chose, and why an opted-in palette still rings itself when there is
         // no row to carry it.
         focusIndicator === "region" || activeDescendant === undefined
-          ? "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-daintree-accent"
+          ? "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
           : "focus:outline-hidden",
         scrollClassName
       )}
@@ -775,7 +775,7 @@ AppPaletteDialog.Input = function AppPaletteInput({
           type="text"
           className={cn(
             "flex-1 min-w-0 bg-transparent px-0 py-0 text-sm",
-            "text-daintree-text placeholder:text-text-placeholder",
+            "text-text-primary placeholder:text-text-placeholder",
             "focus:outline-hidden focus:border-transparent focus:ring-0",
             className
           )}
@@ -791,7 +791,7 @@ AppPaletteDialog.Input = function AppPaletteInput({
       className={cn(
         "w-full px-3 py-2 text-sm",
         PALETTE_INPUT_SURFACE,
-        "text-daintree-text placeholder:text-text-placeholder",
+        "text-text-primary placeholder:text-text-placeholder",
         // Neutral focus — see `PALETTE_INPUT_SURFACE`.
         "focus:outline-hidden focus:border-selection-outline focus:ring-1 focus:ring-selection-outline/50",
         className

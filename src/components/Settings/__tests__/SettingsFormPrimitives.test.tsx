@@ -340,7 +340,7 @@ describe("SettingsTextarea", () => {
     expect(textarea.className).toContain("bg-surface-input");
     expect(textarea.className).toContain("focus-visible:outline");
     expect(textarea.className).toContain("focus-visible:outline-2");
-    expect(textarea.className).toContain("focus-visible:outline-daintree-accent");
+    expect(textarea.className).toContain("focus-visible:outline-accent-primary");
     expect(textarea.className).toContain("focus-visible:outline-offset-2");
     expect(textarea.className).toContain("font-mono");
     expect(textarea.className).toContain("resize-y");

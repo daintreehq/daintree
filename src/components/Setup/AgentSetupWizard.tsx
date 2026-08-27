@@ -850,7 +850,7 @@ export function AgentSetupWizard({
                 <h3
                   ref={focusStepHeading}
                   tabIndex={-1}
-                  className="text-base font-semibold text-daintree-text outline-hidden focus-visible:outline focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-daintree-accent rounded-xs"
+                  className="text-base font-semibold text-text-primary outline-hidden focus-visible:outline focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-accent-primary rounded-xs"
                 >
                   {stepMeta.title}
                 </h3>
@@ -924,7 +924,7 @@ export function AgentSetupWizard({
               <Button
                 variant="ghost"
                 onClick={handleBack}
-                className="text-daintree-text/70 hover:text-daintree-text"
+                className="text-daintree-text/70 hover:text-text-primary"
                 disabled={isSaving || isInstalling}
               >
                 <ChevronLeft className="w-4 h-4" />
@@ -941,7 +941,7 @@ export function AgentSetupWizard({
                 onClick={handleSkip}
                 disabled={isSaving}
                 data-testid="agent-setup-exit"
-                className="text-daintree-text/70 hover:text-daintree-text"
+                className="text-daintree-text/70 hover:text-text-primary"
               >
                 {isFirstRun ? "Not now" : "Cancel"}
               </Button>
@@ -1040,10 +1040,10 @@ function AppearanceStep({
                 // Without this the cards fell through to the browser's default
                 // focus ring, which is the OS accent colour and ignores the
                 // theme and forced-colors entirely.
-                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-daintree-accent",
+                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary",
                 isSelected
                   ? "border-border-strong bg-overlay-selected"
-                  : "border-daintree-border bg-daintree-bg hover:border-daintree-text/30"
+                  : "border-border-default bg-surface-canvas hover:border-daintree-text/30"
               )}
             >
               <ThemeMockup scheme={scheme} />
@@ -1054,10 +1054,10 @@ function AppearanceStep({
                   ) : (
                     <Sun className="w-3 h-3 text-daintree-text/50" />
                   )}
-                  <span className="text-sm font-medium text-daintree-text">{scheme.name}</span>
+                  <span className="text-sm font-medium text-text-primary">{scheme.name}</span>
                   <span className="text-xs text-daintree-text/50">{isDark ? "Dark" : "Light"}</span>
                 </div>
-                {isSelected && <Check className="w-3.5 h-3.5 text-daintree-text shrink-0" />}
+                {isSelected && <Check className="w-3.5 h-3.5 text-text-primary shrink-0" />}
               </div>
             </button>
           );
@@ -1111,7 +1111,7 @@ function AgentsStep({
             {Array.from({ length: 5 }).map((_, i) => (
               <div
                 key={i}
-                className="flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg/30"
+                className="flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] border border-border-default bg-daintree-bg/30"
               >
                 <SkeletonBone className="w-4 h-4 shrink-0" />
                 <SkeletonBone className="w-8 h-8 rounded-[var(--radius-sm)] shrink-0" />
@@ -1181,9 +1181,9 @@ function PrivacyStep({
 
   return (
     <section>
-      <div className="space-y-3 rounded-[var(--radius-lg)] border border-daintree-border p-4">
+      <div className="space-y-3 rounded-[var(--radius-lg)] border border-border-default p-4">
         <div className="flex items-center justify-between gap-3">
-          <p id={crashReportingLabelId} className="text-sm font-medium text-daintree-text">
+          <p id={crashReportingLabelId} className="text-sm font-medium text-text-primary">
             Enable crash reporting
           </p>
           <SettingsSwitch
@@ -1199,7 +1199,7 @@ function PrivacyStep({
             copy and only became identifiable as a control on hover. */}
         <button
           type="button"
-          className="text-xs text-text-link underline underline-offset-2 hover:text-daintree-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-daintree-accent rounded-xs"
+          className="text-xs text-text-link underline underline-offset-2 hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary rounded-xs"
           onClick={() =>
             void actionService.dispatch(
               "telemetry.togglePreview",
@@ -1229,9 +1229,9 @@ function PermissionsStep({
 
   return (
     <section>
-      <div className="space-y-3 rounded-[var(--radius-lg)] border border-daintree-border p-4">
+      <div className="space-y-3 rounded-[var(--radius-lg)] border border-border-default p-4">
         <div className="flex items-center justify-between gap-3">
-          <p id={labelId} className="text-sm font-medium text-daintree-text">
+          <p id={labelId} className="text-sm font-medium text-text-primary">
             Skip permission prompts for agents
           </p>
           <SettingsSwitch
@@ -1284,7 +1284,7 @@ export function CompleteStep({ installedAgents }: { installedAgents: string[] })
                 <BrandMark brandColor={agent.color}>
                   <Icon size={18} />
                 </BrandMark>
-                <span className="text-sm text-daintree-text font-medium">{agent.name}</span>
+                <span className="text-sm text-text-primary font-medium">{agent.name}</span>
                 {presetCount > 1 && (
                   <span
                     data-testid="preset-count-badge"

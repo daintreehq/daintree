@@ -32,7 +32,7 @@ const LAUNCHER_CONFIG: Record<
   },
 };
 
-const toolbarIconButtonClass = "toolbar-icon-button text-daintree-text relative";
+const toolbarIconButtonClass = "toolbar-icon-button text-text-primary relative";
 
 interface ToolbarLauncherButtonProps {
   type: LauncherType;

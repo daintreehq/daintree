@@ -233,7 +233,7 @@ export function DeletedWorktreeCard({
         // contract), this card has no focusable parent row owning keyboard
         // nav — the overlay button IS the keyboard path, so it carries its
         // own inset focus ring.
-        className="absolute inset-0 z-0 outline-hidden focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-daintree-accent"
+        className="absolute inset-0 z-0 outline-hidden focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
         aria-label={`Select deleted worktree: ${worktree.title}`}
       />
       <div
@@ -303,7 +303,7 @@ export function DeletedWorktreeCard({
                       e.stopPropagation();
                       handleDismiss();
                     }}
-                    className="sidebar-action-button shrink-0 p-1.5 -my-1.5 text-status-error/70 hover:text-status-error rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+                    className="sidebar-action-button shrink-0 p-1.5 -my-1.5 text-status-error/70 hover:text-status-error rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
                     aria-label={closeLabel}
                   >
                     <Trash2 className="w-3.5 h-3.5" aria-hidden="true" />

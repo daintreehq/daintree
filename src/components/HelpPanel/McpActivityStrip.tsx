@@ -137,7 +137,7 @@ export function McpActivityStrip({ sessionId, activity }: McpActivityStripProps)
           title={activity && showLive ? buildTitle(activity) : "Recent tool calls"}
           className={cn(
             "flex items-center gap-1.5 min-w-0 transition-colors duration-150 ease-out",
-            "hover:text-daintree-text/60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
+            "hover:text-daintree-text/60 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
             showLive && activity?.isError
               ? "text-status-danger"
               : showLive && inFlight

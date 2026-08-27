@@ -194,7 +194,7 @@ function ArchiveIdentityCard({ intent }: { intent: PendingPluginArchiveInstall }
         <PluginGlyphTile icon={pluginIconForIdentity(manifest.name, manifest.category)} size="md" />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 min-w-0">
-            <span className="text-sm font-medium text-daintree-text truncate">{label}</span>
+            <span className="text-sm font-medium text-text-primary truncate">{label}</span>
             <span className="inline-block shrink-0 px-1.5 py-0.5 rounded-sm text-3xs font-mono tabular-nums bg-overlay-subtle border border-daintree-border/50 text-daintree-text/60 max-w-[10rem] truncate">
               v{manifest.version}
             </span>

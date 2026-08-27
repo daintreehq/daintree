@@ -129,7 +129,7 @@ function Row({ label, value, mono = false, pending = false, fallback = NONE }: R
   return (
     <>
       <dt className="text-daintree-text/70 select-none min-w-0 break-words">{label}</dt>
-      <dd className="min-w-0 text-daintree-text">
+      <dd className="min-w-0 text-text-primary">
         {!hasValue && pending ? (
           <SkeletonBone className="h-4 w-32" data-testid="terminal-info-pending" />
         ) : (
@@ -235,7 +235,7 @@ function DisclosureGroup({
           // header alignments.
           "flex w-full items-center gap-1.5 -ml-[1.125rem] rounded-[var(--radius-sm)] py-1 text-left",
           "transition-colors duration-150 ease-out hover:bg-overlay-subtle",
-          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:-outline-offset-2"
+          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
         )}
       >
         <ChevronRight
@@ -406,7 +406,7 @@ export function TerminalInfoDialog({ isOpen, onClose, terminalId }: TerminalInfo
       ? "text-status-error"
       : runtimeStatus === "error"
         ? "text-status-warning"
-        : "text-daintree-text";
+        : "text-text-primary";
 
   // The remote read is in flight and has never landed. Rows the payload owns show a
   // delayed skeleton; rows the panel store owns are already correct and never flicker.
@@ -591,7 +591,7 @@ Performance:
             data-testid="terminal-info-overview"
           >
             <div className="flex items-baseline justify-between gap-3">
-              <h3 className="text-base font-semibold text-daintree-text min-w-0 break-words select-text">
+              <h3 className="text-base font-semibold text-text-primary min-w-0 break-words select-text">
                 {title ?? "Terminal"}
               </h3>
               {/*
@@ -682,8 +682,8 @@ Performance:
                   onClick={() => setShowErrorDetail((value) => !value)}
                   className={cn(
                     "flex items-center gap-1 rounded-[var(--radius-sm)] px-1.5 py-1 text-xs text-daintree-text/70",
-                    "transition-colors duration-150 ease-out hover:bg-overlay-subtle hover:text-daintree-text",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:-outline-offset-2"
+                    "transition-colors duration-150 ease-out hover:bg-overlay-subtle hover:text-text-primary",
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
                   )}
                 >
                   <ChevronRight

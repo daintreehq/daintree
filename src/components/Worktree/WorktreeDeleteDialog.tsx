@@ -431,11 +431,11 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
 
         <div className="space-y-5">
           {/* 1. WHAT — the entity, named once, concretely. */}
-          <dl className="rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg px-3 py-2.5 text-xs">
+          <dl className="rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas px-3 py-2.5 text-xs">
             {worktree.branch && (
               <div className="flex gap-2">
                 <dt className="w-14 shrink-0 text-daintree-text/50">Branch</dt>
-                <dd className="font-mono text-daintree-text [overflow-wrap:anywhere]">
+                <dd className="font-mono text-text-primary [overflow-wrap:anywhere]">
                   {worktree.branch}
                 </dd>
               </div>
@@ -479,7 +479,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                 data-testid="delete-worktree-file-list"
                 aria-labelledby={changesHeadingId}
                 tabIndex={0}
-                className="mt-2 max-h-32 overflow-auto text-xs text-daintree-text/70 bg-daintree-bg p-3 rounded-[var(--radius-md)] border border-border-strong font-mono space-y-0.5"
+                className="mt-2 max-h-32 overflow-auto text-xs text-daintree-text/70 bg-surface-canvas p-3 rounded-[var(--radius-md)] border border-border-strong font-mono space-y-0.5"
               >
                 {previewChangeRows.map((row) => (
                   <li
@@ -525,9 +525,9 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                 checked={force}
                 onChange={(e) => setForce(e.target.checked)}
                 disabled={isDeleting}
-                className="checkbox-neutral mt-0.5 rounded border-border-strong bg-daintree-bg disabled:opacity-50"
+                className="checkbox-neutral mt-0.5 rounded border-border-strong bg-surface-canvas disabled:opacity-50"
               />
-              <span className="text-sm text-daintree-text">
+              <span className="text-sm text-text-primary">
                 {/* Constant by rule — a toggle label never changes with state
                     (house microcopy), and this one used to swap between three
                     wordings. It also has to stay the same verb as the primary
@@ -553,9 +553,9 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                   checked={closeTerminals}
                   onChange={(e) => setCloseTerminals(e.target.checked)}
                   disabled={isDeleting}
-                  className="checkbox-neutral mt-0.5 rounded border-border-strong bg-daintree-bg disabled:opacity-50"
+                  className="checkbox-neutral mt-0.5 rounded border-border-strong bg-surface-canvas disabled:opacity-50"
                 />
-                <span className="text-sm text-daintree-text">
+                <span className="text-sm text-text-primary">
                   Close all terminals
                   <span className="ml-1 tabular-nums text-daintree-text/60">
                     ({terminalCounts.total})
@@ -571,9 +571,9 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                   checked={deleteBranch}
                   onChange={(e) => setDeleteBranch(e.target.checked)}
                   disabled={isDeleting}
-                  className="checkbox-neutral mt-0.5 rounded border-border-strong bg-daintree-bg disabled:opacity-50"
+                  className="checkbox-neutral mt-0.5 rounded border-border-strong bg-surface-canvas disabled:opacity-50"
                 />
-                <span className="flex items-center gap-1.5 text-sm text-daintree-text">
+                <span className="flex items-center gap-1.5 text-sm text-text-primary">
                   <FolderGit2 className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
                   {/* No branch chip: the entity summary directly above names
                       the branch, and so does the title. A third copy bought
@@ -613,7 +613,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                   data-tone={row.tone}
                   className={cn(
                     "text-sm flex items-start gap-1.5",
-                    row.tone === "danger" ? "text-status-error font-medium" : "text-daintree-text"
+                    row.tone === "danger" ? "text-status-error font-medium" : "text-text-primary"
                   )}
                 >
                   {row.tone === "danger" && (

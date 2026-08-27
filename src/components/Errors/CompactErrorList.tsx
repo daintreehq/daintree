@@ -11,7 +11,7 @@ import type { ErrorRecord, RetryAction } from "@/store/errorStore";
    Same string `ReadinessRail` uses — the accent appears only as a focus ring,
    which is the one place the accent-restraint rule permits it. */
 const FOCUS_RING =
-  "outline-hidden focus-visible:outline focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2";
+  "outline-hidden focus-visible:outline focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2";
 
 interface ErrorListHandlers {
   onDismiss: (id: string) => void;
@@ -87,7 +87,7 @@ function ErrorOverflow({ errors, ...handlers }: ErrorListHandlers & { errors: Er
         onClick={(e) => e.stopPropagation()}
         className={cn(
           "flex w-fit mx-auto items-center gap-0.5 px-1.5 py-0.5 rounded text-3xs transition-colors",
-          "text-daintree-text/60 hover:text-daintree-text hover:bg-tint/[0.06]",
+          "text-daintree-text/60 hover:text-text-primary hover:bg-tint/[0.06]",
           FOCUS_RING
         )}
       >

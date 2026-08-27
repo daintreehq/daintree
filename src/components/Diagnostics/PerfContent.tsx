@@ -52,7 +52,7 @@ function MetricTile({ label, value, unit, tone = "default" }: MetricTileProps) {
       <div className="flex items-baseline gap-1">
         <span
           className={cn(
-            "text-lg font-mono tabular-nums text-daintree-text",
+            "text-lg font-mono tabular-nums text-text-primary",
             tone === "warn" && "text-status-warning",
             tone === "alert" && "text-status-error"
           )}
@@ -116,11 +116,11 @@ function BudgetRow({ row }: { row: PerfSummaryRow }) {
         row.failedBudget && "bg-status-error/[0.04]"
       )}
     >
-      <td className="px-3 py-1.5 text-xs font-mono text-daintree-text truncate">{row.name}</td>
+      <td className="px-3 py-1.5 text-xs font-mono text-text-primary truncate">{row.name}</td>
       <td className="px-3 py-1.5 text-3xs text-daintree-text/55 font-mono uppercase tracking-wide">
         {MODE_LABEL[row.mode] ?? row.mode}
       </td>
-      <td className="px-3 py-1.5 text-xs font-mono tabular-nums text-daintree-text text-right">
+      <td className="px-3 py-1.5 text-xs font-mono tabular-nums text-text-primary text-right">
         {row.p95Ms.toFixed(1)}
       </td>
       <td className="px-3 py-1.5 text-xs">
@@ -129,7 +129,7 @@ function BudgetRow({ row }: { row: PerfSummaryRow }) {
             Over budget
           </span>
         ) : (
-          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-3xs font-medium uppercase tracking-wide border border-daintree-border bg-overlay-subtle text-daintree-text/60">
+          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-3xs font-medium uppercase tracking-wide border border-border-default bg-overlay-subtle text-daintree-text/60">
             Within budget
           </span>
         )}

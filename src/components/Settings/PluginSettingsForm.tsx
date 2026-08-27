@@ -31,7 +31,7 @@ const SCOPE_BADGE_LABEL: Record<PluginSettingsScope, string> = {
 };
 
 const INPUT_CLASS =
-  "w-full px-2.5 py-1.5 text-sm rounded-[var(--radius-md)] bg-daintree-bg border border-daintree-border text-daintree-text placeholder:text-text-placeholder focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent disabled:opacity-50 disabled:cursor-not-allowed";
+  "w-full px-2.5 py-1.5 text-sm rounded-[var(--radius-md)] bg-surface-canvas border border-border-default text-text-primary placeholder:text-text-placeholder focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary disabled:opacity-50 disabled:cursor-not-allowed";
 
 function settingScope(def: SettingDefinition): PluginSettingsScope {
   return def.scope ?? "user";
@@ -454,7 +454,7 @@ function SettingField({
   return (
     <div className="grid grid-cols-[minmax(0,1fr)] gap-1.5">
       <div className="flex items-center justify-between gap-2">
-        <label htmlFor={fieldId} className="text-xs font-medium text-daintree-text">
+        <label htmlFor={fieldId} className="text-xs font-medium text-text-primary">
           {fieldLabel(def)}
         </label>
         <div className="flex items-center gap-1.5 shrink-0">
@@ -605,7 +605,7 @@ export function PluginSettingsForm({ plugin }: PluginSettingsFormProps) {
   if (settings.length === 0) return null;
 
   return (
-    <div className="mt-4 pt-4 border-t border-daintree-border space-y-4">
+    <div className="mt-4 pt-4 border-t border-border-default space-y-4">
       <h4 className="text-xs font-medium text-daintree-text/70">Settings</h4>
       {settings.map((def) => {
         const scope = settingScope(def);

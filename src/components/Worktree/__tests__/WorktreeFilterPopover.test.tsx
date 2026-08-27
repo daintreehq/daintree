@@ -94,7 +94,7 @@ describe("WorktreeFilterPopover keyboard and focus surfaces", () => {
     openPopover();
     const trigger = screen.getByLabelText("Filter and sort worktrees");
     expect(trigger.className).toMatch(/focus-visible:outline\b/);
-    expect(trigger.className).toContain("outline-daintree-accent");
+    expect(trigger.className).toContain("outline-accent-primary");
   });
 
   it("owns its sort radios with a labelled radiogroup", () => {

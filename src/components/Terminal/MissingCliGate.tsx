@@ -44,7 +44,7 @@ function StateBanner({ state, detail }: { state: AgentAvailabilityState; detail:
   // sends the user hunting through endpoint security for a sign-in prompt.
   if (state === "unauthenticated") {
     return (
-      <div className="flex items-start gap-3 px-4 py-3 rounded-[var(--radius-md)] border border-daintree-border bg-overlay-subtle">
+      <div className="flex items-start gap-3 px-4 py-3 rounded-[var(--radius-md)] border border-border-default bg-overlay-subtle">
         <KeyRound className="w-5 h-5 text-daintree-text/60 shrink-0 mt-px" />
         <div>
           <p className="text-sm font-medium">Sign-in not detected</p>
@@ -233,10 +233,10 @@ export function MissingCliGate({
     // name and "Setup required" spill above the scroll origin and cannot be
     // scrolled back to. Auto margins collapse to zero when there is no free
     // space, so the same centring degrades to top alignment instead.
-    <div className="flex-1 min-h-0 bg-daintree-bg flex flex-col items-center overflow-auto">
+    <div className="flex-1 min-h-0 bg-surface-canvas flex flex-col items-center overflow-auto">
       <div className="my-auto w-full max-w-lg space-y-4 px-6 py-8">
         <div className="flex items-center gap-2.5">
-          <div className="w-8 h-8 rounded-[var(--radius-md)] bg-overlay-subtle border border-daintree-border flex items-center justify-center">
+          <div className="w-8 h-8 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-default flex items-center justify-center">
             <Terminal className="w-4 h-4 text-daintree-text/40" />
           </div>
           <div>

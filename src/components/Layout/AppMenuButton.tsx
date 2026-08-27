@@ -6,7 +6,7 @@ import { isMac } from "@/lib/platform";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 
 const APP_MENU_LABEL = "Application menu";
-const toolbarIconButtonClass = "toolbar-icon-button text-daintree-text relative";
+const toolbarIconButtonClass = "toolbar-icon-button text-text-primary relative";
 
 /**
  * In-app entry point to the native application menu on Windows and Linux

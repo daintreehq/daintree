@@ -354,8 +354,8 @@ describe("GitHubListItem", () => {
     );
     const checkboxes = container.querySelectorAll("[aria-hidden='true']");
     const classes = Array.from(checkboxes).map((el) => el.getAttribute("class") ?? "");
-    expect(classes.some((c) => c.includes("bg-daintree-text"))).toBe(true);
-    expect(classes.some((c) => c.includes("bg-daintree-accent"))).toBe(false);
+    expect(classes.some((c) => c.includes("bg-text-primary"))).toBe(true);
+    expect(classes.some((c) => c.includes("bg-accent-primary"))).toBe(false);
   });
 
   it("scopes checkbox hover to icon area via named group", () => {

@@ -48,7 +48,7 @@ export function SettingsSubtabBar({ subtabs, activeId, onChange }: SettingsSubta
   if (subtabs.length === 0) return null;
 
   return (
-    <div className="border-b border-daintree-border mb-6">
+    <div className="border-b border-border-default mb-6">
       <div
         role="tablist"
         aria-label="Subtab navigation"
@@ -68,10 +68,10 @@ export function SettingsSubtabBar({ subtabs, activeId, onChange }: SettingsSubta
               className={cn(
                 "inline-flex items-center gap-2 px-3 pb-2.5 pt-0.5 text-sm font-medium",
                 "transition-[color] duration-150 flex-shrink-0",
-                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
+                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
                 isActive
-                  ? "border-b-2 border-daintree-accent text-daintree-text"
-                  : "border-b-2 border-transparent text-text-secondary hover:border-daintree-border hover:text-daintree-text"
+                  ? "border-b-2 border-accent-primary text-text-primary"
+                  : "border-b-2 border-transparent text-text-secondary hover:border-border-default hover:text-text-primary"
               )}
             >
               {subtab.renderIcon?.(isActive)}

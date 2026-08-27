@@ -329,7 +329,7 @@ export function ContentGridEmptyState({
                         pulled out of flow (absolute, just past the name) so its
                         hidden footprint never shifts the lockup off-axis. */}
                     <div className="group relative flex items-center min-w-0 max-w-full">
-                      <h3 className="text-2xl font-semibold text-daintree-text tracking-tight truncate max-w-full">
+                      <h3 className="text-2xl font-semibold text-text-primary tracking-tight truncate max-w-full">
                         {projectEmoji ? (
                           // The name outweighs the emoji — the text is the
                           // identity, the emoji is seasoning.
@@ -343,7 +343,7 @@ export function ContentGridEmptyState({
                         <button
                           type="button"
                           onClick={handleOpenProjectSettings}
-                          className="absolute left-full top-1/2 ml-1.5 -translate-y-1/2 shrink-0 rounded-full p-1 text-daintree-text/50 opacity-0 transition-opacity hover:bg-overlay-subtle hover:text-daintree-text group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
+                          className="absolute left-full top-1/2 ml-1.5 -translate-y-1/2 shrink-0 rounded-full p-1 text-daintree-text/50 opacity-0 transition-opacity hover:bg-overlay-subtle hover:text-text-primary group-hover:opacity-100 focus-visible:opacity-100 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
                           aria-label="Project settings"
                         >
                           <Settings className="h-3.5 w-3.5" />
@@ -370,7 +370,7 @@ export function ContentGridEmptyState({
                     )}
                   </div>
                 ) : (
-                  <h3 className="text-xl font-semibold text-daintree-text tracking-tight truncate max-w-full">
+                  <h3 className="text-xl font-semibold text-text-primary tracking-tight truncate max-w-full">
                     {activeWorktreeName || "Daintree"}
                   </h3>
                 )}

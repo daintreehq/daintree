@@ -547,10 +547,10 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                 aria-label={`${label} - ${description}`}
                 className={cn(
                   "flex flex-col items-center justify-center p-3 rounded-[var(--radius-md)] border transition-colors",
-                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
+                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
                   cachedProjectViews === value
-                    ? "bg-overlay-selected border-border-strong text-daintree-text font-medium"
-                    : "border-daintree-border hover:bg-tint/5 text-daintree-text/70"
+                    ? "bg-overlay-selected border-border-strong text-text-primary font-medium"
+                    : "border-border-default hover:bg-tint/5 text-daintree-text/70"
                 )}
               >
                 <span className="text-xs font-medium">{label}</span>
@@ -585,7 +585,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
             }
           />
 
-          <div className="ml-4 border-l-2 border-daintree-border pl-4">
+          <div className="ml-4 border-l-2 border-border-default pl-4">
             <SettingsSwitchCard
               icon={MousePointerClick}
               title="Default focus target"
@@ -626,7 +626,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
               onReset={() => setTwoPaneSplitEnabled(true)}
             />
 
-            <div className="ml-4 space-y-3 border-l-2 border-daintree-border pl-4">
+            <div className="ml-4 space-y-3 border-l-2 border-border-default pl-4">
               <SettingsSwitchCard
                 icon={MonitorPlay}
                 title="Preview-focused layout"
@@ -657,7 +657,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                     value={Math.round(twoPaneSplitConfig.defaultRatio * 100)}
                     onChange={(e) => setDefaultRatio(Number(e.target.value) / 100)}
                     aria-valuetext={`${Math.round(twoPaneSplitConfig.defaultRatio * 100)} percent left, ${Math.round((1 - twoPaneSplitConfig.defaultRatio) * 100)} percent right`}
-                    className="flex-1 accent-daintree-accent"
+                    className="flex-1 accent-accent-primary"
                     disabled={!twoPaneSplitConfig.enabled}
                   />
                   <span
@@ -702,10 +702,10 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                   onClick={() => handleStrategyChange(id)}
                   className={cn(
                     "flex flex-col items-center justify-center p-4 rounded-[var(--radius-md)] border transition-colors",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
                     layoutConfig.strategy === id
-                      ? "bg-overlay-selected border-border-strong text-daintree-text font-medium"
-                      : "border-daintree-border hover:bg-tint/5 text-daintree-text/70"
+                      ? "bg-overlay-selected border-border-strong text-text-primary font-medium"
+                      : "border-border-default hover:bg-tint/5 text-daintree-text/70"
                   )}
                 >
                   <Icon className="w-6 h-6 mb-2" />
@@ -763,11 +763,11 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                 aria-label={`${label} - ${description}`}
                 className={cn(
                   "flex flex-col items-center justify-center p-3 rounded-[var(--radius-md)] border transition-colors",
-                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
+                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
                   performanceMode && "opacity-50 cursor-not-allowed",
                   scrollbackLines === value
-                    ? "bg-overlay-selected border-border-strong text-daintree-text font-medium"
-                    : "border-daintree-border hover:bg-tint/5 text-daintree-text/70"
+                    ? "bg-overlay-selected border-border-strong text-text-primary font-medium"
+                    : "border-border-default hover:bg-tint/5 text-daintree-text/70"
                 )}
               >
                 <span className="text-xs font-medium">{label}</span>
@@ -822,9 +822,9 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                   {formatBytes(memoryEstimate.plain)}
                 </span>
               </div>
-              <div className="flex justify-between pt-1.5 border-t border-daintree-border mt-1.5">
+              <div className="flex justify-between pt-1.5 border-t border-border-default mt-1.5">
                 <span className="font-medium text-daintree-text/70">Total estimated</span>
-                <span className="font-mono font-medium text-daintree-accent">
+                <span className="font-mono font-medium text-accent-primary">
                   {formatBytes(memoryEstimate.total)}
                 </span>
               </div>
@@ -856,10 +856,10 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                 aria-label={`${label} - ${description}`}
                 className={cn(
                   "flex flex-col items-center justify-center p-3 rounded-[var(--radius-md)] border transition-colors",
-                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
+                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
                   screenReaderMode === value
-                    ? "bg-overlay-selected border-border-strong text-daintree-text font-medium"
-                    : "border-daintree-border hover:bg-tint/5 text-daintree-text/70"
+                    ? "bg-overlay-selected border-border-strong text-text-primary font-medium"
+                    : "border-border-default hover:bg-tint/5 text-daintree-text/70"
                 )}
               >
                 <span className="text-xs font-medium">{label}</span>

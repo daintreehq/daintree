@@ -920,7 +920,7 @@ describe("PanelHeader", () => {
     it("does not use the accent color for any focus indicator", () => {
       render(<PanelHeader {...makeProps({ isEditingTitle: true, editingValue: "Test" })} />);
       const cls = getRenameInput().className;
-      expect(cls).not.toMatch(/(outline|ring|border)-daintree-accent/);
+      expect(cls).not.toMatch(/(outline|ring|border)-(daintree-accent|accent-primary)/);
       expect(cls).toContain("focus:outline-hidden");
     });
   });

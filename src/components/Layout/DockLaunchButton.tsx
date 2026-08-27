@@ -100,7 +100,7 @@ const PLACEMENT_CONFIG = {
     tooltipSide: "bottom",
     triggerVariant: "ghost",
     triggerSize: "icon",
-    triggerClassName: "toolbar-agent-button text-daintree-text",
+    triggerClassName: "toolbar-agent-button text-text-primary",
     iconClassName: undefined,
     label: "Launcher",
     hasContextMenu: true,
@@ -775,7 +775,7 @@ export function DockLaunchButton({
                 <span
                   data-testid="launcher-discovery-badge"
                   data-visible={showDiscoveryBadge}
-                  className="toolbar-badge absolute top-0 right-0 size-1.5 rounded-full bg-status-info ring-1 ring-daintree-sidebar"
+                  className="toolbar-badge absolute top-0 right-0 size-1.5 rounded-full bg-status-info ring-1 ring-surface-sidebar"
                   aria-hidden="true"
                 />
               </span>
@@ -1353,7 +1353,7 @@ function DockLaunchOption({
             <span
               data-testid={`launcher-new-pill-${agent.id}`}
               aria-hidden="true"
-              className="status-mark ml-2 shrink-0 size-1.5 rounded-full bg-status-info ring-1 ring-daintree-sidebar"
+              className="status-mark ml-2 shrink-0 size-1.5 rounded-full bg-status-info ring-1 ring-surface-sidebar"
             />
           )}
         </span>
@@ -1433,7 +1433,7 @@ function DockLaunchOption({
                   className={cn(
                     "inline-flex h-5 w-5 items-center justify-center rounded-[var(--radius-sm)] bg-transparent border-0",
                     "text-daintree-text/40 opacity-0 transition-[opacity,color,background-color]",
-                    "hover:bg-overlay-soft hover:text-daintree-text",
+                    "hover:bg-overlay-soft hover:text-text-primary",
                     "group-hover:opacity-100 group-aria-selected:opacity-100"
                   )}
                 >
@@ -1468,7 +1468,7 @@ function DockLaunchOption({
                   }}
                   className={cn(
                     "inline-flex h-5 w-5 items-center justify-center rounded-[var(--radius-sm)] bg-transparent border-0",
-                    "transition-[opacity,color,background-color] hover:bg-overlay-soft hover:text-daintree-text",
+                    "transition-[opacity,color,background-color] hover:bg-overlay-soft hover:text-text-primary",
                     // Pinned rows read as state markers and stay visible; unpinned
                     // ones are controls that only appear once the row is under the
                     // pointer or the selection.

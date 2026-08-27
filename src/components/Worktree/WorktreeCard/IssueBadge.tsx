@@ -78,7 +78,7 @@ export function IssueBadge({
           onClick={handleClick}
           data-no-dnd
           className={cn(
-            "flex items-center gap-1 text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent min-w-0",
+            "flex items-center gap-1 text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary min-w-0",
             freshnessClass(freshnessLevel),
             isHeadline ? "gap-1.5 text-sm leading-[inherit]" : "text-xs"
           )}

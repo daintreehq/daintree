@@ -86,9 +86,9 @@ export function SettingsSelect({
             type="button"
             aria-label={resetAriaLabel ?? `Reset ${label} to default`}
             className={cn(
-              "p-0.5 rounded-sm text-text-muted hover:text-daintree-text",
+              "p-0.5 rounded-sm text-text-muted hover:text-text-primary",
               "invisible group-hover:visible group-focus-within:visible focus-visible:visible",
-              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent",
+              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
               "transition-colors"
             )}
             onClick={onReset}

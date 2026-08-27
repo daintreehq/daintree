@@ -35,7 +35,7 @@ export function SettingsSection({
       <div className="settings-section-header sticky top-0 z-20 -mx-6 px-6 pb-1.5">
         <h4
           id={headingId}
-          className="text-sm font-medium text-daintree-text mb-1.5 flex items-center gap-2 flex-wrap"
+          className="text-sm font-medium text-text-primary mb-1.5 flex items-center gap-2 flex-wrap"
         >
           <Icon className={cn("w-4 h-4", iconColor)} aria-hidden="true" />
           {title}

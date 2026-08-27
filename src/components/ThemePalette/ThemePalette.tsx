@@ -52,7 +52,7 @@ function ThemeListItem({
     >
       <PaletteStrip scheme={scheme} />
       <div className="flex-1 min-w-0">
-        <div className="text-sm font-medium text-daintree-text truncate">{scheme.name}</div>
+        <div className="text-sm font-medium text-text-primary truncate">{scheme.name}</div>
         {scheme.location && (
           <div className="text-2xs text-daintree-text/50 truncate">{scheme.location}</div>
         )}

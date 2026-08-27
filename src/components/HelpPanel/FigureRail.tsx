@@ -43,7 +43,7 @@ export function FigureRail({ figures }: { figures: HelpFigure[] }) {
 
   return (
     <div
-      className="shrink-0 h-[88px] overflow-hidden border-t border-daintree-border"
+      className="shrink-0 h-[88px] overflow-hidden border-t border-border-default"
       data-testid="figure-rail"
     >
       <div
@@ -88,7 +88,7 @@ function FigureThumbnail({ figure, isNewest, onClick }: FigureThumbnailProps) {
   return (
     <div
       className={cn(
-        "relative shrink-0 h-[72px] w-[104px] rounded-[var(--radius-md)] overflow-hidden border border-daintree-border bg-overlay-subtle",
+        "relative shrink-0 h-[72px] w-[104px] rounded-[var(--radius-md)] overflow-hidden border border-border-default bg-overlay-subtle",
         isNewest && "animate-figure-arrive"
       )}
       data-testid="figure-thumbnail"
@@ -100,7 +100,7 @@ function FigureThumbnail({ figure, isNewest, onClick }: FigureThumbnailProps) {
             type="button"
             onClick={handleRetry}
             aria-label={`Retry figure ${figure.figureNumber}`}
-            className="flex items-center gap-1 text-3xs text-daintree-text/60 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent rounded"
+            className="flex items-center gap-1 text-3xs text-daintree-text/60 hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary rounded"
           >
             <RotateCw className="w-2.5 h-2.5" aria-hidden="true" />
             Retry
@@ -115,7 +115,7 @@ function FigureThumbnail({ figure, isNewest, onClick }: FigureThumbnailProps) {
               ? `Figure ${figure.figureNumber}: ${figure.caption}`
               : `Figure ${figure.figureNumber}`
           }
-          className="block h-full w-full focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:-outline-offset-2"
+          className="block h-full w-full focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
         >
           {/* Animated WebP demo loops play natively through the browser image
               decoder — no decoding hint or poster-swap is needed, and rail

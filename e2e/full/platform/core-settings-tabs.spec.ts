@@ -341,12 +341,12 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
     await expect(fullButton).toBeVisible({ timeout: T_SHORT });
 
     // Click "Errors Only" and verify it becomes the selected option. The
-    // selected option renders a filled radio dot (the inner bg-daintree-text
+    // selected option renders a filled radio dot (the inner bg-text-primary
     // div only exists when checked) and that selection is mutually exclusive,
     // so assert the observable selection moved to "Errors Only" and left "Off".
     await errorsButton.click();
-    await expect(errorsButton.locator("div.bg-daintree-text")).toBeVisible({ timeout: T_SHORT });
-    await expect(offButton.locator("div.bg-daintree-text")).toHaveCount(0, { timeout: T_SHORT });
+    await expect(errorsButton.locator("div.bg-text-primary")).toBeVisible({ timeout: T_SHORT });
+    await expect(offButton.locator("div.bg-text-primary")).toHaveCount(0, { timeout: T_SHORT });
 
     await window.keyboard.press("Escape");
     await expect(window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_SHORT });

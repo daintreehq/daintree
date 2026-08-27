@@ -147,7 +147,7 @@ describe("Toolbar layout — issue #2584 project switcher collision", () => {
     });
 
     it("project name span has truncate class", () => {
-      expect(source).toContain("min-w-0 truncate text-xs tracking-wide text-daintree-text");
+      expect(source).toContain("min-w-0 truncate text-xs tracking-wide text-text-primary");
     });
 
     it("emoji span has shrink-0 so it is not squeezed before name truncates", () => {

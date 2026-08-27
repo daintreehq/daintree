@@ -233,7 +233,7 @@ export function WorktreeSettingsTab() {
                     <button
                       onClick={handleReset}
                       disabled={isLoading}
-                      className="px-3 py-1.5 border border-daintree-border rounded-[var(--radius-md)] text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-border/50 transition-colors disabled:opacity-50"
+                      className="px-3 py-1.5 border border-border-default rounded-[var(--radius-md)] text-daintree-text/60 hover:text-text-primary hover:bg-daintree-border/50 transition-colors disabled:opacity-50"
                       aria-label="Reset to default"
                     >
                       <RotateCcw className="w-4 h-4" />
@@ -250,19 +250,19 @@ export function WorktreeSettingsTab() {
               Available variables:
             </span>
             <div className="grid grid-cols-2 gap-2 text-xs">
-              <div className="flex items-center gap-2 p-2 bg-daintree-bg/50 rounded-[var(--radius-md)] border border-daintree-border">
+              <div className="flex items-center gap-2 p-2 bg-daintree-bg/50 rounded-[var(--radius-md)] border border-border-default">
                 <code className="text-text-secondary">{"{base-folder}"}</code>
                 <span className="text-daintree-text/50">Repository folder name</span>
               </div>
-              <div className="flex items-center gap-2 p-2 bg-daintree-bg/50 rounded-[var(--radius-md)] border border-daintree-border">
+              <div className="flex items-center gap-2 p-2 bg-daintree-bg/50 rounded-[var(--radius-md)] border border-border-default">
                 <code className="text-text-secondary">{"{branch-slug}"}</code>
                 <span className="text-daintree-text/50">Sanitized branch name</span>
               </div>
-              <div className="flex items-center gap-2 p-2 bg-daintree-bg/50 rounded-[var(--radius-md)] border border-daintree-border">
+              <div className="flex items-center gap-2 p-2 bg-daintree-bg/50 rounded-[var(--radius-md)] border border-border-default">
                 <code className="text-text-secondary">{"{repo-name}"}</code>
                 <span className="text-daintree-text/50">Repository name</span>
               </div>
-              <div className="flex items-center gap-2 p-2 bg-daintree-bg/50 rounded-[var(--radius-md)] border border-daintree-border">
+              <div className="flex items-center gap-2 p-2 bg-daintree-bg/50 rounded-[var(--radius-md)] border border-border-default">
                 <code className="text-text-secondary">{"{parent-dir}"}</code>
                 <span className="text-daintree-text/50">Parent directory path</span>
               </div>
@@ -281,8 +281,8 @@ export function WorktreeSettingsTab() {
                       className={cn(
                         "px-3 py-1.5 text-xs rounded-[var(--radius-md)] border transition-colors disabled:opacity-50",
                         pattern === preset.pattern
-                          ? "bg-overlay-selected border-border-strong text-daintree-text font-medium"
-                          : "border-daintree-border text-daintree-text/70 hover:bg-daintree-border/50"
+                          ? "bg-overlay-selected border-border-strong text-text-primary font-medium"
+                          : "border-border-default text-daintree-text/70 hover:bg-daintree-border/50"
                       )}
                     >
                       {preset.label}
@@ -295,20 +295,20 @@ export function WorktreeSettingsTab() {
           </div>
 
           {validation.valid && preview && (
-            <div className="space-y-2 p-3 bg-daintree-bg/50 rounded-[var(--radius-md)] border border-daintree-border">
+            <div className="space-y-2 p-3 bg-daintree-bg/50 rounded-[var(--radius-md)] border border-border-default">
               <span className="block text-xs font-medium text-daintree-text/70">Preview:</span>
               <div className="text-xs space-y-1">
                 <div className="flex items-center gap-2">
                   <span className="text-daintree-text/50">Repository:</span>
-                  <code className="text-daintree-text">{sampleRootPath}</code>
+                  <code className="text-text-primary">{sampleRootPath}</code>
                 </div>
                 <div className="flex items-center gap-2">
                   <span className="text-daintree-text/50">Branch:</span>
-                  <code className="text-daintree-text">{SAMPLE_BRANCH}</code>
+                  <code className="text-text-primary">{SAMPLE_BRANCH}</code>
                 </div>
-                <div className="flex items-center gap-2 pt-1 border-t border-daintree-border mt-1">
+                <div className="flex items-center gap-2 pt-1 border-t border-border-default mt-1">
                   <span className="text-daintree-text/50">Result:</span>
-                  <code className="text-daintree-text break-all">{preview}</code>
+                  <code className="text-text-primary break-all">{preview}</code>
                 </div>
               </div>
             </div>
@@ -329,8 +329,8 @@ export function WorktreeSettingsTab() {
               className={cn(
                 "px-4 py-1.5 text-sm font-medium rounded-[var(--radius-md)] transition-colors",
                 hasChanges && validation.valid
-                  ? "bg-daintree-accent text-accent-primary-foreground hover:bg-daintree-accent/90"
-                  : "bg-daintree-border text-daintree-text/50 cursor-not-allowed"
+                  ? "bg-accent-primary text-accent-primary-foreground hover:bg-daintree-accent/90"
+                  : "bg-border-default text-daintree-text/50 cursor-not-allowed"
               )}
             >
               {isSaving ? "Saving…" : "Save Changes"}

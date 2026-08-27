@@ -75,7 +75,7 @@ export function RecentCallsPopover({ records, loading, error }: RecentCallsPopov
   const groups = useMemo(() => groupCallsByTurn(records), [records]);
 
   return (
-    <div className="flex flex-col text-2xs text-daintree-text">
+    <div className="flex flex-col text-2xs text-text-primary">
       <div className="px-3 pt-2.5 pb-1.5 text-daintree-text/50 font-medium">Recent tool calls</div>
 
       <div className="max-h-[min(360px,var(--radix-popover-content-available-height,360px))] overflow-y-auto px-1 pb-1">
@@ -126,7 +126,7 @@ function RecentCallRow({ record }: { record: McpAuditRecord }) {
         type="button"
         aria-expanded={expanded}
         onClick={() => setExpanded((v) => !v)}
-        className="grid w-full grid-cols-[auto_auto_1fr_auto] items-center gap-2 rounded-[var(--radius-md)] px-2 py-1 text-left hover:bg-overlay-soft transition-colors duration-150 ease-out focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:-outline-offset-2"
+        className="grid w-full grid-cols-[auto_auto_1fr_auto] items-center gap-2 rounded-[var(--radius-md)] px-2 py-1 text-left hover:bg-overlay-soft transition-colors duration-150 ease-out focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
       >
         <ChevronRight
           aria-hidden

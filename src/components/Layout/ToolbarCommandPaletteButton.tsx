@@ -10,7 +10,7 @@ import { actionService } from "@/services/ActionService";
 
 const PALETTE_ACTION_ID = "action.palette.open" as const;
 const PALETTE_LABEL = "Command palette";
-const toolbarIconButtonClass = "toolbar-icon-button text-daintree-text relative";
+const toolbarIconButtonClass = "toolbar-icon-button text-text-primary relative";
 
 interface ToolbarCommandPaletteButtonProps {
   "data-toolbar-item"?: string;

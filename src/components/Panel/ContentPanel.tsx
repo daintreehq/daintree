@@ -580,7 +580,7 @@ const ContentPanelInner = forwardRef<HTMLDivElement, ContentPanelProps>(function
         // Dialog joins the dock/maximized bucket: AppDialog already draws the
         // surface, border, radius, and shadow, so a second set here would
         // read as a panel nested inside a panel.
-        (location === "dock" || location === "dialog" || isMaximized) && "bg-daintree-bg",
+        (location === "dock" || location === "dialog" || isMaximized) && "bg-surface-canvas",
         location === "grid" &&
           !isMaximized &&
           "rounded border shadow-[var(--theme-shadow-ambient)] transition-colors duration-300",

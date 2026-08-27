@@ -29,8 +29,8 @@ export function IconToggle({
           className={cn(
             "p-1.5 rounded transition-colors",
             pressed
-              ? "bg-daintree-border text-daintree-text"
-              : "text-muted-foreground hover:text-daintree-text hover:bg-daintree-border"
+              ? "bg-border-default text-text-primary"
+              : "text-muted-foreground hover:text-text-primary hover:bg-border-default"
           )}
         >
           {children}

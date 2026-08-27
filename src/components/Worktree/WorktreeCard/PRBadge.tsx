@@ -126,7 +126,7 @@ export function PRBadge({
           onClick={handleClick}
           data-no-dnd
           className={cn(
-            "flex items-center gap-1 text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent min-w-0",
+            "flex items-center gap-1 text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary min-w-0",
             isHeadline ? "gap-1.5 text-sm leading-[inherit]" : "text-xs"
           )}
           aria-disabled={!isActive || undefined}

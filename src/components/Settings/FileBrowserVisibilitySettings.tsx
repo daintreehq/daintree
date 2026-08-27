@@ -73,14 +73,14 @@ export function FileBrowserVisibilitySettings() {
           {patterns.map((pattern) => (
             <li
               key={pattern}
-              className="flex items-center gap-1 rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg/50 py-1 pl-2 pr-1 font-mono text-xs text-daintree-text"
+              className="flex items-center gap-1 rounded-[var(--radius-md)] border border-border-default bg-daintree-bg/50 py-1 pl-2 pr-1 font-mono text-xs text-text-primary"
             >
               <span className="break-all">{pattern}</span>
               <button
                 type="button"
                 onClick={() => setPatterns(patterns.filter((p) => p !== pattern))}
                 aria-label={`Remove ${pattern}`}
-                className="flex h-4 w-4 items-center justify-center rounded text-daintree-text/50 transition-colors hover:bg-daintree-border/50 hover:text-daintree-text"
+                className="flex h-4 w-4 items-center justify-center rounded text-daintree-text/50 transition-colors hover:bg-daintree-border/50 hover:text-text-primary"
               >
                 <X className="h-3 w-3" />
               </button>
@@ -105,9 +105,9 @@ export function FileBrowserVisibilitySettings() {
             placeholder="Add a name or pattern"
             aria-label="Add an always-hidden pattern"
             className={cn(
-              "flex-1 rounded-[var(--radius-md)] border bg-daintree-bg px-3 py-1.5 font-mono text-sm text-daintree-text",
+              "flex-1 rounded-[var(--radius-md)] border bg-surface-canvas px-3 py-1.5 font-mono text-sm text-text-primary",
               "focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/30",
-              error ? "border-status-error/50" : "border-daintree-border"
+              error ? "border-status-error/50" : "border-border-default"
             )}
           />
           <button
@@ -115,7 +115,7 @@ export function FileBrowserVisibilitySettings() {
             onClick={commitAdd}
             disabled={draft.trim() === ""}
             aria-label="Add pattern"
-            className="flex items-center gap-1 rounded-[var(--radius-md)] border border-daintree-border px-3 py-1.5 text-sm text-daintree-text/70 transition-colors hover:bg-daintree-border/50 hover:text-daintree-text disabled:opacity-50"
+            className="flex items-center gap-1 rounded-[var(--radius-md)] border border-border-default px-3 py-1.5 text-sm text-daintree-text/70 transition-colors hover:bg-daintree-border/50 hover:text-text-primary disabled:opacity-50"
           >
             <Plus className="h-4 w-4" />
             Add
@@ -131,7 +131,7 @@ export function FileBrowserVisibilitySettings() {
               resetPatterns();
               setError(null);
             }}
-            className="flex items-center gap-1 text-xs text-daintree-text/50 transition-colors hover:text-daintree-text"
+            className="flex items-center gap-1 text-xs text-daintree-text/50 transition-colors hover:text-text-primary"
           >
             <RotateCcw className="h-3 w-3" />
             Reset to defaults

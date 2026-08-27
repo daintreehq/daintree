@@ -6,7 +6,7 @@ import { cn } from "@/lib/utils";
 import { Spinner } from "@/components/ui/Spinner";
 
 const buttonVariants = cva(
-  "relative inline-flex items-center justify-center whitespace-nowrap rounded-[var(--radius-md)] text-sm font-medium cursor-pointer select-none transition duration-150 ease-out focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 active:scale-[0.98] active:duration-[1ms]",
+  "relative inline-flex items-center justify-center whitespace-nowrap rounded-[var(--radius-md)] text-sm font-medium cursor-pointer select-none transition duration-150 ease-out focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2 disabled:pointer-events-none disabled:opacity-50 [&_svg]:pointer-events-none [&_svg]:shrink-0 active:scale-[0.98] active:duration-[1ms]",
   {
     variants: {
       variant: {
@@ -20,7 +20,7 @@ const buttonVariants = cva(
         destructive:
           "bg-destructive text-text-inverse [text-shadow:0_1px_0_rgba(255,255,255,0.15)] ring-1 ring-tint/20 shadow-[var(--theme-shadow-ambient)] inset-shadow-[0_1px_0_rgba(255,255,255,0.15)] hover:brightness-110 active:brightness-95 active:inset-shadow-none",
         outline:
-          "ring-1 ring-border-strong bg-surface-panel-elevated/95 backdrop-blur-md text-daintree-text shadow-[var(--theme-shadow-ambient)] inset-shadow-[0_1px_0_var(--color-overlay-soft)] hover:bg-surface-panel-elevated hover:ring-border-default hover:text-daintree-text active:bg-overlay-soft active:shadow-none",
+          "ring-1 ring-border-strong bg-surface-panel-elevated/95 backdrop-blur-md text-text-primary shadow-[var(--theme-shadow-ambient)] inset-shadow-[0_1px_0_var(--color-overlay-soft)] hover:bg-surface-panel-elevated hover:ring-border-default hover:text-text-primary active:bg-overlay-soft active:shadow-none",
         // High-contrast INVERSE CTA: a near-white fill + off-black text on dark
         // themes, near-black fill + off-white text on light themes — so the button
         // pops against the surrounding UI (white CTA on a dark app / black CTA on a
@@ -34,15 +34,15 @@ const buttonVariants = cva(
         // fill / lightens the black fill). Not opacity, which would fade the
         // label and let the surface bleed through.
         contrast:
-          "bg-daintree-text text-text-inverse ring-1 ring-tint/15 shadow-[var(--theme-shadow-ambient)] hover:bg-[color-mix(in_oklab,var(--color-daintree-text)_90%,var(--color-text-inverse))] active:bg-[color-mix(in_oklab,var(--color-daintree-text)_82%,var(--color-text-inverse))] active:shadow-none",
+          "bg-text-primary text-text-inverse ring-1 ring-tint/15 shadow-[var(--theme-shadow-ambient)] hover:bg-[color-mix(in_oklab,var(--color-text-primary)_90%,var(--color-text-inverse))] active:bg-[color-mix(in_oklab,var(--color-text-primary)_82%,var(--color-text-inverse))] active:shadow-none",
         secondary:
           "bg-secondary text-secondary-foreground ring-1 ring-tint/[0.08] shadow-[var(--theme-shadow-ambient)] hover:bg-secondary/90 active:shadow-none",
         ghost:
-          "text-text-secondary hover:bg-overlay-soft hover:text-daintree-text focus-visible:text-daintree-text",
+          "text-text-secondary hover:bg-overlay-soft hover:text-text-primary focus-visible:text-text-primary",
         link: "text-text-link underline-offset-4 hover:underline",
         subtle:
-          "bg-surface-panel text-text-secondary ring-1 ring-border-strong hover:bg-surface-panel-elevated hover:ring-border-default hover:text-daintree-text",
-        pill: "rounded-full bg-surface-panel backdrop-blur-md ring-1 ring-border-strong text-text-secondary hover:bg-surface-panel-elevated hover:ring-border-default hover:text-daintree-text",
+          "bg-surface-panel text-text-secondary ring-1 ring-border-strong hover:bg-surface-panel-elevated hover:ring-border-default hover:text-text-primary",
+        pill: "rounded-full bg-surface-panel backdrop-blur-md ring-1 ring-border-strong text-text-secondary hover:bg-surface-panel-elevated hover:ring-border-default hover:text-text-primary",
         "ghost-danger":
           "text-status-error hover:bg-status-error/10 focus-visible:outline-status-error",
         "ghost-success": "text-status-success hover:bg-status-success/10",

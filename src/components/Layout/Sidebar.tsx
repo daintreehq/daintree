@@ -213,7 +213,7 @@ export function Sidebar({
               className={cn(
                 "w-px h-8 rounded-full transition-[width] duration-150 delay-100 group-hover:w-0.5",
                 "bg-daintree-text/20",
-                "group-hover:bg-daintree-text/35 group-focus-visible:bg-daintree-accent",
+                "group-hover:bg-daintree-text/35 group-focus-visible:bg-accent-primary",
                 isResizing && "bg-daintree-text/50"
               )}
             />

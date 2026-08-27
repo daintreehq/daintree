@@ -111,7 +111,7 @@ vi.mock("@/components/ui/AppPaletteDialog", () => {
 
   return {
     AppPaletteDialog: Dialog,
-    KBD_CLASS: "px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-daintree-border text-daintree-text/60",
+    KBD_CLASS: "px-1.5 py-0.5 rounded-[var(--radius-sm)] bg-border-default text-daintree-text/60",
     PALETTE_SURFACE_WIDTHS: {
       // Sentinel values, not the production pixels: this mock only has to satisfy
       // the real AppPalettePopover's width lookup, and copying the shipped

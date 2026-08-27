@@ -1126,7 +1126,7 @@ export function FilePane({
     >
       <div
         ref={heightHold.bodyRef}
-        className={`flex-1 min-h-0 overflow-auto bg-daintree-bg${
+        className={`flex-1 min-h-0 overflow-auto bg-surface-canvas${
           viewMode === "diff" ? " diff-scroll-root" : ""
         }`}
         data-testid="file-pane-body"
@@ -1175,14 +1175,14 @@ export function FilePane({
             />
             {pickerRoot && (
               <div className="w-full max-w-md flex flex-col gap-1 min-h-0">
-                <div className="flex items-center gap-2 px-2 py-1.5 rounded-md border border-daintree-border bg-daintree-sidebar focus-within:border-daintree-accent/40 focus-within:ring-1 focus-within:ring-daintree-accent/20">
+                <div className="flex items-center gap-2 px-2 py-1.5 rounded-md border border-border-default bg-surface-sidebar focus-within:border-daintree-accent/40 focus-within:ring-1 focus-within:ring-daintree-accent/20">
                   <Search className="w-3.5 h-3.5 text-muted-foreground shrink-0" />
                   <input
                     value={pickerQuery}
                     onChange={(e) => setPickerQuery(e.target.value)}
                     placeholder="Search files"
                     aria-label="Search files"
-                    className="w-full bg-transparent text-sm text-daintree-text placeholder:text-text-placeholder focus:outline-hidden"
+                    className="w-full bg-transparent text-sm text-text-primary placeholder:text-text-placeholder focus:outline-hidden"
                     data-testid="file-pane-search"
                   />
                 </div>
@@ -1194,7 +1194,7 @@ export function FilePane({
                       role="option"
                       aria-selected={false}
                       onClick={() => setFilePanelPath(id, result.absolutePath)}
-                      className="text-left px-2 py-1.5 rounded text-xs font-mono truncate text-muted-foreground transition-colors hover:text-daintree-text hover:bg-daintree-border"
+                      className="text-left px-2 py-1.5 rounded text-xs font-mono truncate text-muted-foreground transition-colors hover:text-text-primary hover:bg-border-default"
                       data-testid="file-pane-result"
                     >
                       {result.relativePath}
@@ -1226,7 +1226,7 @@ export function FilePane({
               <button
                 type="button"
                 onClick={() => loadFile("explicit")}
-                className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-daintree-text bg-daintree-border hover:bg-daintree-border/80 rounded transition-colors"
+                className="flex items-center gap-1.5 px-3 py-1.5 text-xs text-text-primary bg-border-default hover:bg-daintree-border/80 rounded transition-colors"
               >
                 <RefreshCw className="w-3.5 h-3.5" />
                 Retry
@@ -1326,7 +1326,7 @@ export function FilePane({
               {metadata && (
                 <div
                   data-testid="file-viewer-metadata"
-                  className="px-3 py-1 border-b border-daintree-border text-xs text-muted-foreground font-mono shrink-0"
+                  className="px-3 py-1 border-b border-border-default text-xs text-muted-foreground font-mono shrink-0"
                 >
                   {metadata.lineCount} lines · {metadata.sizeLabel} · UTF-8
                 </div>

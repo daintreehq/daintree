@@ -186,7 +186,7 @@ export function ImageViewerTab() {
                     onChange={(e) => handleCommandChange(e.target.value)}
                     disabled={controlsDisabled}
                     placeholder="e.g. open -a Photoshop, gimp"
-                    className="w-full bg-surface-input border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text font-mono transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                    className="w-full bg-surface-input border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-text-primary font-mono transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
                   />
                   <p className="text-xs text-text-secondary select-text">
                     The file path is appended as the last argument
@@ -200,7 +200,7 @@ export function ImageViewerTab() {
             <button
               onClick={handleSave}
               disabled={isSaving || isLoading || Boolean(loadError)}
-              className="px-4 py-2 rounded-[var(--radius-md)] bg-daintree-accent text-accent-primary-foreground text-sm font-medium hover:bg-daintree-accent/90 disabled:opacity-50 disabled:pointer-events-none transition-colors"
+              className="px-4 py-2 rounded-[var(--radius-md)] bg-accent-primary text-accent-primary-foreground text-sm font-medium hover:bg-daintree-accent/90 disabled:opacity-50 disabled:pointer-events-none transition-colors"
             >
               {isSaving ? "Saving…" : "Save"}
             </button>

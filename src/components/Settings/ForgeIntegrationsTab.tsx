@@ -425,7 +425,7 @@ function ProjectRoutingPanel({
           >
             <div className="min-w-0 flex-1">
               <div className="flex items-baseline gap-2">
-                <span className="text-xs font-medium text-daintree-text">{remote.name}</span>
+                <span className="text-xs font-medium text-text-primary">{remote.name}</span>
                 {remote.name === liveRemoteName && (
                   <Tooltip>
                     <TooltipTrigger asChild>

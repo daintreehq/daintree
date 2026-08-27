@@ -33,7 +33,7 @@ function Stat({ icon, value, label, highlight, className, dim = true }: StatProp
     <div
       className={cn(
         "flex items-center gap-1.5 text-xs",
-        highlight ? "text-daintree-text" : "text-daintree-text/75",
+        highlight ? "text-text-primary" : "text-daintree-text/75",
         className
       )}
     >

@@ -215,7 +215,7 @@ export function PilotParkEditor({
           className="h-4 w-4 shrink-0"
           brandColor={target.row.presetColor ?? target.row.chrome.color}
         />
-        <span className="min-w-0 truncate text-sm text-daintree-text">{target.row.title}</span>
+        <span className="min-w-0 truncate text-sm text-text-primary">{target.row.title}</span>
         <span className="shrink-0 text-xs text-text-secondary">{target.group.name}</span>
       </div>
 
@@ -234,7 +234,7 @@ export function PilotParkEditor({
           data-testid="pilot-park-note"
           className={cn(
             "w-full rounded-[var(--radius-sm)] border border-border-default bg-transparent px-2 py-1.5",
-            "text-sm text-daintree-text placeholder:text-text-secondary"
+            "text-sm text-text-primary placeholder:text-text-secondary"
           )}
         />
       </label>
@@ -281,9 +281,9 @@ export function PilotParkEditor({
                 onClick={() => setGateId(id)}
                 className={cn(
                   "flex w-full items-center gap-2 px-2 py-1.5 text-left text-sm",
-                  "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-daintree-accent",
+                  "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
                   isActive
-                    ? "bg-overlay-subtle text-daintree-text"
+                    ? "bg-overlay-subtle text-text-primary"
                     : "text-daintree-text/70 hover:bg-tint/[0.04]"
                 )}
               >
@@ -337,9 +337,9 @@ export function PilotParkEditor({
           disabled={busy}
           data-testid="pilot-park-confirm"
           className={cn(
-            "rounded-[var(--radius-sm)] bg-overlay-subtle px-3 py-1 text-sm text-daintree-text transition-colors",
+            "rounded-[var(--radius-sm)] bg-overlay-subtle px-3 py-1 text-sm text-text-primary transition-colors",
             "hover:bg-tint/[0.08] disabled:opacity-50",
-            "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-daintree-accent"
+            "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
           )}
         >
           <span className="flex items-center gap-1.5">
@@ -356,8 +356,8 @@ export function PilotParkEditor({
             data-testid="pilot-park-unpark"
             className={cn(
               "rounded-[var(--radius-sm)] px-3 py-1 text-sm text-daintree-text/70 transition-colors",
-              "hover:bg-overlay-subtle hover:text-daintree-text disabled:opacity-50",
-              "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-daintree-accent"
+              "hover:bg-overlay-subtle hover:text-text-primary disabled:opacity-50",
+              "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
             )}
           >
             Unpark
@@ -371,8 +371,8 @@ export function PilotParkEditor({
           data-testid="pilot-park-cancel"
           className={cn(
             "ml-auto rounded-[var(--radius-sm)] px-3 py-1 text-sm text-text-secondary transition-colors",
-            "hover:bg-overlay-subtle hover:text-daintree-text disabled:opacity-50",
-            "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-daintree-accent"
+            "hover:bg-overlay-subtle hover:text-text-primary disabled:opacity-50",
+            "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
           )}
         >
           Cancel

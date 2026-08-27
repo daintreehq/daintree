@@ -563,7 +563,7 @@ function ApiKeyRow({
         {!value && (
           <button
             onClick={() => window.electron?.system?.openExternal(helpUrl)}
-            className="text-xs text-text-secondary hover:text-daintree-text underline-offset-2 hover:underline flex items-center gap-1"
+            className="text-xs text-text-secondary hover:text-text-primary underline-offset-2 hover:underline flex items-center gap-1"
           >
             {helpLabel}
             <ExternalLink className="w-3 h-3" />
@@ -590,7 +590,7 @@ function ApiKeyRow({
               }
             }}
             placeholder={value ? "Enter new key to replace" : placeholder}
-            className="w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 pr-8 font-mono text-sm text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40 transition-colors"
+            className="w-full bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 pr-8 font-mono text-sm text-text-primary placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40 transition-colors"
             autoComplete="new-password"
             spellCheck={false}
             disabled={validation === "testing"}
@@ -610,7 +610,7 @@ function ApiKeyRow({
           loading={validation === "testing"}
           size="sm"
           variant="outline"
-          className="text-daintree-text border-daintree-border hover:bg-daintree-border"
+          className="text-text-primary border-border-default hover:bg-border-default"
         >
           Save
         </Button>
@@ -619,7 +619,7 @@ function ApiKeyRow({
             onClick={handleClear}
             variant="outline"
             size="sm"
-            className="text-daintree-text/50 border-daintree-border hover:text-status-error hover:border-status-error/30"
+            className="text-daintree-text/50 border-border-default hover:text-status-error hover:border-status-error/30"
           >
             Clear
           </Button>
@@ -684,7 +684,7 @@ function AdvancedSection({
               onBlur={(e) => update({ organizationId: e.target.value.trim() })}
               placeholder={isLegacyKey ? "org-..." : ""}
               disabled={!isLegacyKey}
-              className="w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 font-mono text-sm text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40 transition-colors disabled:opacity-50"
+              className="w-full bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 font-mono text-sm text-text-primary placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40 transition-colors disabled:opacity-50"
               autoComplete="off"
               spellCheck={false}
             />
@@ -701,7 +701,7 @@ function AdvancedSection({
               onBlur={(e) => update({ projectId: e.target.value.trim() })}
               placeholder={isLegacyKey ? "proj_..." : ""}
               disabled={!isLegacyKey}
-              className="w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 font-mono text-sm text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40 transition-colors disabled:opacity-50"
+              className="w-full bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 font-mono text-sm text-text-primary placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40 transition-colors disabled:opacity-50"
               autoComplete="off"
               spellCheck={false}
             />
@@ -769,7 +769,7 @@ function MicPermissionRow({
             <div className="flex gap-2">
               <button
                 onClick={onOpenSettings}
-                className="text-xs text-text-secondary hover:text-daintree-text underline-offset-2 hover:underline flex items-center gap-1"
+                className="text-xs text-text-secondary hover:text-text-primary underline-offset-2 hover:underline flex items-center gap-1"
               >
                 Open {settingsLabel}
                 <ExternalLink className="w-3 h-3" />
@@ -796,7 +796,7 @@ function MicPermissionRow({
                   variant="outline"
                   onClick={onRequest}
                   loading={isRequesting}
-                  className="text-daintree-text border-daintree-border hover:bg-daintree-border"
+                  className="text-text-primary border-border-default hover:bg-border-default"
                 >
                   <Mic className="w-3.5 h-3.5" />
                   Request
@@ -954,14 +954,14 @@ function DictionarySection({
             {suggestedWords.map((entry) => (
               <span
                 key={entry.word}
-                className="inline-flex items-center gap-1.5 rounded-full border border-daintree-border bg-overlay-subtle px-2 py-0.5 text-xs text-daintree-text"
+                className="inline-flex items-center gap-1.5 rounded-full border border-border-default bg-overlay-subtle px-2 py-0.5 text-xs text-text-primary"
                 title={entry.utterance ? `Heard as "${entry.utterance}"` : undefined}
               >
                 {entry.word}
                 <button
                   type="button"
                   onClick={() => onAcceptSuggestion(entry.word)}
-                  className="inline-flex items-center gap-0.5 text-daintree-text/50 hover:text-daintree-text transition-colors"
+                  className="inline-flex items-center gap-0.5 text-daintree-text/50 hover:text-text-primary transition-colors"
                   aria-label={`Add ${entry.word} to dictionary`}
                 >
                   <Plus className="h-3 w-3" />
@@ -994,14 +994,14 @@ function DictionarySection({
             }
           }}
           placeholder="Add term…"
-          className="flex-1 bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40 transition-colors"
+          className="flex-1 bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-text-primary placeholder:text-text-placeholder focus:outline-hidden focus:border-daintree-accent/40 transition-colors"
         />
         <Button
           onClick={onAdd}
           disabled={!newWord.trim()}
           size="sm"
           variant="outline"
-          className="text-daintree-text border-daintree-border hover:bg-daintree-border"
+          className="text-text-primary border-border-default hover:bg-border-default"
         >
           <Plus className="h-3.5 w-3.5" />
           Add
@@ -1013,7 +1013,7 @@ function DictionarySection({
           {words.map((word) => (
             <span
               key={word}
-              className="inline-flex items-center gap-1 rounded-full border border-daintree-border bg-daintree-bg px-2.5 py-0.5 text-xs text-daintree-text"
+              className="inline-flex items-center gap-1 rounded-full border border-border-default bg-surface-canvas px-2.5 py-0.5 text-xs text-text-primary"
             >
               {word}
               <button
@@ -1077,7 +1077,7 @@ function CorePromptViewer() {
         Inspect core prompt
       </button>
       {expanded && (
-        <pre className="bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] px-3 py-2 text-xs font-mono text-daintree-text/50 whitespace-pre-wrap overflow-y-auto max-h-48 select-text">
+        <pre className="bg-surface-canvas border border-border-default rounded-[var(--radius-md)] px-3 py-2 text-xs font-mono text-daintree-text/50 whitespace-pre-wrap overflow-y-auto max-h-48 select-text">
           {CORE_CORRECTION_PROMPT}
         </pre>
       )}

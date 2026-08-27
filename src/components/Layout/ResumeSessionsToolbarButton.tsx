@@ -10,7 +10,7 @@ import { actionService } from "@/services/ActionService";
 
 const RESUME_ACTION_ID = "terminal.resumeSessions" as const;
 const RESUME_LABEL = "Resume session";
-const toolbarIconButtonClass = "toolbar-icon-button text-daintree-text relative";
+const toolbarIconButtonClass = "toolbar-icon-button text-text-primary relative";
 
 interface ResumeSessionsToolbarButtonProps {
   "data-toolbar-item"?: string;

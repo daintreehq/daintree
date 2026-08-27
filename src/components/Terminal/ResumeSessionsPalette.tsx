@@ -33,7 +33,7 @@ function ResumeSessionRow({ item, isSelected, matches, onSelect, itemRef }: Resu
         PALETTE_ROW_CLASS,
         "w-full flex items-start gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left",
         "text-daintree-text/70",
-        "hover:bg-overlay-subtle hover:text-daintree-text",
+        "hover:bg-overlay-subtle hover:text-text-primary",
         item.isStale && "opacity-50"
       )}
       onClick={() => onSelect(item)}
@@ -42,7 +42,7 @@ function ResumeSessionRow({ item, isSelected, matches, onSelect, itemRef }: Resu
         <PanelKindIcon iconId={item.iconId} color={item.color} size={16} />
       </div>
       <div className="flex-1 min-w-0">
-        <div className="text-sm font-medium text-daintree-text truncate">
+        <div className="text-sm font-medium text-text-primary truncate">
           <HighlightedText text={item.name} indices={findMatchIndices(matches, "name")} />
         </div>
         {item.description && (

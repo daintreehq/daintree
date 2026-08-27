@@ -442,9 +442,9 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
                       tabIndex={-1}
                       aria-hidden="true"
                       className={cn(
-                        "pointer-events-auto p-1.5 text-daintree-text/60 hover:text-daintree-text",
+                        "pointer-events-auto p-1.5 text-daintree-text/60 hover:text-text-primary",
                         "rounded-[var(--radius-md)] transition-colors",
-                        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+                        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
                       )}
                       aria-label="Scroll left"
                     >
@@ -532,9 +532,9 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
                       tabIndex={-1}
                       aria-hidden="true"
                       className={cn(
-                        "pointer-events-auto p-1.5 text-daintree-text/60 hover:text-daintree-text",
+                        "pointer-events-auto p-1.5 text-daintree-text/60 hover:text-text-primary",
                         "rounded-[var(--radius-md)] transition-colors",
-                        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+                        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
                       )}
                       aria-label="Scroll right"
                     >

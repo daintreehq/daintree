@@ -149,7 +149,7 @@ export function PluginActionAuditLogViewer({
           onChange={(e) => setPluginFilter(e.target.value)}
           placeholder="Filter by plugin or action ID"
           aria-label="Filter audit by plugin or action ID"
-          className="flex-1 min-w-[180px] bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-xs text-daintree-text placeholder:text-text-placeholder font-mono focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+          className="flex-1 min-w-[180px] bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-xs text-text-primary placeholder:text-text-placeholder font-mono focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
         />
         <input
           type="text"
@@ -157,7 +157,7 @@ export function PluginActionAuditLogViewer({
           onChange={(e) => setSearchQuery(e.target.value)}
           placeholder="Search arguments or errors"
           aria-label="Search audit arguments or error messages"
-          className="w-40 bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-xs text-daintree-text placeholder:text-text-placeholder font-mono focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+          className="w-40 bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-xs text-text-primary placeholder:text-text-placeholder font-mono focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
         />
         <select
           value={resultFilter}
@@ -174,7 +174,7 @@ export function PluginActionAuditLogViewer({
             }
           }}
           aria-label="Filter audit by result"
-          className="bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-xs text-daintree-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+          className="bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-xs text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
         >
           <option value="all">All results</option>
           <option value="success">Success</option>
@@ -191,7 +191,7 @@ export function PluginActionAuditLogViewer({
             }
           }}
           aria-label="Filter audit by time range"
-          className="bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-xs text-daintree-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+          className="bg-surface-canvas border border-border-strong rounded-[var(--radius-md)] px-2 py-1 text-xs text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
         >
           <option value="all">All</option>
           <option value="5m">Last 5 minutes</option>
@@ -205,8 +205,8 @@ export function PluginActionAuditLogViewer({
             className={cn(
               "flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded-[var(--radius-md)] border transition-colors",
               showSuccessful
-                ? "bg-overlay-subtle border-daintree-border text-daintree-text"
-                : "border-daintree-border text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft"
+                ? "bg-overlay-subtle border-border-default text-text-primary"
+                : "border-border-default text-daintree-text/70 hover:text-text-primary hover:bg-overlay-soft"
             )}
             aria-pressed={showSuccessful}
           >
@@ -216,7 +216,7 @@ export function PluginActionAuditLogViewer({
         )}
       </div>
 
-      <div className="max-h-64 overflow-y-auto rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg">
+      <div className="max-h-64 overflow-y-auto rounded-[var(--radius-md)] border border-border-default bg-surface-canvas">
         {loading ? (
           <Skeleton label="Loading audit records" className="space-y-2 p-3">
             <SkeletonBone className="h-5 w-5/6" />
@@ -248,7 +248,7 @@ export function PluginActionAuditLogViewer({
             />
           )
         ) : (
-          <ul className="divide-y divide-daintree-border">
+          <ul className="divide-y divide-border-default">
             {filteredRecords.map((record) => (
               <li key={record.id} className="grid grid-cols-[auto_1fr_auto] gap-2 p-2 text-xs">
                 <SeverityMark
@@ -306,7 +306,7 @@ export function PluginActionAuditLogViewer({
         <button
           type="button"
           onClick={() => void onRefresh()}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-[var(--radius-md)] border border-daintree-border text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft transition-colors"
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-[var(--radius-md)] border border-border-default text-daintree-text/70 hover:text-text-primary hover:bg-overlay-soft transition-colors"
           aria-label="Refresh audit log"
         >
           <RefreshCw className="w-3.5 h-3.5" />
@@ -319,10 +319,10 @@ export function PluginActionAuditLogViewer({
           className={cn(
             "flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-[var(--radius-md)] border transition-colors",
             filteredRecords.length === 0
-              ? "border-daintree-border text-daintree-text/30 cursor-not-allowed"
+              ? "border-border-default text-daintree-text/30 cursor-not-allowed"
               : copyFlashActive
                 ? "text-status-success border-status-success/30"
-                : "border-daintree-border text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft"
+                : "border-border-default text-daintree-text/70 hover:text-text-primary hover:bg-overlay-soft"
           )}
         >
           {copyFlashActive ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
@@ -335,10 +335,10 @@ export function PluginActionAuditLogViewer({
           className={cn(
             "flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-[var(--radius-md)] border transition-colors",
             filteredRecords.length === 0
-              ? "border-daintree-border text-daintree-text/30 cursor-not-allowed"
+              ? "border-border-default text-daintree-text/30 cursor-not-allowed"
               : exportFlashActive
                 ? "text-status-success border-status-success/30"
-                : "border-daintree-border text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft"
+                : "border-border-default text-daintree-text/70 hover:text-text-primary hover:bg-overlay-soft"
           )}
         >
           {exportFlashActive ? (
@@ -355,8 +355,8 @@ export function PluginActionAuditLogViewer({
           className={cn(
             "px-3 py-1.5 text-xs font-medium rounded-[var(--radius-md)] border transition-colors",
             records.length === 0
-              ? "border-daintree-border text-daintree-text/30 cursor-not-allowed"
-              : "border-daintree-border text-status-danger hover:text-status-danger hover:bg-status-danger/10 hover:border-status-danger/20"
+              ? "border-border-default text-daintree-text/30 cursor-not-allowed"
+              : "border-border-default text-status-danger hover:text-status-danger hover:bg-status-danger/10 hover:border-status-danger/20"
           )}
         >
           Clear log

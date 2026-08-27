@@ -1100,7 +1100,7 @@ export function NewWorktreeDialog({
                     label="Base"
                     htmlFor="base-branch"
                     hint={
-                      <label className="flex w-fit cursor-pointer items-center gap-2 text-xs text-text-secondary hover:text-daintree-text">
+                      <label className="flex w-fit cursor-pointer items-center gap-2 text-xs text-text-secondary hover:text-text-primary">
                         <span className="relative inline-flex shrink-0">
                           <input
                             id="from-remote"
@@ -1114,9 +1114,9 @@ export function NewWorktreeDialog({
                               // A 16px box at the theme radius reads as a radio, not a checkbox.
                               "h-4 w-4 appearance-none rounded-[4px] border",
                               "transition-colors duration-150 ease-out",
-                              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
+                              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
                               fromRemote
-                                ? "border-daintree-text bg-daintree-text"
+                                ? "border-text-primary bg-text-primary"
                                 : "border-border-strong bg-surface-input"
                             )}
                           />

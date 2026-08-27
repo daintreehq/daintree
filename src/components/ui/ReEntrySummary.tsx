@@ -107,7 +107,7 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
           "rounded-[var(--radius-sm)] border-l-[3px] border border-tint/[0.08]",
           "bg-surface-panel/85 backdrop-blur-xl",
           "px-3 py-2.5 pr-2",
-          "text-sm text-daintree-text",
+          "text-sm text-text-primary",
           "shadow-[var(--theme-shadow-floating)]",
           "ring-1 ring-inset ring-tint/[0.05]",
           // Tailwind v4 translate-* emits the individual `translate` property,
@@ -137,7 +137,7 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
         onMouseLeave={() => setIsPaused(false)}
       >
         <div className="flex items-start justify-between gap-2">
-          <h4 className="font-medium leading-tight tracking-tight text-xs text-daintree-text">
+          <h4 className="font-medium leading-tight tracking-tight text-xs text-text-primary">
             While you were away
           </h4>
           <div className="flex items-center gap-0.5">
@@ -151,7 +151,7 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
                 "h-6 w-6 flex items-center justify-center",
                 "text-daintree-text/40 transition-colors duration-150",
                 "hover:text-daintree-text/80 hover:bg-tint/10",
-                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
+                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
                 isPinned && "text-daintree-text/80"
               )}
             >
@@ -166,7 +166,7 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
                 "h-6 w-6 flex items-center justify-center",
                 "text-daintree-text/40 transition-colors duration-150",
                 "hover:text-daintree-text/80 hover:bg-tint/10",
-                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
               )}
             >
               <X className="h-3.5 w-3.5" />
@@ -186,9 +186,9 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
                     "flex items-center gap-1.5 w-full text-left text-xs",
                     "rounded-[var(--radius-xs)] px-0.5 py-0.5 -mx-0.5",
                     "hover:bg-tint/5 transition-colors duration-150",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
                     row.worstType === "error" || row.worstType === "warning"
-                      ? "text-daintree-text"
+                      ? "text-text-primary"
                       : "text-daintree-text/70"
                   )}
                 >
@@ -226,7 +226,7 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
               "text-xs font-medium",
               "bg-status-info/10 text-status-info",
               "hover:bg-status-info/20 transition-colors",
-              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
             )}
           >
             Open Notifications

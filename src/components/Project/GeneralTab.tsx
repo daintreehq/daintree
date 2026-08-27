@@ -327,19 +327,19 @@ export function GeneralTab({
   return (
     <>
       {currentProject && (
-        <div id="project-name" className="mb-6 pb-6 border-b border-daintree-border">
+        <div id="project-name" className="mb-6 pb-6 border-b border-border-default">
           <h3 className="text-sm font-semibold text-daintree-text/80 mb-2">Project Identity</h3>
           <p className="text-xs text-daintree-text/60 mb-4">
             Customize how your project appears in the sidebar and dashboard.
           </p>
 
-          <div className="flex items-start gap-3 p-3 rounded-[var(--radius-md)] bg-daintree-bg border border-daintree-border">
+          <div className="flex items-start gap-3 p-3 rounded-[var(--radius-md)] bg-surface-canvas border border-border-default">
             <Popover open={isEmojiPickerOpen} onOpenChange={setIsEmojiPickerOpen}>
               <PopoverTrigger asChild>
                 <button
                   type="button"
                   aria-label="Change project emoji"
-                  className="flex h-14 w-14 items-center justify-center rounded-[var(--radius-xl)] shadow-inner shrink-0 bg-tint/5 hover:bg-tint/10 transition-colors border border-transparent hover:border-daintree-border cursor-pointer group"
+                  className="flex h-14 w-14 items-center justify-center rounded-[var(--radius-xl)] shadow-inner shrink-0 bg-tint/5 hover:bg-tint/10 transition-colors border border-transparent hover:border-border-default cursor-pointer group"
                   style={{
                     background: getProjectGradient(color),
                   }}
@@ -371,7 +371,7 @@ export function GeneralTab({
                 type="text"
                 value={name}
                 onChange={(e) => onNameChange(e.target.value)}
-                className="w-full bg-transparent border border-daintree-border rounded px-3 py-2 text-sm text-daintree-text focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30 transition-[border-color,box-shadow] placeholder:text-text-placeholder"
+                className="w-full bg-transparent border border-border-default rounded px-3 py-2 text-sm text-text-primary focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30 transition-[border-color,box-shadow] placeholder:text-text-placeholder"
                 placeholder="My Awesome Project"
               />
             </div>
@@ -398,7 +398,7 @@ export function GeneralTab({
       )}
 
       {currentProject && (
-        <div className="mb-6 pb-6 border-b border-daintree-border">
+        <div className="mb-6 pb-6 border-b border-border-default">
           <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
             <Palette className="h-4 w-4" />
             Project Color
@@ -418,8 +418,8 @@ export function GeneralTab({
                 className={cn(
                   "h-7 w-7 rounded-full transition-[border-color,scale,box-shadow] border-2 shrink-0",
                   color === hex
-                    ? "border-daintree-text scale-110 shadow-sm"
-                    : "border-transparent hover:border-daintree-border hover:scale-105"
+                    ? "border-text-primary scale-110 shadow-sm"
+                    : "border-transparent hover:border-border-default hover:scale-105"
                 )}
                 style={{ backgroundColor: hex }}
               />
@@ -437,7 +437,7 @@ export function GeneralTab({
                 aria-label="Pick a custom color"
               />
               <div
-                className="h-8 w-8 rounded-[var(--radius-md)] border border-daintree-border flex items-center justify-center cursor-pointer hover:border-daintree-text/40 transition-colors"
+                className="h-8 w-8 rounded-[var(--radius-md)] border border-border-default flex items-center justify-center cursor-pointer hover:border-daintree-text/40 transition-colors"
                 style={{
                   backgroundColor: color ?? undefined,
                 }}
@@ -455,17 +455,17 @@ export function GeneralTab({
               autoComplete="off"
               aria-label="Hex color value"
               className={cn(
-                "w-28 bg-daintree-bg border rounded px-3 py-1.5 text-sm text-daintree-text font-mono focus:outline-hidden focus:ring-1 transition placeholder:text-text-placeholder",
+                "w-28 bg-surface-canvas border rounded px-3 py-1.5 text-sm text-text-primary font-mono focus:outline-hidden focus:ring-1 transition placeholder:text-text-placeholder",
                 hexInput && !isValidHexColor(hexInput)
                   ? "border-status-error/50 focus:border-status-error focus:ring-status-error/30"
-                  : "border-daintree-border focus:border-daintree-accent/40 focus:ring-daintree-accent/30"
+                  : "border-border-default focus:border-daintree-accent/40 focus:ring-daintree-accent/30"
               )}
             />
             {color && (
               <button
                 type="button"
                 onClick={() => onColorChange(undefined)}
-                className="flex items-center gap-1 px-2 py-1.5 rounded text-xs text-daintree-text/60 hover:text-daintree-text hover:bg-tint/5 transition-colors"
+                className="flex items-center gap-1 px-2 py-1.5 rounded text-xs text-daintree-text/60 hover:text-text-primary hover:bg-tint/5 transition-colors"
                 aria-label="Clear project color"
               >
                 <X className="h-3.5 w-3.5" />
@@ -476,7 +476,7 @@ export function GeneralTab({
         </div>
       )}
 
-      <div id="project-dev-server" className="mb-6 pb-6 border-b border-daintree-border">
+      <div id="project-dev-server" className="mb-6 pb-6 border-b border-border-default">
         <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
           <Rocket className="h-4 w-4" />
           Dev Server Command
@@ -490,7 +490,7 @@ export function GeneralTab({
           <div
             className={cn(
               "flex items-center gap-2 mb-3 px-3 py-2 rounded-[var(--radius-md)]",
-              "bg-overlay-subtle border border-daintree-border"
+              "bg-overlay-subtle border border-border-default"
             )}
           >
             <span className="text-xs text-daintree-text/60">
@@ -501,7 +501,7 @@ export function GeneralTab({
               onClick={handleApplyDetected}
               variant="ghost"
               size="sm"
-              className="gap-1.5 px-2.5 py-1 h-auto text-daintree-accent"
+              className="gap-1.5 px-2.5 py-1 h-auto text-accent-primary"
             >
               <WandSparkles className="h-3.5 w-3.5" />
               Use command
@@ -514,7 +514,7 @@ export function GeneralTab({
           type="text"
           value={devServerCommand}
           onChange={(e) => onDevServerCommandChange(e.target.value)}
-          className="w-full bg-daintree-bg border border-daintree-border rounded px-3 py-2 text-sm text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30 transition placeholder:text-text-placeholder"
+          className="w-full bg-surface-canvas border border-border-default rounded px-3 py-2 text-sm text-text-primary font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30 transition placeholder:text-text-placeholder"
           placeholder="npm run dev"
           spellCheck={false}
           autoCapitalize="off"
@@ -544,7 +544,7 @@ export function GeneralTab({
                 onDevServerLoadTimeoutChange(num);
               }
             }}
-            className="w-28 bg-daintree-bg border border-daintree-border rounded px-3 py-2 text-sm text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30 transition placeholder:text-text-placeholder"
+            className="w-28 bg-surface-canvas border border-border-default rounded px-3 py-2 text-sm text-text-primary font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30 transition placeholder:text-text-placeholder"
             placeholder="30"
             aria-label="Dev server load timeout in seconds"
           />
@@ -556,7 +556,7 @@ export function GeneralTab({
             type="checkbox"
             checked={turbopackEnabled}
             onChange={(e) => onTurbopackEnabledChange(e.target.checked)}
-            className="h-4 w-4 rounded border-daintree-border accent-daintree-accent cursor-pointer"
+            className="h-4 w-4 rounded border-border-default accent-accent-primary cursor-pointer"
             aria-label="Auto-inject --turbopack for Next.js 15+ projects"
           />
           <label
@@ -568,7 +568,7 @@ export function GeneralTab({
         </div>
       </div>
 
-      <div className="mb-6 pb-6 border-b border-daintree-border">
+      <div className="mb-6 pb-6 border-b border-border-default">
         <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
           <McpServerIcon className="h-4 w-4" />
           Agent integrations
@@ -590,7 +590,7 @@ export function GeneralTab({
             <div
               className={cn(
                 "flex items-start gap-2 p-3 rounded-[var(--radius-md)]",
-                "bg-overlay-subtle border border-daintree-border"
+                "bg-overlay-subtle border border-border-default"
               )}
             >
               <AlertTriangle className="w-4 h-4 text-status-warning shrink-0 mt-0.5" />
@@ -623,8 +623,8 @@ export function GeneralTab({
         />
 
         {projectIconSvg ? (
-          <div className="flex items-center gap-4 p-3 rounded-[var(--radius-md)] bg-daintree-bg border border-daintree-border">
-            <div className="h-16 w-16 rounded-[var(--radius-md)] bg-daintree-sidebar flex items-center justify-center overflow-hidden">
+          <div className="flex items-center gap-4 p-3 rounded-[var(--radius-md)] bg-surface-canvas border border-border-default">
+            <div className="h-16 w-16 rounded-[var(--radius-md)] bg-surface-sidebar flex items-center justify-center overflow-hidden">
               {(() => {
                 const sanitized = sanitizeSvg(projectIconSvg);
                 if (!sanitized.ok) {
@@ -640,7 +640,7 @@ export function GeneralTab({
               })()}
             </div>
             <div className="flex-1 min-w-0">
-              <p className="text-sm text-daintree-text mb-1">Custom icon configured</p>
+              <p className="text-sm text-text-primary mb-1">Custom icon configured</p>
               <p className="text-xs text-daintree-text/60">
                 {Math.round(new Blob([projectIconSvg]).size / 1024)}KB
               </p>
@@ -660,8 +660,8 @@ export function GeneralTab({
             className={cn(
               "flex flex-col items-center justify-center p-8 rounded-[var(--radius-md)] border-2 border-dashed transition-colors cursor-pointer",
               isDraggingIcon
-                ? "border-daintree-accent bg-daintree-accent/10"
-                : "border-daintree-border hover:border-daintree-border/80 hover:bg-daintree-bg/50"
+                ? "border-accent-primary bg-daintree-accent/10"
+                : "border-border-default hover:border-daintree-border/80 hover:bg-daintree-bg/50"
             )}
             onDrop={handleIconDrop}
             onDragOver={handleIconDragOver}
@@ -725,7 +725,7 @@ export function GeneralTab({
         )}
 
         {!currentProject?.inRepoSettings && inRepoExpanded && (
-          <div className="mt-3 rounded-[var(--radius-lg)] border border-daintree-border bg-daintree-bg p-4 space-y-4">
+          <div className="mt-3 rounded-[var(--radius-lg)] border border-border-default bg-surface-canvas p-4 space-y-4">
             <div>
               <p className="text-xs font-medium text-daintree-text/80 mb-2">
                 The following files will be created:
@@ -761,7 +761,7 @@ export function GeneralTab({
                 <button
                   type="button"
                   onClick={() => void handleCopyGitignore()}
-                  className="flex items-center gap-1 px-2 py-1 rounded text-xs text-daintree-text/60 hover:text-daintree-text hover:bg-tint/5 transition-colors"
+                  className="flex items-center gap-1 px-2 py-1 rounded text-xs text-daintree-text/60 hover:text-text-primary hover:bg-tint/5 transition-colors"
                   aria-label="Copy .gitignore snippet"
                 >
                   {gitignoreCopied ? (
@@ -772,7 +772,7 @@ export function GeneralTab({
                   {gitignoreCopied ? "Copied!" : "Copy"}
                 </button>
               </div>
-              <pre className="rounded-[var(--radius-md)] border border-daintree-border bg-daintree-sidebar p-3 text-xs font-mono text-daintree-text/70 overflow-x-auto whitespace-pre select-text">
+              <pre className="rounded-[var(--radius-md)] border border-border-default bg-surface-sidebar p-3 text-xs font-mono text-daintree-text/70 overflow-x-auto whitespace-pre select-text">
                 {GITIGNORE_SNIPPET}
               </pre>
             </div>

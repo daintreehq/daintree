@@ -138,7 +138,7 @@ function Path({ path, copied, onCopy }: { path?: string; copied: boolean; onCopy
           )}
           <span
             ref={spanRef}
-            className="w-full pl-7 pr-2 py-1 text-left text-xs font-mono rounded bg-daintree-bg border border-overlay text-daintree-text/70 truncate transition-colors group-hover/path:border-border-strong group-hover/path:text-daintree-text"
+            className="w-full pl-7 pr-2 py-1 text-left text-xs font-mono rounded bg-surface-canvas border border-overlay text-daintree-text/70 truncate transition-colors group-hover/path:border-border-strong group-hover/path:text-text-primary"
           >
             {display}
           </span>
@@ -201,7 +201,7 @@ function IconButton({
           data-testid={testId}
           className={cn(
             "toolbar-icon-button p-1.5 rounded",
-            active ? "text-daintree-text" : "text-daintree-text/60"
+            active ? "text-text-primary" : "text-daintree-text/60"
           )}
         >
           {children}

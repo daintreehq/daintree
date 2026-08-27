@@ -402,16 +402,20 @@
   --height-sm: 2rem;
   --height-md: 2.5rem;
   --height-lg: 3rem;
+  /* Legacy aliases (#12031). Every solid call site now spells the semantic
+   * token directly; these five survive only because Tailwind v4 generates
+   * utilities on demand from this namespace, and the alpha-modified forms
+   * still in the tree — the `text-daintree-text/NN` hierarchy ramp and the
+   * non-text alpha composites such as `ring-daintree-accent/30` — would stop
+   * generating without them. They go when those do. */
   --color-daintree-bg: var(--theme-surface-canvas);
   --color-daintree-sidebar: var(--theme-surface-sidebar);
   --color-daintree-border: var(--theme-border-default);
   --color-daintree-text: var(--theme-text-primary);
   --color-daintree-accent: var(--theme-accent-primary);
-  --color-daintree-accent-rgb: var(--theme-accent-rgb);
   --color-surface: var(--theme-surface-panel);
   --color-surface-highlight: var(--theme-surface-panel-elevated);
   --color-grid-bg: var(--panel-grid-bg, var(--terminal-grid-bg, var(--theme-surface-grid)));
-  --color-daintree-focus: var(--theme-focus-ring);
   --color-status-error: var(--theme-status-danger);
   --color-status-error-surface: var(--theme-status-danger-surface);
   --color-state-active: var(--theme-activity-active);
@@ -679,7 +683,7 @@ code.hljs {
   );
   --border-divider: var(--theme-border-divider);
 
-  --dock-bg: var(--color-daintree-sidebar);
+  --dock-bg: var(--color-surface-sidebar);
   --dock-border: var(--border-divider);
   --dock-shadow: 0 -2px 12px rgb(from var(--theme-shadow-color) r g b / 0.35);
   --dock-padding-x: 0.5rem;
@@ -850,7 +854,7 @@ code.hljs {
 
   /* Neutral option controls: membership, not emphasis. */
   .checkbox-neutral {
-    --checkbox-accent: var(--color-daintree-text);
+    --checkbox-accent: var(--color-text-primary);
   }
 
   *:focus-visible {
@@ -1195,7 +1199,7 @@ body,
   background: linear-gradient(
     90deg,
     transparent 0%,
-    color-mix(in oklab, var(--color-daintree-text) 8%, transparent) 50%,
+    color-mix(in oklab, var(--color-text-primary) 8%, transparent) 50%,
     transparent 100%
   );
   animation: skeleton-shimmer 1.8s ease-in-out infinite;
@@ -2225,7 +2229,7 @@ label:focus-within .brand-mark,
   0% {
     /* Unselected appearance */
     background-color: var(--color-surface);
-    border-color: var(--color-daintree-border);
+    border-color: var(--color-border-default);
     box-shadow: none;
   }
   35% {
@@ -2338,7 +2342,7 @@ label:focus-within .brand-mark,
 }
 
 .forge-status-loading {
-  background: color-mix(in oklab, var(--color-daintree-accent) 20%, transparent);
+  background: color-mix(in oklab, var(--color-accent-primary) 20%, transparent);
 }
 
 .forge-status-loading::after {
@@ -2351,7 +2355,7 @@ label:focus-within .brand-mark,
   background: linear-gradient(
     90deg,
     transparent,
-    color-mix(in oklab, var(--color-daintree-accent) 80%, transparent),
+    color-mix(in oklab, var(--color-accent-primary) 80%, transparent),
     transparent
   );
   animation: forge-status-shimmer 1.5s ease-in-out infinite;
@@ -2375,7 +2379,7 @@ label:focus-within .brand-mark,
   right: 0;
   height: 1px;
   overflow: hidden;
-  background: color-mix(in oklab, var(--color-daintree-accent) 18%, transparent);
+  background: color-mix(in oklab, var(--color-accent-primary) 18%, transparent);
   pointer-events: none;
 }
 
@@ -2388,7 +2392,7 @@ label:focus-within .brand-mark,
   background: linear-gradient(
     90deg,
     transparent,
-    color-mix(in oklab, var(--color-daintree-accent) 85%, transparent),
+    color-mix(in oklab, var(--color-accent-primary) 85%, transparent),
     transparent
   );
   animation: palette-loading-sweep 1.5s ease-in-out infinite;
@@ -2506,7 +2510,7 @@ label:focus-within .brand-mark,
   }
 
   .forge-status-loading {
-    background: color-mix(in oklab, var(--color-daintree-accent) 60%, transparent);
+    background: color-mix(in oklab, var(--color-accent-primary) 60%, transparent);
   }
 
   .forge-status-success {
@@ -2523,7 +2527,7 @@ label:focus-within .brand-mark,
   .palette-loading-bar__sweep {
     animation: none;
     width: 100%;
-    background: color-mix(in oklab, var(--color-daintree-accent) 50%, transparent);
+    background: color-mix(in oklab, var(--color-accent-primary) 50%, transparent);
   }
 }
 
@@ -2533,13 +2537,13 @@ body[data-performance-mode="true"] .forge-status-loading::after {
 }
 
 body[data-performance-mode="true"] .forge-status-loading {
-  background: color-mix(in oklab, var(--color-daintree-accent) 60%, transparent) !important;
+  background: color-mix(in oklab, var(--color-accent-primary) 60%, transparent) !important;
 }
 
 body[data-performance-mode="true"] .palette-loading-bar__sweep {
   animation: none !important;
   width: 100% !important;
-  background: color-mix(in oklab, var(--color-daintree-accent) 50%, transparent) !important;
+  background: color-mix(in oklab, var(--color-accent-primary) 50%, transparent) !important;
 }
 
 body[data-performance-mode="true"] .forge-status-success {
@@ -3190,7 +3194,7 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
    * solid token restores it. !important is required because the Tailwind
    * utility rule has equal specificity (0,1,0) and wins on source order. */
   [class*="text-daintree-text/"] {
-    color: var(--color-daintree-text) !important;
+    color: var(--color-text-primary) !important;
   }
 
   /* Project Pulse heatmap (issue #9819). On macOS Increase Contrast the theme
@@ -3200,7 +3204,7 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
   .pulse-heat-cell {
     border-width: 1px;
     border-style: solid;
-    border-color: var(--color-daintree-text);
+    border-color: var(--color-text-primary);
   }
 
   /* File-browser type icons (issue #11596). Entry icons paint in the secondary
@@ -3220,7 +3224,7 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
    * already forces `color` to a system keyword, so the flattening happens on
    * its own with no rule at all. */
   .file-tree-entry-icon {
-    color: var(--color-daintree-text) !important;
+    color: var(--color-text-primary) !important;
   }
 
   /* Diff-viewer increased-contrast rules live in src/components/Worktree/DiffViewer.css

@@ -23,7 +23,7 @@ const checkboxVariants = cva(
   "group relative flex shrink-0 items-center justify-center border border-border-strong bg-surface-canvas transition-colors duration-150 ease-out " +
     "data-[state=checked]:bg-text-primary data-[state=checked]:border-text-primary " +
     "data-[state=indeterminate]:bg-text-primary data-[state=indeterminate]:border-text-primary " +
-    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-daintree-accent " +
+    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary " +
     "disabled:opacity-50 disabled:cursor-not-allowed",
   {
     variants: {

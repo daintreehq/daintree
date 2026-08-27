@@ -93,7 +93,7 @@ export function GitHubResourceListSkeleton({
               key={tab.id}
               className={cn(
                 "flex-1 px-3 py-1 text-xs font-medium rounded text-center",
-                tab.id === "open" ? "bg-overlay-medium text-daintree-text" : "text-text-secondary"
+                tab.id === "open" ? "bg-overlay-medium text-text-primary" : "text-text-secondary"
               )}
             >
               {tab.label}

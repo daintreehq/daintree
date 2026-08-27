@@ -435,7 +435,7 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
   },
   {
     file: "src/components/ui/PopoverSearchField.tsx",
-    fragment: "h-10 min-w-0 flex-1 bg-transparent text-sm text-daintree-text",
+    fragment: "h-10 min-w-0 flex-1 bg-transparent text-sm text-text-primary",
     reason:
       "The field is the popover's whole top strip, so its indicator is painted once on the wrapping label via focus-within — it has to span the panel's full width and take its rounded top corners, which a ring on the bare input cannot do (that ring is precisely what this component replaced)",
   },
@@ -507,7 +507,7 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
   },
   {
     file: "src/components/Terminal/ContentGridMaximizedGroup.tsx",
-    fragment: "h-full flex flex-col bg-daintree-bg outline-hidden",
+    fragment: "h-full flex flex-col bg-surface-canvas outline-hidden",
     reason: "Grid layout container — focus owned by terminal pane children",
   },
   {
@@ -522,12 +522,12 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
   },
   {
     file: "src/components/Terminal/ContentGridMaximizedSingle.tsx",
-    fragment: "h-full flex flex-col bg-daintree-bg outline-hidden",
+    fragment: "h-full flex flex-col bg-surface-canvas outline-hidden",
     reason: "Grid layout container — focus owned by terminal pane children",
   },
   {
     file: "src/components/Fleet/FleetArmingRibbon.tsx",
-    fragment: "relative flex items-center gap-3 overflow-hidden border-b border-daintree-border",
+    fragment: "relative flex items-center gap-3 overflow-hidden border-b border-border-default",
     reason:
       "Status ribbon — focus delegated to child controls (Exit button, count chip, selection-menu trigger); ribbon container uses tabIndex=-1 to receive programmatic focus only",
   },
@@ -553,37 +553,37 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
   {
     file: "src/components/Settings/KeyboardShortcutsTab.tsx",
     fragment:
-      "flex-1 min-w-0 text-xs bg-transparent text-daintree-text placeholder:text-text-placeholder focus:outline-hidden",
+      "flex-1 min-w-0 text-xs bg-transparent text-text-primary placeholder:text-text-placeholder focus:outline-hidden",
     reason:
-      "Parent shows focus: wrapper at line 230 has `focus-within:border-daintree-accent focus-within:ring-1`",
+      "Parent shows focus: wrapper at line 230 has `focus-within:border-accent-primary focus-within:ring-1`",
   },
   {
     file: "src/components/Settings/SettingsDialog.tsx",
     fragment:
-      "settings-search-input flex-1 min-w-0 text-xs bg-transparent text-daintree-text focus:outline-hidden",
+      "settings-search-input flex-1 min-w-0 text-xs bg-transparent text-text-primary focus:outline-hidden",
     reason:
-      "Parent shows focus: wrapper at line 578 has `focus-within:border-daintree-accent focus-within:ring-1`",
+      "Parent shows focus: wrapper at line 578 has `focus-within:border-accent-primary focus-within:ring-1`",
   },
   {
     file: "src/components/FileViewer/FileViewerModal.tsx",
     fragment:
-      "w-44 bg-transparent text-xs text-daintree-text placeholder:text-text-placeholder focus:outline-hidden",
+      "w-44 bg-transparent text-xs text-text-primary placeholder:text-text-placeholder focus:outline-hidden",
     reason:
-      "Parent shows focus: the diff search bar wrapper has `focus-within:border-daintree-accent focus-within:ring-1`",
+      "Parent shows focus: the diff search bar wrapper has `focus-within:border-accent-primary focus-within:ring-1`",
   },
   {
     file: "src/components/FileViewer/DiffFileSidebar.tsx",
     fragment:
-      "w-full bg-transparent text-xs text-daintree-text placeholder:text-text-placeholder focus:outline-hidden",
+      "w-full bg-transparent text-xs text-text-primary placeholder:text-text-placeholder focus:outline-hidden",
     reason:
-      "Parent shows focus: the sidebar filter wrapper has `focus-within:border-daintree-accent focus-within:ring-1`",
+      "Parent shows focus: the sidebar filter wrapper has `focus-within:border-accent-primary focus-within:ring-1`",
   },
   {
     file: "src/panels/file/FilePane.tsx",
     fragment:
-      "w-full bg-transparent text-sm text-daintree-text placeholder:text-text-placeholder focus:outline-hidden",
+      "w-full bg-transparent text-sm text-text-primary placeholder:text-text-placeholder focus:outline-hidden",
     reason:
-      "Parent shows focus: the markdown file-picker wrapper has `focus-within:border-daintree-accent focus-within:ring-1`",
+      "Parent shows focus: the markdown file-picker wrapper has `focus-within:border-accent-primary focus-within:ring-1`",
   },
   {
     file: "src/components/Project/QuickRun.tsx",
@@ -600,28 +600,28 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
   {
     file: "src/components/Settings/ColorSchemePicker.tsx",
     fragment:
-      "flex-1 min-w-0 text-xs bg-transparent text-daintree-text placeholder:text-text-placeholder focus:outline-hidden",
-    reason: "Parent shows focus: wrapper at line 172 has `focus-within:border-daintree-accent`",
+      "flex-1 min-w-0 text-xs bg-transparent text-text-primary placeholder:text-text-placeholder focus:outline-hidden",
+    reason: "Parent shows focus: wrapper at line 172 has `focus-within:border-accent-primary`",
   },
   {
     file: "src/components/ThemeBrowser/ThemeBrowser.tsx",
     fragment:
-      "flex-1 min-w-0 text-xs bg-transparent text-daintree-text placeholder:text-text-placeholder focus:outline-hidden",
-    reason: "Parent shows focus: wrapper at line 477 has `focus-within:border-daintree-accent`",
+      "flex-1 min-w-0 text-xs bg-transparent text-text-primary placeholder:text-text-placeholder focus:outline-hidden",
+    reason: "Parent shows focus: wrapper at line 477 has `focus-within:border-accent-primary`",
   },
   {
     file: "src/components/Worktree/WorktreeSidebarSearchBar.tsx",
     fragment:
-      "flex-1 min-w-0 text-xs bg-transparent text-daintree-text placeholder-daintree-text/40 focus:outline-hidden",
+      "flex-1 min-w-0 text-xs bg-transparent text-text-primary placeholder-daintree-text/40 focus:outline-hidden",
     reason:
-      "Parent shows focus: wrapper at line 141 has `focus-within:border-daintree-accent focus-within:ring-1`",
+      "Parent shows focus: wrapper at line 141 has `focus-within:border-accent-primary focus-within:ring-1`",
   },
   {
     file: "src/components/Layout/LocalCommitsDropdown.tsx",
     fragment:
-      "flex-1 min-w-0 text-sm bg-transparent text-daintree-text placeholder:text-muted-foreground focus:outline-hidden",
+      "flex-1 min-w-0 text-sm bg-transparent text-text-primary placeholder:text-muted-foreground focus:outline-hidden",
     reason:
-      "Parent shows focus: wrapper at line 437 has `focus-within:border-daintree-accent focus-within:ring-1`",
+      "Parent shows focus: wrapper at line 437 has `focus-within:border-accent-primary focus-within:ring-1`",
   },
 
   // ── Pre-existing focus-ring gaps surfaced by #8940 ───────────────────
@@ -632,34 +632,34 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
   {
     file: "src/components/Settings/AgentSelectorDropdown.tsx",
     fragment:
-      "flex-1 min-w-0 text-xs bg-transparent text-daintree-text placeholder:text-text-placeholder focus:outline-hidden",
+      "flex-1 min-w-0 text-xs bg-transparent text-text-primary placeholder:text-text-placeholder focus:outline-hidden",
     reason:
       "PRE-EXISTING #8940: autoFocus filter input inside popover lacks a focus indicator — follow-up",
   },
   {
     file: "src/components/Settings/ForgeProviderSelectorDropdown.tsx",
     fragment:
-      "flex-1 min-w-0 text-xs bg-transparent text-daintree-text placeholder:text-text-placeholder focus:outline-hidden",
+      "flex-1 min-w-0 text-xs bg-transparent text-text-primary placeholder:text-text-placeholder focus:outline-hidden",
     reason:
       "PRE-EXISTING #8940: autoFocus filter input inside popover lacks a focus indicator — follow-up",
   },
   {
     file: "src/components/Settings/AgentScopeEditor/CustomPresetChrome.tsx",
     fragment:
-      "flex-1 text-sm font-medium bg-daintree-bg border border-border-strong rounded px-2 py-0.5 focus:outline-hidden",
+      "flex-1 text-sm font-medium bg-surface-canvas border border-border-strong rounded px-2 py-0.5 focus:outline-hidden",
     reason: "PRE-EXISTING #8940: preset rename input has no focus indicator — follow-up",
   },
   {
     file: "src/components/Panel/PanelHeader.tsx",
     fragment:
-      "text-xs font-medium bg-overlay-soft border border-transparent px-1 h-5 min-w-32 text-daintree-text select-text transition-colors focus:outline-hidden",
+      "text-xs font-medium bg-overlay-soft border border-transparent px-1 h-5 min-w-32 text-text-primary select-text transition-colors focus:outline-hidden",
     reason:
       "PRE-EXISTING #8940: inline panel title rename input has no focus indicator — follow-up",
   },
   {
     file: "src/components/Panel/TabButton.tsx",
     fragment:
-      "text-xs bg-overlay-soft border border-transparent px-1 h-4 min-w-[60px] max-w-[100px] text-daintree-text select-text focus:outline-hidden",
+      "text-xs bg-overlay-soft border border-transparent px-1 h-4 min-w-[60px] max-w-[100px] text-text-primary select-text focus:outline-hidden",
     reason:
       "PRE-EXISTING #8940: tab rename input has no focus indicator (the input is the sole focus target while editing) — follow-up",
   },
@@ -691,16 +691,16 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
   {
     file: "plugins/builtin/github/renderer/components/CommitList.tsx",
     fragment:
-      "flex-1 min-w-0 text-sm bg-transparent text-daintree-text placeholder:text-muted-foreground focus:outline-hidden",
+      "flex-1 min-w-0 text-sm bg-transparent text-text-primary placeholder:text-muted-foreground focus:outline-hidden",
     reason: "PRE-EXISTING #8940: autoFocus commit search input lacks a focus indicator — follow-up",
   },
   {
     file: "plugins/builtin/github/renderer/components/GitHubResourceList.tsx",
     fragment:
-      "flex-1 min-w-0 text-sm bg-transparent text-daintree-text placeholder:text-text-secondary focus:outline-hidden",
+      "flex-1 min-w-0 text-sm bg-transparent text-text-primary placeholder:text-text-secondary focus:outline-hidden",
     reason:
       "RESOLVED, not deferred: the input is a bare transparent field inside a bordered shell, " +
-      "and the shell owns the indicator — `focus-within:border-daintree-accent` at full strength, " +
+      "and the shell owns the indicator — `focus-within:border-accent-primary` at full strength, " +
       "the one accent signal this focus region is allowed. A same-element ring would draw a second " +
       "indicator inside the first. Was the #8940 follow-up.",
   },
@@ -720,7 +720,7 @@ describe("focus-ring fallback contract", () => {
   describe("focus fallback detection", () => {
     const withFallback = [
       // Standard same-string focus variants
-      '"outline-hidden focus:ring-2 focus:ring-daintree-accent"',
+      '"outline-hidden focus:ring-2 focus:ring-accent-primary"',
       '"focus:bg-overlay-emphasis outline-hidden"',
       '"outline-hidden focus-visible:outline focus-visible:outline-2"',
       '"outline-hidden focus-within:ring-1"',
@@ -770,7 +770,7 @@ describe("focus-ring fallback contract", () => {
       const source = `<input
         className={cn(
           "w-full bg-transparent outline-hidden",
-          "focus:ring-2 focus:ring-daintree-accent"
+          "focus:ring-2 focus:ring-accent-primary"
         )}
       />`;
       const matchPos = source.indexOf("outline-hidden");
@@ -782,7 +782,7 @@ describe("focus-ring fallback contract", () => {
       const source = `<aside
         className={cn(
           "overflow-hidden outline-hidden",
-          "bg-daintree-bg border-l border-daintree-border",
+          "bg-surface-canvas border-l border-border-default",
           "data-[macro-focus=true]:ring-2 data-[macro-focus=true]:ring-daintree-accent/60"
         )}
       />`;
@@ -871,7 +871,7 @@ describe("focus-ring fallback contract", () => {
 
     throw new Error(
       `Found ${violations.length} bare \`outline-hidden\` use(s) with no element-owned focus indicator. ` +
-        `Add a same-element focus fallback (e.g. \`focus-visible:ring-2 focus-visible:ring-daintree-accent\`) ` +
+        `Add a same-element focus fallback (e.g. \`focus-visible:ring-2 focus-visible:ring-accent-primary\`) ` +
         `or, if the element is non-interactive and delegates focus, add an ALLOWLIST entry with a rationale ` +
         `in src/config/__tests__/focusRingFallback.contract.test.ts:\n${detail}${more}`
     );

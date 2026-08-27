@@ -466,7 +466,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
 
   const summary =
     destinationPath !== null ? (
-      <div className="space-y-2.5 rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg px-3 py-3">
+      <div className="space-y-2.5 rounded-[var(--radius-md)] border border-border-default bg-surface-canvas px-3 py-3">
         <div className="space-y-1">
           <span className="text-xs font-medium text-daintree-text/60">Source</span>
           <p className="truncate text-xs font-mono text-daintree-text/80" title={normalizedUrl}>
@@ -538,7 +538,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
               <Check className="h-6 w-6 text-status-success" />
             </div>
             <div className="space-y-1">
-              <h3 className="text-base font-semibold text-daintree-text">Repository cloned</h3>
+              <h3 className="text-base font-semibold text-text-primary">Repository cloned</h3>
               {/* Says what is about to happen, not merely what is possible:
                   this mode opens the project on its own two seconds later. */}
               <p className="text-sm text-daintree-text/60">
@@ -570,7 +570,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
               </span>
               <div className="flex items-center gap-2">
                 <Spinner size="sm" className="shrink-0 text-text-secondary" />
-                <span aria-hidden="true" className="text-sm text-daintree-text">
+                <span aria-hidden="true" className="text-sm text-text-primary">
                   {currentStage ? stageLabel(currentStage) : "Connecting…"}
                 </span>
                 {currentStage && (

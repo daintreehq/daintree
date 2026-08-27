@@ -35,7 +35,7 @@ export function SegmentedToggle<T extends string>({
   const thumbTransition = useUiMotionTransition();
 
   return (
-    <div className="relative isolate flex bg-daintree-sidebar rounded p-0.5 shrink-0">
+    <div className="relative isolate flex bg-surface-sidebar rounded p-0.5 shrink-0">
       {options.map((option) => {
         const isActive = value === option.value;
 
@@ -50,7 +50,7 @@ export function SegmentedToggle<T extends string>({
             className={cn(
               "relative px-2.5 py-1 text-xs font-medium rounded transition-colors",
               "disabled:cursor-not-allowed disabled:pointer-events-none",
-              isActive ? "text-daintree-text" : "text-muted-foreground hover:text-daintree-text"
+              isActive ? "text-text-primary" : "text-muted-foreground hover:text-text-primary"
             )}
           >
             {isActive && (
@@ -66,7 +66,7 @@ export function SegmentedToggle<T extends string>({
                 // between segments of different widths — a frame or two, and worth it to stay
                 // theme-correct at rest.
                 className={cn(
-                  "absolute inset-0 z-0 rounded bg-daintree-border pointer-events-none",
+                  "absolute inset-0 z-0 rounded bg-border-default pointer-events-none",
                   option.disabled && "opacity-40"
                 )}
                 aria-hidden="true"

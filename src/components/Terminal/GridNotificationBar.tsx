@@ -315,7 +315,7 @@ export function GridNotificationBar({ className }: GridNotificationBarProps) {
                   "h-7 rounded-[var(--radius-xs)] px-3 text-xs font-medium transition-colors",
                   "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent/60",
                   action.variant === "secondary"
-                    ? "border border-tint/15 bg-tint/5 text-daintree-text/80 hover:bg-tint/10 hover:text-daintree-text"
+                    ? "border border-tint/15 bg-tint/5 text-daintree-text/80 hover:bg-tint/10 hover:text-text-primary"
                     : "border border-status-info/30 bg-status-info/15 text-status-info hover:bg-status-info/20",
                   buttonPointerClass
                 )}

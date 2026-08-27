@@ -311,7 +311,7 @@ const TooltipContent = React.forwardRef<
           hideWhenDetached={hideWhenDetached}
           style={{ transformOrigin: "var(--radix-tooltip-content-transform-origin)", ...style }}
           className={cn(
-            "z-[var(--z-popover)] max-w-xs overflow-hidden rounded-[var(--radius-md)] surface-overlay shadow-overlay px-3 py-1.5 text-xs text-daintree-text",
+            "z-[var(--z-popover)] max-w-xs overflow-hidden rounded-[var(--radius-md)] surface-overlay shadow-overlay px-3 py-1.5 text-xs text-text-primary",
             "animate-in fade-in-0 duration-150 data-[state=closed]:animate-out data-[state=closed]:duration-100 data-[state=closed]:fade-out-0 data-[side=bottom]:slide-in-from-top-1 data-[side=left]:slide-in-from-right-1 data-[side=right]:slide-in-from-left-1 data-[side=top]:slide-in-from-bottom-1",
             className
           )}

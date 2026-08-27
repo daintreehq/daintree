@@ -45,7 +45,7 @@ export const ScrollPill = forwardRef<HTMLButtonElement, ScrollPillProps>(
           // and the 10% let the text through. The covered glyphs stayed
           // legible under it, so a card headline read as its own text
           // interleaved with the pill's chevron and count.
-          "bg-surface-panel-elevated border border-daintree-border text-daintree-text shadow-[var(--theme-shadow-floating)]",
+          "bg-surface-panel-elevated border border-border-default text-text-primary shadow-[var(--theme-shadow-floating)]",
           "text-xs font-medium cursor-pointer",
           "hover:bg-overlay-subtle hover:border-border-strong",
           // Tailwind v4 translate-* emits the individual `translate` property,
@@ -53,7 +53,7 @@ export const ScrollPill = forwardRef<HTMLButtonElement, ScrollPillProps>(
           // explicitly or the slide snaps and only the fade animates.
           "transition-[opacity,translate] duration-150",
           "motion-reduce:transition-none motion-reduce:duration-0 motion-reduce:translate-none",
-          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1",
+          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-1",
           isVisible ? "opacity-100 translate-y-0" : hiddenTransform,
           className
         )}

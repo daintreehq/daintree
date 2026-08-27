@@ -224,7 +224,7 @@ export function useWorktreeActions({
         "pre",
         {
           className:
-            "text-xs text-daintree-text/80 bg-daintree-bg/50 p-3 rounded border border-daintree-border font-mono whitespace-pre-wrap break-all",
+            "text-xs text-daintree-text/80 bg-daintree-bg/50 p-3 rounded border border-border-default font-mono whitespace-pre-wrap break-all",
         },
         hasCommands ? teardownCommands.join("\n") : "No teardown commands found."
       )

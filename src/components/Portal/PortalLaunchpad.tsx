@@ -60,13 +60,13 @@ export function PortalLaunchpad({ links, onOpenUrl }: PortalLaunchpadProps) {
                   onOpenUrl(link.url, link.title, true);
                 }
               }}
-              className="flex items-center gap-4 p-4 rounded-[var(--radius-xl)] bg-daintree-border hover:bg-daintree-border/80 border border-daintree-border hover:border-daintree-border transition-colors group focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+              className="flex items-center gap-4 p-4 rounded-[var(--radius-xl)] bg-border-default hover:bg-daintree-border/80 border border-border-default hover:border-border-default transition-colors group focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
             >
-              <div className="w-8 h-8 flex items-center justify-center text-foreground group-hover:text-daintree-text transition-colors">
+              <div className="w-8 h-8 flex items-center justify-center text-foreground group-hover:text-text-primary transition-colors">
                 <PortalIcon icon={link.icon} size="launchpad" />
               </div>
               <div className="text-left min-w-0">
-                <div className="font-medium text-foreground group-hover:text-daintree-text transition-colors">
+                <div className="font-medium text-foreground group-hover:text-text-primary transition-colors">
                   {link.title}
                 </div>
                 <div className="text-xs text-daintree-text/70 truncate">

@@ -257,8 +257,8 @@ export function GitHubListItem({
                 "absolute inset-0 rounded border flex items-center justify-center cursor-pointer",
                 "transition-colors duration-150 ease-out",
                 isSelected
-                  ? "bg-daintree-text border-daintree-text"
-                  : "border-daintree-border hover:border-daintree-text/60",
+                  ? "bg-text-primary border-text-primary"
+                  : "border-border-default hover:border-daintree-text/60",
                 isSelectionActive || isSelected ? "flex" : "hidden group-hover/icon:flex"
               )}
             >
@@ -395,7 +395,7 @@ export function GitHubListItem({
                       // opacity wash: 55% put it under the 3:1 floor a
                       // graphical control has to clear.
                       "w-6 h-6 -me-1 rounded text-text-secondary",
-                      "hover:bg-overlay-medium hover:text-daintree-text",
+                      "hover:bg-overlay-medium hover:text-text-primary",
                       "transition-[background-color,color] duration-150 ease-out",
                       "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
                     )}
@@ -474,7 +474,7 @@ export function GitHubListItem({
                   }}
                   className={cn(
                     "shrink-0 inline-flex items-center tabular-nums rounded cursor-pointer",
-                    "hover:text-daintree-text transition-colors duration-150 ease-out",
+                    "hover:text-text-primary transition-colors duration-150 ease-out",
                     "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring",
                     copied && "text-status-success"
                   )}
@@ -543,7 +543,7 @@ export function GitHubListItem({
                       }}
                       className={cn(
                         "shrink-0 inline-flex items-center gap-0.5 tabular-nums rounded cursor-pointer",
-                        "hover:text-daintree-text transition-colors duration-150 ease-out",
+                        "hover:text-text-primary transition-colors duration-150 ease-out",
                         "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
                       )}
                       aria-label={`Open linked pull request #${item.linkedPR.number}`}

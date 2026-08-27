@@ -19,7 +19,7 @@ export interface ErrorFallbackProps {
 }
 
 const VARIANT_STYLES = {
-  fullscreen: "h-screen w-screen flex items-center justify-center bg-daintree-bg",
+  fullscreen: "h-screen w-screen flex items-center justify-center bg-surface-canvas",
   section: "h-full w-full flex items-center justify-center p-8",
   component:
     "p-4 rounded-[var(--radius-lg)] bg-[color-mix(in_oklab,var(--color-status-error)_12%,transparent)] border border-status-error/30",
@@ -146,7 +146,7 @@ export function ErrorFallback({
             data-testid="error-fallback-restart"
             autoFocus={isFullscreen}
             className={cn(
-              "bg-status-error hover:bg-[color-mix(in_oklab,var(--color-status-error)_85%,transparent)] text-daintree-bg rounded transition-colors",
+              "bg-status-error hover:bg-[color-mix(in_oklab,var(--color-status-error)_85%,transparent)] text-surface-canvas rounded transition-colors",
               sizes.button
             )}
           >
@@ -164,7 +164,7 @@ export function ErrorFallback({
               disabled={reportInFlight}
               data-testid="error-fallback-report"
               className={cn(
-                "bg-daintree-border hover:bg-daintree-border/80 text-daintree-text rounded transition-colors",
+                "bg-border-default hover:bg-daintree-border/80 text-text-primary rounded transition-colors",
                 "disabled:opacity-60 disabled:cursor-not-allowed",
                 sizes.button
               )}
@@ -179,7 +179,7 @@ export function ErrorFallback({
               onClick={handleOpenLogs}
               data-testid="error-fallback-logs"
               className={cn(
-                "bg-daintree-border hover:bg-daintree-border/80 text-daintree-text rounded transition-colors",
+                "bg-border-default hover:bg-daintree-border/80 text-text-primary rounded transition-colors",
                 sizes.button
               )}
             >

@@ -331,7 +331,7 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
                   e.stopPropagation();
                   onRestart(terminal.id);
                 }}
-                className="p-0.5 rounded hover:bg-tint/10 text-daintree-text/40 hover:text-daintree-text"
+                className="p-0.5 rounded hover:bg-tint/10 text-daintree-text/40 hover:text-text-primary"
                 aria-label="Restart task"
               >
                 <RotateCw className="h-3 w-3" />
@@ -342,7 +342,7 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
                 e.stopPropagation();
                 onDismiss(terminal.id);
               }}
-              className="p-0.5 rounded hover:bg-tint/10 text-daintree-text/40 hover:text-daintree-text"
+              className="p-0.5 rounded hover:bg-tint/10 text-daintree-text/40 hover:text-text-primary"
               aria-label="Dismiss"
             >
               <X className="h-3 w-3" />
@@ -354,7 +354,7 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
             e.stopPropagation();
             onFocus(terminal.id);
           }}
-          className="p-0.5 rounded hover:bg-tint/10 text-daintree-text/40 hover:text-daintree-text"
+          className="p-0.5 rounded hover:bg-tint/10 text-daintree-text/40 hover:text-text-primary"
           aria-label="Focus terminal"
         >
           <Eye className="h-3 w-3" />

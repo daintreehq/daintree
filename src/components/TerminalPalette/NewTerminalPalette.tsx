@@ -144,13 +144,13 @@ export function NewTerminalPalette({
                 className={cn(
                   PALETTE_ROW_CLASS,
                   "group w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left",
-                  "text-daintree-text/70 hover:bg-overlay-subtle hover:text-daintree-text"
+                  "text-daintree-text/70 hover:bg-overlay-subtle hover:text-text-primary"
                 )}
                 onClick={() => onSelect(option)}
               >
                 <span className="shrink-0 text-daintree-text/70">{option.icon}</span>
                 <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium text-daintree-text truncate">
+                  <div className="text-sm font-medium text-text-primary truncate">
                     {option.label}
                   </div>
                   <div className="text-xs text-daintree-text/50 truncate">{option.description}</div>

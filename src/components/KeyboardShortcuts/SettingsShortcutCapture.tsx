@@ -328,7 +328,7 @@ export function SettingsShortcutCapture({
 
   const containerClass = compact
     ? "space-y-2"
-    : "bg-daintree-bg/50 border border-daintree-border rounded-[var(--radius-lg)] p-4 space-y-3";
+    : "bg-daintree-bg/50 border border-border-default rounded-[var(--radius-lg)] p-4 space-y-3";
   const captureClass = compact
     ? "flex-1 px-2 py-1 text-sm border rounded text-center transition-colors"
     : "flex-1 px-4 py-2 border rounded text-center transition-colors";
@@ -340,7 +340,7 @@ export function SettingsShortcutCapture({
           <div
             className={cn(
               captureClass,
-              "border-daintree-accent bg-daintree-accent/10 text-daintree-accent animate-pulse"
+              "border-accent-primary bg-daintree-accent/10 text-accent-primary animate-pulse"
             )}
           >
             {chordStep === "first" ? (
@@ -361,7 +361,7 @@ export function SettingsShortcutCapture({
           <div
             className={cn(
               captureClass,
-              "border-daintree-border bg-daintree-bg text-daintree-text font-mono"
+              "border-border-default bg-surface-canvas text-text-primary font-mono"
             )}
           >
             <span>{keybindingService.formatComboForDisplay(capturedCombo)}</span>
@@ -372,7 +372,7 @@ export function SettingsShortcutCapture({
             onClick={handleStartRecording}
             className={cn(
               captureClass,
-              "border-daintree-border bg-daintree-bg text-daintree-text/60 hover:text-daintree-text hover:border-daintree-accent"
+              "border-border-default bg-surface-canvas text-daintree-text/60 hover:text-text-primary hover:border-accent-primary"
             )}
           >
             Click to record shortcut
@@ -418,7 +418,7 @@ export function SettingsShortcutCapture({
                   <button
                     onClick={() => handleUnbindConflict(conflict)}
                     disabled={isUnbinding}
-                    className="flex items-center gap-1 px-2 py-0.5 text-xs text-daintree-text/60 hover:text-daintree-text hover:bg-overlay-soft rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
+                    className="flex items-center gap-1 px-2 py-0.5 text-xs text-daintree-text/60 hover:text-text-primary hover:bg-overlay-soft rounded transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
                   >
                     <X className="w-3 h-3" />
                     <span>Unbind</span>
@@ -434,7 +434,7 @@ export function SettingsShortcutCapture({
         <button
           onClick={handleCancel}
           className={cn(
-            "text-daintree-text/60 hover:text-daintree-text transition-colors",
+            "text-daintree-text/60 hover:text-text-primary transition-colors",
             compact ? "text-xs" : "px-3 py-1.5 text-sm"
           )}
         >
@@ -443,7 +443,7 @@ export function SettingsShortcutCapture({
         <button
           onClick={handleClear}
           className={cn(
-            "text-daintree-text/60 hover:text-daintree-text transition-colors",
+            "text-daintree-text/60 hover:text-text-primary transition-colors",
             compact ? "text-xs" : "px-3 py-1.5 text-sm"
           )}
         >
@@ -454,7 +454,7 @@ export function SettingsShortcutCapture({
             onClick={handleSave}
             disabled={Boolean(validationError)}
             className={cn(
-              "bg-daintree-accent text-accent-primary-foreground rounded hover:bg-daintree-accent/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed",
+              "bg-accent-primary text-accent-primary-foreground rounded hover:bg-daintree-accent/90 transition-colors disabled:opacity-50 disabled:cursor-not-allowed",
               compact ? "px-2 py-0.5 text-xs" : "px-3 py-1.5 text-sm"
             )}
           >

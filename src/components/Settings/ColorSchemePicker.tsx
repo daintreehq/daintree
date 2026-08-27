@@ -167,8 +167,8 @@ export function ColorSchemePicker() {
 
   return (
     <div className="space-y-3">
-      <div className="flex flex-col rounded-[var(--radius-md)] border border-daintree-border overflow-hidden">
-        <div className="flex items-center gap-1.5 px-2.5 py-1.5 border-b border-daintree-border shrink-0">
+      <div className="flex flex-col rounded-[var(--radius-md)] border border-border-default overflow-hidden">
+        <div className="flex items-center gap-1.5 px-2.5 py-1.5 border-b border-border-default shrink-0">
           <div className="flex items-center gap-1.5 flex-1 min-w-0 focus-within:border-daintree-accent/40">
             <Search className="w-3.5 h-3.5 shrink-0 text-daintree-text/40 pointer-events-none" />
             <input
@@ -183,17 +183,17 @@ export function ColorSchemePicker() {
               }}
               placeholder="Filter schemes..."
               aria-label="Filter color schemes"
-              className="flex-1 min-w-0 text-xs bg-transparent text-daintree-text placeholder:text-text-placeholder focus:outline-hidden"
+              className="flex-1 min-w-0 text-xs bg-transparent text-text-primary placeholder:text-text-placeholder focus:outline-hidden"
             />
           </div>
-          <div className="flex rounded-[var(--radius-md)] border border-daintree-border overflow-hidden shrink-0">
+          <div className="flex rounded-[var(--radius-md)] border border-border-default overflow-hidden shrink-0">
             <button
               type="button"
               onClick={() => setTypeFilter("dark")}
               className={cn(
                 "px-2.5 py-0.5 text-2xs font-medium transition-colors",
                 typeFilter === "dark"
-                  ? "bg-overlay-selected text-daintree-text"
+                  ? "bg-overlay-selected text-text-primary"
                   : "text-daintree-text/50 hover:text-daintree-text/70"
               )}
             >
@@ -203,9 +203,9 @@ export function ColorSchemePicker() {
               type="button"
               onClick={() => setTypeFilter("light")}
               className={cn(
-                "px-2.5 py-0.5 text-2xs font-medium transition-colors border-l border-daintree-border",
+                "px-2.5 py-0.5 text-2xs font-medium transition-colors border-l border-border-default",
                 typeFilter === "light"
-                  ? "bg-overlay-selected text-daintree-text"
+                  ? "bg-overlay-selected text-text-primary"
                   : "text-daintree-text/50 hover:text-daintree-text/70"
               )}
             >
@@ -241,19 +241,19 @@ export function ColorSchemePicker() {
                     onBlur={handlePreviewLeave}
                     className={cn(
                       "flex flex-col gap-1.5 p-2 rounded-[var(--radius-md)] border transition-colors text-left",
-                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
+                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
                       "[&>*]:pointer-events-none",
                       isSelected
                         ? "border-border-strong bg-overlay-selected"
-                        : "border-daintree-border bg-daintree-bg hover:border-daintree-text/30"
+                        : "border-border-default bg-surface-canvas hover:border-daintree-text/30"
                     )}
                   >
                     <SchemePreview scheme={resolved} />
                     <div className="flex items-center gap-1.5">
-                      <span className="text-xs text-daintree-text truncate flex-1">
+                      <span className="text-xs text-text-primary truncate flex-1">
                         {scheme.name}
                       </span>
-                      {isSelected && <Check className="w-3.5 h-3.5 text-daintree-text shrink-0" />}
+                      {isSelected && <Check className="w-3.5 h-3.5 text-text-primary shrink-0" />}
                     </div>
                   </button>
                 );
@@ -269,7 +269,7 @@ export function ColorSchemePicker() {
 
       <button
         onClick={handleImport}
-        className="text-xs text-text-secondary hover:text-daintree-text underline-offset-2 hover:underline transition-colors"
+        className="text-xs text-text-secondary hover:text-text-primary underline-offset-2 hover:underline transition-colors"
       >
         Import color scheme...
       </button>

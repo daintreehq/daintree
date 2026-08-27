@@ -193,7 +193,7 @@ export function ContextTab({
 
   return (
     <>
-      <div id="project-excluded-paths" className="mb-6 pb-6 border-b border-daintree-border">
+      <div id="project-excluded-paths" className="mb-6 pb-6 border-b border-border-default">
         <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
           <FolderX className="h-4 w-4" />
           Excluded paths
@@ -205,14 +205,14 @@ export function ContextTab({
 
         <div className="space-y-2">
           {excludedPaths.length === 0 ? (
-            <div className="text-sm text-daintree-text/60 text-center py-8 border border-dashed border-daintree-border rounded-[var(--radius-md)]">
+            <div className="text-sm text-daintree-text/60 text-center py-8 border border-dashed border-border-default rounded-[var(--radius-md)]">
               No excluded paths configured yet
             </div>
           ) : (
             excludedPaths.map((path, index) => (
               <div
                 key={index}
-                className="flex items-center gap-2 p-2 rounded-[var(--radius-md)] bg-daintree-bg border border-daintree-border"
+                className="flex items-center gap-2 p-2 rounded-[var(--radius-md)] bg-surface-canvas border border-border-default"
               >
                 <input
                   type="text"
@@ -223,7 +223,7 @@ export function ContextTab({
                     );
                     setTestConfigResult(null);
                   }}
-                  className="flex-1 bg-transparent border border-daintree-border rounded px-2 py-1 text-sm text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
+                  className="flex-1 bg-transparent border border-border-default rounded px-2 py-1 text-sm text-text-primary font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
                   placeholder="node_modules/**"
                   aria-label="Excluded path glob pattern"
                 />
@@ -256,7 +256,7 @@ export function ContextTab({
       </div>
 
       {/* CopyTree Settings */}
-      <div id="project-copy-tree" className="mb-6 pb-6 border-b border-daintree-border">
+      <div id="project-copy-tree" className="mb-6 pb-6 border-b border-border-default">
         <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
           <FileCode className="h-4 w-4" />
           Context generation settings
@@ -283,7 +283,7 @@ export function ContextTab({
                 }}
                 min={1}
                 placeholder="Default (100 MB)"
-                className="w-full bg-daintree-sidebar border border-daintree-border rounded px-2 py-1 text-sm text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
+                className="w-full bg-surface-sidebar border border-border-default rounded px-2 py-1 text-sm text-text-primary font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
               />
               <p className="text-xs text-text-secondary mt-1">Total size limit for all files</p>
             </div>
@@ -301,7 +301,7 @@ export function ContextTab({
                 }}
                 min={1}
                 placeholder="Default (up to 10 MB)"
-                className="w-full bg-daintree-sidebar border border-daintree-border rounded px-2 py-1 text-sm text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
+                className="w-full bg-surface-sidebar border border-border-default rounded px-2 py-1 text-sm text-text-primary font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
               />
               <p className="text-xs text-text-secondary mt-1">Skip files larger than this</p>
             </div>
@@ -321,7 +321,7 @@ export function ContextTab({
                 }}
                 min={1}
                 placeholder="Default (no truncation)"
-                className="w-full bg-daintree-sidebar border border-daintree-border rounded px-2 py-1 text-sm text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
+                className="w-full bg-surface-sidebar border border-border-default rounded px-2 py-1 text-sm text-text-primary font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
               />
               <p className="text-xs text-text-secondary mt-1">Total characters across all files</p>
             </div>
@@ -336,7 +336,7 @@ export function ContextTab({
                   onCopyTreeSettingsChange({ ...copyTreeSettings, strategy: value || undefined });
                   setTestConfigResult(null);
                 }}
-                className="w-full bg-daintree-sidebar border border-daintree-border rounded px-2 py-1 text-sm text-daintree-text focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
+                className="w-full bg-surface-sidebar border border-border-default rounded px-2 py-1 text-sm text-text-primary focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
               >
                 <option value="">Default (all files)</option>
                 <option value="all">Include all files</option>
@@ -361,7 +361,7 @@ export function ContextTab({
               {(copyTreeSettings.alwaysInclude || []).map((pattern, index) => (
                 <div
                   key={index}
-                  className="flex items-center gap-2 p-2 rounded-[var(--radius-md)] bg-daintree-bg border border-daintree-border"
+                  className="flex items-center gap-2 p-2 rounded-[var(--radius-md)] bg-surface-canvas border border-border-default"
                 >
                   <input
                     type="text"
@@ -372,7 +372,7 @@ export function ContextTab({
                       onCopyTreeSettingsChange({ ...copyTreeSettings, alwaysInclude: updated });
                       setTestConfigResult(null);
                     }}
-                    className="flex-1 bg-transparent border border-daintree-border rounded px-2 py-1 text-sm text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
+                    className="flex-1 bg-transparent border border-border-default rounded px-2 py-1 text-sm text-text-primary font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
                     placeholder="**/*.md"
                     aria-label="Always include pattern"
                   />
@@ -423,7 +423,7 @@ export function ContextTab({
               {(copyTreeSettings.alwaysExclude || []).map((pattern, index) => (
                 <div
                   key={index}
-                  className="flex items-center gap-2 p-2 rounded-[var(--radius-md)] bg-daintree-bg border border-daintree-border"
+                  className="flex items-center gap-2 p-2 rounded-[var(--radius-md)] bg-surface-canvas border border-border-default"
                 >
                   <input
                     type="text"
@@ -434,7 +434,7 @@ export function ContextTab({
                       onCopyTreeSettingsChange({ ...copyTreeSettings, alwaysExclude: updated });
                       setTestConfigResult(null);
                     }}
-                    className="flex-1 bg-transparent border border-daintree-border rounded px-2 py-1 text-sm text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
+                    className="flex-1 bg-transparent border border-border-default rounded px-2 py-1 text-sm text-text-primary font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
                     placeholder="**/*.lock"
                     aria-label="Always exclude pattern"
                   />
@@ -474,7 +474,7 @@ export function ContextTab({
           </div>
 
           {/* Test Configuration */}
-          <div className="mt-6 pt-4 border-t border-daintree-border">
+          <div className="mt-6 pt-4 border-t border-border-default">
             <div className="flex items-center justify-between">
               <div>
                 <h4 className="text-sm font-medium text-daintree-text/80">Test configuration</h4>
@@ -496,7 +496,7 @@ export function ContextTab({
             {showTestingSkeleton && (
               <Skeleton
                 label="Running test configuration"
-                className="mt-4 p-4 rounded-[var(--radius-md)] border border-daintree-border space-y-3"
+                className="mt-4 p-4 rounded-[var(--radius-md)] border border-border-default space-y-3"
               >
                 <SkeletonBone immediate className="h-4 w-2/3" />
                 <SkeletonBone immediate className="h-3 w-1/2" />
@@ -515,7 +515,7 @@ export function ContextTab({
                   "mt-4 p-4 rounded-[var(--radius-md)] border",
                   testConfigResult.error
                     ? "bg-status-error/5 border-status-error/15"
-                    : "bg-daintree-bg border-daintree-border"
+                    : "bg-surface-canvas border-border-default"
                 )}
               >
                 {testConfigResult.error ? (
@@ -526,13 +526,13 @@ export function ContextTab({
                 ) : (
                   <div className="space-y-3">
                     {testConfigResult.noFilesMatched ? (
-                      <p className="text-sm text-daintree-text">
+                      <p className="text-sm text-text-primary">
                         No files match these settings — loosen the excluded paths or size limits
                       </p>
                     ) : (
                       <div className="flex items-center gap-2 flex-wrap">
                         <Check className="h-4 w-4 text-status-success" />
-                        <span className="text-sm font-medium text-daintree-text">
+                        <span className="text-sm font-medium text-text-primary">
                           {testConfigResult.includedFiles} files would be included
                         </span>
                         <span className="text-xs text-daintree-text/60">
@@ -604,7 +604,7 @@ export function ContextTab({
                           <button
                             type="button"
                             onClick={() => setShowAllFiles((value) => !value)}
-                            className="text-xs text-daintree-text/60 hover:text-daintree-text transition-colors"
+                            className="text-xs text-daintree-text/60 hover:text-text-primary transition-colors"
                           >
                             {showAllFiles
                               ? "Show fewer"

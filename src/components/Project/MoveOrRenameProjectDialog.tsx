@@ -434,13 +434,13 @@ function RelocationPreviewSection({
 
   return (
     <div
-      className="space-y-3 rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg px-3 py-3"
+      className="space-y-3 rounded-[var(--radius-md)] border border-border-default bg-surface-canvas px-3 py-3"
       data-testid="relocate-preview"
     >
       <div className="space-y-1">
         <span className="text-xs font-medium text-daintree-text/60">Folder</span>
         <p className="text-xs font-mono text-daintree-text/50 break-all">{oldPath}</p>
-        <p className="text-xs font-mono text-daintree-text break-all">→ {preview.newPath}</p>
+        <p className="text-xs font-mono text-text-primary break-all">→ {preview.newPath}</p>
       </div>
 
       {preview.blockers.length > 0 ? (

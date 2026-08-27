@@ -191,7 +191,7 @@ export function ChordIndicator() {
           onKeyDown={handleKeyDown}
           className={cn(
             "w-full bg-transparent px-4 py-2.5 text-sm",
-            "text-daintree-text placeholder:text-text-placeholder",
+            "text-text-primary placeholder:text-text-placeholder",
             "focus:outline-hidden"
           )}
         />

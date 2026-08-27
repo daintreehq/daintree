@@ -294,7 +294,7 @@ export function VoiceInputButton({
             />
             <span
               ref={dotCoreRef}
-              className="absolute rounded-full bg-daintree-accent"
+              className="absolute rounded-full bg-accent-primary"
               style={{
                 width: "3.5px",
                 height: "3.5px",
@@ -328,9 +328,9 @@ export function VoiceInputButton({
         className={cn(
           "relative flex items-center justify-center rounded-full transition duration-150",
           "h-6 w-6",
-          "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-accent",
+          "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-accent-primary",
           showOrbit
-            ? "bg-overlay-soft text-daintree-text hover:bg-overlay-medium"
+            ? "bg-overlay-soft text-text-primary hover:bg-overlay-medium"
             : cn(
                 status === "error"
                   ? "text-activity-waiting hover:text-activity-waiting/80"

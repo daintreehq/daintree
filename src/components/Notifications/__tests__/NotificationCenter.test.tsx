@@ -708,8 +708,8 @@ describe("NotificationThread visual treatment", () => {
     const wrapper = screen.getByTestId("notification-thread");
     expect(wrapper.className).toMatch(/border-l-2/);
     expect(wrapper.className).toMatch(/border-tint\//);
-    expect(wrapper.className).not.toMatch(/border-daintree-accent/);
-    expect(wrapper.className).not.toMatch(/bg-daintree-accent/);
+    expect(wrapper.className).not.toMatch(/border-(daintree-accent|accent-primary)/);
+    expect(wrapper.className).not.toMatch(/bg-(daintree-accent|accent-primary)/);
   });
 
   it("does not render the thread rail wrapper for solo entries", async () => {
@@ -1342,7 +1342,7 @@ describe("NotificationCenter — Filter inactive contrast", () => {
     const unread = screen.getByText("Unread");
     expect(unread.className).toContain("text-daintree-text/60");
     expect(unread.className).not.toContain("text-daintree-text/40");
-    expect(unread.className).toContain("hover:text-daintree-text");
+    expect(unread.className).toContain("hover:text-text-primary");
 
     fireEvent.click(unread);
 
@@ -1350,7 +1350,7 @@ describe("NotificationCenter — Filter inactive contrast", () => {
     const all = screen.getByText("All");
     expect(all.className).toContain("text-daintree-text/60");
     expect(all.className).not.toContain("text-daintree-text/40");
-    expect(all.className).toContain("hover:text-daintree-text");
+    expect(all.className).toContain("hover:text-text-primary");
   });
 
   it("does not render either segment when entries is empty", () => {

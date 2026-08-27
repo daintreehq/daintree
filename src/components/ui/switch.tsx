@@ -28,7 +28,7 @@ const switchVariants = cva(
       tone: {
         // Neutral, not accent: "on" is state, not the one load-bearing signal.
         neutral:
-          "data-[state=checked]:bg-text-primary data-[state=checked]:ring-0 focus-visible:outline-daintree-accent",
+          "data-[state=checked]:bg-text-primary data-[state=checked]:ring-0 focus-visible:outline-accent-primary",
         warning:
           "data-[state=checked]:bg-status-warning data-[state=checked]:ring-0 focus-visible:outline-status-warning",
         danger:

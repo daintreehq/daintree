@@ -606,18 +606,18 @@ function FileTreeRow({ row, isSelected, isOpen, context }: FileTreeRowProps) {
         // is reserved for a single load-bearing signal per focus region.
         "transition-colors duration-150 ease-out",
         isSelected
-          ? "bg-overlay-subtle text-daintree-text"
+          ? "bg-overlay-subtle text-text-primary"
           : // Full-strength text, no fill: enough to find the open row at a
             // glance without reading as a second selection.
             isOpen
-            ? "text-daintree-text"
+            ? "text-text-primary"
             : "text-daintree-text/70",
         !isSelected && "hover:bg-tint/5",
         // The row whose context menu is open lifts to a distinct neutral tier
         // (raised, not the selection's subtle) so it reads as "the menu targets
         // this row" without masquerading as the selection. Radix forwards
         // data-state onto this surface through the asChild trigger below.
-        "data-[state=open]:bg-overlay-raised data-[state=open]:text-daintree-text"
+        "data-[state=open]:bg-overlay-raised data-[state=open]:text-text-primary"
       )}
     >
       {row.isDirectory ? (

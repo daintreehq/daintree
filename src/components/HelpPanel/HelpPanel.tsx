@@ -1269,7 +1269,7 @@ export function HelpPanel({
       }}
       className={cn(
         "relative shrink-0 flex flex-col h-full overflow-hidden outline-hidden",
-        "bg-daintree-bg border-l border-daintree-border transition-[border-left-color,box-shadow] duration-150",
+        "bg-surface-canvas border-l border-border-default transition-[border-left-color,box-shadow] duration-150",
         isHighlighted && "assistant-focused",
         !isVisible && "pointer-events-none"
       )}
@@ -1288,7 +1288,7 @@ export function HelpPanel({
         className={cn(
           "absolute left-0 top-0 bottom-0 w-1.5 cursor-col-resize z-10",
           "hover:bg-overlay-soft active:bg-overlay-medium transition-colors",
-          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:-outline-offset-2",
+          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2",
           isResizing && "bg-overlay-medium"
         )}
         onMouseDown={handleResizeStart}
@@ -1424,7 +1424,7 @@ export function HelpPanel({
                   aria-hidden="true"
                 />
                 <div className="flex-1 select-text">
-                  <p className="font-medium text-daintree-text">
+                  <p className="font-medium text-text-primary">
                     {getAgentConfig(droppedPreferredAgentId)?.name ?? droppedPreferredAgentId} is no
                     longer available
                   </p>
@@ -1434,7 +1434,7 @@ export function HelpPanel({
                   <button
                     type="button"
                     onClick={handleOpenSettings}
-                    className="mt-1 text-daintree-text/70 hover:text-daintree-text underline underline-offset-2 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+                    className="mt-1 text-daintree-text/70 hover:text-text-primary underline underline-offset-2 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                   >
                     Open assistant settings
                   </button>
@@ -1443,7 +1443,7 @@ export function HelpPanel({
                   type="button"
                   onClick={clearDroppedPreferredAgent}
                   aria-label="Dismiss agent unavailable notice"
-                  className="text-daintree-text/50 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+                  className="text-daintree-text/50 hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                 >
                   <X className="w-3 h-3" />
                 </button>
@@ -1492,7 +1492,7 @@ export function HelpPanel({
                           key={prompt}
                           type="button"
                           onClick={() => handleStartAssistant(prompt)}
-                          className="flex items-center gap-2 w-full text-left px-3 py-2 text-xs rounded-[var(--radius-md)] border border-daintree-border text-daintree-text/80 hover:text-daintree-text hover:bg-overlay-soft transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+                          className="flex items-center gap-2 w-full text-left px-3 py-2 text-xs rounded-[var(--radius-md)] border border-border-default text-daintree-text/80 hover:text-text-primary hover:bg-overlay-soft transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                         >
                           <MessageCircle className="w-3.5 h-3.5 shrink-0 text-daintree-text/50" />
                           <span>{prompt}</span>
@@ -1510,7 +1510,7 @@ export function HelpPanel({
                 <button
                   type="button"
                   onClick={handleOpenSettings}
-                  className="flex items-center gap-1 text-2xs text-daintree-text/70 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+                  className="flex items-center gap-1 text-2xs text-daintree-text/70 hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                 >
                   <Settings2 className="w-3.5 h-3.5" />
                   Assistant settings
@@ -1518,7 +1518,7 @@ export function HelpPanel({
                 <button
                   type="button"
                   onClick={handleOpenAssistantDocs}
-                  className="flex items-center gap-1 text-2xs text-daintree-text/70 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+                  className="flex items-center gap-1 text-2xs text-daintree-text/70 hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                 >
                   <ExternalLink className="w-3.5 h-3.5" />
                   Daintree Assistant guide
@@ -1535,7 +1535,7 @@ export function HelpPanel({
           edge. Raw args, the elapsed ticker, and the marketing link live in
           the popover / hover titles / header docs button now. */}
       {showTerminal && agentConfig && !isMissingCli && (
-        <div className="flex items-center justify-between gap-3 border-t border-daintree-border shrink-0 px-3 py-1.5 text-2xs text-text-secondary">
+        <div className="flex items-center justify-between gap-3 border-t border-border-default shrink-0 px-3 py-1.5 text-2xs text-text-secondary">
           <span className="flex items-center gap-2 min-w-0">
             <McpActivityStrip sessionId={sessionId} activity={session.mcpActivity} />
             <TurnOutcomePip outcome={session.outcomeAlert} onDismiss={dismissOutcomeAlert} />
@@ -1561,7 +1561,7 @@ export function HelpPanel({
                     "flex items-center gap-1.5 min-w-0 p-0 bg-transparent border-none text-2xs",
                     "text-status-warning hover:text-status-warning/80 transition-colors duration-150",
                     "rounded-[var(--radius-sm)]",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                   )}
                   title="Switch to the worktree this assistant is pinned to"
                 >

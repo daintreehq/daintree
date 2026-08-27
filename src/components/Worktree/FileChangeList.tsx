@@ -148,7 +148,7 @@ function FileChangeRow({
               aria-label={`Open ${change.relativePath}`}
               className={cn(
                 "group/filerow flex items-center text-xs font-mono hover:bg-tint/5 rounded px-1.5 py-0.5 -mx-1.5 cursor-pointer transition-colors",
-                "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-daintree-accent",
+                "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-1 focus-visible:outline-accent-primary",
                 // The row whose menu is open lifts to a neutral raised tier
                 // so it reads as "the menu targets this row" — these rows
                 // are ~20px and densely stacked, and the menu otherwise
@@ -182,7 +182,7 @@ function FileChangeRow({
                     {displayDir}/
                   </span>
                 )}
-                <span className="text-daintree-text group-hover/filerow:text-daintree-text font-medium truncate min-w-0">
+                <span className="text-text-primary group-hover/filerow:text-text-primary font-medium truncate min-w-0">
                   {base}
                 </span>
               </div>

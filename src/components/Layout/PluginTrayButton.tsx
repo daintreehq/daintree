@@ -112,7 +112,7 @@ export function PluginToolbarButton({
                   { source: "user" }
                 );
               }}
-              className="toolbar-icon-button text-daintree-text relative"
+              className="toolbar-icon-button text-text-primary relative"
               aria-label={config.label}
               aria-keyshortcuts={ariaShortcut}
             >
@@ -191,7 +191,7 @@ function PluginTrayRow({
           onTogglePin(config);
         }}
         className={cn(
-          "ml-1 inline-flex h-5 w-5 items-center justify-center rounded-sm text-daintree-text/50 transition-opacity hover:bg-overlay-emphasis hover:text-daintree-text",
+          "ml-1 inline-flex h-5 w-5 items-center justify-center rounded-sm text-daintree-text/50 transition-opacity hover:bg-overlay-emphasis hover:text-text-primary",
           promoted ? "opacity-100" : "opacity-0 group-data-[highlighted]:opacity-100"
         )}
       >
@@ -199,7 +199,7 @@ function PluginTrayRow({
           className={cn(
             "h-3 w-3",
             promoted &&
-              "fill-current text-daintree-text/40 group-data-[highlighted]:text-daintree-text"
+              "fill-current text-daintree-text/40 group-data-[highlighted]:text-text-primary"
           )}
           strokeWidth={promoted ? 2 : 1.75}
         />
@@ -301,7 +301,7 @@ export function PluginTrayButton({
                   variant="ghost"
                   size="icon"
                   data-toolbar-item={dataToolbarItem}
-                  className="toolbar-icon-button text-daintree-text relative"
+                  className="toolbar-icon-button text-text-primary relative"
                   aria-label="Plugin tray"
                   onPointerEnter={() => {
                     isRestoringFocusRef.current = false;

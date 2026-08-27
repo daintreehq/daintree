@@ -316,7 +316,7 @@ export function PilotFilterBar({
               // from content and sharing only the SLACK keeps every label whole
               // and still fills the bar edge to edge.
               "inline-flex min-w-0 grow items-center justify-center gap-1 px-1.5 py-1.5 transition-colors",
-              "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-daintree-accent",
+              "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
               idx > 0 && "border-l border-border-default",
               isActive
                 ? // Fallback keeps themes without the var byte-identical.
@@ -340,7 +340,7 @@ export function PilotFilterBar({
               aria-hidden="true"
               className={cn(
                 "truncate text-xs",
-                isActive ? "font-medium text-daintree-text" : "text-daintree-text/60"
+                isActive ? "font-medium text-text-primary" : "text-daintree-text/60"
               )}
             >
               {label}
@@ -349,7 +349,7 @@ export function PilotFilterBar({
               aria-hidden="true"
               className={cn(
                 "text-xs tabular-nums",
-                isActive ? "text-daintree-text" : "text-daintree-text/60"
+                isActive ? "text-text-primary" : "text-daintree-text/60"
               )}
             >
               {count}

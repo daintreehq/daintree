@@ -372,9 +372,7 @@ export function CommitPanel({
             ) : (
               <Check className="w-3 h-3 text-status-success shrink-0" />
             )}
-            <span
-              className={b.active ? "text-daintree-text" : "text-daintree-text/40 line-through"}
-            >
+            <span className={b.active ? "text-text-primary" : "text-daintree-text/40 line-through"}>
               {b.label}
             </span>
           </li>
@@ -423,9 +421,9 @@ export function CommitPanel({
         }
         className={cn(
           // Fallback keeps themes without --review-commit-input-bg byte-identical.
-          "w-full resize-none rounded-md border border-divider bg-[var(--review-commit-input-bg,var(--color-daintree-bg))] px-3 py-2 text-xs font-mono",
+          "w-full resize-none rounded-md border border-divider bg-[var(--review-commit-input-bg,var(--color-surface-canvas))] px-3 py-2 text-xs font-mono",
           "min-h-[calc(2lh+1rem)] max-h-[calc(6lh+1rem)] overflow-y-auto",
-          "placeholder:text-text-placeholder text-daintree-text",
+          "placeholder:text-text-placeholder text-text-primary",
           "focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/30 focus:border-transparent",
           "disabled:opacity-50 disabled:cursor-not-allowed"
         )}
@@ -450,7 +448,7 @@ export function CommitPanel({
           {progressEntries.map((e) => (
             <div key={e.stage} className="flex items-center gap-2 text-3xs text-daintree-text/70">
               <span className="w-20 truncate capitalize">{e.stage}</span>
-              <div className="flex-1 h-1 bg-daintree-bg rounded-full overflow-hidden">
+              <div className="flex-1 h-1 bg-surface-canvas rounded-full overflow-hidden">
                 <div
                   className="h-full bg-primary rounded-full transition-[width] duration-300 ease-out"
                   style={{ width: `${Math.min(100, Math.max(0, e.progress ?? 0))}%` }}
@@ -502,7 +500,7 @@ export function CommitPanel({
           <div>
             <span
               data-testid="commit-panel-push-confirm-branch"
-              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-tint/[0.07] border border-tint/[0.08] text-2xs font-mono text-daintree-text"
+              className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-tint/[0.07] border border-tint/[0.08] text-2xs font-mono text-text-primary"
             >
               {destinationLabel ?? currentBranch ?? ""}
             </span>
@@ -511,7 +509,7 @@ export function CommitPanel({
             data-testid="commit-panel-push-confirm-message"
             className={cn(
               "max-h-40 overflow-y-auto rounded-[var(--radius-md)] border border-divider",
-              "bg-surface-inset px-3 py-2 text-xs font-mono whitespace-pre-wrap break-words text-daintree-text"
+              "bg-surface-inset px-3 py-2 text-xs font-mono whitespace-pre-wrap break-words text-text-primary"
             )}
           >
             {commitMessage}
@@ -522,7 +520,7 @@ export function CommitPanel({
               data-testid="commit-panel-push-confirm-dont-ask"
               checked={dontAskChecked}
               onChange={(e) => setDontAskChecked(e.target.checked)}
-              className="accent-daintree-accent"
+              className="accent-accent-primary"
             />
             Don't ask again for this worktree
           </label>

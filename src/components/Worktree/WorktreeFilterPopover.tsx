@@ -37,7 +37,7 @@ function FilterSection({
   const expandButtonRef = useRef<HTMLButtonElement>(null);
 
   return (
-    <div className="flex flex-col border-b border-daintree-border last:border-b-0">
+    <div className="flex flex-col border-b border-border-default last:border-b-0">
       <div className="flex items-center">
         <button
           ref={expandButtonRef}
@@ -71,7 +71,7 @@ function FilterSection({
               onClear();
             }}
             aria-label={`Clear ${title} filters`}
-            className="shrink-0 px-2 py-1.5 text-2xs text-text-secondary transition-colors hover:text-daintree-text"
+            className="shrink-0 px-2 py-1.5 text-2xs text-text-secondary transition-colors hover:text-text-primary"
           >
             Clear
           </button>
@@ -117,10 +117,10 @@ function FilterChip({ label, isActive, onClick, count }: FilterChipProps) {
       className={cn(
         "inline-flex items-center px-2 py-0.5 text-2xs rounded-full border transition-colors",
         isActive
-          ? "bg-filter-selected-bg-soft border-daintree-border text-daintree-text"
+          ? "bg-filter-selected-bg-soft border-border-default text-text-primary"
           : isDimmed
-            ? "bg-daintree-bg border-daintree-border text-daintree-text/45 hover:bg-overlay-soft hover:text-daintree-text/70"
-            : "bg-daintree-bg border-daintree-border text-daintree-text/75 hover:bg-overlay-medium hover:text-daintree-text"
+            ? "bg-surface-canvas border-border-default text-daintree-text/45 hover:bg-overlay-soft hover:text-daintree-text/70"
+            : "bg-surface-canvas border-border-default text-daintree-text/75 hover:bg-overlay-medium hover:text-text-primary"
       )}
     >
       {showCount ? `${label} (${count})` : label}
@@ -391,18 +391,18 @@ export function WorktreeFilterPopover({
             "flex shrink-0 items-center justify-center gap-1 rounded-[var(--radius-md)] transition-colors",
             // Every other control in this rail carries the accent focus ring;
             // without one here the browser painted its own blue outline.
-            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent",
-            isField ? "self-stretch border border-daintree-border px-2" : "h-6 min-w-6 px-1.5",
+            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
+            isField ? "self-stretch border border-border-default px-2" : "h-6 min-w-6 px-1.5",
             // Active state is a neutral fill + count, never a saturated colour or a
             // floating notification dot. A dot reads as "something new"; what matters
             // here is "how many filters", so we surface the number instead.
             filtersActive
               ? isField
-                ? "bg-overlay-soft text-daintree-text"
-                : "bg-tint/[0.08] text-daintree-text"
+                ? "bg-overlay-soft text-text-primary"
+                : "bg-tint/[0.08] text-text-primary"
               : isField
-                ? "bg-[var(--worktree-search-input-bg,var(--color-daintree-bg))] text-daintree-text/60 hover:bg-overlay-soft hover:text-daintree-text"
-                : "text-daintree-text/60 hover:bg-tint/[0.06] hover:text-daintree-text"
+                ? "bg-[var(--worktree-search-input-bg,var(--color-surface-canvas))] text-daintree-text/60 hover:bg-overlay-soft hover:text-text-primary"
+                : "text-daintree-text/60 hover:bg-tint/[0.06] hover:text-text-primary"
           )}
           aria-label="Filter and sort worktrees"
           aria-haspopup="dialog"
@@ -423,7 +423,7 @@ export function WorktreeFilterPopover({
         <div className="flex flex-col">
           {/* Search */}
           {!hideSearchInput && (
-            <div className="p-3 border-b border-daintree-border">
+            <div className="p-3 border-b border-border-default">
               <div className="relative">
                 <input
                   type="text"
@@ -433,8 +433,8 @@ export function WorktreeFilterPopover({
                   aria-label="Search worktrees"
                   className={cn(
                     "w-full px-2.5 py-1.5 text-xs rounded",
-                    "bg-daintree-bg border border-daintree-border",
-                    "text-daintree-text placeholder-daintree-text/40",
+                    "bg-surface-canvas border border-border-default",
+                    "text-text-primary placeholder-daintree-text/40",
                     "focus:outline-hidden focus:border-daintree-accent/50"
                   )}
                 />
@@ -448,7 +448,7 @@ export function WorktreeFilterPopover({
                       setLocalQuery("");
                       setQuery("");
                     }}
-                    className="absolute right-2 top-1/2 -translate-y-1/2 text-daintree-text/40 hover:text-daintree-text"
+                    className="absolute right-2 top-1/2 -translate-y-1/2 text-daintree-text/40 hover:text-text-primary"
                     aria-label="Clear search"
                   >
                     <X className="w-3 h-3" />
@@ -459,7 +459,7 @@ export function WorktreeFilterPopover({
           )}
 
           {/* Sort Order */}
-          <div className="px-3 pt-2.5 pb-2 border-b border-daintree-border">
+          <div className="px-3 pt-2.5 pb-2 border-b border-border-default">
             <div
               id="worktree-sort-by-label"
               className="text-3xs font-medium text-text-secondary uppercase tracking-wide mb-1.5"
@@ -486,9 +486,9 @@ export function WorktreeFilterPopover({
                   tabIndex={index === tabbableSortIndex ? 0 : -1}
                   className={cn(
                     "flex items-center gap-2 px-2 py-1 text-xs rounded",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-daintree-accent",
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
                     orderBy === option.value
-                      ? "bg-overlay-raised text-daintree-text"
+                      ? "bg-overlay-raised text-text-primary"
                       : "text-daintree-text/70 hover:bg-overlay-medium"
                   )}
                 >
@@ -496,8 +496,8 @@ export function WorktreeFilterPopover({
                     className={cn(
                       "w-3 h-3 rounded-full border",
                       orderBy === option.value
-                        ? "border-daintree-text bg-daintree-text"
-                        : "border-daintree-border"
+                        ? "border-text-primary bg-text-primary"
+                        : "border-border-default"
                     )}
                   >
                     {orderBy === option.value && (
@@ -513,13 +513,13 @@ export function WorktreeFilterPopover({
           </div>
 
           {/* Group by Type Toggle */}
-          <div className="px-3 py-2 border-b border-daintree-border">
+          <div className="px-3 py-2 border-b border-border-default">
             <label className="flex items-center gap-2 cursor-pointer">
               <input
                 type="checkbox"
                 checked={groupByType}
                 onChange={(e) => setGroupByType(e.target.checked)}
-                className="w-3.5 h-3.5 rounded border-daintree-border text-daintree-accent focus:ring-daintree-accent/30 focus:ring-offset-0 bg-daintree-bg"
+                className="w-3.5 h-3.5 rounded border-border-default text-accent-primary focus:ring-daintree-accent/30 focus:ring-offset-0 bg-surface-canvas"
               />
               <span className="text-xs text-daintree-text/70">Group by type</span>
             </label>
@@ -642,7 +642,7 @@ export function WorktreeFilterPopover({
 
           {/* Clear All */}
           {hasAnyFilter && (
-            <div className="p-3 border-t border-daintree-border">
+            <div className="p-3 border-t border-border-default">
               <Button variant="subtle" size="xs" onClick={handleClearAll} className="w-full">
                 Clear all filters
               </Button>

@@ -106,7 +106,7 @@ function ConflictSide({ label, value, kept }: { label: string; value: string; ke
           // being protected the hardest thing in the row to read. The surviving
           // side is marked by weight instead, which costs no contrast and
           // survives forced-colors, where a colour difference would not.
-          "font-mono text-2xs break-all text-daintree-text",
+          "font-mono text-2xs break-all text-text-primary",
           kept ? "font-medium" : "font-normal",
           isEmpty && "italic"
         )}
@@ -250,7 +250,7 @@ export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDia
           <h3
             ref={stepHeadingRef}
             tabIndex={-1}
-            className="text-sm font-medium text-daintree-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 rounded-xs"
+            className="text-sm font-medium text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2 rounded-xs"
             data-testid="import-env-step-heading"
           >
             {STEP_TITLE[step]}
@@ -286,7 +286,7 @@ export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDia
               // for `focus-visible:outline-*` for keyboard focus, and the ring
               // this replaced measured ~2.2:1 — under the 3:1 floor for a
               // non-text indicator, on the step's primary input.
-              className="w-full h-56 resize-y font-mono text-xs leading-[inherit] bg-surface-input border border-border-strong rounded-[var(--radius-md)] px-3 py-2 text-daintree-text placeholder:text-text-placeholder transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+              className="w-full h-56 resize-y font-mono text-xs leading-[inherit] bg-surface-input border border-border-strong rounded-[var(--radius-md)] px-3 py-2 text-text-primary placeholder:text-text-placeholder transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
               aria-label="Paste .env content"
               aria-invalid={hasErrors || undefined}
               aria-describedby={hasErrors ? errorsId : undefined}
@@ -315,7 +315,7 @@ export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDia
                   {parsed.errors.map((e) => (
                     <li key={`${e.line}-${e.raw}`}>
                       <span className="text-text-secondary">Line {e.line}:</span>{" "}
-                      <span className="font-medium text-daintree-text">{e.reason}</span>
+                      <span className="font-medium text-text-primary">{e.reason}</span>
                       {/* Weight ranks the reason above the line it came from,
                           the same way the outcome rows above rank a kept value.
                           The raw line drops to its own row rather than sitting
@@ -343,7 +343,7 @@ export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDia
                 {newCount > 0 && conflicts.length > 0 ? ` · ${newCount} new` : ""}
                 {conflicts.length === 0 ? " · existing values unchanged" : ""}
                 {duplicateInPasteCount > 0 ? (
-                  <span className="text-daintree-text">
+                  <span className="text-text-primary">
                     {" "}
                     · {duplicateInPasteCount} duplicate key
                     {duplicateInPasteCount === 1 ? "" : "s"} in paste (last value kept)
@@ -410,7 +410,7 @@ export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDia
                 <ul className="divide-y divide-tint/[0.06]">
                   {conflicts.map((c) => (
                     <li key={c.key} className="px-3 py-2">
-                      <div className="font-mono text-2xs text-daintree-text">{c.key}</div>
+                      <div className="font-mono text-2xs text-text-primary">{c.key}</div>
                       <dl className="mt-0.5 grid grid-cols-[max-content_1fr] items-baseline gap-x-3 gap-y-0.5">
                         <ConflictSide
                           label="Existing"

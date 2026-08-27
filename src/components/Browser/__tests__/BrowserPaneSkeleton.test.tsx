@@ -34,7 +34,7 @@ describe("BrowserPaneSkeleton", () => {
 
   it("does not animate the content area", () => {
     const { container } = render(<BrowserPaneSkeleton />);
-    const contentArea = container.querySelector(".bg-daintree-bg");
+    const contentArea = container.querySelector(".bg-surface-canvas");
     expect(contentArea).toBeTruthy();
     expect(contentArea!.className).not.toContain("animate-pulse");
   });

@@ -34,7 +34,7 @@ function RecipeRunRow({ record }: { record: Extract<RunHistoryRecord, { kind: "r
         <Workflow className="mt-0.5 h-4 w-4 shrink-0 text-daintree-text/60" aria-hidden="true" />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span className="truncate text-sm font-medium text-daintree-text">
+            <span className="truncate text-sm font-medium text-text-primary">
               {record.recipeName}
             </span>
             {record.worktreeName ? (
@@ -91,7 +91,7 @@ function FleetRunRow({ record }: { record: Extract<RunHistoryRecord, { kind: "fl
         <Radio className="mt-0.5 h-4 w-4 shrink-0 text-daintree-text/60" aria-hidden="true" />
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2">
-            <span className="text-sm font-medium text-daintree-text">
+            <span className="text-sm font-medium text-text-primary">
               {record.isRetry ? "Fleet retry" : "Fleet broadcast"}
             </span>
             {statusLabel && statusLabel !== "Finished" ? (

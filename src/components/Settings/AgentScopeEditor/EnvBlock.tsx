@@ -40,7 +40,7 @@ export function EnvBlock({
     return (
       <div id="agents-global-env" className="space-y-2">
         <div>
-          <label className="text-sm font-medium text-daintree-text">Global env vars</label>
+          <label className="text-sm font-medium text-text-primary">Global env vars</label>
           <p className="text-xs text-text-secondary select-text">
             Applied to every launch. Preset-specific vars take precedence.
           </p>

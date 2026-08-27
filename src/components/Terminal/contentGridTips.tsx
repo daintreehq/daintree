@@ -294,7 +294,7 @@ export function RotatingTip() {
             // centred text at the same size and colour as the sentence above
             // it, the only control that names the user's actual goal read as a
             // second sentence — an affordance nobody could see was there.
-            className="tip-action text-xs text-text-secondary underline decoration-text-muted underline-offset-2 hover:text-daintree-text hover:decoration-current transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 rounded px-1"
+            className="tip-action text-xs text-text-secondary underline decoration-text-muted underline-offset-2 hover:text-text-primary hover:decoration-current transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2 rounded px-1"
           >
             {tip.actionLabel}
           </button>

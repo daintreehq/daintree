@@ -615,7 +615,7 @@ describe("FileBrowserPane collapsible sidebar (#11328)", () => {
 
     const vPad = (el: Element) => classToken(el, (c) => /^py-/.test(c));
     const borderColor = (el: Element) =>
-      classToken(el, (c) => c === "border-overlay" || c === "border-daintree-border");
+      classToken(el, (c) => c === "border-overlay" || c === "border-border-default");
     const iconSize = (el: Element) => classToken(el.querySelector("svg")!, (c) => /^h-/.test(c));
 
     // Guard against a vacuous undefined === undefined pass.
@@ -626,7 +626,7 @@ describe("FileBrowserPane collapsible sidebar (#11328)", () => {
 
     // Relational invariant: whatever the shared toolbar uses, the sidebar header
     // matches it — so the line under the two bars reads continuous. A regression
-    // that reverts one side (py-1 / border-daintree-border / h-3.5 icons) fails
+    // that reverts one side (py-1 / border-border-default / h-3.5 icons) fails
     // here. Icon height is the row's tallest child, so it drives the height parity.
     expect(vPad(sidebarHeader)).toBe(vPad(toolbarRoot));
     expect(borderColor(sidebarHeader)).toBe(borderColor(toolbarRoot));
