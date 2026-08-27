@@ -109,7 +109,12 @@ export function ReadinessRail({ summary, onCta }: ReadinessRailProps) {
               read as a single sentence. Weight also survives `prefers-contrast:
               more`, where the colour difference is flattened away. */}
           <span className="font-medium text-daintree-text/85">{primary.label}</span>
-          {primary.detail && <span className="text-text-secondary"> {primary.detail}</span>}
+          {primary.detail && (
+            // The literal space stays: adjacent inline spans concatenate in the
+            // accessibility tree, so dropping it would announce "changedCheck". The
+            // margin is what opens the optical gap.
+            <span className="ml-1 text-text-secondary"> {primary.detail}</span>
+          )}
         </span>
       </TruncatedTooltip>
 
