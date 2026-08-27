@@ -1,4 +1,7 @@
-import { SegmentedRadioGroup, type SegmentedRadioOption } from "./SegmentedRadioGroup";
+import {
+  SegmentedRadioGroup,
+  type SegmentedRadioOption,
+} from "@/components/ui/SegmentedRadioGroup";
 
 type BranchMode = "new" | "existing";
 

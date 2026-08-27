@@ -213,7 +213,7 @@ test.describe.serial("Core: v0.3.0 Features", () => {
 
   // ── Settings Search (3 tests) ──────────────────────────
   // The settings dialog gained a search input (#2719) that filters
-  // all settings entries and switches the content pane to "Search Results".
+  // all settings entries and switches the content pane to "Search results".
 
   test.describe.serial("Settings Search", () => {
     test("search input is visible in settings", async () => {
@@ -235,8 +235,8 @@ test.describe.serial("Core: v0.3.0 Features", () => {
 
       await window.waitForTimeout(T_SETTLE);
 
-      // Content heading should switch from the tab title to "Search Results"
-      await expect(window.locator('h3:has-text("Search Results")')).toBeVisible({
+      // Content heading should switch from the tab title to "Search results"
+      await expect(window.locator('h3:has-text("Search results")')).toBeVisible({
         timeout: T_MEDIUM,
       });
     });
@@ -249,8 +249,8 @@ test.describe.serial("Core: v0.3.0 Features", () => {
 
       await window.waitForTimeout(T_SETTLE);
 
-      // Search Results heading should disappear, normal tab heading returns
-      await expect(window.locator('h3:has-text("Search Results")')).not.toBeVisible({
+      // Search results heading should disappear, normal tab heading returns
+      await expect(window.locator('h3:has-text("Search results")')).not.toBeVisible({
         timeout: T_SHORT,
       });
 

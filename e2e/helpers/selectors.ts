@@ -64,7 +64,9 @@ export const SEL = {
     mcpServerEmptyState: "text=MCP server is off",
     mcpServerEnableButton: 'button:has-text("Turn on MCP server")',
     mcpConnectionMarker: "text=The server binds to 127.0.0.1",
-    scopeSelect: '[aria-label="Settings scope"]',
+    scopeControl: '[role="radiogroup"][aria-label="Settings scope"]',
+    scopeOption: (label: string) =>
+      `[role="radiogroup"][aria-label="Settings scope"] [role="radio"]:text-is("${label}")`,
     searchResultsRegion: '[role="region"][aria-label="Search results"]',
   },
   panel: {

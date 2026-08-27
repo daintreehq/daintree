@@ -1,5 +1,8 @@
 import { useMemo } from "react";
-import { SegmentedRadioGroup, type SegmentedRadioOption } from "./SegmentedRadioGroup";
+import {
+  SegmentedRadioGroup,
+  type SegmentedRadioOption,
+} from "@/components/ui/SegmentedRadioGroup";
 
 interface EnvironmentRadioGroupProps {
   worktreeMode: string;

@@ -428,8 +428,8 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
     await searchInput.fill("font size");
     await window.waitForTimeout(T_SETTLE);
 
-    // h3 switches to "Search Results"
-    await expect(window.locator("h3", { hasText: "Search Results" })).toBeVisible({
+    // h3 switches to "Search results"
+    await expect(window.locator("h3", { hasText: "Search results" })).toBeVisible({
       timeout: T_SHORT,
     });
 
@@ -447,7 +447,7 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
     // Clear search and verify we return to normal tab view
     await searchInput.fill("");
     await window.waitForTimeout(T_SETTLE);
-    await expect(window.locator("h3", { hasText: "Search Results" })).not.toBeVisible({
+    await expect(window.locator("h3", { hasText: "Search results" })).not.toBeVisible({
       timeout: T_SHORT,
     });
 

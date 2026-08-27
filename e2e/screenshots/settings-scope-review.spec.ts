@@ -67,6 +67,9 @@ const GET_SETTINGS_CHANNEL = "project:get-settings";
 const SAVE_SETTINGS_CHANNEL = "project:save-settings";
 
 const DIALOG = '[role="dialog"]:has(.settings-sidebar)';
+// AppDialog puts role="dialog" on the full-viewport scrim, so cropping to DIALOG
+// frames the whole window. The card is its child — that is the surface under review.
+const CARD = '[role="dialog"]:has(.settings-sidebar) > div';
 const SIDEBAR = ".settings-sidebar";
 const CLOSE = '[aria-label="Close settings"]';
 const SEARCH = '[aria-label="Search settings"]';
@@ -422,9 +425,7 @@ const STATES: ScopeState[] = [
         const landed = await page.evaluate(() => {
           const el = document.activeElement as HTMLElement | null;
           if (!el) return null;
-          const inScopeControl = !!el.closest(
-            '[aria-label="Settings scope"],[data-settings-scope-control]'
-          );
+          const inScopeControl = !!el.closest('[aria-label="Settings scope"]');
           return inScopeControl ? { visible: el.matches(":focus-visible") } : null;
         });
         if (landed) {
@@ -550,7 +551,7 @@ test("settings dialog scope review — global, project, search, deep link and tr
           welcome.locator(`${SIDEBAR} [aria-label="Settings scope"]`),
           "01-no-project: a scope control rendered with no project open"
         ).toHaveCount(0, { timeout: 5000 });
-        await snap(welcome, "01-no-project--dialog", DIALOG);
+        await snap(welcome, "01-no-project--dialog", CARD);
         captured++;
         await snap(welcome, "01-no-project--sidebar", SIDEBAR);
         captured++;
@@ -593,7 +594,7 @@ test("settings dialog scope review — global, project, search, deep link and tr
 
         await verify(page, state);
 
-        await snap(page, `${state.slug}--dialog`, DIALOG);
+        await snap(page, `${state.slug}--dialog`, CARD);
         captured++;
         if (state.extraCrop === "sidebar") {
           await snap(page, `${state.slug}--sidebar`, SIDEBAR);

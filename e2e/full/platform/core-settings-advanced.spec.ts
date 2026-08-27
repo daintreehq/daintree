@@ -6,6 +6,26 @@ import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
 
 import { openSettings } from "../../helpers/panels";
+
+/** Click a scope segment and wait for it to report itself checked. */
+async function selectScope(window: Page, label: "Global" | "Project"): Promise<void> {
+  const option = window.locator(SEL.settings.scopeOption(label));
+  await option.click();
+  await expect(option).toHaveAttribute("aria-checked", "true", { timeout: T_SHORT });
+}
+
+/**
+ * Every `role="tab"` must point at a panel that is actually in the document. Search
+ * used to replace the tab panels outright, which left the whole sidebar pointing at
+ * ids that no longer existed — invisible on screen, broken for assistive tech.
+ */
+async function danglingTabControls(window: Page): Promise<string[]> {
+  return window.evaluate(() =>
+    Array.from(document.querySelectorAll('[role="tab"][aria-controls]'))
+      .map((tab) => tab.getAttribute("aria-controls") ?? "")
+      .filter((id) => id && !document.getElementById(id))
+  );
+}
 let ctx: AppContext;
 let fixtureCleanup: (() => void) | undefined;
 
@@ -453,10 +473,8 @@ test.describe.serial("Core: Settings Advanced", () => {
       });
       await expect(nav.locator("button", { hasText: "Variables" })).toHaveCount(0);
 
-      // Switch to Project scope (Radix Select) → nav swaps to project tabs.
-      await window.locator(SEL.settings.scopeSelect).click();
-      await window.locator('[role="option"]', { hasText: "Project" }).click();
-      await expect(window.locator('[role="listbox"]')).toHaveCount(0, { timeout: T_SHORT });
+      // Switch to Project scope (segmented radiogroup) → nav swaps to project tabs.
+      await selectScope(window, "Project");
 
       await expect(nav.locator("button", { hasText: "Variables" })).toBeVisible({
         timeout: T_SHORT,
@@ -470,25 +488,55 @@ test.describe.serial("Core: Settings Advanced", () => {
       });
 
       // Flip to Global and back — the project scope restores its remembered tab.
-      await window.locator(SEL.settings.scopeSelect).click();
-      await window.locator('[role="option"]', { hasText: "Global" }).click();
-      await expect(window.locator('[role="listbox"]')).toHaveCount(0, { timeout: T_SHORT });
+      await selectScope(window, "Global");
       await expect(nav.locator("button", { hasText: "Appearance" })).toBeVisible({
         timeout: T_SHORT,
       });
 
-      await window.locator(SEL.settings.scopeSelect).click();
-      await window.locator('[role="option"]', { hasText: "Project" }).click();
-      await expect(window.locator('[role="listbox"]')).toHaveCount(0, { timeout: T_SHORT });
+      await selectScope(window, "Project");
       await expect(window.locator("h3", { hasText: "Environment Variables" })).toBeVisible({
         timeout: T_SHORT,
       });
 
       // Restore global scope before closing so later state is predictable.
-      await window.locator(SEL.settings.scopeSelect).click();
-      await window.locator('[role="option"]', { hasText: "Global" }).click();
-      await expect(window.locator('[role="listbox"]')).toHaveCount(0, { timeout: T_SHORT });
+      await selectScope(window, "Global");
 
+      await window.keyboard.press("Escape");
+      await expect(window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_SHORT });
+    });
+
+    test("every settings tab points at a panel that exists, in and out of search", async () => {
+      const { window } = ctx;
+      await openSettings(window);
+      await expect(window.locator(SEL.settings.heading)).toBeVisible({ timeout: T_MEDIUM });
+
+      expect(await danglingTabControls(window), "dangling aria-controls at rest").toEqual([]);
+
+      const searchInput = window.locator(SEL.settings.searchInput);
+      await searchInput.fill("font size");
+      await window.waitForTimeout(T_SETTLE);
+      await expect(window.locator(SEL.settings.searchResultsRegion)).toBeVisible({
+        timeout: T_SHORT,
+      });
+      expect(await danglingTabControls(window), "dangling aria-controls while searching").toEqual(
+        []
+      );
+
+      // And in project scope, whose panels mount on a different branch.
+      await searchInput.fill("");
+      await selectScope(window, "Project");
+      expect(await danglingTabControls(window), "dangling aria-controls in project scope").toEqual(
+        []
+      );
+      await searchInput.fill("worktree");
+      await window.waitForTimeout(T_SETTLE);
+      expect(
+        await danglingTabControls(window),
+        "dangling aria-controls searching project scope"
+      ).toEqual([]);
+
+      await searchInput.fill("");
+      await selectScope(window, "Global");
       await window.keyboard.press("Escape");
       await expect(window.locator(SEL.settings.heading)).not.toBeVisible({ timeout: T_SHORT });
     });
@@ -503,7 +551,7 @@ test.describe.serial("Core: Settings Advanced", () => {
       // Keyboard navigation: ArrowDown selects the first result, Enter opens it.
       await searchInput.fill("font size");
       await window.waitForTimeout(T_SETTLE);
-      await expect(window.locator("h3", { hasText: "Search Results" })).toBeVisible({
+      await expect(window.locator("h3", { hasText: "Search results" })).toBeVisible({
         timeout: T_SHORT,
       });
       await expect(window.locator(SEL.settings.searchResultsRegion)).toBeVisible({
@@ -528,7 +576,7 @@ test.describe.serial("Core: Settings Advanced", () => {
         .first();
       await expect(firstResult).toBeVisible({ timeout: T_SHORT });
       await firstResult.click();
-      await expect(window.locator("h3", { hasText: "Search Results" })).not.toBeVisible({
+      await expect(window.locator("h3", { hasText: "Search results" })).not.toBeVisible({
         timeout: T_SHORT,
       });
       await expect(window.locator("h3", { hasText: "Appearance" })).toBeVisible({

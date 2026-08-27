@@ -13,11 +13,15 @@ interface SegmentedRadioGroupProps<T extends string> {
   onChange: (value: T) => void;
   "aria-label": string;
   disabled?: boolean;
+  /** Fill the container and split it evenly between the segments. */
+  fullWidth?: boolean;
+  className?: string;
 }
 
 /**
- * The create-worktree form's one segmented language, shared by the branch-mode
- * and environment switches.
+ * The app's one segmented single-choice control, shared by the create-worktree
+ * form's branch-mode and environment switches and by the settings shell's
+ * global/project scope switch.
  *
  * Radio semantics with a real radiogroup keyboard model: arrow keys and
  * Home/End move the selection, and only the checked segment is a tab stop, so
@@ -37,6 +41,8 @@ export function SegmentedRadioGroup<T extends string>({
   onChange,
   "aria-label": ariaLabel,
   disabled,
+  fullWidth,
+  className,
 }: SegmentedRadioGroupProps<T>) {
   const containerRef = useRef<HTMLDivElement>(null);
   const buttonRefs = useRef<(HTMLButtonElement | null)[]>([]);
@@ -102,16 +108,24 @@ export function SegmentedRadioGroup<T extends string>({
   return (
     <div
       ref={containerRef}
-      className="relative isolate inline-flex shrink-0 rounded-[var(--radius-md)] bg-surface-inset p-0.5"
+      className={cn(
+        "relative isolate rounded-[var(--radius-md)] bg-surface-inset p-0.5",
+        fullWidth ? "flex w-full" : "inline-flex shrink-0",
+        className
+      )}
       role="radiogroup"
       aria-label={ariaLabel}
       onKeyDown={handleKeyDown}
     >
       {thumb && (
         <span
+          data-slot="segmented-thumb"
           className={cn(
             "absolute top-0.5 bottom-0.5 left-0 z-0 rounded-[var(--radius-sm)] pointer-events-none",
             "bg-surface-panel-elevated border border-border-default shadow-[var(--theme-shadow-ambient)]",
+            // forced-colors discards the fill and the ambient shadow, so the thumb has
+            // to say "selected" with a system-coloured border it cannot drop.
+            "forced-colors:border-[Highlight] forced-colors:bg-[Highlight]",
             // Only the thumb's own geometry animates, and reduced motion drops
             // it entirely rather than shortening it.
             !skipMotion && "transition-[translate,width] duration-150 ease-out",
@@ -139,10 +153,13 @@ export function SegmentedRadioGroup<T extends string>({
             disabled={disabled}
             className={cn(
               "relative z-10 px-2.5 py-1 text-xs font-medium rounded-[var(--radius-sm)]",
+              fullWidth && "flex-1 min-w-0 truncate",
               "transition-colors duration-150 ease-out",
               "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1",
               "disabled:cursor-not-allowed disabled:pointer-events-none",
-              isActive ? "text-daintree-text" : "text-text-secondary hover:text-daintree-text",
+              isActive
+                ? "text-daintree-text forced-colors:text-[HighlightText]"
+                : "text-text-secondary hover:text-daintree-text",
               disabled && "opacity-40"
             )}
           >

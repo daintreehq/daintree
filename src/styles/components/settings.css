@@ -68,6 +68,31 @@
   box-shadow: var(--settings-nav-active-shadow, none);
 }
 
+/* The scope switcher's selected segment is the surface seven light themes authored
+   --settings-scope-bg for — it was the old scope Select's fill. Re-homing the key
+   onto the thumb keeps those themes meaningful instead of orphaning the token. */
+.settings-scope-control [data-slot="segmented-thumb"] {
+  background: var(--settings-scope-bg, var(--theme-surface-panel-elevated));
+}
+
+/* Deliberately NOT merged with the `prefers-contrast: more` block below: macOS fires
+   only prefers-contrast, Windows swaps in system colors, and only this path discards
+   backgrounds, tints and shadows outright. Same rationale as src/index.css.
+
+   Without it the settings nav loses its selected state entirely — the tinted fill, the
+   inset ring and the 2px accent marker are all dropped, leaving every section row
+   identical and no way to tell which one you are looking at. */
+@media (forced-colors: active) {
+  .settings-nav-item[data-active="true"] {
+    background: Highlight;
+    color: HighlightText;
+  }
+
+  .settings-scope-control [data-slot="segmented-thumb"] {
+    background: Highlight;
+  }
+}
+
 .settings-kbd {
   background: var(--settings-kbd-bg, var(--theme-surface-input));
   border-color: var(--settings-kbd-border, var(--theme-border-default));

@@ -24,16 +24,18 @@ import {
   usePreferencesStore,
   useSettingsStore,
 } from "@/store";
-import { X, Search, ChevronRight, AlertTriangle } from "lucide-react";
+import {
+  X,
+  Search,
+  ChevronRight,
+  AlertTriangle,
+  ArrowLeftRight,
+  TriangleAlert,
+} from "lucide-react";
+import { Folder, Globe } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
+import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";
 import { appClient } from "@/clients";
 import type { AppVersionInfo } from "@shared/types/ipc/app";
 import { AppDialog } from "@/components/ui/AppDialog";
@@ -98,6 +100,13 @@ function midSentenceLabel(label: string): string {
   if (/^[A-Z]{2,}/.test(label)) return label;
   return label.charAt(0).toLowerCase() + label.slice(1);
 }
+
+// Labels never change with state — the checked segment says which scope is
+// active, and swapping the words would make the control read as a toggle.
+const SCOPE_OPTIONS = [
+  { value: "global" as const, label: "Global" },
+  { value: "project" as const, label: "Project" },
+];
 
 export interface SettingsNavTarget {
   tab: SettingsTab;
@@ -586,25 +595,22 @@ function SettingsDialogInner({
     >
       <div className="flex h-full overflow-hidden">
         <div className="settings-sidebar w-52 border-r border-daintree-border p-3 flex flex-col shrink-0">
-          <div className="flex items-center justify-between mb-3 pl-2">
+          <div className="mb-3 px-2 space-y-2">
             <h2 className="text-sm font-semibold text-daintree-text">Settings</h2>
             {hasProject && (
-              <Select
+              <SegmentedRadioGroup
+                // A radiogroup, not the Select it replaced: two mutually exclusive
+                // contexts that rebuild the nav tree are a view switcher, not a field
+                // value, and screen readers should hear "1 of 2" rather than a combobox.
+                // `settings-scope-control` re-homes --settings-scope-bg onto the thumb,
+                // which is the surface the seven light themes authored it for.
+                className="settings-scope-control"
+                fullWidth
+                aria-label="Settings scope"
                 value={activeScope}
-                onValueChange={(v) => handleScopeSwitch(v as SettingsScope)}
-              >
-                <SelectTrigger
-                  aria-label="Settings scope"
-                  // Fallback keeps themes without --settings-scope-bg byte-identical.
-                  className="text-xs py-1 pl-2 pr-2 h-auto w-auto gap-1 bg-[var(--settings-scope-bg,transparent)] text-text-secondary hover:text-daintree-text hover:border-daintree-text/30"
-                >
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="global">Global</SelectItem>
-                  <SelectItem value="project">Project</SelectItem>
-                </SelectContent>
-              </Select>
+                onChange={handleScopeSwitch}
+                options={SCOPE_OPTIONS}
+              />
             )}
           </div>
 
@@ -702,25 +708,60 @@ function SettingsDialogInner({
 
         <div className="settings-shell flex-1 flex flex-col min-w-0">
           <AppDialog.Header plainBody>
-            {/* h3, not the default h2: the sidebar's "Settings" h2 is the shell
-                heading and this labels the active section beneath it. */}
-            <AppDialog.Title
-              as="h3"
-              icon={
-                isSearching ? (
-                  <Search className="w-5 h-5 text-text-secondary" />
-                ) : (
-                  tabIcons[activeTab]
-                )
-              }
-            >
-              {isSearching ? "Search Results" : tabTitles[activeTab]}
-            </AppDialog.Title>
+            {/* A title stack, not a bare title: the section name alone is ambiguous —
+                General, Notifications and Code Forge all exist in both scopes — so the
+                line above it names what the change lands on. It rides in the header
+                rather than the scrollport, which is the only part of the pane that
+                survives the user scrolling into a long form. */}
+            <div className="flex flex-col gap-1 min-w-0">
+              <ScopeContext scope={activeScope} projectLabel={hasProject ? projectLabel : null} />
+              <AppDialog.Title
+                as="h3"
+                icon={
+                  isSearching ? (
+                    <Search className="w-5 h-5 text-text-secondary" />
+                  ) : (
+                    tabIcons[activeTab]
+                  )
+                }
+              >
+                {isSearching ? "Search results" : tabTitles[activeTab]}
+              </AppDialog.Title>
+            </div>
             <AppDialog.CloseButton aria-label="Close settings" />
           </AppDialog.Header>
 
+          {/* Project trouble rides above the scrollport, not inside it: an autosave
+              failure raised while the user is deep in a long form would otherwise
+              render off-screen, and a message that scrolls away is a message the
+              user never sees. Naming the project keeps the failure attached to the
+              thing it happened to. */}
+          {activeScope === "project" && projectId && (
+            <div className="px-6 pt-4 space-y-2 shrink-0 empty:hidden">
+              {projectForm.projectError && (
+                <SettingsLoadErrorBanner
+                  title="Couldn't load settings"
+                  message={`${projectLabel} — ${projectForm.projectError}`}
+                  onRetry={projectForm.refreshProjectSettings}
+                />
+              )}
+              {projectForm.projectAutoSaveError && (
+                <SettingsLoadErrorBanner
+                  title="Couldn't save settings"
+                  message={`${projectLabel} — ${projectForm.projectAutoSaveError}`}
+                  onRetry={() => void projectForm.flush()}
+                />
+              )}
+              {showProjectLoading && (
+                <p className="text-xs text-text-secondary" aria-live="polite">
+                  Loading settings for {projectLabel}…
+                </p>
+              )}
+            </div>
+          )}
+
           <ScrollShadow className="flex-1" scrollClassName="p-6">
-            {isSearching ? (
+            {isSearching && (
               <div role="region" aria-label="Search results">
                 <SearchResults
                   results={searchResults}
@@ -728,9 +769,16 @@ function SettingsDialogInner({
                   cleanQuery={cleanSearchQuery}
                   onResultClick={handleResultClick}
                   activeIndex={activeResultIndex}
+                  activeScope={activeScope}
+                  projectLabel={hasProject ? projectLabel : null}
                 />
               </div>
-            ) : (
+            )}
+            {/* Hidden rather than unmounted while search owns the pane. Every nav item
+                is a role="tab" whose aria-controls points at one of these panels, and a
+                tab pointing at an id that is not in the document is a broken reference
+                for assistive tech — the panels have to outlive the search overlay. */}
+            <div className={isSearching ? "hidden" : undefined}>
               <>
                 {hiddenSettingBanner && (
                   <div
@@ -830,25 +878,6 @@ function SettingsDialogInner({
                 {/* Project settings panels */}
                 {activeScope === "project" && projectId && (
                   <>
-                    {projectForm.projectError && (
-                      <SettingsLoadErrorBanner
-                        message={`Failed to load settings: ${projectForm.projectError}`}
-                        onRetry={projectForm.refreshProjectSettings}
-                      />
-                    )}
-                    {showProjectLoading && (
-                      <p className="text-sm text-daintree-text/60 py-2" aria-live="polite">
-                        Loading settings…
-                      </p>
-                    )}
-                    {projectForm.projectAutoSaveError && (
-                      <div
-                        className="text-sm text-status-error bg-status-error/10 border border-status-error/20 rounded p-3 mb-4"
-                        role="alert"
-                      >
-                        {projectForm.projectAutoSaveError}
-                      </div>
-                    )}
                     {SETTINGS_REGISTRY.filter((e) => e.scope === "project").map((entry) => {
                       const tabId = entry.id as SettingsTab;
                       const isActive = activeTab === tabId;
@@ -883,7 +912,7 @@ function SettingsDialogInner({
                   </>
                 )}
               </>
-            )}
+            </div>
           </ScrollShadow>
         </div>
       </div>
@@ -1300,15 +1329,26 @@ export function NavItem({
       )}
       <span className="relative">
         {icon}
+        {/* "Changed" and "broken" used to be the same dot in two hues, which is no
+            distinction at all under achromatopsia or forced colors. The shapes differ
+            now — a filled dot for modified, a triangle for a validation error — so the
+            two survive colour being removed. */}
         {(hasError || modified) && (
           <span
-            className={cn(
-              "status-mark absolute -top-0.5 -right-0.5 w-1.5 h-1.5 rounded-full",
-              hasError ? "bg-status-warning" : "bg-state-modified"
-            )}
+            className="absolute -top-1 -right-1 flex items-center justify-center"
             role="img"
             aria-label={hasError ? "Contains validation errors" : "Modified from default"}
-          />
+          >
+            {hasError ? (
+              <TriangleAlert
+                className="w-2.5 h-2.5 text-status-warning forced-colors:text-[CanvasText]"
+                strokeWidth={3}
+                aria-hidden="true"
+              />
+            ) : (
+              <span className="w-1.5 h-1.5 rounded-full bg-state-modified forced-colors:bg-[CanvasText]" />
+            )}
+          </span>
         )}
       </span>
       <span className="flex-1 truncate">{label}</span>
@@ -1328,11 +1368,90 @@ function MatchBadge({ count }: { count: number }) {
   );
 }
 
-function ScopeChip({ scope }: { scope: SettingsScope }) {
-  const label = scope === "project" ? "Project" : "Global";
+// Global settings belong to the app; the app has a name, and using it keeps the two
+// scopes symmetrical — both name a thing rather than one naming a thing and the other
+// naming an abstraction.
+const GLOBAL_ENTITY_LABEL = "Daintree";
+
+/**
+ * The scope line in the content header. Names the entity a change lands on, with the
+ * scope carried by the icon so the line stays short enough to sit above the section
+ * title at any project-name length.
+ */
+export function ScopeContext({
+  scope,
+  projectLabel,
+}: {
+  scope: SettingsScope;
+  /** null when no project is open, which forces the global reading. */
+  projectLabel: string | null;
+}) {
+  const isProject = scope === "project" && projectLabel !== null;
+  const entity = isProject ? projectLabel : GLOBAL_ENTITY_LABEL;
+  const Icon = isProject ? Folder : Globe;
   return (
-    <span className="text-[10px] font-medium px-1.5 py-0.5 rounded-full bg-tint/10 text-daintree-text/60 leading-none shrink-0">
-      {label}
+    <span
+      className="flex items-center gap-1.5 min-w-0 text-xs text-text-secondary"
+      data-settings-scope-context={isProject ? "project" : "global"}
+    >
+      <Icon className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+      {/* The icon is the only visual carrier of the scope word, so the word itself has
+          to reach a screen reader some other way. */}
+      <span className="sr-only">{isProject ? "Project settings for" : "Global settings for"}</span>
+      <span className="truncate" title={entity}>
+        {entity}
+      </span>
+    </span>
+  );
+}
+
+/**
+ * The scope marker on a search result. Unlike the header there is no scope control
+ * beside it, so this one spells the scope out — and names the project, because a
+ * result that says only "Project" does not tell you which one you are about to edit.
+ */
+export function ScopeChip({
+  scope,
+  projectLabel,
+  crossScope,
+}: {
+  scope: SettingsScope;
+  projectLabel: string | null;
+  /** The result lives in the scope the user is NOT currently in. */
+  crossScope?: boolean;
+}) {
+  const isProject = scope === "project" && projectLabel !== null;
+  const scopeWord = scope === "project" ? "Project" : "Global";
+  const entity = isProject ? projectLabel : null;
+  const title = crossScope
+    ? `Switches to ${scopeWord.toLowerCase()} settings${entity ? ` for ${entity}` : ""}`
+    : undefined;
+  return (
+    <span
+      className={cn(
+        "inline-flex items-center gap-1 max-w-[14rem] min-w-0 shrink-0",
+        "text-[10px] font-medium leading-none px-1.5 py-0.5 rounded-full",
+        // Neutral by construction: this sits next to N other results and the dialog's
+        // one accent is already spent on the nav's active marker.
+        crossScope ? "bg-tint/20 text-daintree-text/80" : "bg-tint/10 text-daintree-text/60"
+      )}
+      title={title}
+    >
+      {crossScope && (
+        <>
+          <ArrowLeftRight className="w-2.5 h-2.5 shrink-0" aria-hidden="true" />
+          <span className="sr-only">Switches to </span>
+        </>
+      )}
+      <span className="shrink-0">{scopeWord}</span>
+      {entity && (
+        <>
+          <span aria-hidden="true" className="opacity-40">
+            ·
+          </span>
+          <span className="truncate">{entity}</span>
+        </>
+      )}
     </span>
   );
 }
@@ -1346,6 +1465,9 @@ interface SearchResultsProps {
     requiresEnabled?: { settingId: string; label: string }
   ) => void;
   activeIndex?: number;
+  activeScope: SettingsScope;
+  /** null when no project is open. */
+  projectLabel: string | null;
 }
 
 function SearchResults({
@@ -1354,6 +1476,8 @@ function SearchResults({
   cleanQuery,
   onResultClick,
   activeIndex = -1,
+  activeScope,
+  projectLabel,
 }: SearchResultsProps) {
   const activeRef = useRef<HTMLButtonElement>(null);
 
@@ -1412,7 +1536,11 @@ function SearchResults({
           <div className="flex items-center gap-3">
             <div className="flex-1 min-w-0">
               <div className="flex items-center gap-2 mb-0.5">
-                <ScopeChip scope={result.scope} />
+                <ScopeChip
+                  scope={result.scope}
+                  projectLabel={projectLabel}
+                  crossScope={result.scope !== activeScope}
+                />
                 <span className="text-[10px] font-medium text-daintree-text/40 uppercase tracking-wide">
                   {result.tabLabel}
                 </span>
