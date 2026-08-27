@@ -65,4 +65,28 @@ describe("SettingsSwitchCard", () => {
     const switchEl = container.querySelector('[role="switch"]');
     expect(switchEl?.className).toContain("data-[state=checked]:bg-daintree-text");
   });
+
+  it("points the switch at the subtitle via aria-describedby", () => {
+    const { container } = render(<SettingsSwitchCard {...defaultProps} />);
+    const switchEl = container.querySelector('[role="switch"]');
+    const describedBy = switchEl?.getAttribute("aria-describedby");
+    expect(describedBy, "switch must describe itself with the subtitle").toBeTruthy();
+    expect(document.getElementById(describedBy!)).toBe(screen.getByText(defaultProps.subtitle));
+  });
+
+  it("gives each card its own description id", () => {
+    const { container } = render(
+      <>
+        <SettingsSwitchCard {...defaultProps} title="First" subtitle="First subtitle" />
+        <SettingsSwitchCard {...defaultProps} title="Second" subtitle="Second subtitle" />
+      </>
+    );
+    const ids = Array.from(container.querySelectorAll('[role="switch"]')).map((el) =>
+      el.getAttribute("aria-describedby")
+    );
+    expect(ids).toHaveLength(2);
+    expect(new Set(ids).size).toBe(2);
+    expect(document.getElementById(ids[0]!)?.textContent).toBe("First subtitle");
+    expect(document.getElementById(ids[1]!)?.textContent).toBe("Second subtitle");
+  });
 });
