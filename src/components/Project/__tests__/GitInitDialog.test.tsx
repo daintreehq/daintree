@@ -839,6 +839,85 @@ describe("GitInitDialog", () => {
       expect(screen.queryByLabelText(/project name/i)).toBeNull();
     });
 
+    it("hands focus to the running readout when the mode destroys the focused control", async () => {
+      initGitGuidedMock.mockImplementationOnce(() => new Promise(() => {}));
+      renderDialog();
+      const start = startButton();
+      start.focus();
+      expect(document.activeElement).toBe(start);
+
+      fireEvent.click(start);
+      await waitFor(() => expect(progressHandler).not.toBeNull());
+      act(() => {
+        progressHandler?.({
+          step: "init",
+          status: "start",
+          message: "Initializing Git repository...",
+          timestamp: Date.now(),
+        });
+      });
+
+      // The control that had focus is gone. Focus must land inside the new
+      // mode rather than falling to <body> — WCAG 2.4.3, failure technique F85.
+      await waitFor(
+        () => {
+          const active = document.activeElement;
+          expect(active).not.toBe(document.body);
+          expect(screen.getByTestId("git-init-progress").contains(active)).toBe(true);
+        },
+        { timeout: 2000 }
+      );
+    });
+
+    it("shows a step count that agrees with the bar it sits beside", async () => {
+      startAndHang();
+      await waitFor(() => expect(progressHandler).not.toBeNull());
+
+      act(() => {
+        for (const [step, message] of [
+          ["init", "Initializing Git repository..."],
+          ["gitignore", "Creating .gitignore file..."],
+        ] as const) {
+          progressHandler?.({ step, status: "start", message, timestamp: Date.now() });
+          progressHandler?.({
+            step,
+            status: "success",
+            message: `${step} ok`,
+            timestamp: Date.now(),
+          });
+        }
+        progressHandler?.({
+          step: "add",
+          status: "start",
+          message: "Staging files for initial commit...",
+          timestamp: Date.now(),
+        });
+      });
+
+      const bar = await waitFor(() => screen.getByRole("progressbar"), { timeout: 2000 });
+      const now = Number(bar.getAttribute("aria-valuenow"));
+      const max = Number(bar.getAttribute("aria-valuemax"));
+      // Whatever the wording, the number the user reads must be the number the
+      // bar is drawn from — a counter saying "3 of 4" over a half-filled bar is
+      // two answers to one question.
+      expect(screen.getByTestId("git-init-progress").textContent).toContain(`${now} of ${max}`);
+    });
+
+    it("does not dress the forward action up as a dismissal once it has succeeded", async () => {
+      const onSuccess = vi.fn();
+      const onCancel = vi.fn();
+      renderDialog({ onSuccess, onCancel });
+      fireEvent.click(startButton());
+
+      await waitFor(() => expect(screen.getByTestId("git-init-success")).toBeTruthy());
+      // Escape, the backdrop and the header X all route to the same handler,
+      // and in this mode that handler OPENS the project. So the dialog must not
+      // offer them: the mode has one action and it is labelled.
+      expect(screen.getByTestId("app-dialog").getAttribute("data-dismissible")).toBe("false");
+      expect(screen.queryByRole("button", { name: /^close$/i })).toBeNull();
+      expect(onCancel).not.toHaveBeenCalled();
+    });
+
     it("explains every field that can dead the primary action", () => {
       renderDialog();
       const start = startButton();

@@ -152,6 +152,7 @@ export function GitInitDialog({
   const sawErrorEventRef = useRef(false);
   const nameInputRef = useRef<HTMLInputElement>(null);
   const footerActionRef = useRef<HTMLButtonElement>(null);
+  const runningHeadingRef = useRef<HTMLDivElement>(null);
   const previousModeRef = useRef<"configure" | "running" | "failed" | "complete">("configure");
   const nameErrorId = useId();
   const commitMessageErrorId = useId();
@@ -331,9 +332,11 @@ export function GitInitDialog({
 
   // Each mode replaces the controls the previous one owned, so keyboard focus
   // has to follow or it lands on a node that no longer exists — the WCAG 2.4.3
-  // failure documented as F85. Running hands it to the disabled Cancel's
-  // neighbour, failure to Retry, success to Open project. Configuration is
-  // excluded on the way in: the open effect already put focus in the name
+  // failure documented as F85. Failure hands it to Retry and success to Open
+  // project. Running is the awkward one: it owns no enabled control at all, so
+  // focus goes to the live-phase readout itself, which is both the thing that
+  // changed and the thing a screen reader should be sitting on. Configuration
+  // is excluded on the way in — the open effect already put focus in the name
   // field, and re-running this on every keystroke would fight it.
   useEffect(() => {
     const previousMode = previousModeRef.current;
@@ -344,7 +347,9 @@ export function GitInitDialog({
         ? previousMode === "running"
           ? nameInputRef.current
           : null
-        : footerActionRef.current;
+        : mode === "running"
+          ? runningHeadingRef.current
+          : footerActionRef.current;
     if (!target) return;
     const frame = requestAnimationFrame(() => target.focus());
     return () => cancelAnimationFrame(frame);
@@ -380,7 +385,11 @@ export function GitInitDialog({
       isOpen={isOpen}
       onClose={handleClose}
       size="md"
-      dismissible={!isInitializing}
+      // Complete is deliberately not dismissible. Escape, the backdrop and the
+      // header X all route to `handleClose`, which in this mode opens the
+      // project — so leaving them live would dress the forward action up as a
+      // dismissal. The mode has one action and it is labelled.
+      dismissible={!isInitializing && !isComplete}
       initialFocus="none"
       data-testid="git-init-dialog"
     >
@@ -390,7 +399,7 @@ export function GitInitDialog({
         <AppDialog.Title icon={<FolderGit2 className="h-5 w-5 text-text-secondary" />}>
           Set up repository
         </AppDialog.Title>
-        {!isInitializing && <AppDialog.CloseButton />}
+        {!isInitializing && !isComplete && <AppDialog.CloseButton />}
       </AppDialog.Header>
 
       <AppDialog.Body className="space-y-5">
@@ -407,9 +416,12 @@ export function GitInitDialog({
             </div>
             <div className="space-y-1">
               <h3 className="text-base font-semibold text-daintree-text">Repository initialized</h3>
+              {/* Says what is about to happen, not merely what is possible:
+                  this mode opens the project on its own two seconds later, and
+                  "is ready to open" read as though it were waiting. */}
               <p className="text-sm text-daintree-text/60">
-                <span aria-hidden="true">{emoji} </span>
-                {trimmedProjectName} is ready to open
+                Opening <span aria-hidden="true">{emoji} </span>
+                {trimmedProjectName}…
               </p>
             </div>
             <PathCaption path={directoryPath} className="max-w-full" />
@@ -420,7 +432,14 @@ export function GitInitDialog({
                 in the app reports itself, and first — "what is happening now"
                 is the question this mode exists to answer. The transcript this
                 replaced answered it with four simultaneous spinners. */}
-            <div className="space-y-2" data-testid="git-init-progress">
+            <div
+              className="space-y-2"
+              data-testid="git-init-progress"
+              ref={runningHeadingRef}
+              // Focusable only programmatically: starting the operation destroys
+              // the button that had focus, and this is where focus is handed.
+              tabIndex={-1}
+            >
               {/* Carries the phase and nothing else, so step changes are
                   announced and the step counter ticking is not. */}
               <span className="sr-only" role="status" aria-live="polite">
@@ -435,11 +454,15 @@ export function GitInitDialog({
                   {currentPhase?.live ?? "Starting…"}
                 </span>
                 {currentPhase && (
+                  // Steps FINISHED, not the ordinal of the live one. The live
+                  // step is already named to the left, and a counter reading
+                  // "3 of 4" beside a bar filled to 50% left the two disagreeing
+                  // about the same fact.
                   <span
                     aria-hidden="true"
                     className="ml-auto text-xs tabular-nums text-daintree-text/60"
                   >
-                    {completedCount + 1} of {plannedSteps.length}
+                    {completedCount} of {plannedSteps.length} done
                   </span>
                 )}
               </div>
