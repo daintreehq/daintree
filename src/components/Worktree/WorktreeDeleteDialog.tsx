@@ -331,7 +331,11 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
     consequences.push({
       key: "loss",
       tone: "danger",
-      content: `${changeSummaryLabel} will be permanently lost`,
+      // Hedged only when the status fetch failed: that state is the one the
+      // dialog knows least about, and the banner above already says the loss
+      // is possible rather than certain. Where the changes ARE listed, the
+      // outcome is stated flatly.
+      content: `${changeSummaryLabel} ${verifyFailed ? "may be" : "will be"} permanently lost`,
     });
   }
   if (deleteBranch && canDeleteBranch) {
@@ -372,7 +376,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
     : force
       ? null
       : verifyFailed
-        ? "Couldn't verify this worktree — force delete to proceed anyway"
+        ? "Couldn't verify this worktree — standard delete may fail"
         : `Select Force delete to continue — ${changeSummaryLabel} present`;
 
   const changesHeadingId = "worktree-delete-changes-heading";

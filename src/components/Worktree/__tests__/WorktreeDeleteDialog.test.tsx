@@ -655,7 +655,10 @@ describe("WorktreeDeleteDialog — dialog chrome contract", () => {
       // proves nothing — the first version of this test passed against the bug.
       fireEvent.click(screen.getByRole("checkbox", { name: /force delete/i }));
       const dialog = screen.getByTestId("delete-worktree-dialog");
-      expect(dialog.textContent).toMatch(/will be permanently lost/);
+      // Hedged in the unverified state — the dialog cannot claim the work
+      // exists, only that it may. The unhedged wording is pinned separately
+      // for the verified-dirty case.
+      expect(dialog.textContent).toMatch(/may be permanently lost/);
       // No fabricated zero anywhere in the unverified state.
       expect(dialog.textContent).not.toMatch(/\b0 (uncommitted|untracked) file/);
     });
@@ -764,13 +767,22 @@ describe("WorktreeDeleteDialog — dialog chrome contract", () => {
   });
 
   it("keeps the force toggle label invariant across states", () => {
-    // House microcopy rule: a toggle label never changes with state.
+    // House microcopy rule: a toggle label never changes with state. The old
+    // label swapped between "Force delete (lose uncommitted changes)" and
+    // "Force delete (remove untracked files)" — both of which still satisfy a
+    // /force delete/ substring query, so querying by substring proves nothing.
+    // Read the toggle's OWN text node instead (the state-dependent
+    // sub-description is a separate child span) and compare the two states.
+    const ownLabelText = () => {
+      const checkbox = screen.getByRole("checkbox", { name: /force delete/i });
+      return checkbox.closest("label")?.querySelector("span")?.childNodes[0]?.textContent?.trim();
+    };
+
     const clean = makeWorktree(makeChanges([]));
     const { unmount } = render(
       <WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={clean} />
     );
-    const cleanLabel = screen.getByRole("checkbox", { name: /force delete/i });
-    expect(cleanLabel).toBeDefined();
+    const cleanLabel = ownLabelText();
     unmount();
 
     const dirty = makeWorktree(
@@ -780,7 +792,11 @@ describe("WorktreeDeleteDialog — dialog chrome contract", () => {
       ])
     );
     render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={dirty} />);
-    expect(screen.getByRole("checkbox", { name: /force delete/i })).toBeDefined();
+
+    expect(ownLabelText()).toBe(cleanLabel);
+    // And the invariant text carries no state qualifier at all, so a future
+    // label that varies identically in both states still fails here.
+    expect(cleanLabel).toBe("Force delete");
   });
 });
 
