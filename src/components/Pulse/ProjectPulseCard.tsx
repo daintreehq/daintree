@@ -224,7 +224,7 @@ function PulseSkeleton({ className }: { className?: string }) {
         className
       )}
     >
-      <div className="pulse-card-header px-4 py-3 border-b border-daintree-border flex items-center justify-between">
+      <div className="pulse-card-header animate-pulse-delayed px-4 py-3 border-b border-daintree-border flex items-center justify-between">
         <div className="flex items-center gap-2">
           <div className="w-4 h-4 rounded-[2px] pulse-skeleton-shimmer shrink-0" />
           <div className="h-4 pulse-skeleton-shimmer rounded w-36" />
@@ -235,7 +235,7 @@ function PulseSkeleton({ className }: { className?: string }) {
         </div>
       </div>
 
-      <div className="p-4 space-y-4 animate-pulse-delayed">
+      <div className="p-4 space-y-4 animate-pulse-delayed overflow-x-hidden">
         <div
           className="flex"
           style={{ gap: `${SKELETON_GAP}px`, width: `${SKELETON_ROW_WIDTH}px` }}
@@ -484,7 +484,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
     return (
       <div
         className={cn(
-          "pulse-card p-4 rounded-[var(--radius-lg)] border border-daintree-border",
+          "pulse-card w-full min-w-0 p-4 rounded-[var(--radius-lg)] border border-daintree-border",
           // Hold the slot at PulseSkeleton's natural height so the empty-state
           // column doesn't reflow when the skeleton swaps to this one-liner
           // (#7671). The card centers its short message inside the reserved
@@ -509,7 +509,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
     return (
       <div
         className={cn(
-          "pulse-card p-4 rounded-[var(--radius-lg)] border border-daintree-border",
+          "pulse-card w-full min-w-0 p-4 rounded-[var(--radius-lg)] border border-daintree-border",
           // Match PulseSkeleton height so the error swap doesn't collapse the
           // card and shift siblings up (#7671).
           "min-h-[240px] flex items-center",

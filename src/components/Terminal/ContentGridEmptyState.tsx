@@ -299,7 +299,7 @@ export function ContentGridEmptyState({
               gutter collapse to zero when the column outgrows the canvas, so
               the first rows stay reachable — the property `justify-center`
               could not give. */}
-          <div aria-hidden="true" className="w-full shrink basis-16" />
+          <div aria-hidden="true" className="w-full shrink basis-4" />
           <section
             aria-label={workspaceName ? `${workspaceName} — workspace home` : "Workspace home"}
             className={cn(
@@ -308,7 +308,20 @@ export function ContentGridEmptyState({
             )}
           >
             {hasLaunchTarget && (
-              <div className={cn("mb-6 flex flex-col items-center text-center", SECTION_ENTRY)}>
+              // `min-h-*` reserves the identity block's tallest form — mark,
+              // name, branch row and path. Without it the anchor is invariant
+              // against everything BELOW it and still slides with what is
+              // ABOVE it: a scratch has no branch line, a non-git project has
+              // no branch and no worktree, and each missing row pulled the
+              // launch entry up. Reserving the footprint costs a scratch some
+              // empty air and buys the same launch position in every kind of
+              // workspace, which is the whole point of anchoring it.
+              <div
+                className={cn(
+                  "mb-6 flex min-h-[8.5rem] flex-col items-center justify-end text-center",
+                  SECTION_ENTRY
+                )}
+              >
                 <div className="mb-3">{identityMark}</div>
                 {hasWorkspaceIdentity ? (
                   <div className="flex flex-col items-center gap-1.5 min-w-0 max-w-full">
@@ -338,7 +351,7 @@ export function ContentGridEmptyState({
                       )}
                     </div>
                     {(branchLabel || pathLabel) && (
-                      <div className="flex flex-col items-center gap-0.5 text-daintree-text/60 max-w-full min-w-0 font-mono">
+                      <div className="flex flex-col items-center gap-0.5 text-text-secondary max-w-full min-w-0 font-mono">
                         {branchLabel && (
                           <div className="flex items-center gap-1.5 text-sm max-w-full min-w-0">
                             <GitBranch className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />

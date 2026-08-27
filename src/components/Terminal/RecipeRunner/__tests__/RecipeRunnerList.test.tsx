@@ -61,11 +61,23 @@ describe("RecipeRunnerList — the canvas home does not take the caret", () => {
     expect(document.activeElement).toBe(document.body);
   });
 
-  it("still exposes the search field to the keyboard", () => {
+  it("still exposes the filter to the keyboard", () => {
     renderList();
     // Not focusing it is not the same as hiding it: Tab must still reach it.
-    const field = screen.getByPlaceholderText(/search recipes/i);
+    // Queried by role and accessible name rather than placeholder text, so a
+    // copy change cannot fail a test about keyboard reachability.
+    const field = screen.getByRole("combobox", { name: /recipes/i });
     expect(field.hasAttribute("disabled")).toBe(false);
     expect(field.getAttribute("tabindex")).not.toBe("-1");
+  });
+
+  it("keeps the whole listbox to a single tab stop", () => {
+    renderList();
+    // The combobox owns the stop; seven recipes plus Create must not add eight
+    // more. Counted, not spot-checked — the failure mode is a count.
+    const stops = screen
+      .getAllByRole("option")
+      .filter((el) => el.getAttribute("tabindex") !== "-1");
+    expect(stops).toEqual([]);
   });
 });

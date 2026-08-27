@@ -7,8 +7,21 @@ const EMPTY_STATE_PATH = resolve(__dirname, "../ContentGridEmptyState.tsx");
 describe("ContentGrid EmptyState — RecipeRunner integration", () => {
   it("identity is a centered stacked hero — mark above the name, one alignment axis", async () => {
     const content = await readFile(EMPTY_STATE_PATH, "utf-8");
-    // Centered identity block…
-    expect(content).toMatch(/flex flex-col items-center text-center/);
+    // Centered identity block — asserted as the two properties that make it
+    // one, not as a class string. The block has picked up a reserved height and
+    // a bottom-alignment since, and a literal would have failed on both without
+    // anything about the lockup having changed.
+    // Centered identity block — asserted as the two properties that make it
+    // one, not as a class string. The block has since picked up a reserved
+    // height and a bottom alignment, and a literal would have failed on both
+    // without anything about the lockup having changed.
+    const identity =
+      /"([^"]*)",\s*\n\s*SECTION_ENTRY\s*\n\s*\)\}\s*\n\s*>\s*\n\s*<div className="mb-3">\{identityMark\}/.exec(
+        content
+      );
+    expect(identity, "identity block wrapper not found").not.toBeNull();
+    expect(identity![1]).toContain("items-center");
+    expect(identity![1]).toContain("text-center");
     // …with the mark stacked above the name (no left-aligned lockup, no
     // gear-overlaid logo wrapper from the pre-redesign layout)…
     expect(content).toContain("identityMark");

@@ -102,12 +102,12 @@ export function RecipeRunnerItem({
                 // card the one that does nothing. The state was also
                 // `aria-hidden`, so it existed for sighted users only.
                 <>
-                  <Pin className="h-3 w-3 text-text-muted shrink-0" aria-hidden />
+                  <Pin className="h-3 w-3 text-text-secondary shrink-0" aria-hidden />
                   <span className="sr-only">Pinned</span>
                 </>
               )}
             </div>
-            <span className="flex items-center gap-2 w-full pl-5.5 text-xs text-text-muted">
+            <span className="flex items-center gap-2 w-full pl-5.5 text-xs text-text-secondary">
               <span className="shrink-0">{scopeLabel}</span>
               {recipeSummary && recipeSummary !== recipe.name && (
                 <span className="truncate">{recipeSummary}</span>
@@ -170,7 +170,7 @@ export function RecipeRunnerItem({
             // card the one that does nothing. The state was also
             // `aria-hidden`, so it existed for sighted users only.
             <>
-              <Pin className="h-3 w-3 text-text-muted shrink-0" aria-hidden />
+              <Pin className="h-3 w-3 text-text-secondary shrink-0" aria-hidden />
               <span className="sr-only">Pinned</span>
             </>
           )}

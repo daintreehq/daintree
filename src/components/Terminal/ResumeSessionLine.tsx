@@ -52,7 +52,7 @@ export function ResumeSessionLine() {
         onClick={() => void resume(primary.session)}
         className="group flex min-w-0 items-center gap-2.5 rounded-[var(--radius-md)] px-2.5 py-1.5 text-left transition-colors hover:bg-overlay-subtle focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
       >
-        <History className="h-3.5 w-3.5 shrink-0 text-text-muted" aria-hidden="true" />
+        <History className="h-3.5 w-3.5 shrink-0 text-text-secondary" aria-hidden="true" />
         <span className="shrink-0">
           <PanelKindIcon iconId={primary.iconId} color={primary.color} size={15} />
         </span>
@@ -68,7 +68,7 @@ export function ResumeSessionLine() {
           // title cut mid-word beside a model name cut mid-word, neither of
           // them readable. The title is what identifies the session; the model
           // and location are still on the row this line opens.
-          <span className="min-w-0 truncate text-xs text-text-muted @max-[26rem]/launcher:hidden">
+          <span className="min-w-0 truncate text-xs text-text-secondary @max-[31rem]/launcher:hidden">
             {primary.description}
           </span>
         )}

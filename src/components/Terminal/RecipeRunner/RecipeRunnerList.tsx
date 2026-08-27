@@ -109,17 +109,17 @@ export function RecipeRunnerList({
         <div className="mb-2 flex items-baseline gap-3 px-1">
           <span
             id="recipe-band-label"
-            className="shrink-0 text-[11px] font-medium uppercase tracking-wide text-text-muted"
+            className="shrink-0 text-[11px] font-medium uppercase tracking-wide text-text-secondary"
           >
             Recipes
           </span>
           <div className="relative min-w-0 flex-1">
-            <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-text-muted pointer-events-none" />
+            <Search className="absolute left-2 top-1/2 -translate-y-1/2 h-3 w-3 text-text-secondary pointer-events-none" />
             <input
               ref={inputRef}
               type="text"
               role="combobox"
-              aria-expanded={isSearchActive}
+              aria-expanded={true}
               aria-controls="recipe-listbox"
               aria-activedescendant={focusedItemId}
               aria-label="Filter recipes"
@@ -158,36 +158,42 @@ export function RecipeRunnerList({
               <>
                 <div
                   id="section-pinned"
-                  className="px-3 pt-1 pb-0.5 text-xs font-medium text-text-muted uppercase tracking-wide"
+                  className="px-3 pt-1 pb-0.5 text-xs font-medium text-text-secondary uppercase tracking-wide"
                   role="presentation"
                 >
                   Pinned
                 </div>
-                <div role="presentation">{sections.pinned.map(renderItem)}</div>
+                <div role="group" aria-labelledby="section-pinned">
+                  {sections.pinned.map(renderItem)}
+                </div>
               </>
             )}
             {sections.recent.length > 0 && (
               <>
                 <div
                   id="section-recent"
-                  className="px-3 pt-2 pb-0.5 text-xs font-medium text-text-muted uppercase tracking-wide"
+                  className="px-3 pt-2 pb-0.5 text-xs font-medium text-text-secondary uppercase tracking-wide"
                   role="presentation"
                 >
                   Recent
                 </div>
-                <div role="presentation">{sections.recent.map(renderItem)}</div>
+                <div role="group" aria-labelledby="section-recent">
+                  {sections.recent.map(renderItem)}
+                </div>
               </>
             )}
             {sections.all.length > 0 && (
               <>
                 <div
                   id="section-all"
-                  className="px-3 pt-2 pb-0.5 text-xs font-medium text-text-muted uppercase tracking-wide"
+                  className="px-3 pt-2 pb-0.5 text-xs font-medium text-text-secondary uppercase tracking-wide"
                   role="presentation"
                 >
                   All
                 </div>
-                <div role="presentation">{sections.all.map(renderItem)}</div>
+                <div role="group" aria-labelledby="section-all">
+                  {sections.all.map(renderItem)}
+                </div>
               </>
             )}
           </>
@@ -203,10 +209,10 @@ export function RecipeRunnerList({
           className="group w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] hover:bg-overlay-medium transition-colors text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent group-focus-within/recipes:aria-selected:ring-2 group-focus-within/recipes:aria-selected:ring-daintree-accent/60"
         >
           <Plus
-            className="h-3.5 w-3.5 text-text-muted group-hover:text-daintree-text transition-colors shrink-0"
+            className="h-3.5 w-3.5 text-text-secondary group-hover:text-daintree-text transition-colors shrink-0"
             aria-hidden
           />
-          <span className="flex-1 text-sm text-text-muted group-hover:text-daintree-text transition-colors">
+          <span className="flex-1 text-sm text-text-secondary group-hover:text-daintree-text transition-colors">
             {isSearchActive && flatRecipes.length === 0
               ? `Create recipe: "${searchQuery}"`
               : "Create new recipe…"}
