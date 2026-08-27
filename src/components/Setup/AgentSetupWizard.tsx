@@ -850,7 +850,7 @@ export function AgentSetupWizard({
                 <h3
                   ref={focusStepHeading}
                   tabIndex={-1}
-                  className="text-base font-semibold text-daintree-text outline-hidden focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-daintree-accent rounded-xs"
+                  className="text-base font-semibold text-daintree-text outline-hidden focus-visible:outline focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-daintree-accent rounded-xs"
                 >
                   {stepMeta.title}
                 </h3>
