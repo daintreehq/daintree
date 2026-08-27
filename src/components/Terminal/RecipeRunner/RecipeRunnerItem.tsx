@@ -83,7 +83,7 @@ export function RecipeRunnerItem({
             <div className="flex items-center gap-2 w-full">
               <Play
                 className={cn(
-                  "h-3.5 w-3.5 text-status-success/50 transition-colors shrink-0",
+                  "h-3.5 w-3.5 text-status-success transition-colors shrink-0",
                   !disabled && "group-hover:text-status-success"
                 )}
                 aria-hidden
@@ -94,9 +94,20 @@ export function RecipeRunnerItem({
               {recipe.shadowedBy && (
                 <span className="text-[11px] text-text-muted shrink-0">Overridden by Team</span>
               )}
-              {isPinned && <Pin className="h-3 w-3 text-daintree-accent/60 shrink-0" aria-hidden />}
+              {isPinned && (
+                // Neutral, not accent: pinning is membership, and the accent is
+                // the one signal that means "this is where the keyboard is".
+                // Spending it on a static badge left two greens on screen at
+                // once in the dense state, and made the brightest glyph on the
+                // card the one that does nothing. The state was also
+                // `aria-hidden`, so it existed for sighted users only.
+                <>
+                  <Pin className="h-3 w-3 text-text-secondary shrink-0" aria-hidden />
+                  <span className="sr-only">Pinned</span>
+                </>
+              )}
             </div>
-            <span className="flex items-center gap-2 w-full pl-5.5 text-xs text-text-muted">
+            <span className="flex items-center gap-2 w-full pl-5.5 text-xs text-text-secondary">
               <span className="shrink-0">{scopeLabel}</span>
               {recipeSummary && recipeSummary !== recipe.name && (
                 <span className="truncate">{recipeSummary}</span>
@@ -151,7 +162,18 @@ export function RecipeRunnerItem({
           {recipeSummary && recipeSummary !== recipe.name && (
             <span className="text-xs text-text-muted truncate max-w-[30%]">{recipeSummary}</span>
           )}
-          {isPinned && <Pin className="h-3 w-3 text-daintree-accent/60 shrink-0" aria-hidden />}
+          {isPinned && (
+            // Neutral, not accent: pinning is membership, and the accent is
+            // the one signal that means "this is where the keyboard is".
+            // Spending it on a static badge left two greens on screen at
+            // once in the dense state, and made the brightest glyph on the
+            // card the one that does nothing. The state was also
+            // `aria-hidden`, so it existed for sighted users only.
+            <>
+              <Pin className="h-3 w-3 text-text-secondary shrink-0" aria-hidden />
+              <span className="sr-only">Pinned</span>
+            </>
+          )}
         </button>
       </ContextMenuTrigger>
       <RecipeContextMenu

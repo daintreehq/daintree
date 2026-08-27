@@ -21,6 +21,13 @@ import { LauncherQuickActions } from "./LauncherQuickActions";
 
 const PATH_TRUNCATE_LENGTH = 52;
 
+// The column's single measure. Every band fills it rather than choosing its
+// own, so the stack has ONE pair of edges instead of the four it used to
+// (recipes and pulse at 32rem, the launcher at 38rem, the expanded pulse card
+// at the old 48rem container). The children are all exclusive to this surface,
+// so the measure belongs to the parent that composes them.
+const LAUNCHER_MEASURE = "max-w-[38rem]";
+
 // Marks a section as carrying the entry, so `replaySectionEntries` can find one
 // by the same name the class applies. The reduce-motion block in `index.css`
 // spells this selector out for itself — renaming it means changing both.
@@ -239,9 +246,13 @@ export function ContentGridEmptyState({
 
   // Centered stacked hero: mark above, name below — one alignment axis with
   // the rest of the launcher column (a left-aligned lockup and a floating
-  // watermark both read as misplaced against a centered page). ~10% smaller
-  // than the pre-redesign hero. Decorative; the project's own icon wins over
-  // the Daintree mark when one is set.
+  // watermark both read as misplaced against a centered page). Decorative; the
+  // project's own icon wins over the Daintree mark when one is set.
+  //
+  // Sized for a surface the user lands on many times a day, not for a splash:
+  // the mark orients ("which project am I in") and then gets out of the way of
+  // the launch anchor below it. At 100px the identity block alone ate the top
+  // quarter of the canvas and pushed the anchor past three-quarters down.
   //
   // The fallback mark rides the neutral `daintree-text` (text-primary) token,
   // NOT the hue-carrying `tint` — so it reads as the same grey the startup
@@ -250,9 +261,9 @@ export function ContentGridEmptyState({
   // construction: text-primary flips with light/dark.
   const sanitizedIcon = projectIconSvg ? sanitizeSvg(projectIconSvg) : null;
   const identityMark = sanitizedIcon?.ok ? (
-    <img src={svgToDataUrl(sanitizedIcon.svg)} alt="" className="h-25 w-25 object-contain" />
+    <img src={svgToDataUrl(sanitizedIcon.svg)} alt="" className="h-14 w-14 object-contain" />
   ) : (
-    <DaintreeIcon className="h-25 w-25 text-daintree-text/65" aria-hidden="true" />
+    <DaintreeIcon className="h-14 w-14 text-daintree-text/65" aria-hidden="true" />
   );
 
   // The container no longer fades as one block — each launcher section below
@@ -260,15 +271,58 @@ export function ContentGridEmptyState({
   // fade `EmptyState` already owns.
   return (
     <div ref={containerRef} className="relative h-full w-full overflow-hidden">
-      {/* Content scrolls independently of the fixed watermark so an expanded
-          pulse (or a tall recipe list) on a short canvas stays reachable
-          instead of being clipped; `min-h-full` keeps it centered when short. */}
+      {/* Content scrolls independently so an expanded pulse (or a tall recipe
+          list) on a short canvas stays reachable instead of being clipped.
+          `my-auto` on the column, NOT `justify-center` on this flex parent:
+          `justify-content: center` distributes overflow to BOTH ends, so once
+          the column outgrows the canvas its first rows — identity, and the
+          launch anchor right under it — spill above the scroll origin and
+          cannot be scrolled back to. Auto margins resolve to zero when there is
+          no free space, so the same centering degrades to top alignment.
+
+          `@container/launcher` lets the bands below respond to the CANVAS
+          width rather than the window's: this surface sits beside a sidebar and
+          inside a grid, so a viewport breakpoint describes the wrong box. */}
       <div className="relative h-full w-full overflow-y-auto">
-        <div className="flex min-h-full flex-col items-center justify-center p-8">
-          <div className="max-w-3xl w-full flex flex-col items-center">
+        <div className="flex min-h-full flex-col items-center p-8">
+          {/* A fixed, shrinkable top gutter — not `my-auto` on the column, and
+              certainly not `justify-center`. Centring the whole stack made the
+              anchor's screen position a function of the stack's HEIGHT, which
+              is a function of how many conditional bands resolved: the palette
+              button began 174px further down with no recipes than with eight.
+              Structurally invariant was not the same as spatially invariant,
+              and the muscle memory this surface is supposed to build lives in
+              the second one.
+
+              With the gutter fixed, everything below the anchor can grow and
+              shrink freely and the anchor does not move. `shrink` lets the
+              gutter collapse to zero when the column outgrows the canvas, so
+              the first rows stay reachable — the property `justify-center`
+              could not give. */}
+          <div aria-hidden="true" className="w-full shrink basis-4" />
+          <section
+            aria-label={workspaceName ? `${workspaceName} — workspace home` : "Workspace home"}
+            className={cn(
+              "@container/launcher flex w-full shrink-0 flex-col items-center",
+              LAUNCHER_MEASURE
+            )}
+          >
             {hasLaunchTarget && (
-              <div className={cn("mb-6 flex flex-col items-center text-center", SECTION_ENTRY)}>
-                <div className="mb-4">{identityMark}</div>
+              // `min-h-*` reserves the identity block's tallest form — mark,
+              // name, branch row and path. Without it the anchor is invariant
+              // against everything BELOW it and still slides with what is
+              // ABOVE it: a scratch has no branch line, a non-git project has
+              // no branch and no worktree, and each missing row pulled the
+              // launch entry up. Reserving the footprint costs a scratch some
+              // empty air and buys the same launch position in every kind of
+              // workspace, which is the whole point of anchoring it.
+              <div
+                className={cn(
+                  "mb-6 flex min-h-[8.5rem] flex-col items-center justify-end text-center",
+                  SECTION_ENTRY
+                )}
+              >
+                <div className="mb-3">{identityMark}</div>
                 {hasWorkspaceIdentity ? (
                   <div className="flex flex-col items-center gap-1.5 min-w-0 max-w-full">
                     {/* The name stays centered under the mark; the gear is
@@ -297,7 +351,7 @@ export function ContentGridEmptyState({
                       )}
                     </div>
                     {(branchLabel || pathLabel) && (
-                      <div className="flex flex-col items-center gap-0.5 text-daintree-text/60 max-w-full min-w-0 font-mono">
+                      <div className="flex flex-col items-center gap-0.5 text-text-secondary max-w-full min-w-0 font-mono">
                         {branchLabel && (
                           <div className="flex items-center gap-1.5 text-sm max-w-full min-w-0">
                             <GitBranch className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
@@ -374,22 +428,35 @@ export function ContentGridEmptyState({
               />
             )}
 
-            {hasLaunchTarget && recipesProjectId !== null && !recipesLoading && (
+            {/* The launch anchor sits directly under identity, and nothing
+                conditional is allowed above it. That is the whole point of the
+                order: recipes come and go with the project, resume comes and
+                goes with history, the pulse can be switched off — so anything
+                above the anchor makes the anchor's position a function of
+                state the user did not choose. Identity is the one band that is
+                always present when there is a launch target, so anchoring to it
+                is anchoring to a constant.
+
+                It also inverts the stagger's meaning. The ladder used to reveal
+                recipes first and the anchor fourth, teaching "recipes matter
+                most"; now the sequence walks down the priority order it is
+                supposed to express. */}
+            {hasLaunchTarget && (
               <div
                 className={cn(
-                  "mb-3 w-full flex justify-center",
+                  "mb-6 w-full flex justify-center",
                   SECTION_ENTRY,
                   SECTION_ENTRY_DELAY_1
                 )}
               >
-                <RecipeRunner activeWorktreeId={activeWorktreeId} defaultCwd={defaultCwd} />
+                <LauncherQuickActions />
               </div>
             )}
 
             {hasLaunchTarget && (
               <div
                 className={cn(
-                  "mb-3 w-full flex justify-center",
+                  "mb-2.5 w-full flex justify-center",
                   SECTION_ENTRY,
                   SECTION_ENTRY_DELAY_2
                 )}
@@ -398,7 +465,7 @@ export function ContentGridEmptyState({
               </div>
             )}
 
-            {hasLaunchTarget && (
+            {hasLaunchTarget && recipesProjectId !== null && !recipesLoading && (
               <div
                 className={cn(
                   "mb-6 w-full flex justify-center",
@@ -406,7 +473,7 @@ export function ContentGridEmptyState({
                   SECTION_ENTRY_DELAY_3
                 )}
               >
-                <LauncherQuickActions />
+                <RecipeRunner activeWorktreeId={activeWorktreeId} defaultCwd={defaultCwd} />
               </div>
             )}
 
@@ -429,7 +496,10 @@ export function ContentGridEmptyState({
                 <RotatingTip />
               </div>
             )}
-          </div>
+          </section>
+          {/* All remaining slack goes below the column, so the anchor keeps its
+              distance from the top of the canvas at every canvas height. */}
+          <div aria-hidden="true" className="w-full grow basis-0" />
         </div>
       </div>
     </div>

@@ -220,11 +220,11 @@ function PulseSkeleton({ className }: { className?: string }) {
   return (
     <div
       className={cn(
-        "pulse-card w-fit rounded-[var(--radius-lg)] border border-daintree-border min-h-[240px]",
+        "pulse-card w-full min-w-0 rounded-[var(--radius-lg)] border border-daintree-border min-h-[240px]",
         className
       )}
     >
-      <div className="pulse-card-header px-4 py-3 border-b border-daintree-border flex items-center justify-between">
+      <div className="pulse-card-header animate-pulse-delayed px-4 py-3 border-b border-daintree-border flex items-center justify-between">
         <div className="flex items-center gap-2">
           <div className="w-4 h-4 rounded-[2px] pulse-skeleton-shimmer shrink-0" />
           <div className="h-4 pulse-skeleton-shimmer rounded w-36" />
@@ -235,7 +235,7 @@ function PulseSkeleton({ className }: { className?: string }) {
         </div>
       </div>
 
-      <div className="p-4 space-y-4 animate-pulse-delayed">
+      <div className="p-4 space-y-4 animate-pulse-delayed overflow-x-hidden">
         <div
           className="flex"
           style={{ gap: `${SKELETON_GAP}px`, width: `${SKELETON_ROW_WIDTH}px` }}
@@ -484,7 +484,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
     return (
       <div
         className={cn(
-          "pulse-card p-4 rounded-[var(--radius-lg)] border border-daintree-border",
+          "pulse-card w-full min-w-0 p-4 rounded-[var(--radius-lg)] border border-daintree-border",
           // Hold the slot at PulseSkeleton's natural height so the empty-state
           // column doesn't reflow when the skeleton swaps to this one-liner
           // (#7671). The card centers its short message inside the reserved
@@ -509,7 +509,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
     return (
       <div
         className={cn(
-          "pulse-card p-4 rounded-[var(--radius-lg)] border border-daintree-border",
+          "pulse-card w-full min-w-0 p-4 rounded-[var(--radius-lg)] border border-daintree-border",
           // Match PulseSkeleton height so the error swap doesn't collapse the
           // card and shift siblings up (#7671).
           "min-h-[240px] flex items-center",
@@ -554,10 +554,22 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
   void minuteTick;
   const updatedLabel = formatTimeSince(pulse.generatedAt, Date.now());
 
+  // pulse.rangeDays, not the selector's — the chip describes the same snapshot
+  // the coach line above it does.
+  const healthSection = usableHealth ? (
+    <HealthSignals health={usableHealth} rangeDays={pulse.rangeDays} />
+  ) : healthLoading ? (
+    <HealthSectionSkeleton />
+  ) : health && !health.hasRemote ? (
+    <NoRemoteHint />
+  ) : health && health.hasRemote ? (
+    <OfflineHint />
+  ) : null;
+
   return (
     <div
       className={cn(
-        "pulse-card w-fit rounded-[var(--radius-lg)] border border-daintree-border min-h-[240px]",
+        "pulse-card w-full min-w-0 rounded-[var(--radius-lg)] border border-daintree-border min-h-[240px]",
         className
       )}
       aria-busy={isLoading}
@@ -618,34 +630,42 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
       </div>
 
       <div className="p-4 space-y-4">
-        <PulseHeatmap
-          cells={pulse.heatmap}
-          rangeDays={pulse.rangeDays}
-          describedBy={heatmapDescriptionId}
-        />
+        {/* The card used to be `w-fit`, so a 60-day row of fixed-size cells
+            decided its width and it came out a third wider than every other
+            band on the launcher — making the lowest-priority module the
+            largest object on the surface. The card now obeys the column, and
+            the row that genuinely needs the width scrolls inside it. */}
+        <div className="-mx-1 overflow-x-auto px-1">
+          <PulseHeatmap
+            cells={pulse.heatmap}
+            rangeDays={pulse.rangeDays}
+            describedBy={heatmapDescriptionId}
+          />
 
-        <PulseHeatmapLegend dayCount={pulse.heatmap.length} descriptionId={heatmapDescriptionId} />
+          <PulseHeatmapLegend
+            dayCount={pulse.heatmap.length}
+            descriptionId={heatmapDescriptionId}
+          />
+        </div>
 
         <p className="text-xs text-daintree-text/80">{getCoachLine(pulse, usableHealth)}</p>
 
-        {/* Health section: always renders the wrapper so the 4 sub-variants
-            (signals, skeleton, no-remote hint, offline hint) can swap without
-            growing or collapsing the card. `min-h-9` matches the chip row
-            height (h-5 chip + pt-3 padding) so the loaded HealthSignals row
-            doesn't push siblings down when it resolves after pulse (#7671). */}
-        <div className="border-t border-daintree-border pt-3 min-h-9">
-          {usableHealth ? (
-            // pulse.rangeDays, not the selector's — the chip describes the same
-            // snapshot the coach line above it does.
-            <HealthSignals health={usableHealth} rangeDays={pulse.rangeDays} />
-          ) : healthLoading ? (
-            <HealthSectionSkeleton />
-          ) : health && !health.hasRemote ? (
-            <NoRemoteHint />
-          ) : health && health.hasRemote ? (
-            <OfflineHint />
-          ) : null}
-        </div>
+        {/* Health section: the wrapper reserves `min-h-9` (h-5 chip + pt-3) so
+            the four sub-variants — signals, skeleton, no-remote hint, offline
+            hint — swap without pushing siblings down when health resolves after
+            pulse (#7671).
+
+            But it only reserves for content that is actually coming. When no
+            forge provider ever resolves, `useProjectHealth` never enables its
+            poll, so `health` stays null and `healthLoading` stays false
+            forever: all four branches fall through and the rule plus the
+            reservation render a framed, permanently empty 36px block in the
+            middle of the card. A hairline around nothing reads as content that
+            failed to load. Reserve while a variant is still possible; render
+            nothing once it settles empty. */}
+        {healthSection !== null && (
+          <div className="border-t border-daintree-border pt-3 min-h-9">{healthSection}</div>
+        )}
 
         <div className="border-t border-daintree-border pt-3">
           <PulseSummary pulse={pulse} />

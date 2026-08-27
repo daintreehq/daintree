@@ -69,7 +69,7 @@ export function RecipeRunner({ activeWorktreeId, defaultCwd }: RecipeRunnerProps
   const flatRecipes = runner.getFlatRecipes();
 
   return (
-    <div className="w-full max-w-lg">
+    <div className="w-full">
       {runner.spawnFailureSummary && (
         <div className="mb-3" data-testid="recipe-spawn-failure-banner">
           <InlineStatusBanner

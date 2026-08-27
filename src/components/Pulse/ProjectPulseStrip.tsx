@@ -83,10 +83,19 @@ export function ProjectPulseStrip({ worktreeId }: ProjectPulseStripProps) {
     }
   }, [worktreeId, pulse, isLoading, error, fetchPulse]);
 
+  // Move focus into the expansion without moving the viewport at all. The
+  // collapse control is rendered at the TOP of the expansion, exactly where
+  // the strip the user just clicked was standing, so it is already on screen
+  // and `preventScroll` costs nothing: no scrollIntoView is needed, and none
+  // is wanted. The earlier arrangement put the control at the card's bottom,
+  // several hundred pixels down, and any attempt to reveal it dragged the
+  // project identity and the launch anchor off the top of the canvas —
+  // expanding the lowest-priority band on the surface must not cost the user
+  // the thing they came here to click.
   useEffect(() => {
     if (!toggledRef.current) return;
-    if (expanded) collapseButtonRef.current?.focus();
-    else stripButtonRef.current?.focus();
+    if (expanded) collapseButtonRef.current?.focus({ preventScroll: true });
+    else stripButtonRef.current?.focus({ preventScroll: true });
   }, [expanded]);
 
   const miniCells = useMemo(() => {
@@ -112,17 +121,17 @@ export function ProjectPulseStrip({ worktreeId }: ProjectPulseStripProps) {
   if (expanded) {
     return (
       <div className="flex w-full flex-col items-center gap-2">
-        <ProjectPulseCard worktreeId={worktreeId} />
         <button
           ref={collapseButtonRef}
           type="button"
           onClick={collapse}
-          className="inline-flex items-center gap-1 rounded-[var(--radius-md)] px-2 py-1 text-xs text-daintree-text/50 transition-colors hover:text-daintree-text/80 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
+          className="inline-flex items-center gap-1 self-start rounded-[var(--radius-md)] px-2 py-1 text-xs text-text-secondary transition-colors hover:text-daintree-text focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
           aria-expanded={true}
         >
           <ChevronUp className="h-3.5 w-3.5" aria-hidden="true" />
           Collapse
         </button>
+        <ProjectPulseCard worktreeId={worktreeId} />
       </div>
     );
   }
@@ -144,15 +153,15 @@ export function ProjectPulseStrip({ worktreeId }: ProjectPulseStripProps) {
       onClick={expand}
       aria-expanded={false}
       aria-label={activityLabel}
-      className="group flex w-full max-w-lg items-center gap-3 rounded-[var(--radius-md)] border border-border-subtle px-3 py-2 text-left transition-colors hover:bg-overlay-subtle focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
+      className="group flex w-full items-center gap-3 rounded-[var(--radius-md)] border border-border-subtle px-3 py-2 text-left transition-colors hover:bg-overlay-subtle focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
     >
       <Activity className="h-3.5 w-3.5 shrink-0 text-status-success/70" aria-hidden="true" />
-      <span className="shrink-0 text-xs font-medium text-daintree-text/70">Project pulse</span>
+      <span className="shrink-0 text-xs font-medium text-text-secondary">Project pulse</span>
       {pulse && miniCells.length > 0 && <MiniRibbon cells={miniCells} />}
       <span className="ml-auto flex shrink-0 items-center gap-2.5">
         {pulse ? (
           <>
-            <span className="font-mono text-xs text-daintree-text/50">
+            <span className="font-mono text-xs text-text-secondary">
               {pulse.activeDays} active day{pulse.activeDays !== 1 ? "s" : ""}
             </span>
             {hasStreak && (
@@ -163,10 +172,10 @@ export function ProjectPulseStrip({ worktreeId }: ProjectPulseStripProps) {
             )}
           </>
         ) : (
-          <span className="text-xs text-daintree-text/40">View activity</span>
+          <span className="text-xs text-text-secondary">View activity</span>
         )}
         <ChevronDown
-          className="h-4 w-4 text-daintree-text/40 transition-colors group-hover:text-daintree-text/70"
+          className="h-4 w-4 text-text-secondary transition-colors group-hover:text-daintree-text"
           aria-hidden="true"
         />
       </span>

@@ -50,8 +50,19 @@ export function RecipeRunnerGrid({
   // A lone recipe renders as one full-width hero card — a half-empty two-column
   // grid reads as a mistake when there's a single pinned recipe (the common
   // fresh-worktree case).
+  //
+  // The container-query overrides drop columns as the CANVAS narrows, not the
+  // window: this grid sits beside a sidebar, so a viewport breakpoint measures
+  // the wrong box. Held at three columns, a 550px canvas gave each card ~148px
+  // and truncated every name to an unreadable stub ("Review & s…", "Work an
+  // is…") while each card still reserved a full line for its scope label. Three
+  // names nobody can read is worse than one column of names they can.
   const gridCols =
-    recipes.length === 1 ? "grid-cols-1" : recipes.length === 2 ? "grid-cols-2" : "grid-cols-3";
+    recipes.length === 1
+      ? "grid-cols-1"
+      : recipes.length === 2
+        ? "grid-cols-2 @max-[26rem]/launcher:grid-cols-1"
+        : "grid-cols-3 @max-[34rem]/launcher:grid-cols-2 @max-[26rem]/launcher:grid-cols-1";
   const createIndex = recipes.length;
   const focusableCount = recipes.length + 1;
   const buttonRefs = useRef<Array<HTMLButtonElement | null>>([]);
@@ -112,10 +123,10 @@ export function RecipeRunnerGrid({
         className="group col-span-full flex items-center justify-center gap-2 px-3 py-2 mt-1 rounded-[var(--radius-md)] hover:bg-overlay-medium transition-colors text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent group-focus-within/recipes:aria-selected:ring-2 group-focus-within/recipes:aria-selected:ring-daintree-accent/60"
       >
         <Plus
-          className="h-3.5 w-3.5 text-text-muted group-hover:text-daintree-text transition-colors shrink-0"
+          className="h-3.5 w-3.5 text-text-secondary group-hover:text-daintree-text transition-colors shrink-0"
           aria-hidden
         />
-        <span className="text-sm text-text-muted group-hover:text-daintree-text transition-colors">
+        <span className="text-sm text-text-secondary group-hover:text-daintree-text transition-colors">
           Create new recipe…
         </span>
       </button>
