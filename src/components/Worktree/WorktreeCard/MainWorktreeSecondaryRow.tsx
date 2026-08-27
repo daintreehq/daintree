@@ -43,7 +43,9 @@ export function MainWorktreeSecondaryRow({
   const fetchIntervalMs = isActive ? fetchIntervalActiveMs : fetchIntervalBackgroundMs;
 
   return (
-    <div className="flex items-center gap-2 mt-2.5" data-testid="main-worktree-meta-row">
+    // px-1 for the same reason as NonMainSecondaryRow — the main card's meta
+    // line is the same tier and has to sit on the same x.
+    <div className="flex items-center gap-2 mt-2.5 px-1" data-testid="main-worktree-meta-row">
       <BranchLabel
         label={branchLabel}
         isActive={isActive}

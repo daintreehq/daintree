@@ -65,8 +65,15 @@ import type { WhenClauseContext } from "@shared/utils/whenClause";
 import { isAgentFleetActionEligible, isFleetArmEligible } from "@/store/fleetArmingStore";
 import { useWorktreeStatus } from "./WorktreeCard/hooks/useWorktreeStatus";
 import { useWorktreeDevServerSession } from "@/hooks/app/useWorktreeDevServerSession";
-import { computeChipState } from "./utils/computeChipState";
+import { computeChipState, type ChipState } from "./utils/computeChipState";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
+
+/** Shared by the chip's tooltip and its accessible name, so they cannot drift. */
+const CHIP_LABELS: Record<Exclude<ChipState, null>, string> = {
+  waiting: "Agent waiting for input",
+  cleanup: "Ready for cleanup",
+  complete: "Complete: in review",
+};
 
 const HOVER_REVALIDATE_DELAY = 150;
 const REVALIDATE_FRESHNESS_GATE = 10_000;
@@ -898,6 +905,43 @@ export function WorktreeCard({
             )}
             aria-label={`Select worktree: ${worktree.issueTitle ?? worktree.branchDerivedTitle ?? branchLabel}${(worktree.issueTitle ?? worktree.branchDerivedTitle) ? ` (${branchLabel})` : ""}`}
           />
+          {/* Worktree-level state — waiting / ready-for-cleanup / complete — as
+              a corner chip, not a dot in the title row.
+
+              Two things a dot could not do. It has a shape nothing else in the
+              app uses, so it never has to be told apart from the pins,
+              freshness pills, session pips and git marks that already crowd
+              the title row's trailing cluster; and in a full-bleed list with
+              no radius, a mark clipped into the card's own top-left corner
+              declares where one card starts, which is work the 2px gutter is
+              doing alone.
+
+              `computeChipState` returns one state or none, never a
+              combination, so one mark is the whole vocabulary. */}
+          {chipState !== null && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <div
+                  className={cn(
+                    // status-mark: the fill is the whole signal, so forced
+                    // colors has to repaint it rather than flatten it to the
+                    // canvas.
+                    "status-mark absolute top-0 left-0 w-3 h-3 z-10 cursor-default",
+                    chipState === "waiting" && "bg-activity-waiting",
+                    chipState === "cleanup" && "bg-pr-merged",
+                    chipState === "complete" && "bg-category-blue",
+                    variant === "grid" && "rounded-tl-lg"
+                  )}
+                  style={{ clipPath: "polygon(0 0, 100% 0, 0 100%)" }}
+                  role="img"
+                  aria-label={CHIP_LABELS[chipState]}
+                />
+              </TooltipTrigger>
+              <TooltipContent side="right" align="start" className="text-xs">
+                {CHIP_LABELS[chipState]}
+              </TooltipContent>
+            </Tooltip>
+          )}
           {flashKey > 0 && (
             <div
               key={flashKey}
@@ -1063,7 +1107,6 @@ export function WorktreeCard({
                   isMainWorktree={isMainWorktree}
                   isMainOnStandardBranch={isMainOnStandardBranch}
                   isPinned={isPinned}
-                  chipState={chipState}
                   isCollapsed={effectiveIsCollapsed}
                   canCollapse={canCollapse}
                   onToggleCollapse={handleToggleCollapse}

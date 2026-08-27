@@ -120,7 +120,14 @@ export function NonMainSecondaryRow({
     // belongs to the block above it or starts a new one. 10px puts it clearly
     // outside, and holds the 2:1-to-3:1 outer-to-inner ratio the grouping
     // convention asks for.
-    <div className="flex flex-col gap-0.5 mt-2.5">
+    // px-1: the block used to sit flush against the content column while the
+    // disclosure rows below it carry a 7px leading inset, so the one part of
+    // the card with no inset at all was the part with the most lines in it —
+    // it read as pushed left and crowded against both edges. Four is half the
+    // wells' inset on purpose: headline flush, its supporting lines stepped in
+    // slightly, wells stepped in further. A progression down the card, rather
+    // than one tier that missed the memo.
+    <div className="flex flex-col gap-0.5 mt-2.5 px-1">
       {worktree.issueNumber && (isPrOriginated || !hasDisplayTitle) && (
         <IssueBadge
           issueNumber={worktree.issueNumber}
