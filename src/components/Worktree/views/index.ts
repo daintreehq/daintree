@@ -1,5 +1,5 @@
 export { PrHeader } from "./PrHeader";
-export { IssueLinkerView } from "./IssueSelectorView";
+export { IssueLinkerView, AssignIssueToggle } from "./IssueSelectorView";
 export { BranchModeControl } from "./BranchModeControl";
 export { BaseBranchCombobox } from "./BaseBranchCombobox";
 export { ExistingBranchPicker } from "./ExistingBranchPicker";
@@ -12,6 +12,7 @@ export {
   FormGrid,
   FormSection,
   FormRow,
+  HINT_CELL,
   FIELD_SURFACE,
   FIELD_FOCUS,
   FIELD_INPUT,

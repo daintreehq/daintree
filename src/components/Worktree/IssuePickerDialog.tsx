@@ -192,7 +192,7 @@ export function IssuePickerDialog({
 
   return (
     <AppDialog isOpen={isOpen} onClose={onClose} size="md" maxHeight="max-h-[70vh]">
-      <AppDialog.Header>
+      <AppDialog.Header plainBody>
         <AppDialog.Title icon={<Link className="w-5 h-5 text-pr-open" />}>
           Attach Issue
         </AppDialog.Title>
@@ -290,7 +290,7 @@ export function IssuePickerDialog({
       </div>
 
       {currentIssueNumber && (
-        <AppDialog.Footer>
+        <AppDialog.Footer plainBody>
           <Button variant="ghost" onClick={handleDetach} className="text-daintree-text/70 mr-auto">
             <Unlink className="w-4 h-4 mr-2" />
             Detach Issue

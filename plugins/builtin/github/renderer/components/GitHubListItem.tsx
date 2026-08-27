@@ -355,21 +355,22 @@ export function GitHubListItem({
                     <span
                       className={cn(
                         RAIL_SLOT,
-                        "w-3.5 h-3.5 rounded-[3px] border",
+                        "w-3.5 h-3.5",
                         isActiveWorktree
                           ? // The one place a status colour is load-bearing in
                             // this row: this is the worktree you are standing
-                            // in. The border carries the same distinction
-                            // without colour — and it is a real border, not a
-                            // `ring-*`, because that is a box-shadow and
-                            // forced-colors strips box-shadows outright.
-                            "text-status-info border-current"
-                          : "text-text-secondary border-transparent"
+                            // in. Colour carries it alone — a border drawn a
+                            // hair off a 14px glyph reads as a broken chip, not
+                            // as emphasis. Forced-colors strips the hue, so the
+                            // distinction moves to `Highlight` there, which is
+                            // the one system colour that survives it.
+                            "text-status-info forced-colors:text-[color:Highlight]"
+                          : "text-text-secondary"
                       )}
                       role="img"
                       aria-label={worktreeTooltip}
                     >
-                      <FolderGit2 className="w-3 h-3" />
+                      <FolderGit2 className="w-3.5 h-3.5" />
                     </span>
                   </TooltipTrigger>
                   <TooltipContent side="bottom">{worktreeTooltip}</TooltipContent>

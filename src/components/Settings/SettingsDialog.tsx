@@ -701,7 +701,7 @@ function SettingsDialogInner({
         </div>
 
         <div className="settings-shell flex-1 flex flex-col min-w-0">
-          <AppDialog.Header>
+          <AppDialog.Header plainBody>
             {/* h3, not the default h2: the sidebar's "Settings" h2 is the shell
                 heading and this labels the active section beneath it. */}
             <AppDialog.Title

@@ -474,12 +474,40 @@ export function AppDialog({
 interface AppDialogHeaderProps {
   children: React.ReactNode;
   className?: string;
+  /** This dialog pads its own body rather than using `AppDialog.Body` — see {@link CHROME_INSET}. */
+  plainBody?: boolean;
 }
 
-AppDialog.Header = function AppDialogHeader({ children, className }: AppDialogHeaderProps) {
+/**
+ * Header and footer sit outside the body's scroll box, so a bare `px-6` leaves
+ * them 11px short of it: `AppDialog.Body` reserves a scrollbar gutter on both
+ * edges, which pushes every field in the form that much further in. Padding the
+ * chrome by the same gutter puts the title, the fields and the buttons on one
+ * column instead of three that nearly agree.
+ *
+ * The 11px is the same figure `AppDialog.Body` reserves — `scrollbar-width:
+ * thin` in `index.css`. It has to be a literal: Tailwind only sees class names
+ * it can find in the source, so this cannot be built from a shared constant.
+ *
+ * Dialogs that pad their own body instead (`AppDialog.BodyScroll`, a custom
+ * scroller) have no gutter to line up with and pass `plainBody` — for them this
+ * inset would be the misalignment rather than the fix.
+ */
+const CHROME_INSET = "px-[calc(1.5rem+11px)]";
+const PLAIN_INSET = "px-6";
+
+AppDialog.Header = function AppDialogHeader({
+  children,
+  className,
+  plainBody,
+}: AppDialogHeaderProps) {
   // `density` is deliberately not forwarded: every dialog header is comfortable,
   // and exposing it would widen AppDialog's public surface for no caller.
-  return <SurfaceHeader className={className}>{children}</SurfaceHeader>;
+  return (
+    <SurfaceHeader className={cn(plainBody ? PLAIN_INSET : CHROME_INSET, className)}>
+      {children}
+    </SurfaceHeader>
+  );
 };
 
 interface AppDialogTitleProps {
@@ -577,6 +605,8 @@ interface AppDialogFooterProps {
   primaryAction?: DialogAction;
   secondaryAction?: DialogAction;
   hint?: React.ReactNode;
+  /** This dialog pads its own body rather than using `AppDialog.Body` — see {@link CHROME_INSET}. */
+  plainBody?: boolean;
 }
 
 AppDialog.Footer = function AppDialogFooter({
@@ -585,6 +615,7 @@ AppDialog.Footer = function AppDialogFooter({
   primaryAction,
   secondaryAction,
   hint,
+  plainBody,
 }: AppDialogFooterProps) {
   const context = useContext(AppDialogContext);
   const dialogVariant = context?.variant ?? "default";
@@ -604,7 +635,8 @@ AppDialog.Footer = function AppDialogFooter({
   return (
     <div
       className={cn(
-        "px-6 py-4 border-t border-border-strong bg-surface-panel flex items-center gap-3 shrink-0",
+        plainBody ? PLAIN_INSET : CHROME_INSET,
+        "py-4 border-t border-border-strong bg-surface-panel flex items-center gap-3 shrink-0",
         hint ? "justify-between" : "justify-end",
         className
       )}

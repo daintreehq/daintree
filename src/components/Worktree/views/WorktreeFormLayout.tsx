@@ -32,6 +32,16 @@ export const FIELD_TRIGGER = cn(
 
 const LABEL_CLASSES = "text-xs text-text-secondary";
 
+/**
+ * The cell a {@link FormRow} hint lands in — its own grid row, so the label
+ * stays centred on the control rather than drifting to the middle of
+ * control-plus-hint, and pulled back off the grid's 12px rhythm to 8px, because
+ * a hint that sits as far from its control as the next row does belongs to
+ * neither. Exported so a skeleton standing in for a hint row can match it — the
+ * two drifting apart is a 4px jump on resolve.
+ */
+export const HINT_CELL = "col-start-2 -mt-1 min-w-0";
+
 interface FormSectionProps {
   title: string;
   /** Section-level control (e.g. the branch-mode switch) pinned to the right of the rule. */
@@ -48,10 +58,14 @@ interface FormSectionProps {
  * `max-content` sizes the rail to the longest label rather than a guessed
  * width, which keeps it honest under translation; the `4rem` floor stops a form
  * of short labels from collapsing it.
+ *
+ * The row gap is the form's whole vertical rhythm: 12px between two 32px
+ * controls, 28px between sections, and 8px for a sub-control that belongs to
+ * the row above it — see {@link HINT_CELL}.
  */
 export function FormGrid({ children }: { children: React.ReactNode }) {
   return (
-    <div className="grid grid-cols-[minmax(4rem,max-content)_minmax(0,1fr)] items-center gap-x-3 gap-y-1.5">
+    <div className="grid grid-cols-[minmax(4rem,max-content)_minmax(0,1fr)] items-center gap-x-3 gap-y-3">
       {children}
     </div>
   );
@@ -69,7 +83,7 @@ export function FormGrid({ children }: { children: React.ReactNode }) {
 export function FormSection({ title, action, children }: FormSectionProps) {
   return (
     <>
-      <div className="col-span-2 flex items-center gap-3 [&:not(:first-child)]:mt-3">
+      <div className="col-span-2 flex items-center gap-3 [&:not(:first-child)]:mt-4">
         <h3 className="text-xs font-semibold text-daintree-text shrink-0">{title}</h3>
         <span className="h-px flex-1 bg-border-subtle" aria-hidden="true" />
         {action}
@@ -145,7 +159,7 @@ export function FormRow({
       >
         {children}
       </div>
-      {hint && <div className="col-start-2 min-w-0">{hint}</div>}
+      {hint && <div className={HINT_CELL}>{hint}</div>}
     </>
   );
 }

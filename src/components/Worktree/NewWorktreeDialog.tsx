@@ -44,6 +44,7 @@ import { spawnPanelsFromRecipe } from "./panelSpawning";
 import {
   PrHeader,
   IssueLinkerView,
+  AssignIssueToggle,
   BranchModeControl,
   BaseBranchCombobox,
   ExistingBranchPicker,
@@ -54,6 +55,7 @@ import {
   FormGrid,
   FormSection,
   FormRow,
+  HINT_CELL,
 } from "./views";
 
 type BranchMode = "new" | "existing";
@@ -1075,7 +1077,7 @@ export function NewWorktreeDialog({
                     row === "hint" ? (
                       // h-4, not h-3: the resolved hint row is as tall as its 16px
                       // checkbox, and 12px here grew the row by 4px on resolve.
-                      <SkeletonBone key={index} className="col-start-2 h-4 w-44" />
+                      <SkeletonBone key={index} className={cn(HINT_CELL, "h-4 w-44")} />
                     ) : (
                       <Fragment key={index}>
                         <SkeletonBone className="h-3 w-12" />
@@ -1190,16 +1192,23 @@ export function NewWorktreeDialog({
               {hasSetupSection && (
                 <FormSection title="Setup">
                   {showIssueRow && (
-                    <FormRow label="Issue">
+                    <FormRow
+                      label="Issue"
+                      hint={
+                        canAssignIssue && (
+                          <AssignIssueToggle
+                            assignWorktreeToSelf={assignWorktreeToSelf}
+                            onSetAssignWorktreeToSelf={setAssignWorktreeToSelf}
+                            currentUser={currentUser}
+                            currentUserAvatar={currentUserAvatar}
+                          />
+                        )
+                      }
+                    >
                       <IssueLinkerView
                         projectPath={rootPath}
                         selectedIssue={selectedIssue}
                         onSelectIssue={handleIssueSelectWrapper}
-                        canAssignIssue={canAssignIssue}
-                        assignWorktreeToSelf={assignWorktreeToSelf}
-                        onSetAssignWorktreeToSelf={setAssignWorktreeToSelf}
-                        currentUser={currentUser}
-                        currentUserAvatar={currentUserAvatar}
                       />
                     </FormRow>
                   )}
