@@ -207,6 +207,53 @@ function readCss(cssPath: string): string {
   return fs.readFileSync(cssPath, "utf8").replace(/\/\*[\s\S]*?\*\//g, "");
 }
 
+/**
+ * The variables a value actually depends on: the primary of each `var(--x, …)`,
+ * skipping any `var()` nested inside another one's fallback. A fallback is inert
+ * whenever its primary resolves, so `var(--fixed, var(--scale))` is a fixed value
+ * wearing the scale as a disguise — counting it would let a detached token pass.
+ */
+function primaryVarRefs(value: string): string[] {
+  const refs: string[] = [];
+  const openIsVar: boolean[] = [];
+
+  for (let i = 0; i < value.length; i++) {
+    const ch = value[i];
+    if (ch === "(") {
+      const isVar = /\bvar\s*$/.test(value.slice(0, i));
+      if (isVar && !openIsVar.some(Boolean)) {
+        const named = /^\(\s*(--[\w-]+)/.exec(value.slice(i));
+        if (named) refs.push(named[1]);
+      }
+      openIsVar.push(isVar);
+    } else if (ch === ")") {
+      openIsVar.pop();
+    }
+  }
+
+  return refs;
+}
+
+/** The fallback of `var(--name, fallback)`, read by walking to its matching paren. */
+function varFallback(source: string, name: string): string | null {
+  const at = source.indexOf(name);
+  if (at === -1) return null;
+
+  let depth = 1; // `at` sits just inside the enclosing `var(`
+  let comma = -1;
+  for (let i = at; i < source.length; i++) {
+    const ch = source[i];
+    if (ch === "(") depth++;
+    else if (ch === ")") {
+      depth--;
+      if (depth === 0) return comma === -1 ? null : source.slice(comma + 1, i).trim();
+    } else if (ch === "," && depth === 1 && comma === -1) {
+      comma = i;
+    }
+  }
+  return null;
+}
+
 /** Every `--name: value;` declaration in a stylesheet, last one wins. */
 function readDeclarations(cssPath: string, prefix: string): Map<string, string> {
   const css = readCss(cssPath);
@@ -321,18 +368,7 @@ describe("numeric scales contract (#12033)", () => {
       seen.add(token);
       const value = ours.get(token);
       if (value === undefined) return false;
-      // Only the PRIMARY of each `var(--primary, fallback)` counts. A fallback is
-      // inert whenever the primary resolves, so `var(--fixed, var(--scale))` is a
-      // fixed value wearing the scale as a disguise.
-      const refs = [...value.matchAll(/var\(\s*(--[\w-]+)/g)]
-        .filter((m) => {
-          const before = value.slice(0, m.index ?? 0);
-          const opens = (before.match(/var\(/g) ?? []).length;
-          const closes = (before.match(/\)/g) ?? []).length;
-          return opens === closes; // not nested inside another var()'s fallback
-        })
-        .map((m) => m[1]);
-      return refs.some((ref) => ref === SCALE || reaches(ref, seen));
+      return primaryVarRefs(value).some((ref) => ref === SCALE || reaches(ref, seen));
     };
 
     const detached = [...ours.keys()].filter((token) => !reaches(token));
@@ -413,21 +449,17 @@ describe("numeric scales contract (#12033)", () => {
 
     const fallbacks = CONSUMERS.map((file) => {
       const source = fs.readFileSync(path.join(REPO_ROOT, file), "utf8");
-      const at = source.indexOf("--toolbar-pill-radius");
-      if (at === -1) return { file, fallback: null };
-      // Walk the balanced var(...) so a calc() or nested var() fallback stays intact.
-      const rest = source.slice(at);
-      let depth = 1;
-      let end = rest.indexOf("(");
-      for (let i = rest.indexOf(",") + 1; i < rest.length && depth > 0; i++) {
-        if (rest[i] === "(") depth++;
-        else if (rest[i] === ")") depth--;
-        if (depth === 0) end = i;
-      }
-      const comma = rest.indexOf(",");
+      // Every reference in the file, not just the first — one call site quietly
+      // dropping its fallback is exactly the regression this is here to catch.
+      const references = [...source.matchAll(/--toolbar-pill-radius/g)].map((m) =>
+        varFallback(source.slice(m.index ?? 0), "--toolbar-pill-radius")
+      );
       return {
         file,
-        fallback: comma === -1 || comma > end ? null : rest.slice(comma + 1, end).trim(),
+        fallback:
+          references.length > 0 && references.every((f) => f?.includes("var(--radius"))
+            ? references[0]
+            : null,
       };
     });
 
