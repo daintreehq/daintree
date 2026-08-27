@@ -404,6 +404,155 @@ describe("list-push-commits — publish range", () => {
   });
 });
 
+describe("list-rebase-commits — replay range", () => {
+  const LOCAL_REF = `refs/heads/${LOCAL_BRANCH}`;
+
+  /**
+   * `knownRefs` decides what `rev-parse --verify` resolves, which is how the
+   * handler learns whether the upstream has ever been fetched here. No
+   * `ls-remote` hook: a rebase preview is not allowed to touch the network, and
+   * the assertions below prove it does not.
+   */
+  function makeRebaseGit(knownRefs: string[]): FakeGit {
+    const known = new Set(knownRefs);
+    const git = makeGit({
+      log: vi.fn(async () => ({
+        all: [{ hash: "h1", date: "d", message: "m", author_name: "a" }],
+      })),
+    });
+    const fallback = rawResponder(FOR_EACH_REF, FOR_EACH_REF_UPSTREAM);
+    git.raw = vi.fn(async (args: string[]) => {
+      if (args[0] === "rev-parse") {
+        const ref = (args[3] ?? "").replace(/\^\{commit\}$/, "");
+        if (!known.has(ref)) throw new Error("fatal: bad revision");
+        return "0123456789abcdef0123456789abcdef01234567\n";
+      }
+      return fallback(args);
+    });
+    return git;
+  }
+
+  function listRebaseCommits(git: FakeGit) {
+    createHardenedGitMock.mockResolvedValue(git);
+    return getHandler("git:list-rebase-commits")(FAKE_EVENT, {
+      cwd: CWD,
+      branchName: LOCAL_BRANCH,
+      limit: 5,
+    }) as Promise<{ rangeBasis: string; total: number; behind: number; upstream: unknown }>;
+  }
+
+  it("ranges from the UPSTREAM's tracking ref, not the push destination's", async () => {
+    const git = makeRebaseGit([UPSTREAM_REF, PUSH_REF]);
+
+    const result = await listRebaseCommits(git);
+
+    // The whole point of the separate read: this branch pushes to `team/fork`
+    // and tracks `origin`, and a rebase replays onto what it TRACKS. Ranging
+    // against the push destination would preview a set the rebase never touches.
+    expect(result.upstream).toEqual({ remote: UPSTREAM_REMOTE, branch: UPSTREAM_BRANCH });
+    expect(result.rangeBasis).toBe("tracked");
+    expect(
+      git.log.mock.calls.some((call: unknown[]) =>
+        ((call[0] ?? []) as string[]).some((a) => a.includes(PUSH_REF))
+      )
+    ).toBe(false);
+  });
+
+  // Rebase does not replay everything in `<upstream>..<branch>`. It skips merge
+  // commits and commits the upstream already carries as an equivalent patch, so a
+  // plain two-dot range promises rewrites that never happen — most visibly to the
+  // developer who lands here from a rejected push, whose commits are the ones most
+  // likely to be patch-equivalent. Asserted as "the range carries rebase's own
+  // selection and the rows and the count agree", not against a literal argv order.
+  it("selects the range the way rebase does, and counts over the same one", async () => {
+    const git = makeRebaseGit([UPSTREAM_REF]);
+
+    await listRebaseCommits(git);
+
+    const logArgs = (git.log.mock.calls[0]![0] ?? []) as string[];
+    const countArgs = (
+      git.raw.mock.calls.find(
+        (call: unknown[]) => ((call[0] ?? []) as string[])[0] === "rev-list"
+      )![0] as string[]
+    ).slice(2);
+    for (const flag of ["--no-merges", "--cherry-pick", "--right-only"]) {
+      expect(logArgs).toContain(flag);
+      expect(countArgs).toContain(flag);
+    }
+    // Symmetric difference, which is what `--right-only` needs to mean anything.
+    expect(logArgs).toContain(`${UPSTREAM_REF}...${LOCAL_REF}`);
+    // The rows and the total must describe the same set, or the "…and N more"
+    // tail is counting something the list is not showing.
+    expect(countArgs).toEqual(logArgs.filter((a) => !a.startsWith("--max-count=")));
+  });
+
+  // An empty replay set is produced both by a branch level with its upstream and by
+  // one purely behind it. Only the second is moved by the rebase, so the count that
+  // separates them has to be measured in the other direction.
+  it("measures how far behind the branch is, in the opposite direction", async () => {
+    const git = makeRebaseGit([UPSTREAM_REF]);
+
+    const result = await listRebaseCommits(git);
+
+    expect(git.raw).toHaveBeenCalledWith(["rev-list", "--count", `${LOCAL_REF}..${UPSTREAM_REF}`]);
+    expect(result.behind).toBe(7);
+  });
+
+  it("never reaches the network to measure a replay set", async () => {
+    const git = makeRebaseGit([UPSTREAM_REF]);
+
+    await listRebaseCommits(git);
+
+    // `git pull --rebase` fetches before it replays, and rebasing onto a moved
+    // upstream still replays this same set — so no remote read can improve the
+    // answer, and a confirm dialog has no business waiting on one.
+    expect(
+      git.raw.mock.calls.some((call: unknown[]) => ((call[0] ?? []) as string[])[0] === "ls-remote")
+    ).toBe(false);
+  });
+
+  it("never measures against HEAD, which moves out from under the approver", async () => {
+    const git = makeRebaseGit([UPSTREAM_REF]);
+
+    await listRebaseCommits(git);
+
+    expect(
+      git.log.mock.calls.some((call: unknown[]) =>
+        ((call[0] ?? []) as string[]).some((a) => a.includes("HEAD"))
+      )
+    ).toBe(false);
+  });
+
+  // An upstream configured but never fetched has no local ref to subtract from.
+  // Returning the branch's own history there would be the exact misreport this
+  // read exists to prevent, so it reports the range as unmeasured instead.
+  it("reports an unfetched upstream as unmeasured rather than as branch history", async () => {
+    const git = makeRebaseGit([]);
+
+    const result = await listRebaseCommits(git);
+
+    expect(result.rangeBasis).toBe("unfetched");
+    expect(result.total).toBe(0);
+    expect(git.log).not.toHaveBeenCalled();
+    expect(result.upstream).toEqual({ remote: UPSTREAM_REMOTE, branch: UPSTREAM_BRANCH });
+  });
+
+  // Fail closed, on the same terms as every other remote-mutating path: an
+  // upstream nobody can name must refuse, never degrade into a guess at origin.
+  it("refuses in upstream terms when the branch tracks nothing", async () => {
+    const git = makeGit({}, FOR_EACH_REF, `refs/heads/${LOCAL_BRANCH}\u0000\u0000`);
+    createHardenedGitMock.mockResolvedValue(git);
+
+    await expect(
+      getHandler("git:list-rebase-commits")(FAKE_EVENT, {
+        cwd: CWD,
+        branchName: LOCAL_BRANCH,
+        limit: 5,
+      })
+    ).rejects.toThrow(/upstream/i);
+  });
+});
+
 describe("fails closed when the destination is unresolvable", () => {
   /** Two remotes, no push config anywhere — the genuinely ambiguous case. */
   function makeUnresolvableGit(overrides: FakeGit = {}): FakeGit {

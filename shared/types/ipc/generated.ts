@@ -652,6 +652,10 @@ export interface GeneratedIpcInvokeMap {
     args: [payload: { cwd: string; branchName: string; limit?: number | undefined }];
     result: import("../git.js").GitPushCommitPreview;
   };
+  "git:list-rebase-commits": {
+    args: [payload: { cwd: string; branchName: string; limit?: number | undefined }];
+    result: import("../git.js").GitRebaseCommitPreview;
+  };
   "global-env:get": {
     args: [];
     result: Record<string, string>;

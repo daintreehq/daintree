@@ -1991,7 +1991,19 @@ export function ReviewHubContent({
       <ConfirmDialog
         isOpen={pullRebaseConfirmOpen}
         onClose={() => setPullRebaseConfirmOpen(false)}
-        title={`Pull and rebase '${status?.currentBranch ?? "current branch"}'?`}
+        // Fixed, matching `GitPullRebaseConfirmDialog` (#11980). It used to
+        // interpolate `status?.currentBranch ?? "current branch"`, so a confirm
+        // opened before the status read landed asked to rebase a branch called
+        // "current branch" — and the dialog's accessible name then changed
+        // underneath the user without being re-announced. What is known about
+        // the operation belongs in the description, which can hold a pending
+        // state honestly.
+        title="Pull and rebase local commits?"
+        // Names no base ref. A rebase replays onto the UPSTREAM and rewrites the
+        // branch, so naming the local branch here read as "onto <branch>" — the
+        // exact inversion `GitPullRebaseConfirmDialog`'s Onto/Rewrites pair
+        // exists to prevent. This surface has no upstream ref to put there
+        // instead, so it states the counts and stops (#11980).
         description={
           <span>
             Replays{" "}
@@ -2010,7 +2022,7 @@ export function ReviewHubContent({
             ) : (
               "the incoming commits"
             )}{" "}
-            from the remote. Rebasing rewrites local commit history and cannot be undone.
+            from the remote. Each replayed commit becomes a new commit with a different hash.
           </span>
         }
         confirmLabel="Pull and rebase"

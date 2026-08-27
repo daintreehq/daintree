@@ -2121,6 +2121,8 @@ function buildElectronApi(): ElectronAPI {
         _unwrappingInvoke(CHANNELS.GIT_LIST_REMOTE_COMMITS, { cwd, branchName, limit }),
       listPushCommits: (cwd: string, branchName: string, limit?: number) =>
         _unwrappingInvoke(CHANNELS.GIT_LIST_PUSH_COMMITS, { cwd, branchName, limit }),
+      listRebaseCommits: (cwd: string, branchName: string, limit?: number) =>
+        _unwrappingInvoke(CHANNELS.GIT_LIST_REBASE_COMMITS, { cwd, branchName, limit }),
 
       onPushProgress: (callback: (event: PushProgressEvent) => void) =>
         _typedOn(CHANNELS.GIT_PUSH_PROGRESS, callback),

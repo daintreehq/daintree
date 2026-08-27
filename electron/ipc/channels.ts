@@ -349,6 +349,7 @@ export const CHANNELS = {
   GIT_FORCE_PUSH_WITH_LEASE: "git:force-push-with-lease",
   GIT_LIST_REMOTE_COMMITS: "git:list-remote-commits",
   GIT_LIST_PUSH_COMMITS: "git:list-push-commits",
+  GIT_LIST_REBASE_COMMITS: "git:list-rebase-commits",
   GIT_PUSH_PROGRESS: "git:push-progress",
   GIT_GET_STAGING_STATUS: "git:get-staging-status",
   GIT_COMPARE_WORKTREES: "git:compare-worktrees",

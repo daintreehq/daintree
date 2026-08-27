@@ -12,6 +12,7 @@ import type { PushProgressEvent } from "../../../shared/types/ipc/gitPush.js";
 import type {
   ConflictedFileEntry,
   GitPushCommitPreview,
+  GitRebaseCommitPreview,
   GitRemoteCommitPreview,
   GitStatus,
   RebaseSequence,
@@ -202,25 +203,28 @@ async function readRemoteBranchTip(
 }
 
 /**
- * The commits a push would actually publish (#11979).
+ * The commits a remote operation would actually act on — publish, or replay.
  *
- * The push confirm used to preview `git log HEAD` — the branch's recent history,
+ * Both confirms used to preview `git log HEAD`, the branch's recent history,
  * which is only the same set when nothing on the branch has ever been pushed. A
  * branch level with its remote previewed commits that were already published, and
- * a branch 2 ahead of 14 previewed 12 that mostly were. For a D2 safeguard whose
- * whole job is "a preview of the ACTUAL content", that is the wrong set.
+ * a branch 2 ahead of 14 previewed 12 that mostly were. For safeguards whose
+ * whole job is "a preview of the ACTUAL content", that is the wrong set — the
+ * push side was corrected in #11979 and the rebase side in #11980.
  *
- * Ranged the same way the force-push discard preview is, and reversed: from the
- * destination's remote-tracking ref up to the named local branch. The branch is
- * named explicitly rather than read as `HEAD`, because the two diverge the moment
- * anything checks out another branch between opening the dialog and confirming it.
+ * Both range from a remote-tracking ref up to the named local branch, and differ
+ * only in which ref that is: the PUSH DESTINATION for a publish, the UPSTREAM for
+ * a replay. Those are the same ref in the ordinary case and genuinely different in
+ * a triangular workflow. The branch is named explicitly rather than read as
+ * `HEAD`, because the two diverge the moment anything checks out another branch
+ * between opening the dialog and confirming it.
  *
- * Fails CLOSED on an unresolvable destination, via the same `requireRemoteTarget`
+ * Both fail CLOSED on an unresolvable ref, via the same `requireRemoteTarget`
  * every remote-mutating path uses: returning an empty list would read as "nothing
- * to publish", which is the reassuring answer and the wrong one (#11746).
+ * to do", which is the reassuring answer and the wrong one (#11746).
  */
-const gitPushPreviewNamespace = defineIpcNamespace({
-  name: "gitPushPreview",
+const gitRemotePreviewNamespace = defineIpcNamespace({
+  name: "gitRemotePreview",
   ops: {
     listPushCommits: op(
       CHANNELS.GIT_LIST_PUSH_COMMITS,
@@ -318,6 +322,116 @@ const gitPushPreviewNamespace = defineIpcNamespace({
             {
               cwd: payload.cwd,
               op: "list-push-commits",
+              cause: error instanceof Error ? error : undefined,
+              rawMessage: errorMessage,
+              branchName,
+            }
+          );
+        }
+      }
+    ),
+
+    listRebaseCommits: op(
+      CHANNELS.GIT_LIST_REBASE_COMMITS,
+      async (payload: {
+        cwd: string;
+        branchName: string;
+        limit?: number;
+      }): Promise<GitRebaseCommitPreview> => {
+        checkRateLimit(CHANNELS.GIT_LIST_REBASE_COMMITS, 10, 10_000);
+        validateCwd(payload?.cwd);
+        if (typeof payload.branchName !== "string" || !payload.branchName.trim()) {
+          throw new Error("Invalid branch name");
+        }
+        const branchName = payload.branchName.trim();
+        const limit = Math.max(1, Math.min(100, payload.limit ?? 20));
+
+        const git = await createHardenedGit(payload.cwd);
+        try {
+          // `"upstream"`, not the push target: `git pull --rebase` integrates
+          // from what the branch tracks, and in a triangular setup those are
+          // different repositories (#11746).
+          const upstream = await requireRemoteTarget(
+            git,
+            branchName,
+            payload.cwd,
+            "list-rebase-commits",
+            "upstream"
+          );
+
+          const localRef = `refs/heads/${branchName}`;
+
+          // Deliberately no `ls-remote` fallback, unlike the push preview.
+          // `git pull --rebase` fetches before it replays, and a rebase onto a
+          // MOVED upstream still replays this same set — anything the upstream
+          // absorbed in the meantime is dropped by rebase's own patch-id
+          // detection rather than added to the range. So the last-known tip is
+          // the correct base to measure against and no network read can improve
+          // the answer, which keeps a confirm dialog off the network entirely.
+          if (!(await refExists(git, upstream.remoteTrackingRef))) {
+            // Configured but never fetched here. `<missing>..<branch>` is a
+            // fatal argument, and the branch's own history is NOT the replay
+            // set — returning it is the exact misreport this preview exists to
+            // stop. Say the range is unmeasured instead.
+            return {
+              upstream: { remote: upstream.remote, branch: upstream.branch },
+              rangeBasis: "unfetched",
+              commits: [],
+              total: 0,
+              behind: 0,
+            };
+          }
+
+          // `git rebase`'s own selection, not a plain two-dot range. Rebase
+          // picks its todo list with `--no-merges --cherry-pick --right-only`
+          // over the symmetric difference, and each flag drops rows a two-dot
+          // range would have promised to rewrite:
+          //
+          //  - `--no-merges`, because a default rebase does not recreate merge
+          //    commits. Listing them claims a rewrite that never happens.
+          //    (The push preview deliberately keeps merges — a push publishes
+          //    them — which is why this is not shared with it.)
+          //  - `--cherry-pick --right-only` over `...`, because a commit the
+          //    upstream already carries as an equivalent patch is skipped by
+          //    rebase rather than replayed. Those are exactly the commits a
+          //    developer arriving from a rejected push is most likely to have.
+          const revArgs = [
+            "--no-merges",
+            "--cherry-pick",
+            "--right-only",
+            `${upstream.remoteTrackingRef}...${localRef}`,
+          ];
+          const log = await git.log([`--max-count=${limit}`, ...revArgs]);
+          const total = await countCommitsInRange(git, revArgs);
+          // Measured separately and in the other direction: an empty replay set
+          // is produced both by a branch level with its upstream and by one
+          // purely behind it, and only the second is moved by the rebase.
+          const behind = await countCommitsInRange(git, [
+            `${localRef}..${upstream.remoteTrackingRef}`,
+          ]);
+
+          return {
+            upstream: { remote: upstream.remote, branch: upstream.branch },
+            rangeBasis: "tracked",
+            total,
+            behind,
+            commits: log.all.map((commit) => ({
+              hash: commit.hash,
+              date: commit.date,
+              message: commit.message,
+              author: commit.author_name,
+            })),
+          };
+        } catch (error) {
+          if (error instanceof GitOperationError) throw error;
+          const errorMessage = formatErrorMessage(error, "git log failed");
+          const gitReason = classifyGitFailure(error, errorMessage);
+          throw new GitOperationError(
+            gitReason,
+            encodeGitOperationErrorMessage(gitReason, errorMessage, { branchName }),
+            {
+              cwd: payload.cwd,
+              op: "list-rebase-commits",
               cause: error instanceof Error ? error : undefined,
               rawMessage: errorMessage,
               branchName,
@@ -777,7 +891,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
   };
   handlers.push(typedHandle(CHANNELS.GIT_LIST_REMOTE_COMMITS, handleListRemoteCommits));
 
-  handlers.push(gitPushPreviewNamespace.register());
+  handlers.push(gitRemotePreviewNamespace.register());
 
   const handleGetUsername = async (cwd: string): Promise<string | null> => {
     checkRateLimit(CHANNELS.GIT_GET_USERNAME, 20, 10_000);
