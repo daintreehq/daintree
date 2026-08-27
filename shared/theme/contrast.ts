@@ -647,6 +647,13 @@ function resolvePaletteSurfaces(scheme: AppColorScheme): string[] | null {
 
 const SELECTION_RAIL_MIN_CONTRAST = 3.0;
 
+// A destructive menu row replaces the raised fill with `status-danger/10`
+// (`data-[highlighted]:bg-status-danger/10` in the item primitives, which
+// tailwind-merge resolves in favour of the later class). The rail has to hold
+// its floor on that backdrop too, so the alpha is pinned here rather than left
+// implicit in the class string.
+const DESTRUCTIVE_ROW_FILL_OPACITY = 0.1;
+
 /** WCAG 1.4.11's non-text floor, same basis as the selection rail above. */
 const RECENT_ACTIVITY_DOT_MIN_CONTRAST = 3.0;
 
@@ -777,6 +784,7 @@ function getPaletteSelectionWarnings(scheme: AppColorScheme): AppThemeValidation
   const warnings: AppThemeValidationWarning[] = [];
   const railToken = scheme.tokens["selection-outline"];
   const fillToken = scheme.tokens["overlay-raised"];
+  const dangerToken = scheme.tokens["status-danger"];
 
   const surfaces = resolvePaletteSurfaces(scheme);
   if (surfaces === null) {
@@ -793,6 +801,8 @@ function getPaletteSelectionWarnings(scheme: AppColorScheme): AppThemeValidation
   // against the surface" are separate faults, and reporting only the worse one
   // would send an author to fix half the problem.
   const worstByLabel = new Map<string, number>();
+  // Reported after the loop so it never pre-empts the ordinary pairs.
+  let unevaluableDanger: string | null = null;
 
   for (const surface of surfaces) {
     const fill = resolveOverBackdrop(fillToken, surface);
@@ -813,14 +823,46 @@ function getPaletteSelectionWarnings(scheme: AppColorScheme): AppThemeValidation
       return warnings;
     }
 
-    for (const [label, against] of [
-      ["the selected row fill", fill],
-      ["the surrounding palette surface", surface],
-    ] as const) {
-      const ratio = contrastRatio(rail, against);
+    const record = (label: string, ink: string, against: string): void => {
+      const ratio = contrastRatio(ink, against);
       const seen = worstByLabel.get(label);
       if (seen === undefined || ratio < seen) worstByLabel.set(label, ratio);
+    };
+
+    // Score the ordinary row before anything optional runs. These two pairs
+    // predate the destructive one and must not be lost to it: a theme whose
+    // `status-danger` this math cannot read would otherwise report only that,
+    // and an author fixing the unreadable token would never learn the rail was
+    // also failing the row it marks.
+    record("the selected row fill", rail, fill);
+    record("the surrounding palette surface", rail, surface);
+
+    // The menu, context-menu and select item primitives draw this same token as
+    // an inset focus ring, on the same raised fill over the same
+    // `.surface-overlay` the palette floats on — so the pair above already
+    // covers the ordinary row. A destructive item is the one row that swaps the
+    // fill out, and a ring that vanishes only on "Delete" is the worst place to
+    // lose it.
+    const dangerBase = resolveOverBackdrop(dangerToken, surface);
+    if (dangerBase === null) {
+      unevaluableDanger ??= `Cannot evaluate palette selection contrast: status-danger="${dangerToken}" is neither hex nor rgba()`;
+      continue;
     }
+    const dangerFill = blendOverBackground(dangerBase, surface, DESTRUCTIVE_ROW_FILL_OPACITY);
+    const dangerRail = resolveOverBackdrop(railToken, dangerFill);
+    if (dangerRail === null) {
+      unevaluableDanger ??= `Cannot evaluate palette selection contrast: selection-outline="${railToken}" is neither hex nor rgba()`;
+      continue;
+    }
+
+    record("a destructive menu row's fill", dangerRail, dangerFill);
+    // The ring is inset by its own width, so its outer edge sits on the row's
+    // boundary and its ink still meets the surface — and a translucent rail
+    // composited over the danger wash is not the same pixel as one composited
+    // over the raised fill. Its own label, not the ordinary surface pair's: an
+    // author sent to a pair that measures 3:1 on the row they are looking at has
+    // been sent to the wrong row.
+    record("the surface behind a destructive row", dangerRail, surface);
   }
 
   for (const [label, ratio] of worstByLabel) {
@@ -830,6 +872,10 @@ function getPaletteSelectionWarnings(scheme: AppColorScheme): AppThemeValidation
         message: `selection-outline against ${label} is ${ratio.toFixed(2)}:1; target is ${SELECTION_RAIL_MIN_CONTRAST.toFixed(1)}:1 (WCAG 1.4.11 Non-text Contrast)`,
       });
     }
+  }
+
+  if (unevaluableDanger !== null) {
+    warnings.push({ kind: "unevaluable", message: unevaluableDanger });
   }
 
   return warnings;

@@ -139,6 +139,8 @@ Every state is checked across the whole 150ms crossfade rather than at its endpo
 
 **Usage:** Negative offset keeps indicator inside element bounds. Use when elements are packed tightly (e.g., list items, file tree rows) where default offset would bleed into neighbors.
 
+**Radix row exception (menu, context-menu, select items):** these use `focus-visible:outline-selection-outline`, not accent, and add `focus-visible:outline-solid`. Both are deliberate, so a consistency pass should not "correct" them. `selection-outline` is the only ink `getPaletteSelectionWarnings` in `shared/theme/contrast.ts` holds to 3:1 against the raised `data-[highlighted]` fill, a destructive row's `status-danger/10` fill, and the `.surface-overlay` behind them — the three colours this ring actually touches; accent is scored against the display surfaces only. `outline-solid` is load-bearing wherever the element also carries `outline-hidden`, which these rows keep so `forced-colors` can still recolour the outline: `outline-hidden` sets `--tw-outline-style: none` on the element and the width utility reads that same variable back, so the ring paints nothing without it. `focusRingFallback.contract.test.ts` enforces the ring's presence, effective width, offset, style and that its ink paints something — but not that the ink is this particular token, which is why this note exists.
+
 ---
 
 ### Input Focus (Outline)

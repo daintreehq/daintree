@@ -32,6 +32,149 @@ const FOCUS_VARIANT_PATTERN =
 // region. Functions as a valid focus indicator on the element.
 const MACRO_FOCUS_PATTERN = /data-\[macro-focus[^\]]*\]:/;
 
+// ── Highlight-fill quality detectors ───────────────────────────────────
+//
+// Only Radix sets `data-[highlighted]`, and it does so on pointermove as well as on
+// arrow keys, so a weak fill keyed to it is the pointer affordance. What follows
+// picks out the keyboard ring that has to sit beside it.
+//
+// These resolve the ring the way `cn()` does — last token wins its conflict group —
+// rather than asking whether a good-looking token appears anywhere in the string.
+// The difference is not academic: `cn()` puts the caller's `className` last, so
+// "somewhere in here there is an `outline-2`" is satisfied by a row whose effective
+// width is the `outline-1` that follows it.
+
+const HIGHLIGHT_FILL_PATTERN = /data-\[highlighted\]:bg-[\w-]+(?:\/(?:\[[\d.]+%?\]|\d+))?/g;
+
+/**
+ * Whether a `data-[highlighted]` fill is too faint to be the indicator itself.
+ *
+ * The overlay ladder tops out near 12% and cannot reach 3:1 on these surfaces (see
+ * `shared/theme/contrast.ts`), and the status washes the destructive rows use are
+ * thinner still. Past roughly a third opacity the author has chosen a real fill that
+ * can carry its own contrast, and sweeping it in here would only generate noise.
+ */
+const FAINT_FILL_MAX_ALPHA = 30;
+
+function isFaintFill(token: string): boolean {
+  const fill = token.slice(token.indexOf(":bg-") + 4);
+  if (fill.startsWith("overlay-")) return true;
+  const alpha = /\/(?:\[([\d.]+)%?\]|(\d+))$/.exec(fill);
+  if (alpha === null) return false;
+  return Number(alpha[1] ?? alpha[2]) <= FAINT_FILL_MAX_ALPHA;
+}
+
+type OutlineSlot = "width" | "style" | "ink" | "offset";
+
+/** Which conflict group a `focus-visible:`-scoped outline utility settles. */
+function classifyOutlineUtility(utility: string): { slot: OutlineSlot; value: string } | null {
+  if (/^-?outline-offset-/.test(utility)) {
+    return { slot: "offset", value: utility };
+  }
+  if (!utility.startsWith("outline-")) return null;
+  const value = utility.slice("outline-".length);
+
+  if (/^(solid|dashed|dotted|double|none|hidden)$/.test(value)) return { slot: "style", value };
+  // A width is the numeric scale or an arbitrary length. `outline-2.5` is neither —
+  // Tailwind emits no utility for it — so it must not prefix-match as `outline-2`.
+  if (/^\d+$/.test(value)) return { slot: "width", value };
+  if (/^\[[\d.]+px\]$/.test(value)) return { slot: "width", value };
+  if (/^\[/.test(value)) return { slot: "ink", value };
+  if (/^[\d.]/.test(value)) return null;
+  return { slot: "ink", value };
+}
+
+/**
+ * The outline each conflict group actually resolves to under `:focus-visible`, and
+ * whether the element suppresses the outline style outside that variant.
+ */
+function resolveRing(expression: string): {
+  slots: Partial<Record<OutlineSlot, string>>;
+  suppressedOutsideVariant: boolean;
+} {
+  const slots: Partial<Record<OutlineSlot, string>> = {};
+  let suppressedOutsideVariant = false;
+
+  for (const raw of expression.split(/[\s"'`,()]+/)) {
+    // Tailwind's important marker sits after the variant (`focus-visible:!outline-0`)
+    // and changes nothing about which group a utility settles.
+    const token = raw.replace(/!/g, "");
+    if (token === "outline-hidden" || token === "outline-none") {
+      suppressedOutsideVariant = true;
+      continue;
+    }
+    if (!token.startsWith("focus-visible:")) continue;
+
+    const classified = classifyOutlineUtility(token.slice("focus-visible:".length));
+    if (classified === null) continue;
+    slots[classified.slot] = classified.value;
+  }
+
+  return { slots, suppressedOutsideVariant };
+}
+
+const PAINTING_STYLES = new Set(["solid", "dashed", "dotted", "double"]);
+const INVISIBLE_INKS = new Set(["transparent", "current", "inherit"]);
+
+/**
+ * Everything wrong with one highlighted row's focus treatment, in the order an author
+ * would fix it. Empty means the row is fine.
+ *
+ * Returned rather than asserted so the self-tests can drive the same code the
+ * repository scan runs — a detector proven only against itself proves nothing.
+ */
+function diagnoseHighlightRow(expression: string): string[] {
+  const problems: string[] = [];
+  const { slots, suppressedOutsideVariant } = resolveRing(expression);
+
+  const widthPx =
+    slots.width === undefined
+      ? null
+      : Number(slots.width.startsWith("[") ? slots.width.slice(1, -3) : slots.width);
+
+  if (widthPx === null) {
+    problems.push(
+      "no outline-based keyboard ring — a `ring-*` box-shadow is stripped under forced-colors, and the fill alone is ~1.1:1"
+    );
+  } else if (widthPx < 2) {
+    problems.push(
+      `the ring resolves to ${widthPx}px; WCAG 2.2 SC 2.4.13 wants at least 2px, and a later utility can win this back`
+    );
+  }
+
+  const ink = slots.ink;
+  if (ink === undefined) {
+    problems.push("the ring has no ink of its own, so it inherits `currentColor`");
+  } else if (INVISIBLE_INKS.has(ink) || /\/(?:\[0*(?:\.0+)?%?\]|0+)$/.test(ink)) {
+    problems.push(`the ring resolves to \`outline-${ink}\`, which paints nothing`);
+  }
+
+  const offset = slots.offset;
+  if (widthPx !== null) {
+    const magnitude =
+      offset === undefined
+        ? null
+        : /^-outline-offset-/.test(offset)
+          ? Number(offset.slice("-outline-offset-".length).replace(/[[\]]|px/g, ""))
+          : -Number(offset.slice("outline-offset-".length).replace(/[[\]]|px/g, ""));
+    if (magnitude === null || magnitude <= 0) {
+      problems.push(
+        "the ring needs a negative offset (`focus-visible:-outline-offset-2` or `focus-visible:outline-offset-[-2px]`) — these rows sit in an `overflow-y-auto` popup that clips an outward ring on the first and last item"
+      );
+    }
+  }
+
+  if (widthPx !== null && !PAINTING_STYLES.has(slots.style ?? "")) {
+    problems.push(
+      suppressedOutsideVariant
+        ? "`outline-hidden` sets `--tw-outline-style: none` on this element and the width utility reads it back, so the ring paints nothing without `focus-visible:outline-solid`"
+        : "the ring resolves to a non-painting outline style"
+    );
+  }
+
+  return problems;
+}
+
 // ── className context extraction ───────────────────────────────────────
 
 // Extract the className expression containing `matchPos`. Strategy:
@@ -192,6 +335,63 @@ function hasFocusFallback(expression: string): boolean {
 }
 
 // ── File collection ────────────────────────────────────────────────────
+
+// The scans below are textual, so a comment that *names* `outline-hidden` — as the
+// item primitives now do, explaining why the suppression is deliberate — reads as a
+// bare occurrence with no fallback beside it. Blank comments out rather than asking
+// authors not to write the word: documenting this pattern is the behaviour we want,
+// and a rule that punishes it teaches the wrong lesson.
+//
+// A comment opener only counts when it OPENS A LINE, and a block is then blanked as
+// a SPAN. Both halves are load-bearing, and each has a counterexample in the tree
+// this scans:
+//
+//   - Mid-line `/*` is usually a glob inside a string (`"brands/*Icon.tsx"`,
+//     `node_modules/**`). Honouring it opens a block that never closes and blanks
+//     the rest of the file — a scanner that quietly deletes code stops finding the
+//     violations it exists to find.
+//   - Spans, not whole lines, because `/*@__PURE__*/ LanguageDescription.of({` in
+//     `codeMirrorLanguages.ts` is an annotated call whose brace the helper-call
+//     walker in `extractClassExpression` still has to see.
+//   - A line-leading `*` is only JSDoc while a block is open. Outside one it is a
+//     generator method — `*entries()` in `src/utils/ttlCache.ts`.
+//
+// Missing a trailing comment is the harmless direction: it costs a false positive
+// an author can read, never a silently skipped violation.
+//
+// Replacement is space-for-space, so every match index and line number downstream
+// still points at the original source.
+function blankComments(source: string): string {
+  const blank = (line: string, from: number, to: number): string =>
+    line.slice(0, from) + " ".repeat(to - from) + line.slice(to);
+
+  let inBlock = false;
+
+  return source
+    .split("\n")
+    .map((line) => {
+      if (inBlock) {
+        const close = line.indexOf("*/");
+        if (close === -1) return " ".repeat(line.length);
+        inBlock = false;
+        return blank(line, 0, close + 2);
+      }
+
+      const opensAt = line.length - line.trimStart().length;
+      const opener = line.slice(opensAt, opensAt + 2);
+
+      if (opener === "//") return " ".repeat(line.length);
+      if (opener !== "/*") return line;
+
+      const close = line.indexOf("*/", opensAt + 2);
+      if (close === -1) {
+        inBlock = true;
+        return " ".repeat(line.length);
+      }
+      return blank(line, opensAt, close + 2);
+    })
+    .join("\n");
+}
 
 function collectSourceFiles(dir: string): string[] {
   const entries = fs.readdirSync(dir, { withFileTypes: true });
@@ -638,7 +838,7 @@ describe("focus-ring fallback contract", () => {
     const violations: Array<{ file: string; line: number; snippet: string }> = [];
 
     for (const filePath of allFiles) {
-      const source = fs.readFileSync(filePath, "utf8");
+      const source = blankComments(fs.readFileSync(filePath, "utf8"));
       // Normalize to posix-style separators so allowlist hits match on Windows.
       const relativePath = path.relative(REPO_ROOT, filePath).replace(/\\/g, "/");
 
@@ -728,7 +928,7 @@ describe("focus-ring fallback contract", () => {
     const violations: Array<{ file: string; line: number; snippet: string }> = [];
 
     for (const filePath of allFiles) {
-      const source = fs.readFileSync(filePath, "utf8");
+      const source = blankComments(fs.readFileSync(filePath, "utf8"));
       const relativePath = path.relative(REPO_ROOT, filePath).replace(/\\/g, "/");
 
       OUTLINE_HIDDEN_PATTERN.lastIndex = 0;
@@ -765,6 +965,278 @@ describe("focus-ring fallback contract", () => {
         `\`outline-hidden\` sets \`--tw-outline-style: none\` on the element, and ` +
         `\`focus-visible:outline-2\` reads that same value. Add \`focus-visible:outline-solid\` ` +
         `(or switch the fallback to \`focus-visible:ring-*\`):\n${detail}${more}`
+    );
+  });
+
+  describe("comment blanking", () => {
+    it("hides a documented mention of the suppressor from the scan", () => {
+      const source = [
+        "/* `outline-hidden` is kept so forced-colors can recolour it. */",
+        '<div className="p-2" />',
+      ].join("\n");
+      expect(/\boutline-hidden\b/.test(blankComments(source))).toBe(false);
+    });
+
+    it("keeps line numbers and match offsets intact", () => {
+      const source = ["// leading note", '<div className="outline-hidden focus:ring-2" />'].join(
+        "\n"
+      );
+      const blanked = blankComments(source);
+      expect(blanked.length).toBe(source.length);
+      expect(blanked.indexOf("outline-hidden")).toBe(source.indexOf("outline-hidden"));
+      expect(blanked.split("\n")).toHaveLength(2);
+    });
+
+    it("blanks continuation lines of a block comment", () => {
+      const source = ["/**", " * outline-hidden here is prose.", " */"].join("\n");
+      expect(blankComments(source).trim()).toBe("");
+    });
+
+    // The three shapes in this tree that a whole-line or string-unaware rule would
+    // eat. Each one deleted real code, and deleted code is a violation the scan can
+    // no longer see.
+
+    it("keeps a generator method whose line opens with an asterisk", () => {
+      const source = ["class C {", "  *entries(): Iterable<string> {}", "}"].join("\n");
+      expect(blankComments(source)).toBe(source);
+    });
+
+    it("keeps the call an inline annotation prefixes", () => {
+      const source = '  /*@__PURE__*/ LanguageDescription.of({ name: "C" });';
+      const blanked = blankComments(source);
+      expect(blanked).toContain('LanguageDescription.of({ name: "C" });');
+      expect(blanked).not.toContain("__PURE__");
+      expect(blanked.length).toBe(source.length);
+    });
+
+    it("does not read a glob inside a string as a comment opener", () => {
+      const source = [
+        'const globs = ["brands/*Icon.tsx", "node_modules/**"];',
+        '<div className="outline-hidden focus:ring-2" />',
+      ].join("\n");
+      expect(blankComments(source)).toBe(source);
+    });
+  });
+
+  // ── Self-tests: highlight-fill quality detection ────────────────────
+  //
+  // Each detector has to fail loud on the shape it exists to reject. A detector that
+  // silently matched everything would leave the scan below green while the rows it
+  // guards lost their ring, so every case here is a rejection the scan depends on.
+
+  describe("highlight-fill quality detection", () => {
+    const FIXED =
+      "text-xs outline-hidden transition-colors data-[highlighted]:bg-overlay-raised " +
+      "focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline " +
+      "focus-visible:outline-offset-[-2px]";
+
+    /** The scan's own verdict, so the self-tests exercise what production runs. */
+    function problemsFor(expression: string): string[] {
+      return diagnoseHighlightRow(expression);
+    }
+
+    it("passes a row that carries a real ring", () => {
+      expect(problemsFor(FIXED)).toEqual([]);
+    });
+
+    it("rejects the fill-only row this issue was filed about", () => {
+      const shipped =
+        "text-xs outline-hidden transition-colors focus:bg-overlay-raised " +
+        "data-[highlighted]:bg-overlay-raised";
+      expect(problemsFor(shipped).length).toBeGreaterThan(0);
+    });
+
+    it("rejects a box-shadow ring, which forced-colors strips", () => {
+      const ringed =
+        "outline-hidden data-[highlighted]:bg-overlay-raised focus-visible:ring-2 " +
+        "focus-visible:ring-daintree-accent/30";
+      expect(problemsFor(ringed).length).toBeGreaterThan(0);
+    });
+
+    it("rejects a sub-2px ring", () => {
+      expect(problemsFor(FIXED.replace("outline-2", "outline-1")).length).toBeGreaterThan(0);
+    });
+
+    it("rejects a ring with no ink of its own", () => {
+      const inkless = FIXED.replace("focus-visible:outline-selection-outline ", "");
+      expect(problemsFor(inkless).length).toBeGreaterThan(0);
+    });
+
+    it("rejects inks that paint nothing or inherit someone else's choice", () => {
+      for (const ink of ["transparent", "current", "inherit"]) {
+        const invisible = FIXED.replace("outline-selection-outline", `outline-${ink}`);
+        expect(
+          problemsFor(invisible).length,
+          `outline-${ink} must not count as ink`
+        ).toBeGreaterThan(0);
+      }
+    });
+
+    it("rejects a positive or zero offset, in either spelling", () => {
+      for (const offset of [
+        "outline-offset-2",
+        "outline-offset-[-0px]",
+        "outline-offset-[-00px]",
+        "-outline-offset-0",
+      ]) {
+        const outward = FIXED.replace("outline-offset-[-2px]", offset);
+        expect(problemsFor(outward).length, `${offset} is not inset`).toBeGreaterThan(0);
+      }
+    });
+
+    it("accepts both negative-offset spellings and fractional lengths", () => {
+      for (const offset of [
+        "focus-visible:-outline-offset-2",
+        "focus-visible:outline-offset-[-2.5px]",
+      ]) {
+        const alt = FIXED.replace("focus-visible:outline-offset-[-2px]", offset);
+        expect(problemsFor(alt), offset).toEqual([]);
+      }
+    });
+
+    it("accepts arbitrary widths but not a scale value Tailwind never emits", () => {
+      expect(problemsFor(FIXED.replace("outline-2", "outline-[2.5px]"))).toEqual([]);
+      // `outline-2.5` compiles to nothing, so the row has no width at all — it must
+      // not prefix-match the `outline-2` that would have been fine.
+      expect(problemsFor(FIXED.replace("outline-2 ", "outline-2.5 ")).length).toBeGreaterThan(0);
+    });
+
+    // ── Last-wins: `cn()` resolves conflicts by order, so must this ──────
+    //
+    // Every case here passed a detector that merely asked whether a good token
+    // appeared somewhere in the string. Each one is a row that renders wrong.
+
+    it("takes the width a later utility wins, not the best one present", () => {
+      expect(problemsFor(`${FIXED} focus-visible:outline-1`).length).toBeGreaterThan(0);
+      expect(problemsFor(`${FIXED} focus-visible:outline-0`).length).toBeGreaterThan(0);
+    });
+
+    it("takes the ink a later utility wins", () => {
+      expect(problemsFor(`${FIXED} focus-visible:outline-transparent`).length).toBeGreaterThan(0);
+      expect(
+        problemsFor(`${FIXED} focus-visible:outline-selection-outline/0`).length
+      ).toBeGreaterThan(0);
+    });
+
+    it("takes the offset a later utility wins", () => {
+      expect(problemsFor(`${FIXED} focus-visible:outline-offset-2`).length).toBeGreaterThan(0);
+    });
+
+    it("takes the style a later utility wins, important spelling included", () => {
+      expect(problemsFor(`${FIXED} focus-visible:outline-none`).length).toBeGreaterThan(0);
+      expect(problemsFor(`${FIXED} focus-visible:!outline-hidden`).length).toBeGreaterThan(0);
+    });
+
+    it("clears a row whose good tokens come last", () => {
+      const recovered = `outline-hidden data-[highlighted]:bg-overlay-raised focus-visible:outline-0 focus-visible:outline-none ${FIXED.slice(FIXED.indexOf("focus-visible:"))}`;
+      expect(problemsFor(recovered)).toEqual([]);
+    });
+
+    it("does not let another variant's style satisfy the focus-visible ring", () => {
+      const wrongVariant = FIXED.replace("focus-visible:outline-solid", "hover:outline-solid");
+      expect(problemsFor(wrongVariant).length).toBeGreaterThan(0);
+    });
+
+    it("sweeps in faint washes but leaves substantial fills alone", () => {
+      for (const fill of [
+        "data-[highlighted]:bg-overlay-raised",
+        "data-[highlighted]:bg-status-danger/10",
+        "data-[highlighted]:bg-status-danger/[10%]",
+        "data-[highlighted]:bg-daintree-accent/30",
+      ]) {
+        expect(isFaintFill(fill), `${fill} is too faint to be an indicator`).toBe(true);
+      }
+      for (const fill of [
+        "data-[highlighted]:bg-status-danger",
+        "data-[highlighted]:bg-black/90",
+      ]) {
+        expect(isFaintFill(fill), `${fill} can carry its own contrast`).toBe(false);
+      }
+    });
+
+    it("finds every faint-fill spelling in the source, bracketed alpha included", () => {
+      const source = [
+        'a="data-[highlighted]:bg-overlay-raised"',
+        'b="data-[highlighted]:bg-status-danger/[10%]"',
+        'c="data-[highlighted]:bg-black/90"',
+      ].join("\n");
+      const found = [...source.matchAll(new RegExp(HIGHLIGHT_FILL_PATTERN.source, "g"))]
+        .map((m) => m[0])
+        .filter(isFaintFill);
+      expect(found).toEqual([
+        "data-[highlighted]:bg-overlay-raised",
+        "data-[highlighted]:bg-status-danger/[10%]",
+      ]);
+    });
+  });
+
+  /**
+   * Quality, not presence.
+   *
+   * The repository scan above is satisfied by any non-suppressor `focus:` utility,
+   * and a background tint is one. That is exactly how the menu primitives shipped
+   * `focus:bg-overlay-raised` as their only focus signal and passed: `overlay-raised`
+   * clears roughly 1.1:1 against the surfaces these rows float on, which
+   * `shared/theme/contrast.ts` already treats as too little to be the WCAG 1.4.11
+   * indicator (it is why the palette row grew a separate rail instead of a heavier
+   * fill). A row highlighted with the overlay ladder therefore has to carry a real
+   * keyboard ring beside the fill.
+   *
+   * `data-[highlighted]` is the marker because only Radix sets it, and Radix moves
+   * DOM focus on `pointermove` as well as on arrow keys — so the fill is already the
+   * pointer affordance, and what is missing is the keyboard-only one.
+   */
+  it("a low-contrast highlight fill is never a row's only focus indicator", () => {
+    const scanRoots = [SRC_ROOT, ...PLUGIN_RENDERER_ROOTS];
+    const allFiles = scanRoots.flatMap((root) =>
+      fs.existsSync(root) ? collectSourceFiles(root) : []
+    );
+    expect(allFiles.length, "scan must find source files").toBeGreaterThan(100);
+
+    const violations: Array<{ file: string; line: number; problem: string }> = [];
+    const seenFiles = new Set<string>();
+
+    for (const filePath of allFiles) {
+      const source = blankComments(fs.readFileSync(filePath, "utf8"));
+      const relativePath = path.relative(REPO_ROOT, filePath).replace(/\\/g, "/");
+
+      HIGHLIGHT_FILL_PATTERN.lastIndex = 0;
+      for (const match of source.matchAll(HIGHLIGHT_FILL_PATTERN)) {
+        const matchPos = match.index ?? -1;
+        if (matchPos < 0) continue;
+
+        if (!isFaintFill(match[0])) continue;
+
+        seenFiles.add(relativePath);
+        const expression = extractClassExpression(source, matchPos);
+        const lineNumber = source.slice(0, matchPos).split("\n").length;
+
+        for (const problem of diagnoseHighlightRow(expression)) {
+          violations.push({ file: relativePath, line: lineNumber, problem });
+        }
+      }
+    }
+
+    // Non-vacuity by name, not by count. The three shared primitives are where this
+    // pattern lives and where everything downstream copies it from, so a scan that
+    // stops reaching them has broken rather than passed. A bare total would instead
+    // pin today's duplication and fail the next honest refactor.
+    for (const sentinel of [
+      "src/components/ui/dropdown-menu.tsx",
+      "src/components/ui/context-menu.tsx",
+      "src/components/ui/select.tsx",
+    ]) {
+      expect(seenFiles.has(sentinel), `scan must still reach ${sentinel}`).toBe(true);
+    }
+
+    if (violations.length === 0) return;
+
+    const detail = violations.map((v) => `  ${v.file}:${v.line} — ${v.problem}`).join("\n");
+    throw new Error(
+      `Found ${violations.length} row(s) whose \`data-[highlighted]\` fill is doing work it ` +
+        `cannot do. The fill is the pointer affordance; keyboard focus needs its own indicator ` +
+        `(\`focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline ` +
+        `focus-visible:outline-offset-[-2px]\`):\n${detail}`
     );
   });
 
