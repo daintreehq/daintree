@@ -328,7 +328,9 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
           {runningAgentCount > 0 && (
             <span className="ml-1 text-text-secondary">
               {" "}
-              {runningAgentCount === 1 ? "1 running agent" : `${runningAgentCount} running agents`}
+              {terminalCounts.total === 1
+                ? "running an agent"
+                : `${runningAgentCount} of them running an agent`}
             </span>
           )}
         </>

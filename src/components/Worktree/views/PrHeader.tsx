@@ -13,7 +13,7 @@ export function PrHeader({ pr }: PrHeaderProps) {
       <TruncatedTooltip content={`PR #${pr.number} — ${pr.title}`}>
         <span className="text-daintree-text/80 min-w-0 truncate">
           PR <span className="font-medium text-daintree-text">#{pr.number}</span>
-          <span className="ml-1 text-text-secondary"> {pr.title}</span>
+          <span className="ml-1"> {pr.title}</span>
         </span>
       </TruncatedTooltip>
     </div>

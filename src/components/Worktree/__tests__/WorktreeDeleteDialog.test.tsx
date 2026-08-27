@@ -481,7 +481,7 @@ describe("WorktreeDeleteDialog — consequence list", () => {
     render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
 
     const closed = screen.getByText(/terminals will be closed/);
-    const agents = screen.getByText(/running agents/);
+    const agents = screen.getByText(/of them running an agent/);
     expect(agents.previousSibling).toBe(closed);
     expect(agents.textContent).toMatch(/^\s/);
   });

@@ -426,7 +426,7 @@ export function ResourceEnvironmentsSection({
         <div className="col-span-2 mt-3 px-3 py-2 rounded-[var(--radius-md)] bg-surface-inset border border-border-default text-xs text-text-muted space-y-1">
           <div>
             <span className="font-medium text-daintree-text/70">Variables</span>{" "}
-            <span className="text-daintree-text/40">(replaced at runtime in all commands):</span>
+            <span className="text-text-secondary">(replaced at runtime in all commands):</span>
           </div>
           {/* Weight and colour rank the token above its description — an em dash
               between them read as one run of prose. Weight is also the half that
