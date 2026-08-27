@@ -3,6 +3,17 @@ import type { Dispatch, RefObject, SetStateAction } from "react";
 import type { StagingFileEntry } from "@shared/types";
 import type { debounce } from "@/utils/debounce";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+
+/**
+ * A failed review-hub operation. The title is the operation, so the banner can
+ * lead with what the user was doing ("Couldn't stage files") instead of a
+ * generic label; the detail is git's own message, demoted to supporting copy.
+ * Keeping them separate is what stops raw stderr becoming the headline.
+ */
+export interface ReviewHubActionFailure {
+  title: string;
+  detail: string;
+}
 import type { FileStageRowSection } from "./FileStageRow";
 
 interface UseReviewHubStagingActionsArgs {
@@ -12,7 +23,7 @@ interface UseReviewHubStagingActionsArgs {
   derivedUnstaged: StagingFileEntry[];
   selectedPaths: Set<string>;
   selectionSection: FileStageRowSection | null;
-  setActionError: (message: string | null) => void;
+  setActionError: (failure: ReviewHubActionFailure | null) => void;
   setSelectedPaths: Dispatch<SetStateAction<Set<string>>>;
   setSelectionSection: Dispatch<SetStateAction<FileStageRowSection | null>>;
   selectionAnchorRef: RefObject<string | null>;
@@ -55,7 +66,10 @@ export function useReviewHubStagingActions({
         await window.electron.git.stageFile(worktreePath, filePath);
         await refresh();
       } catch (err) {
-        setActionError(formatErrorMessage(err, "Failed to stage file"));
+        setActionError({
+          title: "Couldn't stage file",
+          detail: formatErrorMessage(err, "Failed to stage file"),
+        });
       }
     },
     [worktreePath, refresh, setActionError, debouncedBgRefreshRef]
@@ -69,7 +83,10 @@ export function useReviewHubStagingActions({
         await window.electron.git.unstageFile(worktreePath, filePath);
         await refresh();
       } catch (err) {
-        setActionError(formatErrorMessage(err, "Failed to unstage file"));
+        setActionError({
+          title: "Couldn't unstage file",
+          detail: formatErrorMessage(err, "Failed to unstage file"),
+        });
       }
     },
     [worktreePath, refresh, setActionError, debouncedBgRefreshRef]
@@ -82,7 +99,10 @@ export function useReviewHubStagingActions({
       await window.electron.git.stageAll(worktreePath);
       await refresh();
     } catch (err) {
-      setActionError(formatErrorMessage(err, "Failed to stage all files"));
+      setActionError({
+        title: "Couldn't stage all files",
+        detail: formatErrorMessage(err, "Failed to stage all files"),
+      });
     }
   }, [worktreePath, refresh, setActionError, debouncedBgRefreshRef]);
 
@@ -93,7 +113,10 @@ export function useReviewHubStagingActions({
       await window.electron.git.unstageAll(worktreePath);
       await refresh();
     } catch (err) {
-      setActionError(formatErrorMessage(err, "Failed to unstage all files"));
+      setActionError({
+        title: "Couldn't unstage all files",
+        detail: formatErrorMessage(err, "Failed to unstage all files"),
+      });
     }
   }, [worktreePath, refresh, setActionError, debouncedBgRefreshRef]);
 
@@ -105,7 +128,10 @@ export function useReviewHubStagingActions({
     try {
       await window.electron.git.stageFiles(worktreePath, paths);
     } catch (err) {
-      setActionError(formatErrorMessage(err, "Failed to stage files"));
+      setActionError({
+        title: "Couldn't stage files",
+        detail: formatErrorMessage(err, "Failed to stage files"),
+      });
     } finally {
       await refresh();
     }
@@ -119,7 +145,10 @@ export function useReviewHubStagingActions({
     try {
       await window.electron.git.unstageFiles(worktreePath, paths);
     } catch (err) {
-      setActionError(formatErrorMessage(err, "Failed to unstage files"));
+      setActionError({
+        title: "Couldn't unstage files",
+        detail: formatErrorMessage(err, "Failed to unstage files"),
+      });
     } finally {
       await refresh();
     }
@@ -139,7 +168,10 @@ export function useReviewHubStagingActions({
       selectionAnchorRef.current = null;
       await refresh();
     } catch (err) {
-      setActionError(formatErrorMessage(err, "Failed to stage selected files"));
+      setActionError({
+        title: "Couldn't stage selected files",
+        detail: formatErrorMessage(err, "Failed to stage selected files"),
+      });
     } finally {
       isBulkStagingRef.current = false;
     }
@@ -169,7 +201,10 @@ export function useReviewHubStagingActions({
       selectionAnchorRef.current = null;
       await refresh();
     } catch (err) {
-      setActionError(formatErrorMessage(err, "Failed to unstage selected files"));
+      setActionError({
+        title: "Couldn't unstage selected files",
+        detail: formatErrorMessage(err, "Failed to unstage selected files"),
+      });
     } finally {
       isBulkStagingRef.current = false;
     }

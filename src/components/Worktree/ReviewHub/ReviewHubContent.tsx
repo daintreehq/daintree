@@ -49,7 +49,10 @@ import { usePanelStore } from "@/store/panelStore";
 import { useWorktreeIdForPath } from "@/panels/diff/useWorktreeIdForPath";
 import { type FileStageRowSection } from "./FileStageRow";
 import { FileSection } from "./FileSection";
-import { useReviewHubStagingActions } from "./useReviewHubStagingActions";
+import {
+  useReviewHubStagingActions,
+  type ReviewHubActionFailure,
+} from "./useReviewHubStagingActions";
 import { BaseBranchFileRow } from "./BaseBranchFileRow";
 import { PushErrorBanner } from "./PushErrorBanner";
 import { PrStatusChip } from "./PrStatusChip";
@@ -96,6 +99,14 @@ import {
   sumChurn,
 } from "./reviewHubUtils";
 import { isGeneratedFile } from "../generatedFileClassifier";
+
+/**
+ * Floor for the dialog-hosted body, so the pane stops resizing itself around
+ * its own content as it moves between loading, failure, empty and resolved.
+ * Named rather than inlined to match `McpConfirmDialog`'s
+ * `PREVIEW_MIN_BODY_HEIGHT`, which reserves a dialog body for the same reason.
+ */
+const DIALOG_MIN_BODY_HEIGHT = "min-h-[22rem]";
 
 export interface ReviewHubContentProps {
   /**
@@ -170,7 +181,7 @@ export function ReviewHubContent({
   const [loading, setLoading] = useState(false);
   const [isBackgroundRefreshing, setIsBackgroundRefreshing] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [actionError, setActionError] = useState<string | null>(null);
+  const [actionError, setActionError] = useState<ReviewHubActionFailure | null>(null);
   const [pushError, setPushError] = useState<PushErrorState | null>(null);
   // Provider-classified push-error state, resolved async via the active forge
   // provider (ForgeProviderImpl lives in main). `forgeErrorCode` is a stable,
@@ -855,7 +866,10 @@ export function ReviewHubContent({
         await refresh();
       } catch (err) {
         hasAutoStagedRef.current = false;
-        setActionError(formatErrorMessage(err, "Failed to stage all files"));
+        setActionError({
+          title: "Couldn't stage all files",
+          detail: formatErrorMessage(err, "Failed to stage all files"),
+        });
       }
     })();
   }, [isOpen, autoStageOnOpen, status, refresh, worktreePath]);
@@ -964,7 +978,10 @@ export function ReviewHubContent({
         useDiffViewedStore.getState().clearWorktree(worktreePath);
         await refresh();
       } catch (err) {
-        setActionError(formatErrorMessage(err, "Failed to commit changes"));
+        setActionError({
+          title: "Couldn't commit changes",
+          detail: formatErrorMessage(err, "Failed to commit changes"),
+        });
         throw err;
       }
     },
@@ -978,7 +995,10 @@ export function ReviewHubContent({
       await window.electron.git.abortRepositoryOperation(worktreePath);
       await refresh();
     } catch (err) {
-      setActionError(formatErrorMessage(err, "Failed to abort repository operation"));
+      setActionError({
+        title: "Couldn't abort repository operation",
+        detail: formatErrorMessage(err, "Failed to abort repository operation"),
+      });
       throw err;
     }
   }, [worktreePath, refresh]);
@@ -990,7 +1010,10 @@ export function ReviewHubContent({
       await window.electron.git.continueRepositoryOperation(worktreePath);
       await refresh();
     } catch (err) {
-      setActionError(formatErrorMessage(err, "Failed to continue repository operation"));
+      setActionError({
+        title: "Couldn't continue repository operation",
+        detail: formatErrorMessage(err, "Failed to continue repository operation"),
+      });
       throw err;
     }
   }, [worktreePath, refresh]);
@@ -1009,7 +1032,10 @@ export function ReviewHubContent({
         }
         await window.electron.system.openInEditor(payload);
       } catch (err) {
-        setActionError(formatErrorMessage(err, "Failed to open file in editor"));
+        setActionError({
+          title: "Couldn't open file in editor",
+          detail: formatErrorMessage(err, "Failed to open file in editor"),
+        });
       }
     },
     [worktreePath]
@@ -1023,9 +1049,13 @@ export function ReviewHubContent({
         await window.electron.git.checkoutOursTheirs(worktreePath, filePath, side);
         await refresh();
       } catch (err) {
-        setActionError(
-          formatErrorMessage(err, side === "ours" ? "Failed to take ours" : "Failed to take theirs")
-        );
+        setActionError({
+          title: side === "ours" ? "Couldn't take ours" : "Couldn't take theirs",
+          detail: formatErrorMessage(
+            err,
+            side === "ours" ? "Failed to take ours" : "Failed to take theirs"
+          ),
+        });
         throw err;
       }
     },
@@ -1044,7 +1074,10 @@ export function ReviewHubContent({
         await window.electron.git.stageFile(worktreePath, filePath);
         await refresh();
       } catch (err) {
-        setActionError(formatErrorMessage(err, "Failed to mark file resolved"));
+        setActionError({
+          title: "Couldn't mark file resolved",
+          detail: formatErrorMessage(err, "Failed to mark file resolved"),
+        });
         throw err;
       }
     },
@@ -1109,7 +1142,10 @@ export function ReviewHubContent({
       try {
         await window.electron.git.commit(worktreePath, message);
       } catch (err) {
-        setActionError(formatErrorMessage(err, "Failed to commit changes"));
+        setActionError({
+          title: "Couldn't commit changes",
+          detail: formatErrorMessage(err, "Failed to commit changes"),
+        });
         throw err;
       }
       // Same review reset as handleCommit — the changeset starts over.
@@ -1666,8 +1702,8 @@ export function ReviewHubContent({
             role="status"
             ariaLive="polite"
             icon={CircleAlert}
-            title="Action failed"
-            description={actionError}
+            title={actionError.title}
+            description={actionError.detail}
             onClose={() => setActionError(null)}
             action={{
               id: "review-hub-action-error-refresh",
@@ -1704,6 +1740,20 @@ export function ReviewHubContent({
           data-testid="review-hub-scroll-container"
           className={cn(
             "flex-1 overflow-y-auto min-h-0",
+            // Reserve the body in the DIALOG host so the pane stops resizing
+            // itself around its own content. Loading, failure, empty and
+            // resolved states used to produce wildly different dialog heights
+            // — the same "Working tree clean" composition measured 458px on one
+            // route and 522px on another — so a retry or a mode switch read as
+            // a major transition rather than as the same surface updating.
+            // Long content still scrolls inside this block, and the Doherty
+            // gate still paints nothing before 400ms: the space is reserved,
+            // not filled.
+            //
+            // Grid-hosted panes are deliberately excluded. There the tile owns
+            // its own height from the layout, so a floor here would fight the
+            // grid instead of stabilising anything.
+            isDialog && DIALOG_MIN_BODY_HEIGHT,
             isBackgroundRefreshing && "surface-stale"
           )}
           aria-busy={isBackgroundRefreshing || undefined}
@@ -1878,9 +1928,30 @@ export function ReviewHubContent({
                       variant="zero-data"
                       scale="canvas"
                       className="py-12"
+                      // The copy below is conditional on `pushError`, and
+                      // EmptyState's fade-through keeps the OUTGOING text
+                      // visually dominant for ~150ms. That is long enough to
+                      // show "ready to push" underneath a banner that has
+                      // already said the push failed, so this one transition
+                      // has to be atomic rather than animated.
+                      instant={pushError !== null}
                       icon={<ArrowUpFromLine />}
-                      title={`${aheadCount} commit${aheadCount !== 1 ? "s" : ""} ready to push`}
-                      description="Nothing left to commit — these commits just aren't on the remote yet."
+                      title={
+                        pushError
+                          ? `${aheadCount} commit${aheadCount !== 1 ? "s" : ""} not pushed`
+                          : `${aheadCount} commit${aheadCount !== 1 ? "s" : ""} ready to push`
+                      }
+                      // "Ready to push" is a readiness claim, so it must not
+                      // survive a rejection: after a push fails, `pushReady`
+                      // goes false and the remedy moves to the push banner's
+                      // pull-rebase / force-push. Claiming readiness while the
+                      // banner directly above explains why it is not ready is
+                      // the pane contradicting itself.
+                      description={
+                        pushError
+                          ? "Nothing left to commit — resolve the push above to publish them."
+                          : "Nothing left to commit — these commits just aren't on the remote yet."
+                      }
                       action={
                         readinessSummary.pushReady ? (
                           <Button

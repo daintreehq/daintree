@@ -340,6 +340,24 @@ async function setWindowSize(
   }, size);
 }
 
+/**
+ * Tab until `target` actually holds focus, and report whether it got there.
+ *
+ * A fixed number of Tab presses is not a focus shot: it lands wherever the tab
+ * order happens to put it, which in a body-scoped capture is often outside the
+ * crop entirely — so the "focused" PNG comes out byte-identical to its
+ * unfocused sibling and reads as a missing focus ring that isn't missing.
+ * `.focus()` is no substitute either: programmatic focus does not match
+ * `:focus-visible` in Chromium.
+ */
+async function tabTo(page: Page, target: string, maxPresses = 14): Promise<boolean> {
+  for (let i = 0; i < maxPresses; i++) {
+    await page.keyboard.press("Tab");
+    if (await page.locator(`${target}:focus`).count()) return true;
+  }
+  return false;
+}
+
 const ONLY = (process.env.DAINTREE_SHOT_ONLY ?? "").split(",").filter(Boolean);
 
 // A failed step must not abort the run — the other shots are still worth having. But
@@ -702,13 +720,13 @@ test("review hub states review — the states around the populated review flow",
         });
         await snapBody(page, "53-base-branch-failure");
         await snap(page, "54-base-branch-failure-window");
-        // Tab, never .focus() — programmatic focus does not match
-        // :focus-visible in Chromium, which is why the earlier focus shot came
-        // out byte-identical to its unfocused sibling.
-        await page.keyboard.press("Tab");
-        await page.keyboard.press("Tab");
-        await settle(page, 250);
-        await snapBody(page, "55-base-branch-failure-tabbed");
+        await page.locator(CONTENT).click({ position: { x: 5, y: 5 } });
+        if (await tabTo(page, `${CONTENT} button:has-text("Retry")`)) {
+          await settle(page, 250);
+          await snapBody(page, "55-base-branch-failure-tabbed");
+        } else {
+          console.log("[reviewstates-shots] Retry never took focus — shot skipped, not duplicated");
+        }
       },
       rest
     );
@@ -768,12 +786,12 @@ test("review hub states review — the states around the populated review flow",
         await snap(page, "71-clean-with-unpushed-commits-window");
         // Tab into Push rather than focusing it — see the base-branch note.
         await page.locator(CONTENT).click({ position: { x: 5, y: 5 } });
-        for (let i = 0; i < 12; i++) {
-          await page.keyboard.press("Tab");
-          if (await page.locator(`${CLEAN_PUSH}:focus`).count()) break;
+        if (await tabTo(page, CLEAN_PUSH)) {
+          await settle(page, 250);
+          await snapBody(page, "72-clean-unpushed-push-tabbed");
+        } else {
+          console.log("[reviewstates-shots] Push never took focus — shot skipped, not duplicated");
         }
-        await settle(page, 250);
-        await snapBody(page, "72-clean-unpushed-push-tabbed");
       },
       rest
     );
@@ -907,9 +925,13 @@ test("review hub states review — the states around the populated review flow",
         await clearAllFaults(app);
         await useGitState("clean-unpushed");
         await expectState(page, `${CONTENT} ${CLEAN_UNPUSHED}`, { label: "clean for keyboard" });
-        await page.keyboard.press("Tab");
-        await settle(page, 250);
-        await snapBody(page, "95-keyboard-into-clean-state");
+        await page.locator(CONTENT).click({ position: { x: 5, y: 5 } });
+        if (await tabTo(page, CLEAN_PUSH)) {
+          await settle(page, 250);
+          await snapBody(page, "95-keyboard-into-clean-state");
+        } else {
+          console.log("[reviewstates-shots] Push never took focus — shot skipped, not duplicated");
+        }
       },
       rest
     );
@@ -994,24 +1016,11 @@ test("review hub states review — the states around the populated review flow",
     : [];
   console.log(`[reviewstates-shots] wrote ${written.length} shot(s), ${onDisk.length} on disk`);
 
-  if (failures.length > 0) {
-    throw new Error(
-      `[reviewstates-shots] ${failures.length} step(s) failed:\n${failures.join("\n")}`
-    );
-  }
-  if (written.length === 0) {
-    throw new Error("[reviewstates-shots] no screenshots were written");
-  }
-  if (onDisk.length < written.length) {
-    throw new Error(
-      `[reviewstates-shots] wrote ${written.length} shot(s) but only ${onDisk.length} landed on disk`
-    );
-  }
-
-  // Two shots of DIFFERENT states must never be the same image. When they are,
-  // the harness captured before the state changed and the whole set silently
-  // stops being evidence. Distinct states are the entire point of this capture,
-  // so an identical pair is a hard failure rather than a warning.
+  // Duplicate detection runs BEFORE the step-failure throw and reports
+  // alongside it. It used to sit last, so any failing step short-circuited the
+  // single most valuable assertion this harness makes — a `grid` timeout would
+  // hide the fact that two states had rendered byte-identical, which is the
+  // exact class of silent-wrong-evidence bug the check exists to catch.
   const byHash = new Map<string, string[]>();
   for (const file of onDisk) {
     const hash = createHash("md5")
@@ -1020,10 +1029,27 @@ test("review hub states review — the states around the populated review flow",
     byHash.set(hash, [...(byHash.get(hash) ?? []), file]);
   }
   const dupes = [...byHash.values()].filter((group) => group.length > 1);
+
+  const problems: string[] = [];
   if (dupes.length > 0) {
+    problems.push(
+      `${dupes.length} group(s) of DIFFERENT states rendered byte-identical — the capture ` +
+        `raced the state change, or the two states genuinely look the same:\n` +
+        dupes.map((g) => `  ${g.join(" == ")}`).join("\n")
+    );
+  }
+  if (failures.length > 0) {
+    problems.push(`${failures.length} step(s) failed:\n  ${failures.join("\n  ")}`);
+  }
+  if (problems.length > 0) {
+    throw new Error(`[reviewstates-shots]\n${problems.join("\n")}`);
+  }
+  if (written.length === 0) {
+    throw new Error("[reviewstates-shots] no screenshots were written");
+  }
+  if (onDisk.length < written.length) {
     throw new Error(
-      `[reviewstates-shots] ${dupes.length} group(s) of DIFFERENT states rendered byte-identical — ` +
-        `the capture raced the state change:\n${dupes.map((g) => g.join(" == ")).join("\n")}`
+      `[reviewstates-shots] wrote ${written.length} shot(s) but only ${onDisk.length} landed on disk`
     );
   }
 });

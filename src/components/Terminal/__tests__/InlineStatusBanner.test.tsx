@@ -484,8 +484,17 @@ describe("InlineStatusBanner", () => {
       />
     );
     const root = container.firstElementChild as HTMLElement;
-    expect(root.className).toContain("duration-250");
-    expect(root.className).not.toContain("duration-150");
+    // Assert the RULE, not the number. The old form asserted the literal
+    // `duration-250` copied straight from the component, so retiming the
+    // banner forced the identical edit here and the test proved nothing —
+    // exactly the tautological shape the repo's testing rules ban. What
+    // actually matters is that the entry transition exists and is scoped to
+    // the properties it animates: a bare `transition` would sweep in every
+    // animatable property, so an unrelated colour or size change would
+    // silently inherit entry timing.
+    expect(root.className).toMatch(/transition-\[[^\]]+\]/);
+    expect(root.className).not.toMatch(/(?:^|\s)transition(?:\s|$)/);
+    expect(root.className).not.toContain("transition-all");
   });
 
   it("suppresses the 250ms entrance class when data-reduce-animations is true", () => {
