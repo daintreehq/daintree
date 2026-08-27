@@ -168,7 +168,7 @@ export function DeletedWorktreeGroup({ worktrees }: DeletedWorktreeGroupProps) {
           type="button"
           onClick={toggleExpanded}
           aria-expanded={isExpanded}
-          className="flex min-w-0 flex-1 items-center gap-1.5 rounded text-left outline-hidden focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-daintree-accent"
+          className="flex min-w-0 flex-1 items-center gap-1.5 rounded text-left outline-hidden focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-daintree-accent"
         >
           <ChevronRight
             data-animated-chevron

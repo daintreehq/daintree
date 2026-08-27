@@ -226,7 +226,7 @@ export function InlineStatusBanner({
       }}
       aria-label={closeAriaLabel}
       className={cn(
-        "p-1 rounded text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-border/50 transition-colors outline-hidden focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-daintree-accent shrink-0",
+        "p-1 rounded text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-border/50 transition-colors outline-hidden focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-daintree-accent shrink-0",
         isTitleBarSurface && "app-no-drag"
       )}
     >
@@ -364,7 +364,7 @@ export function InlineStatusBanner({
                   action.iconOnly
                     ? "p-1"
                     : "flex items-center gap-1.5 px-2 py-1 text-xs font-medium",
-                  "transition-colors outline-hidden focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-daintree-accent",
+                  "transition-colors outline-hidden focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-daintree-accent",
                   variantClasses,
                   (variant === "danger" || variant === "dangerFilled") &&
                     "hover:[color:var(--hover-color)] hover:[background:var(--hover-bg)]",

@@ -87,7 +87,7 @@ export function HostCrashBanner() {
       className={cn(
         "flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded transition-colors",
         "text-daintree-text/70 hover:text-daintree-text hover:bg-daintree-border/50",
-        "outline-hidden focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-daintree-accent",
+        "outline-hidden focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-daintree-accent",
         isCollectingDiagnostics && "cursor-not-allowed opacity-60 hover:bg-transparent"
       )}
     >

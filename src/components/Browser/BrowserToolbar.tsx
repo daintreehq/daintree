@@ -905,7 +905,7 @@ export function BrowserToolbar({
                 "w-full pl-7 pr-2 py-1 text-xs rounded",
                 "bg-daintree-bg border border-overlay",
                 "focus:outline-hidden focus:border-border-strong",
-                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
+                "focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
                 "text-daintree-text placeholder:text-text-placeholder",
                 error && "border-status-error/50"
               )}

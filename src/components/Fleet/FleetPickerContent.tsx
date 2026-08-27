@@ -389,7 +389,7 @@ function TerminalRow({
         className={cn(
           "flex flex-1 items-start gap-2 pl-5 pr-2 py-1.5 rounded text-[13px] text-daintree-text cursor-pointer outline-hidden",
           "hover:bg-tint/[0.06]",
-          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]"
+          "focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]"
         )}
         onClick={handleClick}
         data-testid={`${testIdPrefix}-row-${terminal.id}`}
