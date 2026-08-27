@@ -2612,7 +2612,7 @@ describe("BulkCreateWorktreeDialog — form layout and batch summary", () => {
     const trigger = screen.getByRole("combobox");
     expect(trigger.getAttribute("aria-label")).toBeNull();
     expect(trigger.id).toBeTruthy();
-    expect(railLabel("Starting layout").htmlFor).toBe(trigger.id);
+    expect(railLabel("Recipe").htmlFor).toBe(trigger.id);
   });
 
   it("keeps the assignment row mounted while identity resolves", async () => {

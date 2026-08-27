@@ -1206,7 +1206,7 @@ export function BulkCreateWorktreeDialog({
                 </FormRow>
               )}
 
-              <FormRow label="Starting layout" htmlFor="bulk-recipe-selector-trigger">
+              <FormRow label="Recipe" htmlFor="bulk-recipe-selector-trigger">
                 <RecipePickerPopover
                   recipes={startingLayoutRecipes}
                   selectedRecipeId={selectedRecipeId}
@@ -1357,11 +1357,7 @@ export function BulkCreateWorktreeDialog({
                   Retry failed
                 </Button>
               )}
-              <Button
-                variant="contrast"
-                onClick={handleDone}
-                data-testid="bulk-create-done-button"
-              >
+              <Button variant="contrast" onClick={handleDone} data-testid="bulk-create-done-button">
                 <Check />
                 Done
               </Button>
