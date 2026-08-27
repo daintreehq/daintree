@@ -177,6 +177,16 @@ export interface AssistantNotice {
    * transcript whenever they disagreed.
    */
   afterTurnId: string | null;
+  /**
+   * The engine's `host:error` code, for the notices that came from one.
+   *
+   * Kept so a notice can be RETIRED by kind. Some of what the engine reports is a claim
+   * about the near future — "this message was folded into the running turn and will be
+   * picked up between tasks" — and a claim like that is true for the length of one turn
+   * and then permanently false, still sitting in the transcript telling the user their
+   * message is about to be read hours after it was.
+   */
+  code?: string;
 }
 
 /** An outstanding multiple-choice question. The turn is blocked until it settles. */
@@ -451,6 +461,52 @@ function noticeId(): string {
 const MAX_NOTICES = 50;
 
 /**
+ * What each `host:error` code actually MEANS to a reader, where it is not a fault.
+ *
+ * The engine has one channel for anything off the happy path, so the code is the only
+ * thing that separates "the transport handed us a malformed frame" from "your message
+ * joined the turn that was already running". Unlisted codes stay errors — `turn-failed`,
+ * `command-failed`, `uncaught`, `bad-frame` are all genuine breakage, and a default of
+ * `info` would quietly downgrade the next code the engine invents.
+ *
+ * `prompt-folded` is not a failure at all: the message was accepted and delivered, and
+ * the notice is telling the user where it went. The refusals are warnings — nothing is
+ * broken, but the thing they asked for did not happen and they have to do something
+ * about it.
+ */
+const NOTICE_LEVEL_BY_ERROR_CODE: Record<string, AssistantNotice["level"]> = {
+  "prompt-folded": "info",
+  "command-busy": "warning",
+  "not-ready": "warning",
+};
+
+/**
+ * Codes whose notices expire when the turn they were about ends.
+ *
+ * Only `prompt-folded` so far, and the reason is specific to it: it describes a message
+ * WAITING to be picked up. Once the turn is over that message has either been folded in
+ * — it is in the transcript, inside the turn, where anyone can see it — or it was
+ * stranded and promoted to a user turn of its own. Either way the notice now describes
+ * something that has already finished happening, so it stops being a status and becomes
+ * a permanent line of stale text pinned above the composer.
+ */
+const TRANSIENT_ERROR_CODES = new Set(["prompt-folded"]);
+
+/**
+ * Drops the notices whose claim has expired, returning the SAME array when none had.
+ *
+ * Identity matters: this runs on `turn:end`, which the engine emits twice per exchange
+ * — once for the zero-duration user bracket that opens it and once for the assistant
+ * turn — so a fresh array every time would re-render the whole transcript on a frame
+ * that changed nothing.
+ */
+function retireTransientNotices(notices: AssistantNotice[]): AssistantNotice[] {
+  return notices.some((n) => n.code !== undefined && TRANSIENT_ERROR_CODES.has(n.code))
+    ? notices.filter((n) => n.code === undefined || !TRANSIENT_ERROR_CODES.has(n.code))
+    : notices;
+}
+
+/**
  * Appends a notice, stamping where in the transcript it arrived.
  *
  * One function rather than the literal repeated at each call site, because the anchor is
@@ -608,6 +664,11 @@ export const useAssistantStore = create<AssistantStore>((set, get) => ({
       // typed — but as ordinary turns rather than as a promise of delivery that will
       // never be honoured.
       queuedInterjections: [],
+      // And the notice that promised the delivery goes with them. `turn:end` is the
+      // ordinary retirement, but an engine that dies mid-turn never sends one — which
+      // would leave "your message was folded in and will be picked up between tasks"
+      // standing over a dead session, promising something nothing can now do.
+      notices: retireTransientNotices(s.notices),
       // Dropped rather than auto-declined: this surface cannot answer for an engine
       // that is gone, and leaving a card implies someone still can.
       approvals: [],
@@ -741,13 +802,36 @@ export const useAssistantStore = create<AssistantStore>((set, get) => ({
         return;
 
       case "host:error":
+        // ONE standing copy of an expiring notice, not one per occurrence. Steering a
+        // long turn twice folded twice and said so twice, in the same words — the fact
+        // is "your messages joined the running turn", which is as true of the second as
+        // of the first, and each duplicate also costs a slot in the capped history that
+        // a real warning would otherwise hold. The queued cards below still show every
+        // message individually; this line is the status, not the receipt.
+        if (
+          TRANSIENT_ERROR_CODES.has(event.code) &&
+          get().notices.some((n) => n.code === event.code)
+        ) {
+          return;
+        }
         set((s) => ({
           notices: appendNotice(s, {
             id: noticeId(),
-            level: "error" as const,
+            // Graded by CODE. `host:error` is the engine's one channel for "something
+            // came back other than the happy path", and most of what travels on it is
+            // flow control rather than failure: a prompt sent mid-turn was folded into
+            // that turn (it worked), a command arrived while another was waiting on an
+            // answer (try again in a moment). Painting those with the danger glyph told
+            // the user something had gone wrong at the exact moments nothing had, and
+            // the loudest mark in the panel stopped meaning anything.
+            level: NOTICE_LEVEL_BY_ERROR_CODE[event.code] ?? ("error" as const),
             message: event.message,
             at: Date.now(),
             turnId: null,
+            // Tagged so it can be RETIRED when it stops being true — see `turn:end`.
+            // Only the folded notice needs this: it describes a message waiting to be
+            // picked up, which is a claim with an expiry date on it.
+            code: event.code,
           }),
         }));
         return;
@@ -804,15 +888,22 @@ export const useAssistantStore = create<AssistantStore>((set, get) => ({
             outcome: event.outcome,
             complete: true,
           }));
+          // The folded-prompt notice dies with the turn it was about. See
+          // `TRANSIENT_ERROR_CODES`: "will be picked up between tasks" is a statement
+          // about a turn that is now over, and the message it described is either
+          // inside that turn or promoted below it — visible either way, and no longer
+          // something the reader needs a status line for.
+          const notices = retireTransientNotices(s.notices);
           // A turn that ended without ever folding the queued text in never carried
           // it. Promote it to a user turn of its own rather than letting the card
           // vanish with the turn it was waiting on: losing something the user typed is
           // worse than showing it a beat later than they expected.
           if (s.queuedInterjections.length === 0) {
-            return { phase: null, turns, turnStartedAt: null, lastActivityAt: null };
+            return { phase: null, turns, notices, turnStartedAt: null, lastActivityAt: null };
           }
           return {
             phase: null,
+            notices,
             turnStartedAt: null,
             lastActivityAt: null,
             queuedInterjections: [],

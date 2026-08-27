@@ -507,3 +507,35 @@ body[data-reduce-animations="true"] .assistant-caret {
 body[data-reduce-animations="true"] .assistant-spinner::after {
   animation: none;
 }
+
+/* The answer well's cursor, in the two modes that ask more of it than a fill.
+   Kept as two blocks on purpose, matching the rule in src/index.css: macOS fires
+   `prefers-contrast` only and Windows swaps in system colours through `forced-colors`,
+   so consolidating them serves one platform and drops the other. They are also asking
+   for different things — one has taken the palette away, the other has only asked it to
+   speak up — which is why the outline colours differ.
+
+   The sheet marks the highlighted option with a filled row and a leading rail, both of
+   which are BACKGROUNDS — and forced-colors overrides every background to Canvas, so in
+   that mode the cursor simply vanishes and an arrow key moves nothing anyone can see.
+   The listbox used to carry an accent focus ring, which survived as a system-coloured
+   outline and stood in for it; the ring is gone (it read as a block of colour swallowing
+   the answers), so the option has to say so itself. An outline is the right instrument
+   because outlines are the one thing forced-colors keeps. */
+@media (forced-colors: active) {
+  .assistant-answers [role="option"][aria-selected="true"] {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+}
+
+/* Not a colour swap — the palette is still the panel's own here, and it already solves
+   its surfaces against a contrast floor. What a raised-contrast preference asks for is
+   that the boundary be UNMISTAKABLE, so the cursor gains an outline on top of its fill
+   rather than in place of it. */
+@media (prefers-contrast: more) {
+  .assistant-answers [role="option"][aria-selected="true"] {
+    outline: 2px solid var(--assistant-fg);
+    outline-offset: -2px;
+  }
+}
