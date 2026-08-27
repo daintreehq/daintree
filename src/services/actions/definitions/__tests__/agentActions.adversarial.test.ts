@@ -448,7 +448,9 @@ describe("agentActions adversarial", () => {
 
     const result = await service.dispatch(
       "agent.launch",
-      { agentId: "claude", name: "Claude: auth refactor" },
+      // worktreeId is required of an agent dispatch (#11722); this test is about
+      // `name`, so name the worktree and keep the subject unchanged.
+      { agentId: "claude", worktreeId: "wt-1", name: "Claude: auth refactor" },
       { source: "agent" }
     );
 
@@ -470,7 +472,9 @@ describe("agentActions adversarial", () => {
 
     const result = await service.dispatch(
       "agent.launch",
-      { agentId: "claude", name: "x".repeat(201) },
+      // Named worktree so the rejection is provably the 200-char cap and not the
+      // agent-dispatch worktree guard.
+      { agentId: "claude", worktreeId: "wt-1", name: "x".repeat(201) },
       { source: "agent" }
     );
 
@@ -830,6 +834,84 @@ describe("agent.launch dispatch integration", () => {
       interactive: undefined,
       modelId: undefined,
     });
+  });
+
+  // An omitted worktreeId is resolved against the LIVE active-worktree selection at
+  // the instant the call lands. A person picking from the palette can see which row is
+  // highlighted; an agent cannot, and launches fan out — so a batch dispatched while
+  // the user switches worktrees lands split across two of them, with real terminals in
+  // the wrong place by the time anyone could re-read (#11722).
+  it("refuses an agent-dispatched launch that names no worktree, and launches nothing", async () => {
+    const { ActionService } = await import("../../../ActionService");
+    const service = new ActionService();
+
+    const callbacks = makeCallbacks();
+    const registry: ActionRegistry = new Map();
+    registerAgentActions(registry, callbacks);
+    for (const [, factory] of registry) {
+      service.register(factory());
+    }
+
+    const result = await service.dispatch(
+      "agent.launch",
+      { agentId: "claude" },
+      { source: "agent" }
+    );
+
+    expect(result.ok).toBe(false);
+    if (!result.ok) {
+      expect(result.error.message).toContain("worktreeId");
+    }
+    // The point of failing closed: nothing may reach the launcher, or a terminal
+    // exists in a worktree nobody chose.
+    expect(callbacks.onLaunchAgent).not.toHaveBeenCalled();
+  });
+
+  it("lets an agent launch once it names the worktree", async () => {
+    const { ActionService } = await import("../../../ActionService");
+    const service = new ActionService();
+
+    const callbacks = makeCallbacks();
+    const registry: ActionRegistry = new Map();
+    registerAgentActions(registry, callbacks);
+    for (const [, factory] of registry) {
+      service.register(factory());
+    }
+
+    const result = await service.dispatch(
+      "agent.launch",
+      { agentId: "claude", worktreeId: "wt-1" },
+      { source: "agent" }
+    );
+
+    expect(result.ok).toBe(true);
+    expect(callbacks.onLaunchAgent).toHaveBeenCalledWith(
+      "claude",
+      expect.objectContaining({ worktreeId: "wt-1" })
+    );
+  });
+
+  // The guard must not reach the surfaces it was already safe for: a person launching
+  // from the palette or a keybinding still gets the active worktree.
+  it("still lets a user-dispatched launch inherit the active worktree", async () => {
+    const { ActionService } = await import("../../../ActionService");
+    const service = new ActionService();
+
+    const callbacks = makeCallbacks();
+    const registry: ActionRegistry = new Map();
+    registerAgentActions(registry, callbacks);
+    for (const [, factory] of registry) {
+      service.register(factory());
+    }
+
+    const result = await service.dispatch(
+      "agent.launch",
+      { agentId: "claude" },
+      { source: "user" }
+    );
+
+    expect(result.ok).toBe(true);
+    expect(callbacks.onLaunchAgent).toHaveBeenCalled();
   });
 
   it("rejects an empty agentId with a VALIDATION_ERROR targeting agentId and never invokes the callback", async () => {
