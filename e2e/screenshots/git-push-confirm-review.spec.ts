@@ -86,6 +86,13 @@ const POLISH_CSS = `
     transition-delay: 0s !important;
     caret-color: transparent !important;
   }
+  /*
+   * Skeleton bones start at opacity 0 and are faded in by the pulse keyframes
+   * after the 400ms Doherty delay, so the animation freeze above leaves them
+   * INVISIBLE — a loading shot that looks like an empty panel and sends the
+   * whole review off reviewing a screen that does not exist. Pin them visible.
+   */
+  [class*="animate-pulse-"] { opacity: 1 !important; }
 `;
 
 /**

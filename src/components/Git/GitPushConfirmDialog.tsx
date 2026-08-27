@@ -3,6 +3,7 @@ import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { ErrorBoundary } from "@/components/ErrorBoundary";
 import { Button } from "@/components/ui/button";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
+import { Skeleton } from "@/components/ui/Skeleton";
 import { AlertTriangle, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
@@ -112,10 +113,20 @@ function GitPushConfirmDialogInner() {
   if (!pendingConfirm) return null;
 
   const destinationLabel = destination ? formatGitPushDestination(destination) : null;
-  const isDestinationMissing = !isLoading && !loadError && destination === null;
-  const isLoaded = !isLoading && !loadError && commits !== null;
+  const isLoaded_ = !isLoading && !loadError;
+  // Checked BEFORE the missing-destination branch. A detached HEAD also resolves
+  // no destination, but telling someone with no branch checked out to configure
+  // a push remote for it is both the wrong diagnosis and an unfollowable fix.
+  const isDetached = isLoaded_ && commits !== null && branch === null;
+  const isDestinationMissing = isLoaded_ && !isDetached && destination === null;
+  const isLoaded = isLoaded_ && commits !== null;
   const isInSync = isLoaded && commits.length === 0 && destination !== null;
   const total = pushRange?.total ?? commits?.length ?? 0;
+  // No remote-tracking ref means the range was measured against everything this
+  // machine holds for that remote, so it can only over-report. Saying so is the
+  // honest version of the "creates this branch" claim that cannot be verified
+  // without a network round trip.
+  const isUpperBound = pushRange?.rangeBasis === "untracked";
   const hiddenCount = commits ? Math.max(0, total - commits.length) : 0;
 
   // A destination nobody can name can't be approved — the handler would refuse
@@ -128,24 +139,30 @@ function GitPushConfirmDialogInner() {
   // read as arbitrary. Ordered by which the user can act on first.
   const blockedReason = loadError
     ? "Push stays blocked until the preview loads"
-    : isDestinationMissing
-      ? "Push stays blocked until a destination is set"
-      : isLoading
-        ? "Checking what this would publish…"
-        : null;
+    : isDetached
+      ? "Push stays blocked until a branch is checked out"
+      : isDestinationMissing
+        ? "Push stays blocked until a destination is set"
+        : isLoading
+          ? "Checking what this would publish…"
+          : null;
 
   return (
     <ConfirmDialog
       isOpen={true}
       onClose={() => resolveConfirmation(false)}
       title="Push commits?"
+      // Deliberately says "commits", not "these commits": the same sentence has
+      // to be true in the states where there is nothing to point at — in sync,
+      // no destination, preview failed — and a description that asserts the push
+      // will happen sat directly above an error saying it cannot.
       description={
         <span>
-          Publishing puts these commits on the remote, where everyone working from it sees them.
-          Taking them back afterwards needs a force-push.
+          Publishing puts commits on the remote, where everyone working from it sees them. Taking
+          them back afterwards needs a force-push.
         </span>
       }
-      confirmLabel="Push"
+      confirmLabel="Push commits"
       cancelLabel="Cancel"
       variant="destructive"
       hasPreview={true}
@@ -167,6 +184,8 @@ function GitPushConfirmDialogInner() {
               <RefChip value={branch} />
             ) : isLoading ? (
               <Bone className="w-40" />
+            ) : loadError ? (
+              <Unknown />
             ) : (
               <Unresolved />
             )}
@@ -175,12 +194,14 @@ function GitPushConfirmDialogInner() {
             {destinationLabel ? (
               <span className="flex flex-wrap items-baseline gap-1.5">
                 <RefChip value={destinationLabel} emphasis />
-                {pushRange?.createsRemoteBranch && (
-                  <span className="text-[10px] text-daintree-text/55">creates this branch</span>
+                {isUpperBound && (
+                  <span className="text-[10px] text-daintree-text/55">no local copy</span>
                 )}
               </span>
             ) : isLoading ? (
               <Bone className="w-48" />
+            ) : loadError ? (
+              <Unknown />
             ) : (
               <Unresolved />
             )}
@@ -203,19 +224,20 @@ function GitPushConfirmDialogInner() {
         </div>
 
         {isLoading && (
-          <ul
-            className="px-3 py-2 space-y-1.5"
-            data-testid="git-push-commits-loading"
-            aria-hidden="true"
-          >
-            {Array.from({ length: SKELETON_ROWS }).map((_, i) => (
-              <li key={i} className="flex items-baseline gap-2">
-                <Bone className="w-[3.5rem]" />
-                <Bone className={i === 1 ? "w-40" : "w-52"} />
-                <Bone className="w-16 ml-auto" />
-              </li>
-            ))}
-          </ul>
+          // `Skeleton` is what makes this reach a screen reader: the bones alone
+          // are decorative, so a blocked Push with no announced busy state left
+          // an AT user with a dead button and no explanation.
+          <Skeleton label="Checking what this would publish" data-testid="git-push-commits-loading">
+            <ul className="px-3 py-2 space-y-1.5">
+              {Array.from({ length: SKELETON_ROWS }).map((_, i) => (
+                <li key={i} className="flex items-baseline gap-2">
+                  <Bone className="w-[3.5rem]" />
+                  <Bone className={i === 1 ? "w-40" : "w-52"} />
+                  <Bone className="w-16 ml-auto" />
+                </li>
+              ))}
+            </ul>
+          </Skeleton>
         )}
 
         {!isLoading && loadError && (
@@ -238,6 +260,19 @@ function GitPushConfirmDialogInner() {
           </div>
         )}
 
+        {isDetached && (
+          <div className="px-3 py-3 text-status-error flex items-start gap-2" role="alert">
+            <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+            <div className="flex-1 min-w-0" data-testid="git-push-detached-head">
+              <div className="font-medium">No branch checked out</div>
+              <div className="mt-0.5 text-daintree-text/70">
+                This worktree is on a detached HEAD, so there is no branch to publish. Check one out
+                and try again.
+              </div>
+            </div>
+          </div>
+        )}
+
         {isDestinationMissing && (
           <div className="px-3 py-3 text-status-error flex items-start gap-2" role="alert">
             <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
@@ -245,11 +280,12 @@ function GitPushConfirmDialogInner() {
               <div className="font-medium">No destination git can name</div>
               <div className="mt-0.5 text-daintree-text/70">
                 This branch has no push destination, or more than one remote could be meant. Set an
-                upstream, or name one with{" "}
-                <span className="font-mono break-all">
-                  git config branch.&lt;name&gt;.pushRemote
+                upstream, or name the remote yourself:
+                {/* Its own line, and unbroken: wrapped inline it split as
+                    "with g / it config", which is not a command anyone can run. */}
+                <span className="mt-1 block font-mono text-daintree-text/80 whitespace-nowrap overflow-x-auto">
+                  git config branch.&lt;name&gt;.pushRemote &lt;remote&gt;
                 </span>
-                .
               </div>
             </div>
           </div>
@@ -295,6 +331,12 @@ function GitPushConfirmDialogInner() {
                   </span>
                 </li>
               ))}
+              {isUpperBound && (
+                <li className="text-[11px] text-daintree-text/55 pt-0.5">
+                  No local copy of {destinationLabel} &mdash; this list is an upper bound and may
+                  include commits it already has.
+                </li>
+              )}
               {hiddenCount > 0 && (
                 <li className="text-[11px] text-daintree-text/55 italic pt-0.5">
                   &hellip;and {hiddenCount} more
@@ -331,7 +373,7 @@ function RefChip({ value, emphasis }: { value: string; emphasis?: boolean }) {
   return (
     <span
       className={cn(
-        "inline-flex items-baseline px-1.5 py-0.5 rounded bg-tint/[0.07] border border-tint/[0.08] text-[11px] font-mono break-all",
+        "inline-flex items-baseline px-1.5 py-0.5 rounded bg-tint/[0.07] border border-tint/[0.08] text-[11px] font-mono break-words",
         emphasis ? "text-daintree-text" : "text-daintree-text/70"
       )}
     >
@@ -340,8 +382,14 @@ function RefChip({ value, emphasis }: { value: string; emphasis?: boolean }) {
   );
 }
 
+/** Git answered, and the answer was "no destination anyone can name". */
 function Unresolved() {
   return <span className="text-status-error text-[11px]">Not resolved</span>;
+}
+
+/** Git did not answer at all. The failure is stated once, below, not per row. */
+function Unknown() {
+  return <span className="text-daintree-text/55 text-[11px]">&mdash;</span>;
 }
 
 /**
@@ -351,6 +399,7 @@ function Unresolved() {
 function Bone({ className }: { className?: string }) {
   return (
     <span
+      aria-hidden="true"
       className={cn("inline-block h-3.5 rounded bg-tint/[0.08] animate-pulse-delayed", className)}
     />
   );

@@ -38,8 +38,13 @@ export interface GitPreviewCommit {
 export interface GitPushRangeFacts {
   /** Commits in the whole range, which may exceed the rows in `commits`. */
   total: number;
-  /** The push would CREATE the remote branch rather than fast-forward it. */
-  createsRemoteBranch: boolean;
+  /**
+   * `untracked` means there is no local remote-tracking ref for the
+   * destination, so the range is an upper bound rather than an exact answer —
+   * see `GitPushCommitPreview.rangeBasis`. It is NOT a claim that the push
+   * creates the branch; only the remote can settle that.
+   */
+  rangeBasis: "tracked" | "untracked";
 }
 
 export interface GitRemoteOperationPreview {
@@ -131,7 +136,7 @@ export async function buildGitRemoteOperationPreview(
       })),
       pushRange: {
         total: preview.total,
-        createsRemoteBranch: preview.createsRemoteBranch,
+        rangeBasis: preview.rangeBasis,
       },
     };
   }
@@ -176,7 +181,9 @@ export function formatGitRemoteOperationPreviewLines(
   const remoteRef = isPullRebase ? preview.pullSource : preview.destination;
   const destinationLine = remoteRef
     ? `${isPullRebase ? "Rebases onto" : "Destination"}: ${formatGitPushDestination(remoteRef)}${
-        preview.pushRange?.createsRemoteBranch ? " (creates this branch)" : ""
+        preview.pushRange?.rangeBasis === "untracked"
+          ? " (no local copy of this branch — the commits below are an upper bound)"
+          : ""
       }`
     : isPullRebase
       ? `${MCP_PREVIEW_CAUTION_PREFIX}This branch has no upstream to rebase onto — this operation will be refused.`

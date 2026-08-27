@@ -179,12 +179,22 @@ export interface GitRemoteCommitPreview {
 export interface GitPushCommitPreview {
   destination: GitPushDestination;
   /**
-   * The destination's remote-tracking ref does not exist locally, so this push
-   * CREATES the remote branch rather than fast-forwarding one. The range is then
-   * measured against every other ref on that remote, which is what git would
-   * actually transfer.
+   * How the range was measured, which decides how much the rows can be trusted.
+   *
+   * - `tracked` — the destination has a remote-tracking ref here, and the range
+   *   is exactly `<that ref>..<branch>`.
+   * - `untracked` — it does not, so the range is everything on the branch not
+   *   reachable from any ref this machine holds for that remote.
+   *
+   * `untracked` deliberately does NOT claim the push creates the branch. Only
+   * the remote can settle that, and a tracking ref can be missing because the
+   * branch is new, because it has never been fetched, because it was pruned, or
+   * because the fetch refspec excludes it. Where the branch does exist remotely
+   * and has simply not been fetched, this over-reports — the safe direction for
+   * a destructive preview, and the reason the renderer says so out loud rather
+   * than asserting a creation it cannot verify without a network round trip.
    */
-  createsRemoteBranch: boolean;
+  rangeBasis: "tracked" | "untracked";
   commits: GitRemoteCommit[];
   /** Total commits in the range, which may exceed the returned `commits`. */
   total: number;

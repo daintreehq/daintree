@@ -43,7 +43,7 @@ vi.stubGlobal(
 );
 
 function pushButton(): HTMLElement {
-  return screen.getByRole("button", { name: "Push" });
+  return screen.getByRole("button", { name: "Push commits" });
 }
 
 /** A promise plus its resolvers, so a test can hold the fetch mid-flight. */
@@ -78,7 +78,7 @@ describe("GitPushConfirmDialog", () => {
       destination: { remote: "origin", branch: "feature/x" },
       pullSource: { remote: "origin", branch: "feature/x" },
       commits: [],
-      pushRange: { total: 0, createsRemoteBranch: false },
+      pushRange: { total: 0, rangeBasis: "tracked" as const },
     });
     render(<GitPushConfirmDialog />);
 
@@ -95,7 +95,7 @@ describe("GitPushConfirmDialog", () => {
       destination: { remote: string; branch: string };
       pullSource: { remote: string; branch: string };
       commits: never[];
-      pushRange: { total: number; createsRemoteBranch: boolean } | null;
+      pushRange: { total: number; rangeBasis: "tracked" | "untracked" } | null;
     }>();
     mocks.buildPreview.mockReturnValue(gate.promise);
     render(<GitPushConfirmDialog />);
@@ -112,7 +112,7 @@ describe("GitPushConfirmDialog", () => {
         destination: { remote: "origin", branch: "main" },
         pullSource: { remote: "origin", branch: "main" },
         commits: [],
-        pushRange: { total: 0, createsRemoteBranch: false },
+        pushRange: { total: 0, rangeBasis: "tracked" as const },
       });
       await gate.promise;
     });
@@ -128,7 +128,7 @@ describe("GitPushConfirmDialog", () => {
       destination: { remote: "origin", branch: "main" },
       pullSource: { remote: "origin", branch: "main" },
       commits: [],
-      pushRange: { total: 0, createsRemoteBranch: false },
+      pushRange: { total: 0, rangeBasis: "tracked" as const },
     });
     render(<GitPushConfirmDialog />);
 
@@ -156,7 +156,7 @@ describe("GitPushConfirmDialog", () => {
       destination: { remote: "origin", branch: "main" },
       pullSource: { remote: "origin", branch: "main" },
       commits: [{ hash: "abcdef1234", message: "Fix it", author: "Ada" }],
-      pushRange: { total: 1, createsRemoteBranch: false },
+      pushRange: { total: 1, rangeBasis: "tracked" as const },
     });
     await act(async () => {
       retry.click();
@@ -196,7 +196,7 @@ describe("GitPushConfirmDialog", () => {
         { hash: "aaaaaaa1", message: "One", author: "Ada" },
         { hash: "bbbbbbb2", message: "Two", author: "Bob" },
       ],
-      pushRange: { total: 7, createsRemoteBranch: false },
+      pushRange: { total: 7, rangeBasis: "tracked" as const },
     });
     render(<GitPushConfirmDialog />);
 
@@ -216,7 +216,7 @@ describe("GitPushConfirmDialog", () => {
       destination: { remote: "fork", branch: "release/topic" },
       pullSource: null,
       commits: [],
-      pushRange: { total: 0, createsRemoteBranch: false },
+      pushRange: { total: 0, rangeBasis: "tracked" as const },
     });
     render(<GitPushConfirmDialog />);
 
@@ -246,7 +246,7 @@ describe("GitPushConfirmDialog", () => {
       destination: { remote: "origin", branch: "main" },
       pullSource: null,
       commits: [{ hash: "abcdef12", message: "One", author: "Ada" }],
-      pushRange: { total: 1, createsRemoteBranch: false },
+      pushRange: { total: 1, rangeBasis: "tracked" as const },
     });
     await act(async () => {
       useGitPushConfirmStore.getState().resolveConfirmation(false);
@@ -275,13 +275,55 @@ describe("GitPushConfirmDialog", () => {
     expect(screen.getByTestId("git-push-no-destination")).toBeTruthy();
   });
 
+  // A detached HEAD also resolves no destination. Diagnosing it as a missing
+  // push remote gives the wrong reason and a fix that cannot be followed.
+  it("names a detached HEAD rather than blaming a missing push remote", async () => {
+    mocks.buildPreview.mockResolvedValue({
+      branch: null,
+      destination: null,
+      pullSource: null,
+      commits: [],
+      pushRange: null,
+    });
+    render(<GitPushConfirmDialog />);
+
+    await act(async () => {
+      void useGitPushConfirmStore.getState().requestConfirmation("/repo");
+    });
+
+    expect(screen.getByTestId("git-push-detached-head")).toBeTruthy();
+    expect(screen.queryByTestId("git-push-no-destination")).toBeNull();
+    expect(pushButton().hasAttribute("disabled")).toBe(true);
+  });
+
+  // An untracked range can only over-report, so the surface must say the list is
+  // an upper bound rather than assert a branch creation it cannot verify.
+  it("calls an untracked range an upper bound, never a branch creation", async () => {
+    mocks.buildPreview.mockResolvedValue({
+      branch: "spike",
+      destination: { remote: "origin", branch: "spike" },
+      pullSource: null,
+      commits: [{ hash: "abcdef12", message: "One", author: "Ada" }],
+      pushRange: { total: 1, rangeBasis: "untracked" as const },
+    });
+    render(<GitPushConfirmDialog />);
+
+    await act(async () => {
+      void useGitPushConfirmStore.getState().requestConfirmation("/repo");
+    });
+
+    const region = screen.getByTestId("git-push-destination-summary").parentElement!;
+    expect(region.textContent).toContain("upper bound");
+    expect(region.textContent).not.toContain("creates this branch");
+  });
+
   it("resolves the awaited confirm promise with the user's decision", async () => {
     mocks.buildPreview.mockResolvedValue({
       branch: "main",
       destination: { remote: "origin", branch: "main" },
       pullSource: { remote: "origin", branch: "main" },
       commits: [],
-      pushRange: { total: 0, createsRemoteBranch: false },
+      pushRange: { total: 0, rangeBasis: "tracked" as const },
     });
     render(<GitPushConfirmDialog />);
 

@@ -12,7 +12,7 @@ function stubGit(overrides: {
   items?: Array<{ hash: string; message: string; author: { name: string } }>;
   pushCommits?: Array<{ hash: string; message: string; author: string }>;
   pushTotal?: number;
-  createsRemoteBranch?: boolean;
+  rangeBasis?: "tracked" | "untracked";
   reject?: boolean;
   rejectCommits?: boolean;
   rejectPushCommits?: boolean;
@@ -44,7 +44,7 @@ function stubGit(overrides: {
       ? Promise.reject(new Error("git log range failed"))
       : Promise.resolve({
           destination: pushDestination,
-          createsRemoteBranch: overrides.createsRemoteBranch ?? false,
+          rangeBasis: overrides.rangeBasis ?? "tracked",
           commits: pushCommits,
           total: overrides.pushTotal ?? pushCommits.length,
         })
@@ -94,11 +94,11 @@ describe("buildGitRemoteOperationPreview", () => {
     stubGit({
       pushCommits: [{ hash: "abcdef1234", message: "First", author: "Ada" }],
       pushTotal: 9,
-      createsRemoteBranch: true,
+      rangeBasis: "untracked" as const,
     });
     await expect(buildGitRemoteOperationPreview("/repo", "push")).resolves.toMatchObject({
       commits: [{ hash: "abcdef1234", message: "First", author: "Ada" }],
-      pushRange: { total: 9, createsRemoteBranch: true },
+      pushRange: { total: 9, rangeBasis: "untracked" as const },
     });
   });
 
@@ -139,7 +139,7 @@ describe("buildGitRemoteOperationPreview", () => {
     const { listPushCommits } = stubGit({ pushDestination: { remote: "fork", branch: "topic" } });
     listPushCommits.mockResolvedValueOnce({
       destination: { remote: "fork", branch: "renamed-topic" },
-      createsRemoteBranch: false,
+      rangeBasis: "tracked" as const,
       commits: [],
       total: 0,
     });
@@ -348,7 +348,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         destination: { remote: "origin", branch: "main" },
         pullSource: { remote: "origin", branch: "main" },
         commits: [{ hash: "abcdef1234567", message: "First", author: "Ada" }],
-        pushRange: { total: 4, createsRemoteBranch: false },
+        pushRange: { total: 4, rangeBasis: "tracked" as const },
       },
       "none",
       "push"
@@ -363,7 +363,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         destination: { remote: "origin", branch: "main" },
         pullSource: { remote: "origin", branch: "main" },
         commits: [{ hash: "abcdef1234567", message: "First", author: "Ada" }],
-        pushRange: { total: 1, createsRemoteBranch: false },
+        pushRange: { total: 1, rangeBasis: "tracked" as const },
       },
       "none",
       "push"
@@ -388,19 +388,24 @@ describe("formatGitRemoteOperationPreviewLines", () => {
     expect(lines.join(" ")).not.toContain("more");
   });
 
-  it("says a push creates the remote branch when there is nothing there yet", () => {
+  // Deliberately NOT "creates this branch": a missing local remote-tracking ref
+  // does not prove the remote branch is absent, so the line states what was
+  // measured rather than asserting a creation only the remote can confirm.
+  it("marks an untracked range as an upper bound instead of claiming a creation", () => {
     const lines = formatGitRemoteOperationPreviewLines(
       {
         branch: "spike",
         destination: { remote: "origin", branch: "spike" },
         pullSource: null,
         commits: [],
-        pushRange: { total: 0, createsRemoteBranch: true },
+        pushRange: { total: 0, rangeBasis: "untracked" as const },
       },
       "none",
       "push"
     );
-    expect(lines[0]).toBe("Destination: origin/spike (creates this branch)");
+    expect(lines[0]).toContain("Destination: origin/spike");
+    expect(lines[0]).toContain("upper bound");
+    expect(lines[0]).not.toContain("creates");
   });
 
   it("surfaces an explicit couldn't-verify warning for a failed fetch", () => {

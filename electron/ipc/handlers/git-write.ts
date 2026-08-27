@@ -208,11 +208,14 @@ const gitPushPreviewNamespace = defineIpcNamespace({
           const localRef = `refs/heads/${branchName}`;
           const hasRemoteRef = await refExists(git, destination.remoteTrackingRef);
 
-          // A branch that has never been pushed has no remote-tracking ref to
-          // subtract, and `<missing>..<branch>` is a fatal argument rather than
-          // "everything". What such a push publishes is whatever is not already
-          // reachable from some other ref on that remote, which is what git
-          // itself would transfer — so ask for exactly that.
+          // With no remote-tracking ref there is nothing to subtract, and
+          // `<missing>..<branch>` is a fatal argument rather than "everything".
+          // Fall back to whatever is not already reachable from any ref held for
+          // that remote. That over-reports when the branch exists remotely and
+          // simply has not been fetched — the safe direction for a destructive
+          // preview, and the reason `rangeBasis` travels with the rows so the
+          // surface can say the list is an upper bound instead of asserting a
+          // branch creation only the remote can confirm.
           const revArgs = hasRemoteRef
             ? [`${destination.remoteTrackingRef}..${localRef}`]
             : [localRef, "--not", `--remotes=${destination.remote}`];
@@ -224,7 +227,7 @@ const gitPushPreviewNamespace = defineIpcNamespace({
 
           return {
             destination: { remote: destination.remote, branch: destination.branch },
-            createsRemoteBranch: !hasRemoteRef,
+            rangeBasis: hasRemoteRef ? "tracked" : "untracked",
             total,
             commits: log.all.map((commit) => ({
               hash: commit.hash,
