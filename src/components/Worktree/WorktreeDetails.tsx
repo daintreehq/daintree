@@ -230,10 +230,13 @@ export function WorktreeDetails({
             <div className="text-xs text-text-muted">No AI summary yet</div>
           )}
 
-          {/* Block 3: Artifacts (grouped file changes + system path). The list
-              sits in a well painted the selected-worktree-card color
-              (`.sidebar-active-well`, sidebar.css) — a hairline carries the
-              shape on themes where that fill lands close to the panel's. */}
+          {/* Block 3: Artifacts (grouped file changes + system path). In the
+              GRID variant the list sits in a well painted the
+              selected-worktree-card color (`.sidebar-active-well`,
+              sidebar.css), with a hairline to carry the shape on themes where
+              that fill lands close to the panel's. The sidebar drops both: the
+              row is already inside a card and a Details region, and the rows'
+              own hover backplates give it all the shape it needs. */}
           {hasChanges && worktree.worktreeChanges && (
             <div className="space-y-2.5">
               <div className="flex items-center justify-between gap-2 px-2">

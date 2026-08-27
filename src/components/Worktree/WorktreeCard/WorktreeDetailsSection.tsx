@@ -201,7 +201,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
         id={detailsId}
         className={cn(
           isSidebar
-            ? "mt-3"
+            ? "mt-2"
             : "mt-2 rounded-[var(--radius-lg)] border border-border-default bg-surface-inset p-3"
         )}
       >
@@ -307,6 +307,16 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                     "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]"
                   )}
                 />
+                {isSidebar && (
+                  // The closed half of the same disclosure vocabulary the
+                  // expanded state uses. Flattening removed the well that used
+                  // to say "this is a thing you open", so without a chevron the
+                  // resting row is just a line of metadata.
+                  <ChevronRight
+                    className="pointer-events-none relative z-10 mr-1.5 h-3 w-3 shrink-0 text-text-muted"
+                    aria-hidden="true"
+                  />
+                )}
                 <span className="relative z-10 text-xs truncate min-w-0 flex-1 pointer-events-none">
                   {isBeingDeleted && !deleteError ? (
                     <span
@@ -382,19 +392,19 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                       {showResourceResume && onResourceResume && (
                         <ContextMenuItem onClick={onResourceResume}>
                           <Play className="w-3.5 h-3.5 mr-2" />
-                          Resume
+                          Resume resource
                         </ContextMenuItem>
                       )}
                       {showResourcePause && onResourcePause && (
                         <ContextMenuItem onClick={onResourcePause}>
                           <Square className="w-3.5 h-3.5 mr-2" />
-                          Pause
+                          Pause resource
                         </ContextMenuItem>
                       )}
                       {showResourceConnect && (
                         <ContextMenuItem onClick={onResourceConnect}>
                           <Plug className="w-3.5 h-3.5 mr-2" />
-                          Connect
+                          Connect to resource
                         </ContextMenuItem>
                       )}
                       {(showResourceResume || showResourcePause || showResourceConnect) &&

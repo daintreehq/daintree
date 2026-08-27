@@ -225,4 +225,23 @@ describe("sidebar card containment", () => {
       "the chevron should precede the section label"
     ).toBeTruthy();
   });
+
+  it("marks a sidebar section as a disclosure while it is CLOSED, not only while open", () => {
+    // Flattening took away the well that used to say "this opens". Without a
+    // closed-state chevron the resting Details row is a line of metadata with
+    // no affordance, which is the one thing the boxes were still earning.
+    const details = renderDetails({ variant: "sidebar", isExpanded: false });
+    const detailsRow = details.container.querySelector('[aria-expanded="false"]')!.closest("div")!;
+    expect(
+      detailsRow.querySelector("svg"),
+      "collapsed sidebar Details should carry a disclosure chevron"
+    ).toBeTruthy();
+    details.unmount();
+
+    const terminals = renderTerminals({ variant: "sidebar", isExpanded: false });
+    expect(
+      terminals.container.querySelector('[aria-expanded="false"]')!.querySelectorAll("svg").length,
+      "collapsed sidebar Active sessions should carry a disclosure chevron beside its own icon"
+    ).toBeGreaterThan(1);
+  });
 });

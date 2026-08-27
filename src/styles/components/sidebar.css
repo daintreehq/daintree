@@ -80,8 +80,9 @@ html[data-dragging="true"]
     var(--sidebar-card-shadow, 0 0 #0000);
 }
 
-/* No focus/cursor ring on the rows: the only visual signal in this list is the
-   active-worktree left marker. Suppress the default browser outline so clicking
+/* No focus/cursor ring on the rows: the only visual signals in this list are
+   the active row's neutral lift and its right-edge marker. Suppress the default
+   browser outline so clicking
    or tabbing through rows doesn't paint an outline. The per-row toolbar/drag
    handle still reveal on keyboard focus (below) so keyboard users keep a usable
    affordance, and forced-colors mode still gets a system outline (it can't be

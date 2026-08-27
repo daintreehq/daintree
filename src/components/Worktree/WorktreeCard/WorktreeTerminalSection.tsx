@@ -78,7 +78,7 @@ function TerminalRow({ term, onClick }: TerminalRowProps) {
         isArmed && !isPrimary && "outline-dashed outline-border-strong"
       )}
     >
-      <div className="worktree-section-button group/termrow flex items-center justify-between gap-2.5 px-3 py-2 transition-colors">
+      <div className="worktree-section-button group/termrow flex items-center justify-between gap-2.5 py-2 pl-[18px] pr-1 transition-colors">
         <TruncatedTooltip content={term.title} isTruncated={isTruncated}>
           <button
             type="button"
@@ -387,7 +387,7 @@ export function WorktreeTerminalSection({
         isSidebar
           ? // Flat on the card surface, and separated from Details by a peer
             // divider rather than by each section carrying its own well.
-            "mt-3 border-t border-border-subtle pt-3"
+            "mt-2 border-t border-border-subtle pt-2"
           : "mt-3 rounded-[var(--radius-lg)] border border-border-default bg-surface-inset"
       )}
     >
@@ -504,6 +504,9 @@ export function WorktreeTerminalSection({
           id={`${terminalsId}-button`}
         >
           <div className="flex items-center gap-1.5 text-[11px] text-text-secondary">
+            {isSidebar && (
+              <ChevronRight className="h-3 w-3 shrink-0 text-text-muted" aria-hidden="true" />
+            )}
             {SummaryIcon ? (
               <SummaryIcon className="w-3 h-3" />
             ) : (
