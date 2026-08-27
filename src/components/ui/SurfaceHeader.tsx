@@ -60,8 +60,14 @@ const SurfaceHeaderTitle = React.forwardRef<HTMLHeadingElement, SurfaceHeaderTit
       // default min-width:auto floor is its longest unbroken word — a hostile
       // run would push the close button off-canvas and clip. Shrink permission
       // only; titles that fit render identically.
+      //
+      // break-words completes that intent. min-w-0 lets the box shrink, but a
+      // single unbreakable token (a 60-character MCP tool name, a long branch
+      // or file name) still overhangs the shrunk box and paints through the
+      // close button. `overflow-wrap: break-word` only ever acts on a word that
+      // cannot fit on a line by itself, so a title that fits is untouched.
       className={cn(
-        "text-lg font-semibold text-daintree-text flex items-center gap-2 min-w-0",
+        "text-lg font-semibold text-daintree-text flex items-center gap-2 min-w-0 break-words",
         className
       )}
       {...props}
