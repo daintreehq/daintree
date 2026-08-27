@@ -304,7 +304,7 @@ describe("TerminalInfoDialog", () => {
       expect(text).toContain("Shell PID: 12345");
       expect(text).toContain("TTY device: /dev/ttys004");
       expect(text).toContain("Dimensions: 80 × 24");
-      expect(text).toContain("Output buffer size: 100 lines");
+      expect(text).toContain("Output buffer: 100 lines");
     });
 
     it("carries the panel-store facts when the live read failed", async () => {
@@ -402,7 +402,7 @@ describe("TerminalInfoDialog", () => {
       renderDialog();
       await screen.findByTestId("terminal-info-body");
 
-      expect(screen.getByText("None — agent has exited")).toBeTruthy();
+      expect(screen.getByText("Agent has exited")).toBeTruthy();
     });
   });
 });

@@ -37,7 +37,15 @@
 
 import { test, type Page, type ElectronApplication } from "@playwright/test";
 import { execFileSync } from "child_process";
-import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync, readdirSync } from "fs";
+import {
+  mkdtempSync,
+  writeFileSync,
+  mkdirSync,
+  rmSync,
+  existsSync,
+  readdirSync,
+  statSync,
+} from "fs";
 import { tmpdir } from "os";
 import path from "path";
 import { launchApp, closeApp, type AppContext } from "../helpers/launch";
@@ -85,7 +93,7 @@ const DIALOG = "[data-app-dialog-surface] > div";
  */
 const TID = {
   body: '[data-testid="terminal-info-body"]',
-  loading: '[data-testid="terminal-info-loading"]',
+  pending: '[data-testid="terminal-info-pending"]',
   error: '[data-testid="terminal-info-error"]',
   copy: '[data-testid="terminal-info-copy"]',
 } as const;
@@ -242,6 +250,34 @@ async function waitForShellPrompt(page: Page, terminalId: string): Promise<void>
   throw new Error(`[terminfo-shots] shell ${terminalId} never produced output`);
 }
 
+/**
+ * Wait until a panel's process has actually gone.
+ *
+ * A fixed `waitForTimeout` after writing a stop token proves nothing: if the write is
+ * swallowed the panel simply stays alive and the step goes on to screenshot a running
+ * terminal under the name "exited" — which is precisely what round 2 shipped. There is
+ * no `data-runtime-status` attribute to poll, so this reads the two signals that do
+ * exist: the marker the dying process prints, and the exit banner the panel renders.
+ */
+async function waitForExited(page: Page, terminalId: string, marker: string): Promise<void> {
+  const deadline = Date.now() + 25_000;
+  while (Date.now() < deadline) {
+    const text = await getTerminalTextById(page, terminalId).catch(() => "");
+    if (text.includes(marker)) return;
+    const banner = await page
+      .locator(
+        `[data-panel-id="${terminalId}"] [role="alert"], [data-panel-id="${terminalId}"] [role="status"]`
+      )
+      .allTextContents()
+      .catch(() => [] as string[]);
+    if (banner.some((entry) => /exit/i.test(entry))) return;
+    await page.waitForTimeout(250);
+  }
+  throw new Error(
+    `[terminfo-shots] ${terminalId} never showed "${marker}" or an exit banner — its process did not die, so any shot of it would be mislabelled`
+  );
+}
+
 /** Open the info dialog for one panel by dispatching the real action. */
 async function openInfo(page: Page, terminalId: string): Promise<void> {
   await dispatch(page, "terminal.info.open", { terminalId });
@@ -371,6 +407,9 @@ test("terminal info review — diagnostic states", async () => {
   test.skip(!ENABLED, "Set DAINTREE_SHOT_TERMINFO to run the terminal-info capture");
 
   failures.length = 0;
+  // Stamped before anything is captured so the tally at the end can tell this run's
+  // artifacts from the previous run's. 1s of slack absorbs filesystem mtime coarseness.
+  const runStartedAt = Date.now() - 1000;
   mkdirSync(OUTPUT_DIR, { recursive: true });
   const repo = createFixtureRepo();
   const binDir = installFakeAgent(repo.dir);
@@ -432,15 +471,20 @@ test("terminal info review — diagnostic states", async () => {
     // `everDetectedAgent` with no `detectedAgentId` — the "None — agent has exited" row.
     ids.exitedAgent = await newAgent(page, { name: "Claude: schema migration" });
     await trustAgent(page, ids.exitedAgent);
-    await ptyWrite(page, ids.exitedAgent, FAKE_AGENT_STOP);
-    await page.waitForTimeout(2500);
+    // The trailing CR is load-bearing. The PTY slave is in canonical mode, so the line
+    // discipline buffers input until a line terminator arrives — without it the fake
+    // agent's stdin handler never fires, the process never exits, and this step
+    // screenshots a RUNNING agent while calling it exited. That is exactly what round 2
+    // captured, and it is the same trap `waitForShellPrompt` above already warns about.
+    await ptyWrite(page, ids.exitedAgent, FAKE_AGENT_STOP + "\r");
+    await waitForExited(page, ids.exitedAgent, "FAKE_CLAUDE_EXIT");
 
     // Exited plain shell: a non-zero code is always preserved, and it is the only way
     // to see the Exit Code row on a terminal that never ran an agent.
     ids.exitedPlain = await newTerminal(page);
     await waitForShellPrompt(page, ids.exitedPlain);
     await ptyWrite(page, ids.exitedPlain, "exit 3\r");
-    await page.waitForTimeout(2500);
+    await waitForExited(page, ids.exitedPlain, "__never__");
 
     await dismissBlockingPalette(page);
     await settle(page, 800);
@@ -546,11 +590,18 @@ test("terminal info review — diagnostic states", async () => {
 
     // 9. Loading held open by a main-process delay, so the shot is the real in-flight
     //    render rather than a paused animation frame. Past the 400ms Doherty gate.
+    //
+    //    The marker is a pending CELL, not a loading screen: the dialog no longer has an
+    //    all-or-nothing loading branch. Everything the panel store owns paints on the
+    //    first frame and only the rows waiting on the host carry a skeleton, so the shot
+    //    has to prove the shell AND a bone are on screen together — which is the whole
+    //    claim being made about this state.
     await step("loading", async () => {
       await injectDelay(app, CH_GET_INFO, 9000);
       await openInfo(page, ids.agentFull);
       await page.waitForTimeout(1200);
-      await snap(page, "50-loading", { marker: TID.loading, locator: DIALOG });
+      await page.locator(TID.body).first().waitFor({ state: "visible", timeout: 10_000 });
+      await snap(page, "50-loading", { marker: TID.pending, locator: DIALOG });
     });
 
     // 10. Keyboard focus on the copy action — the only affordance on the surface, and
@@ -592,15 +643,23 @@ test("terminal info review — diagnostic states", async () => {
 
   // Counted here rather than trusted from the exit code: swallowed per-step errors are
   // exactly how a harness reports PASS over an empty directory.
+  //
+  // Counted by MTIME, not by existence. A plain file count is satisfied by last run's
+  // PNGs still sitting in the output directory, so a run that launched, failed every
+  // step and wrote nothing would report the previous run's total and read as a pass —
+  // the same class of lie as trusting the exit code, one level further in.
   const written = existsSync(OUTPUT_DIR)
-    ? readdirSync(OUTPUT_DIR).filter((f) => f.endsWith(`${TAG}.png`)).length
+    ? readdirSync(OUTPUT_DIR).filter(
+        (f) =>
+          f.endsWith(`${TAG}.png`) && statSync(path.join(OUTPUT_DIR, f)).mtimeMs >= runStartedAt
+      ).length
     : 0;
-  console.log(`[terminfo-shots] wrote ${written} png(s) to ${OUTPUT_DIR}`);
+  console.log(`[terminfo-shots] wrote ${written} png(s) this run to ${OUTPUT_DIR}`);
 
   if (failures.length > 0) {
     throw new Error(`[terminfo-shots] ${failures.length} step(s) failed:\n${failures.join("\n")}`);
   }
   if (written === 0) {
-    throw new Error(`[terminfo-shots] no PNGs written to ${OUTPUT_DIR}`);
+    throw new Error(`[terminfo-shots] no PNGs written this run to ${OUTPUT_DIR}`);
   }
 });

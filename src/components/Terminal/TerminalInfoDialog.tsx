@@ -1,9 +1,8 @@
-import { useCallback, useEffect, useId, useState } from "react";
+import { Children, isValidElement, useCallback, useEffect, useId, useState } from "react";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { Button } from "@/components/ui/button";
 import { ChevronRight, Info } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
 import { SkeletonBone } from "@/components/ui/Skeleton";
 import type { TerminalInfoPayload } from "@/types/electron";
 import { actionService } from "@/services/ActionService";
@@ -13,6 +12,7 @@ import { getAgentConfig } from "@shared/config/agentRegistry";
 import { usePanelStore } from "@/store/panelStore";
 import { isPtyPanel } from "@shared/types/panel";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
+import { notify } from "@/lib/notify";
 import { useVisibilityAwareInterval } from "@/hooks/useVisibilityAwareInterval";
 
 const SYNC_MODE_POLL_MS = 250;
@@ -131,22 +131,24 @@ function Row({ label, value, mono = false, pending = false, fallback = NONE }: R
       <dt className="text-daintree-text/70 select-none min-w-0 break-words">{label}</dt>
       <dd className="min-w-0 text-daintree-text">
         {!hasValue && pending ? (
-          <SkeletonBone className="h-4 w-32" />
+          <SkeletonBone className="h-4 w-32" data-testid="terminal-info-pending" />
         ) : (
-          <TruncatedTooltip content={display}>
-            <span
-              className={cn(
-                "block select-text",
-                // `anywhere`, not `break-all`: a path breaks at its separators where it
-                // can and mid-token only where it must, so the leaf directory — the
-                // informative half — survives instead of being ellipsed away.
-                mono ? "font-mono text-xs [overflow-wrap:anywhere] tabular-nums" : "break-words",
-                !hasValue && "text-daintree-text/70"
-              )}
-            >
-              {display}
-            </span>
-          </TruncatedTooltip>
+          // No truncation tooltip. Every value here is a wrapping block, so
+          // `useTruncationDetection`'s `scrollWidth > clientWidth` can never fire — the
+          // wrapper was buying a ResizeObserver registration and a state hook per row
+          // for a tooltip that cannot open, and advertising a contract that isn't real.
+          <span
+            className={cn(
+              "block select-text",
+              // `anywhere`, not `break-all`: a path breaks at its separators where it
+              // can and mid-token only where it must, so the leaf directory — the
+              // informative half — survives instead of being ellipsed away.
+              mono ? "font-mono text-xs [overflow-wrap:anywhere] tabular-nums" : "break-words",
+              !hasValue && "text-daintree-text/70"
+            )}
+          >
+            {display}
+          </span>
         )}
       </dd>
     </>
@@ -167,7 +169,7 @@ function ChipRow({ label, items, pending = false }: ChipRowProps) {
       <dt className="text-daintree-text/70 select-none min-w-0 break-words">{label}</dt>
       <dd className="min-w-0">
         {isEmpty && pending ? (
-          <SkeletonBone className="h-4 w-40" />
+          <SkeletonBone className="h-4 w-40" data-testid="terminal-info-pending" />
         ) : isEmpty ? (
           <span className="text-daintree-text/70">{NONE}</span>
         ) : (
@@ -205,9 +207,19 @@ function Group({ title, children }: { title: string; children: React.ReactNode }
  * their open state, because a support engineer pasting diagnostics into an issue must
  * never have to know which sections they left expanded.
  */
-function DisclosureGroup({ title, children }: { title: string; children: React.ReactNode }) {
-  const [expanded, setExpanded] = useState(false);
+function DisclosureGroup({
+  title,
+  expanded,
+  onToggle,
+  children,
+}: {
+  title: string;
+  expanded: boolean;
+  onToggle: () => void;
+  children: React.ReactNode;
+}) {
   const panelId = useId();
+  const count = Children.toArray(children).filter(isValidElement).length;
 
   return (
     <section>
@@ -215,9 +227,13 @@ function DisclosureGroup({ title, children }: { title: string; children: React.R
         type="button"
         aria-expanded={expanded}
         aria-controls={panelId}
-        onClick={() => setExpanded((value) => !value)}
+        onClick={onToggle}
         className={cn(
-          "flex w-full items-center gap-1.5 rounded-[var(--radius-sm)] py-1 text-left",
+          // `-ml-[1.125rem]` pulls the chevron into its own gutter so the LABEL still
+          // starts on the same left edge as every static section header. Without it a
+          // disclosure header sits 18px right of its peers and the surface has two
+          // header alignments.
+          "flex w-full items-center gap-1.5 -ml-[1.125rem] rounded-[var(--radius-sm)] py-1 text-left",
           "transition-colors duration-150 ease-out hover:bg-overlay-subtle",
           "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:-outline-offset-2"
         )}
@@ -225,14 +241,28 @@ function DisclosureGroup({ title, children }: { title: string; children: React.R
         <ChevronRight
           aria-hidden="true"
           className={cn(
-            "w-3 h-3 shrink-0 text-daintree-text/40 transition-transform duration-150 ease-out",
+            "w-3 h-3 shrink-0 text-daintree-text/60 transition-transform duration-150 ease-out",
             expanded && "rotate-90"
           )}
         />
         <span className={MICRO_LABEL}>{title}</span>
+        {/*
+         * The count is what stops a collapsed disclosure reading as a static header:
+         * five identical micro-labels, two of which happen to be buttons, is not an
+         * affordance. Same treatment as the commit count in `GitPushConfirmDialog`.
+         */}
+        <span className="ml-1.5 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-[10px] font-medium normal-case tracking-normal text-daintree-text/70">
+          {count}
+        </span>
       </button>
       <div id={panelId} hidden={!expanded}>
-        <dl className={cn(ROW_GRID, "text-sm pt-2 pl-[1.125rem]")}>{children}</dl>
+        {/*
+         * No left inset. The fixed rail exists to give the surface ONE vertical
+         * scanning axis, and indenting a disclosure's rows put its values 18px right
+         * of every other group's — the two groups added last round were the only two
+         * that broke the thing they were added alongside.
+         */}
+        <dl className={cn(ROW_GRID, "text-sm pt-2")}>{children}</dl>
       </div>
     </section>
   );
@@ -245,6 +275,11 @@ export function TerminalInfoDialog({ isOpen, onClose, terminalId }: TerminalInfo
   const [syncMode, setSyncMode] = useState<boolean | null>(null);
   const [showErrorDetail, setShowErrorDetail] = useState(false);
   const [reloadKey, setReloadKey] = useState(0);
+  const [internalsOpen, setInternalsOpen] = useState(false);
+  // Lifted out of the disclosure so the synchronised-output poll can be gated on it:
+  // the only genuinely live value on this surface sits inside a group that is closed
+  // by default, so the old unconditional poll ran 4x/sec to update a hidden row.
+  const [performanceOpen, setPerformanceOpen] = useState(false);
   const errorDetailId = useId();
   const panelRaw = usePanelStore((state) => state.panelsById[terminalId]);
   const panel = panelRaw && isPtyPanel(panelRaw) ? panelRaw : undefined;
@@ -297,11 +332,12 @@ export function TerminalInfoDialog({ isOpen, onClose, terminalId }: TerminalInfo
   }, [isOpen, terminalId, reloadKey]);
 
   useEffect(() => {
-    if (!isOpen) return;
+    if (!isOpen || !performanceOpen) return;
     // Immediate read on open so the dialog reflects the current sync-mode
-    // before the first poll lands.
+    // before the first poll lands. Also fires when the group is expanded, so the
+    // first frame after opening it is current rather than up to 250ms stale.
     setSyncMode(terminalInstanceService.getSynchronizedOutputMode(terminalId));
-  }, [isOpen, terminalId]);
+  }, [isOpen, performanceOpen, terminalId]);
 
   // xterm 6 mutates terminal.modes asynchronously as the parser consumes
   // BSU/ESU sequences, and there is no change event. Poll at the same cadence
@@ -311,7 +347,7 @@ export function TerminalInfoDialog({ isOpen, onClose, terminalId }: TerminalInfo
   useVisibilityAwareInterval(
     () => setSyncMode(terminalInstanceService.getSynchronizedOutputMode(terminalId)),
     SYNC_MODE_POLL_MS,
-    isOpen
+    isOpen && performanceOpen
   );
 
   const launchAgentId = panel?.launchAgentId ?? info?.launchAgentId;
@@ -360,6 +396,17 @@ export function TerminalInfoDialog({ isOpen, onClose, terminalId }: TerminalInfo
       : panel || info
         ? "Running"
         : UNKNOWN;
+  // Colour ON the word, never instead of it. The words alone survive
+  // `forced-colors: active`, where the UA discards these tints — which is the reason
+  // the status is a word and not a pill. Adding a status token costs nothing there and
+  // buys the glance everywhere else: a dead terminal and a healthy one were previously
+  // the same colour, same weight, same position, differing only in the string.
+  const livenessTone =
+    hasExited && exitCode !== 0 && exitCode != null
+      ? "text-status-error"
+      : runtimeStatus === "error"
+        ? "text-status-warning"
+        : "text-daintree-text";
 
   // The remote read is in flight and has never landed. Rows the payload owns show a
   // delayed skeleton; rows the panel store owns are already correct and never flicker.
@@ -399,7 +446,7 @@ export function TerminalInfoDialog({ isOpen, onClose, terminalId }: TerminalInfo
     const launchSection = showAgentLaunchSection
       ? `
 
-Agent — launch context:
+Agent launch:
   Launch agent: ${launchAgentId ?? NONE}
   Command: ${command ?? NONE}
   Launch flags: ${formatArgsForClipboard(agentLaunchFlags)}
@@ -412,8 +459,8 @@ Agent — launch context:
     const liveSection = showAgentLiveSection
       ? `
 
-Agent — live state:
-  Detected agent ID: ${detectedAgentId ?? (everDetectedAgent ? "None — agent has exited" : "Not detected yet")}
+Agent state:
+  Detected agent: ${detectedAgentId ?? (everDetectedAgent ? "Agent has exited" : "Not detected yet")}
   Agent state: ${agentState ?? NONE}
   Session ID: ${agentSessionId ?? NONE}`
       : "";
@@ -429,7 +476,7 @@ Status:
   Foreground process: ${info?.ptyForegroundProcess ?? NONE}
   Exit code: ${exitCode != null ? exitCode : NONE}
 ${info ? "" : `  NOTE: the live terminal record could not be read${error ? ` (${error})` : ""}; the values below come from the panel store only.\n`}
-Session metadata:
+Session:
   ID: ${info?.id ?? terminalId}
   Kind: ${info?.kind || panel?.kind || "terminal"}
   Title: ${title ?? NONE}
@@ -442,7 +489,7 @@ Session metadata:
 ${startedByAssistant ? "  Started by: Daintree Assistant\n" : ""}  Started via MCP: ${startedViaMcp}
   UI created at: ${uiStartedAt != null ? formatTimestamp(uiStartedAt) : NONE}
 
-Spawn command:
+How it launched:
   Shell: ${info?.shell || NONE}
   Command: ${command ?? NONE}
   Args: ${formatArgsForClipboard(info?.spawnArgs)}${agentSection}
@@ -456,20 +503,20 @@ Terminal internals:
   Shell PID: ${info?.ptyPid ?? UNAVAILABLE}
   TTY device: ${info?.ptyTty ?? UNAVAILABLE}
 
-Runtime statistics:
-  Running time: ${info ? formatDuration(Date.now() - info.spawnedAt) : UNAVAILABLE}
+Runtime:
+  Runtime: ${info ? formatDuration(Date.now() - info.spawnedAt) : UNAVAILABLE}
   Spawned at: ${info ? formatTimestamp(info.spawnedAt) : UNAVAILABLE}
-  Restart count: ${info?.restartCount ?? UNAVAILABLE}
+  Restarts: ${info?.restartCount ?? UNAVAILABLE}
 
-Activity metrics:
+Activity:
   Last input: ${info ? `${formatRelativeTime(info.lastInputTime)} (${formatTimestamp(info.lastInputTime)})` : UNAVAILABLE}
   Last output: ${info ? `${formatRelativeTime(info.lastOutputTime)} (${formatTimestamp(info.lastOutputTime)})` : UNAVAILABLE}
   Agent state: ${agentState || NONE}
   Last state change: ${info?.lastStateChange != null ? formatRelativeTime(info.lastStateChange) : NONE}
   Activity tier: ${info?.activityTier ?? UNAVAILABLE}
 
-Performance & diagnostics:
-  Output buffer size: ${info?.outputBufferSize ?? UNAVAILABLE} lines
+Performance:
+  Output buffer: ${info?.outputBufferSize ?? UNAVAILABLE} lines
   Semantic buffer: ${info?.semanticBufferLines ?? UNAVAILABLE} lines
   Synchronized output (DEC 2026): ${formatSyncMode(syncMode)}
 `;
@@ -507,7 +554,20 @@ Performance & diagnostics:
   ]);
 
   const handleCopy = useCallback(() => {
-    void copy(buildDiagnostics());
+    const payload = buildDiagnostics();
+    void copy(payload).then((ok) => {
+      if (ok) return;
+      // A clipboard rejection is invisible otherwise — the button simply never flips —
+      // and the whole point of this surface is getting the payload into a bug report.
+      // Timely, actionable, not already visible: that clears the notify() gate.
+      notify({
+        type: "error",
+        title: "Couldn't copy diagnostics",
+        message: "The clipboard refused the write. Selecting the values by hand still works.",
+        action: { label: "Try again", onClick: () => void copy(payload) },
+        context: { eventKind: "settings" },
+      });
+    });
   }, [buildDiagnostics, copy]);
 
   return (
@@ -542,7 +602,10 @@ Performance & diagnostics:
                * 3" survives that intact, and it needs no accent.
                */}
               <span
-                className="text-sm font-medium text-daintree-text shrink-0 tabular-nums select-text"
+                className={cn(
+                  "text-sm font-medium shrink-0 tabular-nums select-text",
+                  livenessTone
+                )}
                 data-testid="terminal-info-liveness"
               >
                 {liveness}
@@ -550,7 +613,10 @@ Performance & diagnostics:
             </div>
             <dl className={cn(ROW_GRID, "text-sm")}>
               <Row
-                label="Running"
+                // "Process", not "Running": the status word to the right of the title
+                // already owns the word "running", and a dead terminal rendering
+                // "Running —" beside "Exited · code 3" reads as a contradiction.
+                label="Process"
                 value={
                   agentName ? `${agentName}${agentState ? ` · ${agentState}` : ""}` : runningLabel
                 }
@@ -559,7 +625,17 @@ Performance & diagnostics:
               />
               <Row
                 label="Runtime"
-                value={info ? formatDuration(Date.now() - info.spawnedAt) : undefined}
+                // Falls back to the panel's own `startedAt` rather than reporting
+                // "Unavailable" directly above a banner claiming the values above are
+                // still accurate. The UI clock is a few ms later than the PTY's, which
+                // does not matter at this resolution.
+                value={
+                  info
+                    ? formatDuration(Date.now() - info.spawnedAt)
+                    : uiStartedAt != null
+                      ? formatDuration(Date.now() - uiStartedAt)
+                      : undefined
+                }
                 pending={pending}
                 fallback={UNAVAILABLE}
               />
@@ -575,24 +651,25 @@ Performance & diagnostics:
 
           {error && (
             <div
-              // No tinted fill. `bg-status-error/10` composites the error text down to
-              // 4.22:1 against the dialog surface — under the AA floor — where the same
-              // token on the bare surface measures 4.83:1. The tint was costing the
-              // banner its legibility to look like a banner.
-              className="rounded-[var(--radius-lg)] border border-status-error/40 p-4 space-y-3"
+              // Warning, not error. The headline answers are intact and correct — this
+              // is a partial degradation, which the runtime-signal tiers put at T2. The
+              // old treatment was the loudest thing on the surface while its own body
+              // text said the values above were still accurate.
+              //
+              // No tinted fill: `bg-status-*/10` composites the banner's own text down
+              // below the 4.5:1 floor, where the same token on the bare dialog surface
+              // clears it.
+              className="rounded-[var(--radius-lg)] border border-status-warning/40 p-3 space-y-2"
               role="alert"
               data-testid="terminal-info-error"
             >
-              <div className="space-y-1">
-                <p className="font-semibold text-status-error">
-                  Couldn&apos;t load live terminal data
-                </p>
-                <p className="text-sm text-daintree-text/80">
-                  The values above come from this window and are still accurate. Process-level
-                  details — PID, TTY, buffers, activity — need the terminal host, which didn&apos;t
-                  answer.
-                </p>
-              </div>
+              <p className="text-sm text-daintree-text/85">
+                <span className="font-semibold text-status-warning">
+                  Couldn&apos;t reach the terminal host.
+                </span>{" "}
+                Everything above is from this window and still accurate; process-level detail — PID,
+                TTY, buffers, activity — is missing.
+              </p>
               <div className="flex items-center gap-2">
                 <Button variant="outline" size="sm" onClick={() => setReloadKey((k) => k + 1)}>
                   Retry
@@ -631,20 +708,17 @@ Performance & diagnostics:
             </div>
           )}
 
-          <Group title="Session">
-            <Row label="Terminal ID" value={info?.id ?? terminalId} mono />
-            <Row label="Kind" value={info?.kind || panel?.kind || "terminal"} />
-            <Row label="Title mode" value={titleMode ?? "default"} />
-            <Row label="Location" value={location} pending={pending} />
-            <Row label="Worktree ID" value={worktreeId} mono pending={pending} />
-            <Row label="Project ID" value={info?.projectId} mono pending={pending} />
-          </Group>
-
+          {/*
+           * "How it launched" leads. `Session` used to, and its first screen was a
+           * UUID, two internal constants, and the working directory printed a second
+           * time — so question 5 (shell, command, argv) never reached the first screen
+           * for anyone while three of the six rows above it answered nothing.
+           */}
           <Group title="How it launched">
             <Row label="Shell" value={info?.shell} mono pending={pending} fallback={UNAVAILABLE} />
             <Row label="Command" value={command} mono pending={pending} />
             <ChipRow label="Arguments" items={info?.spawnArgs} pending={pending} />
-            <Row label="Spawn source" value={spawnSource} pending={pending} />
+            <Row label="Spawn source" value={spawnSource} pending={pending} fallback={UNKNOWN} />
             {startedByAssistant && <Row label="Started by" value="Daintree Assistant" />}
             <Row label="Started via MCP" value={startedViaMcp} />
             <Row
@@ -677,7 +751,7 @@ Performance & diagnostics:
                 label="Detected agent"
                 value={
                   agentLabel(detectedAgentId) ??
-                  (everDetectedAgent ? "None — agent has exited" : "Not detected yet")
+                  (everDetectedAgent ? "Agent has exited" : "Not detected yet")
                 }
                 pending={pending}
               />
@@ -723,7 +797,29 @@ Performance & diagnostics:
             />
           </Group>
 
-          <DisclosureGroup title="Terminal internals">
+          <Group title="Session">
+            <Row label="Terminal ID" value={info?.id ?? terminalId} mono />
+            <Row label="Location" value={location} pending={pending} />
+            {/*
+             * A worktree is identified by its normalised absolute path, so for the
+             * worktree-per-agent workflow this product is built around it is usually
+             * character-for-character the directory shown in the overview. Printing it
+             * again cost three wrapped lines of the first screen to say nothing.
+             */}
+            <Row
+              label="Worktree"
+              value={worktreeId && worktreeId === cwd ? "Same as directory" : worktreeId}
+              mono={worktreeId !== cwd}
+              pending={pending}
+            />
+            <Row label="Project ID" value={info?.projectId} mono pending={pending} />
+          </Group>
+
+          <DisclosureGroup
+            title="Terminal internals"
+            expanded={internalsOpen}
+            onToggle={() => setInternalsOpen((v) => !v)}
+          >
             <Row label="PTY active" value={formatYesNo(info?.hasPty)} pending={pending} />
             <Row
               label="Shell PID"
@@ -751,6 +847,8 @@ Performance & diagnostics:
               fallback={UNAVAILABLE}
             />
             <Row label="Exit code" value={exitCode} mono fallback={hasExited ? UNKNOWN : NONE} />
+            <Row label="Kind" value={info?.kind || panel?.kind || "terminal"} />
+            <Row label="Title mode" value={titleMode ?? "default"} />
             <Row
               label="Resize strategy"
               value={info?.resizeStrategy || "default"}
@@ -764,7 +862,11 @@ Performance & diagnostics:
             <Row label="Agent launch hint" value={launchAgentId ? "Yes" : "No"} />
           </DisclosureGroup>
 
-          <DisclosureGroup title="Performance">
+          <DisclosureGroup
+            title="Performance"
+            expanded={performanceOpen}
+            onToggle={() => setPerformanceOpen((v) => !v)}
+          >
             <Row
               label="Output buffer"
               value={info?.outputBufferSize != null ? `${info.outputBufferSize} lines` : undefined}
@@ -800,6 +902,10 @@ Performance & diagnostics:
           onClick={handleCopy}
           aria-label="Copy diagnostics"
           data-testid="terminal-info-copy"
+          // Fixed width: "Copied" is half the width of "Copy diagnostics", so the
+          // primary button shrank and slid `Close` across under the pointer for the
+          // whole dwell window.
+          className="min-w-[10.5rem]"
         >
           {copied ? "Copied" : "Copy diagnostics"}
         </Button>
