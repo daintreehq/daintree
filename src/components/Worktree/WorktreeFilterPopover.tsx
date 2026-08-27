@@ -359,10 +359,18 @@ export function WorktreeFilterPopover({
 
   const handleSortKeyDown = useCallback(
     (event: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
-      const step = SORT_ARROW_STEPS[event.key];
-      if (step === undefined) return;
+      // Home/End as well as the arrows, matching SegmentedRadioGroup — the
+      // app's other radio-group keyboard model.
+      const next =
+        event.key === "Home"
+          ? 0
+          : event.key === "End"
+            ? sortOptions.length - 1
+            : SORT_ARROW_STEPS[event.key] !== undefined
+              ? (index + SORT_ARROW_STEPS[event.key]! + sortOptions.length) % sortOptions.length
+              : -1;
+      if (next < 0) return;
       event.preventDefault();
-      const next = (index + step + sortOptions.length) % sortOptions.length;
       const option = sortOptions[next];
       if (!option) return;
       setOrderBy(option.value);

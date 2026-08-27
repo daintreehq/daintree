@@ -144,6 +144,18 @@ describe("WorktreeFilterPopover keyboard and focus surfaces", () => {
     expect(document.activeElement).toBe(radios()[count - 1]);
   });
 
+  it("jumps to the ends with Home and End, like the app's other radio group", () => {
+    openPopover();
+    const radios = () => screen.getAllByRole("radio");
+    const checkedIndex = () => radios().findIndex((r) => r.getAttribute("aria-checked") === "true");
+
+    fireEvent.keyDown(radios()[0]!, { key: "End" });
+    expect(checkedIndex()).toBe(radios().length - 1);
+
+    fireEvent.keyDown(radios()[radios().length - 1]!, { key: "Home" });
+    expect(checkedIndex()).toBe(0);
+  });
+
   it("keeps exactly one tabbable option when grouping removes an option", () => {
     // "Custom order" leaves the list while grouping is on. Whatever the store
     // does with the selection, the group must never end up with no tab stop.
