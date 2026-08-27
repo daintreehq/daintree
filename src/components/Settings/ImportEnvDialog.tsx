@@ -101,8 +101,13 @@ function ConflictSide({ label, value, kept }: { label: string; value: string; ke
       <dt className="text-[10px] uppercase tracking-wide text-text-secondary">{label}</dt>
       <dd
         className={cn(
-          "font-mono text-[11px] break-all",
-          kept ? "text-daintree-text" : "text-text-secondary",
+          // BOTH sides read at the audited 4.5:1 tier. The losing value is
+          // still evidence the user has to inspect — dimming it made the half
+          // being protected the hardest thing in the row to read. The surviving
+          // side is marked by weight instead, which costs no contrast and
+          // survives forced-colors, where a colour difference would not.
+          "font-mono text-[11px] break-all text-daintree-text",
+          kept ? "font-medium" : "font-normal",
           isEmpty && "italic"
         )}
       >
@@ -240,7 +245,7 @@ export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDia
         <AppDialog.CloseButton />
       </AppDialog.Header>
 
-      <AppDialog.Body className="space-y-4">
+      <AppDialog.Body className={step === "conflicts" ? "space-y-3" : "space-y-4"}>
         <div className="space-y-1">
           <h3
             ref={stepHeadingRef}
@@ -329,6 +334,7 @@ export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDia
                   ? ` · ${conflicts.length} conflict${conflicts.length === 1 ? "" : "s"}`
                   : ""}
                 {newCount > 0 && conflicts.length > 0 ? ` · ${newCount} new` : ""}
+                {conflicts.length === 0 ? " · existing values unchanged" : ""}
                 {duplicateInPasteCount > 0 ? (
                   <span className="text-daintree-text">
                     {" "}
@@ -378,7 +384,7 @@ export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDia
                   while hiding part of what it was previewing. `tabIndex`
                   + `role="region"` make the hidden part reachable by keyboard.  */}
               <ScrollShadow
-                className="max-h-[260px]"
+                className="max-h-[224px]"
                 scrollClassName="scroll-py-8"
                 tabIndex={0}
                 role="region"

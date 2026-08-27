@@ -309,7 +309,15 @@ async function measureConflictOverflow(page: Page): Promise<string> {
     const overflow = scroller.scrollHeight - scroller.clientHeight;
     const focusable = (scroller as HTMLElement).tabIndex >= 0;
     const role = scroller.getAttribute("role") ?? "none";
-    return `conflict list: ${fullyVisible}/${rows.length} rows fully visible, ${overflow}px hidden below the fold, scroller tabIndex=${(scroller as HTMLElement).tabIndex} (keyboard-reachable: ${focusable}), role=${role}`;
+    // The dialog body scrolls independently. If it ALSO overflows, the preview
+    // has two scroll owners and its own bottom border sits below a second fold
+    // — which is the same hidden-content defect the inner scroller fixes,
+    // reappearing one level up.
+    const body = document.querySelector(
+      '[data-testid="import-env-dialog"] .flex-1.overflow-y-auto'
+    );
+    const bodyOverflow = body ? body.scrollHeight - body.clientHeight : -1;
+    return `conflict list: ${fullyVisible}/${rows.length} rows fully visible, ${overflow}px hidden below the fold, scroller tabIndex=${(scroller as HTMLElement).tabIndex} (keyboard-reachable: ${focusable}), role=${role} | dialog body overflow: ${bodyOverflow}px (0 = single scroll owner)`;
   }, CONFLICT_LIST_SCROLLER);
 }
 
