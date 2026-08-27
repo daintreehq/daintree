@@ -79,7 +79,7 @@ export function FindBar({ find }: FindBarProps) {
         id={counterId}
         role="status"
         aria-atomic="true"
-        className={`text-[11px] tabular-nums whitespace-nowrap mr-0.5 ${
+        className={`text-2xs tabular-nums whitespace-nowrap mr-0.5 ${
           noResults ? "text-status-error" : "text-daintree-text/50"
         }`}
       >

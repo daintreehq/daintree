@@ -116,7 +116,7 @@ const ConsoleRow = memo(function ConsoleRow({
       </span>
       <span
         className={cn(
-          "shrink-0 text-[9px] font-bold tracking-wide px-1 py-0.5 rounded select-none",
+          "shrink-0 text-4xs font-bold tracking-wide px-1 py-0.5 rounded select-none",
           style.badge
         )}
       >
@@ -322,13 +322,13 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
   }, []);
 
   const buttonClass =
-    "px-2 py-0.5 rounded text-[10px] font-medium transition-colors focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-accent/50";
+    "px-2 py-0.5 rounded text-3xs font-medium transition-colors focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-accent/50";
 
   return (
     <div className="flex h-full flex-col bg-daintree-bg">
       {/* Toolbar */}
       <div className="flex items-center gap-1.5 px-2 py-1 border-b border-overlay bg-surface shrink-0">
-        <span className="text-[10px] font-semibold uppercase tracking-wide text-daintree-text/50 mr-1">
+        <span className="text-3xs font-semibold uppercase tracking-wide text-daintree-text/50 mr-1">
           Console
         </span>
 
@@ -365,7 +365,7 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Filter…"
           aria-label="Filter console messages"
-          className="flex-1 min-w-0 max-w-[160px] px-2 py-0.5 text-[11px] rounded bg-daintree-bg border border-overlay focus:outline-hidden focus:border-border-strong text-daintree-text placeholder:text-text-placeholder"
+          className="flex-1 min-w-0 max-w-[160px] px-2 py-0.5 text-2xs rounded bg-daintree-bg border border-overlay focus:outline-hidden focus:border-border-strong text-daintree-text placeholder:text-text-placeholder"
         />
 
         <div className="flex-1" />
@@ -425,7 +425,7 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
 
       {/* Message list */}
       {filtered.length === 0 ? (
-        <div className="flex-1 overflow-y-auto font-mono text-[11px] leading-relaxed">
+        <div className="flex-1 overflow-y-auto font-mono text-2xs leading-relaxed">
           <div className="flex items-center justify-center h-full text-daintree-text/30 text-xs select-none">
             {allMessages.length === 0 ? "No console output" : "No messages match filter"}
           </div>
@@ -445,7 +445,7 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
               onToggleGroup={msg.isGroupHeader ? toggleGroup : undefined}
             />
           )}
-          className="flex-1 font-mono text-[11px] leading-relaxed"
+          className="flex-1 font-mono text-2xs leading-relaxed"
         />
       )}
     </div>

@@ -384,7 +384,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
                     <div className="h-3 w-px bg-border-subtle shrink-0" aria-hidden="true" />
                     <Tooltip open={commandTip.open} onOpenChange={commandTip.onOpenChange}>
                       <TooltipTrigger asChild onPointerEnter={commandTip.onPointerEnter}>
-                        <span className="truncate flex-1 min-w-0 text-[11px] text-daintree-text/50 font-mono">
+                        <span className="truncate flex-1 min-w-0 text-2xs text-daintree-text/50 font-mono">
                           {commandText}
                         </span>
                       </TooltipTrigger>

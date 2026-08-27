@@ -282,7 +282,7 @@ export function RecipesTab({
                             const scopeInfo = getRecipeScope(recipe, resolveWorktreeName);
                             return (
                               <span
-                                className={`text-[11px] px-1.5 py-0.5 rounded font-medium shrink-0 flex items-center gap-1 ${
+                                className={`text-2xs px-1.5 py-0.5 rounded font-medium shrink-0 flex items-center gap-1 ${
                                   scopeInfo.isGlobal
                                     ? "text-status-info bg-status-info/10"
                                     : "text-muted-foreground bg-muted"
@@ -293,23 +293,23 @@ export function RecipesTab({
                               </span>
                             );
                           })()}
-                          <span className="text-[11px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0">
+                          <span className="text-2xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0">
                             {recipe.terminals.length} terminal
                             {recipe.terminals.length !== 1 ? "s" : ""}
                           </span>
                           {isShadowed && (
-                            <span className="text-[11px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0">
+                            <span className="text-2xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0">
                               Overridden
                             </span>
                           )}
                           {isDefault && (
-                            <span className="text-[11px] text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0 flex items-center gap-1">
+                            <span className="text-2xs text-muted-foreground bg-muted px-1.5 py-0.5 rounded font-medium shrink-0 flex items-center gap-1">
                               <Pin className="h-3 w-3" />
                               Default
                             </span>
                           )}
                           {recipe.showInEmptyState && (
-                            <span className="text-[11px] text-status-info bg-status-info/10 px-1.5 py-0.5 rounded font-medium shrink-0">
+                            <span className="text-2xs text-status-info bg-status-info/10 px-1.5 py-0.5 rounded font-medium shrink-0">
                               Empty State
                             </span>
                           )}

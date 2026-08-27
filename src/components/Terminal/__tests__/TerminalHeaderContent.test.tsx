@@ -449,7 +449,7 @@ describe("TerminalHeaderContent — resource severity hysteresis", () => {
     mockResourceState = makeResourceState(10);
 
     const { container } = render(<TerminalHeaderContent id="t1" kind="terminal" />);
-    const wrapper = container.querySelector(".inline-flex.items-center.gap-1.text-\\[11px\\]");
+    const wrapper = container.querySelector(".inline-flex.items-center.gap-1.text-2xs");
     expect(wrapper).toBeTruthy();
     const cls = wrapper!.getAttribute("class")!;
     expect(cls).toContain("transition-colors");
@@ -462,7 +462,7 @@ describe("TerminalHeaderContent — resource severity hysteresis", () => {
     mockResourceState = makeResourceState(10);
 
     const { container } = render(<TerminalHeaderContent id="t1" kind="terminal" />);
-    const wrapper = container.querySelector(".inline-flex.items-center.gap-1.text-\\[11px\\]");
+    const wrapper = container.querySelector(".inline-flex.items-center.gap-1.text-2xs");
     expectMutedSeverity(wrapper!.getAttribute("class"));
   });
 
@@ -488,7 +488,7 @@ describe("TerminalHeaderContent — resource severity hysteresis", () => {
     pollResource(rerender, 60, 1);
     pollResource(rerender, 60, 2);
 
-    const wrapper = container.querySelector(".inline-flex.items-center.gap-1.text-\\[11px\\]");
+    const wrapper = container.querySelector(".inline-flex.items-center.gap-1.text-2xs");
     expectMutedSeverity(wrapper!.getAttribute("class"));
   });
 
@@ -504,7 +504,7 @@ describe("TerminalHeaderContent — resource severity hysteresis", () => {
     pollResource(rerender, 60, 2);
     pollResource(rerender, 60, 3);
 
-    const wrapper = container.querySelector(".inline-flex.items-center.gap-1.text-\\[11px\\]");
+    const wrapper = container.querySelector(".inline-flex.items-center.gap-1.text-2xs");
     expect(wrapper!.getAttribute("class")).toContain("text-status-warning");
   });
 
@@ -515,8 +515,7 @@ describe("TerminalHeaderContent — resource severity hysteresis", () => {
     const { rerender, container } = render(
       <TerminalHeaderContent id="t1" kind="terminal" queueCount={0} />
     );
-    const wrapperFor = () =>
-      container.querySelector(".inline-flex.items-center.gap-1.text-\\[11px\\]")!;
+    const wrapperFor = () => container.querySelector(".inline-flex.items-center.gap-1.text-2xs")!;
 
     // Escalation reacts in 3 polls.
     pollResource(rerender, 90, 1);
@@ -548,8 +547,7 @@ describe("TerminalHeaderContent — resource severity hysteresis", () => {
     const { rerender, container } = render(
       <TerminalHeaderContent id="t1" kind="terminal" queueCount={0} />
     );
-    const wrapperFor = () =>
-      container.querySelector(".inline-flex.items-center.gap-1.text-\\[11px\\]")!;
+    const wrapperFor = () => container.querySelector(".inline-flex.items-center.gap-1.text-2xs")!;
 
     pollResource(rerender, 90, 1);
     pollResource(rerender, 90, 2);
@@ -571,8 +569,7 @@ describe("TerminalHeaderContent — resource severity hysteresis", () => {
     const { rerender, container } = render(
       <TerminalHeaderContent id="t1" kind="terminal" queueCount={0} />
     );
-    const wrapperFor = () =>
-      container.querySelector(".inline-flex.items-center.gap-1.text-\\[11px\\]")!;
+    const wrapperFor = () => container.querySelector(".inline-flex.items-center.gap-1.text-2xs")!;
 
     pollResource(rerender, 90, 1);
     pollResource(rerender, 90, 2);
@@ -595,8 +592,7 @@ describe("TerminalHeaderContent — resource severity hysteresis", () => {
     const { rerender, container } = render(
       <TerminalHeaderContent id="t1" kind="terminal" queueCount={0} />
     );
-    const wrapperFor = () =>
-      container.querySelector(".inline-flex.items-center.gap-1.text-\\[11px\\]")!;
+    const wrapperFor = () => container.querySelector(".inline-flex.items-center.gap-1.text-2xs")!;
 
     pollResource(rerender, 90, 1);
     pollResource(rerender, 90, 2);
@@ -629,8 +625,7 @@ describe("TerminalHeaderContent — resource severity hysteresis", () => {
     const { rerender, container } = render(
       <TerminalHeaderContent id="t1" kind="terminal" queueCount={0} />
     );
-    const wrapperFor = () =>
-      container.querySelector(".inline-flex.items-center.gap-1.text-\\[11px\\]")!;
+    const wrapperFor = () => container.querySelector(".inline-flex.items-center.gap-1.text-2xs")!;
 
     pollResource(rerender, 90, 1);
     pollResource(rerender, 90, 2);
@@ -662,7 +657,7 @@ describe("TerminalHeaderContent — resource severity hysteresis", () => {
     pollMemory(2_500_000, 2);
     pollMemory(2_500_000, 3);
 
-    const wrapper = container.querySelector(".inline-flex.items-center.gap-1.text-\\[11px\\]");
+    const wrapper = container.querySelector(".inline-flex.items-center.gap-1.text-2xs");
     expect(wrapper!.getAttribute("class")).toContain("text-status-error");
   });
 
@@ -677,7 +672,7 @@ describe("TerminalHeaderContent — resource severity hysteresis", () => {
     pollResource(rerender, 60, 1);
     pollResource(rerender, 60, 2);
     pollResource(rerender, 60, 3);
-    let wrapper = container.querySelector(".inline-flex.items-center.gap-1.text-\\[11px\\]");
+    let wrapper = container.querySelector(".inline-flex.items-center.gap-1.text-2xs");
     expect(wrapper!.getAttribute("class")).toContain("text-status-warning");
 
     mockResourceEnabled = false;
@@ -688,7 +683,7 @@ describe("TerminalHeaderContent — resource severity hysteresis", () => {
     mockResourceState = makeResourceState(10);
     rerender(<TerminalHeaderContent id="t1" kind="terminal" queueCount={5} />);
 
-    wrapper = container.querySelector(".inline-flex.items-center.gap-1.text-\\[11px\\]");
+    wrapper = container.querySelector(".inline-flex.items-center.gap-1.text-2xs");
     expectMutedSeverity(wrapper!.getAttribute("class"));
   });
 
@@ -706,7 +701,7 @@ describe("TerminalHeaderContent — resource severity hysteresis", () => {
     pollResource(rerender, 60, 4);
     pollResource(rerender, 60, 5);
 
-    const wrapper = container.querySelector(".inline-flex.items-center.gap-1.text-\\[11px\\]");
+    const wrapper = container.querySelector(".inline-flex.items-center.gap-1.text-2xs");
     expectMutedSeverity(wrapper!.getAttribute("class"));
   });
 });

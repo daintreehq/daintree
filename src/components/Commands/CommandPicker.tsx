@@ -172,7 +172,7 @@ export function CommandPicker({
             {category && (
               <div
                 className={cn(
-                  "px-3 py-1.5 text-[11px] font-medium uppercase tracking-wider text-text-secondary",
+                  "px-3 py-1.5 text-2xs font-medium uppercase tracking-wider text-text-secondary",
                   index > 0 && "mt-2"
                 )}
               >
@@ -203,14 +203,14 @@ export function CommandPicker({
               <div className="flex items-center justify-between">
                 <span className="font-mono text-sm text-daintree-text/90">/{cmd.id}</span>
                 {cmd.hasBuilder && (
-                  <span className="text-[10px] px-1.5 py-0.5 rounded bg-overlay-medium text-daintree-text/70">
+                  <span className="text-3xs px-1.5 py-0.5 rounded bg-overlay-medium text-daintree-text/70">
                     Builder
                   </span>
                 )}
               </div>
               <div className="text-xs text-daintree-text/50 line-clamp-1">{cmd.description}</div>
               {!cmd.enabled && cmd.disabledReason && (
-                <div className="text-[10px] text-daintree-text/40 italic">{cmd.disabledReason}</div>
+                <div className="text-3xs text-daintree-text/40 italic">{cmd.disabledReason}</div>
               )}
             </button>
           </div>

@@ -188,7 +188,7 @@ export function ErrorBanner({
         )}
         {isRetrying && onCancelRetry && (
           <>
-            <span className="text-status-warning text-[10px] shrink-0">{retryLabel}</span>
+            <span className="text-status-warning text-3xs shrink-0">{retryLabel}</span>
             <Button variant="ghost-danger" size="xs" onClick={handleCancel}>
               Cancel
             </Button>
@@ -250,7 +250,7 @@ export function ErrorBanner({
               aria-label={
                 copiedId ? "Correlation ID copied" : `Copy correlation ID ${error.correlationId}`
               }
-              className="font-mono text-[10px] text-status-error/40 hover:text-status-error/70 cursor-copy transition-colors text-left break-all"
+              className="font-mono text-3xs text-status-error/40 hover:text-status-error/70 cursor-copy transition-colors text-left break-all"
             >
               Ref: {copiedId ? "Copied" : error.correlationId}
             </button>
@@ -270,7 +270,7 @@ export function ErrorBanner({
           )}
           {isRetrying && onCancelRetry && (
             <>
-              <span className="text-status-warning text-[10px]">{retryLabel}</span>
+              <span className="text-status-warning text-3xs">{retryLabel}</span>
               <Button variant="ghost-danger" size="xs" onClick={handleCancel}>
                 Cancel
               </Button>

@@ -156,11 +156,11 @@ export function CapabilityRow({
         >
           {meta.label}
         </div>
-        <div className="text-[11px] text-text-secondary">{meta.description}</div>
+        <div className="text-2xs text-text-secondary">{meta.description}</div>
         {scoped && (
           <ul className="mt-0.5 space-y-0.5">
             {scopeEntries.map((entry) => (
-              <li key={entry} className="text-[11px] font-mono text-daintree-text/50 break-all">
+              <li key={entry} className="text-2xs font-mono text-daintree-text/50 break-all">
                 {entry}
               </li>
             ))}

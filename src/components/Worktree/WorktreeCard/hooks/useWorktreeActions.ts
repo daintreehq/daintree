@@ -216,7 +216,7 @@ export function useWorktreeActions({
       createElement(
         "span",
         {
-          className: "text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60",
+          className: "text-2xs font-semibold uppercase tracking-wider text-daintree-text/60",
         },
         hasCommands ? "Commands that will run" : "Teardown commands"
       ),

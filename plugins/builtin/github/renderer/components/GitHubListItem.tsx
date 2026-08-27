@@ -335,7 +335,7 @@ export function GitHubListItem({
                         className="w-4 h-4"
                       />
                       {restAssignees.length > 0 && (
-                        <span className="ml-0.5 text-[10px] text-text-secondary tabular-nums">
+                        <span className="ml-0.5 text-3xs text-text-secondary tabular-nums">
                           +{restAssignees.length}
                         </span>
                       )}

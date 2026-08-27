@@ -75,7 +75,7 @@ export function RecentCallsPopover({ records, loading, error }: RecentCallsPopov
   const groups = useMemo(() => groupCallsByTurn(records), [records]);
 
   return (
-    <div className="flex flex-col text-[11px] text-daintree-text">
+    <div className="flex flex-col text-2xs text-daintree-text">
       <div className="px-3 pt-2.5 pb-1.5 text-daintree-text/50 font-medium">Recent tool calls</div>
 
       <div className="max-h-[min(360px,var(--radix-popover-content-available-height,360px))] overflow-y-auto px-1 pb-1">
@@ -94,9 +94,7 @@ export function RecentCallsPopover({ records, loading, error }: RecentCallsPopov
             {groups.map((group, index) => (
               <li key={group.turnId ?? `unassociated-${index}`} className="py-1">
                 {group.turnId === null && (
-                  <div className="px-2 pb-0.5 text-[10px] text-text-secondary">
-                    Not tied to a turn
-                  </div>
+                  <div className="px-2 pb-0.5 text-3xs text-text-secondary">Not tied to a turn</div>
                 )}
                 <ul className="space-y-0.5">
                   {group.records.map((record) => (

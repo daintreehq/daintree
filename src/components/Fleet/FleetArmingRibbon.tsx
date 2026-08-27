@@ -323,7 +323,7 @@ export function FleetArmingRibbon(): ReactElement | null {
           aria-live="polite"
           aria-atomic="true"
           className={cn(
-            "relative flex items-center gap-3 border-b border-daintree-border px-3 py-2 text-[12px] text-daintree-text",
+            "relative flex items-center gap-3 border-b border-daintree-border px-3 py-2 text-xs leading-[inherit] text-daintree-text",
             // Keep the Fleet surface continuous through confirm-pending so the
             // mode chrome doesn't visually exit and re-enter during a confirm.
             "bg-category-amber-subtle",
@@ -333,15 +333,15 @@ export function FleetArmingRibbon(): ReactElement | null {
           data-pending-action={pending.kind}
         >
           <span className="font-medium text-daintree-accent">{message}</span>
-          <div className="ml-auto flex items-center gap-2 text-[11px] text-daintree-text/70">
+          <div className="ml-auto flex items-center gap-2 text-2xs text-daintree-text/70">
             <span>
-              <kbd className="rounded border border-daintree-text/20 bg-tint/[0.08] px-1 py-0.5 font-mono text-[10px]">
+              <kbd className="rounded border border-daintree-text/20 bg-tint/[0.08] px-1 py-0.5 font-mono text-3xs">
                 Enter
               </kbd>{" "}
               to confirm
             </span>
             <span>
-              <kbd className="rounded border border-daintree-text/20 bg-tint/[0.08] px-1 py-0.5 font-mono text-[10px]">
+              <kbd className="rounded border border-daintree-text/20 bg-tint/[0.08] px-1 py-0.5 font-mono text-3xs">
                 Esc
               </kbd>{" "}
               to cancel
@@ -376,7 +376,7 @@ export function FleetArmingRibbon(): ReactElement | null {
         {...previewItemHandlers(() => computePreviewByState("waiting", "current"))}
       >
         All waiting — this worktree
-        <span className="ml-auto text-[11px] tabular-nums text-daintree-text/50">
+        <span className="ml-auto text-2xs tabular-nums text-daintree-text/50">
           {presetCounts.waitingCurrent}
         </span>
       </DropdownMenuItem>
@@ -387,7 +387,7 @@ export function FleetArmingRibbon(): ReactElement | null {
         {...previewItemHandlers(() => computePreviewByState("waiting", "all"))}
       >
         All waiting — all worktrees
-        <span className="ml-auto text-[11px] tabular-nums text-daintree-text/50">
+        <span className="ml-auto text-2xs tabular-nums text-daintree-text/50">
           {presetCounts.waitingAll}
         </span>
       </DropdownMenuItem>
@@ -398,7 +398,7 @@ export function FleetArmingRibbon(): ReactElement | null {
         {...previewItemHandlers(() => computePreviewByState("working", "current"))}
       >
         All working — this worktree
-        <span className="ml-auto text-[11px] tabular-nums text-daintree-text/50">
+        <span className="ml-auto text-2xs tabular-nums text-daintree-text/50">
           {presetCounts.workingCurrent}
         </span>
       </DropdownMenuItem>
@@ -409,7 +409,7 @@ export function FleetArmingRibbon(): ReactElement | null {
         {...previewItemHandlers(() => computePreviewByState("working", "all"))}
       >
         All working — all worktrees
-        <span className="ml-auto text-[11px] tabular-nums text-daintree-text/50">
+        <span className="ml-auto text-2xs tabular-nums text-daintree-text/50">
           {presetCounts.workingAll}
         </span>
       </DropdownMenuItem>
@@ -421,7 +421,7 @@ export function FleetArmingRibbon(): ReactElement | null {
         {...previewItemHandlers(() => computePreviewAll("current"))}
       >
         All in this worktree
-        <span className="ml-auto text-[11px] tabular-nums text-daintree-text/50">
+        <span className="ml-auto text-2xs tabular-nums text-daintree-text/50">
           {presetCounts.eligibleCurrent}
         </span>
       </DropdownMenuItem>
@@ -504,7 +504,7 @@ export function FleetArmingRibbon(): ReactElement | null {
           tabIndex={-1}
           onKeyDown={handleRibbonKeyDown}
           className={cn(
-            "relative flex items-center gap-3 overflow-hidden border-b border-daintree-border px-3 py-2 text-[12px] text-daintree-text outline-hidden",
+            "relative flex items-center gap-3 overflow-hidden border-b border-daintree-border px-3 py-2 text-xs leading-[inherit] text-daintree-text outline-hidden",
             "bg-category-amber-subtle",
             // Non-color structural cue: 2px amber left-edge stripe, so the
             // "mode surface" reads even with CVD / low-saturation themes where
@@ -530,7 +530,7 @@ export function FleetArmingRibbon(): ReactElement | null {
           />
           {showProgress && (
             <span
-              className="text-[11px] tabular-nums text-daintree-text/70"
+              className="text-2xs tabular-nums text-daintree-text/70"
               data-testid="fleet-broadcast-progress"
             >
               {progressCompleted}/{progressTotal}
@@ -550,14 +550,14 @@ export function FleetArmingRibbon(): ReactElement | null {
               onClick={cancelActiveBroadcast}
               aria-label="Cancel broadcast"
               data-testid="fleet-broadcast-cancel"
-              className="rounded px-1.5 py-0.5 text-[11px] text-daintree-text/70 transition-colors hover:bg-tint/[0.08] hover:text-daintree-text"
+              className="rounded px-1.5 py-0.5 text-2xs text-daintree-text/70 transition-colors hover:bg-tint/[0.08] hover:text-daintree-text"
             >
               Cancel
             </button>
           )}
           {runStatus !== null && (
             <span
-              className="flex items-center gap-1 text-[11px] tabular-nums text-daintree-text/70"
+              className="flex items-center gap-1 text-2xs tabular-nums text-daintree-text/70"
               data-testid="fleet-run-status"
             >
               <span>{runStatus.label}</span>
@@ -602,12 +602,12 @@ export function FleetArmingRibbon(): ReactElement | null {
               aria-label={`Exit fleet mode (${exitChordLabel})`}
               data-testid="fleet-exit"
               className={cn(
-                "inline-flex items-center gap-1.5 rounded px-2 py-0.5 text-[11px] transition-colors",
+                "inline-flex items-center gap-1.5 rounded px-2 py-0.5 text-2xs transition-colors",
                 "bg-tint/[0.08] text-daintree-text/80 hover:bg-tint/[0.14] hover:text-daintree-text"
               )}
             >
               <span>Exit</span>
-              <kbd className="rounded border border-category-amber-border bg-category-amber-subtle px-1 font-mono text-[10px] leading-tight text-category-amber-text">
+              <kbd className="rounded border border-category-amber-border bg-category-amber-subtle px-1 font-mono text-3xs leading-tight text-category-amber-text">
                 {exitChordLabel}
               </kbd>
             </button>

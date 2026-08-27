@@ -188,11 +188,11 @@ export function EnvironmentVariablesEditor({
                     {isSensitive ? "********" : value}
                   </span>
                   {isOverridden ? (
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-status-warning/15 text-status-warning font-medium">
+                    <span className="text-3xs px-1.5 py-0.5 rounded bg-status-warning/15 text-status-warning font-medium">
                       Overridden
                     </span>
                   ) : (
-                    <span className="text-[10px] px-1.5 py-0.5 rounded bg-status-info/15 text-status-info font-medium">
+                    <span className="text-3xs px-1.5 py-0.5 rounded bg-status-info/15 text-status-info font-medium">
                       Global
                     </span>
                   )}
@@ -314,7 +314,7 @@ export function EnvironmentVariablesEditor({
                     <Trash2 className="h-4 w-4 text-status-error" />
                   </button>
                 </div>
-                {error && <p className="text-[11px] text-status-error mt-1 ml-1">{error}</p>}
+                {error && <p className="text-2xs text-status-error mt-1 ml-1">{error}</p>}
               </div>
             );
           })

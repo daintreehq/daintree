@@ -1393,7 +1393,7 @@ function DockLaunchOption({
           <span
             data-launcher-qualifier=""
             className={cn(
-              "ml-2 min-w-0 max-w-[40%] shrink truncate text-[11px] text-text-secondary",
+              "ml-2 min-w-0 max-w-[40%] shrink truncate text-2xs text-text-secondary",
               "transition-colors group-aria-selected:text-daintree-text/80"
             )}
           >

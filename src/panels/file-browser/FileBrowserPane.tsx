@@ -1098,7 +1098,7 @@ export function FileBrowserPane({
                       onClick={handleCopyRootPath}
                       aria-label={`Copy folder path: ${rootAbsolutePath}`}
                       className={cn(
-                        "min-w-0 flex-1 cursor-pointer truncate text-left font-mono text-[11px] transition-colors duration-150 ease-out",
+                        "min-w-0 flex-1 cursor-pointer truncate text-left font-mono text-2xs transition-colors duration-150 ease-out",
                         showRootPathCopied
                           ? "text-status-success"
                           : "text-daintree-text/40 hover:text-daintree-text/70"
@@ -1122,7 +1122,7 @@ export function FileBrowserPane({
                 </Tooltip>
               ) : (
                 <span
-                  className="min-w-0 flex-1 truncate font-mono text-[11px] text-text-secondary"
+                  className="min-w-0 flex-1 truncate font-mono text-2xs text-text-secondary"
                   title={rootHoverPath}
                 >
                   {rootPath || (basePath ? basename(basePath) : "")}
@@ -1401,7 +1401,7 @@ export function FileBrowserPane({
             <button
               type="button"
               onClick={revealSelection}
-              className="shrink-0 truncate border-t border-daintree-border px-3 py-1 text-left font-mono text-[11px] text-daintree-text/60 transition-colors duration-150 ease-out hover:bg-tint/5 hover:text-daintree-text"
+              className="shrink-0 truncate border-t border-daintree-border px-3 py-1 text-left font-mono text-2xs text-daintree-text/60 transition-colors duration-150 ease-out hover:bg-tint/5 hover:text-daintree-text"
             >
               Reveal {selectedFileName}
             </button>

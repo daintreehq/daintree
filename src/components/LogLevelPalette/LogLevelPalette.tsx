@@ -163,7 +163,7 @@ export function LogLevelPalette({ isOpen, onClose }: LogLevelPaletteProps) {
             {item.current && (
               <span
                 className={cn(
-                  "text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded",
+                  "text-3xs uppercase tracking-wider px-1.5 py-0.5 rounded",
                   isSelected
                     ? "bg-overlay-medium text-daintree-text/70"
                     : "bg-daintree-border/60 text-daintree-text/70"
@@ -200,7 +200,7 @@ export function LogLevelPalette({ isOpen, onClose }: LogLevelPaletteProps) {
       renderItem={(item) => (
         <div className="flex-1 min-w-0">
           <div className="text-sm text-daintree-text">{item.label}</div>
-          <div className="text-[11px] text-daintree-text/50">{item.hint}</div>
+          <div className="text-2xs text-daintree-text/50">{item.hint}</div>
         </div>
       )}
     />

@@ -21,7 +21,7 @@ import {
 } from "@/hooks/useActionPalette";
 
 const SECTION_HEADER_CLASS =
-  "px-3 py-1 text-[10px] font-medium tracking-wider uppercase text-text-secondary select-none";
+  "px-3 py-1 text-3xs font-medium tracking-wider uppercase text-text-secondary select-none";
 
 // Module-level so SearchablePalette receives a stable reference and skips
 // re-renders driven only by a freshly-created callback identity.
@@ -71,7 +71,7 @@ function PrefixDiscoverabilityRow() {
       // Spacing does the separating, not interpuncts. The row wraps at the
       // palette's width, and a per-item separator ends a wrapped line with a
       // dangling dot pointing at nothing.
-      className="@max-[420px]/palette-footer:hidden flex items-center gap-x-3 gap-y-1 flex-wrap text-[11px] text-daintree-text/45"
+      className="@max-[420px]/palette-footer:hidden flex items-center gap-x-3 gap-y-1 flex-wrap text-2xs text-daintree-text/45"
       aria-label="Prefix shortcuts"
     >
       <span className="text-daintree-text/40">Type</span>

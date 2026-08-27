@@ -260,7 +260,7 @@ export function WorktreeSidebarSearchBar({
         // floating clear of the rule below.
         <div className="flex items-center gap-2 pt-2">
           {statusText && (
-            <span className="min-w-0 flex-1 truncate text-[11px] text-text-secondary">
+            <span className="min-w-0 flex-1 truncate text-2xs text-text-secondary">
               {statusText}
             </span>
           )}
@@ -268,7 +268,7 @@ export function WorktreeSidebarSearchBar({
             <button
               type="button"
               onClick={handleClearAll}
-              className="ml-auto shrink-0 rounded text-[11px] text-text-secondary hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-daintree-accent"
+              className="ml-auto shrink-0 rounded text-2xs text-text-secondary hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-daintree-accent"
             >
               Clear all
             </button>

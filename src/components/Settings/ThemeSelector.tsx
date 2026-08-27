@@ -170,7 +170,7 @@ export function ThemeSelector<T extends { id: string }>({
         <div role="listbox" id={id} aria-label="Theme list" className="space-y-2">
           {filteredGroups.map((group) => (
             <div key={group.label} role="group" aria-label={group.label}>
-              <p className="text-[10px] font-medium uppercase tracking-wider text-text-secondary select-none px-1 mb-1">
+              <p className="text-3xs font-medium uppercase tracking-wider text-text-secondary select-none px-1 mb-1">
                 {group.label}
               </p>
               <div className={cn("grid gap-2", colsClass)}>{group.items.map(renderCard)}</div>

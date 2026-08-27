@@ -1597,7 +1597,7 @@ export function ReviewHubContent({
             )}
             {status?.currentBranch && (
               <TruncatedTooltip content={status.currentBranch}>
-                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-tint/[0.07] border border-tint/[0.08] text-[11px] text-daintree-text/60 font-mono truncate max-w-[200px]">
+                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-tint/[0.07] border border-tint/[0.08] text-2xs text-daintree-text/60 font-mono truncate max-w-[200px]">
                   <GitBranch className="w-3 h-3 shrink-0" />
                   <span className="truncate">{status.currentBranch}</span>
                 </span>
@@ -1605,7 +1605,7 @@ export function ReviewHubContent({
             )}
             {status?.currentBranch && isProtectedBranch(status.currentBranch.toLowerCase()) && (
               <span
-                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-status-warning/10 border border-status-warning/30 text-[11px] text-status-warning shrink-0"
+                className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-status-warning/10 border border-status-warning/30 text-2xs text-status-warning shrink-0"
                 data-testid="review-hub-protected-branch-chip"
               >
                 <AlertTriangle className="w-3 h-3 shrink-0" aria-hidden="true" />
@@ -1621,7 +1621,7 @@ export function ReviewHubContent({
           <div className="flex items-center gap-2 shrink-0">
             {/* Diff mode toggle */}
             <div
-              className="flex items-center rounded border border-tint/[0.08] overflow-hidden text-[11px]"
+              className="flex items-center rounded border border-tint/[0.08] overflow-hidden text-2xs"
               role="group"
               aria-label="Diff mode"
               data-testid="review-hub-diff-mode"
@@ -1855,9 +1855,9 @@ export function ReviewHubContent({
                 <div>
                   <div className={REVIEW_HUB_STICKY_BAND}>
                     <div className="flex items-center justify-between px-4 py-2 bg-overlay-subtle border-b border-divider">
-                      <span className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60">
+                      <span className="text-2xs font-semibold uppercase tracking-wider text-daintree-text/60">
                         Changed vs {mainBranch}
-                        <span className="ml-1.5 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-[10px] font-medium normal-case tracking-normal">
+                        <span className="ml-1.5 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-3xs font-medium normal-case tracking-normal">
                           {sortedBaseBranchFiles.length} file
                           {sortedBaseBranchFiles.length !== 1 ? "s" : ""}
                           {(baseBranchChurn.ins > 0 || baseBranchChurn.del > 0) && (
@@ -2023,7 +2023,7 @@ export function ReviewHubContent({
                         aria-controls={`review-hub-files-${worktreePath}`}
                         data-testid="review-hub-file-list-toggle"
                         className={cn(
-                          "inline-flex items-center gap-1 text-[11px] font-medium text-daintree-text/70 hover:text-daintree-text transition-colors",
+                          "inline-flex items-center gap-1 text-2xs font-medium text-daintree-text/70 hover:text-daintree-text transition-colors",
                           "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-accent rounded"
                         )}
                       >

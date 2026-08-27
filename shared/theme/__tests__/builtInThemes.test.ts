@@ -675,6 +675,12 @@ const NON_EXTENSION_VAR_NAMES = new Set<string>([
   "radius-md",
   "radius-lg",
   "radius-xl",
+  // Stock Tailwind type steps, consumed by name where a size has to be written as
+  // a value rather than a utility class (CodeMirror theme objects, the diff
+  // text-size preference). The steps below them (--text-2xs/3xs/4xs) are declared
+  // in src/index.css, so the `declared` half of the scan already covers those.
+  "text-xs",
+  "text-sm",
   "chart-1",
   "chart-2",
   "chart-3",

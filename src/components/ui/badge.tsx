@@ -16,9 +16,9 @@ const badgeVariants = cva(
   {
     variants: {
       size: {
-        xs: "gap-1 px-1.5 py-0.5 text-[10px] [&_svg]:w-2.5 [&_svg]:h-2.5",
+        xs: "gap-1 px-1.5 py-0.5 text-3xs [&_svg]:w-2.5 [&_svg]:h-2.5",
         sm: "gap-1 px-1.5 py-0.5 text-xs [&_svg]:w-3 [&_svg]:h-3",
-        md: "gap-1.5 px-2 py-1 text-[13px] [&_svg]:w-3.5 [&_svg]:h-3.5",
+        md: "gap-1.5 px-2 py-1 text-sm leading-[inherit] [&_svg]:w-3.5 [&_svg]:h-3.5",
       },
       tone: {
         neutral: "bg-overlay-subtle text-text-secondary",

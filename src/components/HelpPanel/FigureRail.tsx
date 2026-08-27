@@ -100,7 +100,7 @@ function FigureThumbnail({ figure, isNewest, onClick }: FigureThumbnailProps) {
             type="button"
             onClick={handleRetry}
             aria-label={`Retry figure ${figure.figureNumber}`}
-            className="flex items-center gap-1 text-[10px] text-daintree-text/60 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent rounded"
+            className="flex items-center gap-1 text-3xs text-daintree-text/60 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent rounded"
           >
             <RotateCw className="w-2.5 h-2.5" aria-hidden="true" />
             Retry
@@ -152,7 +152,7 @@ function FigureThumbnail({ figure, isNewest, onClick }: FigureThumbnailProps) {
       )}
 
       {status === "loaded" && (
-        <span className="pointer-events-none absolute bottom-0 left-0 right-0 bg-scrim-medium px-1.5 py-0.5 text-[10px] font-medium text-daintree-text/90">
+        <span className="pointer-events-none absolute bottom-0 left-0 right-0 bg-scrim-medium px-1.5 py-0.5 text-3xs font-medium text-daintree-text/90">
           {figure.figureLabel}
         </span>
       )}

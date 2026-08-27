@@ -649,7 +649,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
               </span>
 
               {/* Tab count indicator */}
-              <span className="text-[10px] text-text-secondary tabular-nums shrink-0">
+              <span className="text-3xs text-text-secondary tabular-nums shrink-0">
                 ({panels.length})
               </span>
 
@@ -658,7 +658,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
                   <div className="h-3 w-px bg-border-subtle shrink-0" aria-hidden="true" />
                   <Tooltip open={commandTip.open} onOpenChange={commandTip.onOpenChange}>
                     <TooltipTrigger asChild onPointerEnter={commandTip.onPointerEnter}>
-                      <span className="truncate flex-1 min-w-0 text-[11px] text-daintree-text/50 font-mono">
+                      <span className="truncate flex-1 min-w-0 text-2xs text-daintree-text/50 font-mono">
                         {commandText}
                       </span>
                     </TooltipTrigger>

@@ -161,7 +161,7 @@ export function PluginArchiveInstallConfirmDialog() {
             className="flex items-start gap-2 px-2.5 py-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20"
           >
             <AlertCircle className="w-3.5 h-3.5 text-status-danger shrink-0 mt-0.5" />
-            <p className="text-[11px] text-status-danger break-words min-w-0">{error}</p>
+            <p className="text-2xs text-status-danger break-words min-w-0">{error}</p>
           </div>
         )}
       </div>
@@ -195,21 +195,21 @@ function ArchiveIdentityCard({ intent }: { intent: PendingPluginArchiveInstall }
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 min-w-0">
             <span className="text-sm font-medium text-daintree-text truncate">{label}</span>
-            <span className="inline-block shrink-0 px-1.5 py-0.5 rounded-sm text-[10px] font-mono tabular-nums bg-overlay-subtle border border-daintree-border/50 text-daintree-text/60 max-w-[10rem] truncate">
+            <span className="inline-block shrink-0 px-1.5 py-0.5 rounded-sm text-3xs font-mono tabular-nums bg-overlay-subtle border border-daintree-border/50 text-daintree-text/60 max-w-[10rem] truncate">
               v{manifest.version}
             </span>
           </div>
-          <div className="mt-0.5 text-[11px] font-mono text-daintree-text/45 truncate">
+          <div className="mt-0.5 text-2xs font-mono text-daintree-text/45 truncate">
             {manifest.name}
           </div>
         </div>
       </div>
       <div className="mt-3 pt-2.5 border-t border-tint/[0.08] space-y-1.5">
-        <div className="flex items-start gap-1.5 text-[11px] text-daintree-text/50">
+        <div className="flex items-start gap-1.5 text-2xs text-daintree-text/50">
           <FileArchive className="w-3 h-3 shrink-0 mt-[1.5px] text-daintree-text/35" aria-hidden />
           <span className="font-mono break-all min-w-0">{archiveFileName}</span>
         </div>
-        <div className="flex items-start gap-1.5 text-[11px] text-daintree-text/50">
+        <div className="flex items-start gap-1.5 text-2xs text-daintree-text/50">
           <Users className="w-3 h-3 shrink-0 mt-[1.5px] text-daintree-text/35" aria-hidden />
           {manifest.authors.length > 0 ? (
             <span className="break-words min-w-0">{formatAuthors(manifest.authors)}</span>
@@ -235,9 +235,7 @@ function ArchiveRecipes({ recipes }: { recipes: { count: number; names: string[]
   if (recipes.count === 0) return null;
   return (
     <div className="space-y-2">
-      <h4 className="text-[11px] font-medium uppercase tracking-wide text-text-secondary">
-        Recipes
-      </h4>
+      <h4 className="text-2xs font-medium uppercase tracking-wide text-text-secondary">Recipes</h4>
       <p className="text-xs text-text-secondary">
         Adds {recipes.count} launch {recipes.count === 1 ? "recipe" : "recipes"}, available in every
         project. Each starts terminals that run commands or agents.
@@ -291,7 +289,7 @@ function ArchivePermissions({ capabilities }: { capabilities: readonly string[] 
 
   return (
     <div className="space-y-2">
-      <h4 className="text-[11px] font-medium uppercase tracking-wide text-text-secondary">
+      <h4 className="text-2xs font-medium uppercase tracking-wide text-text-secondary">
         Permissions
       </h4>
       {granted.length === 0 ? (
@@ -301,7 +299,7 @@ function ArchivePermissions({ capabilities }: { capabilities: readonly string[] 
           {worst === "danger" && (
             <div className="flex items-start gap-2 px-2.5 py-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20">
               <AlertCircle className="w-3.5 h-3.5 text-status-danger shrink-0 mt-0.5" />
-              <p className="text-[11px] text-status-danger break-words">
+              <p className="text-2xs text-status-danger break-words">
                 Can run arbitrary commands on your machine
               </p>
             </div>
@@ -309,7 +307,7 @@ function ArchivePermissions({ capabilities }: { capabilities: readonly string[] 
           {worst === "warning" && (
             <div className="flex items-start gap-2 px-2.5 py-2 rounded-[var(--radius-md)] bg-status-warning/10 border border-status-warning/20">
               <AlertTriangle className="w-3.5 h-3.5 text-status-warning shrink-0 mt-0.5" />
-              <p className="text-[11px] text-status-warning break-words">
+              <p className="text-2xs text-status-warning break-words">
                 Requests sensitive permissions — review before installing
               </p>
             </div>

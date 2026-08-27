@@ -49,7 +49,7 @@ function TelemetryRow({ event, isSelected, onSelect }: RowProps) {
       <div className="flex items-center gap-2">
         <span
           className={cn(
-            "px-1.5 py-0.5 rounded text-[10px] font-mono uppercase tracking-wide shrink-0",
+            "px-1.5 py-0.5 rounded text-3xs font-mono uppercase tracking-wide shrink-0",
             event.kind === "sentry"
               ? "bg-status-error/15 text-status-error"
               : "bg-status-info/15 text-status-info"
@@ -58,7 +58,7 @@ function TelemetryRow({ event, isSelected, onSelect }: RowProps) {
           {kindLabel(event.kind)}
         </span>
         <span className="font-mono text-xs text-daintree-text truncate flex-1">{event.label}</span>
-        <span className="text-[10px] text-daintree-text/50 font-mono tabular-nums shrink-0">
+        <span className="text-3xs text-daintree-text/50 font-mono tabular-nums shrink-0">
           {formatClockTime(event.timestamp)}
         </span>
       </div>
@@ -129,7 +129,7 @@ function TelemetryDetail({ event }: DetailProps) {
             <div className="flex items-center gap-2">
               <span
                 className={cn(
-                  "px-1.5 py-0.5 rounded text-[10px] font-mono uppercase tracking-wide",
+                  "px-1.5 py-0.5 rounded text-3xs font-mono uppercase tracking-wide",
                   event.kind === "sentry"
                     ? "bg-status-error/15 text-status-error"
                     : "bg-status-info/15 text-status-info"
@@ -139,7 +139,7 @@ function TelemetryDetail({ event }: DetailProps) {
               </span>
               <span className="font-mono text-sm text-daintree-text truncate">{event.label}</span>
             </div>
-            <div className="flex items-center gap-2 text-[11px] text-daintree-text/50 font-mono">
+            <div className="flex items-center gap-2 text-2xs text-daintree-text/50 font-mono">
               <span>{new Date(event.timestamp).toISOString()}</span>
               <span aria-hidden>•</span>
               <span>ID {event.id.slice(0, 8)}</span>

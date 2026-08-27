@@ -261,7 +261,7 @@ const SelectLabel = React.forwardRef<
     <Label
       ref={ref}
       className={cn(
-        "px-2.5 py-1.5 text-[11px] font-bold tracking-wider uppercase text-daintree-text/50",
+        "px-2.5 py-1.5 text-2xs font-bold tracking-wider uppercase text-daintree-text/50",
         className
       )}
       {...props}
@@ -307,7 +307,7 @@ const SelectItem = React.forwardRef<
       {description ? (
         <span className="flex flex-col gap-0.5">
           <ItemText>{children}</ItemText>
-          <span className="text-[11px] text-text-secondary">{description}</span>
+          <span className="text-2xs text-text-secondary">{description}</span>
         </span>
       ) : (
         <ItemText>{children}</ItemText>

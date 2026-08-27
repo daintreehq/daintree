@@ -167,7 +167,7 @@ export function DevPreviewEmptyStates({
                   We found a script in your package.json that looks like a dev server.
                 </p>
                 <div className="mb-3 px-3 py-1.5 rounded bg-overlay-subtle border border-overlay/30 inline-flex items-center gap-2">
-                  <span className="text-[11px] text-daintree-text/40">Auto-detected</span>
+                  <span className="text-2xs text-daintree-text/40">Auto-detected</span>
                   <code className="text-xs text-daintree-text/70 font-mono">
                     {primaryCandidate.command}
                   </code>
@@ -227,7 +227,7 @@ export function DevPreviewEmptyStates({
                               }}
                               className="flex items-center gap-2 px-2 py-1.5 rounded text-xs hover:bg-overlay-subtle transition-colors text-left"
                             >
-                              <code className="text-daintree-text/70 font-mono text-[11px] flex-1 truncate">
+                              <code className="text-daintree-text/70 font-mono text-2xs flex-1 truncate">
                                 {c.command}
                               </code>
                               <span className="text-text-secondary shrink-0">{c.name}</span>
@@ -280,7 +280,7 @@ export function DevPreviewEmptyStates({
                     <span className="text-xs">Run</span>
                   </Button>
                   {commandInput.trim() && commandInputError && (
-                    <p className="text-[11px] text-status-warning">{commandInputError}</p>
+                    <p className="text-2xs text-status-warning">{commandInputError}</p>
                   )}
                 </div>
                 <Button

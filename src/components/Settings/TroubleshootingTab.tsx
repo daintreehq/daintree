@@ -628,7 +628,7 @@ export function TroubleshootingTab() {
                   className="flex items-center justify-between px-3 py-1.5 rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg/30"
                 >
                   <span className="text-xs font-mono text-daintree-text truncate">{name}</span>
-                  <span className="text-[10px] uppercase tracking-wider px-1.5 py-0.5 rounded bg-daintree-border/60 text-daintree-text/80">
+                  <span className="text-3xs uppercase tracking-wider px-1.5 py-0.5 rounded bg-daintree-border/60 text-daintree-text/80">
                     {level}
                   </span>
                 </div>

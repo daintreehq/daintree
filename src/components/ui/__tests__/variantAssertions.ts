@@ -14,7 +14,7 @@ const GROUP_PATTERNS = {
   // to X alongside `pl-`/`pr-` and never to Y.
   paddingX: /^p([xselr])?-/,
   paddingY: /^p([ytb])?-/,
-  fontSize: /^text-(xs|sm|base|lg|[2-9]?xl|\[[\d.]+(px|rem|em)\])$/,
+  fontSize: /^text-([2-4]xs|xs|sm|base|lg|[2-9]?xl|\[[\d.]+(px|rem|em)\])$/,
   radius: /^rounded(-|$)/,
   resize: /^resize(-|$)/,
   width: /^w-/,

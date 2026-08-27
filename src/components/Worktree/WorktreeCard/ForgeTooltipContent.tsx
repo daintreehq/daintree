@@ -195,7 +195,7 @@ function LabelBadge({ name, color }: LabelBadgeProps) {
       // `line-clamp-2` bounds height as well as width: a name is unbounded in
       // the provider contract, and twenty of them wrapping freely would make the
       // tooltip arbitrarily tall even under the chip cap.
-      className="inline-block max-w-full break-words [overflow-wrap:anywhere] line-clamp-2 px-1.5 py-0.5 rounded-full text-[10px] font-medium"
+      className="inline-block max-w-full break-words [overflow-wrap:anywhere] line-clamp-2 px-1.5 py-0.5 rounded-full text-3xs font-medium"
       style={{
         backgroundColor: `#${color}20`,
         color: `#${color}`,
@@ -239,7 +239,7 @@ function LabelRow({ labels, subject }: { labels: readonly ForgeLabel[]; subject:
         <LabelBadge key={label.name} name={label.name} color={label.color ?? "8b949e"} />
       ))}
       {labels.length > shown.length && (
-        <span className="text-[10px] text-text-secondary">
+        <span className="text-3xs text-text-secondary">
           Showing {shown.length} of {labels.length} — open the {subject} for the rest
         </span>
       )}
@@ -263,10 +263,10 @@ export function IssueTooltipContent({ data, freshness }: IssueTooltipContentProp
       </div>
 
       {data.bodyExcerpt && (
-        <p className="text-[11px] text-daintree-text/60 line-clamp-3">{data.bodyExcerpt}</p>
+        <p className="text-2xs text-daintree-text/60 line-clamp-3">{data.bodyExcerpt}</p>
       )}
 
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-daintree-text/50">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-2xs text-daintree-text/50">
         {data.author && (
           <span className="flex items-center gap-1">
             <PenLine className="w-3 h-3 shrink-0" aria-hidden="true" />
@@ -313,7 +313,7 @@ export function PRTooltipContent({ data, freshness }: PRTooltipContentProps) {
         <span className="text-xs text-daintree-text/90 line-clamp-2">{data.title}</span>
         <span
           className={cn(
-            "text-[10px] px-1.5 py-0.5 rounded-full shrink-0 capitalize",
+            "text-3xs px-1.5 py-0.5 rounded-full shrink-0 capitalize",
             data.state === "merged"
               ? "bg-pr-merged/20 text-pr-merged"
               : data.state === "closed" || data.state === "declined"
@@ -326,10 +326,10 @@ export function PRTooltipContent({ data, freshness }: PRTooltipContentProps) {
       </div>
 
       {data.bodyExcerpt && (
-        <p className="text-[11px] text-daintree-text/60 line-clamp-3">{data.bodyExcerpt}</p>
+        <p className="text-2xs text-daintree-text/60 line-clamp-3">{data.bodyExcerpt}</p>
       )}
 
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-[11px] text-daintree-text/50">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-2xs text-daintree-text/50">
         {data.author && (
           <span className="flex items-center gap-1">
             <PenLine className="w-3 h-3 shrink-0" aria-hidden="true" />

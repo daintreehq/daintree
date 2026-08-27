@@ -447,7 +447,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                         {entry.events.map((name) => (
                           <li
                             key={name}
-                            className="font-mono text-[11px] text-daintree-text/70 bg-daintree-bg px-1.5 py-0.5 rounded border border-daintree-border/60"
+                            className="font-mono text-2xs text-daintree-text/70 bg-daintree-bg px-1.5 py-0.5 rounded border border-daintree-border/60"
                           >
                             {name}
                           </li>

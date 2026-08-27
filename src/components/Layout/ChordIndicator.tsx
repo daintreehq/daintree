@@ -210,7 +210,7 @@ export function ChordIndicator() {
               <div key={group.category}>
                 {groupIdx > 0 && <div className="border-t border-[var(--border-overlay)] my-1.5" />}
                 <div
-                  className="text-[10px] font-medium uppercase tracking-wider text-daintree-text/30 px-1 py-1"
+                  className="text-3xs font-medium uppercase tracking-wider text-daintree-text/30 px-1 py-1"
                   role="presentation"
                 >
                   {group.category}
@@ -249,7 +249,7 @@ export function ChordIndicator() {
           )}
         </div>
 
-        <div className="flex items-center gap-2 border-t border-[var(--border-overlay)] px-4 py-1.5 text-[11px] text-text-secondary select-none">
+        <div className="flex items-center gap-2 border-t border-[var(--border-overlay)] px-4 py-1.5 text-2xs text-text-secondary select-none">
           <span>↑↓ select</span>
           <span aria-hidden className="text-daintree-text/20">
             ·

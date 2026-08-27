@@ -32,7 +32,7 @@ function PatchDiffLines({ content, className }: { content: string; className?: s
   return (
     <pre
       className={cn(
-        "font-mono text-[11px] leading-4 overflow-y-auto overflow-x-auto select-text",
+        "font-mono text-2xs leading-4 overflow-y-auto overflow-x-auto select-text",
         className
       )}
     >
@@ -49,7 +49,7 @@ function PatchDiffPreview({ content }: { content: string }) {
   return (
     <div className="rounded border border-tint/[0.08] bg-tint/[0.04]">
       <div className="px-3 py-2 border-b border-tint/[0.08]">
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60">
+        <span className="text-2xs font-semibold uppercase tracking-wider text-daintree-text/60">
           Patch contents
         </span>
       </div>
@@ -637,7 +637,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
         {pendingBulkPatches && (
           <div className="rounded border border-tint/[0.08] bg-tint/[0.04]">
             <div className="px-3 py-2 border-b border-tint/[0.08]">
-              <span className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60">
+              <span className="text-2xs font-semibold uppercase tracking-wider text-daintree-text/60">
                 Patches to apply
               </span>
             </div>
@@ -649,16 +649,16 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                   // open by default; the toggle only tames very long bulk sets.
                   <details key={patch.id} open className="group">
                     <summary className="flex items-baseline gap-2 px-3 py-2 cursor-pointer list-none">
-                      <span className="text-daintree-text/40 text-[10px] shrink-0 group-open:hidden">
+                      <span className="text-daintree-text/40 text-3xs shrink-0 group-open:hidden">
                         ▶
                       </span>
-                      <span className="text-daintree-text/40 text-[10px] shrink-0 hidden group-open:inline">
+                      <span className="text-daintree-text/40 text-3xs shrink-0 hidden group-open:inline">
                         ▼
                       </span>
                       <span className="text-daintree-text/80 truncate min-w-0">
                         {patch.filename || patch.language || "patch"}
                       </span>
-                      <span className="font-mono text-[10px] shrink-0 ml-auto tabular-nums">
+                      <span className="font-mono text-3xs shrink-0 ml-auto tabular-nums">
                         <span className="text-status-success">+{stats.additions}</span>{" "}
                         <span className="text-status-error">-{stats.deletions}</span>
                       </span>

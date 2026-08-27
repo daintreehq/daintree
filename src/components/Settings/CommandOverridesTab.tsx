@@ -355,7 +355,7 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                         {command.id}
                       </span>
                       {hasOverride(command.id) && (
-                        <span className="text-[11px] text-daintree-text/70 bg-overlay-medium px-1.5 py-0.5 rounded font-medium">
+                        <span className="text-2xs text-daintree-text/70 bg-overlay-medium px-1.5 py-0.5 rounded font-medium">
                           {override?.prompt ? "Custom Prompt" : "Modified"}
                         </span>
                       )}
@@ -471,7 +471,7 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                                     )}
                                   </label>
                                   {hasDefaultValue && (
-                                    <span className="text-[10px] text-daintree-text/70 bg-overlay-medium px-1.5 py-0.5 rounded">
+                                    <span className="text-3xs text-daintree-text/70 bg-overlay-medium px-1.5 py-0.5 rounded">
                                       Custom
                                     </span>
                                   )}
@@ -562,7 +562,7 @@ function PromptEditor({ commandId, args, value, onChange }: PromptEditorProps) {
                     <button
                       onClick={() => onChange(value + `{${arg.name}}`)}
                       className={cn(
-                        "text-[11px] px-2 py-0.5 rounded font-mono transition-colors",
+                        "text-2xs px-2 py-0.5 rounded font-mono transition-colors",
                         usedVariables.includes(arg.name)
                           ? "bg-overlay-medium text-daintree-text/70 border border-border-strong"
                           : "bg-daintree-sidebar text-daintree-text/70 hover:bg-daintree-border border border-daintree-border"

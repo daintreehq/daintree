@@ -213,7 +213,7 @@ export function WaitingContainer({ compact = false }: WaitingContainerProps) {
             <span className="relative">
               <WaitingIcon className="w-3.5 h-3.5 text-state-waiting" aria-hidden="true" />
               {compact && displayCount > 0 && (
-                <span className="absolute -top-1.5 -right-1.5 z-10 flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full text-[10px] font-bold tabular-nums shadow-sm bg-state-waiting text-daintree-bg">
+                <span className="absolute -top-1.5 -right-1.5 z-10 flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full text-3xs font-bold tabular-nums shadow-sm bg-state-waiting text-daintree-bg">
                   <AnimatedLabel label={displayCount > 9 ? "9+" : String(displayCount)} />
                 </span>
               )}
@@ -250,7 +250,7 @@ export function WaitingContainer({ compact = false }: WaitingContainerProps) {
           <div className="flex flex-col">
             <div className="px-3 py-2 border-b border-divider bg-daintree-bg/50 flex justify-between items-center">
               <span className="text-xs font-medium text-daintree-text/70">Waiting for input</span>
-              <span className="text-[10px] font-medium text-state-waiting tabular-nums">
+              <span className="text-3xs font-medium text-state-waiting tabular-nums">
                 {count} {count === 1 ? "agent" : "agents"}
               </span>
             </div>
@@ -364,13 +364,13 @@ function WaitingSingleItem({
         <span
           className={cn(
             "min-w-0 truncate font-medium text-daintree-text/80 group-hover/row:text-daintree-text transition-colors",
-            compact ? "text-[11px]" : "text-xs"
+            compact ? "text-2xs" : "text-xs"
           )}
         >
           {title}
         </span>
         {(worktreeName || terminal.activityHeadline) && (
-          <span className="flex items-center gap-1 min-w-0 truncate text-[10px] text-daintree-text/45">
+          <span className="flex items-center gap-1 min-w-0 truncate text-3xs text-daintree-text/45">
             {worktreeName && <span className="truncate">{worktreeName}</span>}
             {worktreeName && terminal.activityHeadline && (
               <span className="text-daintree-text/30">·</span>
@@ -387,7 +387,7 @@ function WaitingSingleItem({
       {reason && (
         <span
           className={cn(
-            "shrink-0 rounded px-1.5 py-0.5 text-[10px] font-medium",
+            "shrink-0 rounded px-1.5 py-0.5 text-3xs font-medium",
             reason === "error"
               ? "bg-status-error/10 text-status-error"
               : "bg-state-waiting/15 text-state-waiting"
@@ -402,7 +402,7 @@ function WaitingSingleItem({
         <LiveTimeAgo
           timestamp={terminal.lastStateChange}
           noTooltip
-          className="text-[10px] text-text-secondary shrink-0"
+          className="text-3xs text-text-secondary shrink-0"
         />
       )}
 

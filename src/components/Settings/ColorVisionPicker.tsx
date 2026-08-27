@@ -65,7 +65,7 @@ function SwatchPreview() {
             style={{ backgroundColor: colors[i] }}
             title={token.label}
           />
-          <span className="text-[9px] text-text-secondary">{token.label}</span>
+          <span className="text-4xs text-text-secondary">{token.label}</span>
         </div>
       ))}
     </div>

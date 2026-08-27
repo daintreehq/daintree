@@ -139,11 +139,11 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
       >
         {(title || keyHint) && (
           <div className="flex items-center justify-between gap-2 border-b border-tint/5 px-2 py-1.5">
-            <span className="text-[10px] font-semibold uppercase tracking-wider text-text-secondary">
+            <span className="text-3xs font-semibold uppercase tracking-wider text-text-secondary">
               {title}
             </span>
             {keyHint && (
-              <span aria-hidden="true" className="shrink-0 text-[10px] text-daintree-text/30">
+              <span aria-hidden="true" className="shrink-0 text-3xs text-daintree-text/30">
                 {keyHint}
               </span>
             )}
@@ -208,7 +208,7 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
                         <>
                           <span
                             aria-hidden="true"
-                            className="shrink-0 rounded-sm border border-tint/10 bg-overlay-subtle px-1 text-[9px] font-medium uppercase leading-4 tracking-wide text-daintree-text/50"
+                            className="shrink-0 rounded-sm border border-tint/10 bg-overlay-subtle px-1 text-4xs font-medium uppercase leading-4 tracking-wide text-daintree-text/50"
                           >
                             {badge}
                           </span>
@@ -218,7 +218,7 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
                       {descriptionSnippet && (
                         <span
                           className={cn(
-                            "min-w-0 truncate text-[10px] leading-4",
+                            "min-w-0 truncate text-3xs leading-4",
                             idx === selectedIndex
                               ? "text-daintree-text/80"
                               : "text-daintree-text/30"

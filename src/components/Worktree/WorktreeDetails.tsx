@@ -33,7 +33,7 @@ const NARRATIVE_RAIL = "border-l-2 border-border-strong pl-2.5";
 // namib, where it drops out of the rail entirely. The 10px uppercase size and
 // the tracking already do the de-emphasis.
 const NARRATIVE_LABEL =
-  "flex items-center gap-1 text-[10px] font-medium uppercase tracking-[0.06em] text-text-secondary";
+  "flex items-center gap-1 text-3xs font-medium uppercase tracking-[0.06em] text-text-secondary";
 
 export interface WorktreeDetailsProps {
   worktree: WorktreeState;

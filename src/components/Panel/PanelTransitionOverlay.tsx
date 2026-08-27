@@ -178,7 +178,7 @@ function TransitionGhost({ transition, onComplete }: TransitionGhostProps) {
         transitionProperty: "left, top, width, height, opacity",
         transitionTimingFunction: timingFunction,
         willChange: "left, top, width, height, opacity",
-        borderRadius: "6px",
+        borderRadius: "var(--radius-sm)",
       }}
     />
   );

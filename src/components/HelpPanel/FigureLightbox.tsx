@@ -131,7 +131,7 @@ export function FigureLightbox({
         <div className="flex flex-col gap-1 border-t border-daintree-border pt-3">
           <div className="flex items-baseline justify-between gap-2">
             <p className="text-sm font-medium text-daintree-text">Figure {figure.figureNumber}</p>
-            <p className="text-[11px] text-daintree-text/45 shrink-0">
+            <p className="text-2xs text-daintree-text/45 shrink-0">
               {figure.figureLabel} · Daintree docs
             </p>
           </div>

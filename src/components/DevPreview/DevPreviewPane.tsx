@@ -909,7 +909,7 @@ export function DevPreviewPane({
           )}
         >
           {viewportPreset && effectiveViewport && (
-            <div className="absolute top-1 left-1/2 -translate-x-1/2 z-10 px-1.5 py-0.5 rounded text-[10px] font-medium bg-surface/90 text-daintree-text/60 border border-overlay/50">
+            <div className="absolute top-1 left-1/2 -translate-x-1/2 z-10 px-1.5 py-0.5 rounded text-3xs font-medium bg-surface/90 text-daintree-text/60 border border-overlay/50">
               {getViewportPreset(viewportPreset).label} · {effectiveViewport.width}×
               {effectiveViewport.height}
               {viewportFit && fitScale < 1 && ` · ${Math.round(fitScale * 100)}%`}

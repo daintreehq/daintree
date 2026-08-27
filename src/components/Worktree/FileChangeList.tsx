@@ -187,7 +187,7 @@ function FileChangeRow({
                 </span>
               </div>
 
-              <div className="flex items-center gap-2 shrink-0 text-[11px]">
+              <div className="flex items-center gap-2 shrink-0 text-2xs">
                 {(change.insertions ?? 0) > 0 && (
                   <span className="text-status-success/80">+{change.insertions}</span>
                 )}
@@ -434,7 +434,7 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
                     token for the same reason — how many files a folder holds
                     is information, and `text-muted` has no contrast floor on
                     the dark palettes (2.22:1 on namib) to carry it. */}
-                <div className="flex items-center gap-1.5 text-[11px] text-text-secondary mb-1">
+                <div className="flex items-center gap-1.5 text-2xs text-text-secondary mb-1">
                   <Folder className="w-3 h-3 shrink-0" />
                   <span className="min-w-0 truncate font-mono">{group.displayDir}</span>
                   <span className="shrink-0 text-text-secondary">({group.files.length})</span>
@@ -461,7 +461,7 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
               </div>
             ))}
             {remainingCount > 0 && (
-              <div className="text-[11px] text-daintree-text/60 pl-4 pt-1">
+              <div className="text-2xs text-daintree-text/60 pl-4 pt-1">
                 ...and {remainingCount} more
                 {remainingFiles.length > 0 && (
                   <span className="ml-1 opacity-75">
@@ -507,7 +507,7 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
           })}
 
           {remainingCount > 0 && (
-            <div className="text-[11px] text-daintree-text/60 pl-5 pt-1">
+            <div className="text-2xs text-daintree-text/60 pl-5 pt-1">
               ...and {remainingCount} more
               {remainingFiles.length > 0 && (
                 <span className="ml-1 opacity-75">

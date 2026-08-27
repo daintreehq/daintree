@@ -511,7 +511,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
                     onMouseDown={(e) => e.preventDefault()}
                     className="absolute bottom-full left-0 right-0 z-50 mb-1 flex max-h-64 flex-col overflow-hidden rounded-[var(--radius-md)] border border-border-default bg-surface-panel-elevated shadow-[var(--theme-shadow-floating)]"
                   >
-                    <div className="shrink-0 border-b border-border-subtle bg-surface-input px-3 py-1 text-[11px] font-sans tracking-wider text-text-muted">
+                    <div className="shrink-0 border-b border-border-subtle bg-surface-input px-3 py-1 text-2xs font-sans tracking-wider text-text-muted">
                       COMMANDS
                     </div>
                     <div className="overflow-y-auto flex-1">
@@ -550,19 +550,19 @@ export function QuickRun({ projectId }: QuickRunProps) {
                                 {item.type === "saved" ? item.label : item.value}
                               </span>
                               {item.type === "script" && item.label !== item.value && (
-                                <span className="ml-2 text-[11px] font-sans text-text-muted">
+                                <span className="ml-2 text-2xs font-sans text-text-muted">
                                   ({item.label})
                                 </span>
                               )}
                               {item.type === "saved" && item.label !== item.value && (
-                                <span className="ml-2 text-[11px] font-sans text-text-muted">
+                                <span className="ml-2 text-2xs font-sans text-text-muted">
                                   {item.value}
                                 </span>
                               )}
                               {(item.type === "script" || item.type === "saved") &&
                                 "description" in item &&
                                 item.description && (
-                                  <span className="mt-0.5 block truncate text-[11px] font-sans text-text-muted">
+                                  <span className="mt-0.5 block truncate text-2xs font-sans text-text-muted">
                                     {item.description}
                                   </span>
                                 )}

@@ -88,7 +88,7 @@ export function DiagnosticCopyButton({ diagnostics, className }: DiagnosticCopyB
         type="button"
         onClick={handleClick}
         aria-label={copied ? "Diagnostics copied" : "Copy diagnostics"}
-        className="flex items-center gap-1 px-1.5 py-0.5 text-[10px] font-medium text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-border/40 rounded transition-colors outline-hidden focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-daintree-accent shrink-0"
+        className="flex items-center gap-1 px-1.5 py-0.5 text-3xs font-medium text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-border/40 rounded transition-colors outline-hidden focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-daintree-accent shrink-0"
       >
         <Copy className="w-3 h-3" aria-hidden="true" />
         {copied ? "Copied" : "Copy"}

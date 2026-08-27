@@ -96,13 +96,13 @@ export function createSelectionChipTooltip() {
         dom.className = "px-2 py-1 text-xs";
         dom.style.cssText = `
           background: color-mix(in oklab, var(--theme-surface-canvas) 95%, transparent);
-          border-radius: 4px;
+          border-radius: var(--radius-xs);
           border: 1px solid var(--theme-border-subtle);
           box-shadow: 0 2px 8px var(--theme-scrim-soft);
         `;
 
         const desc = document.createElement("p");
-        desc.className = "text-[11px] text-text-primary/80 leading-snug";
+        desc.className = "text-2xs text-text-primary/80 leading-snug";
         desc.textContent = "Attaches current terminal text selection as context";
         dom.appendChild(desc);
 

@@ -40,7 +40,7 @@ export function SettingsSection({
           <Icon className={cn("w-4 h-4", iconColor)} aria-hidden="true" />
           {title}
           {badge && (
-            <span className="inline-flex items-center px-1.5 py-0.5 rounded-sm text-[10px] font-medium bg-text-secondary/10 border border-daintree-border/50 text-text-secondary uppercase tracking-wide">
+            <span className="inline-flex items-center px-1.5 py-0.5 rounded-sm text-3xs font-medium bg-text-secondary/10 border border-daintree-border/50 text-text-secondary uppercase tracking-wide">
               {badge}
             </span>
           )}

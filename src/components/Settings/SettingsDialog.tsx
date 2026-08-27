@@ -1377,7 +1377,7 @@ function MatchBadge({ count }: { count: number }) {
   return (
     <span
       aria-hidden="true"
-      className="ml-auto text-[10px] font-medium tabular-nums px-1.5 py-0.5 rounded-full bg-tint/10 text-daintree-text/60 leading-none"
+      className="ml-auto text-3xs font-medium tabular-nums px-1.5 py-0.5 rounded-full bg-tint/10 text-daintree-text/60 leading-none"
     >
       {count}
     </span>
@@ -1451,7 +1451,7 @@ export function ScopeChip({
     <span
       className={cn(
         "inline-flex items-center gap-1 max-w-[14rem] min-w-0 shrink-0",
-        "text-[10px] font-medium leading-none px-1.5 py-0.5 rounded-full",
+        "text-3xs font-medium leading-none px-1.5 py-0.5 rounded-full",
         // Neutral by construction: this sits next to N other results and the dialog's
         // one accent is already spent on the nav's active marker.
         crossScope ? "bg-tint/20 text-daintree-text/80" : "bg-tint/10 text-daintree-text/60"
@@ -1531,7 +1531,7 @@ function SearchResults({
           <span className="tabular-nums">{results.length}</span> result
           {results.length === 1 ? "" : "s"}
         </p>
-        <p className="text-[10px] text-daintree-text/30">
+        <p className="text-3xs text-daintree-text/30">
           <kbd className="settings-kbd px-1 py-0.5 rounded border font-mono">↑↓</kbd> navigate{" "}
           <kbd className="settings-kbd px-1 py-0.5 rounded border font-mono">↵</kbd> go
         </p>
@@ -1562,19 +1562,19 @@ function SearchResults({
                   projectLabel={projectLabel}
                   crossScope={result.scope !== activeScope}
                 />
-                <span className="text-[10px] font-medium text-text-secondary uppercase tracking-wide">
+                <span className="text-3xs font-medium text-text-secondary uppercase tracking-wide">
                   {result.tabLabel}
                 </span>
                 {result.subtabLabel && (
                   <>
-                    <span className="text-[10px] text-daintree-text/30">›</span>
-                    <span className="text-[10px] text-daintree-text/50">{result.subtabLabel}</span>
+                    <span className="text-3xs text-daintree-text/30">›</span>
+                    <span className="text-3xs text-daintree-text/50">{result.subtabLabel}</span>
                   </>
                 )}
-                <span className="text-[10px] text-daintree-text/30">›</span>
-                <span className="text-[10px] text-daintree-text/50">{result.section}</span>
+                <span className="text-3xs text-daintree-text/30">›</span>
+                <span className="text-3xs text-daintree-text/50">{result.section}</span>
                 {result.requiresEnabled && (
-                  <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-status-warning/10 px-1.5 py-0.5 text-[10px] font-medium text-status-warning shrink-0">
+                  <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-status-warning/10 px-1.5 py-0.5 text-3xs font-medium text-status-warning shrink-0">
                     <AlertTriangle className="w-3 h-3" />
                     Requires {midSentenceLabel(result.requiresEnabled.label)}
                   </span>

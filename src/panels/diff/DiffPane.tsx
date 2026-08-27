@@ -81,9 +81,13 @@ const GENERIC_AUDIO_ERROR: MediaPreviewError = {
   description: "The format is supported but the codec may not be — Refresh to try again.",
 };
 
-// Mirrors the ladder the modal used, so the preference keeps meaning the same
-// sizes it always did.
-const DIFF_FONT_SIZE_PX: Record<DiffFontSize, string> = { s: "11px", m: "12px", l: "14px" };
+// The S/M/L rungs are the shared type steps, so the preference keeps meaning the
+// same sizes it always did while still tracking the scale.
+const DIFF_FONT_SIZE: Record<DiffFontSize, string> = {
+  s: "var(--text-2xs)",
+  m: "var(--text-xs)",
+  l: "var(--text-sm)",
+};
 
 export interface DiffPaneProps extends BasePanelProps {
   tabs?: TabInfo[];
@@ -178,7 +182,7 @@ export function DiffPane({
   const diffShowFileList = usePreferencesStore((s) => s.diffShowFileList);
   const diffFontSize = usePreferencesStore((s) => s.diffFontSize);
   const diffFontStyle: CSSProperties & Record<"--diff-font-size", string> = {
-    "--diff-font-size": DIFF_FONT_SIZE_PX[diffFontSize],
+    "--diff-font-size": DIFF_FONT_SIZE[diffFontSize],
   };
   const setDiffShowFileList = usePreferencesStore((s) => s.setDiffShowFileList);
 

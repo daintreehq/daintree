@@ -460,7 +460,7 @@ function RowStatusLine({ status }: { status: ProjectRowStatus }) {
   if (parts.length === 0) return null;
 
   return (
-    <div className="flex items-center gap-1 min-w-0 mt-0.5 text-[11px] leading-none">
+    <div className="flex items-center gap-1 min-w-0 mt-0.5 text-2xs leading-none">
       {parts.map((part, index) => (
         <Fragment key={part.key}>
           {/*
@@ -876,7 +876,7 @@ function ScratchListItem({
           >
             {scratch.name}
           </span>
-          <span className="text-[11px] leading-none text-daintree-text/50 shrink-0">· Scratch</span>
+          <span className="text-2xs leading-none text-daintree-text/50 shrink-0">· Scratch</span>
           {scratch.isActive && <span className="sr-only">, current</span>}
           {showResumeDot && <ResumableAgentsLabel count={scratch.resumableAgentCount ?? 0} />}
         </div>
@@ -977,7 +977,7 @@ function BandCollapseToggle({
  * screen.
  */
 function BandCollapsedCount({ count }: { count: number }) {
-  return <span className="shrink-0 text-[10px] tabular-nums">{count}</span>;
+  return <span className="shrink-0 text-3xs tabular-nums">{count}</span>;
 }
 
 /** Stable `aria-controls` target for a band's rows. */
@@ -1798,7 +1798,7 @@ function ScratchSection({
                           <RowStatusLine status={status} />
                           {countdown && (
                             <div
-                              className="text-[11px] leading-none text-text-secondary mt-0.5 truncate"
+                              className="text-2xs leading-none text-text-secondary mt-0.5 truncate"
                               data-testid="scratch-cleanup-countdown"
                             >
                               {countdown}

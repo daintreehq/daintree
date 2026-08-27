@@ -56,7 +56,7 @@ export function PushErrorBanner({
       data-testid={isPrimary ? "review-hub-push-error-cta" : "review-hub-push-error-secondary-cta"}
       data-cta-kind={cta.kind}
       className={cn(
-        "inline-flex items-center gap-1 px-2 py-0.5 rounded text-[11px] font-medium transition-colors",
+        "inline-flex items-center gap-1 px-2 py-0.5 rounded text-2xs font-medium transition-colors",
         "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-status-warning",
         "disabled:opacity-50 disabled:cursor-not-allowed",
         isPrimary
@@ -82,7 +82,7 @@ export function PushErrorBanner({
         {forgeErrorCode && (
           <div
             data-testid="review-hub-push-error-code"
-            className="mt-1 text-[10px] font-mono opacity-80"
+            className="mt-1 text-3xs font-mono opacity-80"
           >
             {forgeErrorCode}
           </div>
@@ -97,7 +97,7 @@ export function PushErrorBanner({
               className={cn(
                 "inline-flex items-center px-1.5 py-0.5 rounded",
                 "text-status-warning/80 hover:text-status-warning",
-                "text-[10px] font-medium underline-offset-2 hover:underline transition-colors",
+                "text-3xs font-medium underline-offset-2 hover:underline transition-colors",
                 "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-status-warning"
               )}
             >
@@ -108,7 +108,7 @@ export function PushErrorBanner({
         {canCollapse && showPushDetails && (
           <pre
             data-testid="review-hub-push-error-details"
-            className="mt-1 text-[10px] font-mono whitespace-pre-wrap break-all opacity-70"
+            className="mt-1 text-3xs font-mono whitespace-pre-wrap break-all opacity-70"
           >
             {pushError.rawMessage}
           </pre>

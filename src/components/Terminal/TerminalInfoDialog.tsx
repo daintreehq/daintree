@@ -37,7 +37,7 @@ const UNAVAILABLE = "Unavailable";
  * sentence, and at 11px it reads as structure instead of competing with the rows for
  * the same tab stop of the eye.
  */
-const MICRO_LABEL = "text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60";
+const MICRO_LABEL = "text-2xs font-semibold uppercase tracking-wider text-daintree-text/60";
 
 /**
  * The label rail.
@@ -251,7 +251,7 @@ function DisclosureGroup({
          * five identical micro-labels, two of which happen to be buttons, is not an
          * affordance. Same treatment as the commit count in `GitPushConfirmDialog`.
          */}
-        <span className="ml-1.5 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-[10px] font-medium normal-case tracking-normal text-daintree-text/70">
+        <span className="ml-1.5 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-3xs font-medium normal-case tracking-normal text-daintree-text/70">
           {count}
         </span>
       </button>

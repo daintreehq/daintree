@@ -100,14 +100,14 @@ function ThemeRow({
         <div className="flex items-center gap-1.5">
           <span className="text-xs font-medium text-daintree-text truncate">{scheme.name}</span>
           {warnings.length > 0 && (
-            <span className="inline-flex items-center gap-0.5 rounded-full bg-status-warning/10 px-1.5 py-0.5 text-[10px] text-status-warning shrink-0">
+            <span className="inline-flex items-center gap-0.5 rounded-full bg-status-warning/10 px-1.5 py-0.5 text-3xs text-status-warning shrink-0">
               <AlertTriangle className="h-2.5 w-2.5" />
               {warnings.length}
             </span>
           )}
         </div>
         {scheme.location && (
-          <span className="text-[11px] text-text-secondary truncate block">{scheme.location}</span>
+          <span className="text-2xs text-text-secondary truncate block">{scheme.location}</span>
         )}
       </div>
       <PaletteStrip scheme={scheme} />
@@ -468,7 +468,7 @@ export function ThemeBrowser() {
             {activeScheme.name}
           </span>
           {activeScheme.location && (
-            <span className="text-[11px] text-white/75 drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]">
+            <span className="text-2xs text-white/75 drop-shadow-[0_1px_2px_rgba(0,0,0,0.5)]">
               {activeScheme.location}
             </span>
           )}
@@ -503,7 +503,7 @@ export function ThemeBrowser() {
               setTypeFilter("dark");
             }}
             className={cn(
-              "px-2.5 py-0.5 text-[11px] font-medium transition-colors",
+              "px-2.5 py-0.5 text-2xs font-medium transition-colors",
               typeFilter === "dark"
                 ? "bg-daintree-accent/15 text-daintree-text"
                 : "text-daintree-text/50 hover:text-daintree-text/70"
@@ -519,7 +519,7 @@ export function ThemeBrowser() {
               setTypeFilter("light");
             }}
             className={cn(
-              "px-2.5 py-0.5 text-[11px] font-medium transition-colors border-l border-daintree-border",
+              "px-2.5 py-0.5 text-2xs font-medium transition-colors border-l border-daintree-border",
               typeFilter === "light"
                 ? "bg-daintree-accent/15 text-daintree-text"
                 : "text-daintree-text/50 hover:text-daintree-text/70"

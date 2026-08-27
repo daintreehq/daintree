@@ -30,7 +30,7 @@ export function PrStatusChip({ hasRemote, worktreePR, onOpenExternal }: PrStatus
       <>
         <Badge
           tone="outline"
-          className="text-[11px] font-mono"
+          className="text-2xs font-mono"
           aria-label={
             ciVisual
               ? `Pull request #${worktreePR.prNumber} ${prStateLabel} — CI ${ciVisual.shortLabel}`
@@ -94,7 +94,7 @@ export function PrStatusChip({ hasRemote, worktreePR, onOpenExternal }: PrStatus
 
   if (hasRemote && !worktreePR) {
     return (
-      <Badge tone="outline" className="text-[11px] text-text-secondary">
+      <Badge tone="outline" className="text-2xs text-text-secondary">
         <GitPullRequest />
         <span>No PR</span>
       </Badge>

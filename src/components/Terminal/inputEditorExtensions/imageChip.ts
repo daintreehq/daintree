@@ -141,7 +141,7 @@ export function createImageChipTooltip() {
         dom.className = "px-2 py-2";
         dom.style.cssText = `
           background: var(--theme-surface-panel-elevated);
-          border-radius: 6px;
+          border-radius: var(--radius-sm);
           box-shadow: 0 4px 12px var(--theme-scrim-medium);
         `;
 
@@ -149,12 +149,12 @@ export function createImageChipTooltip() {
         img.src = entry.thumbnailUrl;
         img.alt = "Screenshot preview";
         img.style.cssText =
-          "max-width: 200px; max-height: 200px; border-radius: 4px; display: block;";
+          "max-width: 200px; max-height: 200px; border-radius: var(--radius-xs); display: block;";
         dom.appendChild(img);
 
         const pathEl = document.createElement("p");
         pathEl.style.cssText =
-          "font-size: 10px; color: var(--theme-text-muted); margin-top: 4px; word-break: break-all; max-width: 200px;";
+          "font-size: var(--text-3xs); color: var(--theme-text-muted); margin-top: 4px; word-break: break-all; max-width: 200px;";
         pathEl.textContent = entry.filePath;
         dom.appendChild(pathEl);
 

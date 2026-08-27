@@ -312,7 +312,7 @@ export function ForgeAuditLogViewer({
                       {record.methodName}
                     </span>
                     {(record.repoOwner || record.repoName) && (
-                      <span className="font-mono text-[10px] text-daintree-text/50 truncate">
+                      <span className="font-mono text-3xs text-daintree-text/50 truncate">
                         {record.repoOwner ? `${record.repoOwner}/` : ""}
                         {record.repoName ?? ""}
                       </span>
@@ -327,7 +327,7 @@ export function ForgeAuditLogViewer({
                     </div>
                   )}
                   {record.errorMessage && (
-                    <div className="mt-0.5 text-[10px] text-status-danger/80 truncate">
+                    <div className="mt-0.5 text-3xs text-status-danger/80 truncate">
                       {record.errorMessage}
                     </div>
                   )}

@@ -176,10 +176,10 @@ function CacheDirsPreview({ meta, sizes, sizesPending }: CacheDirsPreviewProps) 
       data-testid="dev-preview-destructive-cache-preview"
     >
       <div className="px-3 py-2 border-b border-tint/[0.08] flex items-center justify-between">
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60">
+        <span className="text-2xs font-semibold uppercase tracking-wider text-daintree-text/60">
           Directories to delete
           {cacheDirs && (
-            <span className="ml-1.5 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-[10px] font-medium normal-case tracking-normal">
+            <span className="ml-1.5 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-3xs font-medium normal-case tracking-normal">
               {presentCount} of {cacheDirs.length}
             </span>
           )}
@@ -215,7 +215,7 @@ function CacheDirsPreview({ meta, sizes, sizesPending }: CacheDirsPreviewProps) 
                   </span>
                   {dir.exists ? (
                     <>
-                      <span className="text-[10px] text-text-secondary shrink-0">
+                      <span className="text-3xs text-text-secondary shrink-0">
                         {dir.mtimeMs ? formatRelativeTime(dir.mtimeMs) : null}
                       </span>
                       <span className="ml-auto tabular-nums text-daintree-text/60 shrink-0">
@@ -232,7 +232,7 @@ function CacheDirsPreview({ meta, sizes, sizesPending }: CacheDirsPreviewProps) 
                       </span>
                     </>
                   ) : (
-                    <span className="ml-auto text-[10px] text-daintree-text/35 italic shrink-0">
+                    <span className="ml-auto text-3xs text-daintree-text/35 italic shrink-0">
                       not present
                     </span>
                   )}
@@ -262,7 +262,7 @@ function NodeModulesPreview({ meta, sizes, sizesPending }: NodeModulesPreviewPro
       data-testid="dev-preview-destructive-reinstall-preview"
     >
       <div className="px-3 py-2 border-b border-tint/[0.08]">
-        <span className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60">
+        <span className="text-2xs font-semibold uppercase tracking-wider text-daintree-text/60">
           What will happen
         </span>
       </div>
@@ -284,12 +284,12 @@ function NodeModulesPreview({ meta, sizes, sizesPending }: NodeModulesPreviewPro
         </Row>
         <Row label="Size">
           {nodeModules?.exists === false ? (
-            <span className="text-[10px] text-daintree-text/35 italic">not present</span>
+            <span className="text-3xs text-daintree-text/35 italic">not present</span>
           ) : sizeBytes !== null ? (
             <span className="tabular-nums text-daintree-text/80">
               {formatBytes(sizeBytes)}
               {isPnpm && (
-                <span className="ml-1.5 text-[10px] text-daintree-text/45 italic">
+                <span className="ml-1.5 text-3xs text-daintree-text/45 italic">
                   apparent — pnpm store files remain
                 </span>
               )}
@@ -326,7 +326,7 @@ function NodeModulesPreview({ meta, sizes, sizesPending }: NodeModulesPreviewPro
             meta.lockfileName ? (
               <span className="font-mono text-daintree-text/80">{meta.lockfileName}</span>
             ) : (
-              <span className="text-[10px] text-daintree-text/45 italic">none — npm fallback</span>
+              <span className="text-3xs text-daintree-text/45 italic">none — npm fallback</span>
             )
           ) : (
             <RowSkeleton width="w-32" />
@@ -340,7 +340,7 @@ function NodeModulesPreview({ meta, sizes, sizesPending }: NodeModulesPreviewPro
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex items-baseline gap-2">
-      <dt className="text-[10px] uppercase tracking-wider text-daintree-text/50 shrink-0 w-28">
+      <dt className="text-3xs uppercase tracking-wider text-daintree-text/50 shrink-0 w-28">
         {label}
       </dt>
       <dd className="flex-1 min-w-0">{children}</dd>

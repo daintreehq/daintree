@@ -38,13 +38,13 @@ import { PLUGIN_CATEGORIES } from "@shared/config/pluginCategoryRegistry";
 import type { LoadedPluginInfo, PluginDeepLinkIntent } from "@shared/types/plugin";
 
 const ROW_BADGE_CLASS =
-  "inline-flex items-center px-1.5 py-0.5 rounded-sm text-[10px] font-medium bg-overlay-subtle border border-daintree-border/50 text-daintree-text/60 uppercase tracking-wide";
+  "inline-flex items-center px-1.5 py-0.5 rounded-sm text-3xs font-medium bg-overlay-subtle border border-daintree-border/50 text-daintree-text/60 uppercase tracking-wide";
 
 // Disabled-option separator class for section headers inside the listbox.
 // role="group" inside role="listbox" is broken under Chromium 146 + VoiceOver
 // (LESSON #9006), so headers masquerade as non-interactive options instead.
 const SECTION_HEADER_CLASS =
-  "px-3 text-[10px] font-medium uppercase tracking-wider text-text-secondary select-none";
+  "px-3 text-3xs font-medium uppercase tracking-wider text-text-secondary select-none";
 
 // Operator chips surfaced below the search input so the filter syntax is
 // discoverable instead of hidden. Categories are the headline filters; the
@@ -140,14 +140,14 @@ function PluginRow({
             )}
           >
             <span className="truncate">{label}</span>
-            <span className="text-[11px] font-normal text-text-secondary">
+            <span className="text-2xs font-normal text-text-secondary">
               v{plugin.manifest.version}
             </span>
           </span>
           {tagline && (
             <span
               className={cn(
-                "mt-0.5 block text-[11px] truncate",
+                "mt-0.5 block text-2xs truncate",
                 enabled ? "text-daintree-text/50" : "text-daintree-text/35"
               )}
             >
@@ -162,7 +162,7 @@ function PluginRow({
             blocklisted) && (
             <span className="mt-1 flex items-center gap-1 flex-wrap">
               {blocklisted && (
-                <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-status-danger uppercase tracking-wide">
+                <span className="inline-flex items-center gap-0.5 text-3xs font-medium text-status-danger uppercase tracking-wide">
                   <AlertCircle className="w-3 h-3" aria-hidden="true" />
                   Blocked
                 </span>
@@ -176,7 +176,7 @@ function PluginRow({
                 <span className={`${ROW_BADGE_CLASS} text-daintree-text/50`}>Restart required</span>
               )}
               {plugin.loadError && (
-                <span className="inline-flex items-center gap-0.5 text-[10px] font-medium text-status-danger uppercase tracking-wide">
+                <span className="inline-flex items-center gap-0.5 text-3xs font-medium text-status-danger uppercase tracking-wide">
                   <AlertCircle className="w-3 h-3" aria-hidden="true" />
                   Failed
                 </span>
@@ -601,7 +601,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                       aria-pressed={active}
                       onClick={() => toggleFilterToken(token)}
                       className={cn(
-                        "px-1.5 py-0.5 rounded-sm text-[10px] font-medium border transition-colors",
+                        "px-1.5 py-0.5 rounded-sm text-3xs font-medium border transition-colors",
                         active
                           ? "bg-overlay-strong border-daintree-border text-daintree-text"
                           : "bg-overlay-subtle border-daintree-border/50 text-daintree-text/60 hover:text-daintree-text/80 hover:border-daintree-border"
@@ -616,13 +616,13 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
             {pm.notice && (
               <div className="flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-overlay-subtle border border-daintree-border">
                 <Info className="w-3.5 h-3.5 text-daintree-text/50 shrink-0 mt-0.5" />
-                <p className="text-[11px] text-daintree-text/70">{pm.notice}</p>
+                <p className="text-2xs text-daintree-text/70">{pm.notice}</p>
               </div>
             )}
             {pm.error && (
               <div className="flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-status-danger/10 border border-status-danger/20">
                 <AlertCircle className="w-3.5 h-3.5 text-status-danger shrink-0 mt-0.5" />
-                <p className="text-[11px] text-status-danger">{pm.error}</p>
+                <p className="text-2xs text-status-danger">{pm.error}</p>
               </div>
             )}
           </div>
@@ -743,12 +743,10 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
               network-backed catalog ships separately; the slot keeps its place
               in the master column so the layout doesn't shift when it lands. */}
           <div className="px-4 py-3 border-t border-daintree-border shrink-0">
-            <p className="text-[10px] font-medium uppercase tracking-wider text-text-secondary select-none">
+            <p className="text-3xs font-medium uppercase tracking-wider text-text-secondary select-none">
               Browse
             </p>
-            <p className="text-[11px] text-text-secondary mt-1">
-              Online plugin catalog coming soon.
-            </p>
+            <p className="text-2xs text-text-secondary mt-1">Online plugin catalog coming soon.</p>
           </div>
         </div>
 

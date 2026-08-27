@@ -78,7 +78,7 @@ export function RateLimitDetailsPanel({
     <div className="w-[260px] px-3.5 py-3.5">
       <div className="pb-5">
         <div className="text-text-primary text-sm font-semibold leading-tight">{heading}</div>
-        <div className="text-muted-foreground mt-1 text-[11px] leading-snug">{subheading}</div>
+        <div className="text-muted-foreground mt-1 text-2xs leading-snug">{subheading}</div>
       </div>
       {details ? (
         <div className="flex flex-col gap-4">
@@ -92,7 +92,7 @@ export function RateLimitDetailsPanel({
           ))}
         </div>
       ) : (
-        <div className="text-muted-foreground text-[11px] tabular-nums">
+        <div className="text-muted-foreground text-2xs tabular-nums">
           {fallbackResetAt && fallbackResetAt > now
             ? formatRateLimitCountdown(fallbackResetAt - now)
             : "Loading…"}
@@ -122,13 +122,13 @@ function RateLimitBucketRow({ label, bucket, now }: RateLimitBucketRowProps) {
       <div className="flex items-baseline justify-between gap-3">
         <span
           className={cn(
-            "text-[13px] font-medium leading-none",
+            "text-sm font-medium leading-none",
             exhausted ? "text-text-primary" : "text-text-secondary"
           )}
         >
           {label}
         </span>
-        <span className="text-muted-foreground text-[11px] leading-none tabular-nums">
+        <span className="text-muted-foreground text-2xs leading-none tabular-nums">
           {timeLabel}
         </span>
       </div>

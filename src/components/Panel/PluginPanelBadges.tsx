@@ -37,7 +37,7 @@ function BadgeIndicator({ pluginId, badge }: { pluginId: string; badge: PluginPa
       <span
         role="status"
         aria-label={badge.tooltip ?? `${pluginId}: ${badge.text}`}
-        className={`shrink-0 rounded px-1 text-[10px] font-medium leading-4 ${LABEL_COLOR[color]}`}
+        className={`shrink-0 rounded px-1 text-3xs font-medium leading-4 ${LABEL_COLOR[color]}`}
       >
         {badge.text}
       </span>

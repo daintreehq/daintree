@@ -104,7 +104,7 @@ function MetricTile({ label, value, unit, tone = "default" }: MetricTileProps) {
         tone === "alert" && "border-status-error/40 bg-status-error/5"
       )}
     >
-      <span className="text-[10px] uppercase tracking-wide text-daintree-text/55 font-medium">
+      <span className="text-3xs uppercase tracking-wide text-daintree-text/55 font-medium">
         {label}
       </span>
       <div className="flex items-baseline gap-1">
@@ -227,14 +227,14 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
             error ? (
               <span
                 data-testid="why-slow-stale-note"
-                className="text-[10px] text-status-warning/80 tabular-nums"
+                className="text-3xs text-status-warning/80 tabular-nums"
               >
                 Refresh failed · data from {formatSnapshotAge(snapshotAgeMs)}
               </span>
             ) : (
               <span
                 data-testid="why-slow-updated-note"
-                className="text-[10px] text-text-secondary tabular-nums"
+                className="text-3xs text-text-secondary tabular-nums"
               >
                 Updated {formatSnapshotAge(snapshotAgeMs)}
               </span>
@@ -268,7 +268,7 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
         <div className="flex flex-col gap-4">
           {/* Resource profile + reasons */}
           <section>
-            <h3 className="text-[10px] uppercase tracking-wide text-daintree-text/55 font-medium mb-2">
+            <h3 className="text-3xs uppercase tracking-wide text-daintree-text/55 font-medium mb-2">
               Resource profile
             </h3>
             {resource ? (
@@ -340,7 +340,7 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
 
           {/* Rendering + throttle */}
           <section>
-            <h3 className="text-[10px] uppercase tracking-wide text-daintree-text/55 font-medium mb-2">
+            <h3 className="text-3xs uppercase tracking-wide text-daintree-text/55 font-medium mb-2">
               Rendering &amp; throttle
             </h3>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -383,7 +383,7 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
 
           {/* Memory: Daintree's own processes vs terminal descendant workloads */}
           <section>
-            <h3 className="text-[10px] uppercase tracking-wide text-daintree-text/55 font-medium mb-2">
+            <h3 className="text-3xs uppercase tracking-wide text-daintree-text/55 font-medium mb-2">
               Memory
             </h3>
             {memory && memoryWorkloads ? (
@@ -426,7 +426,7 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
 
           {/* PTY + worktrees */}
           <section>
-            <h3 className="text-[10px] uppercase tracking-wide text-daintree-text/55 font-medium mb-2">
+            <h3 className="text-3xs uppercase tracking-wide text-daintree-text/55 font-medium mb-2">
               PTY &amp; worktrees
             </h3>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -491,7 +491,7 @@ function Badge({ children, tone = "default" }: { children: ReactNode; tone?: Met
   return (
     <span
       className={cn(
-        "inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-mono border border-daintree-border/40 bg-daintree-sidebar/40 text-daintree-text/75",
+        "inline-flex items-center px-1.5 py-0.5 rounded text-2xs font-mono border border-daintree-border/40 bg-daintree-sidebar/40 text-daintree-text/75",
         tone === "warn" && "border-status-warning/40 bg-status-warning/10 text-status-warning",
         tone === "alert" && "border-status-error/40 bg-status-error/10 text-status-error"
       )}

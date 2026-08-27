@@ -92,7 +92,7 @@ export function RecipeRunnerItem({
                 {recipe.name}
               </span>
               {recipe.shadowedBy && (
-                <span className="text-[11px] text-text-muted shrink-0">Overridden by Team</span>
+                <span className="text-2xs text-text-muted shrink-0">Overridden by Team</span>
               )}
               {isPinned && (
                 // Neutral, not accent: pinning is membership, and the accent is
@@ -155,9 +155,9 @@ export function RecipeRunnerItem({
           <span className="flex-1 text-sm font-medium text-daintree-text truncate">
             {recipe.name}
           </span>
-          <span className="text-[11px] text-text-muted shrink-0">{scopeLabel}</span>
+          <span className="text-2xs text-text-muted shrink-0">{scopeLabel}</span>
           {recipe.shadowedBy && (
-            <span className="text-[11px] text-text-muted shrink-0">Overridden by Team</span>
+            <span className="text-2xs text-text-muted shrink-0">Overridden by Team</span>
           )}
           {recipeSummary && recipeSummary !== recipe.name && (
             <span className="text-xs text-text-muted truncate max-w-[30%]">{recipeSummary}</span>

@@ -154,10 +154,10 @@ export function ForcePushConfirmDialog({
 
         <div className="rounded border border-tint/[0.08] bg-tint/[0.04]">
           <div className="px-3 py-2 border-b border-tint/[0.08] flex items-center justify-between">
-            <span className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60">
+            <span className="text-2xs font-semibold uppercase tracking-wider text-daintree-text/60">
               Remote commits to discard
               {totalRemote > 0 && (
-                <span className="ml-1.5 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-[10px] font-medium normal-case tracking-normal">
+                <span className="ml-1.5 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-3xs font-medium normal-case tracking-normal">
                   {totalRemote}
                 </span>
               )}
@@ -183,7 +183,7 @@ export function ForcePushConfirmDialog({
                   onClick={loadCommits}
                   data-testid="force-push-commits-retry"
                   className={cn(
-                    "mt-1 inline-flex items-center px-2 py-0.5 rounded text-[11px] font-medium transition-colors",
+                    "mt-1 inline-flex items-center px-2 py-0.5 rounded text-2xs font-medium transition-colors",
                     "bg-status-error/15 hover:bg-status-error/25 text-status-error",
                     "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-status-error"
                   )}
@@ -222,14 +222,12 @@ export function ForcePushConfirmDialog({
                     data-testid="force-push-commit-row"
                   >
                     <span
-                      className={cn(
-                        "font-mono text-[10px] text-text-secondary shrink-0 tabular-nums"
-                      )}
+                      className={cn("font-mono text-3xs text-text-secondary shrink-0 tabular-nums")}
                     >
                       {commit.hash.slice(0, SHORT_HASH_LEN)}
                     </span>
                     <span className="text-daintree-text/80 truncate min-w-0">{commit.message}</span>
-                    <span className="text-[10px] text-text-secondary shrink-0 ml-auto">
+                    <span className="text-3xs text-text-secondary shrink-0 ml-auto">
                       {commit.author}
                     </span>
                   </li>
@@ -240,7 +238,7 @@ export function ForcePushConfirmDialog({
                   // is that the divergence runs to hundreds of commits, not
                   // what the hundred-and-first one says.
                   <li
-                    className="text-[10px] text-text-secondary italic pt-1"
+                    className="text-3xs text-text-secondary italic pt-1"
                     data-testid="force-push-commit-cap"
                   >
                     Listing the {commits.length} most recent of {totalRemote}

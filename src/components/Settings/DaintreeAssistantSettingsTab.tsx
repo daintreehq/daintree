@@ -898,8 +898,8 @@ export function DaintreeAssistantSettingsTab() {
           description={
             <>
               Advanced — whitespace-separated flags appended to the launch command. Use the Model
-              picker above for the model; a <code className="font-mono text-[11px]">--model</code>{" "}
-              flag here overrides it. Applies to new assistant sessions.
+              picker above for the model; a <code className="font-mono text-2xs">--model</code> flag
+              here overrides it. Applies to new assistant sessions.
             </>
           }
           type="text"
@@ -975,14 +975,14 @@ export function DaintreeAssistantSettingsTab() {
       >
         <div className="flex items-start gap-3">
           <div className="flex-1 text-xs text-daintree-text/70 leading-relaxed select-text">
-            Files in <code className="font-mono text-[11px]">~/.daintree/assistant</code> are copied
+            Files in <code className="font-mono text-2xs">~/.daintree/assistant</code> are copied
             into each new assistant session. Claude Code picks up{" "}
-            <code className="font-mono text-[11px]">.claude/commands</code> and{" "}
-            <code className="font-mono text-[11px]">.claude/skills</code>; Codex picks up{" "}
-            <code className="font-mono text-[11px]">.agents/skills</code> and{" "}
-            <code className="font-mono text-[11px]">.codex/skills</code>; Copilot reads both skill
+            <code className="font-mono text-2xs">.claude/commands</code> and{" "}
+            <code className="font-mono text-2xs">.claude/skills</code>; Codex picks up{" "}
+            <code className="font-mono text-2xs">.agents/skills</code> and{" "}
+            <code className="font-mono text-2xs">.codex/skills</code>; Copilot reads both skill
             trees. A per-project variant in{" "}
-            <code className="font-mono text-[11px]">&lt;project&gt;/.daintree/assistant</code> takes
+            <code className="font-mono text-2xs">&lt;project&gt;/.daintree/assistant</code> takes
             precedence and can be committed to git.
           </div>
           <Button
@@ -1337,7 +1337,7 @@ function BlastRadiusPreview({ tier, isOpen, onToggle }: BlastRadiusPreviewProps)
         <div className="px-3 pb-3 pt-1 space-y-2">
           {groups.map(([ns, tools]) => (
             <div key={ns} className="space-y-1">
-              <div className="text-[10px] uppercase tracking-wide text-daintree-text/50 font-mono">
+              <div className="text-3xs uppercase tracking-wide text-daintree-text/50 font-mono">
                 {ns}
                 <span className="ml-1 text-daintree-text/30">({tools.length})</span>
               </div>
@@ -1346,7 +1346,7 @@ function BlastRadiusPreview({ tier, isOpen, onToggle }: BlastRadiusPreviewProps)
                   <span
                     key={tool}
                     className={cn(
-                      "px-1.5 py-0.5 rounded text-[10px] font-mono",
+                      "px-1.5 py-0.5 rounded text-3xs font-mono",
                       "bg-daintree-bg border border-daintree-border text-daintree-text/70"
                     )}
                   >
@@ -1442,7 +1442,7 @@ function NativeGrantsSection({
 
   return (
     <div className="space-y-2 pt-1">
-      <div className="text-[10px] uppercase tracking-wide text-daintree-text/50 font-mono">
+      <div className="text-3xs uppercase tracking-wide text-daintree-text/50 font-mono">
         Automation grants{grants.length > 0 ? ` (${grants.length})` : ""}
       </div>
       {grants.length > 0 ? (
@@ -1452,19 +1452,19 @@ function NativeGrantsSection({
               key={grant.grantId}
               className="rounded-[var(--radius-sm)] border border-daintree-border bg-daintree-bg/40 px-2 py-1.5 space-y-1"
             >
-              <div className="flex items-center justify-between gap-2 text-[11px]">
+              <div className="flex items-center justify-between gap-2 text-2xs">
                 <span className="font-mono text-daintree-text/70 truncate">
                   {(grant.allowedTools ?? []).join(", ") || "no tools"}
                 </span>
                 <button
                   type="button"
                   onClick={() => grant.grantId && revoke(grant.grantId)}
-                  className="shrink-0 text-[10px] text-daintree-text/60 hover:text-status-danger transition-colors"
+                  className="shrink-0 text-3xs text-daintree-text/60 hover:text-status-danger transition-colors"
                 >
                   Revoke
                 </button>
               </div>
-              <div className="flex items-center justify-between gap-2 text-[10px] text-daintree-text/50">
+              <div className="flex items-center justify-between gap-2 text-3xs text-daintree-text/50">
                 <span className="tabular-nums">
                   {grant.remainingUses ?? 0} of {grant.maxUses ?? 0} uses left
                 </span>
@@ -1474,7 +1474,7 @@ function NativeGrantsSection({
           ))}
         </div>
       ) : (
-        <div className="text-[11px] text-daintree-text/50">No automation grants active</div>
+        <div className="text-2xs text-daintree-text/50">No automation grants active</div>
       )}
 
       <div className="flex items-end gap-1.5 pt-0.5">
@@ -1483,7 +1483,7 @@ function NativeGrantsSection({
           value={toolsInput}
           onChange={(e) => setToolsInput(e.target.value)}
           placeholder="git.commit terminal.new"
-          className="flex-1 min-w-0 rounded-[var(--radius-sm)] border border-daintree-border bg-daintree-bg px-2 py-1 text-[11px] font-mono text-daintree-text placeholder:text-daintree-text/30 focus-visible:outline-2 focus-visible:outline-daintree-accent"
+          className="flex-1 min-w-0 rounded-[var(--radius-sm)] border border-daintree-border bg-daintree-bg px-2 py-1 text-2xs font-mono text-daintree-text placeholder:text-daintree-text/30 focus-visible:outline-2 focus-visible:outline-daintree-accent"
         />
         <input
           type="number"
@@ -1492,18 +1492,18 @@ function NativeGrantsSection({
           value={usesInput}
           onChange={(e) => setUsesInput(e.target.value)}
           aria-label="Maximum uses"
-          className="w-12 rounded-[var(--radius-sm)] border border-daintree-border bg-daintree-bg px-1.5 py-1 text-[11px] tabular-nums text-daintree-text focus-visible:outline-2 focus-visible:outline-daintree-accent"
+          className="w-12 rounded-[var(--radius-sm)] border border-daintree-border bg-daintree-bg px-1.5 py-1 text-2xs tabular-nums text-daintree-text focus-visible:outline-2 focus-visible:outline-daintree-accent"
         />
         <button
           type="button"
           onClick={approve}
           disabled={issuing}
-          className="shrink-0 rounded-[var(--radius-sm)] border border-daintree-border bg-overlay-subtle px-2 py-1 text-[11px] text-daintree-text/80 hover:text-daintree-text disabled:opacity-50 transition-colors"
+          className="shrink-0 rounded-[var(--radius-sm)] border border-daintree-border bg-overlay-subtle px-2 py-1 text-2xs text-daintree-text/80 hover:text-daintree-text disabled:opacity-50 transition-colors"
         >
           Approve grant
         </button>
       </div>
-      {issueError && <div className="text-[10px] text-status-danger">{issueError}</div>}
+      {issueError && <div className="text-3xs text-status-danger">{issueError}</div>}
     </div>
   );
 }
@@ -1552,7 +1552,7 @@ function SessionLiveStatusCard({ configuredTier }: SessionLiveStatusCardProps) {
           </span>
         </span>
         {connected && (
-          <span className="px-1.5 py-0.5 rounded text-[10px] font-mono bg-daintree-bg border border-daintree-border text-daintree-text/70">
+          <span className="px-1.5 py-0.5 rounded text-3xs font-mono bg-daintree-bg border border-daintree-border text-daintree-text/70">
             {TIER_SHORT_LABEL[tier]}
           </span>
         )}
@@ -1567,14 +1567,14 @@ function SessionLiveStatusCard({ configuredTier }: SessionLiveStatusCardProps) {
           </div>
           {perToolGrants.length > 0 ? (
             <div className="space-y-1">
-              <div className="text-[10px] uppercase tracking-wide text-daintree-text/50 font-mono">
+              <div className="text-3xs uppercase tracking-wide text-daintree-text/50 font-mono">
                 Active grants ({perToolGrants.length})
               </div>
               <div className="space-y-1">
                 {perToolGrants.map((grant) => (
                   <div
                     key={grant.toolId}
-                    className="flex items-center justify-between gap-2 text-[11px]"
+                    className="flex items-center justify-between gap-2 text-2xs"
                   >
                     <span className="font-mono text-daintree-text/70 truncate">{grant.toolId}</span>
                     <GrantCountdown expiresAt={grant.expiresAt} />
@@ -1583,7 +1583,7 @@ function SessionLiveStatusCard({ configuredTier }: SessionLiveStatusCardProps) {
               </div>
             </div>
           ) : (
-            <div className="text-[11px] text-daintree-text/50">No per-tool grants active</div>
+            <div className="text-2xs text-daintree-text/50">No per-tool grants active</div>
           )}
           {sessionId && <NativeGrantsSection helpSessionId={sessionId} grants={nativeGrants} />}
         </>

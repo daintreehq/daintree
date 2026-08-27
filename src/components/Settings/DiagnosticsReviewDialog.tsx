@@ -358,7 +358,7 @@ export function DiagnosticsReviewDialog({
             {showPreview ? "Hide Preview" : "Show Preview"}
           </Button>
           {showPreview && (
-            <pre className="text-[10px] leading-relaxed font-mono bg-daintree-bg border border-daintree-border rounded p-3 max-h-64 overflow-auto text-daintree-text/80 whitespace-pre-wrap break-all">
+            <pre className="text-3xs leading-relaxed font-mono bg-daintree-bg border border-daintree-border rounded p-3 max-h-64 overflow-auto text-daintree-text/80 whitespace-pre-wrap break-all">
               {previewJson}
             </pre>
           )}

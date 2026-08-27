@@ -1299,7 +1299,7 @@ export function NewWorktreeDialog({
             >
               {initialPR ? "Check out" : "Create worktree"}
               <span
-                className="ml-1 rounded-[3px] bg-text-inverse/15 px-1 py-0.5 font-mono text-[10px] leading-none text-text-inverse"
+                className="ml-1 rounded-xs bg-text-inverse/15 px-1 py-0.5 font-mono text-3xs leading-none text-text-inverse"
                 aria-hidden="true"
               >
                 {isMac() ? "\u2318\u21A9" : "Ctrl\u21A9"}

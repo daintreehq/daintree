@@ -142,7 +142,7 @@ export function ZoomableImage({ filePath, rootPath, alt, cacheBust, onError }: Z
           className="max-h-full max-w-full object-contain"
         />
       </div>
-      <div className="flex shrink-0 items-center justify-between border-t border-daintree-border px-3 py-1 text-[11px] text-muted-foreground">
+      <div className="flex shrink-0 items-center justify-between border-t border-daintree-border px-3 py-1 text-2xs text-muted-foreground">
         <span>{Math.round(zoom * 100)}%</span>
         <button
           type="button"

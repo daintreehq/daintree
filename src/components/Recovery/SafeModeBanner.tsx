@@ -56,7 +56,7 @@ function QuarantinedPanelRow({ panel }: QuarantinedPanelRowProps) {
           {displayTitle}
         </p>
         {subtitle && (
-          <p className="truncate text-[10px] text-daintree-text/50" title={subtitle}>
+          <p className="truncate text-3xs text-daintree-text/50" title={subtitle}>
             {subtitle}
           </p>
         )}
@@ -65,22 +65,22 @@ function QuarantinedPanelRow({ panel }: QuarantinedPanelRowProps) {
         <button
           type="button"
           onClick={handleRestore}
-          className="shrink-0 rounded border border-[var(--color-status-warning)]/30 px-2 py-0.5 text-[10px] transition-colors hover:bg-[var(--color-status-warning)]/10"
+          className="shrink-0 rounded border border-[var(--color-status-warning)]/30 px-2 py-0.5 text-3xs transition-colors hover:bg-[var(--color-status-warning)]/10"
         >
           Restore panel
         </button>
       )}
       {state === "clearing" && (
-        <span className="shrink-0 text-[10px] text-daintree-text/60">Clearing…</span>
+        <span className="shrink-0 text-3xs text-daintree-text/60">Clearing…</span>
       )}
       {state === "cleared" && (
-        <span className="shrink-0 text-[10px] text-daintree-text/60">Restoring on next launch</span>
+        <span className="shrink-0 text-3xs text-daintree-text/60">Restoring on next launch</span>
       )}
       {state === "failed" && (
         <button
           type="button"
           onClick={handleRestore}
-          className="shrink-0 rounded border border-[var(--color-status-warning)]/30 px-2 py-0.5 text-[10px] transition-colors hover:bg-[var(--color-status-warning)]/10"
+          className="shrink-0 rounded border border-[var(--color-status-warning)]/30 px-2 py-0.5 text-3xs transition-colors hover:bg-[var(--color-status-warning)]/10"
         >
           Retry
         </button>
@@ -161,7 +161,7 @@ export function SafeModeBanner() {
             </p>
             <ul
               role="list"
-              className="-mx-1 max-h-64 overflow-y-auto divide-y divide-daintree-text/10 text-[11px]"
+              className="-mx-1 max-h-64 overflow-y-auto divide-y divide-daintree-text/10 text-2xs"
             >
               {quarantined.map((panel) => (
                 <QuarantinedPanelRow key={panel.id} panel={panel} />

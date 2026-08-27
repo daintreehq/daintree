@@ -213,7 +213,7 @@ export function GettingStartedChecklist({
                   label={counterLabel}
                   animateKey={counterAnimateKey}
                   textClassName={cn(
-                    "text-[10px] font-mono tabular-nums",
+                    "text-3xs font-mono tabular-nums",
                     allComplete ? "text-daintree-accent" : "text-daintree-text/50"
                   )}
                 />
@@ -296,7 +296,7 @@ export function GettingStartedChecklist({
                       {description && (
                         <span
                           className={cn(
-                            "text-[10px] leading-snug",
+                            "text-3xs leading-snug",
                             done ? "text-daintree-text/30" : "text-daintree-text/50"
                           )}
                         >
@@ -354,7 +354,7 @@ export function GettingStartedChecklist({
               }}
               className={cn(
                 "w-full text-left px-2 py-1 rounded-[var(--radius-xs)]",
-                "text-[10px] text-daintree-text/50 transition-colors duration-150",
+                "text-3xs text-daintree-text/50 transition-colors duration-150",
                 "hover:text-daintree-text/80 hover:bg-tint/10",
                 "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
               )}

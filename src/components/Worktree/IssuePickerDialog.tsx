@@ -60,7 +60,7 @@ function IssueOptionRow({ issue, isSelected, isCurrentlyAttached, onClick }: Iss
               {issue.title}
             </span>
             {isCurrentlyAttached && (
-              <span className="text-[10px] px-1.5 py-0.5 rounded bg-status-success/10 text-status-success shrink-0">
+              <span className="text-3xs px-1.5 py-0.5 rounded bg-status-success/10 text-status-success shrink-0">
                 attached
               </span>
             )}

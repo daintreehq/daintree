@@ -46,7 +46,7 @@
 
 .settings-meta {
   color: var(--settings-meta-fg, var(--theme-text-muted));
-  font-size: var(--settings-meta-size, 11px);
+  font-size: var(--settings-meta-size, var(--text-2xs));
 }
 
 .settings-nav-item:hover {

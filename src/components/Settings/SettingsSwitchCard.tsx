@@ -59,7 +59,7 @@ export function SettingsSwitchCard({
   };
 
   const scopeBadge = scope ? (
-    <span className="text-[10px] px-1.5 py-0.5 rounded-sm font-medium bg-text-secondary/10 text-text-secondary dark:bg-text-secondary/20">
+    <span className="text-3xs px-1.5 py-0.5 rounded-sm font-medium bg-text-secondary/10 text-text-secondary dark:bg-text-secondary/20">
       {scope === "project" ? "Project" : scope === "global" ? "Global" : "Default"}
     </span>
   ) : null;
@@ -94,7 +94,7 @@ export function SettingsSwitchCard({
             {title}
             {scopeBadge}
             {lifecycleBadge && (
-              <span className="inline-flex items-center px-1.5 py-0.5 rounded-sm text-[10px] font-medium bg-overlay-subtle border border-daintree-border/50 text-daintree-text/50 uppercase tracking-wide">
+              <span className="inline-flex items-center px-1.5 py-0.5 rounded-sm text-3xs font-medium bg-overlay-subtle border border-daintree-border/50 text-daintree-text/50 uppercase tracking-wide">
                 {lifecycleBadge}
               </span>
             )}

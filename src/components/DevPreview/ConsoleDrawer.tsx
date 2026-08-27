@@ -245,7 +245,7 @@ export function ConsoleDrawer({
       status === "stopping");
   const stopDisabled = isRestarting || status === "stopping";
   const statusClass = cn(
-    "inline-flex min-h-8 items-center px-3 text-[10px] font-semibold uppercase tracking-wide",
+    "inline-flex min-h-8 items-center px-3 text-3xs font-semibold uppercase tracking-wide",
     (hasRestartControls || stopVisible) && "border-r border-overlay/70",
     statusLabel.textClass
   );

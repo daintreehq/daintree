@@ -56,7 +56,7 @@ export function TerminalDragPreview({ terminal, groupTabCount }: TerminalDragPre
             color: "var(--color-daintree-bg)",
             borderRadius: "9999px",
             padding: "2px 6px",
-            fontSize: 10,
+            fontSize: "var(--text-3xs)",
             fontWeight: 600,
             display: "flex",
             alignItems: "center",
@@ -98,7 +98,7 @@ export function TerminalDragPreview({ terminal, groupTabCount }: TerminalDragPre
         <span
           style={{
             fontFamily: "var(--font-mono)",
-            fontSize: 11,
+            fontSize: "var(--text-2xs)",
             fontWeight: 500,
             color: "var(--color-daintree-text)",
             whiteSpace: "nowrap",

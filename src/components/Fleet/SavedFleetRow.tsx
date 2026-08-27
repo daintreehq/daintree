@@ -31,7 +31,7 @@ export function SavedFleetRow({
       className={isStale ? "flex items-center gap-2 opacity-50" : "flex items-center gap-2"}
     >
       <span className="flex-1 truncate">{scope.name}</span>
-      <span className="text-[10px] text-daintree-text/50 tabular-nums">
+      <span className="text-3xs text-daintree-text/50 tabular-nums">
         {count} · {flavorLabel}
       </span>
       <button

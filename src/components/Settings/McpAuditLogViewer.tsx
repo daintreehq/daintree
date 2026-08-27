@@ -254,28 +254,28 @@ function GrantRow({
           <span className="font-mono text-daintree-text/60 truncate">{record.toolId}</span>
         </div>
         {record.type === "tier.elevated" && record.tier && record.previousTier && (
-          <div className="mt-0.5 text-[10px] text-daintree-text/50">
+          <div className="mt-0.5 text-3xs text-daintree-text/50">
             {record.previousTier} → {record.tier}
           </div>
         )}
         {record.type === "tier.decayed" && record.tier && record.previousTier && (
-          <div className="mt-0.5 text-[10px] text-daintree-text/50">
+          <div className="mt-0.5 text-3xs text-daintree-text/50">
             {record.previousTier} → {record.tier}
           </div>
         )}
         {record.type === "grant.revoked" && record.revokedReason && (
-          <div className="mt-0.5 text-[10px] text-daintree-text/50">
+          <div className="mt-0.5 text-3xs text-daintree-text/50">
             Reason: {record.revokedReason}
           </div>
         )}
         {record.maxUses !== undefined &&
           (record.type === "grant.used" || record.type === "grant.exhausted") && (
-            <div className="mt-0.5 text-[10px] text-daintree-text/50">
+            <div className="mt-0.5 text-3xs text-daintree-text/50">
               {record.remainingUses ?? 0} of {record.maxUses} uses left
             </div>
           )}
         {record.expiresAt !== undefined && record.type === "grant.issued" && (
-          <div className="mt-0.5 text-[10px] text-daintree-text/50">
+          <div className="mt-0.5 text-3xs text-daintree-text/50">
             Expires{" "}
             {new Date(record.expiresAt).toLocaleTimeString([], {
               hour: "2-digit",
@@ -576,7 +576,7 @@ export function McpAuditLogViewer({
                               {record.toolId}
                             </span>
                             {record.errorCode && (
-                              <span className="text-[10px] uppercase tracking-wide text-status-danger/80">
+                              <span className="text-3xs uppercase tracking-wide text-status-danger/80">
                                 {record.errorCode}
                               </span>
                             )}
@@ -585,12 +585,12 @@ export function McpAuditLogViewer({
                             {record.argsSummary || "{}"}
                           </div>
                           {record.result === "unauthorized" && record.tierHint && (
-                            <div className="mt-0.5 text-[10px] text-daintree-text/50">
+                            <div className="mt-0.5 text-3xs text-daintree-text/50">
                               Raise capability tier to {TIER_HINT_LABEL[record.tierHint]} to allow.
                             </div>
                           )}
                           {record.result === "unauthorized" && record.tierHint === null && (
-                            <div className="mt-0.5 text-[10px] text-daintree-text/50">
+                            <div className="mt-0.5 text-3xs text-daintree-text/50">
                               Tool isn't permitted at any tier.
                             </div>
                           )}
@@ -637,7 +637,7 @@ export function McpAuditLogViewer({
                               {record.toolId}
                             </span>
                             {record.errorCode && (
-                              <span className="text-[10px] uppercase tracking-wide text-status-danger/80">
+                              <span className="text-3xs uppercase tracking-wide text-status-danger/80">
                                 {record.errorCode}
                               </span>
                             )}
@@ -700,7 +700,7 @@ export function McpAuditLogViewer({
                         {record.toolId}
                       </span>
                       {record.errorCode && (
-                        <span className="text-[10px] uppercase tracking-wide text-status-danger/80">
+                        <span className="text-3xs uppercase tracking-wide text-status-danger/80">
                           {record.errorCode}
                         </span>
                       )}
@@ -709,12 +709,12 @@ export function McpAuditLogViewer({
                       {record.argsSummary || "{}"}
                     </div>
                     {record.result === "unauthorized" && record.tierHint && (
-                      <div className="mt-0.5 text-[10px] text-daintree-text/50">
+                      <div className="mt-0.5 text-3xs text-daintree-text/50">
                         Raise capability tier to {TIER_HINT_LABEL[record.tierHint]} to allow.
                       </div>
                     )}
                     {record.result === "unauthorized" && record.tierHint === null && (
-                      <div className="mt-0.5 text-[10px] text-daintree-text/50">
+                      <div className="mt-0.5 text-3xs text-daintree-text/50">
                         Tool isn't permitted at any tier.
                       </div>
                     )}
@@ -740,22 +740,22 @@ export function McpAuditLogViewer({
                       </span>
                     </div>
                     {record.type === "tier.elevated" && record.tier && record.previousTier && (
-                      <div className="mt-0.5 text-[10px] text-daintree-text/50">
+                      <div className="mt-0.5 text-3xs text-daintree-text/50">
                         {record.previousTier} → {record.tier}
                       </div>
                     )}
                     {record.type === "tier.decayed" && record.tier && record.previousTier && (
-                      <div className="mt-0.5 text-[10px] text-daintree-text/50">
+                      <div className="mt-0.5 text-3xs text-daintree-text/50">
                         {record.previousTier} → {record.tier}
                       </div>
                     )}
                     {record.type === "grant.revoked" && record.revokedReason && (
-                      <div className="mt-0.5 text-[10px] text-daintree-text/50">
+                      <div className="mt-0.5 text-3xs text-daintree-text/50">
                         Reason: {record.revokedReason}
                       </div>
                     )}
                     {record.expiresAt !== undefined && record.type === "grant.issued" && (
-                      <div className="mt-0.5 text-[10px] text-daintree-text/50">
+                      <div className="mt-0.5 text-3xs text-daintree-text/50">
                         Expires{" "}
                         {new Date(record.expiresAt).toLocaleTimeString([], {
                           hour: "2-digit",

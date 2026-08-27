@@ -133,14 +133,14 @@ export function TrashGroupItem({
             {worktreeName ? (
               <span className="text-daintree-text/50 ml-1 font-normal">({worktreeName})</span>
             ) : isOrphan ? (
-              <span className="text-status-warning/70 ml-1 font-normal text-[11px]">
+              <span className="text-status-warning/70 ml-1 font-normal text-2xs">
                 (deleted tree)
               </span>
             ) : null}
           </div>
           <div
             className={cn(
-              "text-[11px] tabular-nums transition-opacity",
+              "text-2xs tabular-nums transition-opacity",
               seconds <= COUNTDOWN_CRITICAL_SECONDS
                 ? "opacity-100 text-status-warning/70"
                 : "text-text-secondary opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
@@ -219,7 +219,7 @@ export function TrashGroupItem({
               return (
                 <div
                   key={terminal.id}
-                  className="flex items-center gap-2 px-2 py-1 text-[11px] rounded hover:bg-tint/5 group/panel"
+                  className="flex items-center gap-2 px-2 py-1 text-2xs rounded hover:bg-tint/5 group/panel"
                 >
                   <TerminalIcon
                     kind={terminal.kind}

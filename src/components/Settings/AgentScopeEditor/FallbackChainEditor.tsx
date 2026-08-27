@@ -54,9 +54,7 @@ export function FallbackChainEditor({
                 key={id}
                 className="flex items-center gap-2 rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg/30 px-2 py-1.5"
               >
-                <span className="text-[10px] text-text-secondary font-mono shrink-0">
-                  {idx + 1}.
-                </span>
+                <span className="text-3xs text-text-secondary font-mono shrink-0">{idx + 1}.</span>
                 <span
                   className={
                     missing
@@ -99,14 +97,12 @@ export function FallbackChainEditor({
         </select>
       )}
       {chain.length >= FALLBACK_CHAIN_MAX && (
-        <p className="text-[11px] text-text-secondary">
+        <p className="text-2xs text-text-secondary">
           Maximum of {FALLBACK_CHAIN_MAX} fallbacks reached.
         </p>
       )}
       {chain.length < FALLBACK_CHAIN_MAX && candidates.length === 0 && (
-        <p className="text-[11px] text-text-secondary">
-          No other presets available for this agent.
-        </p>
+        <p className="text-2xs text-text-secondary">No other presets available for this agent.</p>
       )}
     </div>
   );

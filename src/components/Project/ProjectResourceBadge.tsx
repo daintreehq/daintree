@@ -67,7 +67,7 @@ function HeapBar({ heapStats }: { heapStats: HeapStats }) {
 
   return (
     <div className="space-y-1">
-      <div className="flex items-center justify-between text-[10px]">
+      <div className="flex items-center justify-between text-3xs">
         <span className="text-daintree-text/50">V8 Heap</span>
         <span className="font-mono text-text-secondary">
           {heapStats.usedMB.toFixed(0)} / {heapStats.limitMB}MB ({heapStats.percent.toFixed(0)}%)
@@ -80,7 +80,7 @@ function HeapBar({ heapStats }: { heapStats: HeapStats }) {
         />
       </div>
       {heapStats.externalMB > 50 && (
-        <div className="text-[9px] text-daintree-text/30 font-mono">
+        <div className="text-4xs text-daintree-text/30 font-mono">
           External: {heapStats.externalMB.toFixed(0)}MB
         </div>
       )}
@@ -90,7 +90,7 @@ function HeapBar({ heapStats }: { heapStats: HeapStats }) {
 
 function MemoryRow({ label, value }: { label: string; value: string }) {
   return (
-    <div className="flex items-center justify-between gap-2 text-[10px]">
+    <div className="flex items-center justify-between gap-2 text-3xs">
       <span className="text-daintree-text/50 leading-tight">{label}</span>
       <span className="font-mono tabular-nums text-text-secondary shrink-0">{value}</span>
     </div>
@@ -144,13 +144,13 @@ function MemorySummary({
         />
       )}
       {workloadNote !== null && (
-        <div className="text-[9px] text-status-warning/70 leading-tight">{workloadNote}</div>
+        <div className="text-4xs text-status-warning/70 leading-tight">{workloadNote}</div>
       )}
       {systemAvailableMB !== null && (
         <MemoryRow label="System available" value={formatMemory(systemAvailableMB)} />
       )}
       {shown !== null && (
-        <div className="text-[9px] text-daintree-text/25 leading-tight">
+        <div className="text-4xs text-daintree-text/25 leading-tight">
           Workloads = dev servers, agents, and tools your terminals launched
         </div>
       )}
@@ -161,14 +161,14 @@ function MemorySummary({
 function ProcessTable({ metrics }: { metrics: ProcessMetricEntry[] }) {
   return (
     <div className="space-y-1">
-      <div className="text-[10px] text-daintree-text/50 font-medium">Daintree processes</div>
+      <div className="text-3xs text-daintree-text/50 font-medium">Daintree processes</div>
       <div className="space-y-px">
         {metrics.map((proc) => {
           const label = formatProcessLabel(proc);
           return (
             <div
               key={proc.pid}
-              className="flex items-center justify-between text-[10px] font-mono py-0.5"
+              className="flex items-center justify-between text-3xs font-mono py-0.5"
             >
               <span
                 className="text-daintree-text/60 truncate max-w-[140px]"
@@ -203,7 +203,7 @@ function ProjectBreakdown({
 
   return (
     <div className="space-y-1">
-      <div className="text-[10px] text-daintree-text/50 font-medium">Projects</div>
+      <div className="text-3xs text-daintree-text/50 font-medium">Projects</div>
       <div className="space-y-px">
         {entries.map((entry) => {
           const s = entry.stats!;
@@ -216,7 +216,7 @@ function ProjectBreakdown({
           return (
             <div
               key={entry.id}
-              className="flex items-center justify-between text-[10px] font-mono py-0.5 gap-2"
+              className="flex items-center justify-between text-3xs font-mono py-0.5 gap-2"
             >
               <span className="text-daintree-text/60 truncate min-w-0">
                 {entry.name}
@@ -233,7 +233,7 @@ function ProjectBreakdown({
         })}
       </div>
       {hasEstimates && (
-        <div className="text-[9px] text-daintree-text/25 leading-tight">
+        <div className="text-4xs text-daintree-text/25 leading-tight">
           ~ estimated from terminal count, not measured
         </div>
       )}
@@ -264,14 +264,14 @@ function DiagnosticsSection({
   return (
     <div className="space-y-1">
       <button
-        className="text-[10px] text-daintree-text/50 font-medium hover:text-daintree-text/70 transition-colors flex items-center gap-1"
+        className="text-3xs text-daintree-text/50 font-medium hover:text-daintree-text/70 transition-colors flex items-center gap-1"
         onClick={() => setExpanded(!expanded)}
       >
         <span className="text-[8px]">{expanded ? "\u25BC" : "\u25B6"}</span>
         Diagnostics
       </button>
       {expanded && (
-        <div className="space-y-1 text-[10px] font-mono text-text-secondary pl-2">
+        <div className="space-y-1 text-3xs font-mono text-text-secondary pl-2">
           <div>{trendText}</div>
           <div>Uptime: {formatUptime(diagnosticsInfo.uptimeSeconds)}</div>
           {diagnosticsInfo.eventLoopP99Ms > 50 && (
@@ -550,7 +550,7 @@ export function ProjectResourceBadge() {
               key={memoryState}
               className={`status-mark inline-flex h-2 w-2 rounded-full ${STATE_DOT_CLASSES[memoryState]} animate-diagnostics-flash shrink-0`}
             />
-            <span className="text-[10px] tabular-nums text-text-secondary font-medium truncate">
+            <span className="text-3xs tabular-nums text-text-secondary font-medium truncate">
               {stats.runningProjects} project{stats.runningProjects !== 1 ? "s" : ""} active
             </span>
           </div>
@@ -579,8 +579,8 @@ export function ProjectResourceBadge() {
                 trendSamples={samples}
               />
               <div className="pt-1 border-t border-divider space-y-0.5">
-                {ageLabel && <div className="text-[9px] text-daintree-text/30">{ageLabel}</div>}
-                <div className="text-[9px] text-daintree-text/25 leading-tight">
+                {ageLabel && <div className="text-4xs text-daintree-text/30">{ageLabel}</div>}
+                <div className="text-4xs text-daintree-text/25 leading-tight">
                   Figures sum working-set memory and count shared pages once per process
                 </div>
               </div>

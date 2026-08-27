@@ -387,6 +387,9 @@
   --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
   --color-sidebar-border: var(--sidebar-border);
   --color-sidebar-ring: var(--sidebar-ring);
+  /* Every step Tailwind ships must be overridden here, or the ones we skip keep
+   * their stock constants and stop tracking --theme-radius-scale. Bare `rounded`
+   * and its directional forms resolve through --radius, so they scale too. */
   --radius-xs: calc(var(--radius) - 6px);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
@@ -394,6 +397,7 @@
   --radius-xl: calc(var(--radius) + 4px);
   --radius-2xl: calc(var(--radius) + 8px);
   --radius-3xl: calc(var(--radius) + 12px);
+  --radius-4xl: calc(var(--radius) + 16px);
   --height-xs: 1.75rem;
   --height-sm: 2rem;
   --height-md: 2.5rem;
@@ -446,6 +450,29 @@
   unicode-range:
     U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329,
     U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
+}
+
+/* Type scale below Tailwind's floor. A lot of this chrome lives under 12px, and
+ * without names for those tiers every author picked a pixel value by eye.
+ * Emitted to :root (plain @theme, not inline) so plain CSS and CodeMirror/inline
+ * style consumers can reach the same steps via var().
+ *
+ * No paired --text-*--line-height: a size token without one emits font-size and
+ * nothing else, which is what the arbitrary values these replace did. Adding
+ * leading here would silently reflow every call site that inherits it today.
+ *
+ * These are fixed rem, deliberately NOT multiplied by a theme scalar the way
+ * --radius is by --theme-radius-scale. Radius scaling is theme aesthetics; text
+ * size is not something a colour scheme should decide. App-wide text scaling
+ * already exists as Chromium zoom (View ▸ Zoom In/Out), which scales rem and px
+ * alike. If a text scalar is ever wanted it has to cover the whole --text-*
+ * family at once — wiring it to these three steps alone would reproduce, for
+ * type, exactly the split-scale defect this scale exists to avoid.
+ */
+@theme {
+  --text-2xs: 0.6875rem;
+  --text-3xs: 0.625rem;
+  --text-4xs: 0.5625rem;
 }
 
 /* Motion token scale — single source of truth for durations and easings.

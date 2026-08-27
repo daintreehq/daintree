@@ -205,7 +205,7 @@ function FileStageRowComponent({
             aria-hidden="true"
             className={cn(
               "inline-flex items-center justify-center rounded-sm px-1 mr-2 shrink-0",
-              "text-[10px] font-medium leading-4 h-4 min-w-[16px]",
+              "text-3xs font-medium leading-4 h-4 min-w-[16px]",
               config.bg,
               config.text
             )}
@@ -216,7 +216,7 @@ function FileStageRowComponent({
             <span
               data-testid="file-stage-row-dir"
               className={cn(
-                "shrink truncate font-mono text-[11px] transition-colors",
+                "shrink truncate font-mono text-2xs transition-colors",
                 generated
                   ? "text-daintree-text/30"
                   : "text-daintree-text/50 group-hover/stagerow:text-daintree-text/70"
@@ -228,7 +228,7 @@ function FileStageRowComponent({
           <span
             data-testid="file-stage-row-base"
             className={cn(
-              "shrink truncate font-medium font-mono text-[11px] transition-colors",
+              "shrink truncate font-medium font-mono text-2xs transition-colors",
               generated
                 ? "text-daintree-text/40"
                 : "text-daintree-text group-hover/stagerow:text-daintree-text"
@@ -243,7 +243,7 @@ function FileStageRowComponent({
         <div
           data-testid="file-stage-row-churn"
           className={cn(
-            "ml-2 flex items-center gap-1 shrink-0 text-[10px] tabular-nums",
+            "ml-2 flex items-center gap-1 shrink-0 text-3xs tabular-nums",
             generated && "opacity-60"
           )}
         >
@@ -259,7 +259,7 @@ function FileStageRowComponent({
               onClick={handleViewedClick}
               className={cn(
                 "flex items-center gap-1 ml-2 shrink-0 cursor-pointer select-none rounded px-1.5 py-0.5",
-                "text-[10px] font-medium uppercase tracking-wider transition-colors",
+                "text-3xs font-medium uppercase tracking-wider transition-colors",
                 viewed
                   ? "text-daintree-text/60"
                   : "text-daintree-text/30 hover:text-daintree-text/60"

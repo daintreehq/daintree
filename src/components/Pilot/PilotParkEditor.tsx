@@ -220,7 +220,7 @@ export function PilotParkEditor({
       </div>
 
       <label className="flex flex-col gap-1">
-        <span className="text-[10px] font-medium tracking-wide text-text-secondary uppercase">
+        <span className="text-3xs font-medium tracking-wide text-text-secondary uppercase">
           Note
         </span>
         <input
@@ -242,7 +242,7 @@ export function PilotParkEditor({
       <div className="flex flex-col gap-1">
         <span
           id="pilot-park-gate-label"
-          className="text-[10px] font-medium tracking-wide text-text-secondary uppercase"
+          className="text-3xs font-medium tracking-wide text-text-secondary uppercase"
         >
           Park until
         </span>
@@ -312,7 +312,7 @@ export function PilotParkEditor({
             );
           })}
         </div>
-        <p className="text-[11px] leading-snug text-text-secondary">
+        <p className="text-2xs leading-snug text-text-secondary">
           Gated parks lift when that agent next finishes working — the run pops back into Waiting
           with your note.
         </p>

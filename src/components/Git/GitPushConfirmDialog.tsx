@@ -233,9 +233,9 @@ function GitPushConfirmDialogInner() {
               <span className="flex flex-wrap items-baseline gap-1.5">
                 <RefChip value={destinationLabel} emphasis />
                 {isCreatingBranch && (
-                  <span className="text-[10px] text-daintree-text/55">creates this branch</span>
+                  <span className="text-3xs text-daintree-text/55">creates this branch</span>
                 )}
-                {isUnverified && <span className="text-[10px] text-status-error">unverified</span>}
+                {isUnverified && <span className="text-3xs text-status-error">unverified</span>}
               </span>
             ) : !isSettled && !loadError ? (
               <Bone className="w-48" />
@@ -251,11 +251,11 @@ function GitPushConfirmDialogInner() {
           <span
             role="heading"
             aria-level={3}
-            className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60"
+            className="text-2xs font-semibold uppercase tracking-wider text-daintree-text/60"
           >
             Commits to push
             {isSettled && total > 0 && (
-              <span className="ml-1.5 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-[10px] font-medium normal-case tracking-normal">
+              <span className="ml-1.5 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-3xs font-medium normal-case tracking-normal">
                 {total}
               </span>
             )}
@@ -290,7 +290,7 @@ function GitPushConfirmDialogInner() {
                 size="sm"
                 onClick={loadPreview}
                 data-testid="git-push-commits-retry"
-                className="mt-1.5 h-6 px-2 text-[11px]"
+                className="mt-1.5 h-6 px-2 text-2xs"
               >
                 <RefreshCw className="w-3 h-3" />
                 Retry
@@ -365,7 +365,7 @@ function GitPushConfirmDialogInner() {
                   className="flex items-baseline gap-2"
                   data-testid="git-push-commit-row"
                 >
-                  <span className="font-mono text-[11px] text-daintree-text/55 shrink-0 tabular-nums">
+                  <span className="font-mono text-2xs text-daintree-text/55 shrink-0 tabular-nums">
                     {commit.hash.slice(0, SHORT_HASH_LEN)}
                   </span>
                   <span className="flex-1 min-w-0 truncate text-daintree-text/90">
@@ -374,19 +374,19 @@ function GitPushConfirmDialogInner() {
                   {/* Bounded, unlike the rest of the row: an author is the least
                     important column here, and left unbounded a long name took
                     40% of the width and truncated the subject to nothing. */}
-                  <span className="text-[11px] text-daintree-text/55 shrink-0 max-w-[7rem] truncate">
+                  <span className="text-2xs text-daintree-text/55 shrink-0 max-w-[7rem] truncate">
                     {commit.author}
                   </span>
                 </li>
               ))}
               {isUnverified && (
-                <li className="text-[11px] text-status-error pt-0.5">
+                <li className="text-2xs text-status-error pt-0.5">
                   Couldn&apos;t reach {destination?.remote} to check {destinationLabel}, so this
                   list is unverified.
                 </li>
               )}
               {hiddenCount > 0 && (
-                <li className="text-[11px] text-daintree-text/55 italic pt-0.5">
+                <li className="text-2xs text-daintree-text/55 italic pt-0.5">
                   &hellip;and {hiddenCount} more
                 </li>
               )}
@@ -397,7 +397,7 @@ function GitPushConfirmDialogInner() {
       {/* The quietest tier on the surface, and last: this is the least specific
           thing the dialog has to say, but it is the one question a push raises
           that nothing else here answers. */}
-      <p className="text-[11px] text-daintree-text/55">
+      <p className="text-2xs text-daintree-text/55">
         If the remote has moved on, Git refuses the push rather than overwriting it.
       </p>
     </ConfirmDialog>
@@ -407,7 +407,7 @@ function GitPushConfirmDialogInner() {
 function SummaryRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex items-baseline gap-2">
-      <dt className="text-[10px] uppercase tracking-wider text-daintree-text/55 shrink-0 w-10">
+      <dt className="text-3xs uppercase tracking-wider text-daintree-text/55 shrink-0 w-10">
         {label}
       </dt>
       <dd className="flex-1 min-w-0">{children}</dd>
@@ -427,7 +427,7 @@ function RefChip({ value, emphasis }: { value: string; emphasis?: boolean }) {
   return (
     <span
       className={cn(
-        "inline-flex items-baseline px-1.5 py-0.5 rounded bg-tint/[0.07] border border-tint/[0.08] text-[11px] font-mono break-words",
+        "inline-flex items-baseline px-1.5 py-0.5 rounded bg-tint/[0.07] border border-tint/[0.08] text-2xs font-mono break-words",
         emphasis ? "text-daintree-text" : "text-daintree-text/70"
       )}
     >
@@ -438,12 +438,12 @@ function RefChip({ value, emphasis }: { value: string; emphasis?: boolean }) {
 
 /** Git answered, and the answer was "no destination anyone can name". */
 function Unresolved() {
-  return <span className="text-status-error text-[11px]">Not resolved</span>;
+  return <span className="text-status-error text-2xs">Not resolved</span>;
 }
 
 /** Git did not answer at all. The failure is stated once, below, not per row. */
 function Unknown() {
-  return <span className="text-daintree-text/55 text-[11px]">&mdash;</span>;
+  return <span className="text-daintree-text/55 text-2xs">&mdash;</span>;
 }
 
 /**

@@ -169,7 +169,7 @@ export function FleetCountChip({
           aria-expanded={open}
           data-testid="fleet-armed-count-chip"
           className={cn(
-            "inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-[12px] transition-colors",
+            "inline-flex items-center gap-1.5 rounded-full px-2 py-0.5 text-xs leading-[inherit] transition-colors",
             "bg-tint/[0.08] hover:bg-tint/[0.14]"
           )}
         >
@@ -201,12 +201,12 @@ export function FleetCountChip({
       >
         {popoverMode === "list" ? (
           <>
-            <div className="px-2 py-1 text-[10px] font-medium uppercase tracking-wide text-daintree-text/50">
+            <div className="px-2 py-1 text-3xs font-medium uppercase tracking-wide text-daintree-text/50">
               Fleet terminals
             </div>
             <ul className="flex flex-col overflow-y-auto">
               {armOrder.length === 0 ? (
-                <li className="px-2 py-1 text-[12px] text-daintree-text/60">None</li>
+                <li className="px-2 py-1 text-xs leading-[inherit] text-daintree-text/60">None</li>
               ) : (
                 armOrder.map((id) => {
                   const title = titlesByPane[id] ?? id;
@@ -219,13 +219,13 @@ export function FleetCountChip({
                         type="button"
                         onClick={() => focusArmedPane(id)}
                         aria-label={`Focus ${title}`}
-                        className="flex-1 truncate px-2 py-1 text-left text-[12px] text-daintree-text"
+                        className="flex-1 truncate px-2 py-1 text-left text-xs leading-[inherit] text-daintree-text"
                       >
                         {title}
                       </button>
                       {sendFailed && (
                         <span
-                          className="shrink-0 text-[10px] text-status-error"
+                          className="shrink-0 text-3xs text-status-error"
                           data-testid={`fleet-row-send-failed-${id}`}
                         >
                           Send failed
@@ -250,7 +250,7 @@ export function FleetCountChip({
               onClick={() => setPopoverMode("picker")}
               data-testid="fleet-armed-list-add-panes"
               className={cn(
-                "mt-1 flex items-center gap-2 rounded px-2 py-1.5 text-[12px] text-daintree-text/80",
+                "mt-1 flex items-center gap-2 rounded px-2 py-1.5 text-xs leading-[inherit] text-daintree-text/80",
                 "hover:bg-tint/[0.08] hover:text-daintree-text",
                 "border-t border-daintree-border/50 pt-2",
                 "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
@@ -269,7 +269,7 @@ export function FleetCountChip({
                 aria-label="Back to fleet list"
                 data-testid="fleet-picker-back"
                 className={cn(
-                  "inline-flex items-center gap-1 rounded px-1.5 py-1 text-[12px] text-daintree-text/70",
+                  "inline-flex items-center gap-1 rounded px-1.5 py-1 text-xs leading-[inherit] text-daintree-text/70",
                   "hover:bg-tint/[0.08] hover:text-daintree-text",
                   "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
                 )}
@@ -277,13 +277,13 @@ export function FleetCountChip({
                 <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" />
                 <span>Back</span>
               </button>
-              <span className="text-[11px] font-medium uppercase tracking-wide text-daintree-text/50">
+              <span className="text-2xs font-medium uppercase tracking-wide text-daintree-text/50">
                 Add panes
               </span>
             </div>
             <FleetPickerContent picker={picker} testIdPrefix="fleet-picker-add" autoFocusSearch />
             <div className="mt-1 flex items-center justify-between gap-2 border-t border-daintree-border/50 px-1 pt-2">
-              <span className="text-[11px] tabular-nums text-daintree-text/55">
+              <span className="text-2xs tabular-nums text-daintree-text/55">
                 {picker.confirmedIds.length === 0
                   ? "Select panes to add"
                   : `${picker.confirmedIds.length} selected`}
@@ -293,7 +293,7 @@ export function FleetCountChip({
                   type="button"
                   onClick={() => setPopoverMode("list")}
                   className={cn(
-                    "rounded px-2 py-1 text-[11px] text-daintree-text/70",
+                    "rounded px-2 py-1 text-2xs text-daintree-text/70",
                     "hover:bg-tint/[0.08] hover:text-daintree-text",
                     "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
                   )}
@@ -306,7 +306,7 @@ export function FleetCountChip({
                   disabled={picker.confirmedIds.length === 0}
                   data-testid="fleet-picker-add-confirm"
                   className={cn(
-                    "rounded border border-category-amber-border bg-category-amber-subtle px-2 py-1 text-[11px] text-category-amber-text transition",
+                    "rounded border border-category-amber-border bg-category-amber-subtle px-2 py-1 text-2xs text-category-amber-text transition",
                     "hover:brightness-110",
                     "disabled:cursor-not-allowed disabled:opacity-40 disabled:pointer-events-none",
                     "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"

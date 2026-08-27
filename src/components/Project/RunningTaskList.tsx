@@ -220,7 +220,7 @@ function TaskOverflow({
         // popover is labelled and exposes the rows themselves once opened.
         aria-label={`Show ${tasks.length} more running ${tasks.length === 1 ? "task" : "tasks"}`}
         className={cn(
-          "flex w-full items-center gap-0.5 px-2 py-0.5 rounded-[var(--radius-sm)] text-[10px] font-sans transition-colors",
+          "flex w-full items-center gap-0.5 px-2 py-0.5 rounded-[var(--radius-sm)] text-3xs font-sans transition-colors",
           "text-daintree-text/40 hover:text-daintree-text/70 hover:bg-tint/[0.04]",
           "outline-hidden focus-visible:outline focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
         )}
@@ -279,7 +279,7 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
   return (
     <div
       className={cn(
-        "flex items-center gap-1.5 px-2 py-1 rounded-[var(--radius-sm)] text-[11px] font-mono group",
+        "flex items-center gap-1.5 px-2 py-1 rounded-[var(--radius-sm)] text-2xs font-mono group",
         "hover:bg-tint/[0.04] transition-colors cursor-pointer",
         status === "failed" && "border-l-2 border-status-error",
         status === "success" && "opacity-60"
@@ -304,7 +304,7 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
 
       {/* Elapsed time */}
       {isActive && (
-        <span className="text-[10px] text-daintree-text/30 tabular-nums shrink-0">
+        <span className="text-3xs text-daintree-text/30 tabular-nums shrink-0">
           {formatElapsed(elapsed)}
         </span>
       )}

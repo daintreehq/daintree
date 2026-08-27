@@ -88,7 +88,7 @@ export function FileBrowserChangeSummary({ changes, onSelect }: FileBrowserChang
                   <span className="truncate font-medium">{base}</span>
                 </span>
                 <span
-                  className="flex shrink-0 items-center gap-1.5 text-[11px] tabular-nums"
+                  className="flex shrink-0 items-center gap-1.5 text-2xs tabular-nums"
                   aria-hidden="true"
                 >
                   {insertions > 0 && <span className="text-status-success/80">+{insertions}</span>}
