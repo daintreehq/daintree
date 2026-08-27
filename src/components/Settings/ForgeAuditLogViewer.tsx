@@ -291,7 +291,7 @@ export function ForgeAuditLogViewer({
           <ul className="divide-y divide-daintree-border">
             {filteredRecords.map((record) => (
               <li key={record.id} className="grid grid-cols-[auto_1fr_auto] gap-2 p-2 text-xs">
-                <div className="flex items-center gap-1 mt-0.5">
+                <div className="flex self-start items-center gap-1 mt-0.5">
                   <SeverityMark
                     severity={RESULT_SEVERITY[record.result]}
                     label={RESULT_LABEL[record.result]}

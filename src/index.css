@@ -2912,6 +2912,16 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     background-color: CanvasText !important;
   }
 
+  /* Marks that live inside a control. The UA paints button surfaces ButtonFace,
+     and only ButtonText is guaranteed to contrast against it — Canvas and
+     ButtonFace happen to be the same colour in the stock high-contrast themes,
+     but a user's own palette is free to separate them. Same repaint, matched
+     pair. */
+  button .status-mark,
+  [role="button"] .status-mark {
+    background-color: ButtonText !important;
+  }
+
   /* Project-switcher row marks. The solid states are a CSS background, which
      forced colors pushes toward Canvas, so the whole 8px slot would read as
      empty. Repaint them as a CanvasText disc: hue is gone here either way, and

@@ -132,6 +132,16 @@ describe("forced-colors shared status-mark contract (#12000)", () => {
     expect(block).toMatch(/\.status-mark\s*\{[^}]*background-color:\s*CanvasText[^}]*!important/);
   });
 
+  // Canvas and ButtonFace are the same colour in the stock high-contrast themes,
+  // so dropping this rule looks harmless in testing and only breaks for users on
+  // a palette that separates them.
+  it("repaints marks inside a control with ButtonText, the pair that matches ButtonFace", () => {
+    const block = readForcedColorsBlocks(INDEX_CSS);
+    expect(block).toMatch(
+      /button\s+\.status-mark,[\s\S]{0,80}?\.status-mark\s*\{[^}]*background-color:\s*ButtonText[^}]*!important/
+    );
+  });
+
   it("does not reach for forced-color-adjust, which would opt out of the user's palette", () => {
     const block = readForcedColorsBlocks(INDEX_CSS);
     const rule = block.match(/\.status-mark\s*\{([^}]*)\}/);
