@@ -1094,6 +1094,7 @@ export function WorktreeCard({
                   {isMainWorktree && <MainWorktreeSummaryRows health={projectHealth ?? null} />}
 
                   <WorktreeDetailsSection
+                    variant={variant}
                     worktree={worktree}
                     homeDir={homeDir}
                     isExpanded={isExpanded}
@@ -1127,6 +1128,7 @@ export function WorktreeCard({
                   />
 
                   <WorktreeTerminalSection
+                    variant={variant}
                     worktreeId={worktree.id}
                     isExpanded={isTerminalsExpanded}
                     counts={terminalCounts}

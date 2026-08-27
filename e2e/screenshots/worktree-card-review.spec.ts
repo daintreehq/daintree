@@ -486,7 +486,7 @@ test("sidebar worktree card review — states and themes", async () => {
     // 3. Details expanded — the nested-card stack the issue is about.
     await step("expanded", async () => {
       await setSection(flagship, "details", true);
-      await snap(page, "30-card-details-expanded", flagship, "Changed Files");
+      await snap(page, "30-card-details-expanded", flagship, "Changed files");
     });
 
     // 4. The quiet card expanded: clean tree, no note, so the narrative slot
@@ -602,13 +602,13 @@ test("sidebar worktree card review — states and themes", async () => {
         // nesting evidence, but the session rows have to be legible somewhere.
         await setSection(flagship, "details", false);
         await setSection(flagship, "terminals", true);
-        await snap(page, "100-card-sessions-expanded", flagship, "Active Sessions");
+        await snap(page, "100-card-sessions-expanded", flagship, "Active sessions");
         await snap(page, "102-sidebar-loaded", sidebar);
         await setSection(flagship, "terminals", false);
         await snap(page, "103-card-sessions-collapsed", flagship, "active");
         await setSection(flagship, "terminals", true);
         await setSection(flagship, "details", true);
-        await snap(page, "101-card-details-and-sessions", flagship, "Active Sessions");
+        await snap(page, "101-card-details-and-sessions", flagship, "Active sessions");
         await setSection(flagship, "details", false);
       });
     }

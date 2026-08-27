@@ -310,7 +310,7 @@ describe("WorktreeDetailsSection — reviewState surfaces", () => {
       reviewState: "has-changes",
       onOpenReviewHub,
     });
-    const button = screen.getByLabelText("Open Review & Commit");
+    const button = screen.getByLabelText("Open Review & commit");
     expect(button).toBeDefined();
     fireEvent.click(button);
     expect(onOpenReviewHub).toHaveBeenCalledTimes(1);
@@ -332,10 +332,10 @@ describe("WorktreeDetailsSection — reviewState surfaces", () => {
         } as WorktreeChanges,
       },
     });
-    expect(screen.queryByLabelText("Open Review & Commit")).toBeNull();
+    expect(screen.queryByLabelText("Open Review & commit")).toBeNull();
     expect(screen.queryByText("Conflicts need review")).toBeNull();
     expect(screen.getByText("fix: stuff")).toBeDefined();
-    const button = screen.getByLabelText("Open Review & Push");
+    const button = screen.getByLabelText("Open Review & push");
     fireEvent.click(button);
     expect(onOpenReviewHub).toHaveBeenCalledTimes(1);
   });
@@ -354,8 +354,8 @@ describe("WorktreeDetailsSection — reviewState surfaces", () => {
         } as WorktreeChanges,
       },
     });
-    expect(screen.queryByLabelText("Open Review & Commit")).toBeNull();
-    expect(screen.queryByLabelText("Open Review & Push")).toBeNull();
+    expect(screen.queryByLabelText("Open Review & commit")).toBeNull();
+    expect(screen.queryByLabelText("Open Review & push")).toBeNull();
   });
 });
 

@@ -165,11 +165,15 @@ html[data-dragging="true"]
     outline-offset: -2px;
   }
 
-  /* The active row's left-edge indicator is an inset box-shadow, which is
-     stripped here. Fall back to a system-color left border so the selected
-     worktree stays distinguishable from idle rows. */
+  /* The active row's right-edge indicator is an inset box-shadow, which is
+     stripped here. Fall back to a system-color border on the SAME edge so the
+     selected worktree stays distinguishable from idle rows without moving the
+     marker across the card — a left fallback contradicted the all-theme
+     right-edge vocabulary (#9711 round 3) and read as a second, different
+     selection signal for exactly the high-contrast users least able to
+     absorb one. */
   .sidebar-worktree-card[data-active="true"] {
-    border-left: 2px solid SelectedItem;
+    border-right: 2px solid SelectedItem;
   }
 
   /* The panel drag-over ring is also an inset box-shadow; restore it as a
