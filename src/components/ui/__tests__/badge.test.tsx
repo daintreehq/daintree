@@ -17,9 +17,9 @@ const SIZES = ["xs", "sm", "md"] as const;
 
 const GEOMETRY = /^(px|py|p|gap|rounded)-/;
 const COLOUR = /^(bg|text|border)-/;
-// `text-xs` and `text-[10px]` set a size, not a colour — they belong to the
+// `text-xs` and `text-3xs` set a size, not a colour — they belong to the
 // geometry axis, so a naive /^text-/ would make the two axes look coupled.
-const FONT_SIZE = /^text-(xs|sm|base|lg|xl|\[[^\]]+\])$/;
+const FONT_SIZE = /^text-([2-4]xs|xs|sm|base|lg|xl|\[[^\]]+\])$/;
 
 function tokens(classes: string, pattern: RegExp): string[] {
   return classes
