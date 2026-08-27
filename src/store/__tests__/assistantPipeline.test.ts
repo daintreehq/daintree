@@ -828,3 +828,168 @@ describe("the operations deck", () => {
     expect(ops?.at).toBeGreaterThan(0);
   });
 });
+
+describe("what the engine reports on its error channel is graded by CODE", () => {
+  function hostError(code: string, message: string) {
+    useAssistantStore
+      .getState()
+      .applyEvent({ sessionId: "s1", seq: 1, type: "host:error", code, message } as never);
+    return useAssistantStore.getState().notices.at(-1);
+  }
+
+  beforeEach(() => useAssistantStore.getState().reset("s1"));
+
+  it("does not paint a delivered message as a failure", () => {
+    // `prompt-folded` means the message WAS accepted — it joined the running turn.
+    // Reported on the same channel as a panic, so the code is the only thing that
+    // separates them, and grading by channel alone made a success look like a fault.
+    const folded = hostError("prompt-folded", "folded into the running turn");
+    const panicked = hostError("turn-failed", "turn panicked");
+
+    expect(folded?.level).not.toBe(panicked?.level);
+    expect(folded?.level).toBe("info");
+  });
+
+  it("keeps a refusal below a fault, and a fault at the top", () => {
+    const rank = { info: 0, warning: 1, error: 2 } as const;
+    const busy = hostError("command-busy", "a command is waiting on your answer");
+    const broken = hostError("bad-frame", "inbound line exceeded the frame cap");
+
+    expect(rank[busy!.level]).toBeLessThan(rank[broken!.level]);
+  });
+
+  it("leaves a code it has never seen at the loudest level", () => {
+    // The engine can add codes without this map knowing. An unknown one is a fault
+    // until someone decides otherwise — the opposite default would quietly silence
+    // the next real failure the engine learns to report.
+    expect(hostError("some-code-invented-later", "?")?.level).toBe("error");
+  });
+});
+
+describe("a folded-prompt notice does not outlive the turn it was about", () => {
+  function foldDuringTurn() {
+    const store = useAssistantStore.getState();
+    store.reset("s1");
+    store.applyEvent({
+      sessionId: "s1",
+      seq: 1,
+      type: "turn:start",
+      turnId: "t1",
+      role: "assistant",
+      startedAt: 1,
+    } as never);
+    store.applyEvent({
+      sessionId: "s1",
+      seq: 2,
+      type: "host:error",
+      code: "prompt-folded",
+      message: "A turn is already running; this message was folded into it.",
+    } as never);
+    expect(useAssistantStore.getState().notices).toHaveLength(1);
+  }
+
+  it("stands while the turn is still running, and goes when it ends", () => {
+    foldDuringTurn();
+
+    useAssistantStore.getState().applyEvent({
+      sessionId: "s1",
+      seq: 3,
+      type: "turn:end",
+      turnId: "t1",
+      endedAt: 2,
+      outcome: "answered",
+    } as never);
+
+    // "will be picked up between tasks" is a claim with an expiry: once the turn is
+    // over the message is either inside it or promoted below it, and the status line
+    // is left describing something that has already finished happening.
+    expect(useAssistantStore.getState().notices).toEqual([]);
+  });
+
+  it("goes when the engine dies mid-turn, which sends no turn:end at all", () => {
+    foldDuringTurn();
+    // The message the notice was ABOUT, so the exit path is exercised with something
+    // actually queued rather than against an empty queue that would pass either way.
+    useAssistantStore.getState().appendUserTurn("and check the tests");
+    useAssistantStore.getState().endLiveState();
+
+    const after = useAssistantStore.getState();
+    expect(after.notices).toEqual([]);
+    // And the promise the notice made is kept the only way left to keep it: the words
+    // become a turn of their own rather than vanishing with the engine.
+    expect(after.queuedInterjections).toEqual([]);
+    expect(after.turns.at(-1)).toMatchObject({ role: "user", text: "and check the tests" });
+  });
+
+  it("says it once however many messages are folded into the same turn", () => {
+    foldDuringTurn();
+    useAssistantStore.getState().applyEvent({
+      sessionId: "s1",
+      seq: 3,
+      type: "host:error",
+      code: "prompt-folded",
+      message: "A turn is already running; this message was folded into it.",
+    } as never);
+
+    // The status is "your messages joined the running turn", which the second fold does
+    // not make more true. Every message is still shown individually as a queued card;
+    // this line is the status, not the receipt, and a duplicate also burns a slot in
+    // the capped history that a real warning would otherwise hold.
+    expect(useAssistantStore.getState().notices).toHaveLength(1);
+  });
+
+  it("retires only the expiring kind, leaving every other notice standing", () => {
+    foldDuringTurn();
+    useAssistantStore.getState().applyEvent({
+      sessionId: "s1",
+      seq: 3,
+      type: "host:error",
+      code: "turn-failed",
+      message: "turn panicked",
+    } as never);
+
+    useAssistantStore.getState().applyEvent({
+      sessionId: "s1",
+      seq: 4,
+      type: "turn:end",
+      turnId: "t1",
+      endedAt: 2,
+      outcome: "failed",
+    } as never);
+
+    const left = useAssistantStore.getState().notices;
+    expect(left.map((n) => n.code)).toEqual(["turn-failed"]);
+  });
+});
+
+describe("a cleared conversation leaves its result line at the head of the new one", () => {
+  it("anchors the notice to nothing, so nothing can push it to the tail", () => {
+    const store = useAssistantStore.getState();
+    store.reset("s1");
+    store.applyEvent({
+      sessionId: "s1",
+      seq: 1,
+      type: "turn:start",
+      turnId: "t1",
+      role: "assistant",
+      startedAt: 1,
+    } as never);
+    store.applyEvent({
+      sessionId: "s1",
+      seq: 2,
+      type: "command:result",
+      command: "/clear",
+      text: "Conversation cleared — starting fresh.",
+      conversationCleared: true,
+    } as never);
+
+    const after = useAssistantStore.getState();
+    expect(after.turns).toEqual([]);
+    // Both null is what puts it BEFORE the turns rather than behind them: the view
+    // draws an unanchored notice at the head of the transcript, and an anchor to the
+    // turn that /clear just deleted would strand it at the tail for the rest of the
+    // session.
+    expect(after.notices).toHaveLength(1);
+    expect(after.notices[0]).toMatchObject({ turnId: null, afterTurnId: null, level: "info" });
+  });
+});
