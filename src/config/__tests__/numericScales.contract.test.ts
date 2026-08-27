@@ -294,8 +294,8 @@ function primaryVarRefs(value: string): string[] {
     if (ch === "(") {
       const isVar = /\bvar\s*$/.test(value.slice(0, i));
       if (isVar && !openIsVar.some(Boolean)) {
-        const named = /^\(\s*(--[\w-]+)/.exec(value.slice(i));
-        if (named) refs.push(named[1]);
+        const named = /^\(\s*(--[\w-]+)/.exec(value.slice(i))?.[1];
+        if (named !== undefined) refs.push(named);
       }
       openIsVar.push(isVar);
     } else if (ch === ")") {
@@ -331,7 +331,10 @@ function readDeclarations(cssPath: string, prefix: string): Map<string, string> 
   const css = readCss(cssPath);
   const decls = new Map<string, string>();
   const re = new RegExp(String.raw`^\s*(${prefix}[\w-]*)\s*:\s*([^;]+);`, "gm");
-  for (const m of css.matchAll(re)) decls.set(m[1], m[2].trim());
+  for (const m of css.matchAll(re)) {
+    const [, name, value] = m;
+    if (name !== undefined && value !== undefined) decls.set(name, value.trim());
+  }
   return decls;
 }
 
@@ -503,8 +506,8 @@ describe("numeric scales contract (#12033)", () => {
       // Opening detection runs first so a same-line `@theme inline { --text-x: … }`
       // is still attributed to the inline block.
       if (/@theme\s+inline\s*\{/.test(line)) inlineThemeDepth = depth;
-      const declared = /^\s*(--text-[\w-]+)\s*:/.exec(line);
-      if (declared && inlineThemeDepth !== null) inlined.push(declared[1]);
+      const declared = /^\s*(--text-[\w-]+)\s*:/.exec(line)?.[1];
+      if (declared !== undefined && inlineThemeDepth !== null) inlined.push(declared);
       for (const ch of line) {
         if (ch === "{") depth++;
         else if (ch === "}") {
