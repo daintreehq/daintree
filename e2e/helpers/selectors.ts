@@ -116,7 +116,14 @@ export const SEL = {
     deleteConfirmInput: '[data-testid="delete-worktree-confirm-input"]',
     searchInput: '[aria-label="Search worktrees"]',
     searchClear: '[aria-label="Clear search"]',
-    reviewHubButton: '[aria-label="Open Review & Commit"]',
+    // Prefix match, deliberately. The card builds this label from the worktree's
+    // review state (`WorktreeDetailsSection.reviewHubButtonLabel`): "Open Review &
+    // commit" normally, "Open Review & push" once the tree is clean but commits
+    // are unpushed. An exact selector silently stops matching the moment either
+    // the verb or its casing shifts — which is what happened here, leaving every
+    // ReviewHub spec unable to open the hub. Note the button is ABSENT entirely
+    // when there is nothing to review and nothing to push.
+    reviewHubButton: '[aria-label^="Open Review &"]',
     filterButton: '[aria-label="Filter and sort worktrees"]',
     filterPopover: '[data-testid="worktree-filter-popover"]',
     openOverviewButton: '[aria-label="Open worktrees overview"]',
