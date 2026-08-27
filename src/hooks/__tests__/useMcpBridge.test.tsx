@@ -886,7 +886,7 @@ describe("useMcpBridge", () => {
 
     useMcpConfirmStore.getState().resolveCurrent("approved");
     await dispatched;
-    expect(mocks.buildGitPreview).toHaveBeenCalledWith("/repo");
+    expect(mocks.buildGitPreview).toHaveBeenCalledWith("/repo", "push");
   });
 
   // The preview resolves cwd when the modal opens; ActionService would otherwise
@@ -996,7 +996,7 @@ describe("useMcpBridge", () => {
     useMcpConfirmStore.getState().resolveCurrent("approved");
     await dispatched;
 
-    expect(mocks.buildGitPreview).toHaveBeenCalledWith("/previewed");
+    expect(mocks.buildGitPreview).toHaveBeenCalledWith("/previewed", "pull-rebase");
     expect(mocks.dispatch).toHaveBeenCalledWith(
       "git.pullRebase",
       { cwd: "/previewed" },
@@ -1463,7 +1463,7 @@ describe("buildMcpConfirmPreview (#11343, #11538)", () => {
       commits: [{ hash: "abcdef1234", message: "Fix the thing", author: "Ada" }],
     });
     const lines = await buildMcpConfirmPreview({ kind: "gitPush", cwd: "/repo" });
-    expect(mocks.buildGitPreview).toHaveBeenCalledWith("/repo");
+    expect(mocks.buildGitPreview).toHaveBeenCalledWith("/repo", "push");
     expect(lines[0]).toBe("Destination: origin/feature/x");
     expect(lines[1]).toBe("Branch: feature/x");
     expect(lines[2]).toContain("Fix the thing");

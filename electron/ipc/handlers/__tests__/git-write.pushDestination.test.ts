@@ -67,24 +67,36 @@ const UPSTREAM_REMOTE = "origin";
 const UPSTREAM_BRANCH = "release/topic";
 const UPSTREAM_REF = `refs/remotes/${UPSTREAM_REMOTE}/${UPSTREAM_BRANCH}`;
 
+const FOR_EACH_REF = `refs/heads/${LOCAL_BRANCH}\u0000${REMOTE}\u0000${PUSH_REF}`;
+const FOR_EACH_REF_UPSTREAM = `refs/heads/${LOCAL_BRANCH}\u0000${UPSTREAM_REMOTE}\u0000${UPSTREAM_REF}`;
+
+/**
+ * The shared `git.raw` behaviour, callable on its own so a double that
+ * intercepts part of the argv can delegate the rest here rather than restating
+ * the ref-resolution config a second time.
+ */
+function rawResponder(forEachRef: string, forEachRefUpstream: string) {
+  return async (args: string[]): Promise<string> => {
+    if (args[0] === "for-each-ref") {
+      const format = args[1] ?? "";
+      return `${format.includes("upstream") ? forEachRefUpstream : forEachRef}\n`;
+    }
+    if (args[0] === "rev-list") return "7\n";
+    return "";
+  };
+}
+
 function makeGit(
   overrides: FakeGit = {},
-  forEachRef = `refs/heads/${LOCAL_BRANCH}\u0000${REMOTE}\u0000${PUSH_REF}`,
-  forEachRefUpstream = `refs/heads/${LOCAL_BRANCH}\u0000${UPSTREAM_REMOTE}\u0000${UPSTREAM_REF}`
+  forEachRef = FOR_EACH_REF,
+  forEachRefUpstream = FOR_EACH_REF_UPSTREAM
 ): FakeGit {
   return {
     revparse: vi.fn(async (args: string[]) => {
       if (args[0] === "--abbrev-ref" && args[1] === "HEAD") return `${LOCAL_BRANCH}\n`;
       return "aaaaaaaabbbbbbbbccccccccdddddddd\n";
     }),
-    raw: vi.fn(async (args: string[]) => {
-      if (args[0] === "for-each-ref") {
-        const format = args[1] ?? "";
-        return `${format.includes("upstream") ? forEachRefUpstream : forEachRef}\n`;
-      }
-      if (args[0] === "rev-list") return "7\n";
-      return "";
-    }),
+    raw: vi.fn(rawResponder(forEachRef, forEachRefUpstream)),
     getRemotes: vi.fn(async () => [
       { name: "origin", refs: { fetch: "", push: "" } },
       { name: REMOTE, refs: { fetch: "", push: "" } },
@@ -253,6 +265,142 @@ describe("list-remote-commits — resolved destination", () => {
       "--count",
       `refs/heads/${LOCAL_BRANCH}..${PUSH_REF}`,
     ]);
+  });
+});
+
+describe("list-push-commits — publish range", () => {
+  const LOCAL_REF = `refs/heads/${LOCAL_BRANCH}`;
+  /** A 40-hex sha, so `readRemoteBranchTip` accepts the ls-remote line. */
+  const REMOTE_TIP = "0123456789abcdef0123456789abcdef01234567";
+
+  /**
+   * A git double for the preview's two probes. `knownRefs` decides what
+   * `rev-parse --verify` resolves — which is how the handler learns whether a
+   * remote-tracking ref exists — and `lsRemote` is the remote's own answer,
+   * kept independent of it so every branch of the basis choice is reachable.
+   */
+  function makePreviewGit(opts: {
+    knownRefs?: string[];
+    lsRemote?: () => Promise<string>;
+  }): FakeGit {
+    const knownRefs = new Set(opts.knownRefs ?? []);
+    const git = makeGit({
+      log: vi.fn(async () => ({
+        all: [{ hash: "h1", date: "d", message: "m", author_name: "a" }],
+      })),
+    });
+    const fallback = rawResponder(FOR_EACH_REF, FOR_EACH_REF_UPSTREAM);
+    git.raw = vi.fn(async (args: string[]) => {
+      if (args[0] === "rev-parse") {
+        const ref = (args[3] ?? "").replace(/\^\{commit\}$/, "");
+        if (!knownRefs.has(ref)) throw new Error("fatal: bad revision");
+        return `${REMOTE_TIP}\n`;
+      }
+      if (args[0] === "ls-remote") {
+        if (!opts.lsRemote) throw new Error("ls-remote was not expected here");
+        return opts.lsRemote();
+      }
+      return fallback(args);
+    });
+    return git;
+  }
+
+  /** Every argv a git double was called with, for the negative assertions. */
+  function argvOf(fn: ReturnType<typeof vi.fn>): string[][] {
+    return fn.mock.calls.map((call: unknown[]) => (call[0] ?? []) as string[]);
+  }
+
+  function listPushCommits(git: FakeGit) {
+    createHardenedGitMock.mockResolvedValue(git);
+    return getHandler("git:list-push-commits")(FAKE_EVENT, {
+      cwd: CWD,
+      branchName: LOCAL_BRANCH,
+      limit: 5,
+    }) as Promise<{ rangeBasis: string; total: number; destination: unknown }>;
+  }
+
+  it("ranges from the destination's tracking ref up to the named branch", async () => {
+    const git = makePreviewGit({ knownRefs: [PUSH_REF] });
+
+    const result = await listPushCommits(git);
+
+    // The range runs remote..local, the opposite direction from the discard
+    // preview above: these are the commits the push would ADD.
+    expect(git.log).toHaveBeenCalledWith(["--max-count=5", `${PUSH_REF}..${LOCAL_REF}`]);
+    expect(git.raw).toHaveBeenCalledWith(["rev-list", "--count", `${PUSH_REF}..${LOCAL_REF}`]);
+    expect(result.rangeBasis).toBe("tracked");
+    expect(result.destination).toEqual({ remote: REMOTE, branch: REMOTE_BRANCH });
+    // A tracking ref we hold is a settled answer; nothing justifies the network.
+    expect(argvOf(git.raw).some((args) => args[0] === "ls-remote")).toBe(false);
+    // Never HEAD: it resolves to whatever is checked out when the range is
+    // measured, not to the branch the approver was shown.
+    expect(argvOf(git.log).some((args) => args.some((a) => a.includes("HEAD")))).toBe(false);
+  });
+
+  it("claims a creation only after the remote reports no such branch", async () => {
+    const git = makePreviewGit({ knownRefs: [], lsRemote: async () => "" });
+
+    const result = await listPushCommits(git);
+
+    expect(git.raw).toHaveBeenCalledWith([
+      "ls-remote",
+      "--heads",
+      "--",
+      REMOTE,
+      `refs/heads/${REMOTE_BRANCH}`,
+    ]);
+    expect(git.log).toHaveBeenCalledWith(["--max-count=5", LOCAL_REF]);
+    expect(result.rangeBasis).toBe("creates");
+  });
+
+  it("ranges from a remote-named tip this repository already holds", async () => {
+    const git = makePreviewGit({
+      knownRefs: [REMOTE_TIP],
+      lsRemote: async () => `${REMOTE_TIP}\trefs/heads/${REMOTE_BRANCH}\n`,
+    });
+
+    const result = await listPushCommits(git);
+
+    expect(git.log).toHaveBeenCalledWith(["--max-count=5", `${REMOTE_TIP}..${LOCAL_REF}`]);
+    expect(result.rangeBasis).toBe("tracked");
+  });
+
+  it("marks the range unverified rather than claiming a creation when the remote is unreachable", async () => {
+    const git = makePreviewGit({
+      knownRefs: [],
+      lsRemote: () => Promise.reject(new Error("Could not read from remote repository")),
+    });
+
+    const result = await listPushCommits(git);
+
+    // The local approximation excludes everything already on ANY ref of that
+    // remote — an over-count would read as commits this push publishes.
+    expect(git.log).toHaveBeenCalledWith([
+      "--max-count=5",
+      LOCAL_REF,
+      "--not",
+      `--remotes=${REMOTE}`,
+    ]);
+    expect(result.rangeBasis).toBe("unverified");
+    expect(result.rangeBasis).not.toBe("creates");
+  });
+
+  it("counts the tail over the same range the rows came from", async () => {
+    const git = makePreviewGit({
+      knownRefs: [],
+      lsRemote: () => Promise.reject(new Error("offline")),
+    });
+
+    const result = await listPushCommits(git);
+
+    expect(git.raw).toHaveBeenCalledWith([
+      "rev-list",
+      "--count",
+      LOCAL_REF,
+      "--not",
+      `--remotes=${REMOTE}`,
+    ]);
+    expect(result.total).toBe(7);
   });
 });
 

@@ -168,6 +168,36 @@ export interface GitRemoteCommitPreview {
   total: number;
 }
 
+/**
+ * What a push would actually publish, over the range git itself resolved.
+ *
+ * Distinct from a branch's recent history, which is what a plain `git log HEAD`
+ * returns: the two diverge for every branch that is not entirely unpushed, and a
+ * D2 confirm that shows the second while claiming the first is showing commits
+ * the push will not write (#11979).
+ */
+export interface GitPushCommitPreview {
+  destination: GitPushDestination;
+  /**
+   * How the range was established, which decides what the rows may be called.
+   *
+   * - `tracked` — the delta against the destination tip is exact, either from a
+   *   local remote-tracking ref or from a tip the remote named that this
+   *   repository already has.
+   * - `creates` — the remote confirmed the destination branch does not exist, so
+   *   the push creates it and the rows are the branch's own history.
+   * - `unverified` — neither could be established (no tracking ref, and the
+   *   remote could not be reached or named a tip this repository does not hold).
+   *   The rows are a local approximation that can BOTH overstate and understate,
+   *   so callers must present them as unverified — and an empty one means
+   *   "nothing found locally", never "the destination is up to date".
+   */
+  rangeBasis: "tracked" | "creates" | "unverified";
+  commits: GitRemoteCommit[];
+  /** Total commits in the range, which may exceed the returned `commits`. */
+  total: number;
+}
+
 export interface StagingStatus {
   staged: StagingFileEntry[];
   unstaged: StagingFileEntry[];

@@ -74,6 +74,7 @@ describe("GitPullRebaseConfirmDialog", () => {
       destination: { remote: "origin", branch: "feature/y" },
       pullSource: { remote: "origin", branch: "feature/y" },
       commits: [],
+      pushRange: null,
     });
     render(<GitPullRebaseConfirmDialog />);
 
@@ -81,7 +82,7 @@ describe("GitPullRebaseConfirmDialog", () => {
       void useGitPullRebaseConfirmStore.getState().requestConfirmation("/repo");
     });
 
-    expect(mocks.buildPreview).toHaveBeenCalledWith("/repo");
+    expect(mocks.buildPreview).toHaveBeenCalledWith("/repo", "pull-rebase");
   });
 
   it("blocks approval while the preview is still loading", async () => {
@@ -90,6 +91,7 @@ describe("GitPullRebaseConfirmDialog", () => {
       destination: { remote: string; branch: string };
       pullSource: { remote: string; branch: string };
       commits: never[];
+      pushRange: null;
     }>();
     mocks.buildPreview.mockReturnValue(gate.promise);
     render(<GitPullRebaseConfirmDialog />);
@@ -106,6 +108,7 @@ describe("GitPullRebaseConfirmDialog", () => {
         destination: { remote: "origin", branch: "main" },
         pullSource: { remote: "origin", branch: "main" },
         commits: [],
+        pushRange: null,
       });
       await gate.promise;
     });
@@ -130,6 +133,7 @@ describe("GitPullRebaseConfirmDialog", () => {
       destination: { remote: "origin", branch: "main" },
       pullSource: { remote: "origin", branch: "main" },
       commits: [],
+      pushRange: null,
     });
     render(<GitPullRebaseConfirmDialog />);
 

@@ -648,6 +648,10 @@ export interface GeneratedIpcInvokeMap {
     args: [];
     result: { exists: boolean; alternateBufferEnabled: boolean; error?: string | undefined };
   };
+  "git:list-push-commits": {
+    args: [payload: { cwd: string; branchName: string; limit?: number | undefined }];
+    result: import("../git.js").GitPushCommitPreview;
+  };
   "global-env:get": {
     args: [];
     result: Record<string, string>;
