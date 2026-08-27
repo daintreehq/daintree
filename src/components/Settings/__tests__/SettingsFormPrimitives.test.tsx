@@ -1137,18 +1137,42 @@ describe("SettingsSwitch", () => {
     expect(switchEl?.className).toContain("data-[state=checked]:bg-status-error");
   });
 
-  it("applies correct thumb colors for contrast", () => {
-    const { container: offContainer } = render(
+  // The off state used to paint the thumb with the very fill the on state uses
+  // for its TRACK, so a switch that was off presented a solid high-contrast
+  // circle and read as lit. The rule, not the values: the resting thumb must
+  // never borrow the fill that means "on", and the two thumb states must
+  // differ from each other.
+  it("never paints the resting thumb with the fill that signals on", () => {
+    const { container } = render(
       <SettingsSwitch checked={false} onCheckedChange={vi.fn()} aria-label="Test switch" />
     );
-    const thumbOff = offContainer.querySelector('[role="switch"] > span');
-    expect(thumbOff?.className).toContain("bg-daintree-text");
+    const track = container.querySelector('[role="switch"]');
+    const thumb = container.querySelector('[role="switch"] > span');
 
-    const { container: onContainer } = render(
-      <SettingsSwitch checked={true} onCheckedChange={vi.fn()} aria-label="Test switch" />
+    const bg = (className: string | undefined, checked: boolean) =>
+      (className ?? "")
+        .split(/\s+/)
+        .filter((c) => (checked ? c.startsWith("data-[state=checked]:bg-") : /^bg-/.test(c)))
+        .map((c) => c.replace("data-[state=checked]:", ""));
+
+    const restingThumb = bg(thumb?.className, false);
+    const onTrack = bg(track?.className, true);
+    const onThumb = bg(thumb?.className, true);
+
+    expect(restingThumb.length, "the resting thumb needs a fill").toBeGreaterThan(0);
+    expect(onTrack.length, "the on track needs a fill").toBeGreaterThan(0);
+    expect(restingThumb).not.toEqual(expect.arrayContaining(onTrack));
+    expect(restingThumb).not.toEqual(expect.arrayContaining(onThumb));
+  });
+
+  it("gives the resting track a boundary so the control stays discernible", () => {
+    const { container } = render(
+      <SettingsSwitch checked={false} onCheckedChange={vi.fn()} aria-label="Test switch" />
     );
-    const thumbOn = onContainer.querySelector('[role="switch"] > span');
-    expect(thumbOn?.className).toContain("data-[state=checked]:bg-text-inverse");
+    const track = container.querySelector('[role="switch"]');
+    // Either spelling is fine; what matters is that the resting control has an
+    // edge of its own and does not rely on its fill alone to be discernible.
+    expect(track?.className).toMatch(/(^|\s)(border|ring-\d)(\s|-|$)/);
   });
 
   it("toggles with keyboard (Space key)", () => {

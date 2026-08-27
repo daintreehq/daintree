@@ -258,4 +258,19 @@ describe("AgentSetupWizard completion action", () => {
     expect(buttonLabels()).toContain("Cancel");
     expect(buttonLabels()).not.toContain("Skip");
   });
+
+  // The step heading is the landing point on open and on every advance: it
+  // reads the step's name and instructions before the first control, and keeps
+  // Enter off the dismiss button that discards a first run.
+  it("lands focus on the current step's heading rather than the dismiss button", async () => {
+    await openAt({ claude: "ready" });
+    const heading = document.querySelector("h3");
+    expect(heading?.textContent).toBe("Choose your AI agents");
+    expect(document.activeElement).toBe(heading);
+
+    await clickButton("Continue");
+    const next = document.querySelector("h3");
+    expect(next?.textContent).toBe("Setup complete");
+    expect(document.activeElement).toBe(next);
+  });
 });

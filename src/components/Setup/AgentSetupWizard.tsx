@@ -485,6 +485,7 @@ export function AgentSetupWizard({
   const { setAgentPinned, setGlobalSkipPermissions } = useAgentSettingsStore();
   const isAvailabilityLoading = useCliAvailabilityStore((s) => s.isLoading || s.isRefreshing);
   const [isSaving, setIsSaving] = useState(false);
+  const [isInstalling, setIsInstalling] = useState(false);
 
   // Theme state (first-run only)
   const selectedSchemeId = useAppThemeStore((s) => s.selectedSchemeId);
@@ -634,15 +635,25 @@ export function AgentSetupWizard({
   // ARIA practices ask for on a step advance: land on the heading with
   // tabindex=-1 so the step's name and instructions are read before the first
   // control, rather than leaving focus on the button that was just pressed.
-  const stepHeadingRef = useRef<HTMLHeadingElement | null>(null);
-  useEffect(() => {
-    if (!isOpen) return;
-    const frame = requestAnimationFrame(() => stepHeadingRef.current?.focus());
-    return () => cancelAnimationFrame(frame);
-  }, [isOpen, state.step.type]);
+  //
+  // This has to be a ref callback rather than an effect on `state.step.type`.
+  // `AnimatePresence mode="wait"` holds the OUTGOING step mounted while it
+  // animates out and only then mounts the incoming one, so an effect keyed on
+  // the step would focus the heading that is about to be removed — and focus
+  // would land back on the document when it unmounted. The callback fires when
+  // the incoming heading actually attaches, whenever that is.
+  const focusStepHeading = useCallback((node: HTMLHeadingElement | null) => {
+    if (node && isOpenRef.current) node.focus();
+  }, []);
 
+  // Same featured-then-more ordering the agents step presents, so the summary
+  // lists them in the order the user just saw rather than registry order.
   const installedAgents = useMemo(
-    () => AGENT_ORDER.filter((id) => isAgentLaunchable(state.availability[id])),
+    () =>
+      [
+        ...sortTierByInstalled(FEATURED_AGENT_IDS, state.availability),
+        ...sortTierByInstalled(MORE_AGENT_IDS, state.availability),
+      ].filter((id) => isAgentLaunchable(state.availability[id])),
     [state.availability]
   );
 
@@ -795,7 +806,7 @@ export function AgentSetupWizard({
       onClose={handleFinish}
       onBeforeClose={isFirstRun ? handleBeforeClose : undefined}
       size="lg"
-      dismissible={!isSaving}
+      dismissible={!isSaving && !isInstalling}
       initialFocus="none"
       data-testid="agent-setup-wizard"
     >
@@ -837,7 +848,7 @@ export function AgentSetupWizard({
                   names the current task rather than leaving it to body copy. */}
               <div className="mb-4">
                 <h3
-                  ref={stepHeadingRef}
+                  ref={focusStepHeading}
                   tabIndex={-1}
                   className="text-base font-semibold text-daintree-text outline-hidden focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-daintree-accent rounded-xs"
                 >
@@ -877,6 +888,7 @@ export function AgentSetupWizard({
                   availability={state.availability}
                   selections={state.selections}
                   isFirstRun={isFirstRun}
+                  onBusyChange={setIsInstalling}
                   onInstallComplete={() => {
                     void cliAvailabilityClient.refresh().then((result) => {
                       if (isOpenRef.current) {
@@ -913,15 +925,17 @@ export function AgentSetupWizard({
                 variant="ghost"
                 onClick={handleBack}
                 className="text-daintree-text/70 hover:text-daintree-text"
-                disabled={isSaving}
+                disabled={isSaving || isInstalling}
               >
                 <ChevronLeft className="w-4 h-4" />
                 Back
               </Button>
             ) : (
               // Not "Skip": this closes the whole wizard, it does not skip the
-              // step. The first-run wording says the setup can be resumed;
-              // the re-run wording says the selection is being abandoned.
+              // step. "Not now" is the app's existing word for deferring an
+              // app-initiated setup — the welcome banner that opens this very
+              // wizard uses it. "Cancel" on a re-run, where the selection the
+              // user just made is discarded rather than deferred.
               <Button
                 variant="ghost"
                 onClick={handleSkip}
@@ -929,7 +943,7 @@ export function AgentSetupWizard({
                 data-testid="agent-setup-exit"
                 className="text-daintree-text/70 hover:text-daintree-text"
               >
-                {isFirstRun ? "Set up later" : "Cancel"}
+                {isFirstRun ? "Not now" : "Cancel"}
               </Button>
             ))}
           {state.step.type === "appearance" && (
@@ -960,7 +974,7 @@ export function AgentSetupWizard({
             </Button>
           )}
           {state.step.type === "cli" && (
-            <Button variant="contrast" onClick={handleCliContinue}>
+            <Button variant="contrast" onClick={handleCliContinue} disabled={isInstalling}>
               Continue
               <ArrowRight className="w-4 h-4 ml-1" />
             </Button>

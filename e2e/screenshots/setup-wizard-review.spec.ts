@@ -283,7 +283,31 @@ test("agent setup wizard review — every step of both flows", async () => {
       await closeWizard(page);
     });
 
-    // 6. Keyboard focus — where the ring lands on entry, and on the footer.
+    // 6. Focus after an advance. jsdom flattens AnimatePresence, so the unit
+    // test cannot reproduce the `mode="wait"` timing that put focus on the
+    // OUTGOING heading — this is the check that does.
+    await step("focus-after-advance", async () => {
+      await openWizard(page, true);
+      await clickContinue(page); // appearance -> agents
+      await settle(page, 700);
+      const focused = await page.evaluate(() => {
+        const el = document.activeElement as HTMLElement | null;
+        return {
+          tag: el?.tagName ?? "none",
+          text: (el?.textContent ?? "").trim().slice(0, 60),
+          inDialog: !!el?.closest('[data-testid="agent-setup-wizard"]'),
+        };
+      });
+      expect(focused.inDialog, `focus escaped the dialog: ${JSON.stringify(focused)}`).toBe(true);
+      expect(focused.tag, `focus should land on the step heading: ${JSON.stringify(focused)}`).toBe(
+        "H3"
+      );
+      expect(focused.text).toBe("Choose your AI agents");
+      await snap(page, "62-focus-after-advance", PANEL);
+      await closeWizard(page);
+    });
+
+    // 7. Keyboard focus — where the ring lands on entry, and on the footer.
     await step("keyboard", async () => {
       await openWizard(page, true);
       await page.keyboard.press("Tab");
@@ -293,7 +317,7 @@ test("agent setup wizard review — every step of both flows", async () => {
       await closeWizard(page);
     });
 
-    // 7. Privacy toggle on — the only step whose control has two visual states.
+    // 8. Privacy toggle on — the only step whose control has two visual states.
     await step("privacy-on", async () => {
       await openWizard(page, true);
       await clickContinue(page); // appearance -> agents
