@@ -203,6 +203,24 @@ describe("CloneRepoDialog", () => {
     });
   });
 
+  /**
+   * The mode swap is gated on the Doherty threshold, so the running view does
+   * not exist for the first 400ms of a clone however fast the first progress
+   * event arrives. Tests that assert on the live phase have to cross it first.
+   */
+  async function waitForRunningMode() {
+    await screen.findByText("Connecting…", {}, { timeout: 3000 });
+  }
+
+  /**
+   * The live phase is gated behind a real 400ms timer AND arrives through an
+   * IPC callback, so querying for it synchronously races the gate — which
+   * passed in isolation and flaked under full-suite load.
+   */
+  async function findProgressBar(): Promise<HTMLElement> {
+    return screen.findByRole("progressbar", {}, { timeout: 3000 });
+  }
+
   it("renders input fields when opened", () => {
     render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
 
@@ -275,6 +293,7 @@ describe("CloneRepoDialog", () => {
     });
 
     await waitFor(() => expect(progressHandler).not.toBeNull());
+    await waitForRunningMode();
 
     act(() => {
       progressHandler?.({
@@ -285,7 +304,7 @@ describe("CloneRepoDialog", () => {
       });
     });
 
-    expect(screen.getByRole("progressbar").getAttribute("aria-label")).toBe("receiving");
+    expect((await findProgressBar()).getAttribute("aria-label")).toBe("receiving");
   });
 
   it("calls onSuccess with clonedPath after successful clone", async () => {
@@ -753,6 +772,7 @@ describe("CloneRepoDialog", () => {
     });
 
     await waitFor(() => expect(progressHandler).not.toBeNull());
+    await waitForRunningMode();
     act(() => {
       progressHandler?.({
         stage: "receiving",
@@ -761,7 +781,7 @@ describe("CloneRepoDialog", () => {
         timestamp: Date.now(),
       });
     });
-    expect(screen.getByRole("progressbar")).toBeTruthy();
+    expect(await findProgressBar()).toBeTruthy();
 
     await act(async () => {
       rejectClone?.(new Error("[AppError|CANCELLED] Clone cancelled"));
@@ -909,6 +929,7 @@ describe("CloneRepoDialog", () => {
     });
 
     await waitFor(() => expect(progressHandler).not.toBeNull());
+    await waitForRunningMode();
 
     act(() => {
       progressHandler?.({
@@ -951,8 +972,8 @@ describe("CloneRepoDialog", () => {
 
     // The live stage is the most recent event's stage, and its percentage is
     // read off the payload rather than scraped out of the message string.
-    expect(screen.getByRole("progressbar").getAttribute("aria-valuenow")).toBe("80");
-    expect(screen.getByRole("progressbar").getAttribute("aria-label")).toBe("receiving");
+    expect((await findProgressBar()).getAttribute("aria-valuenow")).toBe("80");
+    expect((await findProgressBar()).getAttribute("aria-label")).toBe("receiving");
   });
 
   it("Enter retries after a failed clone (matches Retry button behavior)", async () => {
@@ -1009,6 +1030,7 @@ describe("CloneRepoDialog", () => {
     });
 
     await waitFor(() => expect(progressHandler).not.toBeNull());
+    await waitForRunningMode();
 
     act(() => {
       progressHandler?.({
@@ -1029,7 +1051,7 @@ describe("CloneRepoDialog", () => {
     // a stage, so it must never become a row of its own — and it must not
     // displace the live stage either.
     expect(screen.queryByText("Clone cancelled")).toBeNull();
-    expect(screen.getByRole("progressbar").getAttribute("aria-label")).toBe("receiving");
+    expect((await findProgressBar()).getAttribute("aria-label")).toBe("receiving");
     expect(screen.getAllByTestId("spinner")).toHaveLength(1);
   });
 
@@ -1052,6 +1074,7 @@ describe("CloneRepoDialog", () => {
     });
 
     await waitFor(() => expect(progressHandler).not.toBeNull());
+    await waitForRunningMode();
 
     act(() => {
       for (let pct = 0; pct <= 100; pct += 10) {
@@ -1067,7 +1090,7 @@ describe("CloneRepoDialog", () => {
     // One stage updating repeatedly stays one row — an unbounded log was the
     // old failure mode — and the reported value tracks the latest payload.
     expect(screen.getAllByTestId("spinner")).toHaveLength(1);
-    expect(screen.getByRole("progressbar").getAttribute("aria-valuenow")).toBe("100");
+    expect((await findProgressBar()).getAttribute("aria-valuenow")).toBe("100");
   });
 
   it("reads the percentage from the payload, not from the message text", async () => {
@@ -1089,6 +1112,7 @@ describe("CloneRepoDialog", () => {
     });
 
     await waitFor(() => expect(progressHandler).not.toBeNull());
+    await waitForRunningMode();
 
     // Message and payload deliberately disagree. The bar must follow `progress`.
     act(() => {
@@ -1100,7 +1124,7 @@ describe("CloneRepoDialog", () => {
       });
     });
 
-    expect(screen.getByRole("progressbar").getAttribute("aria-valuenow")).toBe("37");
+    expect((await findProgressBar()).getAttribute("aria-valuenow")).toBe("37");
   });
 
   it("does not treat full URLs as owner/repo shorthand", async () => {
@@ -1197,6 +1221,34 @@ describe("CloneRepoDialog", () => {
       expect(screen.getByRole("progressbar").getAttribute("aria-label")).toBe("Receiving");
     });
 
+    it("does not switch to the running view when progress arrives before the threshold", async () => {
+      render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
+      await startActiveClone();
+
+      act(() => {
+        vi.advanceTimersByTime(200);
+        progressHandler?.({
+          stage: "receiving",
+          progress: 5,
+          message: "Receiving: 5%",
+          timestamp: Date.now(),
+        });
+      });
+
+      // A clone fast enough to report progress inside the threshold must not
+      // flash the monitor. Gating on "no event yet" rather than on the clone
+      // itself let a quick first event bypass the gate entirely.
+      expect(screen.queryByRole("progressbar")).toBeNull();
+      expect(screen.queryByTestId("spinner")).toBeNull();
+      // Still the configuration form, untouched.
+      expect(screen.getByPlaceholderText("owner/repo or repository URL")).toBeTruthy();
+
+      act(() => {
+        vi.advanceTimersByTime(400);
+      });
+      expect(screen.getByRole("progressbar").getAttribute("aria-valuenow")).toBe("5");
+    });
+
     it("replaces the placeholder with the live log when the first event arrives", async () => {
       render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
       await startActiveClone();
@@ -1227,6 +1279,7 @@ describe("CloneRepoDialog", () => {
       await startActiveClone();
 
       await waitFor(() => expect(progressHandler).not.toBeNull());
+      await waitForRunningMode();
 
       act(() => {
         progressHandler?.({
@@ -1261,6 +1314,7 @@ describe("CloneRepoDialog", () => {
       await startActiveClone();
 
       await waitFor(() => expect(progressHandler).not.toBeNull());
+      await waitForRunningMode();
 
       act(() => {
         progressHandler?.({

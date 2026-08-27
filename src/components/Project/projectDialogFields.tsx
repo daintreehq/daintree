@@ -42,7 +42,17 @@ export const FIELD_EMOJI_ROW_INDENT = "ml-11";
 export function PathCaption({ path, className }: { path: string; className?: string }) {
   const displayPath = normalize(path);
   const leaf = basename(displayPath);
-  const ancestors = displayPath.slice(0, displayPath.length - leaf.length);
+  // The separator rides with the leaf, not with the ancestors. Left inside the
+  // truncating span it is the first thing the ellipsis eats, and the caption
+  // then reads as two unrelated strings ("…/some/pre  leaf") rather than as one
+  // elided path ("…/leaf").
+  const separatorIndex = displayPath.length - leaf.length - 1;
+  const separator =
+    separatorIndex >= 0 &&
+    (displayPath[separatorIndex] === "/" || displayPath[separatorIndex] === "\\")
+      ? displayPath[separatorIndex]
+      : "";
+  const ancestors = displayPath.slice(0, displayPath.length - leaf.length - separator.length);
 
   return (
     <p
@@ -52,7 +62,10 @@ export function PathCaption({ path, className }: { path: string; className?: str
       <span className="min-w-0 truncate">{ancestors}</span>
       {/* Pinned against the ancestors, but still capped: a leaf wider than the
           dialog would otherwise overflow into a horizontal scroll. */}
-      <span className="max-w-full shrink-0 truncate">{leaf}</span>
+      <span className="max-w-full shrink-0 truncate">
+        {separator}
+        {leaf}
+      </span>
     </p>
   );
 }

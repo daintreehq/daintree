@@ -50,6 +50,14 @@ interface CloneRepoDialogProps {
 
 const AUTO_CLOSE_DELAY_MS = 2000;
 
+/**
+ * House rule for a wait with nothing to show is reassurance past five seconds;
+ * `SkeletonHint`'s own default is eight, which suits a skeleton that at least
+ * has shape. Only the first threshold moves — the later escalations keep the
+ * shared cadence.
+ */
+const STILL_WORKING_AFTER_MS = 5000;
+
 /** Stages that end the operation. They are reported by the promise, not as a row. */
 const TERMINAL_STAGES = new Set(["complete", "error", "cancelled"]);
 
@@ -142,6 +150,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
   const [forgeProviders, setForgeProviders] = useState<CloneForgeProvider[]>([]);
   const urlInputRef = useRef<HTMLInputElement>(null);
   const footerActionRef = useRef<HTMLButtonElement>(null);
+  const previousModeRef = useRef<"configure" | "running" | "failed" | "complete">("configure");
   const hasFinalizedRef = useRef(false);
 
   const suggestedEmoji = useMemo(() => {
@@ -348,8 +357,10 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
   const currentStage = currentIndex === -1 ? null : (stages[currentIndex] ?? null);
   const completedStages = currentIndex === -1 ? [] : stages.slice(0, currentIndex);
 
-  const showConnecting = useDohertyGate(isCloning && currentStage === null);
-  const isRunning = showConnecting || currentStage !== null;
+  // The gate belongs on the clone itself, not on the absence of events. Gating
+  // "no event yet" let a fast clone that reports progress inside 400ms switch
+  // modes immediately — the flash the threshold exists to prevent.
+  const isRunning = useDohertyGate(isCloning);
 
   // Four modes of one surface. Configuration stays on screen through the
   // sub-gate window and after a stop, so a fast clone never flashes a mode
@@ -369,8 +380,19 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
   // already put focus in the URL field, and re-running this on every keystroke
   // would fight it.
   useEffect(() => {
-    if (!isOpen || mode === "configure") return;
-    const frame = requestAnimationFrame(() => footerActionRef.current?.focus());
+    const previousMode = previousModeRef.current;
+    previousModeRef.current = mode;
+    if (!isOpen) return;
+    // Returning to the form after a stop unmounts the Stop button that had
+    // focus, so without this the focus falls to the document body.
+    const target =
+      mode === "configure"
+        ? previousMode === "running"
+          ? urlInputRef.current
+          : null
+        : footerActionRef.current;
+    if (!target) return;
+    const frame = requestAnimationFrame(() => target.focus());
     return () => cancelAnimationFrame(frame);
   }, [isOpen, mode]);
 
@@ -484,7 +506,12 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
 
       <AppDialog.Body className="space-y-5">
         {mode === "complete" ? (
-          <div className="flex flex-col items-center gap-4 py-6 text-center">
+          <div
+            className="flex flex-col items-center gap-4 py-6 text-center"
+            role="status"
+            aria-live="polite"
+            aria-atomic="true"
+          >
             <div className="flex h-12 w-12 items-center justify-center rounded-full bg-status-success/15">
               <Check className="h-6 w-6 text-status-success" />
             </div>
@@ -492,41 +519,24 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
               <h3 className="text-base font-semibold text-daintree-text">Repository cloned</h3>
               <p className="text-sm text-daintree-text/60">
                 <span aria-hidden="true">{effectiveEmoji} </span>
-                {trimmedFolderName} is ready to open.
+                {trimmedFolderName} is ready to open
               </p>
             </div>
             {clonedPath !== null && <PathCaption path={clonedPath} className="max-w-full" />}
           </div>
         ) : mode === "running" ? (
           <>
-            {summary}
-
             {/* One current phase, the way every other running-operation surface
-                in the app reports itself. The percentage rides the payload's
-                `progress`, which the transcript this replaced threw away. */}
+                in the app reports itself, and first — "what is happening now"
+                is the question this mode exists to answer. The percentage rides
+                the payload's `progress`, which the transcript this replaced
+                threw away. */}
             <div className="space-y-2" aria-busy="true">
               {/* Carries the phase and nothing else, so stage changes are
                   announced and percentage ticks are not. */}
               <span className="sr-only" role="status" aria-live="polite">
                 {currentStage ? stageLabel(currentStage) : "Connecting"}
               </span>
-              {/* Phases already finished, quieted to a static check. They are
-                  what makes the current phase's bar resetting to 0% read as
-                  "next step" instead of "went backwards". */}
-              {completedStages.length > 0 && (
-                <ul className="space-y-1">
-                  {completedStages.map((event) => (
-                    <li
-                      key={event.stage}
-                      className="flex items-center gap-2 text-xs text-daintree-text/45"
-                    >
-                      <Check className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
-                      <span>{stageLabel(event)}</span>
-                    </li>
-                  ))}
-                </ul>
-              )}
-
               <div className="flex items-center gap-2">
                 <Spinner size="sm" className="shrink-0 text-text-secondary" />
                 <span aria-hidden="true" className="text-sm text-daintree-text">
@@ -564,9 +574,33 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
               </div>
               {/* Only while the phase is indeterminate — once a percentage is
                   moving, "Still working…" would be telling the user something
-                  the number already says. */}
-              {!currentStage && <SkeletonHint message="Still connecting…" />}
+                  the number already says. Five seconds, per the house rule for
+                  a wait with nothing to show. */}
+              {!currentStage && (
+                <SkeletonHint message="Still working…" firstThreshold={STILL_WORKING_AFTER_MS} />
+              )}
             </div>
+
+            {/* Phases already finished, quieted to a static check. They are what
+                makes the live phase's bar resetting to 0% read as "next step"
+                instead of "went backwards". */}
+            {completedStages.length > 0 && (
+              <ul className="space-y-1">
+                {completedStages.map((event) => (
+                  <li
+                    key={event.stage}
+                    className="flex items-center gap-2 text-xs text-daintree-text/45"
+                  >
+                    <Check className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
+                    <span>{stageLabel(event)}</span>
+                  </li>
+                ))}
+              </ul>
+            )}
+
+            {/* Subordinate to the live phase: what is being cloned and where,
+                kept legible now that the form is gone. */}
+            {summary}
 
             {cleanupBanner}
           </>
