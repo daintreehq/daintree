@@ -2,9 +2,9 @@ import { z } from "zod";
 import { defineIpcNamespace, opValidated } from "../define.js";
 import { CODEX_METHOD_CHANNELS } from "./codex.preload.js";
 import type {
-  CodexSubagentsResult,
-  CodexSubagentTranscriptResult,
-} from "../../../shared/types/ipc/codexSubagents.js";
+  AgentSubagentsResult,
+  AgentSubagentTranscriptResult,
+} from "../../../shared/types/ipc/agentSubagents.js";
 
 // The renderer names a terminal, never a folder or a bare thread id. Main
 // resolves the cwd and the owning Codex thread from the pty-host record and
@@ -16,7 +16,7 @@ const ID_MAX = 128;
 const id = z.string().trim().min(1).max(ID_MAX);
 
 const listSchema = z.object({ terminalId: id });
-const readSchema = z.object({ terminalId: id, threadId: id });
+const readSchema = z.object({ terminalId: id, subagentId: id });
 
 export const codexNamespace = defineIpcNamespace({
   name: "codex",
@@ -24,7 +24,7 @@ export const codexNamespace = defineIpcNamespace({
     listSubagents: opValidated(
       CODEX_METHOD_CHANNELS.listSubagents,
       listSchema,
-      async ({ terminalId }): Promise<CodexSubagentsResult> => {
+      async ({ terminalId }): Promise<AgentSubagentsResult> => {
         // Imported lazily so the module graph (and the PtyClient singleton it
         // reaches for) isn't pulled in at handler-registration time.
         const { listCodexSubagents } = await import("../../services/codex/CodexSubagentService.js");
@@ -34,10 +34,10 @@ export const codexNamespace = defineIpcNamespace({
     readSubagentTranscript: opValidated(
       CODEX_METHOD_CHANNELS.readSubagentTranscript,
       readSchema,
-      async ({ terminalId, threadId }): Promise<CodexSubagentTranscriptResult> => {
+      async ({ terminalId, subagentId }): Promise<AgentSubagentTranscriptResult> => {
         const { readCodexSubagentTranscript } =
           await import("../../services/codex/CodexSubagentService.js");
-        return readCodexSubagentTranscript(terminalId, threadId);
+        return readCodexSubagentTranscript(terminalId, subagentId);
       }
     ),
   },

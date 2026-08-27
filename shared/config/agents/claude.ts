@@ -20,6 +20,15 @@ export const config: AgentConfig = {
   // #11282 phase 5: Claude Code stores sessions per-folder under
   // ~/.claude/projects/<cwd-slug>/ with no cross-path resume and no documented
   // migration command; Daintree must not touch that private store (#4100).
+  //
+  // #11949 scopes that: the prohibition is on *writing* — moving a conversation
+  // between paths, or planting hooks and settings to make one behave. Opening
+  // the files Claude Code has already written, and only for the session id
+  // Daintree itself minted below, is a different act and is allowed. It is also
+  // the only route left for showing subagents: the documented alternatives
+  // write the user's settings.json or run Claude headless. See
+  // electron/services/claude/ClaudeSubagentReader.ts, which reads and never
+  // writes.
   continuity: {
     tier: "provider-migration",
     detail: "Claude Code stores this conversation per-folder and can't resume it after the move",

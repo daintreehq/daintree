@@ -23,7 +23,7 @@ import { useResourceMonitoringStore } from "@/store/resourceMonitoringStore";
 import { useErrorStore } from "@/store/errorStore";
 import { useGlobalMinuteTicker } from "@/hooks/useGlobalMinuteTicker";
 import { TerminalResourceSparkline } from "./TerminalResourceSparkline";
-import { CodexSubagentChip } from "./CodexSubagentChip";
+import { SubagentChip } from "./SubagentChip";
 import { panelKindHasPty } from "@shared/config/panelKindRegistry";
 
 // FUTURE_SAB: the `flowStatus` prop is widened to `TerminalFlowStatus` (not
@@ -625,9 +625,9 @@ export function TerminalHeaderContent({
         </Tooltip>
       )}
 
-      {/* Codex subagent count — self-gating, renders nothing unless this
-          terminal's Codex session actually spawned child threads. */}
-      <CodexSubagentChip terminalId={id} />
+      {/* Subagent count — self-gating, renders nothing unless this terminal's
+          agent actually spawned children. */}
+      <SubagentChip terminalId={id} />
     </>
   );
 }

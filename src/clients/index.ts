@@ -27,6 +27,7 @@ export { terminalClient } from "./terminalClient";
 export { worktreeClient } from "./worktreeClient";
 export { worktreeConfigClient } from "./worktreeConfigClient";
 export { codexClient } from "./codexClient";
+export { claudeClient } from "./claudeClient";
 export { commandsClient } from "./commandsClient";
 export { editorClient } from "./editorClient";
 export { appThemeClient } from "./appThemeClient";

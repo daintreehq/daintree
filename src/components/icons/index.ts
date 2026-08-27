@@ -33,7 +33,7 @@ export {
   LayoutPanelTop, // workspace plugin category (panels, notes)
   Menu, // the application menu, surfaced in-app where the native menu bar can't render
   Moon, // sleep a project — shut it down the way quitting does, restored on reopen
-  Network, // Codex subagent tree — a parent session's spawned child threads
+  Network, // Subagent tree — a parent session's spawned child sessions
   Package, // plugin (a packaged extension) — plugin tray, unresolved plugin glyphs
   Plug, // agent (integration that plugs into the host system)
   Plus, // the toolbar launcher — "make me a new thing" (agent, panel)

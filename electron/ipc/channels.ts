@@ -501,6 +501,9 @@ export const CHANNELS = {
   CODEX_LIST_SUBAGENTS: "codex:list-subagents",
   CODEX_READ_SUBAGENT_TRANSCRIPT: "codex:read-subagent-transcript",
 
+  CLAUDE_LIST_SUBAGENTS: "claude:list-subagents",
+  CLAUDE_READ_SUBAGENT_TRANSCRIPT: "claude:read-subagent-transcript",
+
   DEV_PREVIEW_ENSURE: "dev-preview:ensure",
   DEV_PREVIEW_RESTART: "dev-preview:restart",
   DEV_PREVIEW_RESTART_AND_CLEAR_CACHE: "dev-preview:restart-and-clear-cache",

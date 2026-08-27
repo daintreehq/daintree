@@ -27,7 +27,7 @@ import {
   selectParentThread,
   toSubagent,
   toSubagentStatus,
-  toSubagentTurn,
+  toSubagentMessages,
 } from "../CodexSubagentService.js";
 
 /** Params the service sends; every field is optional so a script can probe any. */
@@ -60,22 +60,42 @@ beforeEach(() => {
 });
 
 describe("toSubagentStatus", () => {
-  it("keeps the active flags that say why a child is blocked", () => {
+  it("names the reason a child is blocked rather than just that it is", () => {
     expect(toSubagentStatus({ type: "active", activeFlags: ["waitingOnApproval"] })).toEqual({
-      type: "active",
-      activeFlags: ["waitingOnApproval"],
+      type: "blocked",
+      reason: "approval",
+    });
+    expect(toSubagentStatus({ type: "active", activeFlags: ["waitingOnUserInput"] })).toEqual({
+      type: "blocked",
+      reason: "input",
     });
   });
 
-  it("drops flags the protocol did not define rather than passing them through", () => {
+  it("reports the approval when a child is held on both, since typing cannot clear it", () => {
     expect(
-      toSubagentStatus({ type: "active", activeFlags: ["waitingOnUserInput", "bogus"] })
-    ).toEqual({ type: "active", activeFlags: ["waitingOnUserInput"] });
+      toSubagentStatus({
+        type: "active",
+        activeFlags: ["waitingOnUserInput", "waitingOnApproval"],
+      })
+    ).toEqual({ type: "blocked", reason: "approval" });
   });
 
-  it("degrades an unknown or malformed status to notLoaded instead of throwing", () => {
-    expect(toSubagentStatus({ type: "somethingNew" })).toEqual({ type: "notLoaded" });
-    expect(toSubagentStatus(null)).toEqual({ type: "notLoaded" });
+  it("ignores flags the protocol did not define rather than passing them through", () => {
+    expect(toSubagentStatus({ type: "active", activeFlags: ["bogus"] })).toEqual({
+      type: "working",
+    });
+  });
+
+  it("separates a thread the protocol declined to load from one it described strangely", () => {
+    expect(toSubagentStatus({ type: "notLoaded" })).toEqual({
+      type: "unknown",
+      reason: "not-loaded",
+    });
+    expect(toSubagentStatus({ type: "somethingNew" })).toEqual({
+      type: "unknown",
+      reason: "unrecognized",
+    });
+    expect(toSubagentStatus(null)).toEqual({ type: "unknown", reason: "unrecognized" });
   });
 });
 
@@ -86,12 +106,16 @@ describe("toSubagent", () => {
     expect(subagent?.updatedAt).toBe(1_730_831_222_000);
   });
 
-  it("treats a null canAcceptDirectInput as not accepting input", () => {
-    // null is what the protocol reports for the unloaded threads this feature
-    // always sees, so an `=== false` check would read it as input-capable.
-    expect(toSubagent({ id: "t", canAcceptDirectInput: null })?.acceptsDirectInput).toBe(false);
-    expect(toSubagent({ id: "t", canAcceptDirectInput: false })?.acceptsDirectInput).toBe(false);
-    expect(toSubagent({ id: "t", canAcceptDirectInput: true })?.acceptsDirectInput).toBe(true);
+  it("maps the nickname into the shared label so one row renderer serves both agents", () => {
+    const subagent = toSubagent({ id: "t", agentNickname: "Meitner", agentRole: "reviewer" });
+    expect(subagent?.label).toBe("Meitner");
+    expect(subagent?.role).toBe("reviewer");
+  });
+
+  it("reports no model or depth rather than inventing values the protocol never sent", () => {
+    const subagent = toSubagent({ id: "t", agentNickname: "Meitner" });
+    expect(subagent?.model).toBeNull();
+    expect(subagent?.depth).toBeNull();
   });
 
   it("drops a thread with no id rather than emitting an unaddressable row", () => {
@@ -196,13 +220,10 @@ describe("selectParentThread", () => {
   });
 });
 
-describe("toSubagentTurn", () => {
-  it("keeps user and agent messages and drops reasoning items", () => {
-    const turn = toSubagentTurn({
+describe("toSubagentMessages", () => {
+  it("keeps the task and the reply and drops the reasoning between them", () => {
+    const messages = toSubagentMessages({
       id: "turn-1",
-      status: "completed",
-      startedAt: 1_700_000_000,
-      completedAt: 1_700_000_007,
       items: [
         { type: "userMessage", content: [{ type: "text", text: "review the diff" }] },
         { type: "reasoning", summary: [], content: [] },
@@ -210,25 +231,26 @@ describe("toSubagentTurn", () => {
       ],
     });
 
-    expect(turn?.messages).toEqual([
-      { role: "user", text: "review the diff" },
-      { role: "agent", text: "Looks fine" },
+    expect(messages).toEqual([
+      { role: "task", text: "review the diff" },
+      { role: "reply", text: "Looks fine" },
     ]);
-    expect(turn?.startedAt).toBe(1_700_000_000_000);
-    expect(turn?.completedAt).toBe(1_700_000_007_000);
   });
 
   it("truncates a message that would otherwise flood IPC, keeping its start", () => {
     const text = `START${"x".repeat(20_000)}`;
-    const turn = toSubagentTurn({ id: "turn-2", items: [{ type: "agentMessage", text }] });
-    const kept = turn?.messages[0]?.text ?? "";
+    const kept =
+      toSubagentMessages({ id: "turn-2", items: [{ type: "agentMessage", text }] })[0]?.text ?? "";
     expect(kept.length).toBeLessThan(text.length);
+    // Without this the assertion below is vacuous: every string starts with "".
+    expect(kept.startsWith("START")).toBe(true);
     expect(text.startsWith(kept)).toBe(true);
   });
 
-  it("drops a turn that carried no readable message", () => {
-    const turn = toSubagentTurn({ id: "turn-3", items: [{ type: "reasoning", content: [] }] });
-    expect(turn?.messages).toEqual([]);
+  it("has nothing to show for a turn that carried no readable message", () => {
+    expect(
+      toSubagentMessages({ id: "turn-3", items: [{ type: "reasoning", content: [] }] })
+    ).toEqual([]);
   });
 });
 
@@ -237,7 +259,7 @@ describe("listCodexSubagents", () => {
     getTerminalAsync.mockResolvedValue({ cwd: "/repo", launchAgentId: "claude" });
     await expect(listCodexSubagents("t1")).resolves.toEqual({
       status: "unavailable",
-      reason: "not-codex",
+      reason: "provider-mismatch",
     });
     expect(runSession).not.toHaveBeenCalled();
   });
@@ -287,13 +309,9 @@ describe("listCodexSubagents", () => {
 
     const result = await listCodexSubagents("t1");
 
-    expect(result).toMatchObject({
-      status: "ok",
-      parentThreadId: "root",
-      matchedBy: "spawn-time",
-    });
+    expect(result).toMatchObject({ status: "ok", provider: "codex", parentId: "root" });
     if (result.status !== "ok") throw new Error("expected ok");
-    expect(result.subagents.map((s) => s.threadId)).toEqual(["newer", "older"]);
+    expect(result.subagents.map((s) => s.id)).toEqual(["newer", "older"]);
     expect(childParams.parentThreadId).toBe("root");
     // An explicit sourceKinds list would fall back to the interactive-only
     // default and return no subagents at all.
@@ -428,7 +446,7 @@ describe("readCodexSubagentTranscript", () => {
 
     const result = await readCodexSubagentTranscript("t1", "someone-elses-thread");
 
-    expect(result).toEqual({ status: "unavailable", reason: "no-session" });
+    expect(result).toEqual({ status: "unavailable", reason: "subagent-not-found" });
     // The membership check must run before any read of the requested thread.
     expect(methods).not.toContain("thread/turns/list");
   });
@@ -450,9 +468,9 @@ describe("readCodexSubagentTranscript", () => {
 
     const result = await readCodexSubagentTranscript("t1", "mine");
 
-    expect(result).toMatchObject({ status: "ok", threadId: "mine" });
+    expect(result).toMatchObject({ status: "ok", subagentId: "mine" });
     if (result.status !== "ok") throw new Error("expected ok");
-    expect(result.turns[0].messages).toEqual([{ role: "agent", text: "done" }]);
+    expect(result.messages).toEqual([{ role: "reply", text: "done" }]);
     expect(turnParams.itemsView).toBe("summary");
     expect(turnParams.sortDirection).toBe("desc");
   });

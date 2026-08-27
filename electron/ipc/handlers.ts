@@ -38,6 +38,7 @@ import { registerFileWatchHandlers } from "./handlers/fileWatch.js";
 import { registerSlashCommandHandlers } from "./handlers/slashCommands.js";
 import { registerGeminiHandlers } from "./handlers/gemini.js";
 import { registerCodexHandlers } from "./handlers/codex.js";
+import { registerClaudeHandlers } from "./handlers/claude.js";
 import { registerEventsHandlers } from "./handlers/events.js";
 import { registerDevPreviewHandlers } from "./handlers/devPreview.js";
 import { registerCommandHandlers } from "./handlers/commands.js";
@@ -168,6 +169,7 @@ export function registerIpcHandlers(deps: HandlerDependencies): () => void {
     register(() => registerNotificationHandlers(deps));
     register(() => registerGeminiHandlers());
     register(() => registerCodexHandlers());
+    register(() => registerClaudeHandlers());
     register(() => registerEventsHandlers(deps));
     register(() => registerDevPreviewHandlers(deps));
     register(() => registerCommandHandlers());

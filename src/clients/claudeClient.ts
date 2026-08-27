@@ -5,18 +5,18 @@ import type {
 
 /**
  * @example
- * const result = await codexClient.listSubagents({ terminalId });
+ * const result = await claudeClient.listSubagents({ terminalId });
  * if (result.status === "ok") console.log(result.subagents.length);
  */
-export const codexClient = {
+export const claudeClient = {
   listSubagents: (payload: { terminalId: string }): Promise<AgentSubagentsResult> => {
-    return window.electron.codex.listSubagents(payload);
+    return window.electron.claude.listSubagents(payload);
   },
 
   readSubagentTranscript: (payload: {
     terminalId: string;
     subagentId: string;
   }): Promise<AgentSubagentTranscriptResult> => {
-    return window.electron.codex.readSubagentTranscript(payload);
+    return window.electron.claude.readSubagentTranscript(payload);
   },
 } as const;

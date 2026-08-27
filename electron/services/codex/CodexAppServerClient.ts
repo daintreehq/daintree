@@ -25,7 +25,7 @@
 import { spawn, spawnSync, type ChildProcess } from "child_process";
 import { buildProbeEnv } from "../../utils/spawnEnv.js";
 import { scrubSecrets } from "../../../shared/utils/secretScrubber.js";
-import type { CodexSubagentUnavailableReason } from "../../../shared/types/ipc/codexSubagents.js";
+import type { AgentSubagentUnavailableReason } from "../../../shared/types/ipc/agentSubagents.js";
 
 /**
  * Read-only surface. `thread/start` is absent by design — see the file header.
@@ -53,9 +53,9 @@ const EXIT_DRAIN_MS = 200;
 const MAX_BUFFER = 4 * 1024 * 1024;
 
 export class CodexAppServerError extends Error {
-  readonly reason: CodexSubagentUnavailableReason;
+  readonly reason: AgentSubagentUnavailableReason;
 
-  constructor(reason: CodexSubagentUnavailableReason, message: string, options?: ErrorOptions) {
+  constructor(reason: AgentSubagentUnavailableReason, message: string, options?: ErrorOptions) {
     super(scrubSecrets(message), options);
     this.name = "CodexAppServerError";
     this.reason = reason;
