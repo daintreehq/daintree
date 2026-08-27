@@ -689,6 +689,55 @@ describe("WorktreeDeleteDialog — dialog chrome contract", () => {
     });
   });
 
+  it("freezes the option set while a submit-time revalidation is in flight", async () => {
+    // The revalidation await can outlive a toggle, and the closure would then
+    // dispatch the values the user held BEFORE they changed their mind.
+    let resolvePreview: (value: unknown) => void = () => {};
+    buildPreviewMock.mockReturnValueOnce(Promise.resolve(null)).mockReturnValueOnce(
+      new Promise((resolve) => {
+        resolvePreview = resolve;
+      })
+    );
+    const worktree = makeWorktree(makeChanges([{ path: "/wt/a.ts", status: "modified" }]));
+    render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
+
+    fireEvent.click(screen.getByRole("checkbox", { name: /force delete/i }));
+    fireEvent.change(screen.getByTestId("delete-worktree-confirm-input"), {
+      target: { value: "feature/test" },
+    });
+    fireEvent.click(screen.getByTestId("delete-worktree-confirm"));
+
+    await waitFor(() => {
+      expect(
+        (screen.getByRole("checkbox", { name: /force delete/i }) as HTMLInputElement).disabled
+      ).toBe(true);
+    });
+    expect((screen.getByTestId("delete-worktree-confirm-input") as HTMLInputElement).disabled).toBe(
+      true
+    );
+    // Cancel stays live throughout — freezing the options must not trap the user.
+    const cancel = screen
+      .getByTestId("delete-worktree-dialog")
+      .querySelector('[data-confirm-role="cancel"]') as HTMLButtonElement;
+    expect(cancel.disabled).toBe(false);
+
+    resolvePreview(null);
+  });
+
+  it("speaks the file status that the glyph column only shows", () => {
+    const worktree = makeWorktree(
+      makeChanges([
+        { path: "/wt/src/a.ts", status: "modified" },
+        { path: "/wt/gone.ts", status: "deleted" },
+      ])
+    );
+    render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
+
+    const list = screen.getByTestId("delete-worktree-file-list");
+    expect(list.textContent).toContain("Modified:");
+    expect(list.textContent).toContain("Deleted:");
+  });
+
   it("gives the dialog a short static description for aria-describedby", () => {
     const worktree = makeWorktree(makeChanges([]));
     render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
@@ -1217,7 +1266,13 @@ describe("WorktreeDeleteDialog — fresh status verification (#11343)", () => {
     // so a wrapped path cannot detach from it. Assert per row rather than on
     // concatenated textContent, which no longer carries the separator.
     const rows = within(screen.getByTestId("delete-worktree-file-list")).getAllByRole("listitem");
-    const cells = rows.map((row) => Array.from(row.children).map((c) => c.textContent));
+    // The visible cells: the glyph column and the path column. The sr-only
+    // status word sits between them and is asserted separately.
+    const cells = rows.map((row) =>
+      Array.from(row.children)
+        .filter((c) => !c.className.includes("sr-only"))
+        .map((c) => c.textContent)
+    );
     expect(cells).toContainEqual(["M", "src/app.ts"]);
     expect(cells).toContainEqual(["?", "new.txt"]);
   });

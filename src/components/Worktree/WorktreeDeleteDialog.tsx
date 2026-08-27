@@ -465,9 +465,16 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                     className={cn("flex gap-2", row.isOverflow && "text-daintree-text/50 italic")}
                   >
                     {!row.isOverflow && (
-                      <span aria-hidden="true" className="w-3 shrink-0 text-daintree-text/50">
-                        {row.glyph}
-                      </span>
+                      <>
+                        <span aria-hidden="true" className="w-3 shrink-0 text-daintree-text/50">
+                          {row.glyph}
+                        </span>
+                        {/* The glyph column is right for scanning and useless
+                            to a screen reader, which would otherwise hear a
+                            list of paths with no way to tell a deletion from
+                            an addition. */}
+                        <span className="sr-only">{row.statusLabel}: </span>
+                      </>
                     )}
                     <span className="[overflow-wrap:anywhere]">{row.label}</span>
                   </li>
@@ -480,6 +487,11 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
               consequences they rewrite. Checking a box below content it
               changes is the "upstream state mutation" failure: the reader has
               already passed the text that just moved. */}
+          {/* `disabled` on the fieldset would also trap focus oddly, so the
+              controls carry it individually. Frozen during the submit-time
+              revalidation: that await can outlive a toggle, and the closure
+              would then dispatch the values the user had BEFORE they changed
+              their mind. Cancel and Escape stay live throughout. */}
           <fieldset className="space-y-3">
             <legend className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60">
               Options
@@ -490,7 +502,8 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                 type="checkbox"
                 checked={force}
                 onChange={(e) => setForce(e.target.checked)}
-                className="checkbox-neutral mt-0.5 rounded border-border-strong bg-daintree-bg"
+                disabled={isDeleting}
+                className="checkbox-neutral mt-0.5 rounded border-border-strong bg-daintree-bg disabled:opacity-50"
               />
               <span className="text-sm text-daintree-text">
                 {/* Constant by rule — a toggle label never changes with state
@@ -517,7 +530,8 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                   type="checkbox"
                   checked={closeTerminals}
                   onChange={(e) => setCloseTerminals(e.target.checked)}
-                  className="checkbox-neutral mt-0.5 rounded border-border-strong bg-daintree-bg"
+                  disabled={isDeleting}
+                  className="checkbox-neutral mt-0.5 rounded border-border-strong bg-daintree-bg disabled:opacity-50"
                 />
                 <span className="text-sm text-daintree-text">
                   Close all terminals
@@ -534,7 +548,8 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                   type="checkbox"
                   checked={deleteBranch}
                   onChange={(e) => setDeleteBranch(e.target.checked)}
-                  className="checkbox-neutral mt-0.5 rounded border-border-strong bg-daintree-bg"
+                  disabled={isDeleting}
+                  className="checkbox-neutral mt-0.5 rounded border-border-strong bg-daintree-bg disabled:opacity-50"
                 />
                 <span className="flex items-center gap-1.5 text-sm text-daintree-text">
                   <FolderGit2 className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
@@ -604,6 +619,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                 onChange={setConfirmInput}
                 onMatchSubmit={handleDelete}
                 preamble={highTierPreamble}
+                disabled={isDeleting}
                 data-testid="delete-worktree-confirm-input"
               />
             </div>

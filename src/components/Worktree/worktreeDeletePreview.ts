@@ -80,6 +80,22 @@ export async function buildWorktreeDeletePreview(
 /** Max file rows shown in a compact preview before collapsing the tail. */
 export const PREVIEW_FILE_LIMIT = 12;
 
+/**
+ * Spoken form of each status. The visible column is a single glyph, which is
+ * right for scanning and useless to a screen reader — without this a listener
+ * hears a list of paths with no way to tell a deletion from an addition.
+ */
+export const STATUS_LABEL: Record<FileChangeDetail["status"], string> = {
+  modified: "Modified",
+  added: "Added",
+  deleted: "Deleted",
+  renamed: "Renamed",
+  copied: "Copied",
+  conflicted: "Conflicted",
+  untracked: "Untracked",
+  ignored: "Ignored",
+};
+
 const STATUS_GLYPH: Record<FileChangeDetail["status"], string> = {
   modified: "M",
   added: "A",
@@ -103,8 +119,15 @@ const STATUS_GLYPH: Record<FileChangeDetail["status"], string> = {
  */
 function toDisplayPath(filePath: string, rootPath: string | undefined): string {
   if (!rootPath) return filePath;
-  const root = rootPath.endsWith("/") ? rootPath : `${rootPath}/`;
-  return filePath.startsWith(root) ? filePath.slice(root.length) : filePath;
+  // Both separators: Daintree runs on Windows, where the producer emits
+  // backslash paths. A `/`-only check left every Windows row absolute — the
+  // exact defect this function exists to prevent, just on the other platform.
+  const trimmed = rootPath.replace(/[/\\]+$/, "");
+  for (const sep of ["/", "\\"]) {
+    const root = trimmed + sep;
+    if (filePath.startsWith(root)) return filePath.slice(root.length);
+  }
+  return filePath;
 }
 
 /**
@@ -135,6 +158,8 @@ export function formatWorktreeChangeRows(
 export interface WorktreeChangeRow {
   /** Status glyph (`M`, `D`, `?`…) or `null` for the overflow tail row. */
   glyph: string | null;
+  /** Spoken status ("Modified"), for assistive tech. `null` on the tail row. */
+  statusLabel: string | null;
   /** Worktree-relative path, or the "…and N more" text on the tail row. */
   label: string;
   /** True for the synthesised overflow row, which is not a file. */
@@ -161,12 +186,14 @@ export function buildWorktreeChangeRows(
   const shown = changes.filter((c) => c.status !== "ignored");
   const rows: WorktreeChangeRow[] = shown.slice(0, limit).map((c) => ({
     glyph: STATUS_GLYPH[c.status] ?? "?",
+    statusLabel: STATUS_LABEL[c.status] ?? "Changed",
     label: toDisplayPath(c.path, rootPath),
     isOverflow: false,
   }));
   if (shown.length > limit) {
     rows.push({
       glyph: null,
+      statusLabel: null,
       label: `…and ${shown.length - limit} more`,
       isOverflow: true,
     });

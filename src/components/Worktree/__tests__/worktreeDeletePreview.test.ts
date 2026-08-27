@@ -14,6 +14,7 @@ import {
   buildWorktreeDeletePreview,
   formatWorktreeDeletePreviewLines,
   formatWorktreeChangeRows,
+  buildWorktreeChangeRows,
 } from "../worktreeDeletePreview";
 
 /**
@@ -221,6 +222,51 @@ describe("formatWorktreeChangeRows", () => {
       ROOT
     );
     expect(rows).toEqual([`  M ${outside}`]);
+  });
+
+  it("relativises Windows paths, not just POSIX ones", () => {
+    // Daintree runs on Windows, where the producer emits backslash paths. A
+    // separator-specific check leaves every Windows row absolute — the exact
+    // defect this relativisation exists to prevent, on the other platform.
+    const winRoot = "C:\\Users\\dev\\proj-worktrees\\feature-x";
+    const rows = formatWorktreeChangeRows(
+      [
+        {
+          path: `${winRoot}\\src\\queue.ts`,
+          status: "modified",
+          insertions: null,
+          deletions: null,
+        },
+      ],
+      undefined,
+      winRoot
+    );
+    expect(rows).toEqual(["  M src\\queue.ts"]);
+    expect(rows[0]).not.toContain(winRoot);
+  });
+
+  it("tolerates a root given with a trailing separator", () => {
+    const rows = formatWorktreeChangeRows([file("src/a.ts", "modified")], undefined, `${ROOT}/`);
+    expect(rows).toEqual(["  M src/a.ts"]);
+  });
+
+  it("carries a spoken status label on every structured row", () => {
+    // The visible column is a single glyph — right for scanning, useless to a
+    // screen reader, which would otherwise hear paths with no way to tell a
+    // deletion from an addition.
+    const rows = buildWorktreeChangeRows(
+      [file("src/a.ts", "modified"), file("gone.ts", "deleted"), file("n.txt", "untracked")],
+      undefined,
+      ROOT
+    );
+    expect(rows.map((r) => r.statusLabel)).toEqual(["Modified", "Deleted", "Untracked"]);
+    // The overflow tail is not a file and must not claim a status.
+    const capped = buildWorktreeChangeRows(
+      Array.from({ length: 14 }, (_, i) => file(`f${i}.ts`, "modified")),
+      12,
+      ROOT
+    );
+    expect(capped[capped.length - 1]?.statusLabel).toBeNull();
   });
 
   it("renders raw paths when no root is supplied", () => {

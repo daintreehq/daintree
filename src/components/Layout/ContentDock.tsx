@@ -433,7 +433,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
           <div className="relative flex-1 min-w-0">
             {/* Left Scroll Chevron - Overlay */}
             {canScrollLeft && (
-              <div className="absolute left-0 top-1/2 -translate-y-1/2 z-10 pointer-events-none bg-gradient-to-r from-[var(--dock-bg)] via-[var(--dock-bg)]/90 to-transparent pr-4">
+              <div className="absolute left-0 top-1/2 -translate-y-1/2 z-10 pointer-events-none bg-gradient-to-r from-[var(--dock-bg)] via-[var(--dock-bg)]/90 to-transparent pr-4 contrast-more:bg-none">
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <button
@@ -523,7 +523,7 @@ export function ContentDock({ density = "normal" }: ContentDockProps) {
 
             {/* Right Scroll Chevron - Overlay */}
             {canScrollRight && (
-              <div className="absolute right-0 top-1/2 -translate-y-1/2 z-10 pointer-events-none bg-gradient-to-l from-[var(--dock-bg)] via-[var(--dock-bg)]/90 to-transparent pl-4">
+              <div className="absolute right-0 top-1/2 -translate-y-1/2 z-10 pointer-events-none bg-gradient-to-l from-[var(--dock-bg)] via-[var(--dock-bg)]/90 to-transparent pl-4 contrast-more:bg-none">
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <button
