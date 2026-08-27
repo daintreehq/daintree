@@ -30,14 +30,21 @@ beforeAll(() => {
   });
 });
 
-const { cloneRepoMock, onCloneProgressMock, openDialogMock, cancelCloneMock, dispatchMock } =
-  vi.hoisted(() => ({
-    cloneRepoMock: vi.fn(),
-    onCloneProgressMock: vi.fn(),
-    openDialogMock: vi.fn(),
-    cancelCloneMock: vi.fn(),
-    dispatchMock: vi.fn(),
-  }));
+const {
+  cloneRepoMock,
+  onCloneProgressMock,
+  openDialogMock,
+  cancelCloneMock,
+  dispatchMock,
+  showItemInFolderMock,
+} = vi.hoisted(() => ({
+  cloneRepoMock: vi.fn(),
+  onCloneProgressMock: vi.fn(),
+  openDialogMock: vi.fn(),
+  cancelCloneMock: vi.fn(),
+  dispatchMock: vi.fn(),
+  showItemInFolderMock: vi.fn(),
+}));
 
 vi.mock("@/clients", () => ({
   projectClient: {
@@ -45,6 +52,9 @@ vi.mock("@/clients", () => ({
     onCloneProgress: onCloneProgressMock,
     openDialog: openDialogMock,
     cancelClone: cancelCloneMock,
+  },
+  systemClient: {
+    showItemInFolderUnconfined: showItemInFolderMock,
   },
 }));
 
@@ -57,9 +67,14 @@ vi.mock("@/services/ActionService", () => ({
 vi.mock("@/components/ui/button", () => ({
   Button: ({
     children,
+    loading,
     ...props
-  }: ButtonHTMLAttributes<HTMLButtonElement> & { variant?: string; size?: string }) => (
-    <button type="button" {...props}>
+  }: ButtonHTMLAttributes<HTMLButtonElement> & {
+    variant?: string;
+    size?: string;
+    loading?: boolean;
+  }) => (
+    <button type="button" aria-busy={loading || undefined} {...props}>
       {children}
     </button>
   ),
@@ -112,12 +127,14 @@ vi.mock("@/components/Terminal/InlineStatusBanner", () => ({
   InlineStatusBanner: ({
     title,
     description,
+    contextLine,
     action,
     actions,
     onClose,
   }: {
     title: ReactNode;
     description?: ReactNode;
+    contextLine?: string;
     action?: MockBannerAction;
     actions?: MockBannerAction[];
     onClose?: () => void;
@@ -127,6 +144,7 @@ vi.mock("@/components/Terminal/InlineStatusBanner", () => ({
       <div data-testid="cleanup-banner">
         <span>{title}</span>
         <span>{description}</span>
+        {contextLine !== undefined && <span data-testid="banner-context">{contextLine}</span>}
         {actionList.map((a) => (
           <button key={a.id} type="button" aria-label={a.ariaLabel} onClick={a.onClick}>
             {a.label}
@@ -267,7 +285,7 @@ describe("CloneRepoDialog", () => {
       });
     });
 
-    expect(screen.getByText("receiving: 50%")).toBeTruthy();
+    expect(screen.getByRole("progressbar").getAttribute("aria-label")).toBe("receiving");
   });
 
   it("calls onSuccess with clonedPath after successful clone", async () => {
@@ -289,7 +307,7 @@ describe("CloneRepoDialog", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText("Open Project")).toBeTruthy();
+      expect(screen.getByText("Open project")).toBeTruthy();
     });
 
     // Auto-close runs after AUTO_CLOSE_DELAY_MS (2s) — extend the waitFor
@@ -327,7 +345,7 @@ describe("CloneRepoDialog", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText("Clone Failed")).toBeTruthy();
+      expect(screen.getByText("Clone failed")).toBeTruthy();
       expect(screen.getByText("Auth failed")).toBeTruthy();
       expect(screen.getByText("Retry")).toBeTruthy();
     });
@@ -416,7 +434,7 @@ describe("CloneRepoDialog", () => {
 
     const signInBtn = await waitFor(() => screen.getByText("Sign in to GitHub"));
     expect(signInBtn).toBeTruthy();
-    expect(screen.getByText("Clone Failed")).toBeTruthy();
+    expect(screen.getByText("Clone failed")).toBeTruthy();
 
     await act(async () => {
       fireEvent.click(signInBtn);
@@ -483,7 +501,7 @@ describe("CloneRepoDialog", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText("Clone Failed")).toBeTruthy();
+      expect(screen.getByText("Clone failed")).toBeTruthy();
     });
     expect(screen.queryByText("Sign in to GitHub")).toBeNull();
   });
@@ -514,7 +532,7 @@ describe("CloneRepoDialog", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByText("Clone Failed")).toBeTruthy();
+      expect(screen.getByText("Clone failed")).toBeTruthy();
     });
     expect(screen.queryByText("Sign in to GitHub")).toBeNull();
   });
@@ -699,8 +717,81 @@ describe("CloneRepoDialog", () => {
     });
 
     await waitFor(() => {
-      expect(screen.queryByText("Clone Failed")).toBeNull();
+      expect(screen.queryByText("Clone failed")).toBeNull();
     });
+  });
+
+  it("treats a bridge-shaped CANCELLED rejection as a stop, not a failure", async () => {
+    // The shape that actually reaches the renderer. `contextBridge` strips own
+    // Error properties, so the preload encodes the code into the message and
+    // `code` is undefined by the time the dialog sees it. Reading `err.code`
+    // here used to classify every user stop as a failure and print the raw
+    // `[AppError|CANCELLED]` prefix into the error surface.
+    cloneRepoMock.mockRejectedValue(new Error("[AppError|CANCELLED] Clone cancelled"));
+
+    render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
+
+    const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
+    fireEvent.change(urlInput, { target: { value: "https://github.com/user/repo.git" } });
+
+    const browseBtn = screen.getByText("Browse");
+    await act(async () => {
+      fireEvent.click(browseBtn);
+    });
+
+    const cloneBtn = screen.getByText("Clone");
+    await act(async () => {
+      fireEvent.click(cloneBtn);
+    });
+
+    await waitFor(() => {
+      expect(screen.getByText("Clone stopped")).toBeTruthy();
+    });
+    expect(screen.queryByText("Clone failed")).toBeNull();
+    // No internal encoding may reach the user, in any surface.
+    expect(document.body.textContent).not.toContain("[AppError");
+    // A stop leaves the form editable so Clone can simply be pressed again.
+    expect(screen.getByRole("button", { name: "Clone" }).hasAttribute("disabled")).toBe(false);
+  });
+
+  it("states a failure once, never as both a stage row and a banner", async () => {
+    const gitError = Object.assign(new Error("early EOF"), {
+      name: "GitOperationError",
+      gitReason: "unknown",
+    });
+    cloneRepoMock.mockRejectedValue(gitError);
+
+    render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
+
+    const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
+    fireEvent.change(urlInput, { target: { value: "https://github.com/user/repo.git" } });
+
+    const browseBtn = screen.getByText("Browse");
+    await act(async () => {
+      fireEvent.click(browseBtn);
+    });
+
+    const cloneBtn = screen.getByText("Clone");
+    await act(async () => {
+      fireEvent.click(cloneBtn);
+    });
+
+    await waitFor(() => expect(progressHandler).not.toBeNull());
+
+    // The handler emits an `error` progress event before it throws. Rendering
+    // that as a stage as well is what put the same sentence on screen twice.
+    act(() => {
+      progressHandler?.({
+        stage: "error",
+        progress: 0,
+        message: "Clone failed: early EOF",
+        timestamp: Date.now(),
+      });
+    });
+
+    await waitFor(() => expect(screen.getByText("Clone failed")).toBeTruthy());
+    expect(screen.getAllByText("early EOF")).toHaveLength(1);
+    expect(screen.queryByText("Clone failed: early EOF")).toBeNull();
   });
 
   it("preserves Unicode characters in derived folder name", () => {
@@ -819,13 +910,22 @@ describe("CloneRepoDialog", () => {
       });
     });
 
-    // counting and checkout (one each) survive; receiving collapses to its
-    // latest value. A broken implementation that simply replaced the entire
-    // list with each new event would lose counting/checkout.
-    expect(screen.getByText("counting: 100%")).toBeTruthy();
-    expect(screen.getByText("checkout: 0%")).toBeTruthy();
-    expect(screen.queryByText("receiving: 10%")).toBeNull();
-    expect(screen.getByText("receiving: 80%")).toBeTruthy();
+    // The invariant: however many stages have been seen, exactly one is live.
+    // Multiple concurrent spinners were the defect — finished git stages never
+    // emit a terminal event, so every row used to keep spinning forever.
+    expect(screen.getAllByTestId("spinner")).toHaveLength(1);
+
+    // Earlier stages are still accounted for, quieted rather than dropped:
+    // they are what makes the live stage's bar restarting at 0% legible.
+    // `receiving` appears twice on purpose — the visible label plus the
+    // sr-only status node that announces phase changes.
+    expect(screen.getByText("counting")).toBeTruthy();
+    expect(screen.getAllByText("receiving").length).toBeGreaterThan(0);
+
+    // The live stage is the most recent event's stage, and its percentage is
+    // read off the payload rather than scraped out of the message string.
+    expect(screen.getByRole("progressbar").getAttribute("aria-valuenow")).toBe("80");
+    expect(screen.getByRole("progressbar").getAttribute("aria-label")).toBe("receiving");
   });
 
   it("Enter retries after a failed clone (matches Retry button behavior)", async () => {
@@ -852,7 +952,7 @@ describe("CloneRepoDialog", () => {
       fireEvent.click(cloneBtn);
     });
 
-    await waitFor(() => expect(screen.getByText("Clone Failed")).toBeTruthy());
+    await waitFor(() => expect(screen.getByText("Clone failed")).toBeTruthy());
 
     // Press Enter — should fire a second clone attempt without requiring the
     // user to click Retry, since the form fields are still valid.
@@ -898,11 +998,12 @@ describe("CloneRepoDialog", () => {
       });
     });
 
-    // The cancelled message is visible alongside its specific (non-spinner)
-    // icon — confirms it doesn't fall through to the in-progress Spinner.
-    const cancelledRow = screen.getByText("Clone cancelled").closest("div");
-    expect(cancelledRow).toBeTruthy();
-    expect(cancelledRow!.querySelector('[data-testid="spinner"]')).toBeNull();
+    // A terminal `cancelled` event is reported by the promise, not rendered as
+    // a stage, so it must never become a row of its own — and it must not
+    // displace the live stage either.
+    expect(screen.queryByText("Clone cancelled")).toBeNull();
+    expect(screen.getByRole("progressbar").getAttribute("aria-label")).toBe("receiving");
+    expect(screen.getAllByTestId("spinner")).toHaveLength(1);
   });
 
   it("dedups progress events by stage so a single stage shows one row", async () => {
@@ -936,11 +1037,43 @@ describe("CloneRepoDialog", () => {
       }
     });
 
-    // Only the latest message for the `receiving` stage should remain — the
-    // earlier 10–90% rows are deduped out, leaving a single live row.
-    expect(screen.queryByText("receiving: 0%")).toBeNull();
-    expect(screen.queryByText("receiving: 50%")).toBeNull();
-    expect(screen.getByText("receiving: 100%")).toBeTruthy();
+    // One stage updating repeatedly stays one row — an unbounded log was the
+    // old failure mode — and the reported value tracks the latest payload.
+    expect(screen.getAllByTestId("spinner")).toHaveLength(1);
+    expect(screen.getByRole("progressbar").getAttribute("aria-valuenow")).toBe("100");
+  });
+
+  it("reads the percentage from the payload, not from the message text", async () => {
+    cloneRepoMock.mockImplementation(() => new Promise(() => {}));
+
+    render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
+
+    const urlInput = screen.getByPlaceholderText("owner/repo or repository URL");
+    fireEvent.change(urlInput, { target: { value: "https://github.com/user/repo.git" } });
+
+    const browseBtn = screen.getByText("Browse");
+    await act(async () => {
+      fireEvent.click(browseBtn);
+    });
+
+    const cloneBtn = screen.getByText("Clone");
+    await act(async () => {
+      fireEvent.click(cloneBtn);
+    });
+
+    await waitFor(() => expect(progressHandler).not.toBeNull());
+
+    // Message and payload deliberately disagree. The bar must follow `progress`.
+    act(() => {
+      progressHandler?.({
+        stage: "receiving",
+        progress: 37,
+        message: "receiving: 99%",
+        timestamp: Date.now(),
+      });
+    });
+
+    expect(screen.getByRole("progressbar").getAttribute("aria-valuenow")).toBe("37");
   });
 
   it("does not treat full URLs as owner/repo shorthand", async () => {
@@ -1034,7 +1167,7 @@ describe("CloneRepoDialog", () => {
       });
 
       expect(screen.queryByText("Connecting…")).toBeNull();
-      expect(screen.getByText("Receiving: 5%")).toBeTruthy();
+      expect(screen.getByRole("progressbar").getAttribute("aria-label")).toBe("Receiving");
     });
 
     it("replaces the placeholder with the live log when the first event arrives", async () => {
@@ -1056,7 +1189,7 @@ describe("CloneRepoDialog", () => {
       });
 
       expect(screen.queryByText("Connecting…")).toBeNull();
-      expect(screen.getByText("Receiving: 12%")).toBeTruthy();
+      expect(screen.getByRole("progressbar").getAttribute("aria-label")).toBe("Receiving");
     });
   });
 
@@ -1085,14 +1218,14 @@ describe("CloneRepoDialog", () => {
 
       const banner = screen.getByTestId("cleanup-banner");
       expect(banner).toBeTruthy();
-      expect(banner.textContent).toContain("Couldn't remove the partial clone at /tmp/repo.");
-      // The cleanup message must appear exactly once — only in the banner,
-      // never also as a deduped row in the progress log.
-      expect(screen.getAllByText("Couldn't remove the partial clone at /tmp/repo.")).toHaveLength(
-        1
-      );
-      // The real progress row is still there, unaffected.
-      expect(screen.getByText("Receiving: 40%")).toBeTruthy();
+      expect(banner.textContent).toContain("Partial clone not removed");
+      // The stranded path is carried as the banner's context line rather than
+      // buried in prose, and it names the composed destination.
+      expect(screen.getByTestId("banner-context").textContent).toBe("/tmp/repo");
+      // Exactly one cleanup surface — never also a row in the progress region.
+      expect(screen.getAllByTestId("cleanup-banner")).toHaveLength(1);
+      // The live stage is unaffected: cleanup failure is orthogonal to it.
+      expect(screen.getByRole("progressbar").getAttribute("aria-label")).toBe("Receiving");
     });
 
     it("dismisses the cleanup banner via its close control", async () => {

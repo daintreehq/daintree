@@ -41,7 +41,7 @@ import { openAndOnboardProject } from "../helpers/project";
 import { dismissBlockingPalette } from "../helpers/overlays";
 import { setAppTheme } from "../helpers/theme";
 import { SEL } from "../helpers/selectors";
-import { T_LONG, T_MEDIUM } from "../helpers/timeouts";
+import { T_MEDIUM } from "../helpers/timeouts";
 
 const ENABLED = !!process.env.DAINTREE_SHOT_CLONE;
 const THEME = process.env.DAINTREE_SHOT_THEME ?? "";
@@ -305,7 +305,12 @@ async function openDialog(page: Page): Promise<void> {
  */
 async function closeDialog(page: Page): Promise<void> {
   for (let i = 0; i < 4; i++) {
-    if (!(await dialog(page).isVisible().catch(() => false))) return;
+    if (
+      !(await dialog(page)
+        .isVisible()
+        .catch(() => false))
+    )
+      return;
     await page.keyboard.press("Escape").catch(() => {});
     await settle(page, 200);
   }
@@ -466,8 +471,7 @@ test("clone dialog review — configuration, progress, failure and success state
         mode: "error",
         stages: LONG_STAGES.slice(0, 2),
         stageDelayMs: 120,
-        errorMessage:
-          "repository 'https://github.com/helios-labs/helios-dashboard.git/' not found",
+        errorMessage: "repository 'https://github.com/helios-labs/helios-dashboard.git/' not found",
       });
       await startClone(page);
       await settle(page, 1200);
@@ -483,7 +487,8 @@ test("clone dialog review — configuration, progress, failure and success state
         mode: "auth",
         stages: LONG_STAGES.slice(0, 1),
         stageDelayMs: 120,
-        errorMessage: "Authentication failed for 'https://github.com/helios-labs/helios-dashboard.git/'",
+        errorMessage:
+          "Authentication failed for 'https://github.com/helios-labs/helios-dashboard.git/'",
       });
       await startClone(page);
       await settle(page, 1200);
