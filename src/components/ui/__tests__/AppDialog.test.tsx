@@ -3,6 +3,7 @@ import { render, screen, act, fireEvent, waitFor } from "@testing-library/react"
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import { AppDialog } from "../AppDialog";
 import { buttonVariants } from "../button";
+import { getVisibleTabbableElements } from "@/lib/accessibility";
 import { _resetForTests } from "@/lib/escapeStack";
 import { _resetForTests as _resetBackstopForTests } from "@/lib/dialogEscapeBackstop";
 import { handleDockEscapeKeyDown } from "@/components/Layout/dockPopoverGuard";
@@ -644,7 +645,117 @@ describe("AppDialog focus trapping", () => {
       const secondary = screen.getByRole("button", { name: "Cancel" });
       expect(secondary.hasAttribute("aria-busy")).toBe(false);
       // Not disabled by the unused loading flag
-      expect((secondary as HTMLButtonElement).disabled).toBe(false);
+      expect(secondary.hasAttribute("aria-disabled")).toBe(false);
+      expect(secondary.hasAttribute("disabled")).toBe(false);
+    });
+  });
+
+  describe("AppDialog Footer disabled actions", () => {
+    const renderBothDisabled = async (onPrimary: () => void, onSecondary: () => void) => {
+      render(
+        <>
+          <Dispatcher />
+          <AppDialog isOpen={true} onClose={() => {}} data-testid="test-dialog">
+            <AppDialog.Body>
+              <p>Content</p>
+            </AppDialog.Body>
+            <AppDialog.Footer
+              primaryAction={{ label: "Save", onClick: onPrimary, disabled: true }}
+              secondaryAction={{ label: "Cancel", onClick: onSecondary, disabled: true }}
+            />
+          </AppDialog>
+        </>
+      );
+      await act(() => vi.runAllTimersAsync());
+      return {
+        primary: screen.getByRole("button", { name: "Save" }),
+        secondary: screen.getByRole("button", { name: "Cancel" }),
+      };
+    };
+
+    it("marks disabled actions aria-disabled and never natively disabled", async () => {
+      const { primary, secondary } = await renderBothDisabled(
+        () => {},
+        () => {}
+      );
+
+      for (const button of [primary, secondary]) {
+        expect(button.getAttribute("aria-disabled")).toBe("true");
+        expect(button.hasAttribute("disabled")).toBe(false);
+      }
+    });
+
+    it("does not invoke a disabled action when it is clicked", async () => {
+      const onPrimary = vi.fn();
+      const onSecondary = vi.fn();
+      const { primary, secondary } = await renderBothDisabled(onPrimary, onSecondary);
+
+      fireEvent.click(primary);
+      fireEvent.click(secondary);
+
+      // The attribute is advisory — jsdom dispatches the click either way, so a
+      // handler that stayed silent proves the footer's own guard ran.
+      expect(onPrimary).not.toHaveBeenCalled();
+      expect(onSecondary).not.toHaveBeenCalled();
+    });
+
+    it("still invokes an enabled action, so the guard is not blocking everything", async () => {
+      const onPrimary = vi.fn();
+      render(
+        <>
+          <Dispatcher />
+          <AppDialog isOpen={true} onClose={() => {}} data-testid="test-dialog">
+            <AppDialog.Body>
+              <p>Content</p>
+            </AppDialog.Body>
+            <AppDialog.Footer primaryAction={{ label: "Save", onClick: onPrimary }} />
+          </AppDialog>
+        </>
+      );
+      await act(() => vi.runAllTimersAsync());
+
+      const primary = screen.getByRole("button", { name: "Save" });
+      expect(primary.hasAttribute("aria-disabled")).toBe(false);
+      fireEvent.click(primary);
+      expect(onPrimary).toHaveBeenCalledTimes(1);
+    });
+
+    it("keeps a swallowed click from reaching an ancestor", async () => {
+      const onAncestor = vi.fn();
+      const onPrimary = vi.fn();
+      // Rendered outside AppDialog: the dialog surface stops click propagation of
+      // its own accord, which would hide whether the footer swallowed anything. A
+      // natively-disabled button never produced an ancestor-visible click at all,
+      // and that is the behaviour the guard has to preserve.
+      render(
+        <div onClick={onAncestor}>
+          <AppDialog.Footer primaryAction={{ label: "Save", onClick: onPrimary, disabled: true }} />
+        </div>
+      );
+
+      fireEvent.click(screen.getByRole("button", { name: "Save" }));
+
+      expect(onPrimary).not.toHaveBeenCalled();
+      expect(onAncestor).not.toHaveBeenCalled();
+    });
+
+    it("keeps disabled actions focusable and in the tab order", async () => {
+      const { primary, secondary } = await renderBothDisabled(
+        () => {},
+        () => {}
+      );
+
+      // The point of the convention: an unavailable action can still be reached
+      // and announced. Asserted through the helper AppDialog's focus trap and
+      // initial-focus fallback both use, not through a bare tabIndex read.
+      const tabbable = getVisibleTabbableElements(screen.getByTestId("test-dialog"));
+      expect(tabbable).toContain(primary);
+      expect(tabbable).toContain(secondary);
+
+      for (const button of [primary, secondary]) {
+        act(() => button.focus());
+        expect(document.activeElement).toBe(button);
+      }
     });
   });
 

@@ -238,9 +238,8 @@ function GitPullRebaseConfirmDialogInner() {
       // confirmed action is running": it overlays a spinner on the primary, dims its
       // label to 30%, and disables Cancel. Wiring the PREVIEW read to it drew a
       // spinner across the word "rebase" while the full label was still rendered
-      // underneath, and — because AppDialog's initial-focus pass finds the Cancel
-      // button by selector and calls `.focus()` on it without checking it is enabled
-      // — left focus outside the dialog entirely for the whole read.
+      // underneath, and made Cancel unavailable for the whole read — a preview
+      // fetch is not a reason to take away the way out of the dialog.
       confirmDisabled={confirmDisabled}
       hint={blockedReason}
       onConfirm={() => resolveConfirmation(true)}

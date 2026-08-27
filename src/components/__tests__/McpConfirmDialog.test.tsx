@@ -144,16 +144,16 @@ describe("McpConfirmDialog", () => {
       });
 
       const confirm = screen.getByRole("button", { name: "Delete worktree" });
-      expect(confirm.hasAttribute("disabled")).toBe(true);
+      expect(confirm.getAttribute("aria-disabled")).toBe("true");
       expect(screen.getByRole("status", { name: /checking what this affects/i })).toBeTruthy();
 
       // Only the preview landing unblocks it.
       act(() => {
         useMcpConfirmStore.getState().setPreview("req-pending", ["No uncommitted changes."]);
       });
-      expect(screen.getByRole("button", { name: "Delete worktree" }).hasAttribute("disabled")).toBe(
-        false
-      );
+      expect(
+        screen.getByRole("button", { name: "Delete worktree" }).hasAttribute("aria-disabled")
+      ).toBe(false);
     } finally {
       vi.useRealTimers();
     }
@@ -319,12 +319,12 @@ describe("McpConfirmDialog", () => {
       const confirmBtn = screen.getByRole("button", {
         name: "Delete worktree",
       }) as HTMLButtonElement;
-      expect(confirmBtn.disabled).toBe(true);
+      expect(confirmBtn.getAttribute("aria-disabled")).toBe("true");
 
       act(() => {
         vi.advanceTimersByTime(1200);
       });
-      expect(confirmBtn.disabled).toBe(false);
+      expect(confirmBtn.hasAttribute("aria-disabled")).toBe(false);
     } finally {
       vi.runOnlyPendingTimers();
       vi.useRealTimers();
@@ -340,7 +340,7 @@ describe("McpConfirmDialog", () => {
       const confirmBtn = screen.getByRole("button", {
         name: "List worktrees",
       }) as HTMLButtonElement;
-      expect(confirmBtn.disabled).toBe(false);
+      expect(confirmBtn.hasAttribute("aria-disabled")).toBe(false);
     } finally {
       vi.runOnlyPendingTimers();
       vi.useRealTimers();
@@ -361,7 +361,7 @@ describe("McpConfirmDialog", () => {
       const firstBtn = screen.getByRole("button", {
         name: "Delete worktree",
       }) as HTMLButtonElement;
-      expect(firstBtn.disabled).toBe(false);
+      expect(firstBtn.hasAttribute("aria-disabled")).toBe(false);
 
       act(() => {
         firstBtn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -373,12 +373,12 @@ describe("McpConfirmDialog", () => {
       const secondBtn = screen.getByRole("button", {
         name: "Reset branch",
       }) as HTMLButtonElement;
-      expect(secondBtn.disabled).toBe(true);
+      expect(secondBtn.getAttribute("aria-disabled")).toBe("true");
 
       act(() => {
         vi.advanceTimersByTime(1200);
       });
-      expect(secondBtn.disabled).toBe(false);
+      expect(secondBtn.hasAttribute("aria-disabled")).toBe(false);
     } finally {
       vi.runOnlyPendingTimers();
       vi.useRealTimers();
@@ -399,7 +399,7 @@ describe("McpConfirmDialog", () => {
       const btn = screen.getByRole("button", {
         name: "Delete worktree",
       }) as HTMLButtonElement;
-      expect(btn.disabled).toBe(true);
+      expect(btn.getAttribute("aria-disabled")).toBe("true");
     } finally {
       vi.runOnlyPendingTimers();
       vi.useRealTimers();
@@ -622,7 +622,7 @@ describe("McpConfirmDialog", () => {
       const btn = screen.getByRole("button", {
         name: "Delete worktree",
       }) as HTMLButtonElement;
-      expect(btn.disabled).toBe(true);
+      expect(btn.getAttribute("aria-disabled")).toBe("true");
 
       // The 1200ms cooldown must clear before the auto-timeout fires — the old
       // Math.max(500, …) floor would have timed the item out first, making it
@@ -630,7 +630,7 @@ describe("McpConfirmDialog", () => {
       act(() => {
         vi.advanceTimersByTime(1200);
       });
-      expect(btn.disabled).toBe(false);
+      expect(btn.hasAttribute("aria-disabled")).toBe(false);
 
       act(() => {
         btn.dispatchEvent(new MouseEvent("click", { bubbles: true }));

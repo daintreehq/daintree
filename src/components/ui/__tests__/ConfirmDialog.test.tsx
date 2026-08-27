@@ -393,16 +393,16 @@ describe("ConfirmDialog — typed-name gate", () => {
     const button = findConfirmButton();
 
     expect(input).toBeDefined();
-    expect(button.disabled).toBe(true);
+    expect(button.getAttribute("aria-disabled")).toBe("true");
 
     fireEvent.change(input, { target: { value: "my-rep" } });
-    expect(button.disabled).toBe(true);
+    expect(button.getAttribute("aria-disabled")).toBe("true");
 
     fireEvent.change(input, { target: { value: "My-Repo" } });
-    expect(button.disabled).toBe(true);
+    expect(button.getAttribute("aria-disabled")).toBe("true");
 
     fireEvent.change(input, { target: { value: "my-repo" } });
-    expect(button.disabled).toBe(false);
+    expect(button.hasAttribute("aria-disabled")).toBe(false);
   });
 
   it("does not call onConfirm when primary action is invoked while unmatched", () => {
@@ -478,7 +478,7 @@ describe("ConfirmDialog — typed-name gate", () => {
 
     const input = findTypedInput();
     fireEvent.change(input, { target: { value: "my-repo" } });
-    expect(findConfirmButton().disabled).toBe(false);
+    expect(findConfirmButton().hasAttribute("aria-disabled")).toBe(false);
 
     rerender(
       <ConfirmDialog
@@ -505,7 +505,7 @@ describe("ConfirmDialog — typed-name gate", () => {
 
     const reopenedInput = findTypedInput();
     expect(reopenedInput.value).toBe("");
-    expect(findConfirmButton().disabled).toBe(true);
+    expect(findConfirmButton().getAttribute("aria-disabled")).toBe("true");
   });
 
   it("does not render the input or gate the button when typedNameTarget is empty", () => {
@@ -522,7 +522,7 @@ describe("ConfirmDialog — typed-name gate", () => {
     );
 
     expect(screen.queryByLabelText(/^Type .* to confirm$/i)).toBeNull();
-    expect(findConfirmButton().disabled).toBe(false);
+    expect(findConfirmButton().hasAttribute("aria-disabled")).toBe(false);
   });
 
   it("warns in dev when typedNameTarget is set with a non-destructive variant", () => {
@@ -1057,17 +1057,17 @@ describe("ConfirmDialog confirmCooldownMs gate", () => {
       />
     );
 
-    expect(getConfirm().disabled).toBe(true);
+    expect(getConfirm().getAttribute("aria-disabled")).toBe("true");
 
     act(() => {
       vi.advanceTimersByTime(1199);
     });
-    expect(getConfirm().disabled).toBe(true);
+    expect(getConfirm().getAttribute("aria-disabled")).toBe("true");
 
     act(() => {
       vi.advanceTimersByTime(1);
     });
-    expect(getConfirm().disabled).toBe(false);
+    expect(getConfirm().hasAttribute("aria-disabled")).toBe(false);
   });
 
   it("does not gate the button when confirmCooldownMs is absent", () => {
@@ -1082,7 +1082,7 @@ describe("ConfirmDialog confirmCooldownMs gate", () => {
       />
     );
 
-    expect(getConfirm().disabled).toBe(false);
+    expect(getConfirm().hasAttribute("aria-disabled")).toBe(false);
   });
 
   it("treats zero and negative cooldowns as no cooldown", () => {
@@ -1097,7 +1097,7 @@ describe("ConfirmDialog confirmCooldownMs gate", () => {
         confirmCooldownMs={0}
       />
     );
-    expect(getConfirm().disabled).toBe(false);
+    expect(getConfirm().hasAttribute("aria-disabled")).toBe(false);
 
     rerender(
       <ConfirmDialog
@@ -1110,7 +1110,7 @@ describe("ConfirmDialog confirmCooldownMs gate", () => {
         confirmCooldownMs={-5}
       />
     );
-    expect(getConfirm().disabled).toBe(false);
+    expect(getConfirm().hasAttribute("aria-disabled")).toBe(false);
   });
 
   it("ignores a click while the cooldown is active, then fires after it elapses", () => {
@@ -1179,15 +1179,94 @@ describe("ConfirmDialog confirmCooldownMs gate", () => {
     act(() => {
       vi.advanceTimersByTime(1200);
     });
-    expect(getConfirm().disabled).toBe(false);
+    expect(getConfirm().hasAttribute("aria-disabled")).toBe(false);
 
     // A new item is promoted into the same mounted dialog — the clock restarts.
     rerender(<ConfirmDialog {...props} cooldownKey="B" />);
-    expect(getConfirm().disabled).toBe(true);
+    expect(getConfirm().getAttribute("aria-disabled")).toBe("true");
 
     act(() => {
       vi.advanceTimersByTime(1200);
     });
-    expect(getConfirm().disabled).toBe(false);
+    expect(getConfirm().hasAttribute("aria-disabled")).toBe(false);
+  });
+});
+
+describe("ConfirmDialog activation guards while the confirm is running", () => {
+  const findConfirm = () =>
+    document.querySelector<HTMLButtonElement>('[data-confirm-role="confirm"]')!;
+  const findCancel = () =>
+    document.querySelector<HTMLButtonElement>('[data-confirm-role="cancel"]')!;
+
+  it("does not close when Cancel is clicked mid-confirm", () => {
+    const onClose = vi.fn();
+    render(
+      <ConfirmDialog
+        isOpen={true}
+        onClose={onClose}
+        title="Delete repo?"
+        confirmLabel="Delete it"
+        onConfirm={() => {}}
+        variant="destructive"
+        isConfirmLoading={true}
+      />
+    );
+
+    const cancel = findCancel();
+    expect(cancel.getAttribute("aria-disabled")).toBe("true");
+    expect(cancel.hasAttribute("disabled")).toBe(false);
+
+    fireEvent.click(cancel);
+
+    // Cancel is the one interlock with no re-check of its own inside
+    // ConfirmDialog — the footer guard is all that stands between a click and
+    // closing the dialog out from under a running action.
+    expect(onClose).not.toHaveBeenCalled();
+  });
+
+  it("does not re-confirm when the typed name is submitted mid-confirm", () => {
+    const onConfirm = vi.fn();
+    render(
+      <ConfirmDialog
+        isOpen={true}
+        onClose={() => {}}
+        title="Delete repo?"
+        confirmLabel="Delete it"
+        onConfirm={onConfirm}
+        variant="destructive"
+        typedNameTarget="my-repo"
+        isConfirmLoading={true}
+      />
+    );
+
+    const input = screen.getByLabelText(/^Type my-repo to confirm$/i);
+    fireEvent.change(input, { target: { value: "my-repo" } });
+    // Enter here calls handleConfirm directly, reaching neither the footer's
+    // guard nor Button's own loading short-circuit.
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(onConfirm).not.toHaveBeenCalled();
+  });
+
+  it("confirms on typed-name submit once the confirm is no longer running", () => {
+    const onConfirm = vi.fn();
+    render(
+      <ConfirmDialog
+        isOpen={true}
+        onClose={() => {}}
+        title="Delete repo?"
+        confirmLabel="Delete it"
+        onConfirm={onConfirm}
+        variant="destructive"
+        typedNameTarget="my-repo"
+      />
+    );
+
+    const input = screen.getByLabelText(/^Type my-repo to confirm$/i);
+    fireEvent.change(input, { target: { value: "my-repo" } });
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(onConfirm).toHaveBeenCalledTimes(1);
+    expect(findConfirm().hasAttribute("aria-disabled")).toBe(false);
   });
 });

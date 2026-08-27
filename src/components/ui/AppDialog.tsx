@@ -497,6 +497,18 @@ interface AppDialogHeaderProps {
 const CHROME_INSET = "px-[calc(1.5rem+11px)]";
 const PLAIN_INSET = "px-6";
 
+// Footer actions announce unavailability with `aria-disabled`, never the native
+// attribute — a natively-disabled button leaves the tab order and refuses focus,
+// so the initial-focus pass above (which resolves Cancel/Confirm by
+// `data-confirm-role` and calls `.focus()` on the match) would silently strand
+// focus outside the dialog. The attribute is advisory, so each action vetoes its
+// own activation in JS; these classes stand in for the `disabled:` variants that
+// stop matching. Applied only when the action itself is disabled: `Button` also
+// synthesises `aria-disabled` while `loading`, and dimming there would fade the
+// spinner it overlays. No `aria-disabled:pointer-events-none` — that would
+// suppress hover and put the control back out of reach.
+const DISABLED_ACTION_CLASSES = "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed";
+
 AppDialog.Header = function AppDialogHeader({
   children,
   className,
@@ -622,6 +634,11 @@ AppDialog.BodyScroll = function AppDialogBodyScroll({
 export interface DialogAction {
   label: string;
   onClick: () => void;
+  /**
+   * The action is unavailable. Rendered as `aria-disabled` — the button stays
+   * focusable and keeps its place in the tab order, and the footer vetoes the
+   * activation in JS rather than relying on the attribute to block it.
+   */
   disabled?: boolean;
   loading?: boolean;
   intent?: "default" | "destructive";
@@ -690,9 +707,19 @@ AppDialog.Footer = function AppDialogFooter({
           {secondaryAction && (
             <Button
               variant="ghost"
-              onClick={secondaryAction.onClick}
-              disabled={secondaryAction.disabled}
-              className="text-daintree-text/70 hover:text-daintree-text"
+              onClick={(event) => {
+                if (secondaryAction.disabled) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  return;
+                }
+                secondaryAction.onClick();
+              }}
+              aria-disabled={secondaryAction.disabled || undefined}
+              className={cn(
+                "text-daintree-text/70 hover:text-daintree-text",
+                secondaryAction.disabled && DISABLED_ACTION_CLASSES
+              )}
               data-confirm-role="cancel"
             >
               {secondaryAction.label}
@@ -701,9 +728,17 @@ AppDialog.Footer = function AppDialogFooter({
           {primaryAction && (
             <Button
               variant={getPrimaryVariant()}
-              onClick={primaryAction.onClick}
-              disabled={primaryAction.disabled}
+              onClick={(event) => {
+                if (primaryAction.disabled) {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  return;
+                }
+                primaryAction.onClick();
+              }}
+              aria-disabled={primaryAction.disabled || undefined}
               loading={primaryAction.loading}
+              className={primaryAction.disabled ? DISABLED_ACTION_CLASSES : undefined}
               data-confirm-role="confirm"
             >
               {primaryAction.label}

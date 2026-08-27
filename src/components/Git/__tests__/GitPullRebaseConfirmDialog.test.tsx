@@ -102,7 +102,7 @@ describe("GitPullRebaseConfirmDialog", () => {
       void useGitPullRebaseConfirmStore.getState().requestConfirmation("/repo");
     });
 
-    expect(rebaseButton().hasAttribute("disabled")).toBe(true);
+    expect(rebaseButton().getAttribute("aria-disabled")).toBe("true");
 
     await act(async () => {
       gate.resolve({
@@ -116,7 +116,7 @@ describe("GitPullRebaseConfirmDialog", () => {
       await gate.promise;
     });
 
-    expect(rebaseButton().hasAttribute("disabled")).toBe(false);
+    expect(rebaseButton().hasAttribute("aria-disabled")).toBe(false);
   });
 
   it("keeps approval blocked when the preview fetch fails", async () => {
@@ -127,7 +127,7 @@ describe("GitPullRebaseConfirmDialog", () => {
       void useGitPullRebaseConfirmStore.getState().requestConfirmation("/repo");
     });
 
-    expect(rebaseButton().hasAttribute("disabled")).toBe(true);
+    expect(rebaseButton().getAttribute("aria-disabled")).toBe("true");
   });
 
   it("resolves the awaited confirm promise with the user's decision", async () => {
@@ -199,10 +199,8 @@ describe("GitPullRebaseConfirmDialog", () => {
     expect(whileLoading).not.toContain("main");
   });
 
-  // The preview read must never disable the dialog's safe exit. AppDialog's
-  // initial-focus pass finds Cancel by selector and calls `.focus()` without
-  // checking it is enabled, so a disabled Cancel leaves focus outside the dialog
-  // for the whole read — and takes the keyboard exit with it.
+  // The preview read must never disable the dialog's safe exit: a Cancel the
+  // user cannot reach for the whole read takes the keyboard way out with it.
   it("leaves Cancel usable while the preview is still in flight", async () => {
     const gate = deferred<ReturnType<typeof loaded>>();
     mocks.buildPreview.mockReturnValue(gate.promise);
@@ -212,14 +210,14 @@ describe("GitPullRebaseConfirmDialog", () => {
       void useGitPullRebaseConfirmStore.getState().requestConfirmation("/repo");
     });
 
-    expect(cancelButton().hasAttribute("disabled")).toBe(false);
-    expect(rebaseButton().hasAttribute("disabled")).toBe(true);
+    expect(cancelButton().hasAttribute("aria-disabled")).toBe(false);
+    expect(rebaseButton().getAttribute("aria-disabled")).toBe("true");
 
     await act(async () => {
       gate.resolve(loaded());
       await gate.promise;
     });
-    expect(cancelButton().hasAttribute("disabled")).toBe(false);
+    expect(cancelButton().hasAttribute("aria-disabled")).toBe(false);
   });
 
   // Scoped to what a component test can actually prove. The host stays mounted
@@ -252,7 +250,7 @@ describe("GitPullRebaseConfirmDialog", () => {
     });
 
     expect(screen.queryByText("From repo A")).toBeNull();
-    expect(rebaseButton().hasAttribute("disabled")).toBe(true);
+    expect(rebaseButton().getAttribute("aria-disabled")).toBe("true");
 
     await act(async () => {
       gate.resolve(
@@ -261,7 +259,7 @@ describe("GitPullRebaseConfirmDialog", () => {
       await gate.promise;
     });
     expect(screen.getByText("From repo B")).toBeTruthy();
-    expect(rebaseButton().hasAttribute("disabled")).toBe(false);
+    expect(rebaseButton().hasAttribute("aria-disabled")).toBe(false);
   });
 
   // A measured-empty range is a real answer and a different one from "not measured".
@@ -281,7 +279,7 @@ describe("GitPullRebaseConfirmDialog", () => {
     expect(screen.getByTestId("git-pull-rebase-in-sync")).toBeTruthy();
     // Approvable: a branch level with its upstream rebases to a no-op, which is
     // a different thing from a rebase we could not describe.
-    expect(rebaseButton().hasAttribute("disabled")).toBe(false);
+    expect(rebaseButton().hasAttribute("aria-disabled")).toBe(false);
   });
 
   // An unfetched upstream measured nothing, so it may not borrow the empty note —
@@ -303,7 +301,7 @@ describe("GitPullRebaseConfirmDialog", () => {
 
     expect(screen.queryByTestId("git-pull-rebase-in-sync")).toBeNull();
     expect(screen.getByTestId("git-pull-rebase-empty-unfetched")).toBeTruthy();
-    expect(rebaseButton().hasAttribute("disabled")).toBe(true);
+    expect(rebaseButton().getAttribute("aria-disabled")).toBe("true");
     expect(screen.getAllByRole("alert").length).toBeGreaterThan(0);
     expect(screen.getByTestId("app-dialog-hint").textContent?.trim()).toBeTruthy();
   });
@@ -327,7 +325,7 @@ describe("GitPullRebaseConfirmDialog", () => {
     // — it just replays nothing, which is the part the copy has to get right. What
     // it must NOT do is promise a fast-forward, which `behind` alone can't establish.
     expect(screen.queryByText(/fast-forward/i)).toBeNull();
-    expect(rebaseButton().hasAttribute("disabled")).toBe(false);
+    expect(rebaseButton().hasAttribute("aria-disabled")).toBe(false);
   });
 
   // The conflict caution describes what happens DURING a replay. Rendering it in a
@@ -382,7 +380,7 @@ describe("GitPullRebaseConfirmDialog", () => {
       void useGitPullRebaseConfirmStore.getState().requestConfirmation("/repo");
     });
 
-    expect(rebaseButton().hasAttribute("disabled")).toBe(true);
+    expect(rebaseButton().getAttribute("aria-disabled")).toBe("true");
     // Announced: assistive tech learns why without having to hunt for it.
     expect(screen.getAllByRole("alert").length).toBeGreaterThan(0);
     // And stated beside the control it disables, so a sighted user does not have

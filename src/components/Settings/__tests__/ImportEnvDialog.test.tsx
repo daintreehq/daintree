@@ -159,14 +159,14 @@ describe("ImportEnvDialog", () => {
     it("never advertises a count while it is disabled", () => {
       renderDialog();
       paste("GOOD=fine\nthis line has no equals sign");
-      expect(primary().disabled).toBe(true);
+      expect(primary().getAttribute("aria-disabled")).toBe("true");
       expect(primary().textContent).not.toMatch(/\d/);
     });
 
     it("advertises a count once it can actually be pressed", () => {
       renderDialog();
       paste("BRAND_NEW=1\nALSO_NEW=2");
-      expect(primary().disabled).toBe(false);
+      expect(primary().hasAttribute("aria-disabled")).toBe(false);
       expect(primary().textContent).toMatch(/\d/);
     });
 
@@ -174,13 +174,13 @@ describe("ImportEnvDialog", () => {
     it("says why it is disabled whenever the user has pasted something", () => {
       renderDialog();
       paste("this line has no equals sign");
-      expect(primary().disabled).toBe(true);
+      expect(primary().getAttribute("aria-disabled")).toBe("true");
       expect(screen.getByTestId("app-dialog-hint").textContent?.trim()).toBeTruthy();
     });
 
     it("stays quiet about it before anything is pasted", () => {
       renderDialog();
-      expect(primary().disabled).toBe(true);
+      expect(primary().getAttribute("aria-disabled")).toBe("true");
       expect(screen.queryByTestId("app-dialog-hint")).toBeNull();
     });
   });

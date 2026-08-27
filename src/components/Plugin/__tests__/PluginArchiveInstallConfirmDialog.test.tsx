@@ -321,12 +321,12 @@ describe("PluginArchiveInstallConfirmDialog", () => {
     render(<PluginArchiveInstallConfirmDialog />);
     enqueue(intent());
 
-    expect(confirmButton().disabled).toBe(true);
+    expect(confirmButton().getAttribute("aria-disabled")).toBe("true");
     click(confirmButton());
     expect(installFromPath).not.toHaveBeenCalled();
 
     armConfirm();
-    expect(confirmButton().disabled).toBe(false);
+    expect(confirmButton().hasAttribute("aria-disabled")).toBe(false);
   });
 
   it("hands the approved archive path to the installer exactly once", async () => {
@@ -366,7 +366,7 @@ describe("PluginArchiveInstallConfirmDialog", () => {
 
     // The promoted item earns its own read time — a click landing now must not
     // approve an archive the user hasn't read.
-    expect(confirmButton().disabled).toBe(true);
+    expect(confirmButton().getAttribute("aria-disabled")).toBe("true");
     click(confirmButton());
     expect(installFromPath).toHaveBeenCalledOnce();
 

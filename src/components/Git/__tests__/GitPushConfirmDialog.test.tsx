@@ -104,7 +104,7 @@ describe("GitPushConfirmDialog", () => {
       void useGitPushConfirmStore.getState().requestConfirmation("/repo");
     });
 
-    expect(pushButton().hasAttribute("disabled")).toBe(true);
+    expect(pushButton().getAttribute("aria-disabled")).toBe("true");
 
     await act(async () => {
       gate.resolve({
@@ -117,7 +117,7 @@ describe("GitPushConfirmDialog", () => {
       await gate.promise;
     });
 
-    expect(pushButton().hasAttribute("disabled")).toBe(false);
+    expect(pushButton().hasAttribute("aria-disabled")).toBe(false);
   });
 
   // `commits.length === 0` is a VALID loaded state — it means "nothing ahead",
@@ -136,7 +136,7 @@ describe("GitPushConfirmDialog", () => {
       void useGitPushConfirmStore.getState().requestConfirmation("/repo");
     });
 
-    expect(pushButton().hasAttribute("disabled")).toBe(false);
+    expect(pushButton().hasAttribute("aria-disabled")).toBe(false);
     expect(screen.getByTestId("git-push-in-sync").textContent).toContain("Nothing to publish");
   });
 
@@ -148,7 +148,7 @@ describe("GitPushConfirmDialog", () => {
       void useGitPushConfirmStore.getState().requestConfirmation("/repo");
     });
 
-    expect(pushButton().hasAttribute("disabled")).toBe(true);
+    expect(pushButton().getAttribute("aria-disabled")).toBe("true");
     const retry = screen.getByTestId("git-push-commits-retry");
 
     mocks.buildPreview.mockResolvedValue({
@@ -163,7 +163,7 @@ describe("GitPushConfirmDialog", () => {
     });
 
     expect(mocks.buildPreview).toHaveBeenCalledTimes(2);
-    expect(pushButton().hasAttribute("disabled")).toBe(false);
+    expect(pushButton().hasAttribute("aria-disabled")).toBe(false);
     expect(screen.getByText("Fix it")).toBeTruthy();
   });
 
@@ -187,9 +187,7 @@ describe("GitPushConfirmDialog", () => {
   });
 
   // A preview fetch is not the action running. Wiring it to `isConfirmLoading`
-  // disabled Cancel, and AppDialog's initial-focus pass calls `.focus()` on the
-  // Cancel button it finds by selector without checking it is enabled — so a
-  // disabled Cancel left focus outside the dialog for the whole fetch.
+  // disabled Cancel, leaving the dialog without a usable exit for the whole fetch.
   it("keeps Cancel usable while the preview is still loading", async () => {
     const gate = deferred<never>();
     mocks.buildPreview.mockReturnValue(gate.promise);
@@ -200,8 +198,8 @@ describe("GitPushConfirmDialog", () => {
     });
 
     const cancel = screen.getByRole("button", { name: "Cancel" });
-    expect(cancel.hasAttribute("disabled")).toBe(false);
-    expect(pushButton().hasAttribute("disabled")).toBe(true);
+    expect(cancel.hasAttribute("aria-disabled")).toBe(false);
+    expect(pushButton().getAttribute("aria-disabled")).toBe("true");
   });
 
   // The rows and the count have to describe the same range, or the tail states
@@ -290,7 +288,7 @@ describe("GitPushConfirmDialog", () => {
       void useGitPushConfirmStore.getState().requestConfirmation("/repo");
     });
 
-    expect(pushButton().hasAttribute("disabled")).toBe(true);
+    expect(pushButton().getAttribute("aria-disabled")).toBe("true");
     expect(screen.getByTestId("git-push-no-destination")).toBeTruthy();
   });
 
@@ -312,7 +310,7 @@ describe("GitPushConfirmDialog", () => {
 
     expect(screen.getByTestId("git-push-detached-head")).toBeTruthy();
     expect(screen.queryByTestId("git-push-no-destination")).toBeNull();
-    expect(pushButton().hasAttribute("disabled")).toBe(true);
+    expect(pushButton().getAttribute("aria-disabled")).toBe("true");
   });
 
   // An untracked range can only over-report, so the surface must say the list is
@@ -399,7 +397,7 @@ describe("GitPushConfirmDialog", () => {
 
     // It must neither render nor enable approval: it describes /repo-a, and the
     // dialog on screen is asking about /repo-b.
-    expect(pushButton().hasAttribute("disabled")).toBe(true);
+    expect(pushButton().getAttribute("aria-disabled")).toBe("true");
     expect(screen.queryAllByTestId("git-push-commit-row")).toHaveLength(0);
   });
 
