@@ -286,7 +286,7 @@ export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDia
               // for `focus-visible:outline-*` for keyboard focus, and the ring
               // this replaced measured ~2.2:1 — under the 3:1 floor for a
               // non-text indicator, on the step's primary input.
-              className="w-full h-56 resize-y font-mono text-[12px] bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-2 text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+              className="w-full h-56 resize-y font-mono text-[12px] bg-surface-input border border-border-strong rounded-[var(--radius-md)] px-3 py-2 text-daintree-text placeholder:text-text-placeholder transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
               aria-label="Paste .env content"
               aria-invalid={hasErrors || undefined}
               aria-describedby={hasErrors ? errorsId : undefined}
