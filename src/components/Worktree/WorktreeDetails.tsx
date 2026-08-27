@@ -1,7 +1,7 @@
 import { useMemo, useRef } from "react";
 import type { WorktreeState } from "../../types";
 import type { ErrorRecord, RetryAction } from "../../store/errorStore";
-import { ErrorBanner } from "../Errors/ErrorBanner";
+import { CompactErrorList } from "../Errors/CompactErrorList";
 import { FileChangeList, type FileChangeListHandle } from "./FileChangeList";
 import { ActivityLight } from "./ActivityLight";
 import { LiveTimeAgo } from "./LiveTimeAgo";
@@ -149,23 +149,13 @@ export function WorktreeDetails({
         <>
           {/* Errors (if any) */}
           {worktreeErrors.length > 0 && (
-            <div className="space-y-1">
-              {worktreeErrors.slice(0, 3).map((error) => (
-                <ErrorBanner
-                  key={error.id}
-                  error={error}
-                  onDismiss={onDismissError}
-                  onRetry={onRetryError}
-                  onCancelRetry={onCancelRetry}
-                  compact
-                />
-              ))}
-              {worktreeErrors.length > 3 && (
-                <div className="text-[0.65rem] text-daintree-text/60 text-center">
-                  +{worktreeErrors.length - 3} more errors
-                </div>
-              )}
-            </div>
+            <CompactErrorList
+              errors={worktreeErrors}
+              maxInline={3}
+              onDismiss={onDismissError}
+              onRetry={onRetryError}
+              onCancelRetry={onCancelRetry}
+            />
           )}
 
           {/* Block 2: Narrative — the AI note, the AI summary, or the last

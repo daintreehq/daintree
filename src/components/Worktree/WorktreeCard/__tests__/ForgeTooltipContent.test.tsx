@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { ForgeUser, IssueTooltipData, PRTooltipData } from "@shared/types/forge";
 
@@ -272,5 +272,74 @@ describe("PRTooltipContent freshness item", () => {
     );
     expect(container.querySelector(".lucide-circle-pause")).toBeTruthy();
     expect(screen.getByText(/data may be stale/)).toBeTruthy();
+  });
+});
+
+describe("ForgeTooltipContent labels", () => {
+  // The forge queries ask for `labels(first: 10)`, so this is the widest row
+  // either tooltip can be handed.
+  const manyLabels = Array.from({ length: 10 }, (_, i) => ({
+    name: `label-${i}`,
+    color: "8b949e",
+  }));
+
+  it("renders every issue label rather than counting the tail (#12001)", () => {
+    // The row used to stop at four and print "+N more" — a count inside a
+    // hover tooltip, which has no further surface to open.
+    render(<IssueTooltipContent data={{ ...issueData, labels: manyLabels }} />);
+    for (const label of manyLabels) {
+      expect(screen.getByText(label.name)).toBeTruthy();
+    }
+    expect(screen.queryByText(/more$/)).toBeNull();
+  });
+
+  it("renders every PR label rather than counting the tail (#12001)", () => {
+    render(<PRTooltipContent data={{ ...prData, labels: manyLabels }} />);
+    for (const label of manyLabels) {
+      expect(screen.getByText(label.name)).toBeTruthy();
+    }
+    expect(screen.queryByText(/more$/)).toBeNull();
+  });
+
+  it("renders no label row at all when there are no labels", () => {
+    const withLabels = render(<IssueTooltipContent data={{ ...issueData, labels: manyLabels }} />);
+    const withLabelsNodes = withLabels.container.querySelectorAll("div").length;
+    cleanup();
+
+    const empty = render(<IssueTooltipContent data={{ ...issueData, labels: [] }} />);
+    // An empty row shell would still take the row's `pt-1`, opening a gap under
+    // the metadata line for nothing.
+    expect(empty.container.querySelectorAll("div").length).toBeLessThan(withLabelsNodes);
+  });
+
+  it("bounds the row when a provider returns far more labels than a forge page", () => {
+    // `ForgeLabel[]` is unbounded in the provider contract and a tooltip can't
+    // scroll, so an unbounded row would run past the viewport and be clipped by
+    // the tooltip's own overflow.
+    const flood = Array.from({ length: 300 }, (_, i) => ({ name: `flood-${i}`, color: "8b949e" }));
+    const { container } = render(<IssueTooltipContent data={{ ...issueData, labels: flood }} />);
+
+    const rendered = container.textContent ?? "";
+    const chips = flood.filter((l) => screen.queryByText(l.name) !== null);
+    expect(chips.length).toBeLessThan(flood.length);
+    // And it names the route rather than counting a remainder: a tooltip has no
+    // surface of its own to open, but the badge it describes opens the item.
+    expect(rendered).toContain(String(flood.length));
+    expect(rendered).toContain("open the issue");
+    expect(rendered).not.toMatch(/\+\d+ more/);
+  });
+
+  it("names the pull request, not the issue, on a PR tooltip", () => {
+    const flood = Array.from({ length: 40 }, (_, i) => ({ name: `flood-${i}`, color: "8b949e" }));
+    const { container } = render(<PRTooltipContent data={{ ...prData, labels: flood }} />);
+    expect(container.textContent).toContain("open the pull request");
+  });
+
+  it("falls back to a neutral colour for a label the provider left uncoloured", () => {
+    render(<IssueTooltipContent data={{ ...issueData, labels: [{ name: "uncoloured" }] }} />);
+    const badge = screen.getByText("uncoloured");
+    // Any resolved colour beats none: an unset `color` used to produce
+    // `#undefined20`, which paints nothing.
+    expect(badge.getAttribute("style") ?? "").not.toContain("undefined");
   });
 });

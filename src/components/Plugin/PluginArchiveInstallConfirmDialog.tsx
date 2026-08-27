@@ -1,6 +1,7 @@
 import { useCallback, useRef, useState } from "react";
 import { AlertCircle, AlertTriangle, FileArchive, Users } from "lucide-react";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
+import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { notify } from "@/lib/notify";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { usePluginArchiveInstallStore } from "@/store/pluginArchiveInstallStore";
@@ -232,7 +233,6 @@ const SEVERITY_RANK: Record<CapabilitySeverity, number> = { danger: 0, warning: 
  */
 function ArchiveRecipes({ recipes }: { recipes: { count: number; names: string[] } }) {
   if (recipes.count === 0) return null;
-  const undisclosed = recipes.count - recipes.names.length;
   return (
     <div className="space-y-2">
       <h4 className="text-[11px] font-medium uppercase tracking-wide text-daintree-text/40">
@@ -242,17 +242,31 @@ function ArchiveRecipes({ recipes }: { recipes: { count: number; names: string[]
         Adds {recipes.count} launch {recipes.count === 1 ? "recipe" : "recipes"}, available in every
         project. Each starts terminals that run commands or agents.
       </p>
-      <ul className="space-y-1">
-        {recipes.names.map((name, index) => (
-          <li
-            key={`${name}-${index}`}
-            className="text-xs text-daintree-text/70 break-words min-w-0"
-          >
-            {name}
-          </li>
-        ))}
-        {undisclosed > 0 && <li className="text-xs text-daintree-text/40">+{undisclosed} more</li>}
-      </ul>
+      {/* Every name, bounded by the viewport rather than by the data. The list
+          used to arrive pre-truncated at ten with "+N more" underneath, which
+          on a D2 confirm counts executable content the user can't read before
+          approving it (#12001). A scrollable region with no focusable children
+          has to be keyboard-reachable in its own right (WCAG 2.1.1), and the
+          fades are what say the list continues. */}
+      <ScrollShadow
+        className="max-h-[132px]"
+        scrollClassName="scroll-py-6"
+        tabIndex={0}
+        role="region"
+        aria-label={`${recipes.count} contributed ${recipes.count === 1 ? "recipe" : "recipes"}`}
+        data-testid="archive-recipe-list"
+      >
+        <ul className="space-y-1">
+          {recipes.names.map((name, index) => (
+            <li
+              key={`${name}-${index}`}
+              className="text-xs text-daintree-text/70 break-words min-w-0"
+            >
+              {name}
+            </li>
+          ))}
+        </ul>
+      </ScrollShadow>
     </div>
   );
 }

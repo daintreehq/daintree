@@ -1,4 +1,4 @@
-import type { ForgeUser, IssueTooltipData, PRTooltipData } from "@shared/types/forge";
+import type { ForgeLabel, ForgeUser, IssueTooltipData, PRTooltipData } from "@shared/types/forge";
 import { Calendar, KeyRound, PenLine, UserCheck, Clock, CirclePause } from "lucide-react";
 import type { LucideIcon } from "lucide-react";
 import type { BadgeFreshnessCause } from "@/components/Layout/FreshnessUtils";
@@ -188,7 +188,14 @@ interface LabelBadgeProps {
 function LabelBadge({ name, color }: LabelBadgeProps) {
   return (
     <span
-      className="inline-flex items-center px-1.5 py-0.5 rounded-full text-[10px] font-medium"
+      // `inline-block`, not `inline-flex`: `break-words` acts on an element's
+      // own inline content, and a flex container's anonymous text child keeps
+      // its min-content width instead, so one long label used to paint past
+      // the badge and get clipped by the tooltip.
+      // `line-clamp-2` bounds height as well as width: a name is unbounded in
+      // the provider contract, and twenty of them wrapping freely would make the
+      // tooltip arbitrarily tall even under the chip cap.
+      className="inline-block max-w-full break-words [overflow-wrap:anywhere] line-clamp-2 px-1.5 py-0.5 rounded-full text-[10px] font-medium"
       style={{
         backgroundColor: `#${color}20`,
         color: `#${color}`,
@@ -197,6 +204,46 @@ function LabelBadge({ name, color }: LabelBadgeProps) {
     >
       {name}
     </span>
+  );
+}
+
+/**
+ * How many label chips a hover tooltip will render.
+ *
+ * Double the builtin GitHub provider's own `labels(first: 10)` page, so in
+ * practice every label an issue carries is shown and this never engages. It
+ * exists because `ForgeLabel[]` is unbounded in the provider contract: a plugin
+ * forge could return hundreds, and a tooltip can't scroll, so the row would
+ * grow past the viewport and be clipped by the tooltip's own `overflow-hidden`.
+ */
+const MAX_TOOLTIP_LABELS = 20;
+
+/**
+ * Every label, not the first four.
+ *
+ * The row used to cut off at four and count the rest, which put the tail behind
+ * a "+N more" that sits inside a hover tooltip — there is no further surface to
+ * open from there, so the count named content the user could not reach
+ * (#12001). `LabelBadge` wraps rather than widens, so a single long
+ * provider-supplied label can't push the tooltip past its `max-w-[280px]`.
+ *
+ * Past `MAX_TOOLTIP_LABELS` the row names the route rather than counting a
+ * remainder — a tooltip has no surface of its own to open, but the badge this
+ * one describes does open the item, so that is where the rest live.
+ */
+function LabelRow({ labels, subject }: { labels: readonly ForgeLabel[]; subject: string }) {
+  const shown = labels.slice(0, MAX_TOOLTIP_LABELS);
+  return (
+    <div className="flex flex-wrap items-baseline gap-1 pt-1">
+      {shown.map((label) => (
+        <LabelBadge key={label.name} name={label.name} color={label.color ?? "8b949e"} />
+      ))}
+      {labels.length > shown.length && (
+        <span className="text-[10px] text-daintree-text/40">
+          Showing {shown.length} of {labels.length} — open the {subject} for the rest
+        </span>
+      )}
+    </div>
   );
 }
 
@@ -239,18 +286,7 @@ export function IssueTooltipContent({ data, freshness }: IssueTooltipContentProp
         <FreshnessMetaItem freshness={freshness} />
       </div>
 
-      {data.labels.length > 0 && (
-        <div className="flex flex-wrap gap-1 pt-1">
-          {data.labels.slice(0, 4).map((label) => (
-            <LabelBadge key={label.name} name={label.name} color={label.color ?? "8b949e"} />
-          ))}
-          {data.labels.length > 4 && (
-            <span className="text-[10px] text-daintree-text/40">
-              +{data.labels.length - 4} more
-            </span>
-          )}
-        </div>
-      )}
+      {data.labels.length > 0 && <LabelRow labels={data.labels} subject="issue" />}
     </div>
   );
 }
@@ -313,18 +349,7 @@ export function PRTooltipContent({ data, freshness }: PRTooltipContentProps) {
         <FreshnessMetaItem freshness={freshness} />
       </div>
 
-      {data.labels.length > 0 && (
-        <div className="flex flex-wrap gap-1 pt-1">
-          {data.labels.slice(0, 4).map((label) => (
-            <LabelBadge key={label.name} name={label.name} color={label.color ?? "8b949e"} />
-          ))}
-          {data.labels.length > 4 && (
-            <span className="text-[10px] text-daintree-text/40">
-              +{data.labels.length - 4} more
-            </span>
-          )}
-        </div>
-      )}
+      {data.labels.length > 0 && <LabelRow labels={data.labels} subject="pull request" />}
     </div>
   );
 }

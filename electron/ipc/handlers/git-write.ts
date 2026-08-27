@@ -19,6 +19,7 @@ import type {
   RepoState,
   StagingStatus,
 } from "../../../shared/types/git.js";
+import { GIT_REMOTE_COMMIT_PREVIEW_MAX } from "../../../shared/types/git.js";
 import {
   validateCwd,
   createHardenedGit,
@@ -833,7 +834,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       throw new Error("Invalid branch name");
     }
     const branchName = payload.branchName.trim();
-    const limit = Math.max(1, Math.min(100, payload.limit ?? 20));
+    const limit = Math.max(1, Math.min(GIT_REMOTE_COMMIT_PREVIEW_MAX, payload.limit ?? 20));
 
     const git = await createHardenedGit(payload.cwd);
     try {

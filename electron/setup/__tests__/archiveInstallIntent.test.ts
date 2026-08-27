@@ -446,4 +446,88 @@ describe("archiveInstallIntent", () => {
     const [intent] = intentsFrom(painted.sent);
     expect(intent).toMatchObject({ manifest: { recipes: { count: 0, names: [] } } });
   });
+
+  it("sends every recipe name, not a leading subset (#12001)", async () => {
+    // The preview used to arrive truncated, leaving the D2 confirm to print
+    // "+N more" for executable content nothing downstream could open. The
+    // schema already bounds this at 50 recipes of 200 characters, so the
+    // dialog bounds its viewport instead of the data.
+    const painted = makePainted();
+    deepLinkMock.painted = painted.wc;
+    const declared = Array.from({ length: 24 }, (_, i) => ({
+      id: `r${i}`,
+      name: `Recipe ${i}`,
+      terminals: [],
+    }));
+    archiveMock.readArchiveManifest.mockResolvedValue(
+      manifest({ contributes: { recipes: declared } } as unknown as Partial<PluginManifest>)
+    );
+
+    const { enqueueArchiveInstallIntent } = await importFresh();
+    await enqueueArchiveInstallIntent(P("many-recipes.dntr"));
+
+    const [intent] = intentsFrom(painted.sent);
+    const recipes = (intent as { manifest: { recipes: { count: number; names: string[] } } })
+      .manifest.recipes;
+    // The whole ordered sequence: a length check alone would pass if a middle
+    // entry were duplicated or reordered.
+    expect(recipes.names).toEqual(declared.map((r) => r.name));
+    expect(recipes.count).toBe(recipes.names.length);
+  });
+
+  it("preserves two recipes that declare the same name (#12001)", async () => {
+    const painted = makePainted();
+    deepLinkMock.painted = painted.wc;
+    archiveMock.readArchiveManifest.mockResolvedValue(
+      manifest({
+        contributes: {
+          recipes: [
+            { id: "a", name: "Deploy", terminals: [] },
+            { id: "b", name: "Deploy", terminals: [] },
+          ],
+        },
+      } as unknown as Partial<PluginManifest>)
+    );
+
+    const { enqueueArchiveInstallIntent } = await importFresh();
+    await enqueueArchiveInstallIntent(P("dupe-recipes.dntr"));
+
+    const [intent] = intentsFrom(painted.sent);
+    const recipes = (intent as { manifest: { recipes: { count: number; names: string[] } } })
+      .manifest.recipes;
+    // Two recipes are two things to approve even when they read alike.
+    expect(recipes.names).toEqual(["Deploy", "Deploy"]);
+  });
+
+  it("still clamps and sanitizes names once the subset cap is gone (#12001)", async () => {
+    const painted = makePainted();
+    deepLinkMock.painted = painted.wc;
+    archiveMock.readArchiveManifest.mockResolvedValue(
+      manifest({
+        contributes: {
+          recipes: [
+            ...Array.from({ length: 15 }, (_, i) => ({
+              id: `p${i}`,
+              name: `Pad ${i}`,
+              terminals: [],
+            })),
+            { id: "long", name: "L".repeat(500), terminals: [] },
+            { id: "bidi", name: "Run \u202Etset", terminals: [] },
+          ],
+        },
+      } as unknown as Partial<PluginManifest>)
+    );
+
+    const { enqueueArchiveInstallIntent } = await importFresh();
+    await enqueueArchiveInstallIntent(P("hostile-recipes.dntr"));
+
+    const [intent] = intentsFrom(painted.sent);
+    const { names } = (intent as { manifest: { recipes: { count: number; names: string[] } } })
+      .manifest.recipes;
+    // Past the old cap of ten, so both would have been dropped before.
+    const long = names.at(-2)!;
+    expect(long.length).toBeLessThan(500);
+    expect(long.endsWith("\u2026")).toBe(true);
+    expect(names.at(-1)).not.toContain("\u202E");
+  });
 });
