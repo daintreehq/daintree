@@ -129,7 +129,7 @@ function BudgetRow({ row }: { row: PerfSummaryRow }) {
             Over budget
           </span>
         ) : (
-          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium uppercase tracking-wide bg-status-success/15 text-status-success">
+          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[10px] font-medium uppercase tracking-wide bg-overlay-subtle text-daintree-text/60">
             Within budget
           </span>
         )}

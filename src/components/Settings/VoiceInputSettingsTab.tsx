@@ -561,12 +561,7 @@ function ApiKeyRow({
           {label}
         </label>
         <div className="flex items-center gap-2">
-          {value ? (
-            <span className="flex items-center gap-1 text-xs text-status-success">
-              <Check className="w-3 h-3" />
-              Configured
-            </span>
-          ) : (
+          {!value && (
             <button
               onClick={() => window.electron?.system?.openExternal(helpUrl)}
               className="text-xs text-text-secondary hover:text-daintree-text underline-offset-2 hover:underline flex items-center gap-1"

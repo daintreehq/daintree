@@ -154,13 +154,24 @@ describe("McpServerSettingsTab", () => {
       { timeout: 5000 }
     );
 
+  // The key section used to announce itself with an ambient "API key active"
+  // line; issue #12002 removed it, so gate on the controls that only exist
+  // once a key has loaded.
+  const waitForApiKeyControls = (container: HTMLElement) =>
+    waitFor(
+      () => {
+        expect(container.querySelector('button[aria-label="Show API key"]')).toBeTruthy();
+      },
+      { timeout: 5000 }
+    );
+
   it("renders API key in a non-input display element", async () => {
     const { container } = render(
       <SettingsValidationProvider>
         <McpServerSettingsTab />
       </SettingsValidationProvider>
     );
-    await waitForContent(container, "API key active");
+    await waitForApiKeyControls(container);
 
     const displayArea = container.querySelector(".bg-surface-disabled");
     expect(displayArea).toBeTruthy();
@@ -176,7 +187,7 @@ describe("McpServerSettingsTab", () => {
         <McpServerSettingsTab />
       </SettingsValidationProvider>
     );
-    await waitForContent(container, "API key active");
+    await waitForApiKeyControls(container);
 
     const displayArea = container.querySelector(".bg-surface-disabled")!;
     expect(displayArea.textContent).not.toContain("dnt-key-abc123");
@@ -199,7 +210,7 @@ describe("McpServerSettingsTab", () => {
         <McpServerSettingsTab />
       </SettingsValidationProvider>
     );
-    await waitForContent(container, "API key active");
+    await waitForApiKeyControls(container);
 
     fireEvent.click(screen.getByLabelText("Copy API key"));
     await waitFor(() => {
@@ -213,7 +224,7 @@ describe("McpServerSettingsTab", () => {
         <McpServerSettingsTab />
       </SettingsValidationProvider>
     );
-    await waitForContent(container, "API key active");
+    await waitForApiKeyControls(container);
 
     fireEvent.click(screen.getByLabelText("Copy API key"));
 
@@ -229,7 +240,7 @@ describe("McpServerSettingsTab", () => {
         <McpServerSettingsTab />
       </SettingsValidationProvider>
     );
-    await waitForContent(container, "API key active");
+    await waitForApiKeyControls(container);
 
     fireEvent.click(screen.getByTitle("Rotate API key"));
 
@@ -264,7 +275,7 @@ describe("McpServerSettingsTab", () => {
         <McpServerSettingsTab />
       </SettingsValidationProvider>
     );
-    await waitForContent(container, "API key active");
+    await waitForApiKeyControls(container);
 
     fireEvent.click(screen.getByTitle("Rotate API key"));
     await waitFor(() => {
@@ -285,7 +296,7 @@ describe("McpServerSettingsTab", () => {
         <McpServerSettingsTab />
       </SettingsValidationProvider>
     );
-    await waitForContent(container, "API key active");
+    await waitForApiKeyControls(container);
 
     fireEvent.click(screen.getByLabelText("Show API key"));
     const displayArea = container.querySelector(".bg-surface-disabled")!;
@@ -320,7 +331,7 @@ describe("McpServerSettingsTab", () => {
         <McpServerSettingsTab />
       </SettingsValidationProvider>
     );
-    await waitForContent(container, "API key active");
+    await waitForApiKeyControls(container);
 
     fireEvent.click(screen.getByTitle("Rotate API key"));
     await waitFor(() => {
@@ -341,7 +352,7 @@ describe("McpServerSettingsTab", () => {
         <McpServerSettingsTab />
       </SettingsValidationProvider>
     );
-    await waitForContent(container, "API key active");
+    await waitForApiKeyControls(container);
 
     fireEvent.click(screen.getByLabelText("Show API key"));
     const displayArea = container.querySelector(".bg-surface-disabled")!;
@@ -377,7 +388,7 @@ describe("McpServerSettingsTab", () => {
         <McpServerSettingsTab />
       </SettingsValidationProvider>
     );
-    await waitForContent(container, "API key active");
+    await waitForApiKeyControls(container);
 
     const displayArea = container.querySelector(".bg-surface-disabled")!;
     const maskSpan = displayArea.querySelector("span")!;
@@ -399,7 +410,7 @@ describe("McpServerSettingsTab", () => {
         <McpServerSettingsTab />
       </SettingsValidationProvider>
     );
-    await waitForContent(container, "API key active");
+    await waitForApiKeyControls(container);
 
     fireEvent.click(screen.getByLabelText("Copy API key"));
 
@@ -414,7 +425,7 @@ describe("McpServerSettingsTab", () => {
         <McpServerSettingsTab />
       </SettingsValidationProvider>
     );
-    await waitForContent(container, "API key active");
+    await waitForApiKeyControls(container);
 
     expect(screen.queryByRole("button", { name: /^remove$/i })).toBeNull();
   });
@@ -507,7 +518,7 @@ describe("McpServerSettingsTab", () => {
         <McpServerSettingsTab />
       </SettingsValidationProvider>
     );
-    await waitForContent(container, "API key active");
+    await waitForApiKeyControls(container);
 
     expect(screen.queryByText("MCP server is off")).toBeNull();
   });
@@ -709,7 +720,7 @@ describe("McpServerSettingsTab", () => {
         <McpServerSettingsTab />
       </SettingsValidationProvider>
     );
-    await waitForContent(container, "API key active");
+    await waitForApiKeyControls(container);
 
     const maxRecordsInput = container.querySelector("#mcp-audit-max-records") as HTMLInputElement;
     fireEvent.change(maxRecordsInput, { target: { value: "99999" } });
@@ -731,7 +742,7 @@ describe("McpServerSettingsTab", () => {
         <McpServerSettingsTab />
       </SettingsValidationProvider>
     );
-    await waitForContent(container, "API key active");
+    await waitForApiKeyControls(container);
 
     fireEvent.click(screen.getByRole("switch", { name: /capture audit log/i }));
 
@@ -1014,7 +1025,7 @@ describe("McpServerSettingsTab", () => {
         <McpServerSettingsTab />
       </SettingsValidationProvider>
     );
-    await waitForContent(container, "API key active");
+    await waitForApiKeyControls(container);
 
     const portInput = screen.getByLabelText("MCP server port") as HTMLInputElement;
     fireEvent.change(portInput, { target: { value: "9020 " } });
@@ -1050,7 +1061,7 @@ describe("McpServerSettingsTab", () => {
         <McpServerSettingsTab />
       </SettingsValidationProvider>
     );
-    await waitForContent(container, "API key active");
+    await waitForApiKeyControls(container);
 
     const select = screen.getByLabelText("Filter audit by result") as HTMLSelectElement;
     expect(select).toBeTruthy();
@@ -1124,7 +1135,7 @@ describe("McpServerSettingsTab", () => {
         <McpServerSettingsTab />
       </SettingsValidationProvider>
     );
-    await waitForContent(container, "API key active");
+    await waitForApiKeyControls(container);
     expect(container.textContent).not.toContain("anomaly signal");
   });
 
@@ -1195,7 +1206,7 @@ describe("McpServerSettingsTab", () => {
         <McpServerSettingsTab />
       </SettingsValidationProvider>
     );
-    await waitForContent(container, "API key active");
+    await waitForApiKeyControls(container);
 
     fireEvent.click(screen.getByRole("button", { name: /copy mcp config/i }));
     await waitFor(() => {
@@ -1225,7 +1236,7 @@ describe("McpServerSettingsTab", () => {
           <McpServerSettingsTab />
         </SettingsValidationProvider>
       );
-      await waitForContent(container, "API key active");
+      await waitForApiKeyControls(container);
       expect(container.textContent).not.toContain("External clients");
     });
 
@@ -1274,7 +1285,7 @@ describe("McpServerSettingsTab", () => {
           <McpServerSettingsTab />
         </SettingsValidationProvider>
       );
-      await waitForContent(container, "API key active");
+      await waitForApiKeyControls(container);
       expect(container.textContent).not.toContain("External clients");
 
       runtimeCb?.({ enabled: true, state: "ready", port: 9020, lastError: null });
@@ -1298,7 +1309,7 @@ describe("McpServerSettingsTab", () => {
           <McpServerSettingsTab />
         </SettingsValidationProvider>
       );
-      await waitForContent(container, "API key active");
+      await waitForApiKeyControls(container);
       expect(container.textContent).not.toContain("Kept alive by Daintree Assistant");
     });
   });
@@ -1317,7 +1328,7 @@ describe("McpServerSettingsTab", () => {
           <McpServerSettingsTab />
         </SettingsValidationProvider>
       );
-      await waitForContent(container, "API key active");
+      await waitForApiKeyControls(container);
       expect(container.textContent).not.toContain("Internal connections");
     });
 
@@ -1393,7 +1404,7 @@ describe("McpServerSettingsTab", () => {
           <McpServerSettingsTab />
         </SettingsValidationProvider>
       );
-      await waitForContent(container, "API key active");
+      await waitForApiKeyControls(container);
       expect(container.textContent).not.toContain("Internal connections");
 
       runtimeCb?.({ enabled: true, state: "ready", port: 9020, lastError: null });
@@ -1408,7 +1419,7 @@ describe("McpServerSettingsTab", () => {
           <McpServerSettingsTab />
         </SettingsValidationProvider>
       );
-      await waitForContent(container, "API key active");
+      await waitForApiKeyControls(container);
       expect(container.textContent).toContain("Running on port 9020");
       // Regression (#11535): the box advertised the legacy /sse transport.
       expect(readDisplayedUrl(container)).toBe("http://127.0.0.1:9020/mcp");
@@ -1422,7 +1433,7 @@ describe("McpServerSettingsTab", () => {
           <McpServerSettingsTab />
         </SettingsValidationProvider>
       );
-      await waitForContent(container, "API key active");
+      await waitForApiKeyControls(container);
 
       const shownUrl = readDisplayedUrl(container);
       expect(shownUrl).toBeTruthy();
@@ -1443,7 +1454,7 @@ describe("McpServerSettingsTab", () => {
           <McpServerSettingsTab />
         </SettingsValidationProvider>
       );
-      await waitForContent(container, "API key active");
+      await waitForApiKeyControls(container);
 
       const group = screen.getByRole("radiogroup", { name: /client/i });
       const choices = Array.from(group.querySelectorAll('[role="radio"]'));
@@ -1466,7 +1477,7 @@ describe("McpServerSettingsTab", () => {
           <McpServerSettingsTab />
         </SettingsValidationProvider>
       );
-      await waitForContent(container, "API key active");
+      await waitForApiKeyControls(container);
 
       const text = container.textContent ?? "";
       for (const entry of MCP_CLIENT_CONFIGS) {
@@ -1481,7 +1492,7 @@ describe("McpServerSettingsTab", () => {
           <McpServerSettingsTab />
         </SettingsValidationProvider>
       );
-      await waitForContent(container, "API key active");
+      await waitForApiKeyControls(container);
 
       fireEvent.click(screen.getByRole("radio", { name: /other client/i }));
       fireEvent.click(screen.getByRole("button", { name: /copy mcp config/i }));
@@ -1505,7 +1516,7 @@ describe("McpServerSettingsTab", () => {
           <McpServerSettingsTab />
         </SettingsValidationProvider>
       );
-      await waitForContent(container, "API key active");
+      await waitForApiKeyControls(container);
 
       vi.mocked(window.electron.mcpServer.getStatus).mockResolvedValue({
         enabled: true,
@@ -1527,7 +1538,7 @@ describe("McpServerSettingsTab", () => {
           <McpServerSettingsTab />
         </SettingsValidationProvider>
       );
-      await waitForContent(container, "API key active");
+      await waitForApiKeyControls(container);
 
       fireEvent.click(screen.getByRole("radio", { name: /codex/i }));
       fireEvent.click(screen.getByRole("button", { name: /copy mcp config/i }));
@@ -1552,7 +1563,7 @@ describe("McpServerSettingsTab", () => {
           <McpServerSettingsTab />
         </SettingsValidationProvider>
       );
-      await waitForContent(container, "API key active");
+      await waitForApiKeyControls(container);
 
       fireEvent.click(screen.getByRole("button", { name: /copy mcp config/i }));
       await waitFor(() => {
@@ -1587,7 +1598,7 @@ describe("McpServerSettingsTab", () => {
           <McpServerSettingsTab />
         </SettingsValidationProvider>
       );
-      await waitForContent(container, "API key active");
+      await waitForApiKeyControls(container);
       expect(container.textContent).toContain("Running on port 9020");
       expect(container.textContent).toContain("http://127.0.0.1:9020/mcp");
     });
@@ -1607,7 +1618,7 @@ describe("McpServerSettingsTab", () => {
           <McpServerSettingsTab />
         </SettingsValidationProvider>
       );
-      await waitForContent(container, "API key active");
+      await waitForApiKeyControls(container);
       expect(container.textContent).toContain("Server is starting…");
       expect(container.textContent).not.toContain("http://127.0.0.1");
       expect(container.textContent).not.toContain("Copy MCP config");
@@ -1681,7 +1692,7 @@ describe("McpServerSettingsTab", () => {
           <McpServerSettingsTab />
         </SettingsValidationProvider>
       );
-      await waitForContent(container, "API key active");
+      await waitForApiKeyControls(container);
       expect(container.textContent).toContain("Running on port");
 
       runtimeCb?.({

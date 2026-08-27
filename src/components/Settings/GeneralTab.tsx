@@ -2,7 +2,8 @@ import { useState, useEffect, useRef } from "react";
 import {
   ChevronRight,
   Moon,
-  CheckCircle,
+  ShieldBan,
+  KeyRound,
   Wrench,
   LayoutGrid,
   PanelBottom,
@@ -799,24 +800,20 @@ export function GeneralTab({
                       const ready = isAgentReady(cliAvailability[id]);
                       const unauthenticated = isAgentUnauthenticated(cliAvailability[id]);
                       const blocked = isAgentBlocked(cliAvailability[id]);
-                      // A blocked agent is installed but can't run — show it
-                      // distinctly from the authentication-needed case so the
-                      // user doesn't waste time re-authenticating a binary
-                      // that an endpoint security tool is blocking.
-                      const statusLabel = blocked
-                        ? "Blocked"
-                        : unauthenticated
-                          ? "Login required"
-                          : ready
-                            ? "Ready"
-                            : "Needs setup";
-                      const statusClass = blocked
-                        ? "text-status-warning"
-                        : unauthenticated
-                          ? "text-status-warning"
-                          : ready
-                            ? "text-status-success"
-                            : "text-status-warning";
+                      // Ready is the expected state, so it gets no chrome at
+                      // all — only states needing the user's attention are
+                      // labelled. Each carries its own glyph: a blocked agent
+                      // is installed but can't run, and reads distinctly from
+                      // the authentication-needed case so the user doesn't
+                      // waste time re-authenticating a binary that an endpoint
+                      // security tool is blocking.
+                      const status = ready
+                        ? null
+                        : blocked
+                          ? { label: "Blocked", Icon: ShieldBan }
+                          : unauthenticated
+                            ? { label: "Login required", Icon: KeyRound }
+                            : { label: "Needs setup", Icon: Wrench };
 
                       return (
                         <button
@@ -827,10 +824,12 @@ export function GeneralTab({
                           onClick={() => onNavigateToAgents?.(id)}
                         >
                           <span className="text-text-secondary">{name}</span>
-                          <span className="flex items-center gap-2">
-                            <CheckCircle className={cn("w-3.5 h-3.5", statusClass)} />
-                            <span className={cn("text-xs", statusClass)}>{statusLabel}</span>
-                          </span>
+                          {status && (
+                            <span className="flex items-center gap-2 text-status-warning">
+                              <status.Icon className="w-3.5 h-3.5" aria-hidden="true" />
+                              <span className="text-xs">{status.label}</span>
+                            </span>
+                          )}
                         </button>
                       );
                     })}

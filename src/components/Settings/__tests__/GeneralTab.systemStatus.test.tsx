@@ -133,8 +133,9 @@ describe("GeneralTab — System Status filtering (issue #5072)", () => {
     expect(screen.queryByText("Codex")).toBeNull();
     expect(screen.queryByText("Opencode")).toBeNull();
     expect(screen.queryByText("Cursor")).toBeNull();
-    // Both visible rows render the "Ready" badge
-    expect(screen.getAllByText("Ready")).toHaveLength(2);
+    // Ready is the expected state, so neither row is labelled at all
+    expect(screen.queryByText("Ready")).toBeNull();
+    expect(screen.queryByText("Needs setup")).toBeNull();
   });
 
   it("shows installed agents regardless of pin state (issue #5117)", async () => {
@@ -291,7 +292,50 @@ describe("GeneralTab — System Status filtering (issue #5072)", () => {
     });
 
     expect(screen.getByText("Needs setup")).toBeTruthy();
-    expect(screen.getByText("Ready")).toBeTruthy();
+    // Only the agent needing attention is labelled; the ready one stays quiet.
+    expect(screen.queryByText("Ready")).toBeNull();
+  });
+
+  // Green ambient chrome is gone (issue #12002), so colour can no longer be
+  // what separates these rows — each attention state has to carry its own
+  // glyph, and the expected state has to carry nothing at all.
+  it("gives every attention state its own glyph and leaves ready rows bare", async () => {
+    setupDispatchMock(
+      {
+        claude: "blocked",
+        gemini: "unauthenticated",
+        codex: "installed",
+        opencode: "ready",
+        cursor: "missing",
+      },
+      {
+        agents: {
+          claude: { pinned: true },
+          gemini: { pinned: true },
+          codex: { pinned: true },
+          opencode: { pinned: true },
+        },
+      } as unknown as AgentSettings
+    );
+
+    await renderGeneralTab();
+
+    await waitFor(() => {
+      expect(screen.getByText("Blocked")).toBeTruthy();
+    });
+    expect(screen.getByText("Login required")).toBeTruthy();
+    expect(screen.getByText("Needs setup")).toBeTruthy();
+
+    const glyphs = ["Claude", "Gemini", "Codex"].map((name) => {
+      const svg = screen.getByLabelText(`Go to ${name} agent settings`).querySelector("svg");
+      expect(svg).toBeTruthy();
+      return svg!.innerHTML;
+    });
+    expect(new Set(glyphs).size).toBe(3);
+
+    const readyRow = screen.getByLabelText("Go to Opencode agent settings");
+    expect(readyRow.querySelector("svg")).toBeNull();
+    expect(readyRow.textContent).toBe("Opencode");
   });
 
   it("renders empty-state CTA when no agents installed", async () => {

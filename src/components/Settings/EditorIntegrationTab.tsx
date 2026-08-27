@@ -205,7 +205,7 @@ export function EditorIntegrationTab() {
                 {discoveredEditors.map((d) => (
                   <div key={d.id} className="flex items-center gap-2 text-xs text-daintree-text/60">
                     {d.available ? (
-                      <CheckCircle className="w-3.5 h-3.5 text-status-success shrink-0" />
+                      <CheckCircle className="w-3.5 h-3.5 text-daintree-text/60 shrink-0" />
                     ) : (
                       <AlertCircle className="w-3.5 h-3.5 text-daintree-text/30 shrink-0" />
                     )}

@@ -63,7 +63,7 @@ function HeapBar({ heapStats }: { heapStats: HeapStats }) {
       ? "bg-status-error/80"
       : heapStats.percent > 70
         ? "bg-status-warning/80"
-        : "bg-status-success/80";
+        : "bg-daintree-text/40";
 
   return (
     <div className="space-y-1">

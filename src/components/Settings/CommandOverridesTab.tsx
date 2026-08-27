@@ -395,7 +395,7 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                             "p-1.5 rounded transition-colors",
                             isDisabled
                               ? "text-status-error hover:bg-status-error/10"
-                              : "text-status-success hover:bg-status-success/10"
+                              : "text-daintree-text/60 hover:bg-overlay-hover"
                           )}
                           aria-label={
                             isDisabled ? "Command disabled for this project" : "Command enabled"

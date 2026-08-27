@@ -253,7 +253,7 @@ export function EnvironmentVariablesEditor({
                 >
                   {isSecured && (
                     <Lock
-                      className="h-3.5 w-3.5 text-status-success/60 flex-shrink-0"
+                      className="h-3.5 w-3.5 text-daintree-text/60 flex-shrink-0"
                       aria-label="Kept out of shared settings"
                     />
                   )}
