@@ -641,12 +641,19 @@ AppDialog.Footer = function AppDialogFooter({
         className
       )}
     >
+      {/* min-w-0 so a long hint can shrink and truncate rather than squeezing the
+          action row: as a flex child its default min-width:auto floor is its own
+          content, so without this it pushes the buttons past the card edge and
+          the primary label gets clipped. The actions never yield — a hint is
+          explanatory, an action is how the dialog is answered. */}
       {hint && (
-        <div className="text-[12px] text-daintree-text/55 flex items-center gap-1">{hint}</div>
+        <div className="text-[12px] text-daintree-text/55 flex min-w-0 items-center gap-1">
+          {hint}
+        </div>
       )}
       {children}
       {!children && (
-        <div className="flex items-center gap-3">
+        <div className="flex shrink-0 items-center gap-3">
           {secondaryAction && (
             <Button
               variant="ghost"
