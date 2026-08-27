@@ -24,6 +24,14 @@ import { useProjectStore } from "@/store/projectStore";
 import { actionService } from "@/services/ActionService";
 import { logError } from "@/utils/logger";
 import { LiveTimeAgo } from "@/components/Worktree/LiveTimeAgo";
+import {
+  FIELD_FOCUS,
+  FIELD_INPUT,
+  FIELD_SURFACE,
+  FormGrid,
+  FormRow,
+} from "@/components/Worktree/views";
+import { cn } from "@/lib/utils";
 import type { TerminalRecipe } from "@/types";
 import { useRef } from "react";
 import { isInRepoRecipeId } from "@shared/utils/recipeFilename";
@@ -541,27 +549,42 @@ export function RecipeManager({
         </AppDialog.Header>
 
         <AppDialog.Body>
-          <div className="mb-4">
-            <label className="block text-sm font-medium text-daintree-text mb-1">Import as</label>
-            <select
-              value={importScope}
-              onChange={(e) => setImportScope(e.target.value as "global" | "project")}
-              className="w-full px-3 pr-8 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-daintree-text text-sm"
-            >
-              <option value="project">Project Recipe</option>
-              <option value="global">Global Recipe</option>
-            </select>
-          </div>
+          <FormGrid>
+            <FormRow label="Import as" htmlFor="recipe-import-scope">
+              <select
+                id="recipe-import-scope"
+                value={importScope}
+                onChange={(e) => setImportScope(e.target.value as "global" | "project")}
+                className={cn(FIELD_INPUT, "pr-8")}
+              >
+                <option value="project">Project Recipe</option>
+                <option value="global">Global Recipe</option>
+              </select>
+            </FormRow>
+          </FormGrid>
+
+          {/* Off the rail deliberately: pasted recipe JSON needs the dialog's
+              full width more than it needs a label column. */}
           <textarea
             value={importJson}
             onChange={(e) => setImportJson(e.target.value)}
             data-testid="recipe-import-textarea"
+            aria-label="Recipe JSON"
+            aria-describedby={importError ? "recipe-import-error" : undefined}
             placeholder='{"name": "My Recipe", "terminals": [...]}'
-            className="w-full h-48 px-3 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-sm text-daintree-text font-mono focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/30 resize-none"
+            className={cn(
+              FIELD_SURFACE,
+              FIELD_FOCUS,
+              "mt-3 w-full h-48 px-2.5 py-2 text-sm text-daintree-text font-mono resize-none",
+              "placeholder:text-text-placeholder"
+            )}
             spellCheck={false}
           />
           {importError && (
-            <div className="mt-3 text-sm text-status-error bg-status-error/10 border border-status-error/20 rounded p-3">
+            <div
+              id="recipe-import-error"
+              className="mt-3 text-sm text-status-error bg-status-error/10 border border-status-error/20 rounded p-3"
+            >
               {importError}
             </div>
           )}

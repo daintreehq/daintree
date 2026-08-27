@@ -19,6 +19,7 @@ import { Button } from "@/components/ui/button";
 import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { cn } from "@/lib/utils";
 import type { ResourceEnvironment } from "@shared/types/project";
+import { FIELD_INPUT, FormGrid, FormRow, FormSection } from "@/components/Worktree/views";
 
 interface EnvironmentSettingsTabProps {
   resourceEnvironments?: Record<string, ResourceEnvironment>;
@@ -92,9 +93,10 @@ function CommandList({
   };
 
   return (
-    <div>
-      <h3 className="text-sm font-medium text-text-primary mb-2">{label}</h3>
-      <div className="space-y-2">
+    // A repeated-row editor is not a row on the rail — it gets the section
+    // header its caption used to be, and its rows span both columns.
+    <FormSection title={label}>
+      <div className="col-span-2 space-y-2">
         {commands.map((cmd, index) => (
           <div key={index} className="flex items-center gap-2">
             <span className="text-xs text-text-muted w-5 text-right font-mono select-none">
@@ -146,9 +148,9 @@ function CommandList({
           <Plus className="h-3.5 w-3.5" />
           Add command
         </button>
+        <p className="text-xs text-text-muted mt-1">{helpText}</p>
       </div>
-      <p className="text-xs text-text-muted mt-1">{helpText}</p>
-    </div>
+    </FormSection>
   );
 }
 
@@ -293,38 +295,57 @@ export function ResourceEnvironmentsSection({
   };
 
   return (
-    <div id="tab-nav-project:environments" className="space-y-6 p-1">
-      <div className="flex items-center gap-2 mb-2">
+    <div id="tab-nav-project:environments" className="p-1">
+      <div className="flex items-center gap-2 mb-4">
         <Server className="h-5 w-5 text-daintree-text/60" />
         <h2 className="text-base font-semibold text-text-primary">Resource Environments</h2>
       </div>
 
-      {/* Environment selector dropdown */}
-      {envKeys.length > 0 && (
-        <div data-testid="environment-selector-bar" className="flex items-center gap-2">
-          <select
-            value={currentEnvName}
-            onChange={(e) => handleSelectEnv(e.target.value)}
-            aria-label="Select environment"
-            className="flex-1 px-3 py-1.5 text-sm bg-surface-inset border border-border-default rounded-[var(--radius-md)] text-daintree-text focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
-          >
-            {envKeys.map((name) => (
-              <option key={name} value={name}>
-                {name}
-              </option>
-            ))}
-          </select>
-          <IconPickerButton currentIcon={env.icon} onChange={(icon) => updateEnv({ icon })} />
-          {envKeys.length > 1 && (
-            <button
-              type="button"
-              onClick={() => setPendingDeleteEnvironment(currentEnvName)}
-              className="p-1 rounded hover:bg-status-error/15 transition-colors"
-              aria-label={`Remove ${currentEnvName} environment`}
-            >
-              <X className="h-4 w-4 text-status-error" />
-            </button>
-          )}
+      <FormGrid>
+        {/* Environment selector dropdown */}
+        {envKeys.length > 0 && (
+          <FormRow label="Environment" selfLabelled>
+            <div data-testid="environment-selector-bar" className="flex items-center gap-2">
+              <select
+                value={currentEnvName}
+                onChange={(e) => handleSelectEnv(e.target.value)}
+                aria-label="Environment"
+                className={cn(FIELD_INPUT, "flex-1 min-w-0 pr-8")}
+              >
+                {envKeys.map((name) => (
+                  <option key={name} value={name}>
+                    {name}
+                  </option>
+                ))}
+              </select>
+              <IconPickerButton currentIcon={env.icon} onChange={(icon) => updateEnv({ icon })} />
+              {envKeys.length > 1 && (
+                <button
+                  type="button"
+                  onClick={() => setPendingDeleteEnvironment(currentEnvName)}
+                  className="p-1 rounded hover:bg-status-error/15 transition-colors"
+                  aria-label={`Remove ${currentEnvName} environment`}
+                >
+                  <X className="h-4 w-4 text-status-error" />
+                </button>
+              )}
+              <button
+                type="button"
+                onClick={() => {
+                  setIsAddingEnvironment(true);
+                  setAddEnvironmentError(null);
+                }}
+                aria-label="Add environment"
+                className="flex items-center gap-1 px-2 py-1.5 text-xs text-daintree-text/60 hover:text-daintree-text transition-colors"
+              >
+                <Plus className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </FormRow>
+        )}
+
+        {/* Empty state: no environments yet */}
+        {envKeys.length === 0 && (
           <button
             type="button"
             onClick={() => {
@@ -332,231 +353,238 @@ export function ResourceEnvironmentsSection({
               setAddEnvironmentError(null);
             }}
             aria-label="Add environment"
-            className="flex items-center gap-1 px-2 py-1.5 text-xs text-daintree-text/60 hover:text-daintree-text transition-colors"
+            className="col-span-2 flex w-fit items-center gap-1.5 text-xs text-daintree-text/60 hover:text-daintree-text transition-colors px-1 py-1"
           >
             <Plus className="h-3.5 w-3.5" />
+            Add environment
           </button>
-        </div>
-      )}
+        )}
 
-      {/* Empty state: no environments yet */}
-      {envKeys.length === 0 && (
-        <button
-          type="button"
-          onClick={() => {
-            setIsAddingEnvironment(true);
-            setAddEnvironmentError(null);
-          }}
-          aria-label="Add environment"
-          className="flex items-center gap-1.5 text-xs text-daintree-text/60 hover:text-daintree-text transition-colors px-1 py-1"
-        >
-          <Plus className="h-3.5 w-3.5" />
-          Add environment
-        </button>
-      )}
-
-      {isAddingEnvironment && (
-        <div
-          data-testid="add-environment-form"
-          className="space-y-2 p-3 rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg"
-        >
-          <label
-            className="block text-sm font-medium text-text-primary"
+        {isAddingEnvironment && (
+          <FormRow
+            label="Environment Name"
             htmlFor="new-environment-name"
+            hint={
+              addEnvironmentError && (
+                <p
+                  id="new-environment-name-error"
+                  className="text-xs text-status-error"
+                  role="alert"
+                >
+                  {addEnvironmentError}
+                </p>
+              )
+            }
           >
-            Environment Name
-          </label>
-          <div className="flex items-center gap-2">
-            <input
-              id="new-environment-name"
-              type="text"
-              value={newEnvironmentName}
-              onChange={(e) => {
-                setNewEnvironmentName(e.target.value);
-                setAddEnvironmentError(null);
-              }}
-              onKeyDown={(e) => {
-                if (e.key === "Enter") {
-                  e.preventDefault();
-                  handleAddEnv();
-                } else if (e.key === "Escape") {
+            <div data-testid="add-environment-form" className="flex items-center gap-2">
+              <input
+                id="new-environment-name"
+                type="text"
+                value={newEnvironmentName}
+                onChange={(e) => {
+                  setNewEnvironmentName(e.target.value);
+                  setAddEnvironmentError(null);
+                }}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") {
+                    e.preventDefault();
+                    handleAddEnv();
+                  } else if (e.key === "Escape") {
+                    setIsAddingEnvironment(false);
+                    setNewEnvironmentName("");
+                    setAddEnvironmentError(null);
+                  }
+                }}
+                autoFocus
+                spellCheck={false}
+                placeholder="docker-local"
+                aria-invalid={!!addEnvironmentError}
+                aria-describedby={addEnvironmentError ? "new-environment-name-error" : undefined}
+                className={cn(FIELD_INPUT, "flex-1 min-w-0 font-mono")}
+              />
+              <Button type="button" size="sm" onClick={handleAddEnv}>
+                Add
+              </Button>
+              <Button
+                type="button"
+                variant="outline"
+                size="sm"
+                onClick={() => {
                   setIsAddingEnvironment(false);
                   setNewEnvironmentName("");
                   setAddEnvironmentError(null);
+                }}
+              >
+                Cancel
+              </Button>
+            </div>
+          </FormRow>
+        )}
+
+        {/* Variables hint */}
+        <div className="col-span-2 mt-3 px-3 py-2 rounded-[var(--radius-md)] bg-surface-inset border border-border-default text-xs text-text-muted space-y-1">
+          <div>
+            <span className="font-medium text-daintree-text/70">Variables</span>{" "}
+            <span className="text-daintree-text/40">(replaced at runtime in all commands):</span>
+          </div>
+          <div className="grid grid-cols-2 gap-x-4 gap-y-0.5">
+            <div>
+              <code className="text-text-secondary">{"{branch}"}</code>
+              <span className="text-daintree-text/40"> — branch name</span>
+            </div>
+            <div>
+              <code className="text-text-secondary">{"{branch-slug}"}</code>
+              <span className="text-daintree-text/40"> — sanitized branch</span>
+            </div>
+            <div>
+              <code className="text-text-secondary">{"{repo-name}"}</code>
+              <span className="text-daintree-text/40"> — repository folder</span>
+            </div>
+            <div>
+              <code className="text-text-secondary">{"{base-folder}"}</code>
+              <span className="text-daintree-text/40"> — alias for repo-name</span>
+            </div>
+            <div>
+              <code className="text-text-secondary">{"{parent-dir}"}</code>
+              <span className="text-daintree-text/40"> — parent directory</span>
+            </div>
+            <div>
+              <code className="text-text-secondary">{"{worktree_name}"}</code>
+              <span className="text-daintree-text/40"> — worktree name</span>
+            </div>
+            <div>
+              <code className="text-text-secondary">{"{worktree_path}"}</code>
+              <span className="text-daintree-text/40"> — full worktree path</span>
+            </div>
+            <div>
+              <code className="text-text-secondary">{"{project_root}"}</code>
+              <span className="text-daintree-text/40"> — project root path</span>
+            </div>
+          </div>
+        </div>
+
+        {envKeys.length > 0 && (
+          <>
+            {/* Provision Commands */}
+            <CommandList
+              commands={env.provision ?? []}
+              onChange={(provision) => updateEnv({ provision })}
+              placeholder="e.g. docker compose up -d"
+              label="Provision Commands"
+              helpText="Commands to run when provisioning a remote environment"
+            />
+
+            {/* Teardown Commands */}
+            <CommandList
+              commands={env.teardown ?? []}
+              onChange={(teardown) => updateEnv({ teardown })}
+              placeholder="e.g. docker compose down"
+              label="Teardown Commands"
+              helpText="Commands to run when destroying the environment"
+            />
+
+            {/* Resume Commands */}
+            <CommandList
+              commands={env.resume ?? []}
+              onChange={(resume) => updateEnv({ resume })}
+              placeholder="e.g. docker unpause container"
+              label="Resume Commands"
+              helpText="Commands to resume a paused environment without destroying"
+            />
+
+            {/* Pause Commands */}
+            <CommandList
+              commands={env.pause ?? []}
+              onChange={(pause) => updateEnv({ pause })}
+              placeholder="e.g. docker pause container"
+              label="Pause Commands"
+              helpText="Commands to pause the environment while preserving state"
+            />
+
+            <FormSection title="Status and connect">
+              <FormRow
+                label="Status Command"
+                htmlFor="resource-status-command"
+                hint={
+                  <p id="resource-status-command-help" className="text-xs text-text-muted">
+                    Must output JSON with {'{ "status": "<string>" }'}
+                  </p>
                 }
-              }}
-              autoFocus
-              spellCheck={false}
-              placeholder="docker-local"
-              className="flex-1 px-3 py-1.5 text-sm bg-surface-inset border border-border-default rounded-[var(--radius-md)] text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
-            />
-            <Button type="button" size="sm" onClick={handleAddEnv}>
-              Add
-            </Button>
-            <Button
-              type="button"
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                setIsAddingEnvironment(false);
-                setNewEnvironmentName("");
-                setAddEnvironmentError(null);
-              }}
-            >
-              Cancel
-            </Button>
-          </div>
-          {addEnvironmentError && (
-            <p className="text-xs text-status-error">{addEnvironmentError}</p>
-          )}
-        </div>
-      )}
+              >
+                <input
+                  id="resource-status-command"
+                  type="text"
+                  value={env.status ?? ""}
+                  onChange={(e) => updateEnv({ status: e.target.value || undefined })}
+                  placeholder="e.g. docker compose ps --format json"
+                  spellCheck={false}
+                  aria-describedby="resource-status-command-help"
+                  className={cn(FIELD_INPUT, "font-mono")}
+                />
+              </FormRow>
 
-      {/* Variables hint */}
-      <div className="px-3 py-2 rounded-[var(--radius-md)] bg-surface-inset border border-border-default text-xs text-text-muted space-y-1">
-        <div>
-          <span className="font-medium text-daintree-text/70">Variables</span>{" "}
-          <span className="text-daintree-text/40">(replaced at runtime in all commands):</span>
-        </div>
-        <div className="grid grid-cols-2 gap-x-4 gap-y-0.5">
-          <div>
-            <code className="text-text-secondary">{"{branch}"}</code>
-            <span className="text-daintree-text/40"> — branch name</span>
-          </div>
-          <div>
-            <code className="text-text-secondary">{"{branch-slug}"}</code>
-            <span className="text-daintree-text/40"> — sanitized branch</span>
-          </div>
-          <div>
-            <code className="text-text-secondary">{"{repo-name}"}</code>
-            <span className="text-daintree-text/40"> — repository folder</span>
-          </div>
-          <div>
-            <code className="text-text-secondary">{"{base-folder}"}</code>
-            <span className="text-daintree-text/40"> — alias for repo-name</span>
-          </div>
-          <div>
-            <code className="text-text-secondary">{"{parent-dir}"}</code>
-            <span className="text-daintree-text/40"> — parent directory</span>
-          </div>
-          <div>
-            <code className="text-text-secondary">{"{worktree_name}"}</code>
-            <span className="text-daintree-text/40"> — worktree name</span>
-          </div>
-          <div>
-            <code className="text-text-secondary">{"{worktree_path}"}</code>
-            <span className="text-daintree-text/40"> — full worktree path</span>
-          </div>
-          <div>
-            <code className="text-text-secondary">{"{project_root}"}</code>
-            <span className="text-daintree-text/40"> — project root path</span>
-          </div>
-        </div>
-      </div>
+              <FormRow
+                label="Connect Command"
+                htmlFor="resource-connect-command"
+                hint={
+                  <p id="resource-connect-command-help" className="text-xs text-text-muted">
+                    Shell command for connecting (ssh, docker exec, kubectl exec)
+                  </p>
+                }
+              >
+                <input
+                  id="resource-connect-command"
+                  type="text"
+                  value={env.connect ?? ""}
+                  onChange={(e) => updateEnv({ connect: e.target.value || undefined })}
+                  placeholder="e.g. docker exec -it container /bin/bash"
+                  spellCheck={false}
+                  aria-describedby="resource-connect-command-help"
+                  className={cn(FIELD_INPUT, "font-mono")}
+                />
+              </FormRow>
+            </FormSection>
+          </>
+        )}
 
-      {envKeys.length > 0 && (
-        <>
-          {/* Provision Commands */}
-          <CommandList
-            commands={env.provision ?? []}
-            onChange={(provision) => updateEnv({ provision })}
-            placeholder="e.g. docker compose up -d"
-            label="Provision Commands"
-            helpText="Commands to run when provisioning a remote environment"
-          />
-
-          {/* Teardown Commands */}
-          <CommandList
-            commands={env.teardown ?? []}
-            onChange={(teardown) => updateEnv({ teardown })}
-            placeholder="e.g. docker compose down"
-            label="Teardown Commands"
-            helpText="Commands to run when destroying the environment"
-          />
-
-          {/* Resume Commands */}
-          <CommandList
-            commands={env.resume ?? []}
-            onChange={(resume) => updateEnv({ resume })}
-            placeholder="e.g. docker unpause container"
-            label="Resume Commands"
-            helpText="Commands to resume a paused environment without destroying"
-          />
-
-          {/* Pause Commands */}
-          <CommandList
-            commands={env.pause ?? []}
-            onChange={(pause) => updateEnv({ pause })}
-            placeholder="e.g. docker pause container"
-            label="Pause Commands"
-            helpText="Commands to pause the environment while preserving state"
-          />
-
-          {/* Status Command */}
-          <div>
-            <h3 className="text-sm font-medium text-text-primary mb-2">Status Command</h3>
-            <input
-              type="text"
-              value={env.status ?? ""}
-              onChange={(e) => updateEnv({ status: e.target.value || undefined })}
-              placeholder="e.g. docker compose ps --format json"
-              spellCheck={false}
-              className="w-full px-3 py-1.5 text-sm bg-surface-inset border border-border-default rounded-[var(--radius-md)] text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
-            />
-            <p className="text-xs text-text-muted mt-1">
-              Must output JSON with {'{ "status": "<string>" }'}
-            </p>
-          </div>
-
-          {/* Connect Command */}
-          <div>
-            <h3 className="text-sm font-medium text-text-primary mb-2">Connect Command</h3>
-            <input
-              type="text"
-              value={env.connect ?? ""}
-              onChange={(e) => updateEnv({ connect: e.target.value || undefined })}
-              placeholder="e.g. docker exec -it container /bin/bash"
-              spellCheck={false}
-              className="w-full px-3 py-1.5 text-sm bg-surface-inset border border-border-default rounded-[var(--radius-md)] text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
-            />
-            <p className="text-xs text-text-muted mt-1">
-              Shell command for connecting (ssh, docker exec, kubectl exec)
-            </p>
-          </div>
-        </>
-      )}
-
-      {/* Default Worktree Mode */}
-      <div>
-        <h3 className="text-sm font-medium text-text-primary mb-2">Default Worktree Mode</h3>
-        <div className="flex items-center gap-4 flex-wrap">
-          <label className="flex items-center gap-2 cursor-pointer">
-            <input
-              type="radio"
-              name="worktreeMode"
-              value="local"
-              checked={(defaultWorktreeMode ?? "local") === "local"}
-              onChange={() => onDefaultWorktreeModeChange("local")}
-              className="accent-daintree-accent"
-            />
-            <span className="text-sm text-daintree-text">Local</span>
-          </label>
-          {envKeys.map((key) => (
-            <label key={key} className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="radio"
-                name="worktreeMode"
-                value={key}
-                checked={defaultWorktreeMode === key}
-                onChange={() => onDefaultWorktreeModeChange(key)}
-                className="accent-daintree-accent"
-              />
-              <span className="text-sm text-daintree-text">{key}</span>
-            </label>
-          ))}
-        </div>
-        <p className="text-xs text-text-muted mt-1">Default mode when creating new worktrees</p>
-      </div>
+        <FormSection title="Defaults">
+          {/* No htmlFor: a set of radios has no single control to name, so the
+              rail's label names the group instead. */}
+          <FormRow
+            label="Default Worktree Mode"
+            hint={
+              <p className="text-xs text-text-muted">Default mode when creating new worktrees</p>
+            }
+          >
+            <div className="flex items-center gap-4 flex-wrap">
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="radio"
+                  name="worktreeMode"
+                  value="local"
+                  checked={(defaultWorktreeMode ?? "local") === "local"}
+                  onChange={() => onDefaultWorktreeModeChange("local")}
+                  className="accent-daintree-accent"
+                />
+                <span className="text-sm text-daintree-text">Local</span>
+              </label>
+              {envKeys.map((key) => (
+                <label key={key} className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="worktreeMode"
+                    value={key}
+                    checked={defaultWorktreeMode === key}
+                    onChange={() => onDefaultWorktreeModeChange(key)}
+                    className="accent-daintree-accent"
+                  />
+                  <span className="text-sm text-daintree-text">{key}</span>
+                </label>
+              ))}
+            </div>
+          </FormRow>
+        </FormSection>
+      </FormGrid>
 
       <ConfirmDialog
         isOpen={pendingDeleteEnvironment !== null}

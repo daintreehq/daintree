@@ -14,6 +14,7 @@ import {
   isDeletedWorktreeCleanupSeconds,
   DELETED_WORKTREE_CLEANUP_DEFAULT,
 } from "@/store/preferencesStore";
+import { FIELD_INPUT, FormGrid, FormRow } from "@/components/Worktree/views";
 import { FileBrowserVisibilitySettings } from "./FileBrowserVisibilitySettings";
 import { SettingsSection } from "./SettingsSection";
 import { SettingsSelect } from "./SettingsSelect";
@@ -159,6 +160,10 @@ export function WorktreeSettingsTab() {
     }
   };
 
+  // A failed load leaves the pattern empty, which trips validation too — so
+  // these are reported together rather than one masking the other's cause.
+  const patternError = !isLoading && !validation.valid ? validation.error : undefined;
+
   const handleReset = () => {
     setPattern(DEFAULT_WORKTREE_PATH_PATTERN);
     setError(null);
@@ -183,56 +188,62 @@ export function WorktreeSettingsTab() {
         description="Configure the default path pattern for new worktrees. Use variables to build dynamic paths based on your repository and branch names."
       >
         <div className="contents">
-          <div className="space-y-2">
-            <label htmlFor="path-pattern" className="block text-sm font-medium text-daintree-text">
-              Pattern
-            </label>
-            <div className="flex gap-2">
-              <input
-                id="path-pattern"
-                type="text"
-                value={pattern}
-                onChange={(e) => {
-                  setPattern(e.target.value);
-                  setError(null);
-                }}
-                disabled={isLoading}
-                className={cn(
-                  "flex-1 px-3 py-1.5 bg-daintree-bg border rounded-[var(--radius-md)] text-daintree-text font-mono text-sm",
-                  "focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/30",
-                  !validation.valid ? "border-status-error/50" : "border-daintree-border"
-                )}
-                placeholder="{parent-dir}/{base-folder}-worktrees/{branch-slug}"
-              />
-              <Tooltip>
-                <TooltipTrigger asChild>
-                  <button
-                    onClick={handleReset}
-                    disabled={isLoading}
-                    className="px-3 py-1.5 border border-daintree-border rounded-[var(--radius-md)] text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-border/50 transition-colors disabled:opacity-50"
-                    aria-label="Reset to default"
+          <FormGrid>
+            <FormRow
+              label="Pattern"
+              htmlFor="path-pattern"
+              hint={
+                (patternError || error) && (
+                  <div
+                    id="path-pattern-error"
+                    className="space-y-1 text-xs text-status-error"
+                    role="alert"
                   >
-                    <RotateCcw className="w-4 h-4" />
-                  </button>
-                </TooltipTrigger>
-                <TooltipContent side="bottom">Reset to default</TooltipContent>
-              </Tooltip>
-            </div>
-
-            {!isLoading && !validation.valid && validation.error && (
-              <div className="flex items-start gap-2 text-xs text-status-error">
-                <AlertCircle className="w-3 h-3 mt-0.5 flex-shrink-0" />
-                <span>{validation.error}</span>
+                    {[patternError, error].filter(Boolean).map((message) => (
+                      <div key={message} className="flex items-start gap-2">
+                        <AlertCircle className="w-3 h-3 mt-0.5 flex-shrink-0" aria-hidden="true" />
+                        <span>{message}</span>
+                      </div>
+                    ))}
+                  </div>
+                )
+              }
+            >
+              <div className="flex gap-2">
+                <input
+                  id="path-pattern"
+                  type="text"
+                  value={pattern}
+                  onChange={(e) => {
+                    setPattern(e.target.value);
+                    setError(null);
+                  }}
+                  disabled={isLoading}
+                  aria-invalid={!!patternError}
+                  aria-describedby={patternError || error ? "path-pattern-error" : undefined}
+                  className={cn(
+                    FIELD_INPUT,
+                    "flex-1 min-w-0 font-mono",
+                    !validation.valid && "border-status-error/50"
+                  )}
+                  placeholder="{parent-dir}/{base-folder}-worktrees/{branch-slug}"
+                />
+                <Tooltip>
+                  <TooltipTrigger asChild>
+                    <button
+                      onClick={handleReset}
+                      disabled={isLoading}
+                      className="px-3 py-1.5 border border-daintree-border rounded-[var(--radius-md)] text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-border/50 transition-colors disabled:opacity-50"
+                      aria-label="Reset to default"
+                    >
+                      <RotateCcw className="w-4 h-4" />
+                    </button>
+                  </TooltipTrigger>
+                  <TooltipContent side="bottom">Reset to default</TooltipContent>
+                </Tooltip>
               </div>
-            )}
-
-            {error && (
-              <div className="flex items-start gap-2 text-xs text-status-error">
-                <AlertCircle className="w-3 h-3 mt-0.5 flex-shrink-0" />
-                <span>{error}</span>
-              </div>
-            )}
-          </div>
+            </FormRow>
+          </FormGrid>
 
           <div className="space-y-2">
             <span className="block text-xs font-medium text-daintree-text/70">

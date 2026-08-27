@@ -92,6 +92,13 @@ interface FormRowProps {
    * group". Keep the control's name matching the visible label (WCAG 2.5.3).
    */
   selfLabelled?: boolean;
+  /**
+   * Escape hatch on the label cell, for rows the grid's defaults don't suit —
+   * `self-start` for a control taller than one line, a `max-w-*` cap for a
+   * label the app doesn't author (a plugin manifest's, say) and so can't keep
+   * short enough to leave the rail a sane width.
+   */
+  labelClassName?: string;
   children: React.ReactNode;
 }
 
@@ -105,19 +112,27 @@ interface FormRowProps {
  * cannot be, so it labels the control region as a `role="group"` instead —
  * visually aligned is not the same as programmatically named.
  */
-export function FormRow({ label, htmlFor, hint, selfLabelled, children }: FormRowProps) {
+export function FormRow({
+  label,
+  htmlFor,
+  hint,
+  selfLabelled,
+  labelClassName,
+  children,
+}: FormRowProps) {
   const labelId = useId();
   const needsGroupLabel = !!label && !htmlFor && !selfLabelled;
+  const labelClasses = cn(LABEL_CLASSES, labelClassName);
 
   return (
     <>
       {label ? (
         htmlFor ? (
-          <label htmlFor={htmlFor} className={LABEL_CLASSES}>
+          <label htmlFor={htmlFor} className={labelClasses}>
             {label}
           </label>
         ) : (
-          <span id={labelId} className={LABEL_CLASSES}>
+          <span id={labelId} className={labelClasses}>
             {label}
           </span>
         )
