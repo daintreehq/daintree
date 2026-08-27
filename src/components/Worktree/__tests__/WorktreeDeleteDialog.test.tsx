@@ -510,6 +510,25 @@ describe("WorktreeDeleteDialog — consequence list", () => {
     expect(danger[0]?.textContent).toContain("permanently lost");
   });
 
+  it("never signals the irreversible row by colour alone", () => {
+    // Under `forced-colors: active` every status colour resolves to the same
+    // system ink, so a colour-only danger cue disappears exactly where it is
+    // needed most. The row must carry a non-colour signal too.
+    const worktree = makeWorktree(makeChanges([{ path: "/wt/src/app.ts", status: "modified" }]));
+    const { container } = render(
+      <WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />
+    );
+    fireEvent.click(screen.getByRole("checkbox", { name: /force delete/i }));
+
+    const danger = container.querySelector('li[data-tone="danger"]');
+    expect(danger).not.toBeNull();
+    // A glyph, plus a weight distinction, plus an assistive-tech qualifier —
+    // none of which depend on the colour surviving.
+    expect(danger?.querySelector("svg")).not.toBeNull();
+    expect(danger?.className).toContain("font-medium");
+    expect(danger?.textContent).toContain("Irreversible:");
+  });
+
   it("omits the branch row until 'Delete branch' is checked", () => {
     const worktree = makeWorktree(makeChanges([]));
     render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);

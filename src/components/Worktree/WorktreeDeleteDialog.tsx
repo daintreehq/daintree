@@ -507,13 +507,24 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
               {consequences.map((row) => (
                 <li
                   key={row.key}
+                  data-tone={row.tone}
                   className={cn(
-                    "text-sm",
+                    "text-sm flex items-start gap-1.5",
                     row.tone === "danger" ? "text-status-error font-medium" : "text-daintree-text"
                   )}
                 >
-                  {row.tone === "danger" && <span className="sr-only">Irreversible: </span>}
-                  {row.content}
+                  {row.tone === "danger" && (
+                    <>
+                      {/* The irreversible row must not be distinguished by
+                          colour alone. Under `forced-colors: active` every
+                          status colour resolves to the same system ink, so a
+                          red row and a neutral row become identical — the glyph
+                          and the weight are what survive. */}
+                      <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" aria-hidden="true" />
+                      <span className="sr-only">Irreversible: </span>
+                    </>
+                  )}
+                  <span>{row.content}</span>
                 </li>
               ))}
             </ul>
