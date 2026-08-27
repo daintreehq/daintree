@@ -348,13 +348,21 @@ describe("PluginMcpConfirmDialog structure", () => {
     }
   });
 
-  it("keeps the redacted arguments expanded on a destructive tier", () => {
-    // docs/architecture/destructive-action-safeguards.md records the redacted
-    // argsSummary as the content preview that satisfies this surface's D2
-    // requirement. Collapsing it behind a disclosure would weaken an audited
-    // safeguard, so only the capability list collapses.
-    enqueue({ dangerTier: "D2", argsSummary: '{\n  "app": "helios-prod"\n}' });
-    render(<PluginMcpConfirmDialog />);
-    expect(screen.getByText(/helios-prod/)).toBeTruthy();
-  });
+  // docs/architecture/destructive-action-safeguards.md records the redacted
+  // argsSummary as the content preview that satisfies this surface's D2
+  // requirement. Collapsing it behind a disclosure would weaken an audited
+  // safeguard, so only the capability list collapses. A disclosure defaulted
+  // to open is not the same safeguard either — it is one click from hidden and
+  // one queue advance from remounting shut — so the absence of a trigger is
+  // half of what this pins.
+  it.each(["D2", "D3"] as const)(
+    "shows the redacted arguments outright on %s, with nothing to collapse them",
+    (dangerTier) => {
+      enqueue({ dangerTier, argsSummary: '{\n  "app": "helios-prod"\n}' });
+      render(<PluginMcpConfirmDialog />);
+
+      expect(screen.getByText(/helios-prod/)).toBeTruthy();
+      expect(screen.queryByRole("button", { name: /^arguments$/i })).toBeNull();
+    }
+  );
 });
