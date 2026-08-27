@@ -123,6 +123,15 @@ export interface HybridInputBarProps {
   agentState?: AgentState;
   restartKey?: number;
   disabled?: boolean;
+  /**
+   * Replaces the derived "Ask <agent>" placeholder.
+   *
+   * For a bar that is disabled for a REASON the user can act on. The derived text names
+   * the agent, which is exactly wrong then: a dimmed box still inviting you to ask the
+   * assistant something, while the assistant is parked waiting on an answer you have not
+   * given, reads as the input having broken.
+   */
+  placeholder?: string;
   className?: string;
   /**
    * Whether this bar is one of a terminal pane's two focus surfaces.
@@ -226,6 +235,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
       agentHasLifecycleEvent = false,
       restartKey = 0,
       disabled = false,
+      placeholder: placeholderOverride,
       className,
       participatesInTerminalFocus = true,
     },
@@ -413,7 +423,11 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     });
 
     const placeholder = (() => {
+      // The paused-voice notice outranks an override: it is transient, it is about a
+      // capture that is still running, and losing it would leave a dictation the user
+      // paused with nothing on screen saying so.
       if (isVoicePaused) return "Paused · Resume to continue.";
+      if (placeholderOverride) return placeholderOverride;
       const agentName = agentId ? getAgentConfig(agentId)?.name : null;
       return agentName ? `Ask ${agentName}` : "Ask anything";
     })();
@@ -640,6 +654,16 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
     const collapseEditor = () => setIsExpanded(false);
 
     const focusEditor = () => {
+      // A disabled bar refuses focus, imperatively as well as by pointer.
+      //
+      // `pointer-events-none` already stops a click reaching it, which quietly meant
+      // every OTHER route in — the type-anywhere rescue, a panel's click-to-compose, a
+      // focus-restore effect — could still put the caret in an editor that takes no
+      // input. The assistant's question sheet is where that bites: the composer is
+      // disabled precisely because the engine is parked on the sheet's answer, and
+      // focus landing here takes the arrows, the digits and Escape away from the one
+      // surface that can end the wait.
+      if (disabled) return;
       const view = editorViewRef.current;
       if (!view) return;
       view.focus();
