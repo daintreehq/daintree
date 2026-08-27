@@ -223,32 +223,139 @@ export function NotificationCenterEntry({
         )}
         <Icon className="h-4 w-4" />
       </div>
-      <div className="flex-1 min-w-0">
-        {/* One stable rail, floated rather than a flex sibling.
+      <div className="grid flex-1 min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-x-2">
+        {entry.title && (
+          <div className="col-start-1 row-start-1 flex min-w-0 items-center gap-1.5">
+            <p
+              className={cn(
+                "text-xs text-daintree-text truncate",
+                isNew ? "font-semibold" : "font-normal"
+              )}
+            >
+              {entry.title}
+            </p>
+            {showChip && (
+              <span
+                key={bumpKey}
+                aria-label={formatNotificationCountAriaLabel(safeCount)}
+                // Handle for the forced-colors repaint — the tint fill is forced
+                // to Canvas there, leaving a bare numeral that reads as part of
+                // the title.
+                data-notification-count="true"
+                style={{ animationDuration: "150ms" }}
+                className={cn(
+                  "shrink-0 rounded-full bg-tint/15 px-1.5 py-0.5 text-[10px] font-medium leading-none text-daintree-text/60 tabular-nums min-w-[2.5ch] text-center",
+                  bumpKey > 0 && "animate-badge-bump"
+                )}
+              >
+                {formatNotificationCountGlyph(safeCount)}
+              </span>
+            )}
+          </div>
+        )}
+        {/* A titled row's message spans both columns on row 2, under the rail,
+            so it gets the full width. An untitled row has nothing else to put
+            on row 1, so the message takes that cell instead — otherwise the
+            rail sits alone against an empty gutter and the row wastes a line.
+            It wraps inside column 1 there, which costs nothing at the widths
+            this popover actually uses: the rail is about 100px for a relative
+            stamp, and a message long enough to wrap at 210px was already
+            wrapping at 312px. */}
+        <p
+          className={cn(
+            "text-xs text-daintree-text/70 leading-snug break-words",
+            entry.title ? "col-span-2 row-start-2" : "col-start-1 row-start-1 min-w-0"
+          )}
+        >
+          {entry.message}
+        </p>
+        {showChip && !entry.title && (
+          <span
+            key={bumpKey}
+            aria-label={formatNotificationCountAriaLabel(safeCount)}
+            data-notification-count="true"
+            style={{ animationDuration: "150ms" }}
+            className={cn(
+              "col-span-2 row-start-2 mt-0.5 justify-self-start rounded-full bg-tint/15 px-1.5 py-0.5 text-[10px] font-medium leading-none text-daintree-text/60 tabular-nums min-w-[2.5ch] text-center",
+              bumpKey > 0 && "animate-badge-bump"
+            )}
+          >
+            {formatNotificationCountGlyph(safeCount)}
+          </span>
+        )}
+        {entry.actions && entry.actions.length > 0 && (
+          <div className="col-span-2 row-start-4 mt-1.5 flex flex-wrap gap-1.5">
+            {entry.actions.map((action, index) => {
+              const manifest = actionService.get(action.actionId as ActionId);
+              const isAvailable = manifest !== null && manifest.enabled;
+              return (
+                <button
+                  key={`${action.actionId}-${index}`}
+                  type="button"
+                  aria-disabled={!isAvailable || undefined}
+                  title={
+                    !isAvailable ? (manifest?.disabledReason ?? "Action unavailable") : undefined
+                  }
+                  onClick={
+                    isAvailable
+                      ? () =>
+                          void actionService.dispatch(
+                            action.actionId as ActionId,
+                            action.actionArgs
+                          )
+                      : undefined
+                  }
+                  className={cn(
+                    "h-6 rounded-[var(--radius-sm)] px-2 text-[11px] font-medium transition-colors",
+                    isAvailable
+                      ? action.variant === "secondary"
+                        ? "border border-daintree-text/20 text-text-secondary hover:bg-overlay-medium"
+                        : // The primary used to ink its label from `status-info`,
+                          // which `shared/theme/contrast.ts` only gates at 3:1 —
+                          // no body-text guarantee. It measured 4.46:1 against
+                          // its own fill while the secondary beside it measured
+                          // 7.6:1, so the button with primary chrome read as the
+                          // weaker, near-disabled one, and `prefers-contrast:
+                          // more` lifted the secondary and left it behind. Keep
+                          // status-info as the fill and border (that is what
+                          // marks it primary) and take the label from the gated
+                          // text ramp.
+                          "border border-status-info/30 bg-status-info/15 text-daintree-text hover:bg-status-info/20"
+                      : "border border-daintree-text/10 text-text-muted cursor-not-allowed"
+                  )}
+                >
+                  {action.label}
+                </button>
+              );
+            })}
+          </div>
+        )}
+        {/* One stable rail — the row's trailing metadata and management
+            controls, held in a grid cell rather than an overlay or a float.
 
             The old build cross-faded the metadata out and covered it with an
             absolutely positioned layer carrying its own `bg-overlay-raised`
             fill, so time — the orientation cue the inbox exists to provide —
             vanished at exactly the moment the user was inspecting the row, and
             on the Snoozed tab took the snooze state with it. It was also the
-            only metadata-covering action layer in the app; every other row here
-            reserves a stable box instead. So now nothing moves and nothing is
-            covered: the controls hold their place at every state, quiet at rest
-            and stronger under the pointer, which is the "quiet at rest,
-            stronger on hover" treatment the worktree card's action toolbar
-            already uses here. Keeping them in flow is also what makes them
-            reachable on a touch screen, where there is no hover to reveal
-            anything.
+            only metadata-covering action layer in the app. Now nothing moves
+            and nothing is covered: the controls hold their place at every
+            state, quiet at rest and stronger under the pointer, which is the
+            treatment the worktree card's action toolbar already uses here.
+            Keeping them in flow is what makes them reachable on a touch screen,
+            where there is no hover to reveal anything.
 
-            Float, not a flex sibling, because a sibling subtracts its width
-            from *every* line of the row rather than the one it sits on. At its
-            widest the rail is about 138px of a 360px popover, so as a sibling
-            it pushed the default message from two lines to three and the dense
-            one from four to six. Floated, the title shrinks beside it (the
-            title's `truncate` gives it its own formatting context, so it clears
-            the float rather than running under), the first message line wraps
-            around it, and every line below reclaims the full width. */}
-        <div className="float-right ml-2 mt-0.5 flex items-center gap-1.5">
+            Grid, not a flex sibling and not a float. A flex sibling subtracts
+            its width from every line of the row rather than the one it sits on,
+            which cost the default message a line and the dense one two. A float
+            fixes that but has to precede the content it shifts, which put the
+            management controls ahead of the title, message and recovery actions
+            in DOM order — so tabbing reached Dismiss before "Pull and rebase",
+            and a screen reader read the metadata before the event. Explicit
+            grid placement gets both: this rail is last in the DOM and reads
+            last, but paints in row 1's trailing column, and the message and
+            actions below it span the full width. */}
+        <div className="col-start-2 row-start-1 flex items-center gap-1.5">
           {isSnoozed && snoozedUntil !== undefined && (
             <>
               <span
@@ -308,97 +415,6 @@ export function NotificationCenterEntry({
             </button>
           )}
         </div>
-        {entry.title && (
-          <div className="flex items-center gap-1.5">
-            <p
-              className={cn(
-                "text-xs text-daintree-text truncate",
-                isNew ? "font-semibold" : "font-normal"
-              )}
-            >
-              {entry.title}
-            </p>
-            {showChip && (
-              <span
-                key={bumpKey}
-                aria-label={formatNotificationCountAriaLabel(safeCount)}
-                // Handle for the forced-colors repaint — the tint fill is forced
-                // to Canvas there, leaving a bare numeral that reads as part of
-                // the title.
-                data-notification-count="true"
-                style={{ animationDuration: "150ms" }}
-                className={cn(
-                  "shrink-0 rounded-full bg-tint/15 px-1.5 py-0.5 text-[10px] font-medium leading-none text-daintree-text/60 tabular-nums min-w-[2.5ch] text-center",
-                  bumpKey > 0 && "animate-badge-bump"
-                )}
-              >
-                {formatNotificationCountGlyph(safeCount)}
-              </span>
-            )}
-          </div>
-        )}
-        <p className="text-xs text-daintree-text/70 leading-snug break-words">{entry.message}</p>
-        {showChip && !entry.title && (
-          <span
-            key={bumpKey}
-            aria-label={formatNotificationCountAriaLabel(safeCount)}
-            data-notification-count="true"
-            style={{ animationDuration: "150ms" }}
-            className={cn(
-              "mt-0.5 inline-block rounded-full bg-tint/15 px-1.5 py-0.5 text-[10px] font-medium leading-none text-daintree-text/60 tabular-nums min-w-[2.5ch] text-center",
-              bumpKey > 0 && "animate-badge-bump"
-            )}
-          >
-            {formatNotificationCountGlyph(safeCount)}
-          </span>
-        )}
-        {entry.actions && entry.actions.length > 0 && (
-          <div className="flex flex-wrap gap-1.5 mt-1.5">
-            {entry.actions.map((action, index) => {
-              const manifest = actionService.get(action.actionId as ActionId);
-              const isAvailable = manifest !== null && manifest.enabled;
-              return (
-                <button
-                  key={`${action.actionId}-${index}`}
-                  type="button"
-                  aria-disabled={!isAvailable || undefined}
-                  title={
-                    !isAvailable ? (manifest?.disabledReason ?? "Action unavailable") : undefined
-                  }
-                  onClick={
-                    isAvailable
-                      ? () =>
-                          void actionService.dispatch(
-                            action.actionId as ActionId,
-                            action.actionArgs
-                          )
-                      : undefined
-                  }
-                  className={cn(
-                    "h-6 rounded-[var(--radius-sm)] px-2 text-[11px] font-medium transition-colors",
-                    isAvailable
-                      ? action.variant === "secondary"
-                        ? "border border-daintree-text/20 text-text-secondary hover:bg-overlay-medium"
-                        : // The primary used to ink its label from `status-info`,
-                          // which `shared/theme/contrast.ts` only gates at 3:1 —
-                          // no body-text guarantee. It measured 4.46:1 against
-                          // its own fill while the secondary beside it measured
-                          // 7.6:1, so the button with primary chrome read as the
-                          // weaker, near-disabled one, and `prefers-contrast:
-                          // more` lifted the secondary and left it behind. Keep
-                          // status-info as the fill and border (that is what
-                          // marks it primary) and take the label from the gated
-                          // text ramp.
-                          "border border-status-info/30 bg-status-info/15 text-daintree-text hover:bg-status-info/20"
-                      : "border border-daintree-text/10 text-text-muted cursor-not-allowed"
-                  )}
-                >
-                  {action.label}
-                </button>
-              );
-            })}
-          </div>
-        )}
       </div>
     </div>
   );
@@ -605,9 +621,11 @@ function RowOptionsMenu({
           <MoreHorizontal className="h-3.5 w-3.5" />
         </button>
       </DropdownMenuTrigger>
-      {/* Capped and inset so the menu cannot end up wider than the 360px popover
-          it belongs to — it was overlaying three rows of the inbox behind it. */}
-      <DropdownMenuContent align="end" sideOffset={4} className="max-w-[280px]">
+      {/* Bounded on both sides, matching the panel-header and docked-tab menus:
+          a floor so short items do not collapse it, and a ceiling so it cannot
+          end up wider than the 360px popover it belongs to — it was overlaying
+          three rows of the inbox behind it. */}
+      <DropdownMenuContent align="end" sideOffset={4} className="min-w-[200px] max-w-[280px]">
         {supportsSnooze &&
           (isSnoozed ? (
             <DropdownMenuItem
