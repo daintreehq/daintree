@@ -862,7 +862,7 @@ export function WorktreeOverviewModal({
                           : "hover:bg-tint/[0.04]"
                       )}
                     >
-                      <span className="w-1.5 h-1.5 rounded-full bg-[var(--color-state-working)] motion-safe:animate-pulse" />
+                      <span className="status-mark w-1.5 h-1.5 rounded-full bg-[var(--color-state-working)] motion-safe:animate-pulse" />
                       <span
                         className={
                           quickStateFilter === "working"

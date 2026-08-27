@@ -147,7 +147,9 @@ describe("forced-colors shared status-mark contract (#12000)", () => {
       path.join(REPO_ROOT, "src/components/Panel/PluginPanelBadges.tsx"),
       "utf8"
     );
-    expect(badges).toContain("status-mark");
+    // Bound to the className the dot branch actually builds, not a loose
+    // substring — a passing mention in a comment would prove nothing.
+    expect(badges).toMatch(/className=\{`[^`]*\bstatus-mark\b[^`]*\$\{DOT_COLOR\[/);
   });
 
   // Whatever `DOT_COLOR` resolves to is still a background, so the hook stays

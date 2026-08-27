@@ -246,6 +246,7 @@ function GrantRow({
         severity={GRANT_TYPE_SEVERITY[record.type]}
         label={GRANT_TYPE_LABEL[record.type]}
         className="mt-0.5 h-3 w-3"
+        decorative
       />
       <div className="min-w-0">
         <div className="flex items-center gap-2">
@@ -678,7 +679,7 @@ export function McpAuditLogViewer({
             {filteredRecords.map((record) =>
               isAuditRecord(record) ? (
                 <li key={record.id} className="grid grid-cols-[auto_1fr_auto] gap-2 p-2 text-xs">
-                  <div className="flex items-start gap-1 mt-1">
+                  <div className="flex items-center gap-1 mt-0.5">
                     <SeverityMark
                       severity={RESULT_SEVERITY[record.result]}
                       label={RESULT_LABEL[record.result]}
@@ -729,6 +730,7 @@ export function McpAuditLogViewer({
                     severity={GRANT_TYPE_SEVERITY[record.type]}
                     label={GRANT_TYPE_LABEL[record.type]}
                     className="mt-0.5 h-3 w-3"
+                    decorative
                   />
                   <div className="min-w-0">
                     <div className="flex items-center gap-2">

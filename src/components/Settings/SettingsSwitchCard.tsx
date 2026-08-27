@@ -78,7 +78,7 @@ export function SettingsSwitchCard({
     >
       {isModified && isCard && (
         <div
-          className="absolute left-0 top-2 bottom-2 w-0.5 rounded-full bg-state-modified"
+          className="status-mark absolute left-0 top-2 bottom-2 w-0.5 rounded-full bg-state-modified"
           aria-hidden="true"
         />
       )}

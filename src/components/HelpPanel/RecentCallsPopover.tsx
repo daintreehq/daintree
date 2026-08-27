@@ -141,7 +141,6 @@ function RecentCallRow({ record }: { record: McpAuditRecord }) {
           severity={RESULT_SEVERITY[record.result]}
           label={RESULT_LABEL[record.result]}
           className="h-3 w-3"
-          decorative
         />
         <span className="min-w-0 font-mono text-daintree-text/80 truncate">{record.toolId}</span>
         {/* Recency, not duration — calls are almost always sub-100ms, so
