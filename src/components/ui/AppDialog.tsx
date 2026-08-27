@@ -675,7 +675,10 @@ AppDialog.Footer = function AppDialogFooter({
           the primary label gets clipped. The actions never yield — a hint is
           explanatory, an action is how the dialog is answered. */}
       {hint && (
-        <div className="text-[12px] text-daintree-text/55 flex min-w-0 items-center gap-1">
+        <div
+          className="text-[12px] text-daintree-text/55 flex min-w-0 items-center gap-1"
+          data-testid="app-dialog-hint"
+        >
           {hint}
         </div>
       )}

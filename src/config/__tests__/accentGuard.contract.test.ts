@@ -180,7 +180,6 @@ const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
     "src/components/Settings/EditorIntegrationTab.tsx",
     "src/components/Settings/EnvVarEditor.tsx",
     "src/components/Settings/ImageViewerTab.tsx",
-    "src/components/Settings/ImportEnvDialog.tsx",
     "src/components/Settings/KeyboardShortcutsTab.tsx",
     "src/components/Settings/PortalSettingsTab.tsx",
     "src/components/Settings/PresetSelector.tsx",

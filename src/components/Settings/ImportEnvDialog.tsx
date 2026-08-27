@@ -1,7 +1,9 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useId, useMemo, useRef, useState } from "react";
 import { RadioChoiceGroup, RadioChoiceRow } from "@/components/ui/RadioChoice";
 import { AlertTriangle } from "lucide-react";
 import { AppDialog } from "@/components/ui/AppDialog";
+import { ScrollShadow } from "@/components/ui/ScrollShadow";
+import { cn } from "@/lib/utils";
 import { parseEnvPaste, type ParseEnvResult } from "@/utils/parseEnvPaste";
 
 type ConflictResolution = "keep" | "overwrite";
@@ -19,6 +21,35 @@ interface ImportEnvDialogProps {
   env: Record<string, string>;
   onImport: (merged: Record<string, string>) => void;
 }
+
+/**
+ * Named stages, so the dialog answers "where am I" without a stepper. Two
+ * conditional steps do not warrant one, and the second step only exists when
+ * something collides — a "Step 1 of 2" counter would be a lie on every clean
+ * import. Matches the step heading `AgentSetupWizard` owns, minus its counter.
+ */
+const STEP_TITLE: Record<Step, string> = {
+  paste: "Paste variables",
+  conflicts: "Resolve conflicts",
+};
+
+/**
+ * The merge policy restated where the evidence is. Without it the conflict list
+ * shows the same old/new pair under both policies, which reads as "all of these
+ * are about to change" even when "Keep existing" means none of them are.
+ */
+const OUTCOME_LABEL: Record<ConflictResolution, string> = {
+  keep: "Existing values kept",
+  overwrite: "Incoming values applied",
+};
+
+/** The caption-strip recipe shared by the app's other destructive previews. */
+const PREVIEW_FRAME = "rounded border border-tint/[0.08] bg-tint/[0.04] text-xs";
+const PREVIEW_STRIP =
+  "px-3 py-2 border-b border-tint/[0.08] flex items-center justify-between gap-2";
+const PREVIEW_CAPTION = "text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60";
+const PREVIEW_COUNT =
+  "ml-1.5 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-[10px] font-medium normal-case tracking-normal";
 
 function collapsePairs(result: ParseEnvResult): Record<string, string> {
   const out: Record<string, string> = {};
@@ -52,10 +83,44 @@ function buildMerged(
   return merged;
 }
 
+/**
+ * One side of a conflict.
+ *
+ * The side that survives carries the readable tier and the other the secondary
+ * one, so the two merge modes no longer render identically — but the weight is
+ * the redundant cue, not the load-bearing one. What actually names each side is
+ * the `<dt>`, because a difference carried by colour, weight, or a strikethrough
+ * alone does not survive `forced-colors: active` and is not announced at all
+ * (WCAG 1.4.1, 1.3.1). `(empty)` is italicised so a value being blanked cannot
+ * be mistaken for a value named "(empty)".
+ */
+function ConflictSide({ label, value, kept }: { label: string; value: string; kept: boolean }) {
+  const isEmpty = value === "";
+  return (
+    <>
+      <dt className="text-[10px] uppercase tracking-wide text-text-secondary">{label}</dt>
+      <dd
+        className={cn(
+          "font-mono text-[11px] break-all",
+          kept ? "text-daintree-text" : "text-text-secondary",
+          isEmpty && "italic"
+        )}
+      >
+        {isEmpty ? "(empty)" : value}
+      </dd>
+    </>
+  );
+}
+
 export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDialogProps) {
   const [pastedText, setPastedText] = useState("");
   const [step, setStep] = useState<Step>("paste");
   const [conflictResolution, setConflictResolution] = useState<ConflictResolution>("keep");
+
+  const errorsId = useId();
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
+  const stepHeadingRef = useRef<HTMLHeadingElement>(null);
+  const prevStepRef = useRef<Step>("paste");
 
   // Single reset effect keyed on [isOpen] — avoids the split-effect trap from #4958.
   useEffect(() => {
@@ -63,8 +128,39 @@ export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDia
       setPastedText("");
       setStep("paste");
       setConflictResolution("keep");
+      prevStepRef.current = "paste";
     }
   }, [isOpen]);
+
+  // The dialog is opened to be pasted into, so the caret starts in the textarea
+  // rather than on the header close button `initialFocus: "first"` would pick.
+  // `initialFocus="none"` hands the whole job over — the same arrangement
+  // `AgentSetupWizard` uses — so there is no race between two focus calls.
+  useEffect(() => {
+    if (!isOpen) return;
+    const frame = requestAnimationFrame(() => textareaRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [isOpen]);
+
+  /**
+   * Move focus deliberately on a step change, rather than leaving it on the
+   * footer button whose label just changed underneath it (WAI-ARIA APG, dialog
+   * pattern).
+   *
+   * Forward lands on the step heading: the conflict step is new information and
+   * a decision, so it gets announced before the controls. Back lands on the
+   * textarea instead — that step is already known and the reason for returning
+   * is to edit the paste.
+   */
+  useEffect(() => {
+    if (!isOpen || prevStepRef.current === step) return;
+    prevStepRef.current = step;
+    const frame = requestAnimationFrame(() => {
+      if (step === "conflicts") stepHeadingRef.current?.focus();
+      else textareaRef.current?.focus();
+    });
+    return () => cancelAnimationFrame(frame);
+  }, [isOpen, step]);
 
   const parsed = useMemo(() => parseEnvPaste(pastedText), [pastedText]);
   const incoming = useMemo(() => collapsePairs(parsed), [parsed]);
@@ -94,16 +190,32 @@ export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDia
     handleImport(conflictResolution);
   };
 
+  /**
+   * The label names what pressing it will do — which means it must not name a
+   * count while the button cannot be pressed. A disabled "Import 1 variable"
+   * reads as an offer to import the lines that did parse and skip the rest,
+   * which is not what happens.
+   */
   const primaryLabel =
     step === "conflicts"
       ? conflictResolution === "keep"
         ? "Import, keep existing"
         : "Import, overwrite conflicts"
-      : conflicts.length > 0
-        ? `Review ${conflicts.length} conflict${conflicts.length === 1 ? "" : "s"}`
-        : incomingCount > 0
-          ? `Import ${incomingCount} variable${incomingCount === 1 ? "" : "s"}`
-          : "Import";
+      : !canProceed
+        ? "Import"
+        : conflicts.length > 0
+          ? `Review ${conflicts.length} conflict${conflicts.length === 1 ? "" : "s"}`
+          : `Import ${incomingCount} variable${incomingCount === 1 ? "" : "s"}`;
+
+  /** Why the primary action is dead. A disabled button that explains nothing is a dead end. */
+  const blockedHint =
+    step !== "paste" || canProceed
+      ? null
+      : hasErrors
+        ? `Fix ${parsed.errors.length} parse error${parsed.errors.length === 1 ? "" : "s"} to continue`
+        : pastedText.trim() !== ""
+          ? "No variables found in that paste"
+          : null;
 
   const secondaryLabel = step === "conflicts" ? "Back" : "Cancel";
   const handleSecondary = () => {
@@ -120,6 +232,7 @@ export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDia
       onClose={onClose}
       size="md"
       zIndex="nested"
+      initialFocus="none"
       data-testid="import-env-dialog"
     >
       <AppDialog.Header>
@@ -128,67 +241,106 @@ export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDia
       </AppDialog.Header>
 
       <AppDialog.Body className="space-y-4">
+        <div className="space-y-1">
+          <h3
+            ref={stepHeadingRef}
+            tabIndex={-1}
+            className="text-sm font-medium text-daintree-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 rounded-xs"
+            data-testid="import-env-step-heading"
+          >
+            {STEP_TITLE[step]}
+          </h3>
+          <AppDialog.Description>
+            {step === "paste" ? (
+              <>
+                Keys must match <code className="text-[11px]">[A-Za-z_][A-Za-z0-9_]*</code>. Quoted
+                values, comments, and <code className="text-[11px]">export</code> prefixes are
+                supported.
+              </>
+            ) : (
+              <>
+                {conflicts.length} key{conflicts.length === 1 ? "" : "s"} already exist
+                {conflicts.length === 1 ? "s" : ""} with a different value. Choose which one wins.
+              </>
+            )}
+          </AppDialog.Description>
+        </div>
+
         {step === "paste" ? (
           <>
-            <AppDialog.Description>
-              Paste the contents of a .env file. Keys must match{" "}
-              <code className="text-[11px]">[A-Za-z_][A-Za-z0-9_]*</code>. Quoted values, comments,
-              and <code className="text-[11px]">export</code> prefixes are supported.
-            </AppDialog.Description>
             <textarea
+              ref={textareaRef}
               value={pastedText}
               onChange={(e) => setPastedText(e.target.value)}
               placeholder={'FOO=bar\nexport BAZ="hello world"\n# comments supported'}
               spellCheck={false}
               autoCapitalize="off"
               autoCorrect="off"
-              className="w-full h-56 resize-y font-mono text-[12px] bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-2 focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30 text-daintree-text"
+              // Focus ring is the documented shared recipe rather than a local
+              // `focus:ring-*`: `docs/themes/interaction-state-recipes.md` calls
+              // for `focus-visible:outline-*` for keyboard focus, and the ring
+              // this replaced measured ~2.2:1 — under the 3:1 floor for a
+              // non-text indicator, on the step's primary input.
+              className="w-full h-56 resize-y font-mono text-[12px] bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-2 text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
               aria-label="Paste .env content"
+              aria-invalid={hasErrors || undefined}
+              aria-describedby={hasErrors ? errorsId : undefined}
               data-testid="import-env-textarea"
             />
             {hasErrors && (
               <div
-                className="rounded-[var(--radius-md)] border border-status-warning/20 bg-status-warning/10 px-3 py-2 text-[12px] text-status-warning"
+                id={errorsId}
+                role="alert"
+                className="rounded-[var(--radius-md)] border border-status-warning/20 bg-status-warning/10 px-3 py-2 text-[12px]"
                 data-testid="import-env-errors"
               >
-                <div className="flex items-center gap-1.5 font-medium mb-1">
+                <div className="flex items-center gap-1.5 font-medium mb-1 text-status-warning">
                   <AlertTriangle size={12} aria-hidden="true" />
                   <span>
                     {parsed.errors.length} parse error
                     {parsed.errors.length === 1 ? "" : "s"}
                   </span>
                 </div>
+                {/* The tint, border and icon carry "this is a warning". The
+                    lines themselves are what the user has to read and act on,
+                    so they run on the audited text tiers — the amber tri-tone
+                    this replaced flattened to one uniform run under
+                    `forced-colors: active` anyway. */}
                 <ul className="space-y-0.5 font-mono text-[11px]">
                   {parsed.errors.map((e) => (
                     <li key={`${e.line}-${e.raw}`}>
-                      <span className="text-status-warning/70">Line {e.line}:</span> {e.reason}
+                      <span className="text-text-secondary">Line {e.line}:</span>{" "}
+                      <span className="text-daintree-text">{e.reason}</span>
                       {e.raw.trim() !== "" && (
-                        <span className="text-daintree-text/50"> — {e.raw}</span>
+                        <span className="text-text-secondary"> — {e.raw}</span>
                       )}
                     </li>
                   ))}
                 </ul>
               </div>
             )}
-            {!hasErrors && incomingCount > 0 && (
-              <p className="text-[11px] text-daintree-text/50" data-testid="import-env-summary">
+            {/* Shown alongside parse errors too. Gating this on a clean parse
+                meant a paste that had both a bad line and a duplicated key
+                reported the bad line and silently dropped the duplicate. */}
+            {incomingCount > 0 && (
+              <p className="text-[11px] text-text-secondary" data-testid="import-env-summary">
                 {incomingCount} variable{incomingCount === 1 ? "" : "s"} detected
                 {conflicts.length > 0
                   ? ` · ${conflicts.length} conflict${conflicts.length === 1 ? "" : "s"}`
                   : ""}
                 {newCount > 0 && conflicts.length > 0 ? ` · ${newCount} new` : ""}
-                {duplicateInPasteCount > 0
-                  ? ` · ${duplicateInPasteCount} duplicate key${duplicateInPasteCount === 1 ? "" : "s"} in paste (last value kept)`
-                  : ""}
+                {duplicateInPasteCount > 0 ? (
+                  <span className="text-daintree-text">
+                    {" "}
+                    · {duplicateInPasteCount} duplicate key
+                    {duplicateInPasteCount === 1 ? "" : "s"} in paste (last value kept)
+                  </span>
+                ) : null}
               </p>
             )}
           </>
         ) : (
           <>
-            <AppDialog.Description>
-              {conflicts.length} key{conflicts.length === 1 ? "" : "s"} already exist
-              {conflicts.length === 1 ? "s" : ""}. Choose how to merge.
-            </AppDialog.Description>
             <RadioChoiceGroup legend="Conflict resolution" legendHidden>
               <RadioChoiceRow
                 name="import-env-conflict-mode"
@@ -209,31 +361,57 @@ export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDia
                 testId="import-env-mode-overwrite"
               />
             </RadioChoiceGroup>
-            <div
-              className="rounded-[var(--radius-md)] border border-daintree-border overflow-hidden"
-              data-testid="import-env-conflict-list"
-            >
-              <div className="bg-daintree-bg/40 px-3 py-1.5 text-[10px] uppercase tracking-wide text-daintree-text/50 border-b border-daintree-border">
-                Conflicts ({conflicts.length})
+            <div className={PREVIEW_FRAME} data-testid="import-env-conflict-list">
+              <div className={PREVIEW_STRIP}>
+                <span role="heading" aria-level={4} className={PREVIEW_CAPTION}>
+                  Conflicts
+                  <span className={PREVIEW_COUNT}>{conflicts.length}</span>
+                </span>
+                <span className="text-[11px] text-text-secondary">
+                  {OUTCOME_LABEL[conflictResolution]}
+                </span>
               </div>
-              <ul className="max-h-48 overflow-y-auto divide-y divide-daintree-border/60">
-                {conflicts.map((c) => (
-                  <li key={c.key} className="px-3 py-1.5 font-mono text-[11px]">
-                    <div className="text-daintree-text/80">{c.key}</div>
-                    <div className="text-daintree-text/50">
-                      <span className="line-through">{c.oldValue || "(empty)"}</span>
-                      <span className="mx-1.5">→</span>
-                      <span className="text-daintree-accent">{c.newValue || "(empty)"}</span>
-                    </div>
-                  </li>
-                ))}
-              </ul>
+              {/* Bounded and scrolled inside itself so the footer never moves,
+                  but with the fade the plain `overflow-y-auto` never had: at
+                  `max-h` the list rendered four of five conflicts and its own
+                  clean bottom border, so a destructive preview looked complete
+                  while hiding part of what it was previewing. `tabIndex`
+                  + `role="region"` make the hidden part reachable by keyboard.  */}
+              <ScrollShadow
+                className="max-h-[260px]"
+                scrollClassName="scroll-py-8"
+                tabIndex={0}
+                role="region"
+                aria-label={`Conflicting keys — ${OUTCOME_LABEL[conflictResolution].toLowerCase()}`}
+                data-testid="import-env-conflict-scroller"
+              >
+                <ul className="divide-y divide-tint/[0.06]">
+                  {conflicts.map((c) => (
+                    <li key={c.key} className="px-3 py-2">
+                      <div className="font-mono text-[11px] text-daintree-text">{c.key}</div>
+                      <dl className="mt-0.5 grid grid-cols-[max-content_1fr] items-baseline gap-x-3 gap-y-0.5">
+                        <ConflictSide
+                          label="Existing"
+                          value={c.oldValue}
+                          kept={conflictResolution === "keep"}
+                        />
+                        <ConflictSide
+                          label="Incoming"
+                          value={c.newValue}
+                          kept={conflictResolution === "overwrite"}
+                        />
+                      </dl>
+                    </li>
+                  ))}
+                </ul>
+              </ScrollShadow>
             </div>
           </>
         )}
       </AppDialog.Body>
 
       <AppDialog.Footer
+        hint={blockedHint}
         secondaryAction={{ label: secondaryLabel, onClick: handleSecondary }}
         primaryAction={{
           label: primaryLabel,
