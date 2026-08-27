@@ -3,6 +3,7 @@ import type { Dispatch, RefObject, SetStateAction } from "react";
 import type { StagingFileEntry } from "@shared/types";
 import type { debounce } from "@/utils/debounce";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import type { FileStageRowSection } from "./FileStageRow";
 
 /**
  * A failed review-hub operation. The title is the operation, so the banner can
@@ -14,7 +15,6 @@ export interface ReviewHubActionFailure {
   title: string;
   detail: string;
 }
-import type { FileStageRowSection } from "./FileStageRow";
 
 interface UseReviewHubStagingActionsArgs {
   worktreePath: string;
