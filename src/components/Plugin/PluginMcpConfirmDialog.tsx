@@ -127,7 +127,13 @@ export function PluginMcpConfirmDialog() {
         cooldownKey={current.requestId}
         hint={<GateHint queueDepth={queueDepth} />}
       >
-        <div className="space-y-3">
+        {/* Keyed on the request: the queue advances by swapping `current` on a
+            mounted dialog, so without this the next request inherits this
+            one's expanded disclosure and scroll offsets — showing a freshly
+            promoted tool's capability list already open, in a state the user
+            never chose for it. Keying the body only leaves the footer, focus
+            trap, restoration and cooldown machinery untouched. */}
+        <div key={current.requestId} className="space-y-3">
           <RequesterBlock
             pluginDisplayName={current.pluginDisplayName}
             serverId={current.serverId}
@@ -323,6 +329,7 @@ function CapabilitiesDisclosure({
       >
         <ChevronRight
           aria-hidden="true"
+          data-animated-chevron
           className={cn(
             "w-3 h-3 shrink-0 text-daintree-text/40 transition-transform duration-150 ease-out",
             expanded && "rotate-90"
@@ -357,10 +364,24 @@ function CapabilitiesDisclosure({
  * stated and the seconds are not.
  */
 function GateHint({ queueDepth }: { queueDepth: number }) {
-  const parts = ["Remembered until this tool changes"];
+  // Count first when anything is queued. The persistence phrase is the longer
+  // of the two and, placed first, it consumed both lines of the clamp and the
+  // count never rendered — which is the same "queue is invisible" defect the
+  // hint was added to fix, just moved. Queued copy shortens to match.
   if (queueDepth > 0) {
-    parts.push(`${queueDepth} more request${queueDepth === 1 ? "" : "s"} waiting`);
+    // Stacked rather than joined by a separator: the footer is narrow enough
+    // that a single joined string clipped mid-clause and left a dangling
+    // "· …". Two lines fit both facts whole.
+    return (
+      <span aria-live="polite" className="min-w-0 leading-tight">
+        <span className="block truncate">
+          {queueDepth} more request{queueDepth === 1 ? "" : "s"} waiting
+        </span>
+        <span className="block truncate">remembered until this tool changes</span>
+      </span>
+    );
   }
+  const parts = ["Remembered until this tool changes"];
 
   // Wraps rather than truncates. This is the one line that says the approval is
   // a standing grant, and a wide primary label leaves the hint little room — an
@@ -378,8 +399,14 @@ function GateHint({ queueDepth }: { queueDepth: number }) {
  * since it was pinned, or was revoked) gets a distinct "review and re-approve"
  * framing so a user can tell a rug-pull re-prompt apart from a first-use one —
  * `annotation-changed` in particular must NOT fall through to the generic
- * first-use title, or a server raising a pinned tool's danger tier would be
- * indistinguishable from approving it for the first time. Exported for tests.
+ * first-use title, or a server re-declaring a pinned tool's safety hints would
+ * be indistinguishable from approving it for the first time.
+ *
+ * It says "declarations changed", not "danger increased": the consent store
+ * compares the annotation *hash*, so the recomputed tier may be unchanged or
+ * lower, and a legacy pin minted before `annotationHash` existed carries an
+ * empty-string sentinel that lands here having changed nothing at all.
+ * Exported for tests.
  */
 export function titleFor(reason: string, toolName: string): string {
   const name = truncateToolName(toolName);
@@ -389,7 +416,7 @@ export function titleFor(reason: string, toolName: string): string {
     case "schema-changed":
       return `'${name}' inputs changed — review and re-approve?`;
     case "annotation-changed":
-      return `'${name}' danger level changed — review and re-approve?`;
+      return `'${name}' safety declarations changed — review and re-approve?`;
     case "revoked":
       return `'${name}' was previously revoked — allow again?`;
     case "first-use":
@@ -411,14 +438,23 @@ export function truncateToolName(toolName: string): string {
 }
 
 /**
- * What the tier practically means, in the host's own words.
+ * What the tier means for the decision, stated to the limit of what the host
+ * actually knows.
  *
- * This is the only statement on the surface that Daintree vouches for: the
- * title, the description and the capability list are all the plugin's account
- * of itself, and the tier is what the host concluded independently from the
- * tool's annotations and the plugin's manifest. It goes in `description`, so
- * it is also what `aria-describedby` points at — a screen reader reaching this
- * dialog hears the consequence, not just the identity.
+ * The tier is a *ceiling on what Daintree will permit*, not a description of
+ * what the tool does. `deriveDangerTier` builds it from the plugin's manifest
+ * capabilities (authoritative) and the server's `ToolAnnotations` (explicitly
+ * untrusted — "advisory hints from the server (which the host does not
+ * trust)"). Critically, `destructiveHint: false (or absent) → D1`, so D1 is
+ * the no-information default: a tool that simply declares nothing lands there
+ * next to one that genuinely writes files.
+ *
+ * So this copy says "can", never "does". Asserting "this changes files" for a
+ * tool that merely failed to declare itself read-only would have the host
+ * stating as fact something it cannot know — on the one surface whose entire
+ * job is to be the part the user can trust. D0 goes further and names the
+ * claim as the plugin's own, because D0 rests on `readOnlyHint`, which is the
+ * server's word and nothing else.
  *
  * D2 and D3 get different language deliberately. They share destructive
  * styling because both warrant it, but their blast radius is not the same and
@@ -427,13 +463,13 @@ export function truncateToolName(toolName: string): string {
 export function consequenceFor(tier: PluginMcpDangerTier): string {
   switch (tier) {
     case "D0":
-      return "This reads information. It can't change anything on your machine or in your project.";
+      return "The server reports this only reads. That's the plugin's own claim — Daintree can't verify it.";
     case "D1":
-      return "This changes files on this machine. Daintree can't undo it for you.";
+      return "This can change files on this machine, and Daintree can't undo it for you.";
     case "D2":
-      return "This changes state beyond this machine — other people and other checkouts can see the result.";
+      return "This can change state beyond this machine, where other people and other checkouts would see it.";
     case "D3":
-      return "This destroys shared state, and there's no recovery path once it runs.";
+      return "This can destroy shared state, with no recovery path once it runs.";
   }
 }
 
@@ -449,7 +485,7 @@ export function changeHeadingFor(reason: string): string | null {
     case "schema-changed":
       return "Inputs changed since you allowed this";
     case "annotation-changed":
-      return "Danger level changed since you allowed this";
+      return "Safety declarations changed since you allowed this";
     case "revoked":
       return "You revoked this before";
     default:
@@ -471,7 +507,7 @@ export function changeBodyFor(reason: string, tier: PluginMcpDangerTier): string
     case "schema-changed":
       return "This tool now takes a different set of inputs than the version you approved.";
     case "annotation-changed":
-      return `The server changed what this tool reports about itself, and Daintree now classifies it as ${tierLabelFor(tier)}.`;
+      return `The server changed what this tool declares about itself. Daintree now classifies it as ${tierLabelFor(tier)}.`;
     case "revoked":
       return "You withdrew permission for this tool before. Allowing now grants it again.";
     default:

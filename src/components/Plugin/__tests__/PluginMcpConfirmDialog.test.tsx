@@ -110,13 +110,28 @@ describe("PluginMcpConfirmDialog copy", () => {
     expect(new Set(bodies).size).toBe(REPROMPT_REASONS.length);
   });
 
-  it("does NOT let annotation-changed fall through to the generic first-use copy", () => {
-    // The security-critical case: a server raising a pinned tool's danger tier
-    // must re-prompt with a danger-specific framing, not a prompt
-    // indistinguishable from approving the tool for the first time.
-    expect(titleFor("annotation-changed", "do_thing")).not.toBe(titleFor("first-use", "do_thing"));
-    expect(titleFor("annotation-changed", "do_thing").toLowerCase()).toContain("danger");
-    expect(changeHeadingFor("annotation-changed")?.toLowerCase()).toContain("danger");
+  it("gives every reason, including annotation-changed, a mutually distinct title", () => {
+    // The security-critical case: a server re-declaring a pinned tool's safety
+    // hints must re-prompt with its own framing, not one indistinguishable
+    // from approving the tool for the first time.
+    const all: PluginMcpConsentReason[] = ["first-use", ...REPROMPT_REASONS];
+    const titles = all.map((r) => titleFor(r, "do_thing"));
+    expect(new Set(titles).size).toBe(all.length);
+  });
+
+  it("does not claim the danger level rose when only the declarations moved", () => {
+    // The store compares the annotation HASH. The recomputed tier may be
+    // unchanged or lower, and a legacy pin carrying the empty-string sentinel
+    // lands here having changed nothing at all — so copy asserting an increase
+    // would be false in the common case.
+    const copy = [
+      titleFor("annotation-changed", "do_thing"),
+      changeHeadingFor("annotation-changed") ?? "",
+      changeBodyFor("annotation-changed", "D2"),
+    ]
+      .join(" ")
+      .toLowerCase();
+    expect(copy).not.toMatch(/raised|increased|higher|more dangerous|escalat/);
   });
 
   it("warns on raw-changed that the visible text may look unchanged", () => {
@@ -147,6 +162,21 @@ describe("PluginMcpConfirmDialog danger tiers", () => {
     const sentences = ALL_TIERS.map((t) => consequenceFor(t));
     expect(sentences.every((s) => s.trim().length > 0)).toBe(true);
     expect(new Set(sentences).size).toBe(ALL_TIERS.length);
+  });
+
+  it("hedges every consequence — the host cannot verify what a tool actually does", () => {
+    // deriveDangerTier builds the tier from the plugin's manifest capabilities
+    // and the server's ToolAnnotations, which PluginMcpTierAuth explicitly
+    // calls untrusted advisory hints. `destructiveHint: false (or absent)` maps
+    // to D1, so D1 is the no-information default. Copy that asserts "this
+    // changes files" would state as fact something the host cannot know, on
+    // the one surface whose job is to be the trustworthy part.
+    for (const tier of ALL_TIERS) {
+      expect(consequenceFor(tier).toLowerCase()).toMatch(/\bcan\b|\breports\b|\bclaim\b/);
+    }
+    // D0 rests entirely on the server's own readOnlyHint, so it must attribute
+    // the claim rather than repeat it as the host's finding.
+    expect(consequenceFor("D0").toLowerCase()).toMatch(/claim|reports|can't verify|cannot verify/);
   });
 
   it("states the consequence without leaning on the tier code to carry it", () => {
@@ -212,7 +242,42 @@ describe("PluginMcpConfirmDialog structure", () => {
         .enqueue(pending({ requestId: "req-2", toolName: "scale_machines" }));
     });
     render(<PluginMcpConfirmDialog />);
-    expect(screen.getByText(/1 more request waiting/i)).toBeTruthy();
+    // Read the whole live region, not the one line that matched: the queued
+    // hint stacks its two clauses in separate spans.
+    const region = screen.getByText(/1 more request waiting/i).closest("[aria-live]");
+    const text = (region?.textContent ?? "").toLowerCase();
+    // Count first. Placed after the longer persistence phrase it fell outside
+    // the hint's two-line clamp and never rendered — reinstating the very
+    // "queue is invisible" defect the hint exists to fix.
+    expect(text).toContain("remembered until this tool changes");
+    expect(text.indexOf("1 more request")).toBeLessThan(text.indexOf("remembered"));
+  });
+
+  it("does not carry an expanded disclosure over to the next queued request", () => {
+    // The queue advances by swapping `current` on a mounted dialog, so body
+    // state survives unless it is keyed. Otherwise a freshly promoted tool
+    // renders its capability list already open, in a state the user chose for
+    // a different tool.
+    const caps: BuiltInPluginCapability[] = ["git:read", "shell:exec"];
+    enqueue({ requestId: "req-a", declaredCapabilities: caps });
+    act(() => {
+      usePluginMcpConfirmStore
+        .getState()
+        .enqueue(
+          pending({ requestId: "req-b", toolName: "other_tool", declaredCapabilities: caps })
+        );
+    });
+    render(<PluginMcpConfirmDialog />);
+
+    const trigger = screen.getByRole("button", { name: /what this plugin can do \(2\)/i });
+    act(() => trigger.click());
+    expect(screen.getByText("Run shell commands")).toBeTruthy();
+
+    // Advance the queue: req-b is promoted into the same mounted dialog.
+    act(() => usePluginMcpConfirmStore.getState().resolveCurrent("rejected"));
+
+    expect(screen.getByText("other_tool")).toBeTruthy();
+    expect(screen.queryByText("Run shell commands")).toBeNull();
   });
 
   it("states an empty capability set rather than omitting the section", () => {
