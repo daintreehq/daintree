@@ -1553,7 +1553,7 @@ function ScratchNameEditor({
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={handleKeyDown}
         onBlur={onCancel}
-        className="flex-1 min-w-0 bg-overlay-soft border border-[var(--border-overlay)] rounded-[var(--radius-md)] px-2 py-1 text-sm text-daintree-text outline-hidden focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
+        className="flex-1 min-w-0 bg-overlay-soft border border-[var(--border-overlay)] rounded-[var(--radius-md)] px-2 py-1 text-sm text-daintree-text outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
       />
     </div>
   );

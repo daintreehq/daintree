@@ -32,7 +32,7 @@ export function BannerOverflowMenu({
         type="button"
         aria-label={ariaLabel}
         title="More options"
-        className="p-1 rounded text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-border/50 transition-colors outline-hidden focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-daintree-accent shrink-0"
+        className="p-1 rounded text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-border/50 transition-colors outline-hidden focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-daintree-accent shrink-0"
       >
         <MoreHorizontal className="h-3.5 w-3.5" aria-hidden="true" />
       </PopoverTrigger>
@@ -54,7 +54,7 @@ export function BannerOverflowMenu({
               }}
               className={cn(
                 "flex items-center gap-2 w-full px-2 py-1.5 rounded text-left transition-colors",
-                "outline-hidden focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-daintree-accent",
+                "outline-hidden focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-[-2px] focus-visible:outline-daintree-accent",
                 isDanger
                   ? "text-status-error hover:bg-status-error/10"
                   : "text-daintree-text hover:bg-daintree-border/50",

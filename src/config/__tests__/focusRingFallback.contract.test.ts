@@ -677,6 +677,97 @@ describe("focus-ring fallback contract", () => {
     );
   });
 
+  /**
+   * Tailwind v4 compiles the outline utilities through a registered custom property:
+   *
+   *   @property --tw-outline-style { syntax:"*"; inherits:false; initial-value:solid }
+   *   .outline-hidden                     { --tw-outline-style:none; outline-style:none }
+   *   .focus-visible\:outline:focus-visible   { outline-style:var(--tw-outline-style); … }
+   *   .focus-visible\:outline-2:focus-visible { outline-style:var(--tw-outline-style); … }
+   *
+   * The property does not inherit, so `outline-hidden` sets it to `none` on the very
+   * element the focus utilities then read it from. An element carrying both resolves to
+   * `outline-style: none` under `:focus-visible` — correct colour, correct width, correct
+   * offset, and nothing painted. The test above does not catch this: it sees a
+   * `focus-visible:outline*` utility and calls the fallback satisfied.
+   *
+   * A ring-based fallback (`focus-visible:ring-*`) is box-shadow and unaffected.
+   */
+  it("an outline-based focus fallback restates the outline style", () => {
+    const OUTLINE_FOCUS_UTILITY = /focus(?:-visible)?:outline(?:-\d+)?(?=[\s"'`])/;
+
+    /**
+     * Expressions where the suppressor and the outline fallback are the two arms of a
+     * ternary, so they can never apply to the same element at the same time. The
+     * extractor sees one class expression and cannot tell the arms apart.
+     */
+    const TERNARY_ARMS: ReadonlyArray<{ file: string; fragment: string; reason: string }> = [
+      {
+        file: "src/components/ui/AppPaletteDialog.tsx",
+        fragment: "focus:outline-hidden",
+        reason:
+          "The outline fallback and `focus:outline-hidden` are the two arms of the " +
+          '`focusIndicator === "region"` ternary. Whichever arm renders, the other\'s ' +
+          "classes are absent, so `--tw-outline-style` keeps its `solid` initial value.",
+      },
+    ];
+    for (const entry of TERNARY_ARMS) {
+      expect(entry.reason.trim().length, `${entry.file} needs a rationale`).toBeGreaterThan(0);
+      expect(
+        fs.readFileSync(path.join(REPO_ROOT, entry.file), "utf8").includes(entry.fragment),
+        `stale ternary-arm entry: ${entry.file} no longer contains "${entry.fragment}"`
+      ).toBe(true);
+    }
+
+    const scanRoots = [SRC_ROOT, ...PLUGIN_RENDERER_ROOTS];
+    const allFiles = scanRoots.flatMap((root) =>
+      fs.existsSync(root) ? collectSourceFiles(root) : []
+    );
+    expect(allFiles.length, "scan must find source files").toBeGreaterThan(100);
+
+    const violations: Array<{ file: string; line: number; snippet: string }> = [];
+
+    for (const filePath of allFiles) {
+      const source = fs.readFileSync(filePath, "utf8");
+      const relativePath = path.relative(REPO_ROOT, filePath).replace(/\\/g, "/");
+
+      OUTLINE_HIDDEN_PATTERN.lastIndex = 0;
+      for (const match of source.matchAll(OUTLINE_HIDDEN_PATTERN)) {
+        const matchPos = match.index ?? -1;
+        if (matchPos < 0) continue;
+
+        const expression = extractClassExpression(source, matchPos);
+        if (!OUTLINE_FOCUS_UTILITY.test(expression)) continue;
+        if (expression.includes("outline-solid")) continue;
+        if (
+          TERNARY_ARMS.some(
+            (entry) => entry.file === relativePath && expression.includes(entry.fragment)
+          )
+        )
+          continue;
+
+        const lineNumber = source.slice(0, matchPos).split("\n").length;
+        const snippet = source.split("\n")[lineNumber - 1]!.trim();
+        violations.push({ file: relativePath, line: lineNumber, snippet });
+      }
+    }
+
+    if (violations.length === 0) return;
+
+    const detail = violations
+      .slice(0, 20)
+      .map((v) => `  ${v.file}:${v.line} — ${v.snippet}`)
+      .join("\n");
+    const more = violations.length > 20 ? `\n  …and ${violations.length - 20} more` : "";
+
+    throw new Error(
+      `Found ${violations.length} element(s) whose focus ring resolves to \`outline-style: none\`: ` +
+        `\`outline-hidden\` sets \`--tw-outline-style: none\` on the element, and ` +
+        `\`focus-visible:outline-2\` reads that same value. Add \`focus-visible:outline-solid\` ` +
+        `(or switch the fallback to \`focus-visible:ring-*\`):\n${detail}${more}`
+    );
+  });
+
   it("every allowlist entry has a non-empty rationale", () => {
     for (const entry of ALLOWLIST) {
       expect(

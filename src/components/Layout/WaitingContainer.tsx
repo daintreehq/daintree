@@ -345,7 +345,7 @@ function WaitingSingleItem({
         }
       }}
       className={cn(
-        "flex items-center gap-2 px-3 py-2.5 hover:bg-muted/50 focus:bg-muted/50 focus-visible:outline-2 focus-visible:outline-daintree-accent outline-hidden transition-colors group/row cursor-pointer w-full select-none",
+        "flex items-center gap-2 px-3 py-2.5 hover:bg-muted/50 focus:bg-muted/50 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-daintree-accent outline-hidden transition-colors group/row cursor-pointer w-full select-none",
         compact && "py-1.5 pl-1.5"
       )}
       aria-label={
