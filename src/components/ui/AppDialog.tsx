@@ -673,10 +673,12 @@ AppDialog.Footer = function AppDialogFooter({
           action row: as a flex child its default min-width:auto floor is its own
           content, so without this it pushes the buttons past the card edge and
           the primary label gets clipped. The actions never yield — a hint is
-          explanatory, an action is how the dialog is answered. */}
+          explanatory, an action is how the dialog is answered. flex-1 pins the
+          hint's width to the dialog rather than to its own text, which is what
+          lets a hint measure its own box and crop to it. */}
       {hint && (
         <div
-          className="text-[12px] text-daintree-text/55 flex min-w-0 items-center gap-1"
+          className="text-[12px] text-daintree-text/55 flex min-w-0 flex-1 items-center gap-1"
           data-testid="app-dialog-hint"
         >
           {hint}

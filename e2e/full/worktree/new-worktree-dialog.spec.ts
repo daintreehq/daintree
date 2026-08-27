@@ -37,7 +37,14 @@ function seedRecipe(dir: string): void {
  * `feature/test-branch` to the linked one, which leaves that list empty.
  * Distinct first letters so a one-character query narrows to exactly one.
  */
-const SPARE_BRANCHES = ["e2e-spare-alpha", "e2e-spare-zulu"];
+const SPARE_BRANCHES = [
+  "e2e-spare-alpha",
+  "e2e-spare-zulu",
+  // Long enough to be croppable as a base. Deliberately carries no "z" and no
+  // "spare"/"alpha" token, so the one-character and multi-token search
+  // assertions above still narrow to exactly one row.
+  "feature/long-running-base-branch-for-footer-measurement",
+];
 
 function seedSpareBranches(dir: string): void {
   for (const branch of SPARE_BRANCHES) {
@@ -401,5 +408,72 @@ test.describe.serial("Full: New Worktree Dialog", () => {
     // carries the whole name for assistive tech and for the hover tooltip.
     const footer = window.locator(`${SEL.worktree.newDialog} .border-t`).last();
     await expect(footer).toContainText(longBranch);
+
+    // And each name is cropped to a width it genuinely fits, so `text-overflow`
+    // never fires on top of the crop. That double truncation is what rendered
+    // as `feature/...ne…` — two ellipses in one name.
+    const { names, overflowing } = await footer.evaluate((el) => {
+      const all = [...el.querySelectorAll("[data-branch-name]")];
+      return {
+        names: all.length,
+        overflowing: all.filter((name) => name.scrollWidth > name.clientWidth + 1).length,
+      };
+    });
+    // Without this the check passes vacuously when nothing rendered at all.
+    expect(names).toBe(2);
+    expect(overflowing).toBe(0);
+  });
+
+  test("a long base and a long new name each crop without crowding the other", async () => {
+    const { window } = ctx;
+    await openDialog(window);
+
+    // The base above is short, so it only gates the "a short name donates its
+    // spare room" half of the split. Both being long is the case that shipped
+    // broken: two fixed character budgets that each fit alone but not together,
+    // so `text-overflow` cropped what the JS crop had already cropped.
+    const longBase = SPARE_BRANCHES.find((b) => b.length > 40)!;
+    await window.locator(SEL.worktree.baseBranchTrigger).click();
+    await window
+      .getByRole("option", { name: new RegExp(longBase.replace(/[/-]/g, "\\$&")) })
+      .first()
+      .click();
+    await expect(window.locator(SEL.worktree.baseBranchTrigger)).toContainText(longBase, {
+      timeout: T_MEDIUM,
+    });
+
+    const longBranch = `feature/${"payload-segment-".repeat(6)}end`;
+    await window.locator(SEL.worktree.branchNameInput).fill(longBranch);
+
+    const panel = window.locator(`${SEL.worktree.newDialog} > div`).first();
+    const panelBox = await panel.boundingBox();
+    expect(panelBox).not.toBeNull();
+
+    for (const action of [
+      window.locator(SEL.worktree.createButton),
+      window.getByRole("button", { name: "Cancel", exact: true }),
+    ]) {
+      const box = await action.boundingBox();
+      expect(box).not.toBeNull();
+      expect(box!.x + box!.width).toBeLessThanOrEqual(panelBox!.x + panelBox!.width + 1);
+    }
+
+    const footer = window.locator(`${SEL.worktree.newDialog} .border-t`).last();
+    // Both names survive whole underneath the crop, and neither is so starved
+    // that it renders as nothing but an ellipsis.
+    await expect(footer).toContainText(longBase);
+    await expect(footer).toContainText(longBranch);
+
+    const shown = await footer.evaluate((el) =>
+      [...el.querySelectorAll("[data-branch-name]")].map((name) => ({
+        visible: name.querySelector("[aria-hidden]")?.textContent ?? name.textContent ?? "",
+        overflowing: name.scrollWidth > name.clientWidth + 1,
+      }))
+    );
+    expect(shown).toHaveLength(2);
+    for (const name of shown) {
+      expect(name.overflowing).toBe(false);
+      expect(name.visible.replace(/\.\.\./g, "").length).toBeGreaterThan(4);
+    }
   });
 });

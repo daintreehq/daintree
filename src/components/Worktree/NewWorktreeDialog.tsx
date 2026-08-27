@@ -2,12 +2,10 @@ import { useState, useEffect, useRef, useMemo, useCallback, Fragment } from "rea
 import { useShallow } from "zustand/react/shallow";
 import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
-import { FolderGit2, Check, AlertCircle, ArrowRight, GitBranch } from "lucide-react";
+import { FolderGit2, Check, AlertCircle, GitBranch } from "lucide-react";
 import { isMac } from "@/lib/platform";
 import { cn } from "@/lib/utils";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
-import { TruncatedTooltip } from "@/components/ui/TruncatedTooltip";
-import { middleTruncate } from "@/utils/textParsing";
 import type { BranchInfo, CreateWorktreeOptions } from "@/types/electron";
 import type { Issue, PR } from "@shared/types/forge";
 
@@ -48,6 +46,7 @@ import {
   IssueLinkerView,
   AssignIssueToggle,
   BranchModeControl,
+  BranchSummary,
   BaseBranchCombobox,
   ExistingBranchPicker,
   NewBranchInput,
@@ -91,44 +90,6 @@ function normalizeSourcePrState(state: PR["state"]): "open" | "closed" | "merged
     default:
       return "open";
   }
-}
-
-// Character budgets for the footer echo at the `lg` dialog width. Chromium has no
-// middle `text-overflow`, so the crop is done in JS; the `truncate` on the span
-// stays as the hard guarantee at narrower widths.
-const BASE_BRANCH_ECHO_MAX = 18;
-const NEW_BRANCH_ECHO_MAX = 40;
-
-/** Branch name in the footer summary, middle-cropped with the full name on hover/focus. */
-function BranchEcho({ value, max, className }: { value: string; max: number; className?: string }) {
-  const display = middleTruncate(value, max);
-  const isCropped = display !== value;
-
-  return (
-    // `undefined` rather than `false` on purpose: it hands detection back to
-    // TruncatedTooltip's own overflow measurement, so a name under the budget
-    // that CSS still clips at a narrow width keeps its tooltip.
-    <TruncatedTooltip
-      content={value}
-      isTruncated={isCropped || undefined}
-      side="top"
-      // A branch name has no spaces to break on, so tooltip content would clip
-      // at its own max-width and hide the tail this tooltip exists to reveal.
-      contentClassName="[overflow-wrap:anywhere] whitespace-normal"
-    >
-      <span className={cn("truncate font-mono", className)}>
-        {isCropped ? (
-          <>
-            {/* The visible text is lossy, so the untruncated name is what gets announced. */}
-            <span className="sr-only">{value}</span>
-            <span aria-hidden="true">{display}</span>
-          </>
-        ) : (
-          value
-        )}
-      </span>
-    </TruncatedTooltip>
-  );
 }
 
 interface NewWorktreeDialogProps {
@@ -1033,23 +994,15 @@ export function NewWorktreeDialog({
   // line that used to sit under the branch input restating its own value.
   const outcomeSummary = isExistingMode ? (
     selectedExistingBranch ? (
-      <>
-        <GitBranch className="w-3 h-3 shrink-0" aria-hidden="true" />
-        <BranchEcho value={selectedExistingBranch} max={NEW_BRANCH_ECHO_MAX} />
-      </>
+      <BranchSummary
+        branch={selectedExistingBranch}
+        icon={<GitBranch className="w-3 h-3 shrink-0" aria-hidden="true" />}
+      />
     ) : (
       <span className="truncate">Pick a branch to continue</span>
     )
   ) : parsedBranch.fullBranchName && baseBranch ? (
-    <>
-      <BranchEcho value={baseBranch} max={BASE_BRANCH_ECHO_MAX} />
-      <ArrowRight className="w-3 h-3 shrink-0" aria-hidden="true" />
-      <BranchEcho
-        value={parsedBranch.fullBranchName}
-        max={NEW_BRANCH_ECHO_MAX}
-        className="text-daintree-text/80"
-      />
-    </>
+    <BranchSummary base={baseBranch} branch={parsedBranch.fullBranchName} />
   ) : (
     // Submit stays enabled on purpose — clicking it names what is missing,
     // which beats a disabled button that explains nothing. This is what keeps

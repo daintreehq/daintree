@@ -285,6 +285,38 @@ test("new-worktree dialog review — rest and interactive states", async () => {
       await closeDialog(page);
     });
 
+    // 2c. Both names long — the two crops have to share one row without either
+    // of them picking up a second ellipsis from `text-overflow`.
+    await step("long-both", async () => {
+      await openDialog(page);
+      await page
+        .locator(SEL.worktree.baseBranchTrigger)
+        .click()
+        .catch(() => {});
+      await settle(page, 400);
+      // Not `.catch()`: if the base never changes this captures the default
+      // short base under a "both long" filename, which is worse than no shot.
+      await page
+        .getByRole("option", { name: /feature\/streaming-uploads/ })
+        .first()
+        .click();
+      await page
+        .locator(SEL.worktree.baseBranchTrigger)
+        .filter({ hasText: "feature/streaming-uploads" })
+        .waitFor({ timeout: 4000 });
+      const input2 = page.locator(SEL.worktree.branchNameInput);
+      await input2.click().catch(() => {});
+      await input2.fill("feature/foo-bar-and-a-really-really-long-tail-name").catch(() => {});
+      await page
+        .locator("h3", { hasText: "Destination" })
+        .first()
+        .click()
+        .catch(() => {});
+      await settle(page, 900);
+      await snap(page, "17-long-both", PANEL);
+      await closeDialog(page);
+    });
+
     // 3. Existing-branch mode — the other half of the branch control.
     await step("existing", async () => {
       await openDialog(page);

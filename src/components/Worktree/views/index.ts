@@ -1,6 +1,7 @@
 export { PrHeader } from "./PrHeader";
 export { IssueLinkerView, AssignIssueToggle } from "./IssueSelectorView";
 export { BranchModeControl } from "./BranchModeControl";
+export { BranchSummary } from "./BranchSummary";
 export { BaseBranchCombobox } from "./BaseBranchCombobox";
 export { ExistingBranchPicker } from "./ExistingBranchPicker";
 export { BranchPickerPanel } from "./BranchPickerPanel";
