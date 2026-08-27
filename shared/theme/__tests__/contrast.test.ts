@@ -439,6 +439,47 @@ describe("getThemeContrastWarnings", () => {
     expect(messages.some((m) => m.includes("the surrounding palette surface"))).toBe(false);
   });
 
+  it("still reports the ordinary rail pairs when the destructive fill is unevaluable", () => {
+    // An imported theme may spell `status-danger` in a syntax this math cannot read.
+    // The destructive pair is the newest and least important of the three: losing it
+    // is acceptable, but taking the two older ones down with it would send an author
+    // who fixes the unreadable token away believing the rail was fine.
+    const scheme = makeFlatDarkScheme({
+      "overlay-raised": "#767676" as AppColorSchemeTokens["overlay-raised"],
+      "selection-outline": "#5A5A5A" as AppColorSchemeTokens["selection-outline"],
+      "status-danger": "oklch(0.5 0.1 200)" as AppColorSchemeTokens["status-danger"],
+    });
+    const warnings = getThemeContrastWarnings(scheme);
+    expect(
+      warnings.some(
+        (w) => w.kind === "low-contrast" && w.message.includes("selection-outline against")
+      )
+    ).toBe(true);
+    expect(
+      warnings.some((w) => w.kind === "unevaluable" && w.message.includes("status-danger"))
+    ).toBe(true);
+  });
+
+  it("holds the rail to the surrounding surface on a destructive row too", () => {
+    // A translucent rail is not the same pixel over the danger wash as it is over the
+    // raised fill, and the ring's outer edge sits on the row's boundary — so the
+    // surface pair has to be scored from the composited destructive ink as well.
+    const scheme = makeFlatDarkScheme({
+      "surface-sidebar": "#5A5A5A" as AppColorSchemeTokens["surface-sidebar"],
+      "surface-grid": "#5A5A5A" as AppColorSchemeTokens["surface-grid"],
+      "surface-canvas": "#5A5A5A" as AppColorSchemeTokens["surface-canvas"],
+      "surface-panel": "#5A5A5A" as AppColorSchemeTokens["surface-panel"],
+      "surface-panel-elevated": "#5A5A5A" as AppColorSchemeTokens["surface-panel-elevated"],
+      "overlay-raised": "#5A5A5A" as AppColorSchemeTokens["overlay-raised"],
+      "selection-outline": "rgba(252, 252, 252, 0.5)" as AppColorSchemeTokens["selection-outline"],
+      "status-danger": "#000000" as AppColorSchemeTokens["status-danger"],
+    });
+    const messages = getThemeContrastWarnings(scheme)
+      .filter((w) => w.message.includes("selection-outline against"))
+      .map((w) => w.message);
+    expect(messages.some((m) => m.includes("the surrounding palette surface"))).toBe(true);
+  });
+
   it("scores the dark palette surface as translucent, not as the solid sidebar", () => {
     // #5A5A5A clears 3:1 on a solid black sidebar, but the palette floats at 94%
     // over the app, and admitting 6% of a bright plane behind it drops the pair

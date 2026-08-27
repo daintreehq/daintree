@@ -201,8 +201,8 @@ type DropdownMenuSubTriggerProps = React.ComponentPropsWithoutRef<
  * `getPaletteSelectionWarnings` already holds that token to 3:1 against both the
  * raised fill and the `.surface-overlay` behind it, which is exactly the pair an
  * inset ring on a highlighted row sits between. Accent is only scored against the
- * display surfaces, and a select would then spend it twice — once on the trigger's
- * focused border, once here.
+ * display surfaces — it has no guarantee against either of the two colours this
+ * ring actually touches.
  *
  * `outline-solid` is load-bearing, not decorative: `outline-hidden` sets
  * `--tw-outline-style: none` on this element and `outline-2` reads that same
