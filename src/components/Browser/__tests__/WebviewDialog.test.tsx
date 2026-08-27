@@ -90,6 +90,39 @@ describe("WebviewDialog accessibility", () => {
     );
   });
 
+  // `formatDialogOrigin` only clips above 64 chars, and it clips from the LEFT so the
+  // identifying tail survives. This card renders far fewer than 64 chars, so a CSS
+  // single-line clip would cut hosts the JS clip never sees — and it cuts the other end,
+  // turning `bank.com.<padding>.evil.example` into `bank.com…`, which reads as an
+  // endorsement. jsdom does no layout, so the invariant is pinned on the mechanism.
+  it("keeps a mid-length origin's identifying tail out of reach of a CSS clip", () => {
+    const spoof = `bank.com.${"a".repeat(30)}.evil.example`;
+    expect(spoof.length).toBeGreaterThan(40);
+    expect(spoof.length).toBeLessThan(64);
+
+    const { container } = render(
+      <WebviewDialog dialog={{ ...baseAlert, origin: spoof }} onRespond={vi.fn()} />
+    );
+    const panel = container.querySelector('[role="dialog"]')!;
+    const label = container.querySelector<HTMLElement>(
+      `[id="${panel.getAttribute("aria-labelledby")}"]`
+    )!;
+    expect(label.textContent).toContain(spoof);
+
+    const carriers = Array.from(panel.querySelectorAll<HTMLElement>("*")).filter((el) =>
+      (el.textContent ?? "").includes(spoof)
+    );
+    expect(carriers.length).toBeGreaterThan(0);
+    const clipping = /(^|\s)(truncate|text-ellipsis|text-clip|whitespace-nowrap)(\s|$)/;
+    for (
+      let el: HTMLElement | null = carriers[carriers.length - 1]!;
+      el && el !== panel.parentElement;
+      el = el.parentElement
+    ) {
+      expect(el.className).not.toMatch(clipping);
+    }
+  });
+
   // A null origin means "no host worth claiming" (data:, blob:, about:). The label must
   // degrade to something true rather than invent a host.
   it("falls back to an origin-free label rather than guessing a host", () => {

@@ -182,10 +182,17 @@ export function WebviewDialog({ dialog, onRespond }: WebviewDialogProps) {
             Tab order and the initial-focus target the dialog's contract depends on. */}
         <SurfaceHeader className="px-4 py-2.5 gap-2 justify-start">
           <Globe className="h-3.5 w-3.5 shrink-0 text-text-secondary" aria-hidden="true" />
-          <p id={titleId} className="text-xs text-text-secondary min-w-0 truncate">
+          {/* Deliberately not `truncate`: `text-overflow: ellipsis` clips from the right,
+              the direction `clipOriginTail` exists to avoid. This card is narrower than
+              the 64-char JS threshold, so a 40-63 char host would clear the clip and then
+              be cut by CSS into `bank.com…` — the endorsement-reading spoof. Wrapping
+              keeps the identifying tail visible at any pane width; a character budget
+              tuned to one width cannot. */}
+          <p id={titleId} className="text-xs text-text-secondary min-w-0">
             {dialog.origin ? (
               <>
-                Message from <span className="font-mono text-daintree-text">{dialog.origin}</span>
+                Message from{" "}
+                <span className="font-mono text-daintree-text break-all">{dialog.origin}</span>
               </>
             ) : (
               "Message from this page"
