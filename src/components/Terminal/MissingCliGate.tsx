@@ -227,8 +227,14 @@ export function MissingCliGate({
   const docsUrl = agentConfig?.install?.docsUrl;
 
   return (
-    <div className="flex-1 min-h-0 bg-daintree-bg flex flex-col items-center justify-center overflow-auto">
-      <div className="w-full max-w-lg space-y-4 px-6 py-8">
+    // `my-auto` on the child rather than `justify-center` on the scrollport:
+    // `justify-content: center` distributes overflow to BOTH ends, so once the
+    // install blocks and troubleshooting list outgrow a short pane the agent
+    // name and "Setup required" spill above the scroll origin and cannot be
+    // scrolled back to. Auto margins collapse to zero when there is no free
+    // space, so the same centring degrades to top alignment instead.
+    <div className="flex-1 min-h-0 bg-daintree-bg flex flex-col items-center overflow-auto">
+      <div className="my-auto w-full max-w-lg space-y-4 px-6 py-8">
         <div className="flex items-center gap-2.5">
           <div className="w-8 h-8 rounded-[var(--radius-md)] bg-overlay-subtle border border-daintree-border flex items-center justify-center">
             <Terminal className="w-4 h-4 text-daintree-text/40" />

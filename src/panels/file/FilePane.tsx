@@ -1155,7 +1155,13 @@ export function FilePane({
         )}
 
         {!filePath && (
-          <div className="flex h-full w-full flex-col items-center justify-center gap-4 p-6">
+          // Auto margins on the end children rather than `justify-center`:
+          // `h-full` pins this box to the scrollport, and centred overflow
+          // spills at BOTH ends, so the empty state's icon and title become
+          // unreachable in a short pane once the recent-files list fills. Auto
+          // margins split the free space the same way and collapse to zero when
+          // there is none. Same fix as `ContentGridEmptyState`.
+          <div className="flex h-full w-full flex-col items-center gap-4 p-6 [&>*:first-child]:mt-auto [&>*:last-child]:mb-auto">
             <EmptyState
               variant="zero-data"
               scale="canvas"
@@ -1210,7 +1216,7 @@ export function FilePane({
         )}
 
         {filePath && viewMode !== "diff" && loadState === "error" && errorCode && (
-          <div className="flex h-full flex-col items-center justify-center gap-3 p-6">
+          <div className="flex h-full flex-col items-center gap-3 p-6 [&>*:first-child]:mt-auto [&>*:last-child]:mb-auto">
             <p className="text-sm text-muted-foreground">
               {errorMessage ?? FILE_READ_ERROR_MESSAGES[errorCode]}
             </p>
