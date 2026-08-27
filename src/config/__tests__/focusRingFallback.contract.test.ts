@@ -240,6 +240,12 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
       "The field is the popover's whole top strip, so its indicator is painted once on the wrapping label via focus-within — it has to span the panel's full width and take its rounded top corners, which a ring on the bare input cannot do (that ring is precisely what this component replaced)",
   },
   {
+    file: "src/components/Worktree/ReviewHub/FileSection.tsx",
+    fragment: "w-[104px] min-w-0 bg-transparent text-[11px]",
+    reason:
+      "Section filter is a strip: the wrapper carries the border, focus-within and the forced-colors outline, so the bare input must not paint a second box inside it (that nested rectangle is exactly what #11984 removed)",
+  },
+  {
     file: "src/components/HelpPanel/HelpPanel.tsx",
     fragment: "relative shrink-0 flex flex-col h-full overflow-hidden outline-hidden",
     reason:
