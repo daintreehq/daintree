@@ -90,7 +90,10 @@ function noticeRow(message: string, level: AssistantNotice["level"]): HTMLElemen
   };
   const { container } = render(
     <AssistantPanelView
-      state={{ ...PROSE_SPECIMEN, turns: [], notices: [notice] }}
+      // The specimen's own turns are KEPT. Emptying them put the panel in its boot
+      // state, where the splash draws alone and nothing else renders — including the
+      // notice this is here to read.
+      state={{ ...PROSE_SPECIMEN, notices: [notice] }}
       onSubmit={() => true}
       onInterrupt={() => {}}
       onDecideApproval={() => {}}

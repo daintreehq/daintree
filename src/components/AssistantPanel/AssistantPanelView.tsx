@@ -960,9 +960,44 @@ export function AssistantPanelView({
     }
     return byAnchor;
   }, [state.notices, state.turns]);
-  const sessionNotices = useMemo(() => {
+  /**
+   * Notices that arrived when there was no turn to sit behind — so they head the
+   * transcript rather than trail it.
+   *
+   * This is where `/clear` used to break. Clearing empties the turns and keeps its own
+   * result line as the marker of the fresh start, which leaves that line with a null
+   * anchor; unanchored notices were all drawn at the END of the scroller, so "/clear —
+   * Conversation cleared" did not head the new conversation, it followed it. Every turn
+   * after the clear pushed it further down and it stayed pinned above the composer for
+   * the rest of the session, below the live status line, describing something that had
+   * happened before everything visible above it.
+   *
+   * The same was true, less visibly, of anything the engine said before the first turn:
+   * a boot warning read correctly on an empty panel and then slid to the bottom the
+   * moment a conversation started on top of it. Chronology is the rule — a notice with
+   * nothing behind it arrived first, so it is drawn first.
+   */
+  const leadingNotices = useMemo(
+    () => state.notices.filter((n) => !n.turnId && !n.afterTurnId),
+    [state.notices]
+  );
+  /**
+   * Notices whose turn is GONE — nothing is left to draw them under, and the tail is
+   * the only honest place for them.
+   *
+   * Covers BOTH anchors. A notice the engine attributed to a turn is otherwise drawn by
+   * walking the turns, so one whose `turnId` no longer matches any of them was never
+   * drawn at all — it went into the by-turn map and stayed there, and the only symptom
+   * of losing a warning that way is a warning nobody ever saw. Catching it here makes
+   * the three buckets a total partition of the notices rather than a near-total one.
+   */
+  const orphanedNotices = useMemo(() => {
     const live = new Set(state.turns.map((t) => t.turnId));
-    return state.notices.filter((n) => !n.turnId && (!n.afterTurnId || !live.has(n.afterTurnId)));
+    // TRUTHINESS on both anchors, matching `leadingNotices` and `noticesByTurn`
+    // exactly. A strict null check here would put an empty-string anchor in this
+    // bucket AND in the leading one, drawing that notice twice.
+    const dead = (id: string | null) => (id ? !live.has(id) : false);
+    return state.notices.filter((n) => (n.turnId ? dead(n.turnId) : dead(n.afterTurnId)));
   }, [state.notices, state.turns]);
   const noticesByTurn = useMemo(() => {
     const byTurn = new Map<string, AssistantNotice[]>();
@@ -1260,6 +1295,24 @@ export function AssistantPanelView({
           className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-3 py-3"
         >
           {!booting && <Masthead state={state} live={live} />}
+          {/* HEADS the transcript. See `leadingNotices` — a notice with no turn behind
+            it arrived before everything below, and `/clear` is the case that made the
+            old placement obviously wrong.
+
+            Held for the boot state along with the masthead and the composer: the splash
+            draws ALONE, and a notice above a still-drawing mark is exactly the "two
+            things happening on top of each other" that holding them back exists to
+            prevent. Nothing is lost — `booting` clears the moment the reveal finishes
+            and the notice is still there. `/clear` never lands in this state: the
+            splash is keyed on a boot generation that only a NEW engine bumps, so an
+            emptied transcript mid-session is not a boot. */}
+          {!booting && leadingNotices.length > 0 && (
+            <div className={cn("space-y-0.5", !empty && "mb-5")}>
+              {leadingNotices.map((notice) => (
+                <NoticeRow key={notice.id} notice={notice} />
+              ))}
+            </div>
+          )}
           {booting ? (
             // The boot state: the mark draws itself while the engine connects, ALONE —
             // masthead and composer wait for `onDone` rather than arriving underneath a
@@ -1275,21 +1328,31 @@ export function AssistantPanelView({
               />
             </div>
           ) : empty ? (
-            <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
-              <DaintreeIcon aria-hidden="true" className="size-6 text-[var(--assistant-fg-dim)]" />
-              {/* Names what the assistant DOES. "Ask about this project" framed it as a
+            // Held back when a leading notice is already speaking. After `/clear` the
+            // transcript is empty and the result line is the whole content of the
+            // panel; the teaching blurb underneath it re-explained what the assistant
+            // is to someone who has just been using it, and its `h-full` centring
+            // pushed the notice into a scroller that had one line in it.
+            leadingNotices.length > 0 ? null : (
+              <div className="flex h-full flex-col items-center justify-center gap-2 px-6 text-center">
+                <DaintreeIcon
+                  aria-hidden="true"
+                  className="size-6 text-[var(--assistant-fg-dim)]"
+                />
+                {/* Names what the assistant DOES. "Ask about this project" framed it as a
                 question box, which is the one thing it is not: it plans work, spawns
                 visible agents in worktrees and supervises them. It never edits files
                 itself, and it can run several at once. Written as plain sentences with
                 no dash: the em dash read as an aside, and driving OTHER agents rather
                 than editing anything is the whole point, not a footnote. */}
-              <p className="text-[1em] text-[var(--assistant-fg)]">Put agents to work</p>
-              <p className="max-w-[26rem] text-[1em] text-[var(--assistant-fg-secondary)]">
-                Plan a change and it spawns agents across your worktrees, as many as the job needs,
-                then keeps watch on the runs. It doesn&rsquo;t edit files itself. Every agent it
-                starts is one you can see and take over.
-              </p>
-            </div>
+                <p className="text-[1em] text-[var(--assistant-fg)]">Put agents to work</p>
+                <p className="max-w-[26rem] text-[1em] text-[var(--assistant-fg-secondary)]">
+                  Plan a change and it spawns agents across your worktrees, as many as the job
+                  needs, then keeps watch on the runs. It doesn&rsquo;t edit files itself. Every
+                  agent it starts is one you can see and take over.
+                </p>
+              </div>
+            )
           ) : (
             <div className="space-y-6">
               {state.turns.map((turn) => (
@@ -1382,14 +1445,15 @@ export function AssistantPanelView({
             </div>
           )}
 
-          {sessionNotices.length > 0 && (
+          {orphanedNotices.length > 0 && (
             <div className="mt-3 space-y-0.5">
               {/* NOT truncated, and not a fixed-height strip. The cockpit committed every
                 notice to scrollback as its own cell; showing only the last few is how a
                 warning that mattered (the engine replaying a turn) disappeared behind
                 the notices that followed it. Turn-scoped notices are drawn with their
-                turn above; these are the ones the engine did not attribute to one. */}
-              {sessionNotices.map((notice) => (
+                turn above, unanchored ones head the transcript, and what is left here is
+                the remainder: a notice whose turn has since been dropped. */}
+              {orphanedNotices.map((notice) => (
                 <NoticeRow key={notice.id} notice={notice} />
               ))}
             </div>
