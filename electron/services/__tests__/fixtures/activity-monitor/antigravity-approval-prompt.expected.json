@@ -1,0 +1,15 @@
+{
+  "agentId": "antigravity",
+  "settleMs": 9000,
+  "transitions": [
+    { "atMs": 0, "state": "busy", "trigger": "pattern" },
+    { "atMs": 8350, "state": "idle", "trigger": "timeout", "waitingReason": "approval" }
+  ],
+  "fsm": {
+    "transitions": [
+      { "atMs": 0, "state": "working", "trigger": "heuristic" },
+      { "atMs": 8350, "state": "waiting", "waitingReason": "approval", "trigger": "timeout" }
+    ],
+    "finalWaitingReason": "approval"
+  }
+}

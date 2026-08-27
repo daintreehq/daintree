@@ -1,0 +1,34 @@
+{"time":0.0,"chunk":"Welcome to the Antigravity CLI. You are currently not signed in.","detectedState":"initializing","confidence":0.9,"agentId":"antigravity","agentVersion":"1.1.22"}
+{"time":0.4,"chunk":"⣷  Signing in...","detectedState":"working","confidence":0.95,"agentId":"antigravity","agentVersion":"1.1.22"}
+{"time":1.2,"chunk":"⣯  Signing in...","detectedState":"working","confidence":0.95,"agentId":"antigravity","agentVersion":"1.1.22"}
+{"time":2.5,"chunk":"  Antigravity CLI 1.1.22","detectedState":"initializing","confidence":0.9,"agentId":"antigravity","agentVersion":"1.1.22"}
+{"time":2.6,"chunk":"  Gemini 3.7 Flash (High)","detectedState":"initializing","confidence":0.9,"agentId":"antigravity","agentVersion":"1.1.22"}
+{"time":3.0,"chunk":"Do you trust the contents of this project?","detectedState":"waiting","confidence":0.85,"agentId":"antigravity","agentVersion":"1.1.22"}
+{"time":3.1,"chunk":"> Yes, I trust this folder","detectedState":"waiting","confidence":0.85,"agentId":"antigravity","agentVersion":"1.1.22"}
+{"time":3.2,"chunk":"  ↑/↓ Navigate · enter Confirm","detectedState":"waiting","confidence":0.85,"agentId":"antigravity","agentVersion":"1.1.22"}
+{"time":4.0,"chunk":"? for shortcuts                                    Gemini 3.7 Flash · high","detectedState":"waiting","confidence":0.85,"agentId":"antigravity","agentVersion":"1.1.22"}
+{"time":5.0,"chunk":"⣷  Generating...","detectedState":"working","confidence":0.95,"agentId":"antigravity","agentVersion":"1.1.22"}
+{"time":5.5,"chunk":"⣯  Generating...","detectedState":"working","confidence":0.95,"agentId":"antigravity","agentVersion":"1.1.22"}
+{"time":6.0,"chunk":"⣟  Generating...","detectedState":"working","confidence":0.95,"agentId":"antigravity","agentVersion":"1.1.22"}
+{"time":6.5,"chunk":"⡿  Generating...","detectedState":"working","confidence":0.95,"agentId":"antigravity","agentVersion":"1.1.22"}
+{"time":7.0,"chunk":"⢿  Generating...","detectedState":"working","confidence":0.95,"agentId":"antigravity","agentVersion":"1.1.22"}
+{"time":7.5,"chunk":"⣻  Generating...","detectedState":"working","confidence":0.95,"agentId":"antigravity","agentVersion":"1.1.22"}
+{"time":7.8,"chunk":"⣽  Generating...","detectedState":"working","confidence":0.95,"agentId":"antigravity","agentVersion":"1.1.22"}
+{"time":7.9,"chunk":"⣾  Generating...","detectedState":"working","confidence":0.95,"agentId":"antigravity","agentVersion":"1.1.22"}
+{"time":8.0,"chunk":"⣟  Initial interpretation suggests \"0 words\" could signify a request for a diagram","detectedState":"working","confidence":0.95,"agentId":"antigravity","agentVersion":"1.1.22"}
+{"time":9.0,"chunk":"⡿  Running command...","detectedState":"working","confidence":0.95,"agentId":"antigravity","agentVersion":"1.1.22"}
+{"time":9.5,"chunk":"⢿  Running command...","detectedState":"working","confidence":0.95,"agentId":"antigravity","agentVersion":"1.1.22"}
+{"time":10.0,"chunk":"● Bash(ls -la) (ctrl+o to expand)","detectedState":"waiting","confidence":0.0,"agentId":"antigravity","agentVersion":"1.1.22"}
+{"time":11.0,"chunk":"Requesting permission for:","detectedState":"waiting","confidence":0.85,"agentId":"antigravity","agentVersion":"1.1.22"}
+{"time":11.2,"chunk":"Do you want to proceed?","detectedState":"waiting","confidence":0.85,"agentId":"antigravity","agentVersion":"1.1.22"}
+{"time":11.3,"chunk":"> 1. Yes","detectedState":"waiting","confidence":0.85,"agentId":"antigravity","agentVersion":"1.1.22"}
+{"time":11.4,"chunk":"  ↑/↓ Navigate · tab Amend · ctrl+g edit/expand command","detectedState":"waiting","confidence":0.85,"agentId":"antigravity","agentVersion":"1.1.22"}
+{"time":11.5,"chunk":"esc to cancel                                      Gemini 3.7 Flash · high","detectedState":"waiting","confidence":0.85,"agentId":"antigravity","agentVersion":"1.1.22"}
+{"time":13.0,"chunk":"Pending edit","detectedState":"waiting","confidence":0.85,"agentId":"antigravity","agentVersion":"1.1.22"}
+{"time":13.1,"chunk":"  shift+tab to auto-approve file edits","detectedState":"waiting","confidence":0.85,"agentId":"antigravity","agentVersion":"1.1.22"}
+{"time":13.2,"chunk":"Accept this file edit?","detectedState":"waiting","confidence":0.85,"agentId":"antigravity","agentVersion":"1.1.22"}
+{"time":13.3,"chunk":"  ↑/↓ Navigate · tab Amend · f full diff","detectedState":"waiting","confidence":0.85,"agentId":"antigravity","agentVersion":"1.1.22"}
+{"time":15.0,"chunk":"▸ Thought for 4s, 745 tokens","detectedState":"waiting","confidence":0.0,"agentId":"antigravity","agentVersion":"1.1.22"}
+{"time":16.0,"chunk":"? for shortcuts                                    Gemini 3.7 Flash · high","detectedState":"waiting","confidence":0.85,"agentId":"antigravity","agentVersion":"1.1.22"}
+{"time":17.0,"chunk":"Resume with -c (or command below):","detectedState":"waiting","confidence":0.85,"agentId":"antigravity","agentVersion":"1.1.22"}
+{"time":17.1,"chunk":"agy --conversation=00000000-0000-4000-8000-000000000000","detectedState":"waiting","confidence":0.85,"agentId":"antigravity","agentVersion":"1.1.22"}
