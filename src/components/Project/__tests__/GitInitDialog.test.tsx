@@ -559,7 +559,7 @@ describe("GitInitDialog", () => {
     expect(retryButton()).toBeTruthy();
   });
 
-  it("surfaces the git config commands and offers Try again on identity error", async () => {
+  it("surfaces the git config commands and offers Retry on identity error", async () => {
     renderDialog();
 
     fireEvent.change(screen.getByLabelText(/initial commit message/i), {
@@ -598,6 +598,74 @@ describe("GitInitDialog", () => {
     fireEvent.click(retryButton());
 
     await waitFor(() => expect(initGitGuidedMock).toHaveBeenCalledTimes(1));
+  });
+
+  // Real `git` output that carries a command line without being an identity
+  // failure. Selecting the identity banner on "the text contains a line
+  // starting with `git `" hands this one a confidently wrong diagnosis —
+  // including the claim that the repository was created, which it was not.
+  it("does not diagnose a non-identity failure as a missing git identity", async () => {
+    initGitGuidedMock.mockImplementationOnce(() => {
+      progressHandler?.({
+        step: "error",
+        status: "error",
+        message: "Git initialization failed",
+        error:
+          "fatal: detected dubious ownership in repository at '/tmp/new-repo'\n" +
+          "To add an exception for this directory, call:\n\n" +
+          "\tgit config --global --add safe.directory /tmp/new-repo",
+        timestamp: Date.now(),
+      });
+      return Promise.resolve({ outcome: "error", completedSteps: [] });
+    });
+
+    renderDialog();
+    fireEvent.click(startButton());
+
+    await waitFor(() => expect(screen.getByTestId("git-init-error")).toBeTruthy());
+    expect(screen.queryByText(/initial commit skipped/i)).toBeNull();
+    expect(screen.queryByTestId("git-init-command-block")).toBeNull();
+    expect(screen.getByText(/dubious ownership/i)).toBeTruthy();
+    expect(retryButton()).toBeTruthy();
+  });
+
+  // The warning only ever exists as the gitignore step's SUCCESS message, and a
+  // run this fast never renders the progress panel that used to carry it.
+  it("carries the kept-.gitignore warning into the success state when init beats the gate", async () => {
+    initGitGuidedMock.mockImplementationOnce(() => {
+      progressHandler?.({
+        step: "gitignore",
+        status: "success",
+        message: "Existing .gitignore kept — missing 3 template entries; review it for secrets",
+        timestamp: Date.now(),
+      });
+      return Promise.resolve({ outcome: "success", completedSteps: ["init", "gitignore"] });
+    });
+
+    renderDialog();
+    fireEvent.click(startButton());
+
+    await waitFor(() => expect(screen.getByTestId("git-init-success")).toBeTruthy());
+    expect(screen.queryByTestId("git-init-progress")).toBeNull();
+    expect(screen.getByText(/review it for secrets/i)).toBeTruthy();
+  });
+
+  it("stays quiet when the existing .gitignore already covers the template", async () => {
+    initGitGuidedMock.mockImplementationOnce(() => {
+      progressHandler?.({
+        step: "gitignore",
+        status: "success",
+        message: "Existing .gitignore kept — covers all template entries",
+        timestamp: Date.now(),
+      });
+      return Promise.resolve({ outcome: "success", completedSteps: ["init", "gitignore"] });
+    });
+
+    renderDialog();
+    fireEvent.click(startButton());
+
+    await waitFor(() => expect(screen.getByTestId("git-init-success")).toBeTruthy());
+    expect(screen.queryByText(/review the existing \.gitignore/i)).toBeNull();
   });
 
   describe("project identity row", () => {

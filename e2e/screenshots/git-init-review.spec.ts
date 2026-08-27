@@ -16,9 +16,10 @@
  *     the only path that supplies one.
  *   - initialization is real. `project:init-git-guided` runs against a real folder and
  *     the progress rows come from the main process's own events.
- *   - the git-identity failure is real: the app is launched with `GIT_CONFIG_GLOBAL`
- *     pointed at a file this harness owns, so emptying it makes `git commit` fail the
- *     way it does for a user who has never configured git.
+ *   - the git-identity failure is real: the app is launched with `HOME`/`XDG_CONFIG_HOME`
+ *     pointed at a fake home this harness owns — NOT `GIT_CONFIG_GLOBAL`, which the app's
+ *     git hardening strips out of every spawn env — so rewriting that home's `.gitconfig`
+ *     makes `git commit` fail the way it does for a user who has never configured git.
  *   - the mid-flight progress state is real too — a fixture with 60k files makes
  *     `git add .` take seconds, so the shot is a genuine in-flight render rather than
  *     a paused animation frame.

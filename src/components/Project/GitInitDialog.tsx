@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo, useId } from "react";
 import { Button } from "@/components/ui/button";
 import { AppDialog } from "@/components/ui/AppDialog";
-import { Check, AlertCircle } from "lucide-react";
+import { Check, AlertCircle, AlertTriangle } from "lucide-react";
 import { Spinner } from "@/components/ui/Spinner";
 import { SkeletonHint } from "@/components/ui/Skeleton";
 import { FolderGit2 } from "@/components/icons";
@@ -117,16 +117,53 @@ function collapsePhases(events: GitInitProgressEvent[]): PhaseState[] {
  * The two `git config` lines out of the main process's identity help.
  *
  * Extracted rather than reformatted: these exact strings are the recovery, and
- * they are what goes on the clipboard. Anything that is not a command line
- * falls back to the whole block so a reworded help message degrades to the
- * old verbatim rendering instead of vanishing.
+ * they are what goes on the clipboard. Only ever called on an error already
+ * identified as the identity failure — this is a formatter, not a classifier,
+ * and it returns nothing at all when a reworded help block carries no command
+ * lines. The banner then renders its prose without a command block.
  */
 function extractCommands(help: string): string[] {
-  const commands = help
+  return help
     .split("\n")
     .map((line) => line.trim())
     .filter((line) => line.startsWith("git "));
-  return commands.length > 0 ? commands : [];
+}
+
+/**
+ * The main process's own discriminator for the identity failure
+ * (`projectCrud/gitInit.ts`), applied to the help text it forwards.
+ *
+ * Keyed on the signal rather than on "the error text happens to contain a line
+ * starting with `git `": an `init` or `add` failure whose message mentions a
+ * git command would otherwise be handed the identity diagnosis, including its
+ * claim that the repository WAS created.
+ */
+function isIdentityError(error: string): boolean {
+  return error.includes("user.email") || error.includes("user.name");
+}
+
+/** The main process's prefix for "there was already a .gitignore here". */
+const KEPT_GITIGNORE_PREFIX = "Existing .gitignore kept";
+/** The one kept-.gitignore outcome that is reassurance rather than a warning. */
+const KEPT_GITIGNORE_ALL_CLEAR = "covers all template entries";
+
+/**
+ * The kept-.gitignore warning, when the run produced one.
+ *
+ * The main process delivers it as the `gitignore` step's SUCCESS message, so it
+ * exists only inside the progress stream — and `complete` replaces the whole
+ * body, while a run that finishes inside the Doherty gate never renders
+ * `running` at all. Without carrying it forward, the one line telling the user
+ * their existing .gitignore may not cover secrets is shown to nobody.
+ */
+function keptGitignoreWarning(events: GitInitProgressEvent[]): string | null {
+  for (let i = events.length - 1; i >= 0; i -= 1) {
+    const event = events[i];
+    if (!event || event.step !== "gitignore" || event.status !== "success") continue;
+    if (!event.message.startsWith(KEPT_GITIGNORE_PREFIX)) return null;
+    return event.message.includes(KEPT_GITIGNORE_ALL_CLEAR) ? null : event.message;
+  }
+  return null;
 }
 
 export function GitInitDialog({
@@ -316,7 +353,12 @@ export function GitInitDialog({
     [phases]
   );
   const completedCount = Math.min(completedPhases.length, plannedSteps.length);
-  const identityCommands = useMemo(() => (error ? extractCommands(error) : []), [error]);
+  const isIdentityFailure = error !== null && isIdentityError(error);
+  const identityCommands = useMemo(
+    () => (error && isIdentityFailure ? extractCommands(error) : []),
+    [error, isIdentityFailure]
+  );
+  const keptGitignore = useMemo(() => keptGitignoreWarning(progressEvents), [progressEvents]);
 
   const configDisabled = isInitializing;
   const canStart = !isNameMissing && !isCommitMessageMissing;
@@ -404,28 +446,45 @@ export function GitInitDialog({
 
       <AppDialog.Body className="space-y-5">
         {mode === "complete" ? (
-          <div
-            className="flex flex-col items-center gap-4 py-6 text-center"
-            data-testid="git-init-success"
-            role="status"
-            aria-live="polite"
-            aria-atomic="true"
-          >
-            <div className="flex h-12 w-12 items-center justify-center rounded-full bg-status-success/15">
-              <Check className="h-6 w-6 text-status-success" />
+          <>
+            {/* Above the confirmation, not inside it: the run succeeded, but it
+                left a .gitignore this dialog did not write, and the only place
+                that was ever said is a progress row nobody sees when the run
+                beats the Doherty gate. */}
+            {keptGitignore && (
+              <InlineStatusBanner
+                icon={AlertTriangle}
+                severity="warning"
+                title="Review the existing .gitignore"
+                description={keptGitignore}
+                className="rounded-[var(--radius-md)]"
+              />
+            )}
+            <div
+              className="flex flex-col items-center gap-4 py-6 text-center"
+              data-testid="git-init-success"
+              role="status"
+              aria-live="polite"
+              aria-atomic="true"
+            >
+              <div className="flex h-12 w-12 items-center justify-center rounded-full bg-status-success/15">
+                <Check className="h-6 w-6 text-status-success" />
+              </div>
+              <div className="space-y-1">
+                <h3 className="text-base font-semibold text-daintree-text">
+                  Repository initialized
+                </h3>
+                {/* Says what is about to happen, not merely what is possible:
+                    this mode opens the project on its own two seconds later, and
+                    "is ready to open" read as though it were waiting. */}
+                <p className="text-sm text-daintree-text/60">
+                  Opening <span aria-hidden="true">{emoji} </span>
+                  {trimmedProjectName}…
+                </p>
+              </div>
+              <PathCaption path={directoryPath} className="max-w-full" />
             </div>
-            <div className="space-y-1">
-              <h3 className="text-base font-semibold text-daintree-text">Repository initialized</h3>
-              {/* Says what is about to happen, not merely what is possible:
-                  this mode opens the project on its own two seconds later, and
-                  "is ready to open" read as though it were waiting. */}
-              <p className="text-sm text-daintree-text/60">
-                Opening <span aria-hidden="true">{emoji} </span>
-                {trimmedProjectName}…
-              </p>
-            </div>
-            <PathCaption path={directoryPath} className="max-w-full" />
-          </div>
+          </>
         ) : mode === "running" ? (
           <>
             {/* One current phase, the way every other running-operation surface
@@ -530,18 +589,20 @@ export function GitInitDialog({
                 remediation twice. */}
             {error && (
               <div data-testid="git-init-error">
-                {identityCommands.length > 0 ? (
+                {isIdentityFailure ? (
                   <InlineStatusBanner
                     icon={AlertCircle}
                     severity="error"
                     title="Initial commit skipped"
                     description="The repository was created, but Git needs a name and email before it can commit. Set them, then retry."
                     descriptionExtras={
-                      <div className="mt-2 space-y-1.5" data-testid="git-init-command-block">
-                        {identityCommands.map((command) => (
-                          <CopyableCommand key={command} command={command} />
-                        ))}
-                      </div>
+                      identityCommands.length > 0 ? (
+                        <div className="mt-2 space-y-1.5" data-testid="git-init-command-block">
+                          {identityCommands.map((command) => (
+                            <CopyableCommand key={command} command={command} />
+                          ))}
+                        </div>
+                      ) : undefined
                     }
                     className="rounded-[var(--radius-md)]"
                   />
