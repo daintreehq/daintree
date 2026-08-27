@@ -75,7 +75,6 @@ describe("WebviewDialog accessibility", () => {
     const panel = container.querySelector('[role="dialog"]')!;
     const label = container.querySelector(`[id="${panel.getAttribute("aria-labelledby")}"]`)!;
     const message = container.querySelector(`[id="${panel.getAttribute("aria-describedby")}"]`)!;
-    // eslint-disable-next-line no-bitwise
     const relation = label.compareDocumentPosition(message);
     expect(relation & Node.DOCUMENT_POSITION_FOLLOWING).toBeTruthy();
   });

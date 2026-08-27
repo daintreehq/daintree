@@ -6,6 +6,16 @@ import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { SurfaceHeader } from "@/components/ui/SurfaceHeader";
 import { FIELD_INPUT } from "@/components/Worktree/views/WorktreeFormLayout";
 
+/**
+ * `ScrollShadow` reads its fade colour from this variable, and the card is the surface the
+ * fades have to disappear into. Declared as a typed constant rather than asserted inline:
+ * `CSSProperties` has no index signature for custom properties, and the cast that would
+ * paper over that is the one the lint ratchet counts.
+ */
+const CARD_STYLE: CSSProperties & Record<"--scroll-shadow-color", string> = {
+  "--scroll-shadow-color": "var(--color-surface-dialog)",
+};
+
 const TABBABLE_SELECTOR =
   'a[href], area[href], input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), button:not([disabled]), audio[controls], video[controls], [contenteditable]:not([contenteditable="false"]), [tabindex]:not([tabindex^="-"])';
 
@@ -165,7 +175,7 @@ export function WebviewDialog({ dialog, onRespond }: WebviewDialogProps) {
         aria-describedby={messageId}
         tabIndex={-1}
         className="bg-surface-dialog border border-border-default rounded-[var(--radius-xl)] shadow-[var(--theme-shadow-dialog)] w-full max-w-md max-h-full flex flex-col overflow-hidden"
-        style={{ "--scroll-shadow-color": "var(--color-surface-dialog)" } as CSSProperties}
+        style={CARD_STYLE}
       >
         {/* The only line on this surface Daintree wrote. Everything below it is the
             page's. Carries no focusable control on purpose: adding one would change the
