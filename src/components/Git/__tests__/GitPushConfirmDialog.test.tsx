@@ -341,32 +341,47 @@ describe("GitPushConfirmDialog", () => {
     expect(unverified.textContent).toMatch(/n't confirmed|unverified/);
   });
 
-  // The host stays mounted across close/open, so state survives. Approval must
-  // be gated on the preview belonging to THIS request, or a second confirm for a
-  // different worktree is approvable against the previous one's commits.
-  it("will not approve a preview belonging to a previous request", async () => {
-    mocks.buildPreview.mockResolvedValue({
-      branch: "main",
-      destination: { remote: "origin", branch: "main" },
-      pullSource: null,
-      commits: [{ hash: "abcdef12", message: "One", author: "Ada" }],
-      pushRange: { total: 1, rangeBasis: "tracked" as const },
-    });
+  // The host stays mounted across close/open, so preview state survives a
+  // request. A superseded request's response must not land and re-enable
+  // approval against the worktree the user has already moved away from.
+  it("drops a superseded response instead of approving against it", async () => {
+    const first = deferred<{
+      branch: string;
+      destination: { remote: string; branch: string };
+      pullSource: null;
+      commits: Array<{ hash: string; message: string; author: string }>;
+      pushRange: { total: number; rangeBasis: "tracked" };
+    }>();
+    mocks.buildPreview.mockReturnValue(first.promise);
     render(<GitPushConfirmDialog />);
 
     await act(async () => {
       void useGitPushConfirmStore.getState().requestConfirmation("/repo-a");
     });
-    expect(pushButton().hasAttribute("disabled")).toBe(false);
 
-    // A second request for a DIFFERENT worktree, held mid-flight.
-    const gate = deferred<never>();
-    mocks.buildPreview.mockReturnValue(gate.promise);
+    // A second request for a DIFFERENT worktree supersedes the first.
+    const second = deferred<never>();
+    mocks.buildPreview.mockReturnValue(second.promise);
     await act(async () => {
       void useGitPushConfirmStore.getState().requestConfirmation("/repo-b");
     });
 
+    // The FIRST worktree's answer arrives late.
+    await act(async () => {
+      first.resolve({
+        branch: "main",
+        destination: { remote: "origin", branch: "main" },
+        pullSource: null,
+        commits: [{ hash: "abcdef12", message: "One", author: "Ada" }],
+        pushRange: { total: 1, rangeBasis: "tracked" },
+      });
+      await first.promise;
+    });
+
+    // It must neither render nor enable approval: it describes /repo-a, and the
+    // dialog on screen is asking about /repo-b.
     expect(pushButton().hasAttribute("disabled")).toBe(true);
+    expect(screen.queryAllByTestId("git-push-commit-row")).toHaveLength(0);
   });
 
   // The creation marker is the one claim that requires the remote to have spoken.
