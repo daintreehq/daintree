@@ -558,6 +558,20 @@ test("git init dialog review — configuration, progress, recovery and success",
       // `:focus-visible` in Chromium, so the shot came back pixel-identical to the
       // unfocused default and read as "this button has no focus ring" — a defect that
       // was the harness's, not the dialog's. Walk the real tab order instead.
+      // The dialog focuses its name field on a rAF, and under load the first Tab
+      // could fire before that landed — which spent the budget walking in from
+      // wherever focus happened to be. Wait for the handoff, then walk.
+      await page
+        .locator("#git-init-project-name")
+        .evaluate((el) => el === document.activeElement)
+        .then(async (ok) => {
+          if (ok) return;
+          await page.waitForFunction(
+            () => document.activeElement?.id === "git-init-project-name",
+            undefined,
+            { timeout: 5000 }
+          );
+        });
       let focused = false;
       for (let i = 0; i < 12 && !focused; i++) {
         await page.keyboard.press("Tab");
