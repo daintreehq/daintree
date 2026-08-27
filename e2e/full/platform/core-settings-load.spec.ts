@@ -385,8 +385,8 @@ test.describe.serial("Core: Settings Pages Load", () => {
         }
       );
 
-      // Default Worktree Mode section should be visible (scoped to automation panel)
-      await expect(automationPanel.locator("text=Default Worktree Mode")).toBeVisible({
+      // Default worktree mode section should be visible (scoped to automation panel)
+      await expect(automationPanel.locator("text=Default worktree mode")).toBeVisible({
         timeout: T_SHORT,
       });
     });

@@ -480,6 +480,73 @@ test("add-preset dialog review — start-from states", async () => {
   }
 });
 
+/**
+ * The choice-row treatment is shared, so the surfaces it was rolled out to need
+ * eyes on them too — particularly this one, where the group sits in the narrow
+ * right column of a two-column label rail rather than across a dialog.
+ */
+test("choice-row rollout review — settings surfaces", async () => {
+  test.info().annotations.push({
+    type: "conditional-skip",
+    description: "DAINTREE_SHOT_PRESET and DAINTREE_SHOT_ROLLOUT are required",
+  });
+  test.skip(!ENABLED || !process.env.DAINTREE_SHOT_ROLLOUT, "Set DAINTREE_SHOT_ROLLOUT");
+
+  mkdirSync(OUTPUT_DIR, { recursive: true });
+  const { page, cleanup } = await boot();
+  try {
+    const { openSettings } = await import("../helpers/panels");
+    await openSettings(page);
+    await expect(page.locator(SEL.settings.heading)).toBeVisible({ timeout: 15_000 });
+
+    await page.locator('[aria-label="Settings scope"]').click();
+    await page.locator('[role="option"]', { hasText: "Project" }).click();
+    await settle(page, 800);
+    await page.locator(`${SEL.settings.navSidebar} button`, { hasText: "Worktree Setup" }).click();
+
+    const panel = page.locator("#settings-panel-project\\:automation");
+    await expect(panel).toBeVisible({ timeout: 15_000 });
+
+    // Seed one resource environment so the worktree-mode group has a second option.
+    const selectorBar = panel.locator('[data-testid="environment-selector-bar"]');
+    if (!(await selectorBar.isVisible().catch(() => false))) {
+      await panel.locator('[aria-label="Add environment"]').click();
+      const nameInput = panel.locator("#new-environment-name");
+      await expect(nameInput).toBeVisible({ timeout: 10_000 });
+      await nameInput.fill("docker-local");
+      await panel
+        .locator('[data-testid="add-environment-form"]')
+        .locator("button", { hasText: "Add" })
+        .click();
+    }
+    await expect(selectorBar).toBeVisible({ timeout: 15_000 });
+
+    await page
+      .locator("#project-branch-prefix")
+      .scrollIntoViewIfNeeded()
+      .catch(() => undefined);
+    await settle(page, 600);
+    await snap(page, "90-branch-prefix", ["Branch Prefix", "Username"], "#project-branch-prefix");
+
+    // The custom option's dependent field, nested in its own card.
+    await panel
+      .locator('input[type="radio"][name="branchPrefixMode"][value="custom"]')
+      .click({ force: true });
+    await settle(page, 500);
+    await snap(page, "91-branch-prefix-custom", ["Custom", "Prefix"], "#project-branch-prefix");
+
+    await panel
+      .locator('input[type="radio"][name="worktreeMode"]')
+      .first()
+      .scrollIntoViewIfNeeded();
+    await settle(page, 600);
+    await snap(page, "92-worktree-mode", ["Default worktree mode", "Local"], "body");
+  } finally {
+    writeManifest();
+    await cleanup();
+  }
+});
+
 test("add-preset dialog review — every theme", async () => {
   test.info().annotations.push({
     type: "conditional-skip",

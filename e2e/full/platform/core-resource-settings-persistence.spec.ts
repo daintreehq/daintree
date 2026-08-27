@@ -333,7 +333,7 @@ test.describe.serial("Full: Resource Settings Persistence", () => {
 
     // Set default worktree mode to "e2e-docker"
     const panel = window.locator("#settings-panel-project\\:automation");
-    await expect(panel.locator("text=Default Worktree Mode")).toBeVisible({ timeout: T_SHORT });
+    await expect(panel.locator("text=Default worktree mode")).toBeVisible({ timeout: T_SHORT });
     const dockerRadio = panel.locator('input[type="radio"][value="e2e-docker"]');
     await dockerRadio.click();
     await expect(dockerRadio).toBeChecked({ timeout: T_SHORT });

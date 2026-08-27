@@ -1,38 +1,18 @@
 import { useState, useEffect, useMemo, useId } from "react";
 import { getAgentConfig, type AgentPreset } from "@/config/agents";
 import { AppDialog } from "@/components/ui/AppDialog";
+import {
+  RadioChoiceGroup,
+  RadioChoiceRow,
+  CHOICE_SHELL,
+  CHOICE_PAD,
+  CHOICE_SELECTED,
+  CHOICE_UNSELECTED,
+  CHOICE_LABEL_INSET,
+} from "@/components/ui/RadioChoice";
 import { cn } from "@/lib/utils";
 
 type CreationChoice = "blank" | "clone" | "template";
-
-/**
- * Full-row choice surfaces, so the click target matches the visual target and
- * the three starting points read as one decision set.
- *
- * Selection is carried by the neutral border + fill pair the rest of the app
- * uses for a chosen option, never by accent: the dialog's single accent spend
- * is the focus ring. Under forced-colors both the fill and the border colour
- * are overridden, which is why the native radio stays — the UA paints its
- * checked state itself and remains the indicator of last resort.
- */
-// No display utility here: the shell is composed onto a `flex` label, and
-// tailwind-merge resolves same-property utilities by order, so a `block` in
-// this string silently wins and drops the radio onto its own line.
-const ROW_SHELL = "rounded-[var(--radius-md)] border transition-colors duration-150";
-const ROW_PAD = "px-3 py-2.5";
-/**
- * The transparent outline is not decoration. Under `forced-colors: active` the
- * UA overrides `outline-color` — including `transparent` — to a system colour,
- * so this is what keeps the chosen card distinguishable when the fill and the
- * border have both been repainted to the same value. It costs nothing in normal
- * rendering. (MDN/Microsoft forced-colors guidance; the same reason the app
- * prefers `outline` over `ring` for focus.)
- */
-const ROW_SELECTED =
-  "border-border-strong bg-overlay-selected outline outline-2 outline-transparent";
-const ROW_UNSELECTED = "border-daintree-border hover:bg-overlay-soft hover:border-daintree-text/30";
-/** Radio (~13px) + `gap-3`, so a nested control lines up with the label column. */
-const LABEL_COLUMN_INSET = "ml-[25px]";
 
 interface AddPresetDialogProps {
   isOpen: boolean;
@@ -119,10 +99,8 @@ export function AddPresetDialog({
 
       <AppDialog.Body>
         {hasChoice ? (
-          <fieldset className="space-y-2">
-            <legend className="text-sm font-medium text-daintree-text mb-2">Start from</legend>
-
-            <RadioOption
+          <RadioChoiceGroup legend="Start from">
+            <RadioChoiceRow
               name="creation-choice"
               value="blank"
               checked={choice === "blank"}
@@ -132,7 +110,7 @@ export function AddPresetDialog({
             />
 
             {currentPreset && (
-              <RadioOption
+              <RadioChoiceRow
                 name="creation-choice"
                 value="clone"
                 checked={choice === "clone"}
@@ -144,10 +122,13 @@ export function AddPresetDialog({
 
             {canUseTemplate && (
               <div
-                className={cn(ROW_SHELL, choice === "template" ? ROW_SELECTED : ROW_UNSELECTED)}
+                className={cn(
+                  CHOICE_SHELL,
+                  choice === "template" ? CHOICE_SELECTED : CHOICE_UNSELECTED
+                )}
                 data-testid="template-choice-row"
               >
-                <RadioOption
+                <RadioChoiceRow
                   name="creation-choice"
                   value="template"
                   checked={choice === "template"}
@@ -162,7 +143,7 @@ export function AddPresetDialog({
                     carries the dependency: fills and borders are stripped under
                     forced-colors, structure is not. */}
                 {choice === "template" && (
-                  <div className={cn(ROW_PAD, "pt-0 space-y-1.5", LABEL_COLUMN_INSET)}>
+                  <div className={cn(CHOICE_PAD, "pt-0 space-y-1.5", CHOICE_LABEL_INSET)}>
                     <label
                       htmlFor={providerId}
                       className="block text-xs font-medium text-text-secondary"
@@ -195,7 +176,7 @@ export function AddPresetDialog({
                 )}
               </div>
             )}
-          </fieldset>
+          </RadioChoiceGroup>
         ) : (
           // One path left is not a decision. Say what will happen and why the
           // other two are absent, rather than rendering a single-option group.
@@ -211,69 +192,5 @@ export function AddPresetDialog({
         primaryAction={{ label: "Create preset", onClick: handleCreate, disabled: !canCreate }}
       />
     </AppDialog>
-  );
-}
-
-function RadioOption({
-  name,
-  value,
-  checked,
-  onChange,
-  label,
-  description,
-  bare,
-}: {
-  name: string;
-  value: string;
-  checked: boolean;
-  onChange: () => void;
-  label: string;
-  description: string;
-  /** Rendered inside a row that already paints the choice surface. */
-  bare?: boolean;
-}) {
-  const labelId = useId();
-  const descriptionId = useId();
-
-  return (
-    <label
-      className={cn(
-        "flex items-start gap-3 cursor-pointer",
-        ROW_PAD,
-        // A bare option is padded by the same rule but leaves the border and
-        // fill to the row that wraps it, so the whole card stays one target.
-        !bare && [ROW_SHELL, checked ? ROW_SELECTED : ROW_UNSELECTED]
-      )}
-    >
-      <input
-        type="radio"
-        name={name}
-        value={value}
-        checked={checked}
-        onChange={onChange}
-        // Wrapping the whole card in the <label> is what makes the row one
-        // click target, but it also folds the description into the accessible
-        // name, so every option announces as one long run-on string. Naming the
-        // title explicitly wins over the label subtree (AccName precedence),
-        // and the consequence line comes back as a description instead.
-        aria-labelledby={labelId}
-        aria-describedby={descriptionId}
-        // The theme accent tint comes from the global `accent-color` base rule;
-        // the outline is here because the global `*:focus-visible` rule only
-        // wires the transition, so a bare radio would fall through to
-        // Chromium's cobalt — the one hue the app otherwise never renders.
-        // mt-1 centres the ~13px control in the label's 20px line box; at
-        // mt-0.5 it rode level with the top of the capital letter.
-        className="mt-1 shrink-0 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
-      />
-      <span className="min-w-0">
-        <span id={labelId} className="block text-sm font-medium text-daintree-text">
-          {label}
-        </span>
-        <span id={descriptionId} className="block text-xs text-text-secondary select-text">
-          {description}
-        </span>
-      </span>
-    </label>
   );
 }

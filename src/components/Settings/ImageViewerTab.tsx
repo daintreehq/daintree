@@ -1,4 +1,14 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useId } from "react";
+import {
+  RadioChoiceGroup,
+  RadioChoiceRow,
+  CHOICE_SHELL,
+  CHOICE_PAD,
+  CHOICE_SELECTED,
+  CHOICE_UNSELECTED,
+  CHOICE_LABEL_INSET,
+} from "@/components/ui/RadioChoice";
+import { cn } from "@/lib/utils";
 import { Image } from "lucide-react";
 import { SettingsSection } from "@/components/Settings/SettingsSection";
 import { useProjectStore } from "@/store";
@@ -9,6 +19,7 @@ import { logError } from "@/utils/logger";
 type ImageViewerMode = "os" | "custom";
 
 export function ImageViewerTab() {
+  const commandFieldId = useId();
   const [mode, setMode] = useState<ImageViewerMode>("os");
   const [customCommand, setCustomCommand] = useState("");
   const [isLoading, setIsLoading] = useState(false);
@@ -20,6 +31,8 @@ export function ImageViewerTab() {
 
   const activeProject = useProjectStore((s) => s.currentProject);
   const activeProjectId = activeProject?.id;
+
+  const controlsDisabled = isLoading || Boolean(loadError);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -127,53 +140,61 @@ export function ImageViewerTab() {
         description="Choose the application that opens when you click 'Open in Image Viewer' in the file viewer."
       >
         <div className="space-y-4">
-          <div className="space-y-2">
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="radio"
-                name="imageViewerMode"
-                value="os"
-                checked={mode === "os"}
-                onChange={() => handleModeChange("os")}
-                disabled={isLoading || Boolean(loadError)}
-                className="accent-daintree-accent disabled:opacity-50 disabled:cursor-not-allowed"
-              />
-              <span className="text-sm text-daintree-text">Use OS default</span>
-            </label>
-            <p className="text-xs text-daintree-text/40 ml-6">
-              Opens images with your system default viewer (Preview on macOS, Photos on Windows).
-            </p>
+          <RadioChoiceGroup legend="Image viewer mode" legendHidden>
+            <RadioChoiceRow
+              name="imageViewerMode"
+              value="os"
+              checked={mode === "os"}
+              onChange={() => handleModeChange("os")}
+              disabled={controlsDisabled}
+              label="Use OS default"
+              description="Opens images with your system default viewer — Preview on macOS, Photos on Windows"
+            />
 
-            <label className="flex items-center gap-2 cursor-pointer">
-              <input
-                type="radio"
+            {/* The command field belongs to this option, so it renders inside
+                the card and outside the label: nesting is what carries the
+                dependency once forced-colors has flattened every fill. */}
+            <div
+              className={cn(
+                CHOICE_SHELL,
+                mode === "custom" ? CHOICE_SELECTED : CHOICE_UNSELECTED,
+                controlsDisabled && "opacity-50"
+              )}
+            >
+              <RadioChoiceRow
                 name="imageViewerMode"
                 value="custom"
                 checked={mode === "custom"}
                 onChange={() => handleModeChange("custom")}
-                disabled={isLoading || Boolean(loadError)}
-                className="accent-daintree-accent disabled:opacity-50 disabled:cursor-not-allowed"
+                disabled={controlsDisabled}
+                label="Custom command"
+                description="Opens images with a command you provide"
+                bare
               />
-              <span className="text-sm text-daintree-text">Custom command</span>
-            </label>
-          </div>
-
-          {mode === "custom" && (
-            <div className="space-y-1 ml-6">
-              <label className="text-xs text-daintree-text/60">Command</label>
-              <input
-                type="text"
-                value={customCommand}
-                onChange={(e) => handleCommandChange(e.target.value)}
-                disabled={isLoading || Boolean(loadError)}
-                placeholder="e.g. open -a Photoshop, gimp"
-                className="w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text focus:outline-hidden focus:border-daintree-accent/40 transition-colors font-mono disabled:opacity-50 disabled:cursor-not-allowed"
-              />
-              <p className="text-xs text-daintree-text/40">
-                The file path will be appended as the last argument.
-              </p>
+              {mode === "custom" && (
+                <div className={cn(CHOICE_PAD, "pt-0 space-y-1.5", CHOICE_LABEL_INSET)}>
+                  <label
+                    htmlFor={commandFieldId}
+                    className="block text-xs font-medium text-text-secondary"
+                  >
+                    Command
+                  </label>
+                  <input
+                    id={commandFieldId}
+                    type="text"
+                    value={customCommand}
+                    onChange={(e) => handleCommandChange(e.target.value)}
+                    disabled={controlsDisabled}
+                    placeholder="e.g. open -a Photoshop, gimp"
+                    className="w-full bg-surface-input border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text font-mono transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 disabled:opacity-50 disabled:cursor-not-allowed"
+                  />
+                  <p className="text-xs text-text-secondary select-text">
+                    The file path is appended as the last argument
+                  </p>
+                </div>
+              )}
             </div>
-          )}
+          </RadioChoiceGroup>
 
           <div className="flex items-center gap-2">
             <button
