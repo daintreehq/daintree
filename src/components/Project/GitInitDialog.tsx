@@ -217,7 +217,13 @@ export function GitInitDialog({
     trimmedProjectName !== "" && (!createInitialCommit || initialCommitMessage.trim() !== "");
 
   return (
-    <AppDialog isOpen={isOpen} onClose={handleClose} size="md" dismissible={!isInitializing}>
+    <AppDialog
+      isOpen={isOpen}
+      onClose={handleClose}
+      size="md"
+      dismissible={!isInitializing}
+      data-testid="git-init-dialog"
+    >
       <AppDialog.Header>
         <AppDialog.Title icon={<FolderGit2 className="h-5 w-5 text-daintree-accent" />}>
           Set up project
@@ -253,6 +259,7 @@ export function GitInitDialog({
             <p
               id={nameErrorId}
               role="alert"
+              data-testid="git-init-name-error"
               className={`${FIELD_EMOJI_ROW_INDENT} text-xs text-status-error`}
             >
               Enter a project name
@@ -313,9 +320,15 @@ export function GitInitDialog({
         </div>
 
         {showProgress && (
-          <div className="rounded-lg bg-muted/50 p-4 min-h-[120px] max-h-[300px] overflow-y-auto font-mono text-sm">
+          <div
+            data-testid="git-init-progress"
+            className="rounded-lg bg-muted/50 p-4 min-h-[120px] max-h-[300px] overflow-y-auto font-mono text-sm"
+          >
             {progressEvents.length === 0 && isInitializing && (
-              <div className="flex items-center gap-2 text-muted-foreground">
+              <div
+                data-testid="git-init-connecting"
+                className="flex items-center gap-2 text-muted-foreground"
+              >
                 <Spinner size="md" />
                 <span>Starting initialization...</span>
               </div>
@@ -324,7 +337,11 @@ export function GitInitDialog({
             {progressEvents.map((event, index) => {
               const showCommands = !!event.error?.includes("git config --global");
               return (
-                <div key={index} className="flex items-start gap-2 mb-2">
+                <div
+                  key={index}
+                  data-testid="git-init-step"
+                  className="flex items-start gap-2 mb-2"
+                >
                   {getStepIcon(event)}
                   <div className="flex-1 min-w-0">
                     <div
@@ -342,7 +359,10 @@ export function GitInitDialog({
                       <div className="text-xs text-status-error mt-1">{event.error}</div>
                     )}
                     {event.error && showCommands && (
-                      <pre className="text-xs text-status-error mt-1 whitespace-pre-wrap font-mono">
+                      <pre
+                        data-testid="git-init-command-block"
+                        className="text-xs text-status-error mt-1 whitespace-pre-wrap font-mono"
+                      >
                         {event.error}
                       </pre>
                     )}
@@ -356,7 +376,10 @@ export function GitInitDialog({
         )}
 
         {error && !progressEvents.some((e) => e.status === "error") && (
-          <div className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive flex items-start gap-2">
+          <div
+            data-testid="git-init-error"
+            className="rounded-lg bg-destructive/10 p-3 text-sm text-destructive flex items-start gap-2"
+          >
             <AlertCircle className="h-4 w-4 mt-0.5 flex-shrink-0" />
             <div>
               <div className="font-medium">Initialization failed</div>
