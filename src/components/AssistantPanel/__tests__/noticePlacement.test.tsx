@@ -84,10 +84,12 @@ describe("notice placement", () => {
     expect(at(el, "SIGNED-IN-ANSWER")).toBeLessThan(at(el, "/account"));
   });
 
-  it("keeps a notice that arrived before any turn at the end", () => {
-    // Nothing to sit behind, and the end is where the panel's session-level strip lives.
-    // A boot error on an empty transcript has to stay visible rather than being dropped
-    // for want of an anchor.
+  it("HEADS the transcript with a notice that arrived before any turn", () => {
+    // It used to go to the end, on the reasoning that an unanchored notice has nothing
+    // to sit behind. But it does have something to sit BEFORE: everything. `/clear` is
+    // where that got expensive — clearing empties the turns and keeps its own result
+    // line, so the line was unanchored by construction and every turn asked afterwards
+    // pushed it further down, until "conversation cleared" sat under the conversation.
     const el = renderPanel({
       ...PROSE_SPECIMEN,
       turns: [userTurn("t1", "a question")],
@@ -97,6 +99,7 @@ describe("notice placement", () => {
     });
 
     expect(at(el, "ANCHORED")).toBeGreaterThan(-1);
+    expect(at(el, "ANCHORED")).toBeLessThan(at(el, "a question"));
   });
 
   it("does not lose a notice whose turn has been cleared", () => {
@@ -130,5 +133,38 @@ describe("notice placement", () => {
     });
 
     expect(at(el, "RETRY-WARNING")).toBeGreaterThan(-1);
+  });
+});
+
+describe("every notice is drawn, and drawn once", () => {
+  it("partitions them across the three places a notice can go", () => {
+    // Head, under its turn, and the tail. The buckets have to be disjoint AND total:
+    // an overlap doubles a warning, and a gap loses one — the second of which nothing
+    // on screen can reveal, since the symptom is a warning nobody ever saw.
+    const notices: AssistantNotice[] = [
+      // Unanchored: the head.
+      { ...commandResult("a", "", "HEAD"), afterTurnId: null },
+      // Anchored to a live turn: under it.
+      commandResult("b", "t1", "UNDER-TURN"),
+      // Anchored to a turn that is gone: the tail.
+      commandResult("c", "t-gone", "TAIL"),
+      // Attributed to a turn that is gone. Turn-scoped notices are drawn by walking the
+      // turns, so this one was reached by nothing at all — it went into the by-turn map
+      // and stayed there.
+      { ...commandResult("d", "", "DEAD-TURN"), turnId: "t-also-gone", afterTurnId: null },
+      // An empty-string anchor, which a strict null check and a truthiness check read
+      // differently — enough to put one notice in two buckets and draw it twice.
+      { ...commandResult("e", "", "EMPTY-ANCHOR"), afterTurnId: "" },
+    ];
+    const el = renderPanel({
+      ...PROSE_SPECIMEN,
+      turns: [userTurn("t1", "a question")],
+      notices,
+    });
+
+    for (const marker of ["HEAD", "UNDER-TURN", "TAIL", "DEAD-TURN", "EMPTY-ANCHOR"]) {
+      expect((el.textContent ?? "").split(marker).length - 1, `${marker} drawn once`).toBe(1);
+    }
+    expect(el.querySelectorAll('[data-testid="assistant-notice"]')).toHaveLength(notices.length);
   });
 });
