@@ -1,7 +1,17 @@
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 
+/**
+ * Elements that are actually in the tab order.
+ *
+ * Every branch excludes `tabindex="-1"`, not just the generic `[tabindex]` one. A
+ * roving-tabindex widget — a tablist, a radiogroup, a listbox — marks its inactive
+ * members `-1` precisely so they are not tab stops, and a native tag does not change
+ * that. Without the guard, `<button role="radio" tabindex="-1">` counted as the first
+ * tabbable element of a dialog, so opening one focused the *unchecked* radio, and a
+ * focus trap computed its boundary at an element Tab could never reach.
+ */
 export const TABBABLE_SELECTOR =
-  'a[href], area[href], input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), button:not([disabled]), audio[controls], video[controls], [contenteditable]:not([contenteditable="false"]), [tabindex]:not([tabindex^="-"])';
+  'a[href]:not([tabindex^="-"]), area[href]:not([tabindex^="-"]), input:not([disabled]):not([type="hidden"]):not([tabindex^="-"]), select:not([disabled]):not([tabindex^="-"]), textarea:not([disabled]):not([tabindex^="-"]), button:not([disabled]):not([tabindex^="-"]), audio[controls]:not([tabindex^="-"]), video[controls]:not([tabindex^="-"]), [contenteditable]:not([contenteditable="false"]):not([tabindex^="-"]), [tabindex]:not([tabindex^="-"])';
 
 function isHiddenFromFocus(element: HTMLElement): boolean {
   if (element.closest("[hidden], [inert], [aria-hidden='true']")) return true;
