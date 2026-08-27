@@ -173,11 +173,14 @@ function GitPullRebaseConfirmDialogInner() {
   const isUpstreamMissing = isSettled && !isDetached && upstream === null;
   const isLoaded = isSettled && commits !== null;
   const isUnfetched = rebaseRange?.rangeBasis === "unfetched";
-  // "Already matches" is a categorical claim, so it needs a range that was actually
-  // measured against the upstream. An unfetched one was not: there was no local ref
-  // to subtract from, and empty there means "not measured", never "nothing to replay".
-  const isInSync = isLoaded && commits.length === 0 && upstream !== null && !isUnfetched;
-  const isEmptyUnfetched = isLoaded && commits.length === 0 && upstream !== null && isUnfetched;
+  const isMeasuredEmpty = isLoaded && commits.length === 0 && upstream !== null && !isUnfetched;
+  // A measured-empty range is produced by two different repositories: one level
+  // with its upstream, and one purely behind it. Both replay nothing, but only the
+  // second is moved by the rebase, so "already matches" is true of exactly one of
+  // them and the `behind` count is the only thing that separates them.
+  const isInSync = isMeasuredEmpty && (rebaseRange?.behind ?? 0) === 0;
+  const isBehindOnly = isMeasuredEmpty && (rebaseRange?.behind ?? 0) > 0;
+  const isEmptyUnfetched = isLoaded && upstream !== null && isUnfetched;
   const total = rebaseRange?.total ?? commits?.length ?? 0;
   const hiddenCount = commits ? Math.max(0, total - commits.length) : 0;
 
@@ -185,19 +188,27 @@ function GitPullRebaseConfirmDialogInner() {
   // rebase anyway, and guessing `origin` is the bug (#11746). `commits === null` is
   // "not loaded", which is a different thing from a loaded empty range: a branch
   // level with its upstream is approvable and replays nothing.
-  const confirmDisabled = !isSettled || commits === null || !upstream || !!loadError;
+  //
+  // `isUnfetched` blocks for the same reason the unresolved upstream does. The
+  // panel says in as many words that the replay set could not be measured, and a
+  // surface whose entire job is showing what gets rewritten must not hand out an
+  // approval in the one state where it cannot answer that. Fetching is a
+  // non-destructive thing the user can go and do; approving past an unknown is not.
+  const confirmDisabled = !isSettled || commits === null || !upstream || !!loadError || isUnfetched;
 
   // Names the one unmet prerequisite rather than leaving a dead button to be read as
   // arbitrary. Ordered by which the user can act on first.
   const blockedReason = loadError
-    ? "Rebase stays blocked until the preview loads"
+    ? "Retry the preview to continue"
     : isDetached
-      ? "Rebase stays blocked until a branch is checked out"
+      ? "Check out a branch to continue"
       : isUpstreamMissing
-        ? "Rebase stays blocked until an upstream is set"
-        : showPendingHint
-          ? "Checking which commits this would replay…"
-          : null;
+        ? "Set an upstream to continue"
+        : isUnfetched
+          ? "Fetch the upstream to continue"
+          : showPendingHint
+            ? "Checking what would be replayed…"
+            : null;
 
   return (
     <ConfirmDialog
@@ -212,8 +223,7 @@ function GitPullRebaseConfirmDialogInner() {
       description={
         <span>
           Rebasing replays your local commits on top of the upstream, so each becomes a new commit
-          with a different hash. Anything already pointing at the old ones &mdash; a pushed branch,
-          an open review &mdash; stops matching.
+          with a different hash and anything pointing at the old ones stops matching.
         </span>
       }
       confirmLabel="Pull and rebase"
@@ -232,23 +242,28 @@ function GitPullRebaseConfirmDialogInner() {
       onConfirm={() => resolveConfirmation(true)}
     >
       <div className="rounded border border-tint/[0.08] bg-tint/[0.04] text-xs">
+        {/* Rewrites first, then Onto: the pair reads in the order the operation
+            happens — this branch is taken and replayed onto that ref — so the
+            reader does not have to hold the base in mind while working out what
+            it applies to. Same local-then-remote order as the sibling's From/To,
+            with the vocabulary that keeps a rewrite from reading as a transfer. */}
         <dl className="px-3 py-2 space-y-1.5" data-testid="git-pull-rebase-upstream-summary">
-          <SummaryRow label="Onto">
-            {upstreamLabel && isSettled ? (
-              <RefChip value={upstreamLabel} emphasis />
+          <SummaryRow label="Rewrites">
+            {branch && isSettled ? (
+              <RefChip value={branch} emphasis />
             ) : !isSettled && !loadError ? (
-              <Bone className="w-48" />
+              <Bone className="w-40" />
             ) : loadError ? (
               <Unknown />
             ) : (
               <Unresolved />
             )}
           </SummaryRow>
-          <SummaryRow label="Rewrites">
-            {branch && isSettled ? (
-              <RefChip value={branch} />
+          <SummaryRow label="Onto">
+            {upstreamLabel && isSettled ? (
+              <RefChip value={upstreamLabel} emphasis />
             ) : !isSettled && !loadError ? (
-              <Bone className="w-40" />
+              <Bone className="w-48" />
             ) : loadError ? (
               <Unknown />
             ) : (
@@ -333,13 +348,18 @@ function GitPullRebaseConfirmDialogInner() {
               <div className="mt-0.5 text-daintree-text/70">
                 This branch doesn&apos;t track anything, so there is nothing to replay it onto.
                 Point it at a remote branch:
-                {/* Written out in full rather than as the bare
-                    `git branch --set-upstream-to` the old copy gave: that form takes
-                    a required argument, so following the instruction as printed just
-                    returned an error and left the user back on this screen. */}
-                <span className="mt-1 block font-mono text-daintree-text/80 whitespace-nowrap overflow-x-auto">
-                  git branch --set-upstream-to=&lt;remote&gt;/{branch ?? "<branch>"}{" "}
-                  {branch ?? "<branch>"}
+                {/* Carries its argument, unlike the bare `git branch --set-upstream-to`
+                    the old copy printed: that form takes a required value, so following
+                    the instruction as written just returned an error and left the user
+                    back on this screen. The trailing branch name is omitted because it
+                    defaults to HEAD, which is the branch this state is about — and
+                    naming it twice was long enough to run off the frame.
+
+                    Wraps rather than scrolls: a ref that decides which repository gets
+                    replayed onto must never be half-shown, and a clipped command reads
+                    as a rendering fault rather than as something scrollable. */}
+                <span className="mt-1 block font-mono text-daintree-text/80 break-all">
+                  git branch --set-upstream-to=&lt;remote&gt;/{branch ?? "<branch>"}
                 </span>
               </div>
             </div>
@@ -352,14 +372,32 @@ function GitPullRebaseConfirmDialogInner() {
           </div>
         )}
 
-        {isEmptyUnfetched && (
+        {isBehindOnly && (
           <div
             className="px-3 py-3 text-daintree-text/60"
-            data-testid="git-pull-rebase-empty-unfetched"
+            data-testid="git-pull-rebase-behind-only"
           >
-            {upstreamLabel} has never been fetched into this worktree, so which commits would be
-            replayed couldn&apos;t be measured. The rebase itself fetches first and will work it out
-            then.
+            Nothing of yours to replay &mdash; {branch} is {rebaseRange?.behind} behind{" "}
+            {upstreamLabel} and would fast-forward onto it. No commit changes hash.
+          </div>
+        )}
+
+        {isEmptyUnfetched && (
+          // Blocking, not a quiet note: this is the one state where the surface
+          // cannot answer the question it exists to answer, so it gets the same
+          // alert treatment as the other states that refuse the operation.
+          <div className="px-3 py-3 text-status-error flex items-start gap-2" role="alert">
+            <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
+            <div className="flex-1 min-w-0" data-testid="git-pull-rebase-empty-unfetched">
+              <div className="font-medium">Nothing to compare against yet</div>
+              <div className="mt-0.5 text-daintree-text/70">
+                {upstreamLabel} has never been fetched into this worktree, so which of your commits
+                would be rewritten can&apos;t be worked out. Fetch it and try again:
+                <span className="mt-1 block font-mono text-daintree-text/80 break-all">
+                  git fetch {upstream?.remote}
+                </span>
+              </div>
+            </div>
           </div>
         )}
 
@@ -410,12 +448,20 @@ function GitPullRebaseConfirmDialogInner() {
           </ScrollShadow>
         )}
       </div>
-      {/* The quietest tier on the surface, and last: this is the least specific thing
-          the dialog has to say, but it is the one question a rebase raises that
-          nothing else here answers. */}
-      <p className="text-[11px] text-daintree-text/55">
-        If a replay hits a conflict, Git stops mid-rebase and leaves the branch there to resolve.
-      </p>
+      {/* The quietest tier on the surface, and last: the least specific thing the
+          dialog has to say, but the one question a rebase raises that nothing else
+          here answers.
+
+          Gated on there actually being a replay. It used to render in every state,
+          so a branch with nothing to replay, a branch with no upstream and a failed
+          read all carried a caution about conflicts during a replay the panel
+          directly above had just said would not happen — and it made the empty
+          state taller than the one-commit state. */}
+      {isLoaded && commits.length > 0 && (
+        <p className="text-[11px] text-daintree-text/55">
+          If a replay hits a conflict, Git stops mid-rebase and leaves the branch there to resolve.
+        </p>
+      )}
     </ConfirmDialog>
   );
 }

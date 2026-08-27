@@ -75,7 +75,7 @@ describe("GitPullRebaseConfirmDialog", () => {
       pullSource: { remote: "origin", branch: "feature/y" },
       commits: [],
       pushRange: null,
-      rebaseRange: { total: 0, rangeBasis: "tracked" },
+      rebaseRange: { total: 0, rangeBasis: "tracked", behind: 0 },
     });
     render(<GitPullRebaseConfirmDialog />);
 
@@ -93,6 +93,7 @@ describe("GitPullRebaseConfirmDialog", () => {
       pullSource: { remote: string; branch: string };
       commits: never[];
       pushRange: null;
+      rebaseRange: { total: number; rangeBasis: "tracked"; behind: number };
     }>();
     mocks.buildPreview.mockReturnValue(gate.promise);
     render(<GitPullRebaseConfirmDialog />);
@@ -110,7 +111,7 @@ describe("GitPullRebaseConfirmDialog", () => {
         pullSource: { remote: "origin", branch: "main" },
         commits: [],
         pushRange: null,
-        rebaseRange: { total: 0, rangeBasis: "tracked" },
+        rebaseRange: { total: 0, rangeBasis: "tracked", behind: 0 },
       });
       await gate.promise;
     });
@@ -136,7 +137,7 @@ describe("GitPullRebaseConfirmDialog", () => {
       pullSource: { remote: "origin", branch: "main" },
       commits: [],
       pushRange: null,
-      rebaseRange: { total: 0, rangeBasis: "tracked" },
+      rebaseRange: { total: 0, rangeBasis: "tracked", behind: 0 },
     });
     render(<GitPullRebaseConfirmDialog />);
 
@@ -168,7 +169,7 @@ describe("GitPullRebaseConfirmDialog", () => {
       pullSource: { remote: "origin", branch: "main" },
       commits: [{ hash: "abcdef1234567", message: "Fix the thing", author: "Ada" }],
       pushRange: null,
-      rebaseRange: { total: 1, rangeBasis: "tracked" as const },
+      rebaseRange: { total: 1, rangeBasis: "tracked" as const, behind: 0 },
       ...overrides,
     };
   }
@@ -268,7 +269,7 @@ describe("GitPullRebaseConfirmDialog", () => {
   // there is nothing to be careful about.
   it("says nothing would be replayed instead of listing rows for a measured-empty range", async () => {
     mocks.buildPreview.mockResolvedValue(
-      loaded({ commits: [], rebaseRange: { total: 0, rangeBasis: "tracked" as const } })
+      loaded({ commits: [], rebaseRange: { total: 0, rangeBasis: "tracked" as const, behind: 0 } })
     );
     render(<GitPullRebaseConfirmDialog />);
 
@@ -283,10 +284,16 @@ describe("GitPullRebaseConfirmDialog", () => {
     expect(rebaseButton().hasAttribute("disabled")).toBe(false);
   });
 
-  // An unfetched upstream measured nothing, so it may not borrow the empty note.
-  it("refuses to claim an empty replay set when the upstream was never fetched", async () => {
+  // An unfetched upstream measured nothing, so it may not borrow the empty note —
+  // and, more importantly, it may not be approved. This is the one state where the
+  // surface cannot answer the question it exists to answer, and a destructive
+  // confirm that hands out an approval there is failing open.
+  it("blocks approval rather than claiming an empty replay set when the upstream was never fetched", async () => {
     mocks.buildPreview.mockResolvedValue(
-      loaded({ commits: [], rebaseRange: { total: 0, rangeBasis: "unfetched" as const } })
+      loaded({
+        commits: [],
+        rebaseRange: { total: 0, rangeBasis: "unfetched" as const, behind: 0 },
+      })
     );
     render(<GitPullRebaseConfirmDialog />);
 
@@ -296,6 +303,53 @@ describe("GitPullRebaseConfirmDialog", () => {
 
     expect(screen.queryByTestId("git-pull-rebase-in-sync")).toBeNull();
     expect(screen.getByTestId("git-pull-rebase-empty-unfetched")).toBeTruthy();
+    expect(rebaseButton().hasAttribute("disabled")).toBe(true);
+    expect(screen.getAllByRole("alert").length).toBeGreaterThan(0);
+    expect(screen.getByTestId("app-dialog-hint").textContent?.trim()).toBeTruthy();
+  });
+
+  // Both a level branch and a purely-behind branch measure an empty replay set, and
+  // only one of them "already matches". Saying so of the other is a plain factual
+  // error about what the operation is going to do.
+  it("separates a branch that is level from one that is only behind", async () => {
+    mocks.buildPreview.mockResolvedValue(
+      loaded({ commits: [], rebaseRange: { total: 0, rangeBasis: "tracked" as const, behind: 6 } })
+    );
+    render(<GitPullRebaseConfirmDialog />);
+
+    await act(async () => {
+      void useGitPullRebaseConfirmStore.getState().requestConfirmation("/repo");
+    });
+
+    expect(screen.queryByTestId("git-pull-rebase-in-sync")).toBeNull();
+    expect(screen.getByTestId("git-pull-rebase-behind-only")).toBeTruthy();
+    // Still approvable: a fast-forward is a real, wanted outcome — it just does
+    // not rewrite anything, which is the part the copy has to get right.
+    expect(rebaseButton().hasAttribute("disabled")).toBe(false);
+  });
+
+  // The conflict caution describes what happens DURING a replay. Rendering it in a
+  // state with nothing to replay contradicts the panel directly above it, and it
+  // made the empty state taller than the one-commit state.
+  it("only cautions about replay conflicts when there is a replay", async () => {
+    mocks.buildPreview.mockResolvedValue(
+      loaded({ commits: [], rebaseRange: { total: 0, rangeBasis: "tracked" as const, behind: 0 } })
+    );
+    const { unmount } = render(<GitPullRebaseConfirmDialog />);
+    await act(async () => {
+      void useGitPullRebaseConfirmStore.getState().requestConfirmation("/repo");
+    });
+    expect(screen.queryByText(/stops mid-rebase/i)).toBeNull();
+
+    useGitPullRebaseConfirmStore.getState().resolveConfirmation(false);
+    unmount();
+
+    mocks.buildPreview.mockResolvedValue(loaded());
+    render(<GitPullRebaseConfirmDialog />);
+    await act(async () => {
+      void useGitPullRebaseConfirmStore.getState().requestConfirmation("/repo");
+    });
+    expect(screen.getByText(/stops mid-rebase/i)).toBeTruthy();
   });
 
   // Every state that kills the primary has to say so where a screen reader will
@@ -330,8 +384,11 @@ describe("GitPullRebaseConfirmDialog", () => {
     // Announced: assistive tech learns why without having to hunt for it.
     expect(screen.getAllByRole("alert").length).toBeGreaterThan(0);
     // And stated beside the control it disables, so a sighted user does not have
-    // to infer the reason from a greyed-out button.
-    expect(screen.getByText(/stays blocked until/i)).toBeTruthy();
+    // to infer the reason from a greyed-out button. Asserted as "the footer hint
+    // says something", not against the wording: keying off the copy would make
+    // this a test of the string rather than of the rule, and rewording a hint is
+    // exactly the kind of change that should stay free.
+    expect(screen.getByTestId("app-dialog-hint").textContent?.trim()).toBeTruthy();
   });
 
   // A detached HEAD also resolves no upstream, so the order of the two checks is
@@ -376,7 +433,7 @@ describe("GitPullRebaseConfirmDialog", () => {
           { hash: "aaaaaaa1111", message: "One", author: "Ada" },
           { hash: "bbbbbbb2222", message: "Two", author: "Ada" },
         ],
-        rebaseRange: { total: 30, rangeBasis: "tracked" as const },
+        rebaseRange: { total: 30, rangeBasis: "tracked" as const, behind: 0 },
       })
     );
     render(<GitPullRebaseConfirmDialog />);

@@ -438,7 +438,7 @@ describe("list-rebase-commits — replay range", () => {
       cwd: CWD,
       branchName: LOCAL_BRANCH,
       limit: 5,
-    }) as Promise<{ rangeBasis: string; total: number; upstream: unknown }>;
+    }) as Promise<{ rangeBasis: string; total: number; behind: number; upstream: unknown }>;
   }
 
   it("ranges from the UPSTREAM's tracking ref, not the push destination's", async () => {
@@ -449,8 +449,6 @@ describe("list-rebase-commits — replay range", () => {
     // The whole point of the separate read: this branch pushes to `team/fork`
     // and tracks `origin`, and a rebase replays onto what it TRACKS. Ranging
     // against the push destination would preview a set the rebase never touches.
-    expect(git.log).toHaveBeenCalledWith(["--max-count=5", `${UPSTREAM_REF}..${LOCAL_REF}`]);
-    expect(git.raw).toHaveBeenCalledWith(["rev-list", "--count", `${UPSTREAM_REF}..${LOCAL_REF}`]);
     expect(result.upstream).toEqual({ remote: UPSTREAM_REMOTE, branch: UPSTREAM_BRANCH });
     expect(result.rangeBasis).toBe("tracked");
     expect(
@@ -458,6 +456,46 @@ describe("list-rebase-commits — replay range", () => {
         ((call[0] ?? []) as string[]).some((a) => a.includes(PUSH_REF))
       )
     ).toBe(false);
+  });
+
+  // Rebase does not replay everything in `<upstream>..<branch>`. It skips merge
+  // commits and commits the upstream already carries as an equivalent patch, so a
+  // plain two-dot range promises rewrites that never happen — most visibly to the
+  // developer who lands here from a rejected push, whose commits are the ones most
+  // likely to be patch-equivalent. Asserted as "the range carries rebase's own
+  // selection and the rows and the count agree", not against a literal argv order.
+  it("selects the range the way rebase does, and counts over the same one", async () => {
+    const git = makeRebaseGit([UPSTREAM_REF]);
+
+    await listRebaseCommits(git);
+
+    const logArgs = (git.log.mock.calls[0]![0] ?? []) as string[];
+    const countArgs = (
+      git.raw.mock.calls.find(
+        (call: unknown[]) => ((call[0] ?? []) as string[])[0] === "rev-list"
+      )![0] as string[]
+    ).slice(2);
+    for (const flag of ["--no-merges", "--cherry-pick", "--right-only"]) {
+      expect(logArgs).toContain(flag);
+      expect(countArgs).toContain(flag);
+    }
+    // Symmetric difference, which is what `--right-only` needs to mean anything.
+    expect(logArgs).toContain(`${UPSTREAM_REF}...${LOCAL_REF}`);
+    // The rows and the total must describe the same set, or the "…and N more"
+    // tail is counting something the list is not showing.
+    expect(countArgs).toEqual(logArgs.filter((a) => !a.startsWith("--max-count=")));
+  });
+
+  // An empty replay set is produced both by a branch level with its upstream and by
+  // one purely behind it. Only the second is moved by the rebase, so the count that
+  // separates them has to be measured in the other direction.
+  it("measures how far behind the branch is, in the opposite direction", async () => {
+    const git = makeRebaseGit([UPSTREAM_REF]);
+
+    const result = await listRebaseCommits(git);
+
+    expect(git.raw).toHaveBeenCalledWith(["rev-list", "--count", `${LOCAL_REF}..${UPSTREAM_REF}`]);
+    expect(result.behind).toBe(7);
   });
 
   it("never reaches the network to measure a replay set", async () => {

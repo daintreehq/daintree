@@ -71,6 +71,8 @@ const DIALOG = "[data-app-dialog-surface] > div";
  */
 const TID = {
   noUpstream: '[data-testid="git-pull-rebase-no-destination"]',
+  unfetched: '[data-testid="git-pull-rebase-empty-unfetched"]',
+  behindOnly: '[data-testid="git-pull-rebase-behind-only"]',
   loading: '[data-testid="git-pull-rebase-commits-loading"]',
   retry: '[data-testid="git-pull-rebase-commits-retry"]',
   commitRow: '[data-testid="git-pull-rebase-commit-row"]',
@@ -219,6 +221,28 @@ function createFixtureRepo(): { dir: string; cleanup: () => void } {
     "Wilhelmina Fitzgerald-Mackintosh"
   );
   commit(dir, "src/preview2.ts", "export const two = 2;\n", "fix: short one", "Jean Bartik");
+
+  // behind only: tracks a remote branch that already has all fourteen commits, while
+  // sitting on none of them. Nothing of the user's is replayed and no hash changes —
+  // an empty replay range that must NOT be reported as "already matches", because
+  // the rebase does move the branch.
+  git(["push", "origin", "main:refs/heads/release/next"], dir);
+  git(["checkout", "-b", "docs/behind-upstream", "main~14"], dir);
+  git(["branch", "--set-upstream-to=origin/release/next", "docs/behind-upstream"], dir);
+
+  // unfetched upstream: the config names one and `%(upstream)` resolves it, but its
+  // remote-tracking ref has never existed here, so there is nothing local to subtract
+  // from and the replay set cannot be measured. What a branch looks like after its
+  // upstream is renamed or deleted on the remote, or under a narrow fetch refspec.
+  //
+  // Configured directly rather than by deleting a ref that `push -u` created: the app
+  // fetches in the background, and a deleted tracking ref for a branch that DOES exist
+  // on the remote comes straight back, which silently turns this into the in-sync
+  // state. An upstream that names a branch the remote has never had cannot be
+  // resurrected by any fetch.
+  git(["checkout", "-b", "spike/unfetched-upstream", "main~14"], dir);
+  git(["config", "branch.spike/unfetched-upstream.remote", "origin"], dir);
+  git(["config", "branch.spike/unfetched-upstream.merge", "refs/heads/never-fetched-here"], dir);
 
   // no upstream: never pushed, no branch.<n>.merge, so `resolveGitUpstream` refuses.
   git(["checkout", "-b", "spike/unconfigured-remote", "main~14"], dir);
@@ -444,7 +468,25 @@ test("git pull-rebase confirm review — preview states", async () => {
       }
     );
 
-    // 5. No upstream — the block that must never degrade into a guess at `origin`.
+    // 5a. Behind only: an empty replay range that is NOT a level branch. Shares its
+    //     shape with step 3 and must not share its wording.
+    await step("behind", "docs/behind-upstream", async () => {
+      await openRebaseConfirm(page, repo.dir);
+      await snap(page, "21-behind-only", { marker: SEL.confirmDialog.confirm, locator: DIALOG });
+    });
+
+    // 5b. Upstream configured but never fetched here — the one state where the
+    //     replay set cannot be measured at all, and so the one where approval has
+    //     to be refused rather than granted over an unknown.
+    await step("unfetched", "spike/unfetched-upstream", async () => {
+      await openRebaseConfirm(page, repo.dir);
+      await snap(page, "22-unfetched-upstream", {
+        marker: TID.unfetched,
+        locator: DIALOG,
+      });
+    });
+
+    // 6. No upstream — the block that must never degrade into a guess at `origin`.
     await step("no-upstream", "spike/unconfigured-remote", async () => {
       await openRebaseConfirm(page, repo.dir);
       await snap(page, "30-no-upstream", { marker: TID.noUpstream, locator: DIALOG });
@@ -494,6 +536,19 @@ test("git pull-rebase confirm review — preview states", async () => {
       await page.emulateMedia({ forcedColors: "active" });
       await openRebaseConfirm(page, repo.dir);
       await snap(page, "75-forced-colors", { marker: TID.commitRow, locator: DIALOG });
+    });
+
+    // 11. BOTH at once, which is the combination the real platform reports and
+    //     neither single-query shot can catch: on a high-contrast Windows palette
+    //     Chromium matches `prefers-contrast: more` as well as `forced-colors:
+    //     active`, and the two blocks in `src/index.css` are written independently.
+    //     The destructive button is distinguished from Cancel by border weight
+    //     alone here, so a rule from one block that lands on the other's buttons
+    //     erases the only marker on the action that rewrites history.
+    await step("forced-contrast", "main", async () => {
+      await page.emulateMedia({ forcedColors: "active", contrast: "more" });
+      await openRebaseConfirm(page, repo.dir);
+      await snap(page, "80-forced-colors-contrast", { marker: TID.commitRow, locator: DIALOG });
     });
   } finally {
     if (ctx?.app) await closeApp(ctx.app).catch(() => {});

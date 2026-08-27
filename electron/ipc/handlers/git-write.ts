@@ -378,19 +378,43 @@ const gitRemotePreviewNamespace = defineIpcNamespace({
               rangeBasis: "unfetched",
               commits: [],
               total: 0,
+              behind: 0,
             };
           }
 
-          const revArgs = [`${upstream.remoteTrackingRef}..${localRef}`];
-          // No `--no-merges`: the "N more" tail is only honest while the listed
-          // rows and `total` describe the same set the rebase would replay.
+          // `git rebase`'s own selection, not a plain two-dot range. Rebase
+          // picks its todo list with `--no-merges --cherry-pick --right-only`
+          // over the symmetric difference, and each flag drops rows a two-dot
+          // range would have promised to rewrite:
+          //
+          //  - `--no-merges`, because a default rebase does not recreate merge
+          //    commits. Listing them claims a rewrite that never happens.
+          //    (The push preview deliberately keeps merges — a push publishes
+          //    them — which is why this is not shared with it.)
+          //  - `--cherry-pick --right-only` over `...`, because a commit the
+          //    upstream already carries as an equivalent patch is skipped by
+          //    rebase rather than replayed. Those are exactly the commits a
+          //    developer arriving from a rejected push is most likely to have.
+          const revArgs = [
+            "--no-merges",
+            "--cherry-pick",
+            "--right-only",
+            `${upstream.remoteTrackingRef}...${localRef}`,
+          ];
           const log = await git.log([`--max-count=${limit}`, ...revArgs]);
           const total = await countCommitsInRange(git, revArgs);
+          // Measured separately and in the other direction: an empty replay set
+          // is produced both by a branch level with its upstream and by one
+          // purely behind it, and only the second is moved by the rebase.
+          const behind = await countCommitsInRange(git, [
+            `${localRef}..${upstream.remoteTrackingRef}`,
+          ]);
 
           return {
             upstream: { remote: upstream.remote, branch: upstream.branch },
             rangeBasis: "tracked",
             total,
+            behind,
             commits: log.all.map((commit) => ({
               hash: commit.hash,
               date: commit.date,

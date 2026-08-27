@@ -16,6 +16,7 @@ function stubGit(overrides: {
   rebaseCommits?: Array<{ hash: string; message: string; author: string }>;
   rebaseTotal?: number;
   rebaseRangeBasis?: "tracked" | "unfetched";
+  rebaseBehind?: number;
   reject?: boolean;
   rejectCommits?: boolean;
   rejectPushCommits?: boolean;
@@ -62,6 +63,7 @@ function stubGit(overrides: {
           rangeBasis: overrides.rebaseRangeBasis ?? "tracked",
           commits: rebaseCommits,
           total: overrides.rebaseTotal ?? rebaseCommits.length,
+          behind: overrides.rebaseBehind ?? 0,
         })
   );
   Object.defineProperty(globalThis, "window", {
@@ -181,7 +183,7 @@ describe("buildGitRemoteOperationPreview", () => {
     await expect(buildGitRemoteOperationPreview("/repo", "pull-rebase")).resolves.toMatchObject({
       commits: [{ hash: "abcdef1234", message: "Fix the thing", author: "Ada" }],
       pushRange: null,
-      rebaseRange: { total: 1, rangeBasis: "tracked" },
+      rebaseRange: { total: 1, rangeBasis: "tracked", behind: 0 },
     });
     expect(listRebaseCommits).toHaveBeenCalledWith("/repo", "feature/x", PREVIEW_COMMIT_LIMIT);
     expect(listCommits).not.toHaveBeenCalled();
@@ -244,6 +246,7 @@ describe("buildGitRemoteOperationPreview", () => {
       rangeBasis: "tracked" as const,
       commits: [],
       total: 0,
+      behind: 0,
     });
     await expect(buildGitRemoteOperationPreview("/repo", "pull-rebase")).resolves.toMatchObject({
       pullSource: { remote: "origin", branch: "renamed-topic" },
@@ -609,7 +612,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         pullSource: { remote: "origin", branch: "topic" },
         commits: [],
         pushRange: null,
-        rebaseRange: { total: 0, rangeBasis: "tracked" },
+        rebaseRange: { total: 0, rangeBasis: "tracked", behind: 0 },
       },
       "No local commits to replay.",
       "pull-rebase"
@@ -627,7 +630,7 @@ describe("formatGitRemoteOperationPreviewLines", () => {
         pullSource: { remote: "origin", branch: "topic" },
         commits: [],
         pushRange: null,
-        rebaseRange: { total: 0, rangeBasis: "unfetched" },
+        rebaseRange: { total: 0, rangeBasis: "unfetched", behind: 0 },
       },
       "No local commits to replay.",
       "pull-rebase"

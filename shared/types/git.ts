@@ -222,6 +222,16 @@ export interface GitRebaseCommitPreview {
   commits: GitRemoteCommit[];
   /** Commits in the whole replay set, which may exceed the returned `commits`. */
   total: number;
+  /**
+   * Commits the upstream has that the branch does not — what the rebase would
+   * bring in.
+   *
+   * Carried because an empty replay set alone cannot tell "level with the
+   * upstream" from "purely behind it". Both replay nothing; only the second one
+   * moves the branch, so calling either "already matches" is wrong half the time.
+   * `0` when the range could not be measured.
+   */
+  behind: number;
 }
 
 export interface StagingStatus {

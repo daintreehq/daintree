@@ -62,6 +62,8 @@ export interface GitRebaseRangeFacts {
    * range is NOT evidence that nothing would be replayed.
    */
   rangeBasis: "tracked" | "unfetched";
+  /** Commits the upstream has that the branch does not — what the rebase brings in. */
+  behind: number;
 }
 
 export interface GitRemoteOperationPreview {
@@ -193,6 +195,7 @@ export async function buildGitRemoteOperationPreview(
     rebaseRange: {
       total: preview.total,
       rangeBasis: preview.rangeBasis,
+      behind: preview.behind,
     },
   };
 }
