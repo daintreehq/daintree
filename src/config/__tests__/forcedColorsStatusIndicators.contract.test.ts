@@ -61,6 +61,30 @@ describe("forced-colors status-indicator contract (#8936)", () => {
     );
   });
 
+  // #11988: the notification inbox row's unread dot and thread-count chip are
+  // both solid backgrounds, so forced colors pushed them to Canvas. The dot is
+  // the more serious of the two — an unread row deliberately carries no border
+  // and no background tint, and an untitled one has no title to embolden, so
+  // losing the dot left that row with no unread indication at all.
+  it("index.css repaints the inbox unread dot with CanvasText !important", () => {
+    const block = readForcedColorsBlocks(INDEX_CSS);
+    expect(block).toContain('[data-notification-unread="true"]');
+    // !important for the same reason ActivityLight needs it: it has to beat the
+    // background-color the UA otherwise forces to Canvas.
+    expect(block).toMatch(
+      /\[data-notification-unread="true"\]\s*\{[^}]*background-color:\s*CanvasText[^}]*!important/
+    );
+  });
+
+  it("index.css gives the inbox thread-count chip a border in forced colors", () => {
+    const block = readForcedColorsBlocks(INDEX_CSS);
+    expect(block).toContain('[data-notification-count="true"]');
+    // A border, not a background: borders survive the override, backgrounds do
+    // not. Without it the count renders as a bare numeral running on from the
+    // title instead of as a chip.
+    expect(block).toMatch(/\[data-notification-count="true"\]\s*\{[^}]*border:[^}]*CanvasText/);
+  });
+
   it("index.css gives the checked SettingsSwitch track a Highlight fill", () => {
     const block = readForcedColorsBlocks(INDEX_CSS);
     expect(block).toContain('[role="switch"][data-state="checked"]');

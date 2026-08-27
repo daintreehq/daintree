@@ -2,6 +2,7 @@
 import { render, screen, act, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi, beforeEach, afterEach } from "vitest";
 import type { NotificationHistoryEntry } from "@/store/slices/notificationHistorySlice";
+import { PALETTE_ROW_FOCUS_CLASS } from "@/components/ui/paletteRowStyles";
 import { NotificationCenterEntry } from "../NotificationCenterEntry";
 
 const dispatchMock = vi.hoisted(() => vi.fn().mockResolvedValue({ ok: true }));
@@ -518,35 +519,138 @@ describe("NotificationCenterEntry roving focus props", () => {
     expect(onFocus).toHaveBeenCalledTimes(1);
   });
 
-  it("adds focus-visible ring classes only when tabIndex is set", () => {
+  it("applies a keyboard-focus treatment only when tabIndex is set", () => {
     const { container, rerender } = render(<NotificationCenterEntry entry={makeEntry()} />);
-    expect((container.firstElementChild as HTMLElement).className).not.toMatch(
-      /focus-visible:ring/
-    );
+    const focusClasses = () => (container.firstElementChild as HTMLElement).className;
+    expect(focusClasses()).not.toMatch(/focus-visible:/);
 
     rerender(<NotificationCenterEntry entry={makeEntry()} tabIndex={0} />);
-    expect((container.firstElementChild as HTMLElement).className).toMatch(/focus-visible:ring/);
+    // Every focus utility the shared palette-row treatment contributes must
+    // survive onto the row. Checked token-by-token rather than as one string
+    // because `cn()` runs tailwind-merge, which folds the constant's bare
+    // `focus-visible:outline` into its `focus-visible:outline-2` sibling — the
+    // width utility carries `outline-style: var(--tw-outline-style)`, whose
+    // registered initial value is `solid`, so the ring still paints.
+    const survivors = PALETTE_ROW_FOCUS_CLASS.split(/\s+/).filter(
+      (token) => token !== "focus-visible:outline"
+    );
+    for (const token of survivors) {
+      expect(focusClasses()).toContain(token);
+    }
   });
 
-  it("reveals the action layer on keyboard focus of the row or a descendant", () => {
-    render(<NotificationCenterEntry entry={makeEntry()} onDismiss={vi.fn()} />);
-    // Visibility is owned by the action-layer wrapper (the dismiss button's parent),
-    // not the buttons themselves.
-    const actionLayer = screen.getByLabelText("Dismiss notification").parentElement as HTMLElement;
-    // Row-focus path: the row is the `group`, so `group-focus-visible` must be present.
-    expect(actionLayer.className).toMatch(/group-focus-visible:opacity-100/);
-    expect(actionLayer.className).toMatch(/group-focus-visible:pointer-events-auto/);
-    // Descendant-focus path (focus lands on a button inside the row).
-    expect(actionLayer.className).toMatch(/group-has-\[:focus-visible\]:opacity-100/);
-    expect(actionLayer.className).toMatch(/group-has-\[:focus-visible\]:pointer-events-auto/);
-    expect(actionLayer.className).not.toMatch(/group-focus-within:opacity-100/);
+  it("uses an outline rather than a box-shadow ring for keyboard focus", () => {
+    // The rule, not the value: `outline` is the only focus primitive that
+    // survives Windows High Contrast, where box-shadow is forced to `none`.
+    const { container } = render(<NotificationCenterEntry entry={makeEntry()} tabIndex={0} />);
+    const className = (container.firstElementChild as HTMLElement).className;
+    expect(className).toMatch(/focus-visible:outline/);
+    expect(className).not.toMatch(/focus-visible:ring-/);
   });
 
-  it("keeps the action layer revealed while the kebab dropdown is open", () => {
-    render(<NotificationCenterEntry entry={makeEntry({ context: { projectId: "p1" } })} />);
-    const actionLayer = screen.getByLabelText("Notification options").parentElement as HTMLElement;
-    expect(actionLayer.className).toMatch(/group-has-\[\[data-state=open\]\]:opacity-100/);
-    expect(actionLayer.className).toMatch(/group-has-\[\[data-state=open\]\]:pointer-events-auto/);
+  it("keeps the timestamp rendered in every interaction state", () => {
+    // The defect this replaced: the trailing region cross-faded the timestamp
+    // out and covered it with an absolutely positioned action layer, so time —
+    // the reason the inbox is the durable surface — disappeared exactly when a
+    // row was being inspected. The invariant is that no interaction state may
+    // remove or occlude it, so no class on the timestamp or any ancestor
+    // between it and the row may be conditional on hover, focus or menu state.
+    const { container } = render(
+      <NotificationCenterEntry
+        entry={makeEntry({ context: { projectId: "p1" } })}
+        onDismiss={vi.fn()}
+        tabIndex={0}
+      />
+    );
+    const row = container.firstElementChild as HTMLElement;
+    const timestamp = screen.getByTestId("notification-timestamp");
+    expect(row.contains(timestamp)).toBe(true);
+
+    const stateVariant = /(?:^|:)(?:group-)?(?:hover|focus-visible|has-\[)/;
+    for (let el: HTMLElement | null = timestamp; el && el !== row; el = el.parentElement) {
+      const conditional = el.className
+        .split(/\s+/)
+        .filter((c) => stateVariant.test(c) && /opacity|hidden|invisible/.test(c));
+      expect(conditional).toEqual([]);
+    }
+  });
+
+  it("keeps the snooze indicator rendered alongside the timestamp, not behind it", () => {
+    const { container } = render(
+      <NotificationCenterEntry
+        entry={makeEntry()}
+        isSnoozed
+        snoozedUntil={Date.now() + 3_600_000}
+        onDismiss={vi.fn()}
+      />
+    );
+    const row = container.firstElementChild as HTMLElement;
+    const indicator = screen.getByTestId("notification-snoozed-indicator");
+    const timestamp = screen.getByTestId("notification-timestamp");
+    expect(row.contains(indicator)).toBe(true);
+    // Siblings in one rail — if either ends up in a separately-revealed layer
+    // they stop sharing a parent, which is how the snooze state used to vanish
+    // on the one tab that exists to show it.
+    expect(indicator.parentElement).toBe(timestamp.parentElement);
+  });
+
+  it("keeps the management controls operable without hover", () => {
+    // There is no hover on a touch screen, and this repo has no
+    // `(pointer: coarse)` branch anywhere, so a control that is only reachable
+    // through a hover-gated layer is not reachable at all for those users.
+    // Nothing between a control and the row may gate pointer-events on hover.
+    const { container } = render(
+      <NotificationCenterEntry
+        entry={makeEntry({ context: { projectId: "p1" } })}
+        onDismiss={vi.fn()}
+      />
+    );
+    const row = container.firstElementChild as HTMLElement;
+    for (const label of ["Dismiss notification", "Notification options"]) {
+      const control = screen.getByLabelText(label);
+      for (let el: HTMLElement | null = control; el && el !== row; el = el.parentElement) {
+        expect(el.className).not.toMatch(/pointer-events-none/);
+        expect(el.className).not.toMatch(/(?:group-)?hover:pointer-events-auto/);
+      }
+    }
+  });
+
+  it("gives both management controls the same hit target", () => {
+    // WCAG 2.2 SC 2.5.8 wants 24 CSS px. The pair used to be 16px boxes 6px
+    // apart, clearing neither the size rule nor its spacing exemption. The rule
+    // being pinned is that they match each other and the row's other control —
+    // divergence is how one of them silently shrinks again.
+    render(
+      <NotificationCenterEntry
+        entry={makeEntry({ context: { projectId: "p1" } })}
+        onDismiss={vi.fn()}
+      />
+    );
+    const boxOf = (label: string) =>
+      screen
+        .getByLabelText(label)
+        .className.split(/\s+/)
+        .filter((c) => /^h-\d|^w-\d/.test(c))
+        .sort();
+    expect(boxOf("Dismiss notification")).toEqual(boxOf("Notification options"));
+    expect(boxOf("Dismiss notification")).toEqual(["h-6", "w-6"]);
+  });
+
+  it("carries the forced-colors repaint handle on the unread dot", () => {
+    // forced-colors forces `background-color` to Canvas, which erased the dot.
+    // An unread row carries no border or tint by design and an untitled one has
+    // no title to embolden, so the dot was the entire signal. The repaint rule
+    // itself lives in index.css and is pinned by the forced-colors contract
+    // suite; what this asserts is that the handle it targets is still here.
+    const { container } = render(<NotificationCenterEntry entry={makeEntry()} isNew />);
+    const dot = container.querySelector('[data-notification-unread="true"]');
+    expect(dot).not.toBeNull();
+    expect(container.querySelectorAll('[data-notification-unread="true"]')).toHaveLength(1);
+  });
+
+  it("carries the forced-colors repaint handle on the thread-count chip", () => {
+    render(<NotificationCenterEntry entry={makeEntry()} threadCount={3} />);
+    expect(screen.getByLabelText(/3/).getAttribute("data-notification-count")).toBe("true");
   });
 
   it("invokes onDropdownOpenChange when the kebab menu opens and closes", async () => {
