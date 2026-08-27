@@ -138,7 +138,6 @@ export type DockLaunchBandId =
   | "agents"
   | "dock-panels"
   | "grid-panels"
-  | "panels"
   | "recipes"
   | "needs-setup"
   | "available-agents"
@@ -153,13 +152,27 @@ export const DOCK_LAUNCH_BAND_LABELS: Record<DockLaunchBandId, string> = {
   agents: "Launch agent",
   "dock-panels": "Open in dock",
   "grid-panels": "Open in grid",
-  panels: "Launch panel",
   recipes: "Launch recipe",
   "needs-setup": "Needs setup",
   "available-agents": "Available agents",
   presets: "Presets",
   actions: "More",
   results: "Search results",
+};
+
+/**
+ * What kind of thing a row is, in one word.
+ *
+ * Only ever rendered in the flat `results` band. Every browse band is
+ * type-homogeneous and its heading already says this, so a row that carries it
+ * under a heading is saying the same word twice; a row that carries it in mixed
+ * search results is the only thing telling a recipe named Review apart from a
+ * panel named Review.
+ */
+export const DOCK_LAUNCH_CATEGORY_LABELS: Record<DockLaunchItem["category"], string> = {
+  agent: "Agent",
+  panel: "Panel",
+  recipe: "Recipe",
 };
 
 /** A row that runs something other than a launchable item. */
@@ -575,7 +588,6 @@ export function buildDockLaunchModel({
   // it against every agent would put setup rows on the wrong side of the line.
   const showAgentGroups =
     pinnedCount !== undefined && pinnedCount > 0 && pinnedCount < launchAgents.length;
-  const isSplitByDestination = dockPanels.length > 0 && gridPanels.length > 0;
 
   const browseRows: DockLaunchRow[] = [];
   const pushRows = (band: DockLaunchBandId, items: ReadonlyArray<DockLaunchItem>) => {
@@ -600,12 +612,14 @@ export function buildDockLaunchModel({
     }
   }
 
-  if (isSplitByDestination) {
-    pushRows("dock-panels", dockPanels);
-    pushRows("grid-panels", gridPanels);
-  } else {
-    pushRows("panels", [...dockPanels, ...gridPanels]);
-  }
+  // Always banded by destination, even when only one destination is present.
+  // The generic "Launch panel" heading used to be the fallback, and it left the
+  // row to say where it lands — which in the toolbar meant six consecutive rows
+  // ending in the word "Grid", a column with no information in it. A heading
+  // that states the destination once says the same thing for free, and lets the
+  // row spend that width on its name instead.
+  if (dockPanels.length > 0) pushRows("dock-panels", dockPanels);
+  if (gridPanels.length > 0) pushRows("grid-panels", gridPanels);
 
   if (recipeItems.length > 0) {
     pushRows("recipes", recipeItems);

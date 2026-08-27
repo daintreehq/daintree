@@ -2755,6 +2755,18 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
      row. Scoped to the `.palette-row` marker rather than [role="option"], which
      the file pane, the settings selectors and the agent/forge dropdowns use
      too. */
+  /* The row's `border border-transparent` is a layout reservation — it holds
+     every row's content box on one column — but forced colors remaps border
+     colours from the system palette, so a border that paints nothing in every
+     theme painted a `CanvasText` box round every row here. A list of twenty rows
+     read as a stack of input fields, with the doubled rules between adjacent
+     borders competing with the band headings that actually organise it.
+     `Canvas` keeps the reservation and gives back the invisibility; the selected
+     row's own outline below is unaffected, and is what marks the row. */
+  .palette-row {
+    border-color: Canvas;
+  }
+
   .palette-row[aria-selected="true"] {
     outline: 2px solid SelectedItem;
     outline-offset: -2px;
