@@ -2851,6 +2851,21 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     border: 1px solid ButtonText;
   }
 
+  /* The launcher's teaching link is a control that must never read as one.
+     The blanket border above frames it into a pill sitting under the canvas
+     home's tip sentence, which is exactly the "another action module" the tip
+     is designed not to be — and the surface already carries a real primary
+     action four bands above it. Its permanent underline is the affordance in
+     every mode, so dropping the frame costs nothing.
+
+     Deliberately duplicated rather than shared with the `prefers-contrast`
+     block below: macOS fires only `prefers-contrast: more` and Windows swaps
+     in system colours, so the two blocks stay independent (see the rationale
+     at the top of each). */
+  .tip-action {
+    border: none;
+  }
+
   /* A destructive button is distinguished only by its fill, and the UA replaces
    * every fill with a system colour — so "Delete worktree" and "Cancel" render
    * as the same white pill with the same border, and nothing marks which one
@@ -3027,6 +3042,13 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
   select,
   textarea {
     border-width: 2px;
+  }
+
+  /* Same exemption as the forced-colors block, and deliberately restated here
+     rather than merged: the launcher's teaching link must not be framed into a
+     button. Its underline carries the affordance. */
+  .tip-action {
+    border-width: 0;
   }
 
   /* Tailwind v4 emits `text-daintree-text/N` with a literal slash in the

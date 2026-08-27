@@ -220,7 +220,7 @@ function PulseSkeleton({ className }: { className?: string }) {
   return (
     <div
       className={cn(
-        "pulse-card w-fit rounded-[var(--radius-lg)] border border-daintree-border min-h-[240px]",
+        "pulse-card w-full min-w-0 rounded-[var(--radius-lg)] border border-daintree-border min-h-[240px]",
         className
       )}
     >
@@ -569,7 +569,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
   return (
     <div
       className={cn(
-        "pulse-card w-fit rounded-[var(--radius-lg)] border border-daintree-border min-h-[240px]",
+        "pulse-card w-full min-w-0 rounded-[var(--radius-lg)] border border-daintree-border min-h-[240px]",
         className
       )}
       aria-busy={isLoading}
@@ -630,13 +630,23 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
       </div>
 
       <div className="p-4 space-y-4">
-        <PulseHeatmap
-          cells={pulse.heatmap}
-          rangeDays={pulse.rangeDays}
-          describedBy={heatmapDescriptionId}
-        />
+        {/* The card used to be `w-fit`, so a 60-day row of fixed-size cells
+            decided its width and it came out a third wider than every other
+            band on the launcher — making the lowest-priority module the
+            largest object on the surface. The card now obeys the column, and
+            the row that genuinely needs the width scrolls inside it. */}
+        <div className="-mx-1 overflow-x-auto px-1">
+          <PulseHeatmap
+            cells={pulse.heatmap}
+            rangeDays={pulse.rangeDays}
+            describedBy={heatmapDescriptionId}
+          />
 
-        <PulseHeatmapLegend dayCount={pulse.heatmap.length} descriptionId={heatmapDescriptionId} />
+          <PulseHeatmapLegend
+            dayCount={pulse.heatmap.length}
+            descriptionId={heatmapDescriptionId}
+          />
+        </div>
 
         <p className="text-xs text-daintree-text/80">{getCoachLine(pulse, usableHealth)}</p>
 

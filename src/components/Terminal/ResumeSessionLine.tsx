@@ -62,7 +62,15 @@ export function ResumeSessionLine() {
         {primary.description && (
           // Shrinkable (no shrink-0): a long worktree/branch description must
           // truncate inside the column's measure, not push the row past it.
-          <span className="min-w-0 truncate text-xs text-text-muted">{primary.description}</span>
+          //
+          // And below the launcher's narrow breakpoint it is dropped outright.
+          // Sharing the row down there truncated BOTH halves at once — a task
+          // title cut mid-word beside a model name cut mid-word, neither of
+          // them readable. The title is what identifies the session; the model
+          // and location are still on the row this line opens.
+          <span className="min-w-0 truncate text-xs text-text-muted @max-[26rem]/launcher:hidden">
+            {primary.description}
+          </span>
         )}
       </button>
       {extraCount > 0 && (

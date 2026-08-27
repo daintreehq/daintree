@@ -285,10 +285,25 @@ export function ContentGridEmptyState({
           inside a grid, so a viewport breakpoint describes the wrong box. */}
       <div className="relative h-full w-full overflow-y-auto">
         <div className="flex min-h-full flex-col items-center p-8">
+          {/* A fixed, shrinkable top gutter — not `my-auto` on the column, and
+              certainly not `justify-center`. Centring the whole stack made the
+              anchor's screen position a function of the stack's HEIGHT, which
+              is a function of how many conditional bands resolved: the palette
+              button began 174px further down with no recipes than with eight.
+              Structurally invariant was not the same as spatially invariant,
+              and the muscle memory this surface is supposed to build lives in
+              the second one.
+
+              With the gutter fixed, everything below the anchor can grow and
+              shrink freely and the anchor does not move. `shrink` lets the
+              gutter collapse to zero when the column outgrows the canvas, so
+              the first rows stay reachable — the property `justify-center`
+              could not give. */}
+          <div aria-hidden="true" className="w-full shrink basis-16" />
           <section
             aria-label={workspaceName ? `${workspaceName} — workspace home` : "Workspace home"}
             className={cn(
-              "@container/launcher my-auto flex w-full flex-col items-center",
+              "@container/launcher flex w-full shrink-0 flex-col items-center",
               LAUNCHER_MEASURE
             )}
           >
@@ -469,6 +484,9 @@ export function ContentGridEmptyState({
               </div>
             )}
           </section>
+          {/* All remaining slack goes below the column, so the anchor keeps its
+              distance from the top of the canvas at every canvas height. */}
+          <div aria-hidden="true" className="w-full grow basis-0" />
         </div>
       </div>
     </div>

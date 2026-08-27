@@ -83,24 +83,19 @@ export function ProjectPulseStrip({ worktreeId }: ProjectPulseStripProps) {
     }
   }, [worktreeId, pulse, isLoading, error, fetchPulse]);
 
-  const expandedRef = useRef<HTMLDivElement>(null);
-
-  // Move focus into the expansion, but do NOT let the browser chase it. The
-  // collapse control sits at the bottom of a card several hundred pixels tall,
-  // so a plain `.focus()` scrolls the canvas until that button is visible —
-  // which drags the project identity and the launch anchor above it off the
-  // top of the screen. Expanding an ambient activity strip must not cost the
-  // user the thing they came here to click. `block: "nearest"` then keeps the
-  // card's own top edge in view, which is where the strip they clicked was.
+  // Move focus into the expansion without moving the viewport at all. The
+  // collapse control is rendered at the TOP of the expansion, exactly where
+  // the strip the user just clicked was standing, so it is already on screen
+  // and `preventScroll` costs nothing: no scrollIntoView is needed, and none
+  // is wanted. The earlier arrangement put the control at the card's bottom,
+  // several hundred pixels down, and any attempt to reveal it dragged the
+  // project identity and the launch anchor off the top of the canvas —
+  // expanding the lowest-priority band on the surface must not cost the user
+  // the thing they came here to click.
   useEffect(() => {
     if (!toggledRef.current) return;
-    if (expanded) {
-      collapseButtonRef.current?.focus({ preventScroll: true });
-      expandedRef.current?.scrollIntoView({ block: "nearest" });
-    } else {
-      stripButtonRef.current?.focus({ preventScroll: true });
-      stripButtonRef.current?.scrollIntoView({ block: "nearest" });
-    }
+    if (expanded) collapseButtonRef.current?.focus({ preventScroll: true });
+    else stripButtonRef.current?.focus({ preventScroll: true });
   }, [expanded]);
 
   const miniCells = useMemo(() => {
@@ -125,18 +120,18 @@ export function ProjectPulseStrip({ worktreeId }: ProjectPulseStripProps) {
 
   if (expanded) {
     return (
-      <div ref={expandedRef} className="flex w-full flex-col items-center gap-2">
-        <ProjectPulseCard worktreeId={worktreeId} />
+      <div className="flex w-full flex-col items-center gap-2">
         <button
           ref={collapseButtonRef}
           type="button"
           onClick={collapse}
-          className="inline-flex items-center gap-1 rounded-[var(--radius-md)] px-2 py-1 text-xs text-daintree-text/50 transition-colors hover:text-daintree-text/80 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
+          className="inline-flex items-center gap-1 self-start rounded-[var(--radius-md)] px-2 py-1 text-xs text-text-muted transition-colors hover:text-daintree-text focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
           aria-expanded={true}
         >
           <ChevronUp className="h-3.5 w-3.5" aria-hidden="true" />
           Collapse
         </button>
+        <ProjectPulseCard worktreeId={worktreeId} />
       </div>
     );
   }

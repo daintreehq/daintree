@@ -170,15 +170,31 @@ describe("launcher column — one measure, owned by the parent", () => {
   });
 });
 
-describe("launcher column — overflow is reachable", () => {
-  it("centres the column with auto margins rather than justify-content", () => {
+describe("launcher column — the anchor holds its position", () => {
+  it("never centres the stack, so the anchor's offset cannot follow its height", () => {
     const source = readFileSync(EMPTY_STATE_PATH, "utf-8");
-    // `justify-content: center` distributes overflow to BOTH ends, so a column
-    // taller than the canvas loses its first rows above the scroll origin with
-    // no way to scroll back. Auto margins collapse to zero instead.
     const scroller = source.slice(source.indexOf("overflow-y-auto"));
-    expect(scroller).not.toMatch(/className="flex min-h-full flex-col items-center justify-center/);
-    expect(scroller).toContain("my-auto");
+    // Two failure modes, one rule. `justify-content: center` distributes
+    // overflow to BOTH ends, so a column taller than the canvas loses its
+    // first rows with no way to scroll back. `my-auto` fixes that but ties the
+    // anchor's offset to the stack's HEIGHT, so it slides as conditional bands
+    // resolve. Neither may come back: the offset above the column has to be
+    // independent of everything below it.
+    expect(scroller).not.toMatch(/flex min-h-full flex-col items-center justify-center/);
+    expect(scroller).not.toMatch(/@container\/launcher[^"]*\bmy-auto\b/);
+  });
+
+  it("holds the column with a fixed top gutter that can still collapse", () => {
+    const source = readFileSync(EMPTY_STATE_PATH, "utf-8");
+    // A fixed basis keeps the offset constant whatever renders below it, and
+    // `shrink` lets it collapse to zero when the column outgrows the canvas so
+    // the first rows stay reachable.
+    const gutter = /aria-hidden="true" className="w-full shrink basis-\d+"/;
+    expect(source).toMatch(gutter);
+    const gutterClass = gutter.exec(source)![0];
+    expect(gutterClass).not.toContain("shrink-0");
+    // …and all the slack goes below, so nothing pushes the column back down.
+    expect(source).toMatch(/aria-hidden="true" className="w-full grow basis-0"/);
   });
 });
 
@@ -233,5 +249,56 @@ describe("tip catalog — sentence case", () => {
       // no capitalised word after it (no product name appears in these today).
       expect(label, label).not.toMatch(/\s[A-Z]/);
     }
+  });
+});
+
+describe("launcher column — composite widgets are one tab stop", () => {
+  it("gives the quick-launch cluster a single tab stop", () => {
+    const source = readFileSync(resolve(LAUNCHER_DIR, "LauncherQuickActions.tsx"), "utf-8");
+    // The pinned agent set is uncapped by design, so without a roving stop the
+    // number of Tab presses between the user and the rest of the surface is a
+    // number the user chose in a settings dialog months ago.
+    expect(source).toContain('role="toolbar"');
+    expect(source).toMatch(/tabIndex=\{index === activeChip \? 0 : -1\}/);
+  });
+
+  it("gives the recipe listbox a single tab stop", () => {
+    const source = readFileSync(
+      resolve(LAUNCHER_DIR, "RecipeRunner/RecipeRunnerList.tsx"),
+      "utf-8"
+    );
+    // The combobox owns the stop; every option, Create included, is reached
+    // with the arrow keys and named through aria-activedescendant.
+    expect(source).toContain("aria-activedescendant");
+    const optionStops = source.match(/tabIndex=\{-1\}/g) ?? [];
+    expect(optionStops.length).toBeGreaterThanOrEqual(2);
+  });
+});
+
+describe("launcher column — teaching never reads as an action", () => {
+  it("exempts the tip's control from the button borders in BOTH contrast modes", () => {
+    const css = readFileSync(resolve(LAUNCHER_DIR, "../../index.css"), "utf-8");
+    // macOS fires only `prefers-contrast: more`; Windows swaps in system
+    // colours via `forced-colors: active`. The blocks are separate on purpose,
+    // so the exemption has to exist in each of them independently — a single
+    // shared rule would silently cover only one platform.
+    for (const marker of ["@media (forced-colors: active)", "@media (prefers-contrast: more)"]) {
+      const start = css.indexOf(marker);
+      expect(start, `${marker} block is missing`).toBeGreaterThan(-1);
+      let depth = 0;
+      let end = css.indexOf("{", start);
+      for (let i = end; i < css.length; i++) {
+        if (css[i] === "{") depth++;
+        if (css[i] === "}" && --depth === 0) {
+          end = i;
+          break;
+        }
+      }
+      expect(css.slice(start, end), `${marker} does not exempt .tip-action`).toContain(
+        ".tip-action"
+      );
+    }
+    const tips = readFileSync(resolve(LAUNCHER_DIR, "contentGridTips.tsx"), "utf-8");
+    expect(tips).toContain("tip-action");
   });
 });

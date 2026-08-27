@@ -282,11 +282,19 @@ export function RotatingTip() {
             onClick={() =>
               void actionService.dispatch(tip.actionId!, undefined, { source: "user" })
             }
+            // `tip-action` opts this control out of the button-border rules
+            // that BOTH accessibility media modes apply. Without it the tip's
+            // link grows a pill in `forced-colors: active` and in
+            // `prefers-contrast: more` and reads as another action on the
+            // surface — the one thing teaching content must never do. The
+            // standing underline is the affordance in every mode, so nothing
+            // is lost by dropping the frame.
+            //
             // A standing underline, not a hover-only one. Rendered as bare
             // centred text at the same size and colour as the sentence above
             // it, the only control that names the user's actual goal read as a
             // second sentence — an affordance nobody could see was there.
-            className="text-xs text-text-secondary underline decoration-text-muted underline-offset-2 hover:text-daintree-text hover:decoration-current transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 rounded px-1"
+            className="tip-action text-xs text-text-secondary underline decoration-text-muted underline-offset-2 hover:text-daintree-text hover:decoration-current transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 rounded px-1"
           >
             {tip.actionLabel}
           </button>
