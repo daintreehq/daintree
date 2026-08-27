@@ -558,6 +558,50 @@ async function measure(page: Page, label: string): Promise<void> {
   console.warn(`[notifcenter-shots] geometry:${label} ${JSON.stringify(data)}`);
 }
 
+/**
+ * The scrollport must be BOUNDED BY THE PANEL, not sized by its own content.
+ *
+ * This is the regression gate for #12061, and it is deliberately expressed as
+ * a relationship rather than a number: whatever the panel's height turns out
+ * to be, the scrollport has to be smaller than it, and a fixture that overflows
+ * has to produce something to scroll. The original defect passed every visual
+ * check — the panel looked right and the rows looked right — and showed up only
+ * here, as a scrollport three times taller than the panel containing it.
+ */
+async function assertScrollportIsBounded(page: Page, label: string): Promise<void> {
+  const result = await page.evaluate(
+    ({ popoverSel, listSel }) => {
+      const popover = document.querySelector(popoverSel) as HTMLElement | null;
+      const list = document.querySelector(listSel) as HTMLElement | null;
+      if (!popover || !list) return { ok: false, why: "popover or list not found" };
+      let scroller: HTMLElement | null = list;
+      while (scroller && scroller !== popover) {
+        const oy = getComputedStyle(scroller).overflowY;
+        if (oy === "auto" || oy === "scroll") break;
+        scroller = scroller.parentElement;
+      }
+      if (!scroller || scroller === popover) return { ok: false, why: "no scrollport found" };
+      const panelH = popover.getBoundingClientRect().height;
+      const { clientHeight, scrollHeight } = scroller;
+      if (clientHeight > panelH) {
+        return {
+          ok: false,
+          why: `scrollport (${Math.round(clientHeight)}px) is taller than the panel (${Math.round(panelH)}px) — its height is coming from content, not from the panel`,
+        };
+      }
+      if (scrollHeight <= clientHeight) {
+        return {
+          ok: false,
+          why: `scrollHeight (${Math.round(scrollHeight)}px) does not exceed clientHeight (${Math.round(clientHeight)}px) — the fixture overflows, so there should be something to scroll`,
+        };
+      }
+      return { ok: true, why: "" };
+    },
+    { popoverSel: POPOVER, listSel: SEL.notifications.centerList }
+  );
+  if (!result.ok) throw new Error(`scrollport not bounded (${label}): ${result.why}`);
+}
+
 /** Scroll the inbox scrollport to its very bottom and report where it landed. */
 async function scrollListToBottom(page: Page): Promise<void> {
   // Scroll in steps rather than one jump. With `content-visibility: auto` the
@@ -656,6 +700,9 @@ test("notification center review — scrollport, rhythm, and chrome", async () =
       await measure(page, "scrolled-to-bottom");
       await snap(page, "20-scrolled-bottom-popover", POPOVER);
       await snap(page, "21-scrolled-bottom-window");
+      // The regression gate. Asserted AFTER the shots so a failure still leaves
+      // the evidence on disk rather than aborting with nothing to look at.
+      await assertScrollportIsBounded(page, "scrolled-to-bottom");
     });
 
     // 3. An action-carrying row at the fold — the worst case the issue names,
@@ -748,8 +795,25 @@ test("notification center review — scrollport, rhythm, and chrome", async () =
     await step(page, "empty", async () => {
       await seedNotificationHistory(page, []);
       await reopenCenter(page);
+      // Empty WHILE muted first — this is the state where the pill and the
+      // empty-state body both explain the same silence, so it is the one that
+      // shows whether they are saying it twice.
+      if (
+        await page
+          .locator(MUTED_PILL)
+          .isVisible()
+          .catch(() => false)
+      ) {
+        await measure(page, "empty-muted");
+        await snap(page, "70-empty-muted-popover", POPOVER);
+        // Resume, so the next shot is the ordinary empty state rather than an
+        // inherited mute from the earlier step.
+        await page.locator('button[aria-label="Resume notifications"]').first().click();
+        await settle(page, 500);
+        await reopenCenter(page);
+      }
       await measure(page, "empty");
-      await snap(page, "70-empty-popover", POPOVER);
+      await snap(page, "71-empty-popover", POPOVER);
       await seedNotificationHistory(page, buildFixture(now));
       await reopenCenter(page);
     });
@@ -798,9 +862,16 @@ test("notification center review — scrollport, rhythm, and chrome", async () =
     //     which are the ones that diverge most across palettes.
     await step(page, "themes", async () => {
       for (const [i, theme] of SPOT_THEMES.entries()) {
+        // `setAppTheme` reloads the page, which drops the seeded history, so
+        // re-seed after each switch. Without this the theme shots are taken
+        // against whatever rehydrated from disk rather than the fixture, and a
+        // palette comparison across different content is not a comparison.
         await setAppTheme(page, theme);
         await settle(page, 600);
+        await dismissBlockingPalette(page);
+        await seedNotificationHistory(page, buildFixture(now));
         await reopenCenter(page);
+        await assertSeeded(page, 6);
         await snap(page, `95-theme-${i}-${theme}-popover`, POPOVER);
       }
     });

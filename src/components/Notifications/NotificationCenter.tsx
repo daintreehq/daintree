@@ -20,6 +20,7 @@ import { NotificationCenterEntry } from "./NotificationCenterEntry";
 import { useSnoozeExpiryTimer } from "./useSnoozeExpiryTimer";
 import { resolveSnoozeDuration, type SnoozeDurationOption } from "@shared/utils/snoozeTimestamps";
 import { EmptyState } from "@/components/ui/EmptyState";
+import { ConfirmDialog } from "@/components/ui/ConfirmDialog";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { cn } from "@/lib/utils";
 import {
@@ -216,6 +217,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
   const resetLastClosedAt = useUIStore((s) => s.resetNotificationCenterLastClosedAt);
 
   const [filter, setFilter] = useState<"all" | "unread" | "archived" | "snoozed">("all");
+  const [clearAllConfirmOpen, setClearAllConfirmOpen] = useState(false);
   const [snoozePendingIndex, setSnoozePendingIndex] = useState<number | null>(null);
   const [frozenUnreadIds, setFrozenUnreadIds] = useState<Set<string> | null>(null);
   const scrollContainerRef = useRef<HTMLDivElement>(null);
@@ -823,6 +825,30 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
     uiFeedbackSoundEnabled,
     osDndActive,
   ]);
+  // The strip leads with why it is quiet and follows with what still gets
+  // through. `pillLabel` is empty only when nothing in-app is muted and the OS
+  // signal is unknown — in that case the breakthrough line is the only thing
+  // there is to say, so it becomes the lead rather than leaving a blank one.
+  const quietCause = pillLabel || summaryHeroLine;
+  const quietDetail = [pillLabel ? summaryHeroLine : "", offLabel].filter(Boolean).join(" · ");
+  // What "Clear all" actually costs, named in the confirm. The count is the
+  // preview; the archived and snoozed breakdown is the part a user standing on
+  // the Archived tab would not otherwise expect, since the store call ignores
+  // the active filter entirely.
+  const clearAllConsequence = useMemo(() => {
+    const total = entries.length;
+    const archived = entries.filter((e) => e.archivedAt !== null).length;
+    const now = Date.now();
+    const snoozed = Object.values(snoozedThreads).filter(
+      (v) => typeof v === "number" && v > now
+    ).length;
+    const extras: string[] = [];
+    if (archived > 0) extras.push(`${archived} archived`);
+    if (snoozed > 0) extras.push(`${snoozed} snoozed ${snoozed === 1 ? "thread" : "threads"}`);
+    const noun = total === 1 ? "notification" : "notifications";
+    const tail = extras.length > 0 ? `, including ${extras.join(" and ")}` : "";
+    return `Removes all ${total} ${noun}${tail}. This clears every tab, not just the one you're looking at.`;
+  }, [entries, snoozedThreads]);
   const morningLabel = `Until ${timeFormatter.format(new Date(nextOccurrenceTimestamp(8 * 60)))}`;
   const mutedEmptyDescription = (() => {
     if (isScheduledMuted) {
@@ -855,7 +881,27 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
   }, [filter, hasSnoozedThreads]);
 
   return (
-    <div data-testid="notification-center" className="w-[360px] max-h-[420px] flex flex-col">
+    <div
+      data-testid="notification-center"
+      // The bell advertises `aria-haspopup="dialog"`, so the thing it opens has
+      // to actually be one, with a name — otherwise assistive tech is promised
+      // an interaction contract that never arrives. Non-modal on purpose: no
+      // `aria-modal`, no focus trap, and the rest of the app stays reachable.
+      // Matches CopyTreeRecentsPanel, the other FixedDropdown panel.
+      role="dialog"
+      aria-label="Notifications"
+      // Width stays 360px — the row grid is tuned for it and it reads well.
+      // Height was the problem: a flat 420px meant the same small box on a 27"
+      // display as on a laptop, with a third of the window sitting empty below
+      // it while the list was cut off. Now it scales with the viewport, stops
+      // at 720px so it never becomes an absurd ribbon on a tall monitor, and
+      // never exceeds the room actually left under the bell — which also fixes
+      // the opposite failure, a short window where a fixed 420px would run off
+      // the bottom of the screen. `--fixed-dropdown-available-height` comes
+      // from FixedDropdown's own positioning pass; the 420px fallback keeps
+      // the old behaviour if this ever renders outside that shell.
+      className="w-[360px] max-h-[min(72vh,720px,var(--fixed-dropdown-available-height,420px))] flex flex-col"
+    >
       {/* Two rows, not one. Sharing a line with the toolbar squeezed the filter
           group down to about 120px, so all four chips wrapped onto three lines
           and the header ate a quarter of a 420px popover while roughly 230px
@@ -867,11 +913,17 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
           internal p-1 touch padding, so an 8px container edge lands their
           glyphs at the same 12px optical inset as the title text on the left. */}
       <div className="flex flex-col border-b border-divider">
-        <div className="flex items-center justify-between pl-3 pr-2 py-2 gap-2">
-          <span className="min-w-0 truncate text-xs font-medium text-daintree-text/80">
+        <div className="flex items-center justify-between pl-3 pr-2.5 py-2 gap-2">
+          {/* Full strength, semibold. At /80 the panel's own heading measured
+              dimmer than the row titles underneath it — the label naming the
+              surface was quieter than the content it named, which is the
+              hierarchy upside down. */}
+          <span className="min-w-0 truncate text-xs font-semibold text-daintree-text">
             Notifications
           </span>
-          <div className="flex items-center gap-1 shrink-0">
+          {/* gap-1.5, not gap-1: four controls at 4px apart, one of them a text
+              button, read as a single crowded clump jammed into the corner. */}
+          <div className="flex items-center gap-1.5 shrink-0">
             {showGroupToggle && (
               <button
                 type="button"
@@ -879,7 +931,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                 aria-pressed={groupByContext}
                 title="Group by project or worktree"
                 onClick={() => setGroupByContext(!groupByContext)}
-                className="toolbar-icon-button p-1 rounded-[var(--radius-sm)] text-daintree-text/50"
+                className="toolbar-icon-button p-1 rounded-[var(--radius-sm)] text-daintree-text/70"
               >
                 <Layers className="w-3 h-3" aria-hidden="true" />
               </button>
@@ -888,7 +940,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
               <button
                 type="button"
                 onClick={handleMarkAllRead}
-                className="toolbar-icon-button inline-flex items-center gap-1 px-1.5 py-1 rounded-[var(--radius-sm)] text-2xs text-daintree-text/50 whitespace-nowrap"
+                className="toolbar-icon-button inline-flex items-center gap-1 px-1.5 py-1 rounded-[var(--radius-sm)] text-2xs text-daintree-text/70 whitespace-nowrap"
               >
                 <CheckCheck className="w-3 h-3" aria-hidden="true" />
                 Mark all read
@@ -900,7 +952,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                   type="button"
                   aria-label="Pause notifications"
                   title="Pause notifications"
-                  className="toolbar-icon-button p-1 rounded-[var(--radius-sm)] text-daintree-text/50"
+                  className="toolbar-icon-button p-1 rounded-[var(--radius-sm)] text-daintree-text/70"
                 >
                   <Moon className="w-3 h-3" aria-hidden="true" />
                 </button>
@@ -927,7 +979,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                 <DropdownMenuTrigger asChild>
                   <button
                     type="button"
-                    className="toolbar-icon-button p-1 rounded-[var(--radius-sm)] text-daintree-text/50"
+                    className="toolbar-icon-button p-1 rounded-[var(--radius-sm)] text-daintree-text/70"
                     aria-label="More notification actions"
                     title="More notification actions"
                   >
@@ -937,10 +989,16 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                 <DropdownMenuContent align="end" className="min-w-[160px]">
                   <DropdownMenuItem
                     destructive
-                    onSelect={() => {
-                      clearAll();
-                      onClose();
-                    }}
+                    // Confirm first. `clearAll` empties the whole store —
+                    // active, archived AND snoozed — regardless of which tab
+                    // you are looking at, and the emptied state is persisted,
+                    // so a mis-click on the Archived tab silently destroys the
+                    // record of a whole fleet run with no undo. That is a D1
+                    // local-irreversible action under
+                    // docs/architecture/destructive-action-safeguards.md, which
+                    // requires a ConfirmDialog and a verb-noun button; the
+                    // in-repo precedent is `logs.clear`.
+                    onSelect={() => setClearAllConfirmOpen(true)}
                   >
                     <Trash2 className="w-3.5 h-3.5 mr-2" aria-hidden="true" />
                     Clear all
@@ -951,105 +1009,112 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
           </div>
         </div>
         {entries.length > 0 && (
-          <div className="flex flex-wrap items-center gap-1.5 pl-3 pr-2 pb-2">
-            <button
-              type="button"
-              aria-pressed={filter === "all"}
-              onClick={() => {
+          // `pl-1`, not `pl-3`, and it is deliberate. Every other band down the
+          // panel puts its TEXT on a 12px column — the title, the section
+          // labels, the quiet-state pill, the row icons. A chip carries its own
+          // 8px of padding, so a 12px container left the chip labels at 20px,
+          // and the one row of the panel made of words the eye reads as a list
+          // was the one row that didn't line up with the rest. Insetting the
+          // container by the chip's own padding puts the labels back on the
+          // column and lets the selected pill bleed into the gutter, which is
+          // the usual way a pill row is optically aligned.
+          <div className="flex flex-wrap items-center gap-1.5 pl-1 pr-2 pb-2">
+            <FilterChip
+              label="All"
+              selected={filter === "all"}
+              onSelect={() => {
                 setFilter("all");
                 setFrozenUnreadIds(null);
               }}
-              className={cn(
-                "inline-flex items-center px-2 py-0.5 text-2xs rounded-full transition-colors",
-                filter === "all"
-                  ? "bg-filter-selected-bg-strong text-text-primary font-medium"
-                  : "text-daintree-text/60 hover:text-text-primary hover:bg-tint/[0.04]"
-              )}
-            >
-              All
-            </button>
-            <button
-              type="button"
-              aria-pressed={filter === "unread"}
-              onClick={() => setFilter("unread")}
-              className={cn(
-                "inline-flex items-center px-2 py-0.5 text-2xs rounded-full transition-colors",
-                filter === "unread"
-                  ? "bg-filter-selected-bg-strong text-text-primary font-medium"
-                  : "text-daintree-text/60 hover:text-text-primary hover:bg-tint/[0.04]"
-              )}
-            >
-              Unread
-            </button>
-            <button
-              type="button"
-              aria-pressed={filter === "archived"}
-              onClick={() => {
+            />
+            <FilterChip
+              label="Unread"
+              selected={filter === "unread"}
+              onSelect={() => setFilter("unread")}
+            />
+            <FilterChip
+              label="Archived"
+              selected={filter === "archived"}
+              onSelect={() => {
                 setFilter("archived");
                 setFrozenUnreadIds(null);
               }}
-              className={cn(
-                "inline-flex items-center px-2 py-0.5 text-2xs rounded-full transition-colors",
-                filter === "archived"
-                  ? "bg-filter-selected-bg-strong text-text-primary font-medium"
-                  : "text-daintree-text/60 hover:text-text-primary hover:bg-tint/[0.04]"
-              )}
-            >
-              Archived
-            </button>
+            />
             {hasSnoozedThreads && (
-              <button
-                type="button"
-                aria-pressed={filter === "snoozed"}
-                onClick={() => {
+              <FilterChip
+                label="Snoozed"
+                selected={filter === "snoozed"}
+                onSelect={() => {
                   setFilter("snoozed");
                   setFrozenUnreadIds(null);
                 }}
-                className={cn(
-                  "inline-flex items-center px-2 py-0.5 text-2xs rounded-full transition-colors",
-                  filter === "snoozed"
-                    ? "bg-filter-selected-bg-strong text-text-primary font-medium"
-                    : "text-daintree-text/60 hover:text-text-primary hover:bg-tint/[0.04]"
-                )}
-              >
-                Snoozed
-              </button>
+              />
             )}
           </div>
         )}
       </div>
+      {/* The quiet-state strip. Three things changed here.
+          Order: it used to lead with "Will interrupt you: …" and demote "Muted
+          until 10:56 PM" underneath. But the question this strip exists to
+          answer is why the panel is quiet, and the exception is the footnote,
+          not the headline — so the cause leads and the breakthrough list
+          follows.
+          Truncation: both lines were `truncate`. The strings that overflow are
+          exactly the ones that matter — OS DND, or several kinds switched off —
+          so the failure mode was that the more there was to say, the less got
+          said, silently. They wrap now; this strip is at most two lines of
+          11px text either way.
+          Height: one flex row instead of a column with a nested row, and the
+          detail line only renders when there is a detail. On the common
+          "muted until X, nothing else unusual" case that is a single line. */}
       {showMutedPill && (
         <div
           data-testid="notification-muted-pill"
-          className="flex flex-col gap-0.5 px-3 py-1.5 bg-overlay-raised text-2xs text-daintree-text/70"
+          className="flex items-start gap-2 px-3 py-1.5 bg-overlay-raised text-2xs text-daintree-text/70"
         >
-          <div className="flex items-center gap-1.5">
-            <span className="min-w-0 flex-1 truncate font-medium">{summaryHeroLine}</span>
-            {isSessionMuted && (
-              <button
-                type="button"
-                onClick={handleResumeNotifications}
-                aria-label="Resume notifications"
-                title="Resume notifications"
-                className="inline-flex shrink-0 items-center justify-center rounded-[var(--radius-sm)] px-1.5 py-0.5 text-2xs font-medium text-daintree-text/70 hover:bg-overlay-raised hover:text-text-primary transition-colors"
-              >
-                Resume
-              </button>
-            )}
+          <div className="min-w-0 flex-1 flex flex-col gap-0.5">
+            <span className="font-medium text-text-primary">{quietCause}</span>
+            {quietDetail && <span className="text-daintree-text/70">{quietDetail}</span>}
           </div>
-          <span className="truncate text-daintree-text/50">
-            {pillLabel}
-            {offLabel && <span> · {offLabel}</span>}
-          </span>
+          {isSessionMuted && (
+            <button
+              type="button"
+              onClick={handleResumeNotifications}
+              aria-label="Resume notifications"
+              title="Resume notifications"
+              // A border, because without one this was bare text sitting at the
+              // end of a line of bare text. It only read as a control under
+              // `forced-colors: active`, where the UA supplies the border this
+              // was missing — which is the tell that it was missing. Matches the
+              // secondary row action, so the panel has one button shape.
+              className="inline-flex shrink-0 items-center justify-center rounded-[var(--radius-sm)] border border-daintree-text/20 px-1.5 py-0.5 text-2xs font-medium text-daintree-text/70 hover:bg-overlay-medium hover:text-text-primary transition-colors"
+            >
+              Resume
+            </button>
+          )}
         </div>
       )}
-      <div className="relative flex-1 min-h-0">
+      {/* `flex flex-col` here is load-bearing, not tidying. This slot is a flex
+          ITEM of the panel, so its own height comes out of flex layout and its
+          CSS `height` stays `auto` — and a percentage height resolves against
+          the *specified* height of its containing block, not the used one. So
+          the `h-full` this used to hand ScrollShadow silently computed to
+          `auto`, the scrollport took its full 1546px content height, and the
+          dropdown shell simply clipped it at the panel's 420px. Nothing
+          scrolled: no scrollbar, no wheel, no keyboard, and no bottom fade
+          either, because `canScrollDown` compares scrollHeight to clientHeight
+          and they were equal. Making this a flex container and sizing the child
+          with `flex-1 min-h-0` keeps the bound in flex space, where it
+          resolves. Same shape as CopyTreeRecentsPanel, the other FixedDropdown
+          panel. Covered by `assertScrollportIsBounded` in
+          e2e/screenshots/notification-center-review.spec.ts (#12061). */}
+      <div className="relative flex flex-col flex-1 min-h-0">
         <ScrollShadow
           ref={scrollContainerRef}
           onKeyDown={handleListKeyDown}
           role={rowCount > 0 ? "list" : undefined}
           aria-label={rowCount > 0 ? "Notifications" : undefined}
-          className="h-full"
+          className="flex-1 min-h-0"
           // The fades occlude the first and last 32px of the scrollport, so keep
           // scroll-into-view targets (the jump-to-new divider, keyboard-focused
           // rows) clear of them.
@@ -1190,7 +1255,64 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
           </button>
         )}
       </div>
+      <ConfirmDialog
+        isOpen={clearAllConfirmOpen}
+        onClose={() => setClearAllConfirmOpen(false)}
+        variant="destructive"
+        title="Clear all notifications?"
+        // The specific consequence, not generic irreversibility copy: the count
+        // is the preview, and naming archived and snoozed is the part a user on
+        // the Archived tab would otherwise not expect.
+        description={clearAllConsequence}
+        confirmLabel="Clear notifications"
+        onConfirm={() => {
+          clearAll();
+          setClearAllConfirmOpen(false);
+          onClose();
+        }}
+      />
     </div>
+  );
+}
+
+/**
+ * One filter segment. Four copies of the same twelve-class string is three
+ * chances to let them drift, and the forced-colors handle below has to be on
+ * every one of them or the mode it exists for is the mode it misses.
+ *
+ * No accent in either state, deliberately: membership in a segmented control is
+ * exactly the "multi-element, non-load-bearing" case the accent rule excludes,
+ * and the accent here is spent on focus.
+ */
+function FilterChip({
+  label,
+  selected,
+  onSelect,
+}: {
+  label: string;
+  selected: boolean;
+  onSelect: () => void;
+}) {
+  return (
+    <button
+      type="button"
+      aria-pressed={selected}
+      // Handle for the `forced-colors: active` block in index.css. There the UA
+      // flattens `bg-filter-selected-bg-strong` to Canvas and paints every chip
+      // as the same outlined pill, so which filter you are looking at becomes
+      // unreadable — the same failure the destructive-button rule in that block
+      // already solves, and solved the same way: a heavier border.
+      data-notification-filter="true"
+      onClick={onSelect}
+      className={cn(
+        "inline-flex items-center px-2 py-0.5 text-2xs rounded-full transition-colors",
+        selected
+          ? "bg-filter-selected-bg-strong text-text-primary font-medium"
+          : "text-daintree-text/60 hover:text-text-primary hover:bg-tint/[0.04]"
+      )}
+    >
+      {label}
+    </button>
   );
 }
 
@@ -1233,7 +1355,7 @@ function NeedsAttentionSection({
 } & RovingSectionProps) {
   return (
     <div data-testid="needs-attention-section" className="border-b border-divider">
-      <div className="px-3 pt-2 pb-1 text-3xs font-semibold uppercase tracking-wide text-daintree-text/50">
+      <div className="px-3 pt-2 pb-1 text-3xs font-semibold uppercase tracking-wide text-daintree-text/70">
         Needs attention
       </div>
       <div role="group" aria-label="Needs attention">
@@ -1339,9 +1461,19 @@ function ChronoSection({
           return (
             <div
               key={groupKey}
-              // Off-screen rows skip layout/paint — the popover mounts up to
-              // 200 heavy rows in a plain scroll container (sidebar precedent).
-              style={{ contentVisibility: "auto", containIntrinsicSize: "auto 72px" }}
+              // This used to carry `content-visibility: auto` with
+              // `contain-intrinsic-size: auto 72px`. Rows here measure 44px to
+              // 123.5px, so the 72px placeholder was wrong by up to 71% for
+              // every row not yet scrolled into view: scrollHeight was a
+              // fiction, the thumb jumped as rows rendered for the first time,
+              // and the content below moved while you were scrolling toward it
+              // — during the one interaction this panel exists for. The skip
+              // was never worth that; the history is capped at 200 entries
+              // (MAX_ENTRIES, notificationHistorySlice) which group into fewer
+              // rows still, and that is a modest list for a plain container.
+              // If this ever profiles badly, the answer is measured virtualization
+              // (Virtuoso, as used elsewhere in the app), not a single guessed
+              // height standing in for rows that differ by a factor of three.
             >
               {isDivider && (
                 <NewSinceLastLookedDivider
@@ -1534,7 +1666,7 @@ function NewSinceLastLookedDivider({
       ref={ref}
       tabIndex={-1}
       data-testid="new-since-last-looked"
-      className="flex items-center gap-2 px-3 py-1 bg-overlay-raised text-3xs font-medium uppercase tracking-wide text-daintree-text/50 outline-hidden"
+      className="flex items-center gap-2 px-3 py-1 bg-overlay-raised text-3xs font-medium uppercase tracking-wide text-daintree-text/70 outline-hidden"
     >
       <span>New since you last looked</span>
       {unreadCount > 0 && (
@@ -1601,7 +1733,7 @@ function NotificationThread({
       onFocus={onRowFocus}
       data-testid="notification-thread"
       className={cn(
-        "group relative border-l-2 border-tint/15",
+        "group relative",
         // Same treatment as a solo row (NotificationCenterEntry). Both are
         // stops on the same roving-tabindex ring, so they must not focus
         // differently — one outline, one box-shadow ring would read as two
@@ -1609,6 +1741,20 @@ function NotificationThread({
         tabIndex !== undefined && PALETTE_ROW_FOCUS_CLASS
       )}
     >
+      {/* The thread rail, out of flow on purpose. As a `border-l-2` it was part
+          of the box, so every threaded row's icon, unread dot and title sat 2px
+          right of every solo row's — the panel's left column visibly broke on
+          exactly the rows that carry the most weight. Absolute positioning
+          keeps the mark and drops the displacement.
+          `data-notification-thread-rail` is not styling: a background is forced
+          to Canvas under `forced-colors: active` and would vanish, where the old
+          border survived, so index.css repaints it the same way it repaints the
+          unread dot and the count chip. */}
+      <span
+        aria-hidden="true"
+        data-notification-thread-rail="true"
+        className="pointer-events-none absolute inset-y-0 left-0 w-0.5 bg-tint/15"
+      />
       <NotificationCenterEntry
         entry={displayEntry}
         displayType={displayType}

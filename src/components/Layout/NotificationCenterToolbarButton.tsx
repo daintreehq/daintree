@@ -44,6 +44,26 @@ export function NotificationCenterToolbarButton({
   const notificationCenterButtonRef = useRef<HTMLButtonElement>(null);
   // Latch after first open so reopening never re-suspends.
   const notificationCenterMounted = useKeepMounted(notificationCenterOpen);
+
+  // Send focus back to the bell when the panel closes, but only when the close
+  // would otherwise strand it. Escape from a keyboard-focused row unmounts that
+  // row and drops focus to <body>, which loses the user's place in the toolbar
+  // entirely; the dialog contract says focus returns to whatever invoked the
+  // panel. An outside click is the case that must NOT be reclaimed — the user
+  // has already said where focus belongs by clicking something else, so this
+  // only fires when focus is on <body> or still inside the closing panel (the
+  // exit animation keeps that subtree mounted for a frame or two).
+  const wasOpenRef = useRef(notificationCenterOpen);
+  useEffect(() => {
+    const wasOpen = wasOpenRef.current;
+    wasOpenRef.current = notificationCenterOpen;
+    if (!wasOpen || notificationCenterOpen) return;
+    const active = document.activeElement;
+    const strandedInPanel = !!active?.closest('[data-testid="notification-center"]');
+    if (!active || active === document.body || strandedInPanel) {
+      notificationCenterButtonRef.current?.focus();
+    }
+  }, [notificationCenterOpen]);
   const notificationUnreadCount = useNotificationHistoryStore((s) => s.unreadCount);
   const evictedToInboxCount = useNotificationHistoryStore((s) => s.evictedToInboxCount);
   const {
@@ -303,6 +323,11 @@ export function NotificationCenterToolbarButton({
         }}
         anchorRef={notificationCenterButtonRef}
         className="p-0"
+        // The panel hosts a ConfirmDialog for "Clear all". AppDialog claims a
+        // slot in the overlay stack, and without this flag that rise is read as
+        // a user-initiated dismiss: the popover would close, taking the dialog
+        // — its own child — down with it before anyone could read it.
+        persistThroughChildOverlays
       >
         {notificationCenterMounted && (
           <Suspense fallback={null}>

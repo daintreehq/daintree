@@ -18,7 +18,7 @@ import { actionService } from "@/services/ActionService";
 import { EVENT_KIND_LABEL, isNotificationEventKind, notify } from "@/lib/notify";
 import type { ActionId } from "@shared/types/actions";
 import type { NotificationType } from "@/store/notificationStore";
-import { DURATION_250 } from "@/lib/animationUtils";
+import { DURATION_150, DURATION_250 } from "@/lib/animationUtils";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import {
   formatNotificationCountAriaLabel,
@@ -242,7 +242,7 @@ export function NotificationCenterEntry({
                 // to Canvas there, leaving a bare numeral that reads as part of
                 // the title.
                 data-notification-count="true"
-                style={{ animationDuration: "150ms" }}
+                style={{ animationDuration: `${DURATION_150}ms` }}
                 className={cn(
                   "shrink-0 rounded-full bg-tint/15 px-1.5 py-0.5 text-3xs font-medium leading-none text-daintree-text/60 tabular-nums min-w-[2.5ch] text-center",
                   bumpKey > 0 && "animate-badge-bump"
@@ -274,7 +274,7 @@ export function NotificationCenterEntry({
             key={bumpKey}
             aria-label={formatNotificationCountAriaLabel(safeCount)}
             data-notification-count="true"
-            style={{ animationDuration: "150ms" }}
+            style={{ animationDuration: `${DURATION_150}ms` }}
             className={cn(
               "col-span-2 row-start-2 mt-0.5 justify-self-start rounded-full bg-tint/15 px-1.5 py-0.5 text-3xs font-medium leading-none text-daintree-text/60 tabular-nums min-w-[2.5ch] text-center",
               bumpKey > 0 && "animate-badge-bump"
@@ -292,6 +292,15 @@ export function NotificationCenterEntry({
                 <button
                   key={`${action.actionId}-${index}`}
                   type="button"
+                  // Handle for the `forced-colors: active` block in index.css.
+                  // Primary is marked by its status-info fill and border, and
+                  // the UA flattens both — so "Pull and rebase" and "Open
+                  // review" render as the same white pill and the recommended
+                  // action stops being recommended. Same fix as the destructive
+                  // button in that block: a heavier border.
+                  data-notification-action={
+                    action.variant === "secondary" ? "secondary" : "primary"
+                  }
                   aria-disabled={!isAvailable || undefined}
                   title={
                     !isAvailable ? (manifest?.disabledReason ?? "Action unavailable") : undefined

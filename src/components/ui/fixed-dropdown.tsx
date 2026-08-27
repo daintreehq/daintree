@@ -61,13 +61,21 @@ export function FixedDropdown({
   keepMounted = false,
 }: FixedDropdownProps) {
   const [mounted, setMounted] = useState(false);
-  const [position, setPosition] = useState<{ top: number; right: string } | null>(null);
+  const [position, setPosition] = useState<{
+    top: number;
+    right: string;
+    availableHeight: number;
+  } | null>(null);
   const contentRef = useRef<HTMLDivElement>(null);
   // rAF-coalesce scroll/resize re-positions: a single in-flight frame, latest
   // wins, and `lastPositionRef` diff-gates so an unchanged anchor never fires a
   // redundant React commit (issue #9580). Mirrors `useVerticalScrollShadows`.
   const positionRafRef = useRef<number | null>(null);
-  const lastPositionRef = useRef<{ top: number; right: string } | null>(null);
+  const lastPositionRef = useRef<{
+    top: number;
+    right: string;
+    availableHeight: number;
+  } | null>(null);
   const { isVisible, shouldRender } = useAnimatedPresence({
     isOpen: open,
     animationDuration: getUiTransitionDuration("exit"),
@@ -115,12 +123,26 @@ export function FixedDropdown({
     if (!anchorRef.current || typeof window === "undefined") return;
     const rect = anchorRef.current.getBoundingClientRect();
     const buttonRightGap = Math.max(window.innerWidth - rect.right, 8);
+    const top = rect.bottom + sideOffset;
     const next = {
-      top: rect.bottom + sideOffset,
+      top,
       right: `max(${buttonRightGap}px, calc(var(--portal-right-offset, 0px) + 8px))`,
+      // The room left between the anchor and the bottom of the viewport, minus
+      // the same gutter used on the other edges. Published as a custom property
+      // so content can cap itself against the space it actually has instead of
+      // a constant — the convention every Radix overlay family in this app
+      // already follows via `--radix-*-content-available-height`. Floored so a
+      // cramped viewport yields a small panel rather than a negative one.
+      availableHeight: Math.max(Math.round(window.innerHeight - top - 8), 120),
     };
     const last = lastPositionRef.current;
-    if (last && last.top === next.top && last.right === next.right) return;
+    if (
+      last &&
+      last.top === next.top &&
+      last.right === next.right &&
+      last.availableHeight === next.availableHeight
+    )
+      return;
     lastPositionRef.current = next;
     setPosition(next);
   }, [anchorRef, sideOffset]);
@@ -234,12 +256,15 @@ export function FixedDropdown({
           : "opacity-0 -translate-y-0.5 scale-[0.99]",
         className
       )}
-      style={{
-        top: position.top,
-        right: position.right,
-        transitionDuration: isVisible ? `${UI_ENTER_DURATION}ms` : `${UI_EXIT_DURATION}ms`,
-        transitionTimingFunction: isVisible ? UI_ENTER_EASING : UI_EXIT_EASING,
-      }}
+      style={
+        {
+          top: position.top,
+          right: position.right,
+          "--fixed-dropdown-available-height": `${position.availableHeight}px`,
+          transitionDuration: isVisible ? `${UI_ENTER_DURATION}ms` : `${UI_EXIT_DURATION}ms`,
+          transitionTimingFunction: isVisible ? UI_ENTER_EASING : UI_EXIT_EASING,
+        } as React.CSSProperties
+      }
     >
       {children}
     </div>
