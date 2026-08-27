@@ -143,6 +143,11 @@ describe("class-string extraction", () => {
         errors: [{ messageId: "unnamedStep" }],
       },
       {
+        name: "a plural camelCase class-string constant is a root",
+        code: 'const rowClasses = "px-3 rounded";',
+        errors: [{ messageId: "unnamedStep" }],
+      },
+      {
         name: "a conventionally named class prop is a root",
         code: 'const a = <Chip textClassName="rounded" />;',
         errors: [{ messageId: "unnamedStep" }],

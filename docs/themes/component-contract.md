@@ -29,13 +29,13 @@ Three vocabularies are live in the codebase. **The semantic tokens are the curre
 
 | Vocabulary | Shape | Uses | Status |
 | --- | --- | --- | --- |
-| Semantic tokens | `text-text-secondary`, `bg-surface-panel`, `border-border-default`, `text-status-error` | ~2,700 | **Current.** The validated contract is ~155 tokens; the full list is in [theme-tokens.md](./theme-tokens.md). |
+| Semantic tokens | `text-text-secondary`, `bg-surface-panel`, `border-border-default`, `text-status-error` | ~2,700 | **Current.** The validated contract is 155 tokens; the full list is in [theme-tokens.md](./theme-tokens.md). |
 | Legacy `daintree-*` aliases | `text-daintree-text`, `bg-daintree-bg` | ~4,500 | Legacy. Seven aliases over tokens that already have semantic names. |
 | shadcn defaults | `text-muted-foreground`, `bg-muted`, `bg-popover` | ~200 | Legacy. Arrived with the vendored shadcn primitives. Nearly all are theme-backed (`--muted` resolves to `--theme-surface-panel`), so they render correctly — they are simply a third name for tokens that already have one. |
 
 Counts are utilities in production `src/**`, measured with the same extraction the rules use.
 
-The `daintree-*` layer is pure aliasing — `--color-daintree-text` is defined in `src/index.css` as nothing but `var(--theme-text-primary)`. Two names for one token means neither reads as canonical, and because the alias layer covers seven tokens against the semantic layer's ~155, anything outside those seven has no legacy spelling at all. That is why single class strings today mix both vocabularies.
+The `daintree-*` layer is pure aliasing — `--color-daintree-text` is defined in `src/index.css` as nothing but `var(--theme-text-primary)`. Two names for one token means neither reads as canonical, and because the alias layer covers seven tokens against the semantic layer's 155, anything outside those seven has no legacy spelling at all. That is why single class strings today mix both vocabularies.
 
 Migrate on the utility, keeping the prefix:
 
@@ -111,4 +111,4 @@ The reason is the point. A rule with no written rationale gets disabled the firs
 
 All five ship as `warn`, because each has thousands of pre-existing uses. `scripts/lint-ratchet.mjs` records today's per-rule counts in `scripts/baselines/eslint-warnings-baseline.json` and fails CI when any single rule's count rises, so new violations cannot land quietly. A rule that vanishes from ESLint's output is a hard failure too — you cannot silence one to make a number go away.
 
-Two sharp edges when you clean up. The counts fall only when someone reseeds the baseline; `--update` writes whatever it currently sees, so reseeding is a deliberate act to review, not a formality. And the update path refuses a drop of more than 10% for any single rule, which is easier to hit than it sounds — 449 of the 4,489 legacy uses trips it, as does fixing four of the 32 focus warnings. The escape is `npm run lint:ratchet -- --update --force`, which is the case that guard is designed to let through deliberately; note that it lifts the guard for every rule at once, so read the whole diff before committing it.
+Two sharp edges when you clean up. The counts fall only when someone reseeds the baseline; `--update` writes whatever it currently sees, so reseeding is a deliberate act to review, not a formality. And the update path refuses a drop of more than 10% for any single rule, which is easier to hit than it sounds — 465 of the 4,644 legacy uses trips it, as does fixing four of the 35 focus warnings — and clearing a rule all the way to zero is stricter still: the rule vanishes from ESLint's output, so check mode reports it as disappeared and hard-fails until the baseline is reseeded. The escape is `npm run lint:ratchet -- --update --force`, which is the case that guard is designed to let through deliberately; note that it lifts the guard for every rule at once, so read the whole diff before committing it.

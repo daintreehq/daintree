@@ -6,7 +6,7 @@
  * system actually validates — `--color-daintree-text` is nothing but
  * `var(--theme-text-primary)` under an older name. Two names for one token
  * means neither reads as canonical, and the alias layer covers seven tokens
- * against the semantic layer's ~145, so anything outside those seven has no
+ * against the semantic layer's 155, so anything outside those seven has no
  * legacy spelling and the codebase mixes vocabularies inside single class
  * strings.
  *

@@ -31,7 +31,7 @@ const VARIANT_TABLE_HELPERS = new Map([
 ]);
 
 /** `FOO_CLASS`, `rowClasses`, `paletteRowStyles` — conventional class-string constants. */
-const CLASS_CONSTANT_NAME = /(?:CLASS(?:ES)?|Class(?:Name)?s?|Styles)$/;
+const CLASS_CONSTANT_NAME = /(?:CLASS(?:ES)?|Class(?:Name)?e?s?|Styles)$/;
 
 /** Wrappers that carry no runtime meaning and must not hide the expression inside. */
 const TRANSPARENT = new Set([
