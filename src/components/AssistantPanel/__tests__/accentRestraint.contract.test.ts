@@ -25,13 +25,15 @@ const DIR = path.resolve(__dirname, "..");
  * which is the one accent use the rule exists to protect, and only one element can hold
  * focus at a time.
  */
+/*
+ * AssistantQuestionCard.tsx used to be listed here, and losing its entry is the rule
+ * working rather than an omission. It painted its title in accent on the strength of
+ * REPLACING the composer — with the region's usual anchor off screen, the title was the
+ * one load-bearing signal left. The sheet now sits above a composer that stays, so the
+ * anchor is back and a second accent element beside it would be exactly the competition
+ * this rule exists to prevent.
+ */
 const INK_ALLOWED = new Map([
-  [
-    "AssistantQuestionCard.tsx",
-    "The question sheet's title. The sheet REPLACES the composer while a decision " +
-      "blocks the turn, so the composer — the region's usual anchor — is not on screen " +
-      "at the same time. The title is then the single load-bearing signal in the region.",
-  ],
   [
     "AssistantLink.tsx",
     "Navigable text in rendered markdown, declared ONCE for both destinations. Not an " +

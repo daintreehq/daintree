@@ -94,6 +94,7 @@ export const PROSE_SPECIMEN: AssistantSessionState = {
   toolGrants: {},
   queuedInterjections: [],
   pendingQuestion: null,
+  awaitingLocalCommand: false,
   stoppedReason: null,
   error: null,
   turns: [

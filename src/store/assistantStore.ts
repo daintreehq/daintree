@@ -264,13 +264,6 @@ export interface AssistantSessionState {
    */
   toolGrants: Record<string, number>;
   /**
-   * The question currently blocking the turn, if any.
-   *
-   * Singular because the engine blocks the dispatch until it settles — a second
-   * question cannot arrive while one is outstanding, and modelling a list would
-   * invite a UI that shows two answerable sheets for one blocked call.
-   */
-  /**
    * Text typed while a turn was running, not yet folded in by the engine.
    *
    * A QUEUE, not a slot: someone can send two steers before the engine folds either
@@ -301,6 +294,32 @@ export interface AssistantSessionState {
   turnStartedAt: number | null;
   /** The current phase belongs to a turn the assistant started itself. */
   phaseIsWake: boolean;
+  /**
+   * A LOCAL question has been answered and the command that asked it has not reported.
+   *
+   * The window is small and real. `question:answered` is posted before the parked
+   * command is woken, so the sheet disappears — and the composer with it becomes usable
+   * again — while the command is still applying what was chosen. A prompt submitted in
+   * that gap is refused by the engine's own endpoint reservation, which is safe but
+   * makes a liar of the question: it said the choice applies from the next message, and
+   * the next message is the one that failed.
+   *
+   * LOCAL only. A model's question is answered inside a turn that carries on by itself,
+   * with nothing else owed; only a slash command has a result still to come.
+   */
+  awaitingLocalCommand: boolean;
+  /**
+   * The question currently waiting on the user, if any.
+   *
+   * Singular because the ENGINE enforces it: the bridge refuses a second question while
+   * one is outstanding (`host.ErrQuestionBusy`) rather than letting it replace the live
+   * one. That guarantee is load-bearing here — a slash command can now ask on its own
+   * account beside a model turn, so without it two askers could want this slot, and the
+   * loser would sit parked on a sheet nobody can see until its timeout.
+   *
+   * Modelling a list instead would invite a UI that shows two answerable sheets for a
+   * decision that is one at a time by construction.
+   */
   pendingQuestion: AssistantQuestion | null;
   /** True when this session runs mutating tools with NO confirmation prompt. */
   autoApprove: boolean;
@@ -407,6 +426,7 @@ const EMPTY: AssistantSessionState = {
   turnStartedAt: null,
   phaseIsWake: false,
   pendingQuestion: null,
+  awaitingLocalCommand: false,
   autoApprove: false,
   stoppedReason: null,
   error: null,
@@ -581,6 +601,9 @@ export const useAssistantStore = create<AssistantStore>((set, get) => ({
       turnStartedAt: null,
       lastActivityAt: null,
       pendingQuestion: null,
+      // Nothing is owed by an engine that is gone; holding the composer for a result
+      // that can never arrive would leave it dead for the rest of the session.
+      awaitingLocalCommand: false,
       // Nothing is queued once the engine is gone. The words are kept — they were
       // typed — but as ordinary turns rather than as a promise of delivery that will
       // never be honoured.
@@ -1137,6 +1160,7 @@ export const useAssistantStore = create<AssistantStore>((set, get) => ({
             turnStartedAt: null,
             lastActivityAt: null,
             pendingQuestion: null,
+            awaitingLocalCommand: false,
             // A gap belongs to a transcript. Cleared with it, or the panel keeps
             // reporting frames missing from a conversation nobody can read.
             droppedFrames: 0,
@@ -1172,6 +1196,17 @@ export const useAssistantStore = create<AssistantStore>((set, get) => ({
           return;
         }
         set((s) => ({
+          // The result the composer was waiting on. Cleared for ANY command result, not
+          // only the one that asked, and that is sound rather than sloppy: a command
+          // that asks holds the session EXCLUSIVELY, and the engine keeps OTHER COMMANDS
+          // refused until that command's own result has been posted — it releases prompt
+          // admission earlier than command admission for precisely this reason. So while
+          // this flag is set, no other command can be running to report first. Matching
+          // on the command text instead would hold the composer forever the day a result
+          // came back reworded, and every dispatched command reports exactly once — a
+          // panicking worker included, which is what stops a crash leaving this set for
+          // good.
+          awaitingLocalCommand: false,
           notices: appendNotice(s, {
             id: noticeId(),
             // An unknown command is the user's typo, not an engine fault: say so
@@ -1217,6 +1252,10 @@ export const useAssistantStore = create<AssistantStore>((set, get) => ({
           // question rather than from the answer.
           const turnId = asked?.turnId ?? null;
           return {
+            // A question with no turn behind it was asked by a slash command, and that
+            // command is still parked on this answer. Hold the composer until its
+            // result lands — see `awaitingLocalCommand`.
+            awaitingLocalCommand: asked ? turnId === null : s.awaitingLocalCommand,
             // Cleared only if it is THIS question: a late `answered` for one already
             // superseded must not dismiss the sheet the user is currently looking at.
             pendingQuestion: asked ? null : s.pendingQuestion,
