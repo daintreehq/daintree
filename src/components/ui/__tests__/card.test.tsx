@@ -6,7 +6,13 @@ import { describe, expect, it, vi } from "vitest";
 import { cn } from "@/lib/utils";
 import { Card, cardVariants } from "../card";
 import { SurfaceHeader, SurfaceHeaderTitle } from "../SurfaceHeader";
-import { expectNoUnfocusedAccent, expectSingleWinner, utilitiesInGroup } from "./variantAssertions";
+import {
+  expectAtMostOneWinner,
+  expectNarrowTransition,
+  expectNoUnfocusedAccent,
+  expectSingleWinner,
+  utilitiesInGroup,
+} from "./variantAssertions";
 
 const VARIANTS = ["default", "subtle", "elevated"] as const;
 const PADDINGS = ["none", "sm", "md", "lg"] as const;
@@ -61,21 +67,35 @@ describe("cardVariants", () => {
   it("resolves every combination to a single utility per property", () => {
     for (const variant of VARIANTS) {
       for (const padding of PADDINGS) {
-        expectSingleWinner(cardVariants({ variant, padding }), ["paddingX", "paddingY", "radius"]);
+        // `none` legitimately emits no padding; the radius never varies.
+        expectAtMostOneWinner(cardVariants({ variant, padding }), ["paddingX", "paddingY"]);
+        expectSingleWinner(cardVariants({ variant, padding }), ["radius"]);
       }
     }
   });
 
-  it("changes only surface and border colour between variants", () => {
-    const geometry = (classes: string) =>
+  it("keeps padding on an axis of its own, ordered and distinct", () => {
+    const sizes = PADDINGS.map(
+      (padding) => utilitiesInGroup(cardVariants({ padding }), "paddingX")[0] ?? "none"
+    );
+    // A table that collapsed every padding onto one value would still satisfy
+    // the single-winner check above, so pin that they actually differ.
+    expect(new Set(sizes).size).toBe(PADDINGS.length);
+  });
+
+  it("varies only paint between variants, never the box it draws", () => {
+    const box = (classes: string) =>
       classes
         .split(/\s+/)
-        .filter((token) => /^(rounded|p)-/.test(token))
+        .filter((token) => /^(rounded|p[xy]?)-/.test(token))
         .sort();
-    const baseline = geometry(cardVariants({ variant: "default" }));
+    const baseline = box(cardVariants({ variant: "default" }));
     for (const variant of VARIANTS) {
-      expect(geometry(cardVariants({ variant })), variant).toEqual(baseline);
+      expect(box(cardVariants({ variant })), variant).toEqual(baseline);
     }
+    // Elevated is allowed to add a shadow — that is paint, not geometry.
+    expect(cardVariants({ variant: "elevated" })).toContain("shadow-");
+    expect(cardVariants({ variant: "default" })).not.toContain("shadow-");
   });
 
   it("emits no padding utility when padding is none", () => {
@@ -90,11 +110,7 @@ describe("cardVariants", () => {
   });
 
   it("names the properties it transitions rather than widening to all", () => {
-    const classes = cardVariants({ interactive: true });
-    expect(classes).not.toContain("transition-all");
-    const transitions = utilitiesInGroup(classes, "transition");
-    expect(transitions).toHaveLength(1);
-    expect(transitions[0]).toMatch(/^transition-\[[a-z,-]+\]$/);
+    expectNarrowTransition(cardVariants({ interactive: true }), /^transition-\[[a-z,-]+\]$/);
   });
 
   it("spends accent only on the focus ring", () => {
@@ -106,5 +122,6 @@ describe("cardVariants", () => {
   it("lets a consumer class win its property group outright", () => {
     const merged = cn(cardVariants({ padding: "md" }), "p-8");
     expect(utilitiesInGroup(merged, "paddingX")).toEqual(["p-8"]);
+    expect(utilitiesInGroup(merged, "paddingY")).toEqual(["p-8"]);
   });
 });

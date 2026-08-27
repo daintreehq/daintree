@@ -73,12 +73,12 @@ function Switch({ className, size, tone, ref, ...props }: SwitchProps) {
   return (
     <SwitchPrimitive.Root
       ref={ref}
-      data-slot="switch"
-      data-size={resolvedSize}
-      data-tone={tone ?? "neutral"}
       className={cn(switchVariants({ size, tone }), className)}
       {...props}
       {...controlProps}
+      data-slot="switch"
+      data-size={resolvedSize}
+      data-tone={tone ?? "neutral"}
     >
       <SwitchPrimitive.Thumb className={switchThumbVariants({ size: resolvedSize })} />
     </SwitchPrimitive.Root>

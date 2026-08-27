@@ -56,10 +56,10 @@ function Textarea({ className, density, variant, resize, invalid, ref, ...props 
   return (
     <textarea
       ref={ref}
-      data-slot="textarea"
-      data-density={density ?? "default"}
       {...props}
       {...controlProps}
+      data-slot="textarea"
+      data-density={density ?? "default"}
       className={cn(
         textareaVariants({ density, variant, resize, invalid: resolvedInvalid }),
         className

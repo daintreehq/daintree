@@ -153,6 +153,35 @@ describe("Field horizontal orientation", () => {
     expect(onCheckedChange).toHaveBeenCalledWith(true);
   });
 
+  // jsdom computes no layout, so the two-column row can only be pinned
+  // structurally. These classes are load-bearing selectors, not styling: the
+  // control lands in column one purely because it is the FIRST child and every
+  // text slot is explicitly pushed to column two.
+  it("places the control first and every text slot in the second column", () => {
+    const { container } = render(
+      <Field orientation="horizontal">
+        <Checkbox checked={false} onCheckedChange={vi.fn()} />
+        <FieldLabel>Send crash reports</FieldLabel>
+        <FieldDescription>Includes stack traces</FieldDescription>
+        <FieldError>Pick one</FieldError>
+      </Field>
+    );
+    const row = container.firstElementChild!;
+    expect(row.className).toContain("grid-cols-[auto_minmax(0,1fr)]");
+
+    const children = [...row.children];
+    expect(children[0]!.getAttribute("data-field-control")).toBe("");
+    expect(children.slice(1).map((el) => el.getAttribute("data-slot"))).toEqual([
+      "field-label",
+      "field-description",
+      "field-error",
+    ]);
+
+    for (const slot of ["field-label", "field-description", "field-error"]) {
+      expect(row.className, slot).toContain(`[&>[data-slot=${slot}]]:col-start-2`);
+    }
+  });
+
   it("does not nest a label inside the row label", () => {
     const { container } = render(
       <Field orientation="horizontal">
@@ -166,6 +195,27 @@ describe("Field horizontal orientation", () => {
 });
 
 describe("Field slot guards", () => {
+  // The whole point of the primitive is that a description cannot end up
+  // unassociated. A slot hidden behind a wrapper is invisible to the render-time
+  // scan, so it must fail loudly rather than render with no id.
+  it("refuses to associate a slot nested behind a wrapper component", () => {
+    const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});
+    const Wrapped = () => <FieldDescription>Buried</FieldDescription>;
+    try {
+      expect(() =>
+        render(
+          <Field>
+            <FieldLabel>Endpoint</FieldLabel>
+            <Input />
+            <Wrapped />
+          </Field>
+        )
+      ).toThrow(/direct child of <Field>/);
+    } finally {
+      consoleError.mockRestore();
+    }
+  });
+
   it("refuses to render its parts outside a Field", () => {
     // React logs the thrown error before it propagates; silence the noise.
     const consoleError = vi.spyOn(console, "error").mockImplementation(() => {});

@@ -11,9 +11,16 @@ import { useFieldControl } from "@/components/ui/field";
  * membership, and the accent is reserved for the one load-bearing signal in a
  * focus region. `rounded-sm` (6px) rather than the repo's bare `rounded` (10px),
  * which on a 16px box rounds far enough to read as a radio.
+ *
+ * The unchecked fill is `surface-canvas`, not the `surface-input` the text
+ * fields use. On dark themes `surface-input` derives from
+ * `surface-panel-elevated`, which several palettes (Galapagos) also give the
+ * settings dialog — the box would dissolve into the surface it sits on, leaving
+ * a 20%-alpha border as the only edge. Canvas is the recessed surface in every
+ * bundled theme, so a 16px box keeps a boundary wherever it is dropped.
  */
 const checkboxVariants = cva(
-  "group relative flex shrink-0 items-center justify-center border border-border-strong bg-surface-input transition-colors duration-150 ease-out " +
+  "group relative flex shrink-0 items-center justify-center border border-border-strong bg-surface-canvas transition-colors duration-150 ease-out " +
     "data-[state=checked]:bg-text-primary data-[state=checked]:border-text-primary " +
     "data-[state=indeterminate]:bg-text-primary data-[state=indeterminate]:border-text-primary " +
     "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-daintree-accent " +
@@ -51,10 +58,10 @@ function Checkbox({ className, size, invalid, ref, ...props }: CheckboxProps) {
   return (
     <CheckboxPrimitive.Root
       ref={ref}
-      data-slot="checkbox"
-      data-size={size ?? "md"}
       {...props}
       {...controlProps}
+      data-slot="checkbox"
+      data-size={size ?? "md"}
       className={cn(checkboxVariants({ size, invalid: resolvedInvalid }), className)}
     >
       <CheckboxPrimitive.Indicator className="animate-checkbox-check flex h-full w-full items-center justify-center text-text-inverse">

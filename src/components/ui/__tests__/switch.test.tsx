@@ -4,7 +4,12 @@ import { render, screen, fireEvent } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 
 import { Switch, switchThumbVariants, switchVariants } from "../switch";
-import { expectNoUnfocusedAccent, utilitiesInGroup } from "./variantAssertions";
+import {
+  durationMs,
+  expectNarrowTransition,
+  expectNoUnfocusedAccent,
+  utilitiesInGroup,
+} from "./variantAssertions";
 
 const TONES = ["neutral", "warning", "danger"] as const;
 const SIZES = ["sm", "md"] as const;
@@ -86,14 +91,41 @@ describe("switchVariants", () => {
   });
 
   it("keeps the track and thumb geometry paired across sizes", () => {
+    const trackWidths: number[] = [];
     for (const size of SIZES) {
-      const track = utilitiesInGroup(switchVariants({ size }), "width");
-      const thumb = utilitiesInGroup(switchThumbVariants({ size }), "width");
-      expect(track).toHaveLength(1);
-      expect(thumb).toHaveLength(1);
-      // The thumb has to fit inside the track it travels along.
-      expect(Number(thumb[0]!.replace("w-", ""))).toBeLessThan(Number(track[0]!.replace("w-", "")));
+      const trackW = utilitiesInGroup(switchVariants({ size }), "width");
+      const trackH = utilitiesInGroup(switchVariants({ size }), "height");
+      const thumbW = utilitiesInGroup(switchThumbVariants({ size }), "width");
+      const thumbH = utilitiesInGroup(switchThumbVariants({ size }), "height");
+      expect(trackW).toHaveLength(1);
+      expect(trackH).toHaveLength(1);
+      expect(thumbW).toHaveLength(1);
+      expect(thumbH).toHaveLength(1);
+
+      const track = Number(trackW[0]!.replace("w-", ""));
+      const thumb = Number(thumbW[0]!.replace("w-", ""));
+      // The thumb has to fit inside the track it travels along...
+      expect(thumb).toBeLessThan(track);
+      expect(Number(thumbH[0]!.replace("h-", ""))).toBeLessThan(
+        Number(trackH[0]!.replace("h-", ""))
+      );
+
+      // ...and its checked travel must not carry it out the far end. Rem units
+      // (Tailwind's 0.25rem step) and the arbitrary px values both reduce to
+      // the same scale here.
+      const toRem = (value: string) =>
+        value.endsWith("px]") ? Number(value.replace(/\D+/g, "")) / 4 : Number(value);
+      const travel = /data-\[state=checked\]:translate-x-(\S+)/.exec(
+        switchThumbVariants({ size })
+      )![1]!;
+      const rest = /(?:^|\s)translate-x-(\S+)/.exec(switchThumbVariants({ size }))![1]!;
+      expect(toRem(travel)).toBeGreaterThan(toRem(rest));
+      expect(toRem(travel) + thumb).toBeLessThanOrEqual(track);
+
+      trackWidths.push(track);
     }
+    // Two sizes that resolved to the same geometry would satisfy every check above.
+    expect(new Set(trackWidths).size).toBe(SIZES.length);
   });
 
   // Regression: a resting thumb painted with the ON fill reads as an
@@ -118,14 +150,12 @@ describe("switchVariants", () => {
   it("moves the track and the thumb on separate, narrow transitions", () => {
     const track = switchVariants();
     const thumb = switchThumbVariants();
-    expect(utilitiesInGroup(track, "transition")).toEqual(["transition-colors"]);
-    expect(utilitiesInGroup(thumb, "transition")).toEqual(["transition-transform"]);
-    expect(track).not.toContain("transition-all");
-    expect(thumb).not.toContain("transition-all");
+    expectNarrowTransition(track, /^transition-colors$/);
+    expectNarrowTransition(thumb, /^transition-transform$/);
     // The thumb leads and the track settles behind it — same duration on both
-    // would flatten the press into a single undifferentiated move.
-    expect(track).toContain("duration-200");
-    expect(thumb).toContain("duration-100");
+    // would flatten the toggle into one undifferentiated move. The relationship
+    // is the contract; either value may be retuned.
+    expect(durationMs(thumb)).toBeLessThan(durationMs(track));
   });
 
   it("spends accent only on the focus ring", () => {

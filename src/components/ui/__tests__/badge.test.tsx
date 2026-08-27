@@ -5,7 +5,12 @@ import { describe, expect, it, vi } from "vitest";
 
 import { cn } from "@/lib/utils";
 import { Badge, badgeVariants } from "../badge";
-import { expectNoUnfocusedAccent, expectSingleWinner, utilitiesInGroup } from "./variantAssertions";
+import {
+  expectNarrowTransition,
+  expectNoUnfocusedAccent,
+  expectSingleWinner,
+  utilitiesInGroup,
+} from "./variantAssertions";
 
 const TONES = ["neutral", "outline", "error", "warning", "success", "info"] as const;
 const SIZES = ["xs", "sm", "md"] as const;
@@ -116,8 +121,16 @@ describe("badgeVariants", () => {
   });
 
   it("never widens to a blanket transition", () => {
-    expect(badgeVariants()).not.toContain("transition-all");
-    expect(utilitiesInGroup(badgeVariants(), "transition")).toEqual(["transition-colors"]);
+    expectNarrowTransition(badgeVariants(), /^transition-(colors|\[[a-z,-]+\])$/);
+  });
+
+  it("keeps every size on its own type scale", () => {
+    // `xs` and `sm` deliberately share a box and differ only in type — the size
+    // axis is the type scale, and a table that collapsed two sizes onto one
+    // would still satisfy the single-winner check above.
+    const scales = SIZES.map((size) => utilitiesInGroup(badgeVariants({ size }), "fontSize")[0]);
+    expect(scales.every(Boolean)).toBe(true);
+    expect(new Set(scales).size).toBe(SIZES.length);
   });
 
   it("spends no accent at all — a badge is never the load-bearing signal", () => {

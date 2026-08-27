@@ -17,6 +17,10 @@ import { cn } from "@/lib/utils";
  * orientations put the control in different places: above the description for a
  * text field, beside it for a checkbox row. Props would need a render slot to
  * express that; children already do.
+ *
+ * `disabled` is presentation only — it dims the label and sets the row's cursor.
+ * The control still takes its own `disabled`, so one prop can never leave a
+ * field looking inert while it is still operable.
  */
 
 type FieldOrientation = "vertical" | "horizontal";
@@ -26,7 +30,6 @@ interface FieldContextValue {
   labelId: string | undefined;
   descriptionId: string | undefined;
   errorId: string | undefined;
-  describedBy: string | undefined;
   invalid: boolean;
   disabled: boolean;
   orientation: FieldOrientation;
@@ -41,10 +44,28 @@ interface ControlAria {
   "aria-invalid"?: boolean | "true" | "false" | "grammar" | "spelling";
 }
 
+// A blank or whitespace-only name is no name at all — the accessible-name
+// algorithm falls straight through it — so it must not suppress the field's own
+// label, which would leave a horizontal row naming itself from every scrap of
+// text the wrapping <label> encloses.
+function isNamed(value: unknown): boolean {
+  return typeof value === "string" && value.trim() !== "";
+}
+
+function idList(...sources: Array<string | undefined>): string | undefined {
+  const ids = sources
+    .filter((value): value is string => typeof value === "string" && value.length > 0)
+    .flatMap((value) => value.split(/\s+/))
+    .filter((value) => value.length > 0);
+  // A repeated IDREF is announced twice; dedupe, keeping first position.
+  const unique = [...new Set(ids)];
+  return unique.length > 0 ? unique.join(" ") : undefined;
+}
+
 /**
  * Everything a control needs to join the enclosing field, already merged with
- * whatever ARIA the caller passed. Returns `invalid: false` and a bare
- * passthrough outside a field — controls stay usable standalone.
+ * whatever ARIA the caller passed. Outside a field it degrades to a passthrough,
+ * so controls stay usable standalone.
  *
  * Spread the result AFTER the caller's own props: the field owns the id its
  * label points at, so a stray `id` at the call site cannot orphan the label.
@@ -62,8 +83,7 @@ export function useFieldControl(own: ControlAria, invalidOverride?: boolean) {
     };
   }
 
-  // A caller that named the control itself keeps that name.
-  const namedByCaller = own["aria-label"] !== undefined || own["aria-labelledby"] !== undefined;
+  const namedByCaller = isNamed(own["aria-label"]) || isNamed(own["aria-labelledby"]);
 
   return {
     invalid,
@@ -75,8 +95,9 @@ export function useFieldControl(own: ControlAria, invalidOverride?: boolean) {
       // the accessible name as one run-on string. Naming the label element
       // explicitly keeps the name to the label text alone.
       "aria-labelledby": namedByCaller ? own["aria-labelledby"] : field.labelId,
-      "aria-describedby":
-        [own["aria-describedby"], field.describedBy].filter(Boolean).join(" ") || undefined,
+      // Error first, then the field's own hint, then anything the caller added:
+      // a screen reader should reach the problem before the explanation.
+      "aria-describedby": idList(field.errorId, field.descriptionId, own["aria-describedby"]),
       "aria-invalid": invalid ? (true as const) : own["aria-invalid"],
     },
   };
@@ -88,6 +109,21 @@ function useFieldContext(slot: string): FieldContextValue {
     throw new Error(`${slot} must be rendered inside a <Field>`);
   }
   return field;
+}
+
+/**
+ * Slots are matched by element type while `Field` renders, so one nested behind
+ * a wrapper component is invisible to the scan and would render with no id —
+ * the silently unassociated description this primitive exists to prevent. Fail
+ * loudly rather than ship a field that only looks wired up.
+ */
+function assertAllocated(slot: string, id: string | undefined): string {
+  if (id === undefined) {
+    throw new Error(
+      `${slot} must be a direct child of <Field> (inside a fragment or array is fine) for the field to associate it`
+    );
+  }
+  return id;
 }
 
 // Render-time scan rather than effect-based registration: an effect would leave
@@ -114,7 +150,8 @@ const fieldVariants = cva("min-w-0", {
       // The control sits in column one and everything else stacks in column
       // two. `col-start-2` on the text slots is what pins that: auto-placement
       // then flows label, description and error down the second column while
-      // the control keeps the single cell it was placed in.
+      // the control keeps the single cell it was placed in. That only holds
+      // while the control is the FIRST child — the layout test pins the order.
       horizontal:
         "grid grid-cols-[auto_minmax(0,1fr)] items-start gap-x-3 gap-y-0.5 " +
         "[&>[data-field-control]]:mt-0.5 " +
@@ -145,6 +182,7 @@ export interface FieldProps extends Omit<React.HTMLAttributes<HTMLElement>, "chi
   controlId?: string;
   /** Defaults to whether a `FieldError` is currently rendered. */
   invalid?: boolean;
+  /** Presentation only — pass `disabled` to the control as well. */
   disabled?: boolean;
 }
 
@@ -163,7 +201,7 @@ function Field({
   const hasLabel = hasSlot(children, FieldLabel);
   const hasDescription = hasSlot(children, FieldDescription);
   const hasError = hasSlot(children, FieldError);
-  // A caller that holds an untouched error keeps the field clean by simply not
+  // A caller holding an untouched error keeps the field clean by simply not
   // rendering `FieldError` — presence of the slot is the signal.
   const resolvedInvalid = invalid ?? hasError;
 
@@ -179,8 +217,6 @@ function Field({
       labelId,
       descriptionId,
       errorId,
-      // Error first: a screen reader should reach the problem before the hint.
-      describedBy: [errorId, descriptionId].filter(Boolean).join(" ") || undefined,
       invalid: resolvedInvalid,
       disabled,
       orientation,
@@ -230,7 +266,7 @@ const fieldLabelVariants = cva("text-sm", {
   },
 });
 
-export interface FieldLabelProps extends React.HTMLAttributes<HTMLElement> {
+export interface FieldLabelProps extends Omit<React.HTMLAttributes<HTMLElement>, "id"> {
   children: React.ReactNode;
   /**
    * Rendered beside the label text, never inside it — reset buttons, scope
@@ -249,10 +285,12 @@ function FieldLabel({ accessory, tinted = false, className, children, ...props }
   );
 
   return (
-    <div data-slot="field-label" className="flex min-w-0 items-center gap-2">
+    // The slot marker rides the wrapper, not the text: an accessory has to land
+    // in the same grid cell as the label it annotates.
+    <div className="flex min-w-0 items-center gap-2" data-slot="field-label">
       {orientation === "horizontal" ? (
         // Already inside the row's <label> — a nested one would be invalid.
-        <span id={labelId} className={labelClasses} {...props}>
+        <span className={labelClasses} {...props} id={assertAllocated("FieldLabel", labelId)}>
           {children}
         </span>
       ) : (
@@ -265,21 +303,24 @@ function FieldLabel({ accessory, tinted = false, className, children, ...props }
   );
 }
 
-export type FieldDescriptionProps = React.HTMLAttributes<HTMLParagraphElement>;
+export type FieldDescriptionProps = Omit<React.HTMLAttributes<HTMLParagraphElement>, "id">;
 
 function FieldDescription({ className, ...props }: FieldDescriptionProps) {
   const { descriptionId } = useFieldContext("FieldDescription");
   return (
     <p
-      data-slot="field-description"
-      id={descriptionId}
       className={cn("text-xs text-text-muted select-text", className)}
       {...props}
+      // After the spread: the id is what the control's association points at and
+      // the slot marker is what places this in the row's second column, so
+      // neither is the caller's to override.
+      id={assertAllocated("FieldDescription", descriptionId)}
+      data-slot="field-description"
     />
   );
 }
 
-export type FieldErrorProps = React.HTMLAttributes<HTMLParagraphElement>;
+export type FieldErrorProps = Omit<React.HTMLAttributes<HTMLParagraphElement>, "id">;
 
 /**
  * No `role="alert"`: settings validation renders on every keystroke, and a live
@@ -290,10 +331,10 @@ function FieldError({ className, ...props }: FieldErrorProps) {
   const { errorId } = useFieldContext("FieldError");
   return (
     <p
-      data-slot="field-error"
-      id={errorId}
       className={cn("text-xs text-status-error", className)}
       {...props}
+      id={assertAllocated("FieldError", errorId)}
+      data-slot="field-error"
     />
   );
 }

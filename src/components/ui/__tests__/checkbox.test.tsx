@@ -5,7 +5,12 @@ import { describe, expect, it, vi } from "vitest";
 
 import { Checkbox, checkboxVariants } from "../checkbox";
 import { Field, FieldError, FieldLabel } from "../field";
-import { expectNoUnfocusedAccent, expectSingleWinner, utilitiesInGroup } from "./variantAssertions";
+import {
+  expectNarrowTransition,
+  expectNoUnfocusedAccent,
+  expectSingleWinner,
+  utilitiesInGroup,
+} from "./variantAssertions";
 
 describe("Checkbox behaviour", () => {
   it("reports the next state on each toggle", () => {
@@ -30,12 +35,21 @@ describe("Checkbox behaviour", () => {
     expect(onCheckedChange).not.toHaveBeenCalled();
   });
 
-  it("announces the indeterminate state as mixed and shows the minus glyph", () => {
+  it("announces the indeterminate state as mixed and swaps to the minus glyph", () => {
     render(<Checkbox aria-label="Enable" checked="indeterminate" onCheckedChange={vi.fn()} />);
     const checkbox = screen.getByRole("checkbox");
     expect(checkbox.getAttribute("aria-checked")).toBe("mixed");
-    // Both glyphs are present; data-state on the root decides which one paints.
-    expect(checkbox.querySelectorAll("svg")).toHaveLength(2);
+    expect(checkbox.getAttribute("data-state")).toBe("indeterminate");
+
+    // Cross-node contract, not a class restatement: the glyphs switch via
+    // `group-data-[state=indeterminate]` on the ROOT, so losing the `group`
+    // class makes both variants inert and leaves a checkmark on a mixed box —
+    // a CSS-only failure nothing else here would catch.
+    expect(checkbox.classList.contains("group")).toBe(true);
+    const [check, minus] = [...checkbox.querySelectorAll("svg")];
+    expect(check!.getAttribute("class")).toContain("group-data-[state=indeterminate]:hidden");
+    expect(minus!.getAttribute("class")).toContain("hidden");
+    expect(minus!.getAttribute("class")).toContain("group-data-[state=indeterminate]:block");
   });
 
   it("renders no indicator at all while unchecked", () => {
@@ -92,9 +106,25 @@ describe("checkboxVariants", () => {
     }
   });
 
-  it("paints the checked state without spending the accent", () => {
+  it("paints the checked state with exactly one fill, and never the accent", () => {
     expectNoUnfocusedAccent(checkboxVariants());
-    expect(checkboxVariants()).toContain("data-[state=checked]:bg-text-primary");
+    const checked = checkboxVariants()
+      .split(/\s+/)
+      .filter((token) => token.startsWith("data-[state=checked]:"));
+    const fills = checked.filter((token) => token.includes(":bg-"));
+    const borders = checked.filter((token) => token.includes(":border-"));
+    expect(fills).toHaveLength(1);
+    expect(borders).toHaveLength(1);
+    // The border has to agree with the fill or the box reads as a half-state.
+    expect(borders[0]!.replace(":border-", ":bg-")).toBe(fills[0]);
+    expect(fills[0]).not.toContain("accent");
+  });
+
+  it("keeps the two sizes genuinely distinct", () => {
+    const sm = checkboxVariants({ size: "sm" });
+    const md = checkboxVariants({ size: "md" });
+    expect(utilitiesInGroup(sm, "width")).not.toEqual(utilitiesInGroup(md, "width"));
+    expect(utilitiesInGroup(sm, "height")).not.toEqual(utilitiesInGroup(md, "height"));
   });
 
   it("adds only border colour when invalid", () => {
@@ -107,7 +137,6 @@ describe("checkboxVariants", () => {
   });
 
   it("never widens to a blanket transition", () => {
-    expect(checkboxVariants()).not.toContain("transition-all");
-    expect(utilitiesInGroup(checkboxVariants(), "transition")).toEqual(["transition-colors"]);
+    expectNarrowTransition(checkboxVariants(), /^transition-(colors|\[[a-z,-]+\])$/);
   });
 });

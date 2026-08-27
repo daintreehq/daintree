@@ -6,7 +6,12 @@ import { describe, expect, it, vi } from "vitest";
 import { cn } from "@/lib/utils";
 import { Textarea, textareaVariants } from "../textarea";
 import { Field, FieldDescription, FieldLabel } from "../field";
-import { expectNoUnfocusedAccent, expectSingleWinner, utilitiesInGroup } from "./variantAssertions";
+import {
+  expectNarrowTransition,
+  expectNoUnfocusedAccent,
+  expectSingleWinner,
+  utilitiesInGroup,
+} from "./variantAssertions";
 
 describe("Textarea native surface", () => {
   it("forwards the ref to the textarea element", () => {
@@ -59,17 +64,30 @@ describe("textareaVariants", () => {
   it("keeps typography and spacing on independent axes", () => {
     const compactDefault = textareaVariants({ density: "compact", variant: "default" });
     const compactCode = textareaVariants({ density: "compact", variant: "code" });
+    // Same density, so the box must be identical...
     expect(utilitiesInGroup(compactDefault, "paddingX")).toEqual(
       utilitiesInGroup(compactCode, "paddingX")
     );
-    expect(compactCode).toContain("font-mono");
-    expect(compactDefault).not.toContain("font-mono");
+    expect(utilitiesInGroup(compactDefault, "paddingY")).toEqual(
+      utilitiesInGroup(compactCode, "paddingY")
+    );
+    // ...and the only thing the variant may move is the typeface and its scale.
+    const fontFamily = (classes: string) =>
+      classes.split(/\s+/).filter((token) => /^font-(sans|mono|serif)$/.test(token));
+    expect(fontFamily(compactCode)).not.toEqual(fontFamily(compactDefault));
+    expect(utilitiesInGroup(compactCode, "fontSize")).not.toEqual(
+      utilitiesInGroup(compactDefault, "fontSize")
+    );
+  });
+
+  it("keeps the densities genuinely distinct", () => {
+    const compact = textareaVariants({ density: "compact" });
+    const normal = textareaVariants({ density: "default" });
+    expect(utilitiesInGroup(compact, "paddingY")).not.toEqual(utilitiesInGroup(normal, "paddingY"));
   });
 
   it("never widens to a blanket transition", () => {
-    const classes = textareaVariants();
-    expect(classes).not.toContain("transition-all");
-    expect(utilitiesInGroup(classes, "transition")).toEqual(["transition-colors"]);
+    expectNarrowTransition(textareaVariants(), /^transition-(colors|\[[a-z,-]+\])$/);
   });
 
   it("spends accent only on the focus ring", () => {

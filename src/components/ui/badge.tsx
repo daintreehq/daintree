@@ -55,11 +55,13 @@ function Badge({ className, size, tone, shape, asChild = false, ref, ...props }:
   return (
     <Comp
       ref={ref}
+      className={cn(badgeVariants({ size, tone, shape }), className)}
+      {...props}
+      // After the spread: these report what the variants actually painted, so a
+      // stray `data-tone` at a call site cannot make the markup lie.
       data-slot="badge"
       data-size={size ?? "sm"}
       data-tone={tone ?? "neutral"}
-      className={cn(badgeVariants({ size, tone, shape }), className)}
-      {...props}
     />
   );
 }

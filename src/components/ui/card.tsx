@@ -59,11 +59,11 @@ function Card({
   return (
     <Comp
       ref={ref}
+      className={cn(cardVariants({ variant, padding, interactive }), className)}
+      {...props}
       data-slot="card"
       data-variant={variant ?? "default"}
       data-padding={padding ?? "md"}
-      className={cn(cardVariants({ variant, padding, interactive }), className)}
-      {...props}
     />
   );
 }

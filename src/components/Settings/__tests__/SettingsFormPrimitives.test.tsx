@@ -168,6 +168,16 @@ describe("SettingsInput", () => {
     render(<SettingsInput label="Test" ref={ref} />);
     expect(ref).toHaveBeenCalledWith(expect.any(HTMLInputElement));
   });
+
+  it("hangs reset visibility off a group the field root actually owns", () => {
+    const { container } = render(<SettingsInput label="Name" isModified onReset={vi.fn()} />);
+    const reset = screen.getByLabelText("Reset Name to default");
+    // Drop `group` from the root and the button stays hidden forever, while
+    // every other assertion in this file still passes.
+    expect(reset.className).toContain("invisible");
+    expect(reset.className).toContain("group-hover:visible");
+    expect(reset.closest(".group")).toBe(container.firstElementChild);
+  });
 });
 
 describe("SettingsSelect", () => {
@@ -306,6 +316,22 @@ describe("SettingsTextarea", () => {
     const ref = vi.fn();
     render(<SettingsTextarea label="Bio" ref={ref} />);
     expect(ref).toHaveBeenCalledWith(expect.any(HTMLTextAreaElement));
+  });
+
+  it("shows a reset button that resolves against the field root's group", () => {
+    const onReset = vi.fn();
+    const { container } = render(<SettingsTextarea label="Bio" isModified onReset={onReset} />);
+    const reset = screen.getByLabelText("Reset Bio to default");
+    expect(reset.className).toContain("group-hover:visible");
+    expect(reset.closest(".group")).toBe(container.firstElementChild);
+
+    fireEvent.click(reset);
+    expect(onReset).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides the reset button when disabled", () => {
+    render(<SettingsTextarea label="Bio" isModified onReset={vi.fn()} disabled />);
+    expect(screen.queryByLabelText("Reset Bio to default")).toBeNull();
   });
 
   it("uses semantic tokens for background and focus", () => {
@@ -773,7 +799,23 @@ describe("SettingsCheckbox", () => {
     expect(screen.getByText("A test description")).toBeTruthy();
   });
 
-  it("associates label with checkbox", () => {
+  it("names the checkbox from the label alone, not the whole row", () => {
+    render(
+      <SettingsCheckbox
+        label="Test Setting"
+        description="A test description"
+        checked={false}
+        onChange={vi.fn()}
+        scope="project"
+      />
+    );
+    // The row is a <label> so the whole card is clickable, which would
+    // otherwise fold the description and the scope chip into the control's
+    // accessible name as one run-on string.
+    expect(screen.getByRole("checkbox", { name: "Test Setting" })).toBeTruthy();
+  });
+
+  it("keeps the whole row clickable", () => {
     const onChange = vi.fn();
     render(
       <SettingsCheckbox
@@ -783,8 +825,8 @@ describe("SettingsCheckbox", () => {
         onChange={onChange}
       />
     );
-    const checkbox = screen.getByRole("checkbox");
-    expect(checkbox).toBeTruthy();
+    fireEvent.click(screen.getByText("Test Setting"));
+    expect(onChange).toHaveBeenCalledWith(true);
   });
 
   it("wires description to aria-describedby", () => {
@@ -930,7 +972,10 @@ describe("SettingsCheckbox", () => {
     expect(label.classList.contains("cursor-not-allowed")).toBe(true);
   });
 
-  it("uses semantic tokens for background and border", () => {
+  // The unchecked box has to stay visible against whatever it sits on. Painting
+  // it with the same fill the checked state uses erases the distinction; sharing
+  // the settings dialog's own surface erases the control.
+  it("keeps the resting box distinguishable from both its checked state and the dialog", () => {
     render(
       <SettingsCheckbox
         label="Test Setting"
@@ -939,9 +984,20 @@ describe("SettingsCheckbox", () => {
         onChange={vi.fn()}
       />
     );
-    const checkbox = screen.getByRole("checkbox");
-    expect(checkbox.className).toContain("bg-surface-input");
-    expect(checkbox.className).toContain("border-border-strong");
+    const classes = screen.getByRole("checkbox").className.split(/\s+/);
+    const restingFill = classes.filter((name) => /^bg-/.test(name));
+    const checkedFill = classes
+      .filter((name) => name.startsWith("data-[state=checked]:bg-"))
+      .map((name) => name.replace("data-[state=checked]:", ""));
+
+    expect(restingFill).toHaveLength(1);
+    expect(checkedFill).toHaveLength(1);
+    expect(restingFill).not.toEqual(checkedFill);
+    // Dark themes derive `surface-input` from `surface-panel-elevated`, which
+    // several palettes also give the settings dialog — the box would dissolve.
+    expect(restingFill[0]).not.toBe("bg-surface-input");
+    // And a boundary of its own, so it never depends on fill alone.
+    expect(classes.some((name) => /^border-/.test(name))).toBe(true);
   });
 
   // Membership, not emphasis: the checked box borrows the text colour, never

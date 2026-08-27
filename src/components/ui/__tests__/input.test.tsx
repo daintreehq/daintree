@@ -5,8 +5,13 @@ import { describe, expect, it, vi } from "vitest";
 
 import { cn } from "@/lib/utils";
 import { Input, inputVariants } from "../input";
-import { Field, FieldError, FieldLabel } from "../field";
-import { expectNoUnfocusedAccent, expectSingleWinner, utilitiesInGroup } from "./variantAssertions";
+import { Field, FieldDescription, FieldError, FieldLabel } from "../field";
+import {
+  expectNarrowTransition,
+  expectNoUnfocusedAccent,
+  expectSingleWinner,
+  utilitiesInGroup,
+} from "./variantAssertions";
 
 describe("Input native surface", () => {
   it("forwards the ref to the input element", () => {
@@ -82,6 +87,45 @@ describe("Input invalid state", () => {
       "Required"
     );
   });
+
+  // The order is the contract: a screen reader reaches the problem, then the
+  // field's own hint, then whatever the call site added.
+  it("keeps the error first when the caller also supplies a description", () => {
+    render(
+      <>
+        <span id="external-hint">See the docs</span>
+        <Field>
+          <FieldLabel>Name</FieldLabel>
+          <Input aria-describedby="external-hint" />
+          <FieldDescription>Shown on your profile</FieldDescription>
+          <FieldError>Required</FieldError>
+        </Field>
+      </>
+    );
+    const texts = screen
+      .getByLabelText("Name")
+      .getAttribute("aria-describedby")!
+      .split(" ")
+      .map((id) => document.getElementById(id)?.textContent);
+    expect(texts).toEqual(["Required", "Shown on your profile", "See the docs"]);
+  });
+
+  it("does not repeat an id the caller listed twice", () => {
+    render(
+      <>
+        <span id="external-hint">See the docs</span>
+        <Field>
+          <FieldLabel>Name</FieldLabel>
+          <Input aria-describedby="external-hint external-hint" />
+          <FieldError>Required</FieldError>
+        </Field>
+      </>
+    );
+    // A repeated IDREF is announced twice.
+    const ids = screen.getByLabelText("Name").getAttribute("aria-describedby")!.split(" ");
+    expect(ids.filter((id) => id === "external-hint")).toHaveLength(1);
+    expect(ids).toHaveLength(2);
+  });
 });
 
 describe("inputVariants", () => {
@@ -99,9 +143,16 @@ describe("inputVariants", () => {
   });
 
   it("never widens to a blanket transition", () => {
-    const classes = inputVariants();
-    expect(classes).not.toContain("transition-all");
-    expect(utilitiesInGroup(classes, "transition")).toEqual(["transition-colors"]);
+    expectNarrowTransition(inputVariants(), /^transition-(colors|\[[a-z,-]+\])$/);
+  });
+
+  it("keeps the densities genuinely distinct", () => {
+    const compact = inputVariants({ density: "compact" });
+    const normal = inputVariants({ density: "default" });
+    // A table that resolved both densities to the same padding would still pass
+    // the single-winner check above.
+    expect(utilitiesInGroup(compact, "paddingX")).not.toEqual(utilitiesInGroup(normal, "paddingX"));
+    expect(utilitiesInGroup(compact, "fontSize")).not.toEqual(utilitiesInGroup(normal, "fontSize"));
   });
 
   it("spends accent only on the focus ring", () => {

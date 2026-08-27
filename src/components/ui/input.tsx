@@ -43,10 +43,10 @@ function Input({ className, density, invalid, ref, ...props }: InputProps) {
   return (
     <input
       ref={ref}
-      data-slot="input"
-      data-density={density ?? "default"}
       {...props}
       {...controlProps}
+      data-slot="input"
+      data-density={density ?? "default"}
       className={cn(inputVariants({ density, invalid: resolvedInvalid }), className)}
     />
   );
