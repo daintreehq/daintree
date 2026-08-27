@@ -1,3 +1,4 @@
+import { Card } from "@/components/ui/card";
 import { Plus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { PresetSelector } from "../PresetSelector";
@@ -35,10 +36,7 @@ export function AgentScopeEditor(props: AgentScopeEditorProps) {
   const title = "Runtime settings";
 
   return (
-    <div
-      id="agents-presets"
-      className="rounded-[var(--radius-lg)] border border-daintree-border bg-surface p-4 space-y-4"
-    >
+    <Card id="agents-presets" className="space-y-4">
       {/* Header: title + Add button */}
       <div
         className={`pb-3${scope.allPresets.length > 0 ? " border-b border-daintree-border" : ""}`}
@@ -170,6 +168,6 @@ export function AgentScopeEditor(props: AgentScopeEditorProps) {
           />
         )}
       </div>
-    </div>
+    </Card>
   );
 }

@@ -168,6 +168,16 @@ describe("SettingsInput", () => {
     render(<SettingsInput label="Test" ref={ref} />);
     expect(ref).toHaveBeenCalledWith(expect.any(HTMLInputElement));
   });
+
+  it("hangs reset visibility off a group the field root actually owns", () => {
+    const { container } = render(<SettingsInput label="Name" isModified onReset={vi.fn()} />);
+    const reset = screen.getByLabelText("Reset Name to default");
+    // Drop `group` from the root and the button stays hidden forever, while
+    // every other assertion in this file still passes.
+    expect(reset.className).toContain("invisible");
+    expect(reset.className).toContain("group-hover:visible");
+    expect(reset.closest(".group")).toBe(container.firstElementChild);
+  });
 });
 
 describe("SettingsSelect", () => {
@@ -306,6 +316,22 @@ describe("SettingsTextarea", () => {
     const ref = vi.fn();
     render(<SettingsTextarea label="Bio" ref={ref} />);
     expect(ref).toHaveBeenCalledWith(expect.any(HTMLTextAreaElement));
+  });
+
+  it("shows a reset button that resolves against the field root's group", () => {
+    const onReset = vi.fn();
+    const { container } = render(<SettingsTextarea label="Bio" isModified onReset={onReset} />);
+    const reset = screen.getByLabelText("Reset Bio to default");
+    expect(reset.className).toContain("group-hover:visible");
+    expect(reset.closest(".group")).toBe(container.firstElementChild);
+
+    fireEvent.click(reset);
+    expect(onReset).toHaveBeenCalledTimes(1);
+  });
+
+  it("hides the reset button when disabled", () => {
+    render(<SettingsTextarea label="Bio" isModified onReset={vi.fn()} disabled />);
+    expect(screen.queryByLabelText("Reset Bio to default")).toBeNull();
   });
 
   it("uses semantic tokens for background and focus", () => {
@@ -773,7 +799,44 @@ describe("SettingsCheckbox", () => {
     expect(screen.getByText("A test description")).toBeTruthy();
   });
 
-  it("associates label with checkbox", () => {
+  it("names the checkbox from the label alone, not the whole row", () => {
+    render(
+      <SettingsCheckbox
+        label="Test Setting"
+        description="A test description"
+        checked={false}
+        onChange={vi.fn()}
+        scope="project"
+      />
+    );
+    // The row is a <label> so the whole card is clickable, which would
+    // otherwise fold the description and the scope chip into the control's
+    // accessible name as one run-on string.
+    expect(screen.getByRole("checkbox", { name: "Test Setting" })).toBeTruthy();
+  });
+
+  it("puts the control first so the row's two-column grid resolves", () => {
+    const { container } = render(
+      <SettingsCheckbox
+        label="Test Setting"
+        description="A test description"
+        checked={false}
+        onChange={vi.fn()}
+      />
+    );
+    const row = container.querySelector("label")!;
+    const children = [...row.children];
+    // The checkbox lands in column one purely by being first; everything after
+    // it is pushed to column two by selector. Reorder these and the row breaks
+    // with no other test noticing.
+    expect(children[0]!.getAttribute("data-field-control")).toBe("");
+    expect(children.slice(1).map((el) => el.getAttribute("data-slot"))).toEqual([
+      "field-label",
+      "field-description",
+    ]);
+  });
+
+  it("keeps the whole row clickable", () => {
     const onChange = vi.fn();
     render(
       <SettingsCheckbox
@@ -783,8 +846,8 @@ describe("SettingsCheckbox", () => {
         onChange={onChange}
       />
     );
-    const checkbox = screen.getByRole("checkbox");
-    expect(checkbox).toBeTruthy();
+    fireEvent.click(screen.getByText("Test Setting"));
+    expect(onChange).toHaveBeenCalledWith(true);
   });
 
   it("wires description to aria-describedby", () => {
@@ -930,7 +993,10 @@ describe("SettingsCheckbox", () => {
     expect(label.classList.contains("cursor-not-allowed")).toBe(true);
   });
 
-  it("uses semantic tokens for background and border", () => {
+  // The unchecked box has to stay visible against whatever it sits on. Painting
+  // it with the same fill the checked state uses erases the distinction; sharing
+  // the settings dialog's own surface erases the control.
+  it("keeps the resting box distinguishable from both its checked state and the dialog", () => {
     render(
       <SettingsCheckbox
         label="Test Setting"
@@ -939,12 +1005,28 @@ describe("SettingsCheckbox", () => {
         onChange={vi.fn()}
       />
     );
-    const checkbox = screen.getByRole("checkbox");
-    expect(checkbox.className).toContain("bg-daintree-bg");
-    expect(checkbox.className).toContain("border-border-strong");
+    const classes = screen.getByRole("checkbox").className.split(/\s+/);
+    const restingFill = classes.filter((name) => /^bg-/.test(name));
+    const checkedFill = classes
+      .filter((name) => name.startsWith("data-[state=checked]:bg-"))
+      .map((name) => name.replace("data-[state=checked]:", ""));
+
+    expect(restingFill).toHaveLength(1);
+    expect(checkedFill).toHaveLength(1);
+    expect(restingFill).not.toEqual(checkedFill);
+    // Dark themes derive `surface-input` from `surface-panel-elevated`, and the
+    // settings shell falls back to `surface-panel` — a box painted with any of
+    // the three can dissolve into the dialog behind it.
+    expect(["bg-surface-input", "bg-surface-panel", "bg-surface-panel-elevated"]).not.toContain(
+      restingFill[0]
+    );
+    // And a boundary of its own, so it never depends on fill alone.
+    expect(classes.some((name) => /^border-/.test(name))).toBe(true);
   });
 
-  it("uses accent color when checked", () => {
+  // Membership, not emphasis: the checked box borrows the text colour, never
+  // the accent, which is reserved for the one load-bearing signal on screen.
+  it("marks the checked state without spending the accent", () => {
     render(
       <SettingsCheckbox
         label="Test Setting"
@@ -954,8 +1036,30 @@ describe("SettingsCheckbox", () => {
       />
     );
     const checkbox = screen.getByRole("checkbox");
-    expect(checkbox.className).toContain("data-[state=checked]:bg-daintree-text");
-    expect(checkbox.className).toContain("data-[state=checked]:border-daintree-text");
+    const checkedFills = checkbox.className
+      .split(/\s+/)
+      .filter((name) => name.startsWith("data-[state=checked]:bg-"));
+    expect(checkedFills).toHaveLength(1);
+    expect(checkedFills[0]).not.toContain("accent");
+  });
+
+  // A 16px box at the repo's 10px base radius reads as a radio button.
+  it("does not round the box far enough to read as a radio", () => {
+    render(
+      <SettingsCheckbox
+        label="Test Setting"
+        description="A test description"
+        checked={false}
+        onChange={vi.fn()}
+      />
+    );
+    const radii = screen
+      .getByRole("checkbox")
+      .className.split(/\s+/)
+      .filter((name) => /^rounded(-|$)/.test(name));
+    expect(radii).toHaveLength(1);
+    expect(radii[0]).not.toBe("rounded");
+    expect(radii[0]).not.toBe("rounded-lg");
   });
 
   it("renders checkmark when checked", () => {
@@ -1063,9 +1167,12 @@ describe("SettingsSwitch", () => {
     const { container } = render(
       <SettingsSwitch checked={false} onCheckedChange={vi.fn()} aria-label="Test switch" disabled />
     );
-    const switchEl = container.querySelector('[role="switch"]');
-    expect(switchEl?.classList.contains("opacity-50")).toBe(true);
-    expect(switchEl?.classList.contains("cursor-not-allowed")).toBe(true);
+    const switchEl = container.querySelector('[role="switch"]') as HTMLButtonElement | null;
+    // Keyed off the real :disabled state rather than a conditional class, so
+    // the dimming cannot drift out of sync with whether the control is live.
+    expect(switchEl?.disabled).toBe(true);
+    expect(switchEl?.classList.contains("disabled:opacity-50")).toBe(true);
+    expect(switchEl?.classList.contains("disabled:cursor-not-allowed")).toBe(true);
   });
 
   it("uses correct track dimensions", () => {
@@ -1108,7 +1215,8 @@ describe("SettingsSwitch", () => {
       />
     );
     const switchEl = container.querySelector('[role="switch"]');
-    expect(switchEl?.className).toContain("data-[state=checked]:bg-daintree-text");
+    expect(switchEl?.getAttribute("data-tone")).toBe("neutral");
+    expect(switchEl?.className).toContain("data-[state=checked]:bg-text-primary");
   });
 
   it("applies amber color scheme", () => {
@@ -1121,6 +1229,7 @@ describe("SettingsSwitch", () => {
       />
     );
     const switchEl = container.querySelector('[role="switch"]');
+    expect(switchEl?.getAttribute("data-tone")).toBe("warning");
     expect(switchEl?.className).toContain("data-[state=checked]:bg-status-warning");
   });
 
@@ -1134,6 +1243,7 @@ describe("SettingsSwitch", () => {
       />
     );
     const switchEl = container.querySelector('[role="switch"]');
+    expect(switchEl?.getAttribute("data-tone")).toBe("danger");
     expect(switchEl?.className).toContain("data-[state=checked]:bg-status-error");
   });
 
@@ -1175,7 +1285,7 @@ describe("SettingsSwitch", () => {
     expect(track?.className).toMatch(/(^|\s)(border|ring-\d)(\s|-|$)/);
   });
 
-  it("toggles with keyboard (Space key)", () => {
+  it("toggles on activation", () => {
     const onChange = vi.fn();
     render(<SettingsSwitch checked={false} onCheckedChange={onChange} aria-label="Test switch" />);
 

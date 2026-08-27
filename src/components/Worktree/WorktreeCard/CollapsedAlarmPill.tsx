@@ -1,5 +1,5 @@
 import { CircleAlert } from "lucide-react";
-import { cn } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
 import type { AlarmDescriptor } from "@/lib/worktreeAlarmTier";
 
 interface CollapsedAlarmPillProps {
@@ -9,22 +9,16 @@ interface CollapsedAlarmPillProps {
 export function CollapsedAlarmPill({ alarm }: CollapsedAlarmPillProps) {
   if (alarm.tier === 0) return null;
 
-  const isError = alarm.tone === "error";
-
   return (
-    <span
+    <Badge
+      tone={alarm.tone === "error" ? "error" : "warning"}
       data-testid="collapsed-alarm-pill"
       data-alarm-kind={alarm.kind}
       aria-label={alarm.label}
-      className={cn(
-        "inline-flex items-center gap-1 text-xs px-1.5 py-0.5 rounded shrink-0 transition-colors pointer-events-none",
-        isError
-          ? "bg-status-error/10 text-status-error"
-          : "bg-status-warning/10 text-status-warning"
-      )}
+      className="pointer-events-none"
     >
-      <CircleAlert className="w-3 h-3 shrink-0" aria-hidden="true" />
+      <CircleAlert aria-hidden="true" />
       <span>{alarm.label}</span>
-    </span>
+    </Badge>
   );
 }

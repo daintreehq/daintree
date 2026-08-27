@@ -1,3 +1,4 @@
+import { Card } from "@/components/ui/card";
 import { useState, useRef, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Copy, RefreshCw } from "lucide-react";
@@ -142,7 +143,7 @@ export function AgentHelpOutput({
   };
 
   return (
-    <div className="rounded-[var(--radius-lg)] border border-daintree-border bg-surface p-4 space-y-4">
+    <Card className="space-y-4">
       <div className="pb-3 border-b border-daintree-border">
         <div className="flex items-center justify-between">
           <div>
@@ -220,6 +221,6 @@ export function AgentHelpOutput({
       )}
 
       {!isLoading && !error && renderOutput()}
-    </div>
+    </Card>
   );
 }

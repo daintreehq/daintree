@@ -1,9 +1,6 @@
-import { useId } from "react";
-import * as Checkbox from "@radix-ui/react-checkbox";
-import { CheckIcon, MinusIcon } from "lucide-react";
-import { cn } from "@/lib/utils";
-
-type CheckedState = boolean | "indeterminate";
+import { Badge } from "@/components/ui/badge";
+import { Checkbox } from "@/components/ui/checkbox";
+import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
 
 interface SettingsCheckboxProps {
   id?: string;
@@ -17,6 +14,11 @@ interface SettingsCheckboxProps {
   scope?: "default" | "global" | "project";
 }
 
+/**
+ * The settings-form flavour of `ui/Field` + `ui/Checkbox`: keeps the boolean
+ * `onChange` this form layer has always used, adds the scope chip, and joins the
+ * settings grid. The control and all of the ARIA come from the primitives.
+ */
 export function SettingsCheckbox({
   id,
   label,
@@ -28,70 +30,32 @@ export function SettingsCheckbox({
   touched = true,
   scope,
 }: SettingsCheckboxProps) {
-  const generatedId = useId();
-  const checkboxId = id ?? generatedId;
-  const descriptionId = useId();
-  const errorId = useId();
-
   const isError = touched && error !== undefined && error !== "";
-  const describedBy = [isError ? errorId : null, descriptionId].filter(Boolean).join(" ");
 
   const scopeBadge = scope ? (
-    <span className="text-[10px] px-1.5 py-0.5 rounded-sm font-medium bg-text-secondary/10 text-text-secondary dark:bg-text-secondary/20">
+    <Badge size="xs" className="bg-text-secondary/10 dark:bg-text-secondary/20">
       {scope === "project" ? "Project" : scope === "global" ? "Global" : "Default"}
-    </span>
+    </Badge>
   ) : null;
 
   return (
     <div className="grid grid-cols-subgrid col-span-full gap-2">
-      <label htmlFor={checkboxId} className="flex items-start gap-3 cursor-pointer">
-        <Checkbox.Root
-          id={checkboxId}
-          checked={checked as CheckedState}
+      <Field orientation="horizontal" controlId={id} invalid={isError} disabled={disabled}>
+        <Checkbox
+          checked={checked}
           onCheckedChange={(checkedState) => {
             if (checkedState !== "indeterminate") {
               onChange(checkedState);
             }
           }}
           disabled={disabled}
-          aria-describedby={describedBy}
-          aria-invalid={isError || undefined}
-          className={cn(
-            "relative flex shrink-0 w-4 h-4 mt-0.5 rounded border transition-colors duration-150",
-            "bg-daintree-bg border-border-strong",
-            "data-[state=checked]:bg-daintree-text data-[state=checked]:border-daintree-text",
-            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-daintree-accent",
-            "disabled:opacity-50 disabled:cursor-not-allowed",
-            isError && "border-status-error data-[state=checked]:border-status-error"
-          )}
-        >
-          <Checkbox.Indicator className="animate-checkbox-check flex items-center justify-center w-full h-full text-text-inverse">
-            <CheckIcon className="w-3 h-3 block" data-state="checked" />
-            <MinusIcon className="w-3 h-3 hidden" data-state="indeterminate" />
-          </Checkbox.Indicator>
-        </Checkbox.Root>
-        <div className="flex-1">
-          <span
-            className={cn(
-              "text-sm font-medium block",
-              "text-daintree-text",
-              disabled && "cursor-not-allowed opacity-50",
-              isError && "text-status-error"
-            )}
-          >
-            {label}
-          </span>
-          {scopeBadge}
-          <p id={descriptionId} className="text-xs text-text-muted mt-0.5 select-text">
-            {description}
-          </p>
-          {isError && (
-            <p id={errorId} className="text-xs text-status-error mt-0.5">
-              {error}
-            </p>
-          )}
-        </div>
-      </label>
+        />
+        <FieldLabel accessory={scopeBadge} tinted>
+          {label}
+        </FieldLabel>
+        <FieldDescription>{description}</FieldDescription>
+        {isError && <FieldError>{error}</FieldError>}
+      </Field>
     </div>
   );
 }
