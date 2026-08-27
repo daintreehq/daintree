@@ -480,7 +480,10 @@ describe("WorktreeDeleteDialog — consequence list", () => {
     const worktree = makeWorktree(makeChanges([]));
     render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
 
-    expect(screen.getByText(/3 terminals will be closed — 2 running an agent/)).toBeDefined();
+    const closed = screen.getByText(/terminals will be closed/);
+    const agents = screen.getByText(/of them running an agent/);
+    expect(agents.previousSibling).toBe(closed);
+    expect(agents.textContent).toMatch(/^\s/);
   });
 
   it("omits the data-loss row unless force is on AND there is something to lose", () => {
@@ -548,7 +551,12 @@ describe("WorktreeDeleteDialog — consequence list", () => {
         .getAllByRole("listitem")
         .some((row) => (row.textContent ?? "").startsWith("Branch feature/test"))
     ).toBe(true);
-    expect(screen.getByText(/fails if it has unmerged changes/)).toBeDefined();
+    // The outcome and the guard that qualifies it are separate elements — the
+    // dash that used to join them read as one sentence.
+    const guard = screen.getByText(/Fails if it has unmerged changes/);
+    const outcome = guard.previousSibling;
+    expect(outcome?.textContent).toContain(worktree.branch);
+    expect(guard.textContent).toMatch(/^\s/);
   });
 
   it("does not offer a branch row for a protected branch", () => {

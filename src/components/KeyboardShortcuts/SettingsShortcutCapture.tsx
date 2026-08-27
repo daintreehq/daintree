@@ -347,12 +347,12 @@ export function SettingsShortcutCapture({
               "Press key combination..."
             ) : chordStep === "waiting" ? (
               <span>
-                <span className="font-mono">
+                <span className="font-mono font-medium">
                   {keybindingService.formatComboForDisplay(capturedCombos[0]!)}
                 </span>
-                <span className="text-daintree-accent/70">
+                <span className="ml-1 text-text-secondary">
                   {" "}
-                  — press second key or wait to finish
+                  Press second key or wait to finish
                 </span>
               </span>
             ) : null}

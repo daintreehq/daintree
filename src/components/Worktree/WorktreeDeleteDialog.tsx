@@ -313,11 +313,28 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
     consequences.push({
       key: "terminals",
       tone: "neutral",
-      content: `${terminalCounts.total} terminal${terminalCounts.total === 1 ? "" : "s"} will be closed${
-        runningAgentCount > 0
-          ? ` — ${runningAgentCount} running an agent${runningAgentCount === 1 ? "" : "s"}`
-          : ""
-      }`,
+      content: (
+        <>
+          {/* Weight ranks the outcome above the detail that qualifies it, in
+              place of the em dash that read as one run of prose. It is also
+              the half that holds under `forced-colors: active`, where every
+              author colour resolves to the same ink. The danger row below is
+              still marked by its glyph and by carrying weight across the whole
+              row, so ranking a neutral row's first half does not blunt it.
+              Rows with no detail stay unweighted: there is no pair to rank. */}
+          <span className={cn(runningAgentCount > 0 && "font-medium")}>
+            {terminalCounts.total} terminal{terminalCounts.total === 1 ? "" : "s"} will be closed
+          </span>
+          {runningAgentCount > 0 && (
+            <span className="ml-1 text-text-secondary">
+              {" "}
+              {terminalCounts.total === 1
+                ? "running an agent"
+                : `${runningAgentCount} of them running an agent`}
+            </span>
+          )}
+        </>
+      ),
     });
   }
   if (hasDevPreview) {
@@ -344,9 +361,10 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
       tone: "neutral",
       content: (
         <>
-          Branch <span className="font-mono break-all">{worktree.branch}</span> will be deleted
-          {" — "}
-          <span className="text-daintree-text/60">fails if it has unmerged changes</span>
+          <span className="font-medium">
+            Branch <span className="font-mono break-all">{worktree.branch}</span> will be deleted
+          </span>
+          <span className="ml-1 text-text-secondary"> Fails if it has unmerged changes</span>
         </>
       ),
     });

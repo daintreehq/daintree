@@ -163,8 +163,17 @@ describe("SettingsShortcutCapture", () => {
       window.dispatchEvent(firstEvent);
     });
 
-    // Should show waiting state
-    expect(screen.getByText(/press second key or wait to finish/)).toBeTruthy();
+    // Should show waiting state, ranked against the captured combo by weight
+    // rather than a dash. Accent stays on the combo alone — the recording box
+    // already carries it as the one live signal, and a second accent tone
+    // would compete with it.
+    const instruction = screen.getByText(/Press second key or wait to finish/);
+    const combo = instruction.previousSibling;
+    expect(combo).not.toBeNull();
+    expect(instruction.textContent).toMatch(/^\s/);
+    expect(instruction.parentElement?.textContent).toBe(
+      `${combo?.textContent}${instruction.textContent}`
+    );
 
     // Second key of chord
     const secondEvent = new KeyboardEvent("keydown", {
@@ -213,7 +222,7 @@ describe("SettingsShortcutCapture", () => {
 
     // Recording should be stopped (recording state is false)
     // The "press second key or wait" message should be gone
-    expect(screen.queryByText(/press second key or wait to finish/)).toBeNull();
+    expect(screen.queryByText(/Press second key or wait to finish/)).toBeNull();
   });
 
   it("calls onCapture with empty string when Clear is clicked", async () => {
@@ -676,7 +685,7 @@ describe("SettingsShortcutCapture", () => {
       act(() => {
         window.dispatchEvent(firstToken);
       });
-      expect(screen.getByText(/press second key or wait to finish/)).toBeTruthy();
+      expect(screen.getByText(/Press second key or wait to finish/)).toBeTruthy();
 
       // IME commit Enter while we're waiting must NOT become the second chord token.
       const composingEnter = new KeyboardEvent("keydown", {
@@ -692,7 +701,7 @@ describe("SettingsShortcutCapture", () => {
       });
 
       // The single-token Ctrl+K should finalize cleanly with no chord suffix.
-      expect(screen.queryByText(/press second key or wait to finish/)).toBeNull();
+      expect(screen.queryByText(/Press second key or wait to finish/)).toBeNull();
       expect(screen.queryByText(/\(chord\)/)).toBeNull();
       expect(screen.getByText("Save")).toBeTruthy();
     });
@@ -796,7 +805,7 @@ describe("SettingsShortcutCapture", () => {
         window.dispatchEvent(firstKey);
       });
 
-      expect(screen.getByText(/press second key or wait to finish/)).toBeTruthy();
+      expect(screen.getByText(/Press second key or wait to finish/)).toBeTruthy();
 
       // Simulate the window losing focus (e.g., user Cmd+Tabs away mid-chord).
       act(() => {
@@ -805,7 +814,7 @@ describe("SettingsShortcutCapture", () => {
 
       // Recording should be cancelled — the prompt and Save button both gone.
       expect(screen.queryByText("Save")).toBeNull();
-      expect(screen.queryByText(/press second key or wait to finish/)).toBeNull();
+      expect(screen.queryByText(/Press second key or wait to finish/)).toBeNull();
       expect(screen.getByText("Click to record shortcut")).toBeTruthy();
     });
 

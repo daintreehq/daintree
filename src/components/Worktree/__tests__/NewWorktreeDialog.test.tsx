@@ -380,6 +380,14 @@ describe("NewWorktreeDialog — existing branch mode", () => {
     await advanceTimersGradually(500);
 
     expect(screen.queryByRole("radio", { name: /existing branch/i })).toBeNull();
+
+    // The PR number and its title are ranked by weight and colour. Only the
+    // visible pair loses the dash — the tooltip keeps it, since a screen reader
+    // speaks it fine.
+    const number = screen.getByText("#42");
+    const title = screen.getByText("Test PR");
+    expect(title.previousSibling).toBe(number);
+    expect(title.textContent).toMatch(/^\s/);
   });
 
   it("shows existing branch picker when mode is toggled to existing", async () => {
