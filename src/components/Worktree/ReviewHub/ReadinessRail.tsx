@@ -41,10 +41,19 @@ const CTA_LABELS: Record<ReviewReadinessCta["kind"], string> = {
    the far edge: "Show conflicts" only means anything next to "3 conflicted files",
    and a control stranded at the right margin of a wide strip is the one a screen
    magnifier never reaches. */
+/* `focus-visible:outline-solid` is load-bearing, not decoration. Tailwind v4 compiles the
+   outline-suppressing utility below to `--tw-outline-style: none` on the element
+   unconditionally, and compiles `focus-visible:outline-2` to
+   `outline-style: var(--tw-outline-style)` — so the two cancel and the ring never paints
+   however right its colour and width look. Restating the style under the variant is what
+   makes the focus indicator visible; the capture harness asserts the computed outline. */
+const FOCUS_RING =
+  "outline-hidden focus-visible:outline focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2";
+
 const CTA_CLASS = cn(
   "inline-flex items-center gap-1 shrink-0 px-2 py-0.5 rounded text-[11px] font-medium transition-colors",
   "bg-filter-selected-bg-soft hover:bg-tint/[0.14] text-daintree-text/80",
-  "outline-hidden focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+  FOCUS_RING
 );
 
 interface ReadinessRailProps {
@@ -144,7 +153,7 @@ function ReadinessOverflow({
         className={cn(
           "inline-flex items-center gap-0.5 shrink-0 px-1.5 py-0.5 rounded text-[11px] transition-colors",
           "text-text-secondary hover:text-daintree-text hover:bg-tint/[0.06]",
-          "outline-hidden focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+          FOCUS_RING
         )}
       >
         {items.length} more

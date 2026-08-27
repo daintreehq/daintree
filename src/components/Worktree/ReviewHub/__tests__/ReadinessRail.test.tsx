@@ -217,6 +217,34 @@ describe("ReadinessRail", () => {
     expect(screen.queryByTestId("readiness-cta-generated-only")).toBeNull();
   });
 
+  it("never suppresses an outline without restoring the style under focus", () => {
+    // Tailwind v4 compiles `outline-hidden` to `--tw-outline-style: none` on the
+    // element and `focus-visible:outline-2` to `outline-style: var(--tw-outline-style)`,
+    // so the two silently cancel and the focus ring never paints. Any control that
+    // opts out of the default outline has to restate the style under the variant.
+    const summary = makeSummary({
+      level: "blocked",
+      blockers: [
+        item({ id: "conflicts", severity: "blocker", action: { kind: "focus-conflicts" } }),
+      ],
+      infos: [item({ id: "no-remote" })],
+    });
+    render(<ReadinessRail summary={summary} onCta={vi.fn()} />);
+
+    const controls = [
+      screen.getByTestId("readiness-cta-conflicts"),
+      screen.getByTestId("review-readiness-overflow"),
+    ];
+    expect(controls).not.toHaveLength(0);
+    for (const el of controls) {
+      if (!el.className.includes("outline-hidden")) continue;
+      expect(
+        el.className,
+        `${el.dataset.testid} suppresses its outline but never restores the style`
+      ).toContain("focus-visible:outline-solid");
+    }
+  });
+
   it("labels the rail as a group and announces each level through a status region", () => {
     const announced = new Set<string>();
     for (const [level, severity] of [

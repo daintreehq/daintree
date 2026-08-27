@@ -299,11 +299,40 @@ const STATES: RailState[] = [
     arrange: async (page) => {
       // `:focus-visible` does not match a programmatic `.focus()` — the browser only
       // treats focus as keyboard-driven after a real key event. Land on the CTA, step
-      // off it, then Tab back so the ring the shot is meant to show actually paints.
+      // off it, then Tab forward until a real key event puts focus back on it.
       const cta = page.locator('[data-testid^="readiness-cta-"]').first();
       await cta.focus();
       await page.keyboard.press("Shift+Tab");
-      await page.keyboard.press("Tab");
+      for (let i = 0; i < 8; i++) {
+        await page.keyboard.press("Tab");
+        const state = await page.evaluate(() => {
+          const el = document.activeElement as HTMLElement | null;
+          return {
+            testid: el?.getAttribute("data-testid") ?? el?.tagName ?? "none",
+            visible: !!el?.matches(":focus-visible"),
+          };
+        });
+        if (state.testid.startsWith("readiness-cta-")) {
+          const computed = await page.evaluate(() => {
+            const el = document.activeElement as HTMLElement;
+            const cs = getComputedStyle(el);
+            return [cs.outlineStyle, cs.outlineWidth, cs.outlineColor, cs.outlineOffset].join("|");
+          });
+          console.log(
+            `[readiness-shots] focus landed on ${state.testid}, :focus-visible=${state.visible}, outline=${computed}`
+          );
+          if (!state.visible) throw new Error("CTA focused but :focus-visible did not match");
+          // A ring that resolves to `outline-style: none` is invisible however correct
+          // its colour and width look — that is exactly how Tailwind v4's
+          // `outline-hidden` silently cancels `focus-visible:outline-2`. Refuse to
+          // write a "focused" shot that shows no focus.
+          if (computed.startsWith("none")) {
+            throw new Error(`focus ring resolves to no outline: ${computed}`);
+          }
+          return;
+        }
+      }
+      throw new Error("could not Tab onto the rail CTA");
     },
   },
   {
@@ -317,9 +346,12 @@ const STATES: RailState[] = [
     capture: "page",
     arrange: async (page) => {
       await page.locator(OVERFLOW).click();
+      // The hub itself is a `role="dialog"` containing the leading condition, so wait
+      // on the trigger's own expanded state plus an item only the popover can hold.
       await page
-        .locator('[role="dialog"]:has([data-testid^="readiness-item-"])')
+        .locator(`${OVERFLOW}[aria-expanded="true"]`)
         .waitFor({ state: "visible", timeout: 5000 });
+      await page.locator(item("no-remote")).waitFor({ state: "visible", timeout: 5000 });
     },
     restore: async (page) => {
       await page.keyboard.press("Escape").catch(() => {});
@@ -391,14 +423,18 @@ async function stubStagingStatus(
   );
 }
 
+/* Generous, because this harness is routinely run on a machine with a dozen other
+   worktrees building at once; at load average 20+ the worktree card takes seconds to
+   paint and a tight timeout reports a layout regression that isn't one. */
 async function openHub(page: Page): Promise<void> {
   await dismissBlockingPalette(page);
+  await page.locator(SEL.worktree.mainCard).first().waitFor({ state: "visible", timeout: 30_000 });
   await page.locator(SEL.worktree.mainCard).first().hover();
   await settle(page, 250);
   const btn = page.locator(SEL.worktree.reviewHubButton).first();
-  await btn.waitFor({ state: "visible", timeout: 8000 });
+  await btn.waitFor({ state: "visible", timeout: 30_000 });
   await btn.click();
-  await page.locator(SEL.reviewHub.container).waitFor({ state: "visible", timeout: 15_000 });
+  await page.locator(SEL.reviewHub.container).waitFor({ state: "visible", timeout: 30_000 });
 }
 
 async function closeHub(page: Page): Promise<void> {
