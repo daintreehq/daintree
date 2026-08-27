@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { PtyPanelData } from "@shared/types/panel";
 
 vi.mock("@/clients", () => ({
-  terminalClient: { resize: vi.fn() },
+  terminalClient: { resize: vi.fn(), updateWorktreeId: vi.fn() },
   agentSettingsClient: { get: vi.fn().mockResolvedValue(null) },
   appClient: { setState: vi.fn().mockResolvedValue(undefined) },
 }));
@@ -29,6 +29,7 @@ vi.mock("@/store/persistence/panelPersistence", () => ({
 
 const { usePanelStore } = await import("@/store/panelStore");
 const { agentLifecycleLedger } = await import("@/services/terminal/lifecycleLedger");
+const { terminalClient } = await import("@/clients");
 
 function panel(id: string, worktreeId: string): PtyPanelData {
   return {
@@ -126,5 +127,24 @@ describe("grouped cross-worktree move attribution (#11840)", () => {
     const panels = usePanelStore.getState().panelsById;
     expect(panels["t1"]?.worktreeId).toBe("wt-b");
     expect(panels["t2"]?.worktreeId).toBe("wt-b");
+  });
+
+  it("re-files every member on the pty-host record, not just the dragged one", () => {
+    // The record the fleet palette groups by is the pty-host's, and nothing
+    // re-stamps it after spawn. A grouped drag that syncs only the panel the
+    // user grabbed leaves its tab-mates filed under the worktree they left
+    // (#12060).
+    seedGroup();
+
+    usePanelStore.getState().moveTerminalToWorktree("t1", "wt-b");
+
+    const synced = vi.mocked(terminalClient.updateWorktreeId).mock.calls;
+    expect(synced).toEqual(
+      expect.arrayContaining([
+        ["t1", "wt-b"],
+        ["t2", "wt-b"],
+      ])
+    );
+    expect(synced).toHaveLength(2);
   });
 });

@@ -980,7 +980,10 @@ export const createAddPanelActions = (
             // the terminal record at spawn so a kill path that never runs a
             // capture (force quit, crash, SIGKILL) can't lose the conversation.
             agentSessionId: options.agentSessionId,
-            worktreeId: options.worktreeId,
+            // Live, for the same reason as `title` above: a move landing while
+            // the spawn was queued reaches a pty-host with no record yet and is
+            // dropped, so the spawn itself has to carry the current filing.
+            worktreeId: _p1.worktreeId,
             agentPresetId: options.agentPresetId,
             agentPresetColor: options.agentPresetColor,
             originalAgentPresetId: options.originalPresetId ?? options.agentPresetId,

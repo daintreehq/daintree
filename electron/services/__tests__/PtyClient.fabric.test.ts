@@ -420,6 +420,62 @@ describe("PtyClient fabric", () => {
       client.dispose();
     });
 
+    it("respawns under the worktree a run was moved to, not the one it launched in", async () => {
+      // `pendingSpawns` is replayed verbatim on a crash respawn, so a move that
+      // only reached the live record would be silently undone by the next host
+      // crash — the run would reappear in the palette under the worktree the
+      // user dragged it out of (#12060).
+      const client = createFabricClient();
+      client.spawn("t1", {
+        cwd: "/a",
+        cols: 80,
+        rows: 24,
+        projectId: "project-a",
+        worktreeId: "/repo/.worktrees/old",
+      });
+      const shardA = projectShard("project-a");
+      shardA.child.emit("message", { type: "ready" });
+
+      client.updateWorktreeId("t1", "/repo/.worktrees/new");
+
+      shardA.child.emit("exit", 1);
+      await vi.advanceTimersByTimeAsync(15_000);
+      const restarted = forks[forks.length - 1];
+      restarted.child.emit("message", { type: "ready" });
+
+      const respawns = messagesOfType(restarted.child, "spawn");
+      expect((respawns[0].options as { worktreeId?: string }).worktreeId).toBe(
+        "/repo/.worktrees/new"
+      );
+      client.dispose();
+    });
+
+    it("respawns with no worktree at all after an explicit clear", async () => {
+      // The clear has to delete the cached key, not blank it: a replay carrying
+      // `worktreeId: ""` would re-file the run under a worktree named "".
+      const client = createFabricClient();
+      client.spawn("t1", {
+        cwd: "/a",
+        cols: 80,
+        rows: 24,
+        projectId: "project-a",
+        worktreeId: "/repo/.worktrees/old",
+      });
+      const shardA = projectShard("project-a");
+      shardA.child.emit("message", { type: "ready" });
+
+      client.updateWorktreeId("t1", null);
+
+      shardA.child.emit("exit", 1);
+      await vi.advanceTimersByTimeAsync(15_000);
+      const restarted = forks[forks.length - 1];
+      restarted.child.emit("message", { type: "ready" });
+
+      const respawns = messagesOfType(restarted.child, "spawn");
+      expect(respawns[0].options as Record<string, unknown>).not.toHaveProperty("worktreeId");
+      client.dispose();
+    });
+
     it("migrates a crash-looping project shard's terminals to the default shard without a global host-crash", async () => {
       const client = createFabricClient();
       const hostCrash = vi.fn();

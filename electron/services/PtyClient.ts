@@ -2390,6 +2390,30 @@ export class PtyClient extends EventEmitter {
     this.shardForTerminal(id).send({ type: "update-title", id, title, titleMode });
   }
 
+  /**
+   * Mirror a renderer-side worktree move onto the pty-host record so the fleet
+   * projection groups the run where it now lives (#12060).
+   *
+   * The cached spawn options move with it for the same reason `updateTitle`
+   * keeps them in step: `respawnPendingForShard` replays them verbatim after a
+   * pty-host crash, so a stale entry would quietly re-file the run under the
+   * worktree it launched in. `null` deletes the key rather than storing
+   * `undefined`, so the replayed options carry no worktree at all.
+   */
+  updateWorktreeId(id: string, worktreeId: string | null): void {
+    const pending = this.pendingSpawns.get(id);
+    if (pending) {
+      const next = { ...pending };
+      if (worktreeId === null) {
+        delete next.worktreeId;
+      } else {
+        next.worktreeId = worktreeId;
+      }
+      this.pendingSpawns.set(id, next);
+    }
+    this.shardForTerminal(id).send({ type: "update-worktree-id", id, worktreeId });
+  }
+
   async transitionState(
     id: string,
     event: { type: string; [key: string]: unknown },

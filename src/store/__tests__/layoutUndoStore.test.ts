@@ -810,3 +810,82 @@ describe("layoutUndoStore — cross-worktree move notice", () => {
     expect(noticeOf("t-still")).toBeUndefined();
   });
 });
+
+/**
+ * A layout restore rewrites `worktreeId` through a raw `setState`, so it
+ * bypasses the move choke point entirely — the same reason the move-notice
+ * reconcile pass exists here (#11853). The pty-host record the fleet palette
+ * groups by needs the same treatment, in both directions (#12060).
+ *
+ * Drives the real client rather than mocking `@/clients`, so the whole hop —
+ * helper, client, preload binding shape — is under test.
+ */
+describe("layoutUndoStore syncs restored worktree filings to the pty host", () => {
+  let updateWorktreeId: ReturnType<typeof vi.fn>;
+  let previousElectron: unknown;
+
+  beforeEach(() => {
+    updateWorktreeId = vi.fn();
+    previousElectron = (window as unknown as { electron?: unknown }).electron;
+    (window as unknown as { electron: unknown }).electron = { terminal: { updateWorktreeId } };
+
+    useLayoutUndoStore.setState({
+      undoStack: [],
+      redoStack: [],
+      canUndo: false,
+      canRedo: false,
+    });
+    usePanelStore.setState({
+      panelsById: {},
+      panelIds: [],
+      tabGroups: new Map(),
+      focusedId: null,
+      maximizedId: null,
+      activeDockTerminalId: null,
+    });
+  });
+
+  afterEach(() => {
+    (window as unknown as { electron?: unknown }).electron = previousElectron;
+  });
+
+  it("re-files a run when undo puts it back on its previous worktree", () => {
+    const t1 = makeTerminal({ id: "t1", location: "grid", worktreeId: "w1" });
+    seedTerminals([t1]);
+
+    useLayoutUndoStore.getState().pushLayoutSnapshot();
+    setTerminals([{ ...t1, location: "grid", worktreeId: "w2" }]);
+    useLayoutUndoStore.getState().undo();
+
+    expect(updateWorktreeId).toHaveBeenCalledWith("t1", "w1");
+  });
+
+  it("clears the filing explicitly when undo takes an adopted worktree back off", () => {
+    // The one genuine worktree -> no-worktree transition: a global dock pane
+    // adopts the active worktree on its way to the grid, and undo deletes it
+    // again. Skipping this hop would leave the palette grouping the run under a
+    // worktree the user has just undone it out of.
+    const t1 = makeTerminal({ id: "t1", location: "dock" });
+    delete (t1 as { worktreeId?: string }).worktreeId;
+    seedTerminals([t1]);
+
+    useLayoutUndoStore.getState().pushLayoutSnapshot();
+    setTerminals([{ ...t1, location: "grid", worktreeId: "w2" } as PtyPanelData]);
+    useLayoutUndoStore.getState().undo();
+
+    expect(updateWorktreeId).toHaveBeenCalledWith("t1", null);
+  });
+
+  it("says nothing when a restore leaves the filing where it was", () => {
+    // A location-only undo must not churn the record or the fleet recompute it
+    // triggers — every send costs a snapshot pass in main.
+    const t1 = makeTerminal({ id: "t1", location: "grid", worktreeId: "w1" });
+    seedTerminals([t1]);
+
+    useLayoutUndoStore.getState().pushLayoutSnapshot();
+    setTerminals([{ ...t1, location: "dock", worktreeId: "w1" }]);
+    useLayoutUndoStore.getState().undo();
+
+    expect(updateWorktreeId).not.toHaveBeenCalled();
+  });
+});

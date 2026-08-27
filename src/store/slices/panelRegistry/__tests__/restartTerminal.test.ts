@@ -1201,3 +1201,83 @@ describe("restartTerminal carries a rename that lands mid-restart", () => {
     expect(payload.titleMode).toBe("custom");
   });
 });
+
+/**
+ * A restart and a preset-fallback hop each respawn the id, and the pty-host
+ * record they create is what the fleet palette groups by. Both used to omit
+ * `worktreeId` from the spawn payload while the ledger write right above them
+ * read it off the panel — so a restarted run lost its worktree for the rest of
+ * its life and the palette filed it under "No worktree" (#12060).
+ */
+describe("restartTerminal carries the run's worktree onto the new pty record", () => {
+  beforeEach(async () => {
+    vi.clearAllMocks();
+    getMergedPresetMock.mockReturnValue(undefined);
+    buildAgentLaunchFlagsMock.mockReturnValue([]);
+    const { agentSettingsClient, projectClient } = await import("@/clients");
+    (agentSettingsClient.get as ReturnType<typeof vi.fn>).mockReset();
+    (agentSettingsClient.get as ReturnType<typeof vi.fn>).mockResolvedValue({});
+    (projectClient.getSettings as ReturnType<typeof vi.fn>).mockResolvedValue(null);
+    const { reset } = usePanelStore.getState();
+    await reset();
+    usePanelStore.setState({
+      panelsById: {},
+      panelIds: [],
+      tabGroups: new Map(),
+      trashedTerminals: new Map(),
+      backgroundedTerminals: new Map(),
+      focusedId: null,
+      maximizedId: null,
+      commandQueue: [],
+    });
+  });
+
+  it("respawns under the worktree the panel is filed in", async () => {
+    const active = {
+      ...agentPanelBase,
+      agentState: "working" as const,
+      worktreeId: "/repo/.worktrees/feature",
+    };
+    usePanelStore.setState({ panelsById: { [active.id]: active }, panelIds: [active.id] });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(mockSpawn.mock.calls[0]![0].worktreeId).toBe("/repo/.worktrees/feature");
+  });
+
+  it("respawns under a worktree adopted while the restart was awaiting", async () => {
+    // Same window the mid-restart rename exploits: the panel is captured before
+    // settings, presets and the kill are awaited, so a drag landing in that gap
+    // has to be read at spawn time or the respawn undoes it.
+    const active = { ...agentPanelBase, agentState: "working" as const, worktreeId: "wt-a" };
+    usePanelStore.setState({ panelsById: { [active.id]: active }, panelIds: [active.id] });
+
+    const { agentSettingsClient } = await import("@/clients");
+    (agentSettingsClient.get as ReturnType<typeof vi.fn>).mockImplementation(async () => {
+      usePanelStore.setState((state) => ({
+        panelsById: {
+          ...state.panelsById,
+          "test-1": { ...state.panelsById["test-1"]!, worktreeId: "wt-b" },
+        },
+      }));
+      return {};
+    });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(mockSpawn.mock.calls[0]![0].worktreeId).toBe("wt-b");
+  });
+
+  it("leaves a genuinely worktree-less run without one rather than inventing a root", async () => {
+    // The palette's "No worktree" bucket is for runs that really have none.
+    // Back-filling a project root here would move them out of it and claim a
+    // filing the run never had.
+    const active = { ...agentPanelBase, agentState: "working" as const };
+    delete (active as { worktreeId?: string }).worktreeId;
+    usePanelStore.setState({ panelsById: { [active.id]: active }, panelIds: [active.id] });
+
+    await usePanelStore.getState().restartTerminal("test-1");
+
+    expect(mockSpawn.mock.calls[0]![0].worktreeId).toBeUndefined();
+  });
+});

@@ -960,6 +960,17 @@ export class PtyManager extends EventEmitter {
   }
 
   /**
+   * Apply a renderer-side worktree move to the authoritative record. A move for
+   * a terminal that has already gone is a no-op — never a synthetic record, and
+   * never a back-filled id: the renderer store keeps the attribution either way.
+   */
+  updateWorktreeId(id: string, worktreeId: string | null): void {
+    const terminal = this.registry.get(id);
+    if (!terminal) return;
+    terminal.setWorktreeId(worktreeId);
+  }
+
+  /**
    * Enable or disable semantic analysis for a terminal.
    */
   setAnalysisEnabled(id: string, enabled: boolean): void {

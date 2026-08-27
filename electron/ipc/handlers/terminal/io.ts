@@ -318,6 +318,41 @@ export function registerTerminalIOHandlers(deps: HandlerDependencies): () => voi
     ipcMain.removeListener(CHANNELS.TERMINAL_UPDATE_TITLE, handleTerminalUpdateTitle)
   );
 
+  // A cross-worktree move lands in the renderer panel store, but the record the
+  // fleet palette groups by is the pty-host's. Without this hop a moved — or
+  // restarted — run keeps whatever it was spawned with and the palette files it
+  // under the wrong heading, or under "No worktree" entirely (#12060).
+  //
+  // `null` is the explicit clear and the ONLY way to express "this run now has
+  // no worktree". Nothing here substitutes a project root, the active worktree
+  // or the previous id for a value that fails validation: a run with no
+  // worktree belongs in the no-worktree bucket, and a run with one belongs
+  // under its own real id. A malformed payload is dropped, never guessed at.
+  const handleTerminalUpdateWorktreeId = (
+    _event: Electron.IpcMainEvent,
+    payload: { id: string; worktreeId: string | null }
+  ) => {
+    try {
+      if (!payload || typeof payload !== "object") return;
+      const { id, worktreeId } = payload;
+      if (typeof id !== "string" || !id) return;
+      if (worktreeId !== null && (typeof worktreeId !== "string" || worktreeId.trim() === "")) {
+        return;
+      }
+      ptyClient.updateWorktreeId(id, worktreeId);
+      // Same reason the rename hop emits: the snapshot poll is 5s-aligned and
+      // no other feed reports a move, so the palette would regroup up to a full
+      // cycle after the drag that caused it.
+      events.emit("terminal:worktree-changed", { id, timestamp: Date.now() });
+    } catch (error) {
+      console.error("[IPC] Error handling worktree update:", error);
+    }
+  };
+  ipcMain.on(CHANNELS.TERMINAL_UPDATE_WORKTREE_ID, handleTerminalUpdateWorktreeId);
+  handlers.push(() =>
+    ipcMain.removeListener(CHANNELS.TERMINAL_UPDATE_WORKTREE_ID, handleTerminalUpdateWorktreeId)
+  );
+
   const handleTerminalForceResume = async (id: string): Promise<void> => {
     if (typeof id !== "string" || !id) {
       throw new AppError({

@@ -95,6 +95,9 @@ export class FleetSnapshotService {
     // A rename moves no agent state, so without this the row would carry the
     // old title until the next aligned poll (#11830).
     subscribe("terminal:title-changed");
+    // A move re-files the row without moving any agent state, so without this
+    // the palette keeps the old grouping until the next aligned poll (#12060).
+    subscribe("terminal:worktree-changed");
   }
 
   updatePollInterval(ms: number): void {

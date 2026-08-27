@@ -273,6 +273,11 @@ export type PtyHostRequest =
   | { type: "mark-checked"; id: string }
   | { type: "update-observed-title"; id: string; title: string }
   | { type: "update-title"; id: string; title: string; titleMode: PanelTitleMode }
+  // `null` is an explicit clear, not "unchanged". A panel really can leave a
+  // worktree for none — undoing a dock->grid move deletes the adopted id
+  // (`layoutUndoStore`) — and an optional field could not tell that apart from
+  // a caller that simply forgot to send one (#12060).
+  | { type: "update-worktree-id"; id: string; worktreeId: string | null }
   | {
       type: "transition-state";
       id: string;
