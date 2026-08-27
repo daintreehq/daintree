@@ -9,6 +9,7 @@ import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { logError } from "@/utils/logger";
 
 import { Button } from "@/components/ui/button";
+import { Card } from "@/components/ui/card";
 import {
   DEFAULT_AGENT_SETTINGS,
   getAgentSettingsEntry,
@@ -94,10 +95,11 @@ function AgentShortcutRow({ agentId, agentName }: { agentId: BuiltInAgentId; age
   }, [actionId]);
 
   return (
-    <div
+    <Card
+      padding="sm"
       id={`agents-shortcut-${agentId}`}
       data-testid={`agent-shortcut-row-${agentId}`}
-      className="rounded-[var(--radius-lg)] border border-daintree-border bg-surface p-3 space-y-3"
+      className="space-y-3"
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
@@ -147,7 +149,7 @@ function AgentShortcutRow({ agentId, agentName }: { agentId: BuiltInAgentId; age
           onCancel={() => setIsEditing(false)}
         />
       )}
-    </div>
+    </Card>
   );
 }
 
@@ -385,10 +387,7 @@ export function AgentSettings({
         />
 
         {isGeneralActive && (
-          <div
-            id="agents-general"
-            className="rounded-[var(--radius-lg)] border border-daintree-border bg-surface p-4 space-y-4"
-          >
+          <Card id="agents-general" className="space-y-4">
             <div className="pb-3 border-b border-daintree-border">
               <h4 className="text-sm font-medium text-daintree-text">Global agent settings</h4>
               <p className="text-xs text-daintree-text/50 mt-0.5 select-text">
@@ -447,7 +446,7 @@ export function AgentSettings({
                 }}
               />
             </div>
-          </div>
+          </Card>
         )}
 
         {!isGeneralActive && activeAgent && agentOptions.some((a) => a.id === activeAgent.id) && (

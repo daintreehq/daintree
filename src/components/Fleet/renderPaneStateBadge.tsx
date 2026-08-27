@@ -1,5 +1,5 @@
 import type { ReactElement } from "react";
-import { cn } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
 import type { AgentState } from "@/types";
 import type { WaitingReason } from "@shared/types/agent";
 import {
@@ -24,21 +24,20 @@ export function renderPaneStateBadge(
   const reason = state === "waiting" ? actionableWaitingReason(waitingReason) : null;
   const tone =
     state === "exited"
-      ? "bg-tint/[0.08] text-daintree-text/40"
+      ? "text-daintree-text/40"
       : state === "waiting"
-        ? "bg-tint/[0.08] text-state-waiting"
-        : "bg-tint/[0.08] text-daintree-text/70";
+        ? "text-state-waiting"
+        : "text-daintree-text/70";
   return (
-    <span
-      className={cn(
-        "inline-flex shrink-0 items-center rounded px-1.5 py-0.5 text-[10px] font-medium",
-        tone
-      )}
+    <Badge
+      size="xs"
+      tone="outline"
+      className={tone}
       data-testid={`fleet-pane-state-${paneId}-${state}`}
       data-state={state}
       {...(reason ? { "data-waiting-reason": reason } : {})}
     >
       {reason ? WAITING_REASON_BADGE_LABEL[reason] : labels[state]}
-    </span>
+    </Badge>
   );
 }

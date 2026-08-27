@@ -1,6 +1,7 @@
 import { ExternalLink, GitPullRequest } from "lucide-react";
 import type { CIStatus, NormalizedPRState } from "@shared/types/forge";
 import { cn } from "@/lib/utils";
+import { Badge } from "@/components/ui/badge";
 import { getCIStatusVisual } from "@/lib/worktreeCIStatus";
 
 interface WorktreePR {
@@ -27,11 +28,9 @@ export function PrStatusChip({ hasRemote, worktreePR, onOpenExternal }: PrStatus
           : "open";
     return (
       <>
-        <span
-          className={cn(
-            "inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-[11px] font-mono",
-            "bg-tint/[0.07] border border-tint/[0.08]"
-          )}
+        <Badge
+          tone="outline"
+          className="text-[11px] font-mono"
           aria-label={
             ciVisual
               ? `Pull request #${worktreePR.prNumber} ${prStateLabel} — CI ${ciVisual.shortLabel}`
@@ -75,7 +74,7 @@ export function PrStatusChip({ hasRemote, worktreePR, onOpenExternal }: PrStatus
               </span>
             </>
           )}
-        </span>
+        </Badge>
         <button
           type="button"
           onClick={() => onOpenExternal(worktreePR.prUrl)}
@@ -95,10 +94,10 @@ export function PrStatusChip({ hasRemote, worktreePR, onOpenExternal }: PrStatus
 
   if (hasRemote && !worktreePR) {
     return (
-      <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-tint/[0.07] border border-tint/[0.08] text-[11px] text-daintree-text/40">
-        <GitPullRequest className="w-3 h-3 shrink-0" />
+      <Badge tone="outline" className="text-[11px] text-daintree-text/40">
+        <GitPullRequest />
         <span>No PR</span>
-      </span>
+      </Badge>
     );
   }
 

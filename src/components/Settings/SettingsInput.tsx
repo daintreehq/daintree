@@ -1,10 +1,9 @@
-import { useId } from "react";
 import type { ComponentPropsWithoutRef, ReactNode, Ref } from "react";
 import { RotateCcw } from "lucide-react";
 import { cn } from "@/lib/utils";
-
-const INPUT_CLASSES =
-  "w-full bg-surface-input border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 transition-colors disabled:opacity-50 disabled:cursor-not-allowed";
+import { Badge } from "@/components/ui/badge";
+import { Field, FieldDescription, FieldError, FieldLabel } from "@/components/ui/field";
+import { Input } from "@/components/ui/input";
 
 interface SettingsInputProps extends Omit<ComponentPropsWithoutRef<"input">, "id"> {
   label: string;
@@ -18,6 +17,11 @@ interface SettingsInputProps extends Omit<ComponentPropsWithoutRef<"input">, "id
   ref?: Ref<HTMLInputElement>;
 }
 
+/**
+ * The settings-form flavour of `ui/Field` + `ui/Input`: adds the scope chip, the
+ * modified dot and the reset affordance, and participates in the settings grid.
+ * Everything about labels, descriptions and ARIA comes from `Field`.
+ */
 export function SettingsInput({
   label,
   description,
@@ -32,70 +36,46 @@ export function SettingsInput({
   ref,
   ...props
 }: SettingsInputProps) {
-  const id = useId();
-  const descriptionId = useId();
-  const errorId = useId();
   const showReset = isModified && onReset && !disabled;
   const isError = !!error && touched;
 
-  const describedBy =
-    [isError ? errorId : null, description ? descriptionId : null].filter(Boolean).join(" ") ||
-    undefined;
-
-  const scopeBadge = scope ? (
-    <span className="text-[10px] px-1.5 py-0.5 rounded-sm font-medium bg-text-secondary/10 text-text-secondary dark:bg-text-secondary/20">
-      {scope === "project" ? "Project" : scope === "global" ? "Global" : "Default"}
-    </span>
-  ) : null;
+  const accessory = (
+    <>
+      {scope && (
+        <Badge size="xs" className="bg-text-secondary/10 dark:bg-text-secondary/20">
+          {scope === "project" ? "Project" : scope === "global" ? "Global" : "Default"}
+        </Badge>
+      )}
+      {isModified && (
+        <span
+          className="status-mark w-1.5 h-1.5 rounded-full bg-state-modified"
+          aria-hidden="true"
+        />
+      )}
+      {showReset && (
+        <button
+          type="button"
+          aria-label={resetAriaLabel ?? `Reset ${label} to default`}
+          className={cn(
+            "p-0.5 rounded-sm text-text-muted hover:text-daintree-text",
+            "invisible group-hover:visible group-focus-within:visible focus-visible:visible",
+            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent",
+            "transition-colors"
+          )}
+          onClick={onReset}
+        >
+          <RotateCcw className="w-3 h-3" />
+        </button>
+      )}
+    </>
+  );
 
   return (
-    <div className="group grid grid-cols-subgrid gap-2 col-span-full">
-      <div className="flex items-center gap-2">
-        <label htmlFor={id} className="text-sm text-text-secondary">
-          {label}
-        </label>
-        {scopeBadge}
-        {isModified && (
-          <span
-            className="status-mark w-1.5 h-1.5 rounded-full bg-state-modified"
-            aria-hidden="true"
-          />
-        )}
-        {showReset && (
-          <button
-            type="button"
-            aria-label={resetAriaLabel ?? `Reset ${label} to default`}
-            className={cn(
-              "p-0.5 rounded-sm text-text-muted hover:text-daintree-text",
-              "invisible group-hover:visible group-focus-within:visible focus-visible:visible",
-              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent",
-              "transition-colors"
-            )}
-            onClick={onReset}
-          >
-            <RotateCcw className="w-3 h-3" />
-          </button>
-        )}
-      </div>
-      <input
-        id={id}
-        ref={ref}
-        disabled={disabled}
-        aria-describedby={describedBy}
-        aria-invalid={isError ? true : undefined}
-        className={cn(INPUT_CLASSES, isError && "border-status-error", className)}
-        {...props}
-      />
-      {description && (
-        <p id={descriptionId} className="text-xs text-text-muted select-text">
-          {description}
-        </p>
-      )}
-      {isError && (
-        <p id={errorId} className="text-xs text-status-error">
-          {error}
-        </p>
-      )}
-    </div>
+    <Field className="group grid-cols-subgrid col-span-full" invalid={isError} disabled={disabled}>
+      <FieldLabel accessory={accessory}>{label}</FieldLabel>
+      <Input ref={ref} disabled={disabled} className={className} {...props} />
+      {description && <FieldDescription>{description}</FieldDescription>}
+      {isError && <FieldError>{error}</FieldError>}
+    </Field>
   );
 }

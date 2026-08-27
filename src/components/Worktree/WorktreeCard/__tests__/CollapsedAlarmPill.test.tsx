@@ -30,8 +30,7 @@ describe("CollapsedAlarmPill", () => {
   it("renders CI failed chip with error tone", () => {
     const { getByTestId } = render(<CollapsedAlarmPill alarm={ciFailed} />);
     const pill = getByTestId("collapsed-alarm-pill");
-    expect(pill.className).toContain("bg-status-error/10");
-    expect(pill.className).toContain("text-status-error");
+    expect(pill.getAttribute("data-tone")).toBe("error");
     expect(pill.textContent).toBe("CI failed");
     expect(pill.getAttribute("data-alarm-kind")).toBe("ci-failed");
   });
@@ -39,8 +38,7 @@ describe("CollapsedAlarmPill", () => {
   it("renders auth-failed chip with warning tone", () => {
     const { getByTestId } = render(<CollapsedAlarmPill alarm={authFailed} />);
     const pill = getByTestId("collapsed-alarm-pill");
-    expect(pill.className).toContain("bg-status-warning/10");
-    expect(pill.className).toContain("text-status-warning");
+    expect(pill.getAttribute("data-tone")).toBe("warning");
     expect(pill.textContent).toBe("Auth failed");
     expect(pill.getAttribute("data-alarm-kind")).toBe("auth-failed");
   });
@@ -48,7 +46,7 @@ describe("CollapsedAlarmPill", () => {
   it("renders behind chip with warning tone", () => {
     const { getByTestId } = render(<CollapsedAlarmPill alarm={behind} />);
     const pill = getByTestId("collapsed-alarm-pill");
-    expect(pill.className).toContain("bg-status-warning/10");
+    expect(pill.getAttribute("data-tone")).toBe("warning");
     expect(pill.textContent).toBe("Behind");
     expect(pill.getAttribute("data-alarm-kind")).toBe("behind");
   });
@@ -57,6 +55,14 @@ describe("CollapsedAlarmPill", () => {
     const { getByTestId } = render(<CollapsedAlarmPill alarm={ciFailed} />);
     const pill = getByTestId("collapsed-alarm-pill");
     expect(pill.className).not.toContain("accent");
+  });
+
+  it("stays a non-interactive marker", () => {
+    const { getByTestId } = render(<CollapsedAlarmPill alarm={ciFailed} />);
+    const pill = getByTestId("collapsed-alarm-pill");
+    expect(pill.tagName).toBe("SPAN");
+    expect(pill.className).toContain("pointer-events-none");
+    expect(pill.hasAttribute("tabindex")).toBe(false);
   });
 
   it("does not use transition-all", () => {

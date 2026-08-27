@@ -940,11 +940,13 @@ describe("SettingsCheckbox", () => {
       />
     );
     const checkbox = screen.getByRole("checkbox");
-    expect(checkbox.className).toContain("bg-daintree-bg");
+    expect(checkbox.className).toContain("bg-surface-input");
     expect(checkbox.className).toContain("border-border-strong");
   });
 
-  it("uses accent color when checked", () => {
+  // Membership, not emphasis: the checked box borrows the text colour, never
+  // the accent, which is reserved for the one load-bearing signal on screen.
+  it("marks the checked state without spending the accent", () => {
     render(
       <SettingsCheckbox
         label="Test Setting"
@@ -954,8 +956,30 @@ describe("SettingsCheckbox", () => {
       />
     );
     const checkbox = screen.getByRole("checkbox");
-    expect(checkbox.className).toContain("data-[state=checked]:bg-daintree-text");
-    expect(checkbox.className).toContain("data-[state=checked]:border-daintree-text");
+    const checkedFills = checkbox.className
+      .split(/\s+/)
+      .filter((name) => name.startsWith("data-[state=checked]:bg-"));
+    expect(checkedFills).toHaveLength(1);
+    expect(checkedFills[0]).not.toContain("accent");
+  });
+
+  // A 16px box at the repo's 10px base radius reads as a radio button.
+  it("does not round the box far enough to read as a radio", () => {
+    render(
+      <SettingsCheckbox
+        label="Test Setting"
+        description="A test description"
+        checked={false}
+        onChange={vi.fn()}
+      />
+    );
+    const radii = screen
+      .getByRole("checkbox")
+      .className.split(/\s+/)
+      .filter((name) => /^rounded(-|$)/.test(name));
+    expect(radii).toHaveLength(1);
+    expect(radii[0]).not.toBe("rounded");
+    expect(radii[0]).not.toBe("rounded-lg");
   });
 
   it("renders checkmark when checked", () => {
@@ -1063,9 +1087,12 @@ describe("SettingsSwitch", () => {
     const { container } = render(
       <SettingsSwitch checked={false} onCheckedChange={vi.fn()} aria-label="Test switch" disabled />
     );
-    const switchEl = container.querySelector('[role="switch"]');
-    expect(switchEl?.classList.contains("opacity-50")).toBe(true);
-    expect(switchEl?.classList.contains("cursor-not-allowed")).toBe(true);
+    const switchEl = container.querySelector('[role="switch"]') as HTMLButtonElement | null;
+    // Keyed off the real :disabled state rather than a conditional class, so
+    // the dimming cannot drift out of sync with whether the control is live.
+    expect(switchEl?.disabled).toBe(true);
+    expect(switchEl?.classList.contains("disabled:opacity-50")).toBe(true);
+    expect(switchEl?.classList.contains("disabled:cursor-not-allowed")).toBe(true);
   });
 
   it("uses correct track dimensions", () => {
@@ -1108,7 +1135,8 @@ describe("SettingsSwitch", () => {
       />
     );
     const switchEl = container.querySelector('[role="switch"]');
-    expect(switchEl?.className).toContain("data-[state=checked]:bg-daintree-text");
+    expect(switchEl?.getAttribute("data-tone")).toBe("neutral");
+    expect(switchEl?.className).toContain("data-[state=checked]:bg-text-primary");
   });
 
   it("applies amber color scheme", () => {
@@ -1121,6 +1149,7 @@ describe("SettingsSwitch", () => {
       />
     );
     const switchEl = container.querySelector('[role="switch"]');
+    expect(switchEl?.getAttribute("data-tone")).toBe("warning");
     expect(switchEl?.className).toContain("data-[state=checked]:bg-status-warning");
   });
 
@@ -1134,6 +1163,7 @@ describe("SettingsSwitch", () => {
       />
     );
     const switchEl = container.querySelector('[role="switch"]');
+    expect(switchEl?.getAttribute("data-tone")).toBe("danger");
     expect(switchEl?.className).toContain("data-[state=checked]:bg-status-error");
   });
 

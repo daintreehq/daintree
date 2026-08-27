@@ -55,7 +55,7 @@ describe("SettingsSwitchCard", () => {
       <SettingsSwitchCard {...defaultProps} isEnabled={true} colorScheme="amber" />
     );
     const switchEl = container.querySelector('[role="switch"]');
-    expect(switchEl?.className).toContain("data-[state=checked]:bg-status-warning");
+    expect(switchEl?.getAttribute("data-tone")).toBe("warning");
   });
 
   it("applies danger color scheme to switch track when enabled", () => {
@@ -63,13 +63,13 @@ describe("SettingsSwitchCard", () => {
       <SettingsSwitchCard {...defaultProps} isEnabled={true} colorScheme="danger" />
     );
     const switchEl = container.querySelector('[role="switch"]');
-    expect(switchEl?.className).toContain("data-[state=checked]:bg-status-error");
+    expect(switchEl?.getAttribute("data-tone")).toBe("danger");
   });
 
   it("applies accent color scheme by default", () => {
     const { container } = render(<SettingsSwitchCard {...defaultProps} isEnabled={true} />);
     const switchEl = container.querySelector('[role="switch"]');
-    expect(switchEl?.className).toContain("data-[state=checked]:bg-daintree-text");
+    expect(switchEl?.getAttribute("data-tone")).toBe("neutral");
   });
 
   it("points the switch at the subtitle via aria-describedby", () => {
