@@ -5,7 +5,7 @@ import { test, expect } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
-import { openSettings } from "../../helpers/panels";
+import { openSettings, selectSettingsScope } from "../../helpers/panels";
 import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
 import { ensureWindowFocused } from "../../helpers/focus";
@@ -85,8 +85,7 @@ function writeResourceConfig(repoDir: string) {
 async function navigateToResourcesTab(
   window: Awaited<ReturnType<typeof launchApp>>["window"]
 ): Promise<void> {
-  await window.locator('[aria-label="Settings scope"]').click();
-  await window.locator('[role="option"]', { hasText: "Project" }).click();
+  await selectSettingsScope(window, "Project");
 
   await window.locator(`${SEL.settings.navSidebar} button`, { hasText: "Worktree Setup" }).click();
   const panel = window.locator("#settings-panel-project\\:automation");

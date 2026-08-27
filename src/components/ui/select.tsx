@@ -103,7 +103,10 @@ const SelectTrigger = React.forwardRef<
         ref={ref as React.Ref<HTMLButtonElement>}
         className={cn(
           "flex w-full items-center justify-between gap-2 rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg px-3 py-1.5 text-sm text-daintree-text transition-colors",
-          "focus:outline-hidden focus:border-daintree-accent/40",
+          // Full accent, not /40: the recipe in docs/themes/interaction-state-recipes.md
+          // is "border-shift, no ring", and at 40% alpha the focused border was 1.58:1
+          // against the resting one — a focus indicator you cannot see is not one.
+          "focus:outline-hidden focus:border-daintree-accent",
           "disabled:opacity-50 disabled:cursor-not-allowed",
           className
         )}
@@ -124,7 +127,7 @@ const SelectTrigger = React.forwardRef<
       ref={ref}
       className={cn(
         "flex w-full items-center justify-between gap-2 rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg px-3 py-1.5 text-sm text-daintree-text transition-colors",
-        "focus:outline-hidden focus:border-daintree-accent/40",
+        "focus:outline-hidden focus:border-daintree-accent",
         "disabled:opacity-50 disabled:cursor-not-allowed",
         "data-[placeholder]:text-text-muted",
         "[&>span]:line-clamp-1 [&>span]:text-left",

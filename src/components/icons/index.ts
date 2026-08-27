@@ -11,6 +11,7 @@ export * from "./brands";
 export {
   Activity, // project pulse / live activity heartbeat
   ArrowDownAZ, // alphabetical sort order (A to Z)
+  ArrowLeftRight, // a settings search hit that lives in the other scope — following it switches scope
   AtSign, // @file reference handed to an agent's prompt
   BellDot, // watch alert / notify on completion
   ChartNoAxesColumn, // frecency sort order ("Most used" — decayed access score)
@@ -22,12 +23,15 @@ export {
   CircleSlash, // agent stopped on an error, distinct in shape from a waiting one (Pilot's blocked band)
   Clock, // recency sort order (most recently opened first)
   FileText, // view selected file path in the read-only file viewer
+  Folder, // the project a scoped setting belongs to (settings scope: project)
   FolderGit2, // git worktree (single)
   FolderOpen, // reveal in file manager (Finder / Explorer / file manager)
   FolderOutput, // worktree living outside the project directory (external)
   FolderTree, // Daintree's own file browser panel (the worktree file tree)
   Folders, // copy tree / file hierarchy capture (two overlapping folders)
+  GitBranchPlus, // per-project worktree setup — creating branches, not browsing them
   GitPullRequest, // forge provider / code-host plugin category
+  Globe, // application-wide scope — the setting belongs to Daintree, not one project
   History, // resume closed session / session history
   Layers, // worktree overview (multiple worktrees, stacked)
   LayoutPanelTop, // workspace plugin category (panels, notes)
@@ -38,5 +42,6 @@ export {
   Plug, // agent (integration that plugs into the host system)
   Plus, // the toolbar launcher — "make me a new thing" (agent, panel)
   Sprout, // origin / first step (main worktree, first agent launch)
+  TriangleAlert, // a setting failing validation — a shape, not a hue, so it survives forced colors
   Workflow, // terminal recipe / scripted command sequence
 } from "lucide-react";

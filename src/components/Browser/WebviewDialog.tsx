@@ -16,8 +16,11 @@ const CARD_STYLE: CSSProperties & Record<"--scroll-shadow-color", string> = {
   "--scroll-shadow-color": "var(--color-surface-dialog)",
 };
 
+// Kept in sync with src/lib/accessibility.ts — this dialog cannot import from there
+// because it renders inside the webview overlay. Every branch excludes tabindex="-1":
+// a roving-tabindex widget member is not a tab stop whatever its tag.
 const TABBABLE_SELECTOR =
-  'a[href], area[href], input:not([disabled]):not([type="hidden"]), select:not([disabled]), textarea:not([disabled]), button:not([disabled]), audio[controls], video[controls], [contenteditable]:not([contenteditable="false"]), [tabindex]:not([tabindex^="-"])';
+  'a[href]:not([tabindex^="-"]), area[href]:not([tabindex^="-"]), input:not([disabled]):not([type="hidden"]):not([tabindex^="-"]), select:not([disabled]):not([tabindex^="-"]), textarea:not([disabled]):not([tabindex^="-"]), button:not([disabled]):not([tabindex^="-"]), audio[controls]:not([tabindex^="-"]), video[controls]:not([tabindex^="-"]), [contenteditable]:not([contenteditable="false"]):not([tabindex^="-"]), [tabindex]:not([tabindex^="-"])';
 
 export interface WebviewDialogRequest {
   dialogId: string;

@@ -68,6 +68,43 @@
   box-shadow: var(--settings-nav-active-shadow, none);
 }
 
+/* The scope switcher's selected segment is the surface seven light themes authored
+   --settings-scope-bg for — it was the old scope Select's fill. Re-homing the key
+   onto the thumb keeps those themes meaningful instead of orphaning the token. */
+.settings-scope-control [data-slot="segmented-thumb"] {
+  background: var(--settings-scope-bg, var(--theme-surface-panel-elevated));
+}
+
+/* Deliberately NOT merged with the `prefers-contrast: more` block below: macOS fires
+   only prefers-contrast, Windows swaps in system colors, and only this path discards
+   backgrounds, tints and shadows outright. Same rationale as src/index.css.
+
+   Without it the settings nav loses its selected state entirely — the tinted fill, the
+   inset ring and the 2px accent marker are all dropped, leaving every section row
+   identical and no way to tell which one you are looking at. */
+@media (forced-colors: active) {
+  /* Same reason as the prefers-contrast rule below: the wrapper carries the boundary. */
+  .settings-search-input {
+    border: none;
+  }
+
+  /* Outline, not fill. A `Highlight` background makes Chromium paint a Canvas backplate
+     behind the label, which comes out as a solid white block where the text should be —
+     verified in the capture harness. An inset outline says "selected" without putting
+     text on a system-coloured ground, and — unlike a border on these Preflight
+     zero-border buttons — it takes no layout space, so the list does not jitter as the
+     active row moves. */
+  .settings-nav-item[data-active="true"] {
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
+  }
+
+  .settings-scope-control [data-slot="segmented-thumb"] {
+    background: Canvas;
+    border: 2px solid Highlight;
+  }
+}
+
 .settings-kbd {
   background: var(--settings-kbd-bg, var(--theme-surface-input));
   border-color: var(--settings-kbd-border, var(--theme-border-default));
@@ -92,6 +129,27 @@
 }
 
 @media (prefers-contrast: more) {
+  /* The scope switch and the active nav row are the two selection signals in this
+     shell, and both were carried by a low-delta neutral fill — in the mode whose whole
+     point is stronger state contrast they read exactly as faintly as they do by
+     default, while every row around them gains a border. Give both an explicit
+     boundary. Kept separate from the forced-colors block above by house rule. */
+  .settings-scope-control [data-slot="segmented-thumb"] {
+    border-width: 2px;
+    border-color: var(--theme-text-primary);
+  }
+
+  .settings-nav-item[data-active="true"] {
+    border: 2px solid var(--theme-text-primary);
+  }
+
+  /* The search field's perceivable boundary is its wrapper, so the generic
+     "border on every native form control" rule gives the inner input a second,
+     square-cornered box inside the rounded pill. One control, one border. */
+  .settings-search-input {
+    border: none;
+  }
+
   .settings-section-header {
     --_bg: var(--settings-section-header-bg-solid, var(--theme-surface-panel));
     backdrop-filter: none;
