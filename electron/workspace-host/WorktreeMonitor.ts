@@ -102,6 +102,13 @@ export interface WorktreeMonitorCallbacks {
 
 export class WorktreeMonitor {
   readonly id: string;
+  /**
+   * Incarnation stamp for {@link id}, minted by `WorkspaceService` from a
+   * process-wide monotonic counter. Stamped onto every snapshot this monitor
+   * builds so the renderer can tell a recreated worktree apart from a buffered
+   * update belonging to the previous monitor for the same path (#11994).
+   */
+  readonly generation: number;
   readonly path: string;
 
   private _name: string;
@@ -284,9 +291,11 @@ export class WorktreeMonitor {
     private config: WorktreeMonitorConfig,
     private callbacks: WorktreeMonitorCallbacks,
     private mainBranch: string,
-    pollQueue?: PQueue
+    pollQueue?: PQueue,
+    generation: number = 0
   ) {
     this.id = worktree.id;
+    this.generation = generation;
     this.path = worktree.path;
     this._name = worktree.name;
     this._branch = worktree.branch;
@@ -416,6 +425,9 @@ export class WorktreeMonitor {
     const snapshotHost: SnapshotBuilderHost = {
       get id() {
         return monitor.id;
+      },
+      get generation() {
+        return monitor.generation;
       },
       get path() {
         return monitor.path;

@@ -369,6 +369,33 @@ export class WorkspaceService {
   private seq = 0;
 
   /**
+   * Monotonic monitor-incarnation counter within `epoch`. Deliberately separate
+   * from `seq`: a generation is an identity for one monitor, not a position in
+   * the event stream, and minting one must not advance the stamp the renderer
+   * orders events by. A worktree id is its path, so a delete-then-create at the
+   * same location reuses the id — the incarnation is the only thing that tells
+   * the renderer's tombstone a real recreation apart from a buffered update
+   * belonging to the monitor that was just torn down (#11994). Reset on host
+   * restart, which is safe because that also mints a new `epoch` and the
+   * renderer drops every tombstone on an epoch transition.
+   */
+  private worktreeGeneration = 0;
+
+  /**
+   * In-flight `installWorktreeMonitor` promise per worktree id. The entry guard
+   * reads `monitors` before several awaits, so without single-flighting a second
+   * caller for the same id (a `syncMonitors` pass racing `performCreateWorktree`
+   * or a topology reconcile) sails past it and installs a second live monitor
+   * for one path — double-polling it, and breaking the invariant the removal
+   * tombstone leans on: the registered monitor holds the highest incarnation
+   * minted for its id (#11994). The promise, rather than a bare id set, is what
+   * lets the losing caller wait for the winner instead of returning while the
+   * monitor is still absent — `performCreateWorktree` documents that the
+   * monitor IS registered once its await resolves.
+   */
+  private readonly pendingMonitorInstalls = new Map<string, Promise<void>>();
+
+  /**
    * Epoch-scoped set of mutation IDs that have been successfully acknowledged
    * by this host run. The renderer mints a stable mutationId per delete intent
    * (#8405) and the host records each successful delete here so a replay of
@@ -1201,6 +1228,7 @@ export class WorkspaceService {
       worktreeId: monitor.id,
       epoch: this.epoch,
       seq: this.nextSeq(),
+      generation: monitor.generation,
     });
     events.emit("sys:worktree:remove", { worktreeId: monitor.id, timestamp: Date.now() });
   }
@@ -1363,7 +1391,35 @@ export class WorkspaceService {
     if (this.monitors.has(wt.id)) {
       return;
     }
+    const inFlight = this.pendingMonitorInstalls.get(wt.id);
+    if (inFlight) {
+      // Swallow the winner's failure rather than re-throwing it into a caller
+      // that only asked for the monitor to exist: a duplicate call stays the
+      // no-op it always was, and the shared await is purely so this returns
+      // once the install has actually settled.
+      await inFlight.catch(() => {});
+      return;
+    }
+    const install = this.installWorktreeMonitor(
+      wt,
+      isActive,
+      skipInitialGitStatus,
+      deferWatcherBudget
+    );
+    this.pendingMonitorInstalls.set(wt.id, install);
+    try {
+      await install;
+    } finally {
+      this.pendingMonitorInstalls.delete(wt.id);
+    }
+  }
 
+  private async installWorktreeMonitor(
+    wt: Worktree,
+    isActive: boolean,
+    skipInitialGitStatus: boolean,
+    deferWatcherBudget: boolean
+  ): Promise<void> {
     const enrichedWt = await this.enrichWorktreeWithWsl(wt);
     wt = enrichedWt;
 
@@ -1377,6 +1433,14 @@ export class WorkspaceService {
       createdAt = stats.birthtimeMs > 0 ? stats.birthtimeMs : stats.ctimeMs;
     } catch {
       // If stat fails, leave undefined
+    }
+
+    // The single-flight guard in the caller covers concurrent installs; this
+    // catches any other path that registered this id across the awaits above.
+    // Minting the incarnation only once we know we will register keeps the
+    // counter aligned with the monitors that actually exist.
+    if (this.monitors.has(wt.id)) {
+      return;
     }
 
     const monitor = new WorktreeMonitor(
@@ -1396,10 +1460,10 @@ export class WorkspaceService {
           this.handleMonitorUpdate(monitor, snapshot);
         },
         onRemoved: (worktreeId) => {
-          this.handleExternalWorktreeRemoval(worktreeId);
+          this.handleExternalWorktreeRemoval(worktreeId, monitor);
         },
         onExternalRemoval: (worktreeId) => {
-          this.handleExternalWorktreeRemoval(worktreeId);
+          this.handleExternalWorktreeRemoval(worktreeId, monitor);
         },
         onResourceStatusPoll: (worktreeId) => {
           return this.runResourceAction(
@@ -1446,7 +1510,8 @@ export class WorkspaceService {
         },
       },
       this.mainBranch,
-      this.pollQueue
+      this.pollQueue,
+      ++this.worktreeGeneration
     );
 
     monitor.setIssueNumber(issueNumber ?? undefined);
@@ -2131,9 +2196,19 @@ export class WorkspaceService {
     }
   }
 
-  private handleExternalWorktreeRemoval(worktreeId: string): void {
+  /**
+   * `origin` is the monitor whose callback fired. A watcher/poll continuation
+   * belonging to a torn-down monitor can resume after a same-path worktree was
+   * recreated, and the id alone would then resolve to the *new* monitor and
+   * delete a live worktree the user just created (#11994). Identity, not id,
+   * is what makes the two incarnations distinguishable here.
+   */
+  private handleExternalWorktreeRemoval(worktreeId: string, origin?: WorktreeMonitor): void {
     const monitor = this.monitors.get(worktreeId);
     if (!monitor) {
+      return;
+    }
+    if (origin && origin !== monitor) {
       return;
     }
 

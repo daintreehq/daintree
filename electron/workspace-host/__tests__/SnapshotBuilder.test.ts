@@ -4,6 +4,7 @@ import { SnapshotBuilder, type SnapshotBuilderHost } from "../SnapshotBuilder.js
 function makeHost(overrides: Partial<SnapshotBuilderHost> = {}): SnapshotBuilderHost {
   return {
     id: "/test/worktree",
+    generation: 1,
     path: "/test/worktree",
     name: "worktree",
     branch: "feature/x",
@@ -213,6 +214,14 @@ describe("SnapshotBuilder", () => {
 
     const stamped = makeHost({ workingTreeChangedAt: 1_725_000_000_000 });
     expect(new SnapshotBuilder(stamped).build().workingTreeChangedAt).toBe(1_725_000_000_000);
+  });
+
+  it("carries the monitor's incarnation stamp onto the snapshot", () => {
+    // The renderer's removal tombstone compares this to tell a re-created
+    // worktree apart from a buffered update for the path's previous monitor
+    // (#11994), so it has to survive snapshot construction.
+    const host = makeHost({ generation: 7 });
+    expect(new SnapshotBuilder(host).build().generation).toBe(host.generation);
   });
 
   it("passes isExternal through without collapsing false into undefined", () => {

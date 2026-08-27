@@ -85,6 +85,16 @@ export interface PRServiceStatus {
  */
 export interface WorktreeSnapshot {
   id: string;
+  /**
+   * Monotonic incarnation stamp for this id, minted when the host creates the
+   * worktree's monitor. An id is its path, so a delete-then-create at the same
+   * location reuses it — the generation is what tells the renderer's removal
+   * tombstone a genuine recreation apart from a buffered pre-delete update,
+   * which is closure-bound to the old monitor and so carries the old stamp
+   * (#11994). Optional only so snapshot fixtures stay light; every snapshot the
+   * host builds carries it (`SnapshotBuilder` is the sole construction point).
+   */
+  generation?: number;
   path: string;
   name: string;
   branch?: string;
@@ -666,7 +676,16 @@ export type WorkspaceHostEvent =
     }
   // Spontaneous updates (no requestId - these are pushed events)
   | { type: "worktree-update"; worktree: WorktreeSnapshot; epoch: string; seq: number }
-  | { type: "worktree-removed"; worktreeId: string; epoch: string; seq: number }
+  // `generation` is the removed monitor's incarnation stamp — the renderer
+  // records it on the tombstone so a later update can be compared against it
+  // (#11994). See `WorktreeSnapshot.generation`.
+  | {
+      type: "worktree-removed";
+      worktreeId: string;
+      epoch: string;
+      seq: number;
+      generation?: number;
+    }
   // Host-originated active-worktree change. Emitted from the host's authoritative
   // `setActiveWorktree` writer so the per-view renderer's WorktreeStoreContext
   // learns the new active id in the same tick as any accompanying

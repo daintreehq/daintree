@@ -13,6 +13,7 @@ import type { PluginWorktreeLinked } from "../../shared/types/plugin.js";
 
 export interface SnapshotBuilderHost {
   readonly id: string;
+  readonly generation: number;
   readonly path: string;
   readonly name: string;
   readonly branch: string | undefined;
@@ -112,6 +113,7 @@ export class SnapshotBuilder {
 
     const snapshot: WorktreeSnapshot = {
       id: this.host.id,
+      generation: this.host.generation,
       path: this.host.path,
       name: this.host.name,
       branch: this.host.branch,

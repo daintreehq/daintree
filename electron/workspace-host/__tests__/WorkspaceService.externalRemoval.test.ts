@@ -188,6 +188,11 @@ describe("WorkspaceService external worktree removal", () => {
   });
 
   afterEach(() => {
+    // Both the re-creation tests install real monitors, which arm polling and
+    // fetch timers; leaving them running lets a torn-down monitor fire against
+    // a later test's mocks.
+    service.dispose();
+    vi.useRealTimers();
     vi.restoreAllMocks();
   });
 
@@ -357,6 +362,88 @@ describe("WorkspaceService external worktree removal", () => {
       expect(mockSendEvent).not.toHaveBeenCalledWith(
         expect.objectContaining({ type: "worktree-removed" })
       );
+    });
+  });
+
+  describe("same-path re-creation (#11994)", () => {
+    // A worktree id is its path, so a delete-then-create at the same location
+    // reuses it. The monitor incarnation is the only thing that distinguishes
+    // the two, both for the renderer's tombstone and for fencing continuations
+    // still running against the torn-down monitor.
+    const OTHER_WORKTREE_PATH = pathResolve("/test/other-worktree");
+
+    it("mints a higher incarnation for the replacement and stamps the removal with the old one", async () => {
+      await service["addNewWorktreeMonitor"](createTestWorktree(), false, true);
+      const first = service["monitors"].get(TEST_WORKTREE_PATH);
+      expect(first).toBeDefined();
+
+      // Advance the service counter between creation and removal, so a removal
+      // that stamped the counter's current value instead of the torn-down
+      // monitor's own would carry a different number.
+      await service["addNewWorktreeMonitor"](
+        createTestWorktree({ id: OTHER_WORKTREE_PATH, path: OTHER_WORKTREE_PATH }),
+        false,
+        true
+      );
+      expect(service["monitors"].get(OTHER_WORKTREE_PATH)!.generation).toBeGreaterThan(
+        first!.generation
+      );
+
+      service["removeMonitor"](TEST_WORKTREE_PATH);
+
+      expect(mockSendEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "worktree-removed",
+          worktreeId: TEST_WORKTREE_PATH,
+          generation: first!.generation,
+        })
+      );
+
+      await service["addNewWorktreeMonitor"](createTestWorktree(), false, true);
+      const second = service["monitors"].get(TEST_WORKTREE_PATH);
+      expect(second).toBeDefined();
+
+      expect(second).not.toBe(first);
+      expect(second!.generation).toBeGreaterThan(first!.generation);
+      expect(second!.getSnapshot().generation).toBe(second!.generation);
+    });
+
+    it("ignores a torn-down monitor's removal callback for the worktree that replaced it", async () => {
+      await service["addNewWorktreeMonitor"](createTestWorktree(), false, true);
+      const first = service["monitors"].get(TEST_WORKTREE_PATH);
+      service["removeMonitor"](TEST_WORKTREE_PATH);
+      await service["addNewWorktreeMonitor"](createTestWorktree(), false, true);
+      const second = service["monitors"].get(TEST_WORKTREE_PATH);
+      expect(first).toBeDefined();
+      expect(second).toBeDefined();
+      expect(second).not.toBe(first);
+      mockSendEvent.mockClear();
+
+      // Drive the production callbacks the old monitor actually holds, so this
+      // also fails if `addNewWorktreeMonitor` stops passing the origin along.
+      // Resolving by id alone would find — and delete — the live worktree the
+      // user just created.
+      first!["callbacks"].onRemoved!(TEST_WORKTREE_PATH);
+      first!["callbacks"].onExternalRemoval!(TEST_WORKTREE_PATH);
+
+      expect(service["monitors"].get(TEST_WORKTREE_PATH)).toBe(second);
+      expect(mockSendEvent).not.toHaveBeenCalledWith(
+        expect.objectContaining({ type: "worktree-removed" })
+      );
+    });
+
+    it("installs one monitor when two adds for the same path overlap", async () => {
+      // The entry guard reads `monitors` before several awaits, so without
+      // single-flighting both callers install a monitor and the registered one
+      // is no longer guaranteed to hold the highest incarnation.
+      await Promise.all([
+        service["addNewWorktreeMonitor"](createTestWorktree(), false, true),
+        service["addNewWorktreeMonitor"](createTestWorktree(), false, true),
+      ]);
+
+      const registered = service["monitors"].get(TEST_WORKTREE_PATH);
+      expect(registered).toBeDefined();
+      expect(registered!.generation).toBe(service["worktreeGeneration"]);
     });
   });
 
