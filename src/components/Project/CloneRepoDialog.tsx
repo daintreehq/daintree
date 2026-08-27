@@ -144,6 +144,13 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
   const [cleanupError, setCleanupError] = useState<string | null>(null);
   const [isComplete, setIsComplete] = useState(false);
   const [clonedPath, setClonedPath] = useState<string | null>(null);
+  // Where the partial clone was left, pinned when the clone was launched. A
+  // failure or a stop hands the form back editable with the cleanup banner
+  // still up, so deriving this from the live fields would silently repoint the
+  // banner — and its "Show in folder" action — at a folder that was never
+  // cloned into. This mirrors the `path.join(parentPath, trimmedFolder)` the
+  // main process composes and names in its `cleanup-failed` message.
+  const [strandedPath, setStrandedPath] = useState<string | null>(null);
   // Registered forge providers — gate the auth-failed recovery banner on the
   // clone URL belonging to a registered provider, and derive that banner's
   // sign-in label/route plus the owner/repo shorthand host.
@@ -184,6 +191,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
       setCleanupError(null);
       setIsComplete(false);
       setClonedPath(null);
+      setStrandedPath(null);
       hasFinalizedRef.current = false;
       return;
     }
@@ -271,6 +279,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
   };
 
   const startClone = async () => {
+    const targetFolder = folderName.trim();
     setIsCloning(true);
     setError(null);
     setWasCancelled(false);
@@ -279,13 +288,16 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
     setIsComplete(false);
     setStages([]);
     setCurrentStageKey(null);
+    // Pin the destination this run is launched against, from the very values
+    // handed to the main process, before the form becomes editable again.
+    setStrandedPath(joinPath(parentPath, targetFolder));
     hasFinalizedRef.current = false;
 
     try {
       const { clonedPath: resultPath } = await projectClient.cloneRepo({
         url: normalizeCloneUrl(url, shorthandHost),
         parentPath,
-        folderName: folderName.trim(),
+        folderName: targetFolder,
         shallowClone,
       });
 
@@ -402,9 +414,6 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
       ? joinPath(parentPath, trimmedFolderName)
       : null;
   const normalizedUrl = normalizeCloneUrl(url, shorthandHost);
-  // The partial clone the main process failed to remove sits at the same target
-  // path it was asked to clone into, composed from the same two inputs.
-  const strandedPath = destinationPath;
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLInputElement>) => {
     // Enter acts as Retry too — startClone resets `error` internally, so this
@@ -531,7 +540,14 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
                 is the question this mode exists to answer. The percentage rides
                 the payload's `progress`, which the transcript this replaced
                 threw away. */}
-            <div className="space-y-2" aria-busy="true">
+            {/* No `aria-busy` on this wrapper: it would silence mutations
+                within its own subtree on modern screen readers (see the note on
+                `SkeletonHint` in `@/components/ui/Skeleton`), and the two live
+                regions below are exactly the mutations this mode exists to
+                announce. Unlike a skeleton — meaningless placeholder shape that
+                aria-busy rightly mutes — the progress readout is the content,
+                and the `progressbar` already carries the busy semantics. */}
+            <div className="space-y-2">
               {/* Carries the phase and nothing else, so stage changes are
                   announced and percentage ticks are not. */}
               <span className="sr-only" role="status" aria-live="polite">

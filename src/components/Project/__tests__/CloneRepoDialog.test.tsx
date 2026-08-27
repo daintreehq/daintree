@@ -1272,6 +1272,26 @@ describe("CloneRepoDialog", () => {
     });
   });
 
+  it("keeps the running mode's live regions out of any aria-busy subtree", async () => {
+    // An `aria-busy="true"` ancestor silences mutations within its subtree on
+    // modern screen readers (the hazard `SkeletonHint` documents), so nesting
+    // the phase announcer or the "Still working…" hint under one would mute
+    // exactly the updates this mode exists to speak.
+    cloneRepoMock.mockImplementation(() => new Promise(() => {}));
+    render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
+    await startActiveClone();
+
+    await waitFor(() => expect(progressHandler).not.toBeNull());
+    await waitForRunningMode();
+
+    // The phase announcer plus SkeletonHint's always-present live region.
+    const liveRegions = Array.from(document.querySelectorAll("[aria-live]"));
+    expect(liveRegions.length).toBeGreaterThanOrEqual(2);
+    for (const region of liveRegions) {
+      expect(region.closest('[aria-busy="true"]')).toBeNull();
+    }
+  });
+
   describe("cleanup-failure banner", () => {
     it("renders the cleanup-failed event as a separate banner, not a log row", async () => {
       cloneRepoMock.mockImplementation(() => new Promise(() => {}));
@@ -1306,6 +1326,50 @@ describe("CloneRepoDialog", () => {
       expect(screen.getAllByTestId("cleanup-banner")).toHaveLength(1);
       // The live stage is unaffected: cleanup failure is orthogonal to it.
       expect(screen.getByRole("progressbar").getAttribute("aria-label")).toBe("Receiving");
+    });
+
+    it("keeps the failed run's path after the returned form is edited", async () => {
+      // A failure hands the form back editable with the banner still up. The
+      // stranded folder is wherever the clone that failed was pointed, so
+      // retyping the folder name must not repoint the banner — or its reveal
+      // action — at a directory nothing was ever cloned into.
+      let rejectClone: ((reason: Error) => void) | null = null;
+      cloneRepoMock.mockImplementation(
+        () =>
+          new Promise((_resolve, reject) => {
+            rejectClone = reject;
+          })
+      );
+      render(<CloneRepoDialog isOpen={true} onSuccess={vi.fn()} onCancel={vi.fn()} />);
+      await startActiveClone();
+
+      await waitFor(() => expect(progressHandler).not.toBeNull());
+
+      act(() => {
+        progressHandler?.({
+          stage: "cleanup-failed",
+          progress: 0,
+          message: "Couldn't remove the partial clone at /tmp/repo.",
+          timestamp: Date.now(),
+        });
+      });
+
+      await act(async () => {
+        rejectClone?.(new Error("Failed to clone repository"));
+      });
+
+      await waitFor(() => expect(screen.getByText("Clone failed")).toBeTruthy());
+
+      fireEvent.change(screen.getByLabelText(/folder name/i), {
+        target: { value: "somewhere-else" },
+      });
+
+      expect(screen.getByTestId("banner-context").textContent).toBe("/tmp/repo");
+
+      await act(async () => {
+        fireEvent.click(screen.getByLabelText("Show the partial clone in the file manager"));
+      });
+      expect(showItemInFolderMock).toHaveBeenCalledWith("/tmp/repo");
     });
 
     it("dismisses the cleanup banner via its close control", async () => {
