@@ -397,6 +397,7 @@ export function GitInitDialog({
         {mode === "complete" ? (
           <div
             className="flex flex-col items-center gap-4 py-6 text-center"
+            data-testid="git-init-success"
             role="status"
             aria-live="polite"
             aria-atomic="true"
@@ -419,13 +420,16 @@ export function GitInitDialog({
                 in the app reports itself, and first — "what is happening now"
                 is the question this mode exists to answer. The transcript this
                 replaced answered it with four simultaneous spinners. */}
-            <div className="space-y-2">
+            <div className="space-y-2" data-testid="git-init-progress">
               {/* Carries the phase and nothing else, so step changes are
                   announced and the step counter ticking is not. */}
               <span className="sr-only" role="status" aria-live="polite">
                 {currentPhase?.live ?? "Starting"}
               </span>
-              <div className="flex items-center gap-2">
+              <div
+                className="flex items-center gap-2"
+                data-testid={currentPhase ? "git-init-step" : "git-init-connecting"}
+              >
                 <Spinner size="sm" className="shrink-0 text-text-secondary" />
                 <span aria-hidden="true" className="text-sm text-daintree-text">
                   {currentPhase?.live ?? "Starting…"}
@@ -478,6 +482,7 @@ export function GitInitDialog({
                 {completedPhases.map((phase) => (
                   <li
                     key={phase.step}
+                    data-testid="git-init-step"
                     className="flex items-start gap-2 text-xs text-daintree-text/45"
                   >
                     <Check className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
@@ -500,31 +505,34 @@ export function GitInitDialog({
                 as an event or as a thrown error: the two used to render as two
                 unrelated components, and the identity case printed its
                 remediation twice. */}
-            {error &&
-              (identityCommands.length > 0 ? (
-                <InlineStatusBanner
-                  icon={AlertCircle}
-                  severity="error"
-                  title="Initial commit skipped"
-                  description="The repository was created, but Git needs a name and email before it can commit. Set them, then retry."
-                  descriptionExtras={
-                    <div className="mt-2 space-y-1.5">
-                      {identityCommands.map((command) => (
-                        <CopyableCommand key={command} command={command} />
-                      ))}
-                    </div>
-                  }
-                  className="rounded-[var(--radius-md)]"
-                />
-              ) : (
-                <InlineStatusBanner
-                  icon={AlertCircle}
-                  severity="error"
-                  title="Initialization failed"
-                  description={error}
-                  className="rounded-[var(--radius-md)]"
-                />
-              ))}
+            {error && (
+              <div data-testid="git-init-error">
+                {identityCommands.length > 0 ? (
+                  <InlineStatusBanner
+                    icon={AlertCircle}
+                    severity="error"
+                    title="Initial commit skipped"
+                    description="The repository was created, but Git needs a name and email before it can commit. Set them, then retry."
+                    descriptionExtras={
+                      <div className="mt-2 space-y-1.5" data-testid="git-init-command-block">
+                        {identityCommands.map((command) => (
+                          <CopyableCommand key={command} command={command} />
+                        ))}
+                      </div>
+                    }
+                    className="rounded-[var(--radius-md)]"
+                  />
+                ) : (
+                  <InlineStatusBanner
+                    icon={AlertCircle}
+                    severity="error"
+                    title="Initialization failed"
+                    description={error}
+                    className="rounded-[var(--radius-md)]"
+                  />
+                )}
+              </div>
+            )}
 
             <div className="space-y-1.5">
               <label htmlFor="git-init-project-name" className={FIELD_LABEL_CLASS}>

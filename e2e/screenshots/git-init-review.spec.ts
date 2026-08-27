@@ -78,6 +78,8 @@ const TID = {
   step: '[data-testid="git-init-step"]',
   commandBlock: '[data-testid="git-init-command-block"]',
   error: '[data-testid="git-init-error"]',
+  success: '[data-testid="git-init-success"]',
+  openProject: '[data-testid="git-init-open"]',
 } as const;
 
 const CH = {
@@ -598,7 +600,7 @@ test("git init dialog review — configuration, progress, recovery and success",
       await openGitSetup(folder("beacon-hill"));
       await startInit();
       await snap(page, "50-success", {
-        marker: 'button:has-text("Continue")',
+        marker: TID.success,
         locator: DIALOG,
         markerTimeout: 20000,
         settleMs: 120,
