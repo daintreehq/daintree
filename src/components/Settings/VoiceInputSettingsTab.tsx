@@ -560,17 +560,15 @@ function ApiKeyRow({
           <Key className="w-3.5 h-3.5 text-daintree-text/50" aria-hidden="true" />
           {label}
         </label>
-        <div className="flex items-center gap-2">
-          {!value && (
-            <button
-              onClick={() => window.electron?.system?.openExternal(helpUrl)}
-              className="text-xs text-text-secondary hover:text-daintree-text underline-offset-2 hover:underline flex items-center gap-1"
-            >
-              {helpLabel}
-              <ExternalLink className="w-3 h-3" />
-            </button>
-          )}
-        </div>
+        {!value && (
+          <button
+            onClick={() => window.electron?.system?.openExternal(helpUrl)}
+            className="text-xs text-text-secondary hover:text-daintree-text underline-offset-2 hover:underline flex items-center gap-1"
+          >
+            {helpLabel}
+            <ExternalLink className="w-3 h-3" />
+          </button>
+        )}
       </div>
 
       <div className="flex gap-2">

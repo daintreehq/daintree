@@ -320,7 +320,8 @@ describe("GeneralTab — System Status filtering (issue #5072)", () => {
 
     await renderGeneralTab();
 
-    const rowFor = (name: string) => screen.getByLabelText(`Go to ${name} agent settings`);
+    const rowFor = (name: string) =>
+      screen.getByLabelText(new RegExp(`^Go to ${name} agent settings\\b`));
     const attention = [
       { name: "Claude", label: "Blocked" },
       { name: "Gemini", label: "Login required" },
@@ -335,6 +336,9 @@ describe("GeneralTab — System Status filtering (issue #5072)", () => {
     const glyphs = attention.map(({ name, label }) => {
       const row = rowFor(name);
       expect(row.textContent).toContain(label);
+      // The row's aria-label overrides its inner text for assistive tech, so
+      // the state has to be repeated there or it is announced as nothing.
+      expect(row.getAttribute("aria-label")).toContain(label);
       const svg = row.querySelector("svg");
       expect(svg).toBeTruthy();
       return svg!.innerHTML;
@@ -345,6 +349,7 @@ describe("GeneralTab — System Status filtering (issue #5072)", () => {
     expect(readyRow.querySelector("svg")).toBeNull();
     for (const { label } of attention) {
       expect(readyRow.textContent).not.toContain(label);
+      expect(readyRow.getAttribute("aria-label")).not.toContain(label);
     }
     expect(readyRow.textContent).not.toContain("Ready");
   });

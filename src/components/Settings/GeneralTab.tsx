@@ -822,7 +822,7 @@ export function GeneralTab({
                           type="button"
                           key={id}
                           className="settings-list-item border-daintree-border hover:bg-[var(--settings-nav-hover-bg,var(--theme-overlay-hover))] flex items-center justify-between text-sm px-3 py-2 rounded-[var(--radius-md)] border w-full text-left cursor-pointer transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
-                          aria-label={`Go to ${name} agent settings`}
+                          aria-label={`Go to ${name} agent settings${status ? ` — ${status.label}` : ""}`}
                           onClick={() => onNavigateToAgents?.(id)}
                         >
                           <span className="text-text-secondary">{name}</span>
