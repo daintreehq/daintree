@@ -70,6 +70,12 @@ function openProject(): Promise<unknown> {
   return actions.get("pilot.openProject")!().run(undefined, NO_CTX);
 }
 
+function toggle(): Promise<unknown> {
+  const actions: ActionRegistry = new Map();
+  registerProjectActions(actions, NO_CALLBACKS);
+  return actions.get("pilot.toggle")!().run(undefined, NO_CTX);
+}
+
 beforeEach(() => {
   vi.clearAllMocks();
   resetStoreAccessorsForTesting();
@@ -428,6 +434,51 @@ describe("pilot.openProject fallback explanation", () => {
     expect(usePilotStore.getState().fellBackFrom).toBeNull();
   });
 
+  it("closes on a second press while its own fallback is what's on screen", async () => {
+    // A single-worktree project is the common case, so the refusal note is the
+    // usual outcome of this chord. Reissuing the identical opening made the
+    // second press a key that visibly does nothing.
+    seedWorktrees([ROOT]);
+    seedFleet([run({ runId: "a", worktreeId: ROOT })]);
+    await openProject();
+    expect(usePilotStore.getState()).toMatchObject({
+      isOpen: true,
+      fellBackFrom: PROJECT_HERE,
+    });
+
+    await openProject();
+
+    expect(usePilotStore.getState().isOpen).toBe(false);
+  });
+
+  it("scopes rather than closing when the topology changed under the fallback", async () => {
+    // The press produces a DIFFERENT surface now, so it is not the repeat the
+    // rule above closes on — the toggle compares outcomes, not keystrokes.
+    seedWorktrees([ROOT]);
+    seedFleet([run({ runId: "a", worktreeId: ROOT })]);
+    await openProject();
+
+    seedWorktrees([ROOT, "/repo/wt/alpha"]);
+    await openProject();
+
+    expect(usePilotStore.getState()).toMatchObject({
+      isOpen: true,
+      scope: { kind: "project", workspaceId: PROJECT_HERE },
+    });
+  });
+
+  it("closes rather than reopening a plain fleet it cannot narrow", async () => {
+    // Nothing known to scope on and nothing to explain: the press has no new
+    // surface to show, so it dismisses the one it would have reissued.
+    seedFleet(null);
+    await openProject();
+    expect(usePilotStore.getState()).toMatchObject({ isOpen: true, fellBackFrom: null });
+
+    await openProject();
+
+    expect(usePilotStore.getState().isOpen).toBe(false);
+  });
+
   it("clears a stale explanation when a later press does scope", async () => {
     seedWorktrees([ROOT]);
     seedFleet([run({ runId: "a", worktreeId: ROOT })]);
@@ -440,5 +491,41 @@ describe("pilot.openProject fallback explanation", () => {
       scope: { kind: "project", workspaceId: PROJECT_HERE },
       fellBackFrom: null,
     });
+  });
+});
+
+/**
+ * The sibling chord, which is the same axis read the other way: one step in,
+ * one step out. Lives here because the two only make sense against each other.
+ */
+describe("pilot.toggle", () => {
+  it("opens the fleet from nothing", async () => {
+    await toggle();
+
+    expect(usePilotStore.getState()).toMatchObject({ isOpen: true, scope: { kind: "fleet" } });
+  });
+
+  it("widens to the fleet rather than closing while a project is scoped", async () => {
+    // This chord is the step OUT. Closing from a scope made the key that means
+    // "show me more" the one that showed nothing, and left dismissal with no
+    // owner but Escape.
+    seedWorktrees([ROOT, "/repo/wt/alpha"]);
+    seedFleet([run({ runId: "a", worktreeId: ROOT })]);
+    await openProject();
+
+    await toggle();
+
+    expect(usePilotStore.getState()).toMatchObject({ isOpen: true, scope: { kind: "fleet" } });
+  });
+
+  it("still closes on the next press once the fleet is showing", async () => {
+    seedWorktrees([ROOT, "/repo/wt/alpha"]);
+    seedFleet([run({ runId: "a", worktreeId: ROOT })]);
+    await openProject();
+
+    await toggle();
+    await toggle();
+
+    expect(usePilotStore.getState().isOpen).toBe(false);
   });
 });

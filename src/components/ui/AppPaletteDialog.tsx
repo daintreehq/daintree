@@ -91,6 +91,22 @@ export interface AppPaletteDialogProps {
    */
   tier: PaletteSurfaceTier;
   /**
+   * Where the keyboard goes when the palette opens, when the first tabbable is
+   * the wrong answer.
+   *
+   * The default — first tabbable in the box — assumes the search field leads
+   * the header, and it silently stops being true the moment a palette renders a
+   * control above it. The agent overview's scoped view puts a breadcrumb there,
+   * so opening it with the scoped chord left the keyboard on "All agents", one
+   * press from undoing the narrowing that had just been applied, with typing
+   * going nowhere.
+   *
+   * A prop rather than a rule the palette can enforce from outside: an opener
+   * that focuses its own field races this component's own frame, and which one
+   * lands last depends on how many commits the palette needed to mount.
+   */
+  initialFocusRef?: React.RefObject<HTMLElement | null>;
+  /**
    * Extra classes for the palette box — sizing and layout only. The surface
    * itself is NOT overridable from here: `surface-overlay` is a handwritten
    * rule emitted after the generated utilities, so a `bg-*` or `border-*`
@@ -106,12 +122,28 @@ export function AppPaletteDialog({
   children,
   ariaLabel,
   tier,
+  initialFocusRef,
   className,
 }: AppPaletteDialogProps) {
   useEscapeStack(isOpen, onClose);
   const dialogRef = useRef<HTMLDivElement>(null);
   const previousFocusRef = useRef<HTMLElement | null>(null);
   const autofocusRafRef = useRef<number | null>(null);
+  /**
+   * The initial-focus target, held behind a ref so the effect below does not
+   * depend on the caller's ref IDENTITY.
+   *
+   * A consumer that builds its ref inline would otherwise rerun the opening
+   * effect on every parent render, and that effect is not idempotent: it
+   * records `document.activeElement` as the element to restore on close, so a
+   * rerun while the palette is open records a control INSIDE the palette — one
+   * that unmounts with it, stranding focus on the body when the palette
+   * closes. Ref identity is not part of what "the palette opened" means.
+   */
+  const initialFocusTargetRef = useRef(initialFocusRef);
+  useEffect(() => {
+    initialFocusTargetRef.current = initialFocusRef;
+  }, [initialFocusRef]);
 
   const restoreFocus = useCallback(() => {
     const el = previousFocusRef.current;
@@ -172,9 +204,11 @@ export function AppPaletteDialog({
       dialogRef.current?.focus();
       autofocusRafRef.current = requestAnimationFrame(() => {
         autofocusRafRef.current = null;
-        const firstFocusable = dialogRef.current?.querySelector<HTMLElement>(TABBABLE_SELECTOR);
-        if (firstFocusable) {
-          firstFocusable.focus();
+        const target =
+          initialFocusTargetRef.current?.current ??
+          dialogRef.current?.querySelector<HTMLElement>(TABBABLE_SELECTOR);
+        if (target) {
+          target.focus();
         } else {
           dialogRef.current?.focus();
         }
@@ -497,6 +531,26 @@ interface AppPaletteBodyProps {
    */
   activeDescendant?: string;
   /**
+   * Where this palette draws keyboard focus while the results region holds it.
+   *
+   * `"region"` (the default) rings the whole scroller. It is the safe answer,
+   * and the only correct one for a palette whose rows are drawn by a caller
+   * this component cannot see — `SearchablePalette` hands `renderItem` out
+   * entirely, and not every consumer of it draws a selected state at all.
+   *
+   * `"active-option"` says the highlighted row carries it instead, which is the
+   * `aria-activedescendant` model and the better indication where it holds: it
+   * says WHICH row Enter would take, where a ring around 300px of list says
+   * only that focus is somewhere inside. Opt in only from a palette whose rows
+   * visibly mark the selected one. Even then the region rings itself when there
+   * is no active option — loading, empty, or an unreachable data source leave
+   * no row to carry it.
+   *
+   * Either way the ring is the app's own. Nothing here styled it before, so
+   * what got drawn was Chromium's raw blue UA ring.
+   */
+  focusIndicator?: "region" | "active-option";
+  /**
    * The palette's input keydown handler. Required rather than optional so a new
    * consumer cannot silently reintroduce the dead-end scroll region that made
    * arrow and Enter navigation stop working after Tab (#11431).
@@ -514,6 +568,7 @@ AppPaletteDialog.Body = function AppPaletteBody({
   maxHeight = "max-h-[60vh]",
   ariaLabel,
   activeDescendant,
+  focusIndicator = "region",
   onNavigationKeyDown,
   scrollClassName = "p-2 space-y-1",
 }: AppPaletteBodyProps) {
@@ -553,7 +608,16 @@ AppPaletteDialog.Body = function AppPaletteBody({
         transitionDuration: `${UI_PALETTE_ENTER_DURATION}ms`,
         transitionTimingFunction: "ease-out",
       }}
-      scrollClassName={scrollClassName}
+      scrollClassName={cn(
+        // The region is a tab stop, so it must show focus somewhere. See
+        // `focusIndicator` above for which of the two places this palette
+        // chose, and why an opted-in palette still rings itself when there is
+        // no row to carry it.
+        focusIndicator === "region" || activeDescendant === undefined
+          ? "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-daintree-accent"
+          : "focus:outline-hidden",
+        scrollClassName
+      )}
     >
       {children}
     </ScrollShadow>

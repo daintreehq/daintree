@@ -869,7 +869,13 @@ const createProjectStore: StateCreator<ProjectState> = (set, get) => ({
             label: "Try again",
             variant: "primary",
             onClick: () => {
-              void get().switchProject(projectId);
+              // `options` rides the retry. Without it the retry is a different
+              // request from the one that failed: a switch launched to open a
+              // specific agent (`pilot.openRun` sends the run as a
+              // `focusIntent`) succeeded on the second press and landed in the
+              // project with nothing opened, which reads as the retry half
+              // working.
+              void get().switchProject(projectId, options);
             },
           },
         ],

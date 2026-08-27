@@ -61,11 +61,21 @@ export function useParkReleaseNotifications(): void {
                 successLabel: "Opened",
                 actionId: "pilot.openRun",
                 actionArgs: { runId: run.runId, workspaceId: run.workspaceId },
-                onClick: () => {
-                  void actionService.dispatch("pilot.openRun", {
+                // Awaited, and rejected on a failed dispatch, because
+                // `successLabel` is a CLAIM: the toaster flashes "Opened" the
+                // moment a synchronous handler returns, so discarding the
+                // promise here made every click say the run opened — including
+                // the ones where `pilot.openRun` was at that moment raising
+                // "Couldn't open agent" beside it.
+                onClick: async () => {
+                  const result = await actionService.dispatch("pilot.openRun", {
                     runId: run.runId,
                     workspaceId: run.workspaceId,
                   });
+                  // The action has already said why, in its own toast. This
+                  // rejection only tells the toaster not to claim success —
+                  // hence no message worth reading.
+                  if (!result.ok) throw new Error(result.error.message);
                 },
               },
             }

@@ -2015,6 +2015,44 @@ describe("PilotView worktree scope", () => {
     return screen.getAllByTestId("pilot-group-header")[0]!;
   }
 
+  describe("where the keyboard lands", () => {
+    /**
+     * Radix hands focus to the first tabbable element in the dialog, and the
+     * scoped view puts the breadcrumb there. Both openings must agree, or the
+     * keyboard's home depends on which controls happen to exist.
+     */
+    it("puts focus in the search box, not on the way back", () => {
+      seedSpread();
+      usePilotStore.setState({ isOpen: true, scope: { kind: "project", workspaceId: "p1" } });
+      render(<PilotView />);
+
+      advance(20);
+
+      expect(document.activeElement).toBe(screen.getByTestId("pilot-search"));
+    });
+
+    it("takes focus back after a drill takes the heading with it", async () => {
+      // The chevron the user clicked unmounts with the fleet's headings, which
+      // leaves focus on the body and the arrows driving nothing.
+      seedSpread();
+      render(<PilotView />);
+      advance(20);
+
+      fireEvent.click(drillHeader());
+      // Radix rescues focus from the removed heading through a MutationObserver
+      // — a microtask, so in a real browser it lands BEFORE the next frame and
+      // the frame below is what the user is left with. Flushed explicitly here
+      // because fake timers run the frame inside the same task, which would
+      // reverse an order this test exists to pin.
+      await act(async () => {
+        await Promise.resolve();
+      });
+      advance(20);
+
+      expect(document.activeElement).toBe(screen.getByTestId("pilot-search"));
+    });
+  });
+
   describe("drilling in", () => {
     it("regroups one project's runs by worktree when its header is clicked", () => {
       seedSpread();
@@ -2271,7 +2309,11 @@ describe("PilotView worktree scope", () => {
       expect(usePilotStore.getState().isOpen).toBe(true);
     });
 
-    it("leaves the scope on Escape before it closes anything", () => {
+    it("closes outright on Escape rather than stepping back a level", () => {
+      // Escape dismisses this dialog the way it dismisses every other one. The
+      // scope is a narrowing of the same list, not a mode stacked on top of it,
+      // so putting it under Escape only made the dismissal key take two presses
+      // — the first landing on a surface nobody asked for.
       function Dispatcher() {
         useGlobalEscapeDispatcher();
         return null;
@@ -2286,9 +2328,7 @@ describe("PilotView worktree scope", () => {
       fireEvent.click(drillHeader());
 
       fireEvent.keyDown(screen.getByTestId("pilot-search"), { key: "Escape" });
-      expect(usePilotStore.getState()).toMatchObject({ isOpen: true, scope: { kind: "fleet" } });
 
-      fireEvent.keyDown(screen.getByTestId("pilot-search"), { key: "Escape" });
       expect(usePilotStore.getState().isOpen).toBe(false);
     });
 

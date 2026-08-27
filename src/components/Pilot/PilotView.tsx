@@ -1191,6 +1191,30 @@ export function PilotView() {
     wasParkEditingRef.current = parkEditing;
   }, [parkEditing, isOpen]);
 
+  /**
+   * The search box owns focus on every opening, and across every scope change.
+   *
+   * Radix hands focus to the first tabbable element in the dialog, and in the
+   * scoped view that is the breadcrumb — so opening with the scoped chord put
+   * the keyboard on "All agents" with its focus ring lit, one press from
+   * undoing the narrowing the chord had just applied, and typing went nowhere.
+   * The unscoped view looked fine only because the input happens to be first
+   * there; the difference was which controls existed, not a decision.
+   *
+   * Deferred a frame rather than run in the effect body: Radix's own
+   * auto-focus fires from the same commit, and whichever runs second wins.
+   *
+   * Keyed on the scope as well as the opening, because a drill re-orders the
+   * header. The chevron the user clicked unmounts with the fleet's headings,
+   * which leaves focus on the document body — the arrows stop moving the
+   * selection until focus is put back by hand.
+   */
+  useEffect(() => {
+    if (!isOpen) return;
+    const frame = requestAnimationFrame(() => searchRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [isOpen, scope]);
+
   useEffect(() => {
     if (!isOpen) {
       setQuery("");
@@ -1657,19 +1681,27 @@ export function PilotView() {
   const drillLabel = actionLabel === null || drillTarget === null ? null : "Worktrees";
 
   return (
-    // Dismissal is layered, innermost first: the park editor, then the project
-    // scope, then the dialog. Escape is not handled here at all — it arrives
-    // through the shared escape stack and `AppPaletteDialog`'s document-bubble
-    // backstop, both of which know only how to call `onClose`. So the only way
-    // to put anything under it is to redirect what closing DOES rather than to
-    // race the key with a listener of our own. Backdrop clicks follow the same
-    // rule, which is also the right gesture reading each time: dismiss the
-    // thing on top, not the surface under it.
+    // The park editor is the one thing Escape has to get past before the
+    // dialog, and it earns that because it is a MODE: it replaces the body,
+    // owns focus, and holds an edit the user has not committed. The project
+    // scope is not one — it is a narrowing of the same list, drawn in the same
+    // place, with a breadcrumb and an empty-box Backspace already saying how to
+    // widen it. Putting it under Escape too made the key that dismisses every
+    // other dialog in the app take two presses here, with the first one landing
+    // on a surface the user had not asked to see.
+    //
+    // Escape is not handled here at all — it arrives through the shared escape
+    // stack and `AppPaletteDialog`'s document-bubble backstop, both of which
+    // know only how to call `onClose`. So the layering is expressed by
+    // redirecting what closing DOES rather than by racing the key with a
+    // listener of our own. Backdrop clicks follow the same rule, which is also
+    // the right gesture reading each time.
     <AppPaletteDialog
       isOpen={isOpen}
-      onClose={
-        parkEditing ? () => closeParkEditor(false) : scope.kind === "project" ? showFleet : close
-      }
+      onClose={parkEditing ? () => closeParkEditor(false) : close}
+      // The scoped view renders the breadcrumb above the search box, so the
+      // dialog's default — first tabbable — put the keyboard on "All agents".
+      initialFocusRef={searchRef}
       ariaLabel={scopedName === null ? "All agents" : `Agents in ${scopedName}`}
       tier="overview"
     >
@@ -1695,8 +1727,10 @@ export function PilotView() {
               taking focus with it mid-gesture. As a sibling rendered through
               `&&` the input's position never moves.
 
-              Escape and an empty-box Backspace do the same thing; this is the
-              form that is visible without being tried.
+              An empty-box Backspace and the unscoped chord do the same thing;
+              this is the form that is visible without being tried. Escape is
+              deliberately not one of them — it dismisses the dialog, the way it
+              does everywhere else in the app.
             */}
             {scopedName !== null && (
               <div className="mb-1.5 flex min-w-0 items-center gap-1 text-[11px] leading-none">
@@ -1798,6 +1832,11 @@ export function PilotView() {
         className="p-0"
         ariaLabel="Agents"
         activeDescendant={parkEditing ? undefined : activeDescendantId}
+        // Every row here draws its own selected state, and which agent Enter
+        // would open is the question this surface exists to answer — so the
+        // highlighted row is a better focus indicator than a ring around the
+        // whole list, which says only that focus is somewhere inside it.
+        focusIndicator="active-option"
         onNavigationKeyDown={handleBodyKeyDown}
       >
         {parkEditing && parkTarget !== null && (

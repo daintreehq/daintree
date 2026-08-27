@@ -15,8 +15,10 @@ import { actionService } from "@/services/ActionService";
 import { useProjectSettingsStore } from "@/store/projectSettingsStore";
 import { notify, EVENT_KIND_TO_SETTING_KEY, EVENT_KIND_LABEL } from "@/lib/notify";
 import type { NotificationEventKind } from "@/lib/notify";
+import type { NotificationAction } from "@/store/notificationStore";
 import { switchToLastWorkspace } from "@/lib/projectHistoryNav";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
+import { logWarn } from "@/utils/logger";
 import { isScratchWorkspaceId } from "@shared/utils/workspaceIds";
 import { suppressPaletteFocusRestore } from "@/components/ui/paletteFocusRestore";
 
@@ -81,6 +83,66 @@ const agentVisibleProjectSettingsShape: Record<AgentVisibleProjectSettingsKey, z
 
 const openRunArgs = z.object({ runId: z.string(), workspaceId: z.string() });
 
+/**
+ * The one thing a row in the agent overview promises, not kept.
+ *
+ * Every other failure on that surface is visible in it — a stale fleet says so
+ * in a banner, an unreachable host says so in the body. Opening is the one that
+ * happens somewhere else, so when it fails there is nothing on the surface to
+ * change: the dialog sits there and the row looks dead. That silence read as a
+ * broken click rather than as a run that had moved on.
+ *
+ * A toast rather than an inline banner because the dialog is closing on the
+ * cross-workspace path, so there may be no surface left to draw it on — and the
+ * reason is never something this dialog can fix, which is also why it carries
+ * no action.
+ *
+ * The underlying message is logged rather than shown. "Terminal panel no longer
+ * exists" is true and useless: it names the renderer's bookkeeping, not the
+ * thing the user was looking at — so the two callers supply their own sentence
+ * instead, because the two failures are different facts. One says the run is
+ * not here; the other says we never got to where it lives.
+ *
+ * Throws rather than returns, so the dispatch that asked for this reports a
+ * failure too. A caller that is not a person — the MCP tool surface, an
+ * automation — reads the result and nothing else, and "opened" is the one thing
+ * it must not be told about a run that did not open. The action carries
+ * `selfNotifiesOnExecutionError` so the action palette does not stack a vaguer
+ * toast on top of the specific one raised here.
+ */
+function failToOpenRun(error: unknown, message: string, action?: NotificationAction): never {
+  logWarn("Failed to open a run from the agent overview", {
+    error: formatErrorMessage(error, "unknown"),
+  });
+  // eslint-disable-next-line no-restricted-syntax -- notify-no-action: ok
+  notify({
+    type: "error",
+    title: "Couldn't open agent",
+    message,
+    context: { eventKind: "agent" },
+    duration: 6000,
+    // One caller has a recovery worth offering — a switch that failed can be
+    // asked for again — and the other does not: the overview is still open
+    // behind the toast with every other row in it, and nothing a button could
+    // do there differs from pressing the same row again.
+    ...(action !== undefined ? { actions: [action] } : {}),
+  });
+  throw new Error(message);
+}
+
+/**
+ * What one press of the scoped chord resolves to, before anything is applied.
+ *
+ * `explain` is the workspace whose missing worktree axis the fleet is standing
+ * in for, or null where the fleet is simply the fleet. It is part of the
+ * IDENTITY of the resulting surface, not a decoration on it, which is why it
+ * lives here rather than being written straight into the store: two openings
+ * that differ only by that line are two different answers, and the chord's
+ * toggle has to be able to tell them apart.
+ */
+type PilotChordTarget =
+  { kind: "project"; workspaceId: string } | { kind: "fleet"; explain: string | null };
+
 export function registerProjectActions(actions: ActionRegistry, callbacks: ActionCallbacks): void {
   actions.set("project.switcherPalette", () => ({
     id: "project.switcherPalette",
@@ -107,7 +169,20 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     scope: "renderer",
     nonRepeatable: true,
     run: async () => {
-      usePilotStore.getState().toggle();
+      const pilot = usePilotStore.getState();
+
+      // Scoped right now: this chord is the step OUT, so it widens rather than
+      // closing. The pair is one axis — I narrows to the project, O widens to
+      // the fleet — and a second press from the fleet still closes, so the
+      // toggle is intact. Closing outright from a scope was the wrong half of
+      // that pair: it made the "show me more" key the one that showed nothing,
+      // and dismissal already belongs to Escape.
+      if (pilot.isOpen && pilot.scope.kind === "project") {
+        pilot.showFleet();
+        return;
+      }
+
+      pilot.toggle();
     },
   }));
 
@@ -131,57 +206,73 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
       // `pilot.openRun` documents below.
       const workspaceId = getViewWorkspaceId();
 
-      // Already scoped here: the sibling chord closes, exactly as
-      // `pilot.toggle` does for the fleet. A second press that re-opened the
-      // surface it just showed would be a key that visibly does nothing.
+      // What this press is asking for, decided before anything is applied.
+      //
+      // Deciding first is what lets the toggle be exact. The chord closes when
+      // it would land on the state it is already showing — a key that rewrites
+      // its own output is a key that visibly does nothing — and "the state it
+      // is already showing" is not a property of the scope alone: the fallback
+      // opening is byte for byte the plain fleet plus one line of explanation,
+      // so the answer includes which project that line names.
+      //
+      // Two states where the question cannot be asked yet, as opposed to
+      // answered no: a view with no workspace identity has no project to scope
+      // to, and a fleet nobody has reported cannot be filtered. Both mean the
+      // plain fleet with nothing said — an explanation naming a project would
+      // be describing a decision that was never taken.
+      const runs = useFleetSnapshotStore.getState().snapshot?.runs;
+      const target = ((): PilotChordTarget => {
+        if (workspaceId === null || runs === undefined) return { kind: "fleet", explain: null };
+
+        // Scoping is offered only where regrouping would say something new, and
+        // the project's own worktrees are the half of that the runs cannot
+        // answer (#11957). Read here rather than inside the gate because this
+        // is the one place the two identities are known to agree:
+        // `getWorktreeIdSet` is the CURRENT VIEW's store and
+        // `getViewWorkspaceId` is that view's workspace, so the count belongs
+        // to the project being asked about. A scratch is excluded outright — it
+        // is not a git repository, so no count of its worktrees can be anything
+        // but zero, whatever a store happens to hold.
+        const projectRuns = runs.filter((run) => run.workspaceId === workspaceId);
+        const isScratch = isScratchWorkspaceId(workspaceId);
+        const knownWorktreeCount = isScratch ? 0 : (getWorktreeIdSet()?.size ?? 0);
+        if (hasWorktreeAxis(projectRuns, knownWorktreeCount))
+          return { kind: "project", workspaceId };
+
+        // The unscoped fleet is the honest fallback — still the surface the
+        // user asked for, just without a narrowing it cannot support — but it
+        // is byte for byte what the unscoped chord already gives, so where the
+        // refusal is informed it carries the reason with it.
+        //
+        // A project carries its own root as a first-class entry the moment its
+        // view store hydrates, so a zero there is "not told yet" rather than
+        // "no worktrees" — and a decision taken on an answer nobody gave has no
+        // business explaining itself. A scratch IS a real answer: it is not a
+        // git repository, so its none is a none.
+        const topologyIsKnown = isScratch || knownWorktreeCount > 0;
+        return { kind: "fleet", explain: topologyIsKnown ? workspaceId : null };
+      })();
+
       const scope = pilot.scope;
-      if (pilot.isOpen && scope.kind === "project" && scope.workspaceId === workspaceId) {
+      const alreadyShowingTarget =
+        pilot.isOpen &&
+        (target.kind === "project"
+          ? scope.kind === "project" && scope.workspaceId === target.workspaceId
+          : scope.kind === "fleet" && pilot.fellBackFrom === target.explain);
+      if (alreadyShowingTarget) {
         pilot.close();
         return;
       }
 
-      // Two states where the question cannot be asked yet, as opposed to
-      // answered no: a view with no workspace identity has no project to scope
-      // to, and a fleet nobody has reported cannot be filtered. Both open the
-      // plain fleet and say nothing — an explanation naming a project would be
-      // describing a decision that was never taken.
-      const runs = useFleetSnapshotStore.getState().snapshot?.runs;
-      if (workspaceId === null || runs === undefined) {
-        pilot.open();
+      if (target.kind === "project") {
+        pilot.openProject(target.workspaceId);
         return;
       }
-
-      // Scoping is offered only where regrouping would say something new, and
-      // the project's own worktrees are the half of that the runs cannot answer
-      // (#11957). Read here rather than inside the gate because this is the one
-      // place the two identities are known to agree: `getWorktreeIdSet` is the
-      // CURRENT VIEW's store and `getViewWorkspaceId` is that view's workspace,
-      // so the count belongs to the project being asked about. A scratch is
-      // excluded outright — it is not a git repository, so no count of its
-      // worktrees can be anything but zero, whatever a store happens to hold.
-      const projectRuns = runs.filter((run) => run.workspaceId === workspaceId);
-      const isScratch = isScratchWorkspaceId(workspaceId);
-      const knownWorktreeCount = isScratch ? 0 : (getWorktreeIdSet()?.size ?? 0);
-
-      // A project carries its own root as a first-class entry the moment its
-      // view store hydrates, so a zero there is "not told yet" rather than "no
-      // worktrees" — and a decision taken on an answer nobody gave has no
-      // business explaining itself. A scratch IS a real answer: it is not a git
-      // repository, so its none is a none.
-      const topologyIsKnown = isScratch || knownWorktreeCount > 0;
-
-      if (!hasWorktreeAxis(projectRuns, knownWorktreeCount)) {
-        // The unscoped fleet is the honest fallback — still the surface the
-        // user asked for, just without a narrowing it cannot support — but it
-        // is byte for byte what the unscoped chord already gives, so where the
-        // refusal is informed it goes through the fallback opening, which
-        // carries the reason with it.
-        if (topologyIsKnown) pilot.openFleetFallback(workspaceId);
-        else pilot.open();
+      if (target.explain !== null) {
+        pilot.openFleetFallback(target.explain);
         return;
       }
-
-      pilot.openProject(workspaceId);
+      pilot.open();
     },
   }));
 
@@ -195,6 +286,11 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
     danger: "safe",
     scope: "renderer",
     argsSchema: openRunArgs,
+    // Every failure escaping `run()` below has already been toasted with the
+    // specific reason, so the action palette must not stack its generic one on
+    // top. Validation failures are raised BEFORE `run()` and keep the palette's
+    // toast, which is the right owner for them.
+    selfNotifiesOnExecutionError: true,
     run: async (args: unknown) => {
       // Parsed rather than asserted: this is the one action whose args arrive
       // from a click payload, and a parse both narrows the type and rejects a
@@ -225,8 +321,17 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
           // dialog stays open and the flag would leak to another palette.
           suppressPaletteFocusRestore();
           usePilotStore.getState().close();
+          return;
         }
-        return;
+        // The rows come from the PTY host's terminal list, which is a different
+        // population from this view's panels: a run whose window or view no
+        // longer holds it is listed here and cannot be focused from here. That
+        // is rare, but it used to be SILENT — the click landed, the dispatch
+        // failed, and the dialog sat there looking like a dead row. Say it.
+        failToOpenRun(
+          result.error,
+          "This run isn't open in this window — it may have exited, or it may be open in another one."
+        );
       }
 
       // Elsewhere: the switch is the only way across, and this context dies
@@ -244,11 +349,33 @@ export function registerProjectActions(actions: ActionRegistry, callbacks: Actio
       // list it. That store hydrates asynchronously, so a membership test
       // answers "has the list loaded yet" during the boot window and sends a
       // scratch down the project path exactly when the fleet first renders.
-      if (isScratchWorkspaceId(workspaceId)) {
-        await useScratchStore.getState().switchScratch(workspaceId, { focusIntent });
-        return;
+      //
+      // A rejected switch is reported for the same reason the focus above is:
+      // the dialog is already gone by then, so an unhandled rejection would
+      // leave the user looking at the project they started in with nothing
+      // saying the click was received at all.
+      //
+      // This covers the SCRATCH half in practice. `switchProject` is
+      // fire-and-forget by design — the main process swaps WebContentsViews out
+      // from under this renderer — so it settles before its IPC does and
+      // reports its own failure, with a Try again that now carries the focus
+      // intent. `switchScratch` awaits its client and rejects to here, where
+      // nothing else is listening.
+      try {
+        if (isScratchWorkspaceId(workspaceId)) {
+          await useScratchStore.getState().switchScratch(workspaceId, { focusIntent });
+          return;
+        }
+        await useProjectStore.getState().switchProject(workspaceId, { focusIntent });
+      } catch (error) {
+        failToOpenRun(error, "Daintree couldn't switch to the workspace this run lives in.", {
+          label: "Try again",
+          variant: "primary",
+          onClick: () => {
+            void actionService.dispatch("pilot.openRun", { runId, workspaceId });
+          },
+        });
       }
-      await useProjectStore.getState().switchProject(workspaceId, { focusIntent });
     },
   }));
 
