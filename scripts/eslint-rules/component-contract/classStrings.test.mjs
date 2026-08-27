@@ -69,6 +69,18 @@ describe("class-string extraction", () => {
         });`,
       },
       {
+        name: "a tv option label is not a class (its config is the first argument)",
+        code: `const v = tv({ variants: { shape: { rounded: "rounded-lg" } } });`,
+      },
+      {
+        name: "a cast does not smuggle a variant config past the structural read",
+        code: `const v = cva("", { defaultVariants: { shape: "rounded" } });`,
+      },
+      {
+        name: "a class-named lookup table's keys are labels, not classes",
+        code: 'const editorStyles = { rounded: { borderRadius: "4px" } };',
+      },
+      {
         name: "a compound-variant selector is not a class",
         code: `const v = cva("", {
           variants: { shape: { rounded: "rounded-lg" } },

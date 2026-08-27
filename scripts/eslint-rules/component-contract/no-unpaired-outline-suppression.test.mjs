@@ -33,6 +33,10 @@ describe("no-unpaired-outline-suppression", () => {
         code: 'const a = <div className={cn("outline-hidden", on ? "focus:ring-1" : "p-2")} />;',
       },
       {
+        name: "an opacity lift on focus is a visible element-owned change",
+        code: 'const a = <div className="outline-hidden opacity-50 focus-visible:opacity-100" />;',
+      },
+      {
         name: "no suppression at all",
         code: 'const a = <div className="p-2 rounded-md" />;',
       },
@@ -81,6 +85,11 @@ describe("no-unpaired-outline-suppression", () => {
       {
         name: "a zero-width focus outline paints nothing",
         code: 'const a = <div className="outline-hidden focus-visible:outline-[0px]" />;',
+        errors: [{ messageId: "unpaired" }],
+      },
+      {
+        name: "a decimal zero width still paints nothing",
+        code: 'const a = <div className="outline-hidden focus-visible:outline-[0.0px]" />;',
         errors: [{ messageId: "unpaired" }],
       },
       {

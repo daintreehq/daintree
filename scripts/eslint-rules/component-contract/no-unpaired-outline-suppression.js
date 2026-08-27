@@ -55,7 +55,7 @@ const MACRO_FOCUS_SEGMENT = /^data-\[macro-focus/;
 
 /** Utility namespaces that paint something a keyboard user can see. */
 const PAINTS =
-  /^(?:outline|ring|inset-ring|border|bg|shadow|text|decoration|underline|fill|stroke)\b/;
+  /^(?:outline|ring|inset-ring|border|bg|shadow|text|decoration|underline|fill|stroke|opacity)\b/;
 
 /** Utilities that remove a focus indicator rather than paint one. */
 const SUPPRESSORS = new Set([
@@ -74,7 +74,7 @@ const SUPPRESSORS = new Set([
 const REPORTABLE_SUPPRESSORS = new Set(["outline-hidden", "outline-0"]);
 
 /** `outline-[0px]` and friends declare a treatment and then give it no size. */
-const ZERO_WIDTH = /^(?:outline|ring|border)-\[0[a-z%]*\]$/;
+const ZERO_WIDTH = /^(?:outline|ring|border)-\[0*(?:\.0+)?[a-z%]*\]$/;
 
 function isFocusFallback(token) {
   const { variants, base } = normalizeToken(token);

@@ -21,8 +21,14 @@
 
 const CLASS_HELPERS = new Set(["cn", "clsx", "classnames", "cx", "twMerge", "cva", "tv"]);
 
-/** Helpers whose second argument is a variant table rather than more classes. */
-const VARIANT_TABLE_HELPERS = new Set(["cva", "tv"]);
+/**
+ * Helpers taking a variant table, and the index it sits at: `cva(base, config)`
+ * puts it second, `tv(config)` first.
+ */
+const VARIANT_TABLE_HELPERS = new Map([
+  ["cva", 1],
+  ["tv", 0],
+]);
 
 /** `FOO_CLASS`, `rowClasses`, `paletteRowStyles` — conventional class-string constants. */
 const CLASS_CONSTANT_NAME = /(?:CLASS(?:ES)?|Class(?:Name)?s?|Styles)$/;
@@ -179,8 +185,9 @@ export function createClassExpressionVisitor(context, onEntries) {
    * mixes option selectors with the classes they apply.
    */
   function collectVariantConfig(node, entries) {
-    if (node.type !== "ObjectExpression") return collect(node, entries);
-    for (const property of node.properties) {
+    const config = unwrap(node);
+    if (config?.type !== "ObjectExpression") return collect(config, entries, true);
+    for (const property of config.properties) {
       if (property.type !== "Property") continue;
       const key = property.computed
         ? null
@@ -199,7 +206,9 @@ export function createClassExpressionVisitor(context, onEntries) {
           for (const inner of entry.properties) {
             if (inner.type !== "Property" || inner.computed) continue;
             const innerKey = inner.key.type === "Identifier" ? inner.key.name : null;
-            if (innerKey === "class" || innerKey === "className") collect(inner.value, entries);
+            if (innerKey === "class" || innerKey === "className") {
+              collect(inner.value, entries, true);
+            }
           }
         }
         continue;
@@ -208,7 +217,7 @@ export function createClassExpressionVisitor(context, onEntries) {
     }
   }
 
-  function collect(node, entries) {
+  function collect(node, entries, inHelperArguments) {
     const current = unwrap(node);
     if (!current) return;
     switch (current.type) {
@@ -228,38 +237,41 @@ export function createClassExpressionVisitor(context, onEntries) {
           const after =
             current.quasis[index + 1].value.cooked ?? current.quasis[index + 1].value.raw;
           if (!isBlankEdge(before, "end") || !isBlankEdge(after, "start")) return;
-          collect(expression, entries);
+          collect(expression, entries, inHelperArguments);
         });
         break;
       case "ConditionalExpression":
-        collect(current.consequent, entries);
-        collect(current.alternate, entries);
+        collect(current.consequent, entries, inHelperArguments);
+        collect(current.alternate, entries, inHelperArguments);
         break;
       case "LogicalExpression":
-        collect(current.left, entries);
-        collect(current.right, entries);
+        collect(current.left, entries, inHelperArguments);
+        collect(current.right, entries, inHelperArguments);
         break;
       case "CallExpression": {
         walkedCalls.add(current);
         const name = helperName(current.callee) ?? "";
-        if (VARIANT_TABLE_HELPERS.has(name)) {
-          collect(current.arguments[0], entries);
-          for (const argument of current.arguments.slice(1)) {
-            collectVariantConfig(argument, entries);
-          }
+        const configIndex = VARIANT_TABLE_HELPERS.get(name);
+        if (configIndex !== undefined) {
+          current.arguments.forEach((argument, index) => {
+            if (index === configIndex) collectVariantConfig(argument, entries);
+            else collect(argument, entries, true);
+          });
           break;
         }
-        for (const argument of current.arguments) collect(argument, entries);
+        for (const argument of current.arguments) collect(argument, entries, true);
         break;
       }
       case "ArrayExpression":
-        for (const element of current.elements) collect(element, entries);
+        for (const element of current.elements) collect(element, entries, inHelperArguments);
         break;
       case "ObjectExpression":
-        // The `clsx({ "text-daintree-text": on })` form puts classes in the keys.
+        // The `clsx({ "text-daintree-text": on })` form puts classes in the keys —
+        // but only inside a class helper. A plain object reached from a
+        // class-named constant is a lookup table, and its keys are labels.
         for (const property of current.properties) {
           if (property.type !== "Property") continue;
-          if (!property.computed) {
+          if (inHelperArguments && !property.computed) {
             const key =
               property.key.type === "Literal" && typeof property.key.value === "string"
                 ? property.key.value
@@ -268,7 +280,7 @@ export function createClassExpressionVisitor(context, onEntries) {
                   : null;
             if (key !== null) pushString(key, property.key, entries);
           }
-          collect(property.value, entries);
+          collect(property.value, entries, inHelperArguments);
         }
         break;
       default:
@@ -278,7 +290,7 @@ export function createClassExpressionVisitor(context, onEntries) {
 
   function report(node) {
     const entries = [];
-    collect(node, entries);
+    collect(node, entries, false);
     if (entries.length > 0) onEntries(entries, node);
   }
 

@@ -53,6 +53,10 @@ describe("no-raw-radius", () => {
         code: 'const a = <div className="rounded-[var(--radius-md)] rounded-[--pill-radius]" />;',
       },
       {
+        name: "the paren shorthand for a radius token",
+        code: 'const a = <div className="rounded-(length:--radius-md)" />;',
+      },
+      {
         name: "an unrelated utility that starts with the same word",
         code: 'const a = <div className="roundedish" />;',
       },

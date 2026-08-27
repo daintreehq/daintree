@@ -89,6 +89,19 @@ describe("no-legacy-daintree-utilities", () => {
         ],
       },
       {
+        name: "a bracketed modifier holding its own slash is not lost",
+        code: 'const a = <div className="text-daintree-text/[calc(1/2)]" />;',
+        errors: [
+          {
+            messageId: "mapped",
+            data: {
+              token: "text-daintree-text/[calc(1/2)]",
+              replacement: "text-text-primary/[calc(1/2)]",
+            },
+          },
+        ],
+      },
+      {
         name: "an alias with no mapping still reports",
         code: 'const a = <div className="text-daintree-assistant" />;',
         errors: [{ messageId: "unmapped", data: { token: "text-daintree-assistant" } }],

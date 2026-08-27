@@ -23,8 +23,8 @@
  *     `@theme inline` compiles `rounded-md` to `calc(var(--radius) - 2px)`. Stops
  *     at `3xl` because that is where `src/index.css` stops redefining; Tailwind's
  *     stock `rounded-4xl` is a fixed 2rem that no theme can scale.
- *   - `rounded-[var(--radius-md)]`, the same value spelled explicitly — the
- *     codebase's prevailing idiom, and token-backed either way
+ *   - any arbitrary radius that reads a custom property — `rounded-[var(--radius-md)]`
+ *     (the codebase's prevailing idiom) and v4's `rounded-(length:--radius-md)`
  *   - `rounded-full` and `rounded-none` (and their side variants), which are
  *     shape decisions rather than points on a scale
  *
@@ -108,7 +108,7 @@ export default {
         // Any arbitrary radius that never reads a custom property is a literal
         // value — `[0]`, `[calc(2px)]` and `[2px_4px]` all bypass the scale
         // exactly as `[2px]` does.
-        if (!body.includes("var(") && !body.startsWith("--")) {
+        if (!body.includes("var(") && !body.includes("--")) {
           context.report({ node, messageId: "hardcoded", data: { token: base } });
         }
       }

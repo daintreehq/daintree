@@ -25,7 +25,7 @@
  * See docs/themes/component-contract.md.
  */
 
-import { createClassExpressionVisitor, normalizeToken } from "./classStrings.js";
+import { createClassExpressionVisitor, normalizeToken, splitModifier } from "./classStrings.js";
 
 /** Legacy alias → the semantic token that replaces it, as spelled in a utility. */
 const REPLACEMENTS = new Map([
@@ -38,7 +38,7 @@ const REPLACEMENTS = new Map([
   ["daintree-focus", "focus-ring"],
 ]);
 
-const LEGACY_UTILITY = /^([a-z]+(?:-[a-z]+)*)-(daintree-[a-z0-9-]+?)(\/[^/\s]+)?$/;
+const LEGACY_UTILITY = /^([a-z]+(?:-[a-z]+)*)-(daintree-[a-z0-9-]+)$/;
 
 export default {
   meta: {
@@ -60,10 +60,16 @@ export default {
     return createClassExpressionVisitor(context, (entries) => {
       for (const { token, node } of entries) {
         const { base } = normalizeToken(token);
-        const match = LEGACY_UTILITY.exec(base);
+        // Split the alpha modifier off first: it can itself hold a slash
+        // (`/[calc(1/2)]`), which a single regex cannot bound safely.
+        const split = splitModifier(base);
+        const utility = split?.value ?? base;
+        const alpha = split ? `/${split.modifier}` : "";
+
+        const match = LEGACY_UTILITY.exec(utility);
         if (!match) continue;
 
-        const [, prefix, alias, alpha = ""] = match;
+        const [, prefix, alias] = match;
         const replacement = REPLACEMENTS.get(alias);
         if (replacement) {
           context.report({
