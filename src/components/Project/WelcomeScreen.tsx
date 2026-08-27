@@ -264,7 +264,7 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
         )}
 
         {/* Footer */}
-        <div className="flex items-center gap-4 text-xs text-text-secondary pt-2">
+        <div className="flex items-center gap-4 text-xs text-daintree-text/40 pt-2">
           <button
             type="button"
             onClick={() => {

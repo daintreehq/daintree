@@ -320,7 +320,7 @@ export function DiagnosticsReviewDialog({
                     "focus:outline-hidden focus:border-daintree-accent/40"
                   )}
                 />
-                <span className="text-text-secondary text-xs">→</span>
+                <span className="text-daintree-text/40 text-xs">→</span>
                 <input
                   type="text"
                   value={rule.replace}
@@ -337,7 +337,7 @@ export function DiagnosticsReviewDialog({
                     variant="ghost"
                     size="sm"
                     onClick={() => removeReplacement(i)}
-                    className="text-xs h-7 px-1.5 text-text-secondary hover:text-status-error"
+                    className="text-xs h-7 px-1.5 text-daintree-text/40 hover:text-status-error"
                   >
                     ×
                   </Button>

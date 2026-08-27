@@ -382,7 +382,7 @@ export function WorktreeHeader({
                 resourceEndpoint={resourceEndpoint}
                 resourceLastCheckedAt={resourceLastCheckedAt}
                 onCheckResourceStatus={onCheckResourceStatus}
-                className="w-3.5 h-3.5 text-text-secondary"
+                className="w-3.5 h-3.5 text-daintree-text/40"
               />
             )}
             <DevServerIndicator session={devServerSession} />

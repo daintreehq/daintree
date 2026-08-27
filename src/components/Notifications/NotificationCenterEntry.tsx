@@ -369,7 +369,7 @@ export function NotificationCenterEntry({
               {/* The clock means "snoozed until later"; the stamp beside it means
                   "arrived at". Abutting they read as one fact, so they get a
                   separator. */}
-              <span aria-hidden="true" className="text-[10px] leading-none text-text-secondary">
+              <span aria-hidden="true" className="text-[10px] leading-none text-daintree-text/40">
                 ·
               </span>
             </>
@@ -381,7 +381,7 @@ export function NotificationCenterEntry({
                 data-testid="notification-timestamp"
                 title={ts.absolute}
                 aria-label={ts.absolute}
-                // A solid token, not `text-text-secondary`: slash-alpha
+                // A solid token, not `text-daintree-text/40`: slash-alpha
                 // composites against whatever is behind it and read at ~3.2:1
                 // here. `theme-tokens.md` gates `text-secondary` at >=3:1 across
                 // every theme and prefers a solid token for exactly this.

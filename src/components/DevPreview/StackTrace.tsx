@@ -23,7 +23,7 @@ export function StackTrace({ stackTrace }: StackTraceProps) {
       {isExpanded && (
         <div className="pl-3 border-l border-tint/10 mt-0.5 select-text">
           {stackTrace.callFrames.map((frame, i) => (
-            <div key={i} className="text-text-secondary text-[10px] leading-relaxed">
+            <div key={i} className="text-daintree-text/40 text-[10px] leading-relaxed">
               <span className="text-daintree-text/50">{frame.functionName || "(anonymous)"}</span>
               {frame.url && (
                 <span>

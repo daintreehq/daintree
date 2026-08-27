@@ -74,7 +74,7 @@ function PrefixDiscoverabilityRow() {
       className="@max-[420px]/palette-footer:hidden flex items-center gap-x-3 gap-y-1 flex-wrap text-[11px] text-daintree-text/45"
       aria-label="Prefix shortcuts"
     >
-      <span className="text-text-secondary">Type</span>
+      <span className="text-daintree-text/40">Type</span>
       {Object.entries(PREFIX_MAP).map(([prefix, route]) => (
         <span key={prefix} className="inline-flex items-baseline">
           <kbd className={KBD_CLASS}>{prefix}</kbd>

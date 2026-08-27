@@ -150,7 +150,7 @@ export function ObjectInspector({
           isExpanded ? "text-daintree-text/90" : "text-daintree-text/70"
         )}
       >
-        <span className="text-text-secondary mr-0.5 select-none">
+        <span className="text-daintree-text/40 mr-0.5 select-none">
           {isLoading ? "⏳" : isExpanded ? "▼" : "▶"}
         </span>
         {displayText}

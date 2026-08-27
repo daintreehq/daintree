@@ -142,7 +142,7 @@ function SubagentRow({
         aria-controls={panelId}
         className="w-full flex items-start gap-2 px-3 py-2 text-left hover:bg-overlay-subtle transition-colors"
       >
-        <Chevron className="w-3 h-3 mt-0.5 shrink-0 text-text-secondary" aria-hidden="true" />
+        <Chevron className="w-3 h-3 mt-0.5 shrink-0 text-daintree-text/40" aria-hidden="true" />
         <span className="flex-1 min-w-0 flex flex-col gap-0.5">
           <span className="flex items-center gap-2">
             <span className="text-xs font-medium text-daintree-text truncate">

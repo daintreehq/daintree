@@ -649,10 +649,10 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                   // open by default; the toggle only tames very long bulk sets.
                   <details key={patch.id} open className="group">
                     <summary className="flex items-baseline gap-2 px-3 py-2 cursor-pointer list-none">
-                      <span className="text-text-secondary text-[10px] shrink-0 group-open:hidden">
+                      <span className="text-daintree-text/40 text-[10px] shrink-0 group-open:hidden">
                         ▶
                       </span>
-                      <span className="text-text-secondary text-[10px] shrink-0 hidden group-open:inline">
+                      <span className="text-daintree-text/40 text-[10px] shrink-0 hidden group-open:inline">
                         ▼
                       </span>
                       <span className="text-daintree-text/80 truncate min-w-0">

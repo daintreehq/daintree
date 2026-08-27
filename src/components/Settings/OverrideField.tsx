@@ -45,7 +45,7 @@ export function OverrideField({
       <div className="flex items-center gap-2 mb-1 min-h-[1.25rem]">
         <label htmlFor={id} className="block text-xs font-medium text-daintree-text/60">
           {label}
-          {hint && <span className="ml-1 text-text-secondary">{hint}</span>}
+          {hint && <span className="ml-1 text-daintree-text/40">{hint}</span>}
         </label>
         {isOverriding && (
           <span

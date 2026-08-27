@@ -477,7 +477,7 @@ function RowStatusLine({ status }: { status: ProjectRowStatus }) {
           {index > 0 && (
             <>
               <span className="sr-only">, </span>
-              <span className="shrink-0 text-text-secondary" aria-hidden="true">
+              <span className="shrink-0 text-daintree-text/40" aria-hidden="true">
                 ·
               </span>
             </>
