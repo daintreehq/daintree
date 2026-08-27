@@ -322,10 +322,17 @@ describe("ForgeTooltipContent labels", () => {
     const rendered = container.textContent ?? "";
     const chips = flood.filter((l) => screen.queryByText(l.name) !== null);
     expect(chips.length).toBeLessThan(flood.length);
-    // And it says what it is showing rather than counting a remainder nothing
-    // could open.
+    // And it names the route rather than counting a remainder: a tooltip has no
+    // surface of its own to open, but the badge it describes opens the item.
     expect(rendered).toContain(String(flood.length));
+    expect(rendered).toContain("open the issue");
     expect(rendered).not.toMatch(/\+\d+ more/);
+  });
+
+  it("names the pull request, not the issue, on a PR tooltip", () => {
+    const flood = Array.from({ length: 40 }, (_, i) => ({ name: `flood-${i}`, color: "8b949e" }));
+    const { container } = render(<PRTooltipContent data={{ ...prData, labels: flood }} />);
+    expect(container.textContent).toContain("open the pull request");
   });
 
   it("falls back to a neutral colour for a label the provider left uncoloured", () => {

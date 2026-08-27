@@ -83,16 +83,18 @@ describe("CompactErrorList", () => {
     expect(screen.getByTestId("compact-error-overflow").textContent).toMatch(/2 more errors/);
   });
 
-  it("keeps the trigger's accessible name bounded, not an error-message dump", () => {
+  it("keeps the trigger's accessible name a name, not an error-message dump", () => {
     // An error message is an arbitrary-length string. Enumerating the hidden
-    // ones would make focusing this button read a paragraph before its state,
-    // and the popover exposes the rows themselves once opened.
+    // ones would make focusing this button read a paragraph before its state;
+    // trimming it to a bare digit would be the opposite failure, so the noun
+    // has to survive. The popover exposes the rows themselves once opened.
     const errors = makeErrors(4).map((e) => ({ ...e, message: "x".repeat(400) }));
     render(<CompactErrorList errors={errors} maxInline={1} onDismiss={vi.fn()} />);
 
     const label = screen.getByTestId("compact-error-overflow").getAttribute("aria-label") ?? "";
     expect(label).toContain("3");
-    expect(label.length).toBeLessThan(80);
+    expect(label.toLowerCase()).toContain("error");
+    expect(label).not.toContain("xxx");
   });
 
   it("puts everything behind the disclosure when nothing may render inline", () => {
@@ -104,18 +106,19 @@ describe("CompactErrorList", () => {
   });
 
   it("partitions the list without dropping or duplicating an error", () => {
+    // Counts occurrences rather than presence: an error rendered both inline
+    // and in the tail would otherwise pass as "present once".
     const errors = makeErrors(9);
     render(<CompactErrorList errors={errors} maxInline={4} onDismiss={vi.fn()} />);
 
-    const visible = () =>
-      errors.filter((e) => screen.queryByText(e.message) !== null).map((e) => e.message);
-    const inline = visible();
-    openOverflow();
-    const all = visible();
+    const counts = () => errors.map((e) => screen.queryAllByText(e.message).length);
 
-    expect(inline.length).toBeGreaterThan(0);
-    expect(all).toHaveLength(errors.length);
-    expect(new Set(all).size).toBe(errors.length);
+    const inlineCounts = counts();
+    expect(inlineCounts.every((n) => n <= 1)).toBe(true);
+    expect(inlineCounts.filter((n) => n === 1)).toHaveLength(4);
+
+    openOverflow();
+    expect(counts()).toEqual(errors.map(() => 1));
   });
 
   it("keeps dismiss wired for a hidden error, forwarding its own id", () => {

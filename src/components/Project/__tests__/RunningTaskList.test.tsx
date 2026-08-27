@@ -104,45 +104,41 @@ describe("RunningTaskList overflow", () => {
     }
   });
 
-  it("keeps the trigger's accessible name bounded, not a command dump", () => {
+  it("keeps the trigger's accessible name a name, not a command dump", () => {
     // A task command is an arbitrary-length string; enumerating the hidden ones
-    // would read a paragraph before the button's own state.
+    // would read a paragraph before the button's own state. Trimming it to a
+    // bare digit would be the opposite failure, so the noun has to survive.
     seedTasks(9, { command: "x".repeat(300) });
     render(<RunningTaskList worktreeId={WORKTREE_ID} />);
 
     const label = screen.getByTestId("running-task-overflow").getAttribute("aria-label") ?? "";
     expect(label).toContain("4");
-    expect(label.length).toBeLessThan(80);
+    expect(label.toLowerCase()).toContain("task");
+    expect(label).not.toContain("xxx");
   });
 
   it("partitions the tasks without dropping or duplicating one", () => {
-    // Reads the split off the rendered output rather than restating the
-    // component's private cap.
+    // Counts occurrences rather than presence: a task rendered both inline and
+    // in the tail would otherwise pass as "present once".
     seedTasks(11);
     render(<RunningTaskList worktreeId={WORKTREE_ID} />);
 
     const commands = Array.from({ length: 11 }, (_, i) => `cmd-${i}`);
-    const visible = () => commands.filter((c) => screen.queryAllByText(c).length > 0);
+    const counts = () => commands.map((c) => screen.queryAllByText(c).length);
 
-    const inline = visible();
-    expect(inline.length).toBeGreaterThan(0);
-    expect(inline.length).toBeLessThan(commands.length);
+    const inlineCounts = counts();
+    expect(inlineCounts.every((n) => n <= 1)).toBe(true);
+    const inlineShown = inlineCounts.filter((n) => n === 1).length;
+    expect(inlineShown).toBeGreaterThan(0);
+    expect(inlineShown).toBeLessThan(commands.length);
+
+    // The trigger promises exactly the remainder.
+    const trigger = screen.getByTestId("running-task-overflow");
+    expect(trigger.textContent).toContain(String(commands.length - inlineShown));
 
     openOverflow();
-    const all = visible();
-    expect(all).toHaveLength(commands.length);
-    expect(new Set(all).size).toBe(commands.length);
-  });
-
-  it("keeps the trigger's count equal to what the disclosure reveals", () => {
-    seedTasks(11);
-    render(<RunningTaskList worktreeId={WORKTREE_ID} />);
-
-    const shownBefore = Array.from({ length: 11 }, (_, i) => `cmd-${i}`).filter(
-      (c) => screen.queryAllByText(c).length > 0
-    ).length;
-    const trigger = screen.getByTestId("running-task-overflow");
-    expect(trigger.textContent).toContain(String(11 - shownBefore));
+    // Every task exactly once across both halves — no gap, no overlap.
+    expect(counts()).toEqual(commands.map(() => 1));
   });
 
   it("stops a hidden task, killing that task's own terminal", () => {

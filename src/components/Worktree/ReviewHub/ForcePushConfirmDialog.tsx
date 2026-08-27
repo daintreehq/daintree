@@ -7,7 +7,7 @@ import { AlertTriangle } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { useAnnouncerStore } from "@/store/accessibilityAnnouncerStore";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
-import type { GitRemoteCommitPreview } from "@shared/types/git";
+import { GIT_REMOTE_COMMIT_PREVIEW_MAX, type GitRemoteCommitPreview } from "@shared/types/git";
 import { formatGitPushDestination } from "@/components/Git/gitRemoteOperationPreview";
 
 interface ForcePushConfirmDialogProps {
@@ -21,13 +21,11 @@ interface ForcePushConfirmDialogProps {
 }
 
 /**
- * The main handler clamps this to 100 (`git-write.ts`, `list-remote-commits`),
- * so asking for its ceiling is what makes the preview complete for every
- * divergence a force-push realistically discards. It used to ask for 20 and
- * print "…and N more" for the rest — a count, on the one dialog where D2 says
- * a count is not enough, naming commits nothing could open (#12001).
+ * Ask for everything the handler will serve. It used to ask for 20 and print
+ * "…and N more" for the rest — a count, on the one dialog where D2 says a count
+ * is not enough, naming commits nothing could open (#12001).
  */
-const COMMIT_LIMIT = 100;
+const COMMIT_LIMIT = GIT_REMOTE_COMMIT_PREVIEW_MAX;
 const SHORT_HASH_LEN = 7;
 
 export function ForcePushConfirmDialog({
@@ -90,7 +88,7 @@ export function ForcePushConfirmDialog({
     // is checked too: on the first render after opening it is null while
     // `isLoading` is still false, so the two guards together are what close
     // the window on a click landing before the fetch starts.
-    if (loadError || preview === null) return;
+    if (loadError || preview === null || isPreviewStale) return;
     isExecutingRef.current = true;
     setIsPushing(true);
     try {
@@ -109,17 +107,27 @@ export function ForcePushConfirmDialog({
   const commits = preview?.commits ?? null;
   // Both the rows and the total come from the same `HEAD..<push ref>` range, so
   // the tail can't be computed against a different repository's ref (#11746).
-  // `git log` and the range count are two reads in the handler, so a fetch
-  // landing between them can return a total below the rows already in hand. The
-  // rows are proof the range holds at least that many, so the larger of the two
-  // is the only figure that can't understate what a force push would discard —
-  // and a badge reading 3 above 12 listed commits is the kind of contradiction
-  // a destructive confirm can least afford.
-  const totalRemote = Math.max(preview?.total ?? 0, commits?.length ?? 0);
-  const hiddenCount = commits !== null ? Math.max(0, totalRemote - commits.length) : 0;
+  const totalRemote = preview?.total ?? 0;
+  // `git log` and the range count are two reads over a symbolic range, so a
+  // concurrent fetch or branch move can leave them disagreeing. When it does,
+  // neither is trustworthy — the rows may name commits the range no longer
+  // holds, and the total may describe a range the rows don't. Picking one would
+  // be guessing about what a force push discards, so the preview reloads
+  // instead. Same fail-closed footing as a preview that never arrived.
+  const isPreviewStale = commits !== null && totalRemote < commits.length;
+  const hiddenCount =
+    commits !== null && totalRemote > commits.length ? totalRemote - commits.length : 0;
   // Optional-chained rather than keyed off `preview` alone: this crosses the
   // IPC boundary, so a payload missing the field must degrade to the branch
   // name rather than throwing inside a destructive confirm.
+  // One blocking message for both shapes: a preview that failed to load and one
+  // that arrived self-contradictory leave the user equally unable to see what
+  // would be discarded, and both recover the same way.
+  const blockingMessage =
+    loadError ??
+    (isPreviewStale
+      ? "This preview went stale while loading — reload it before force pushing"
+      : null);
   const destinationLabel = preview?.destination
     ? formatGitPushDestination(preview.destination)
     : null;
@@ -135,7 +143,7 @@ export function ForcePushConfirmDialog({
       variant="destructive"
       hasPreview={true}
       isConfirmLoading={isPushing}
-      confirmDisabled={isLoading || !!loadError || preview === null}
+      confirmDisabled={isLoading || !!loadError || preview === null || isPreviewStale}
     >
       <div className="space-y-3 text-xs text-daintree-text/80">
         <p>
@@ -165,11 +173,11 @@ export function ForcePushConfirmDialog({
             </div>
           )}
 
-          {!isLoading && loadError && (
+          {!isLoading && blockingMessage && (
             <div className="px-3 py-3 text-status-error flex items-start gap-2">
               <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
               <div className="flex-1 min-w-0">
-                <div>{loadError}</div>
+                <div>{blockingMessage}</div>
                 <button
                   type="button"
                   onClick={loadCommits}
@@ -186,13 +194,13 @@ export function ForcePushConfirmDialog({
             </div>
           )}
 
-          {!isLoading && !loadError && commits && commits.length === 0 && (
+          {!isLoading && !blockingMessage && commits && commits.length === 0 && (
             <div className="px-3 py-3 text-daintree-text/50">
               No remote commits to discard. The remote may already match your local branch.
             </div>
           )}
 
-          {!isLoading && !loadError && commits && commits.length > 0 && (
+          {!isLoading && !blockingMessage && commits && commits.length > 0 && (
             // A scrollable region with no focusable children of its own has to
             // be reachable by keyboard in its own right (WCAG 2.1.1), and the
             // fades are what say "there is more" — the same shape

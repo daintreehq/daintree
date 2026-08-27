@@ -161,6 +161,16 @@ export interface GitRemoteCommit {
  * Discard preview for the force-push confirm: the commits, the destination they
  * live on, and the full count over the same range the rows came from.
  */
+/**
+ * The most commits `git:list-remote-commits` will return for one request.
+ *
+ * The contract, not a client preference: the handler clamps to it, and the
+ * force-push confirm asks for it so its D2 preview is never narrower than what
+ * the main process would serve. Both sides read this rather than restating a
+ * number, so the ceiling can only move in one place.
+ */
+export const GIT_REMOTE_COMMIT_PREVIEW_MAX = 100;
+
 export interface GitRemoteCommitPreview {
   destination: GitPushDestination;
   commits: GitRemoteCommit[];

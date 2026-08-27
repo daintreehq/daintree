@@ -192,7 +192,10 @@ function LabelBadge({ name, color }: LabelBadgeProps) {
       // own inline content, and a flex container's anonymous text child keeps
       // its min-content width instead, so one long label used to paint past
       // the badge and get clipped by the tooltip.
-      className="inline-block max-w-full break-words [overflow-wrap:anywhere] px-1.5 py-0.5 rounded-full text-[10px] font-medium"
+      // `line-clamp-2` bounds height as well as width: a name is unbounded in
+      // the provider contract, and twenty of them wrapping freely would make the
+      // tooltip arbitrarily tall even under the chip cap.
+      className="inline-block max-w-full break-words [overflow-wrap:anywhere] line-clamp-2 px-1.5 py-0.5 rounded-full text-[10px] font-medium"
       style={{
         backgroundColor: `#${color}20`,
         color: `#${color}`,
@@ -224,11 +227,11 @@ const MAX_TOOLTIP_LABELS = 20;
  * (#12001). `LabelBadge` wraps rather than widens, so a single long
  * provider-supplied label can't push the tooltip past its `max-w-[280px]`.
  *
- * Past `MAX_TOOLTIP_LABELS` the row states what it is showing as a fact rather
- * than counting a remainder: there is genuinely no surface to route to from
- * inside a tooltip, and the badge itself already opens the issue.
+ * Past `MAX_TOOLTIP_LABELS` the row names the route rather than counting a
+ * remainder — a tooltip has no surface of its own to open, but the badge this
+ * one describes does open the item, so that is where the rest live.
  */
-function LabelRow({ labels }: { labels: readonly ForgeLabel[] }) {
+function LabelRow({ labels, subject }: { labels: readonly ForgeLabel[]; subject: string }) {
   const shown = labels.slice(0, MAX_TOOLTIP_LABELS);
   return (
     <div className="flex flex-wrap items-baseline gap-1 pt-1">
@@ -237,7 +240,7 @@ function LabelRow({ labels }: { labels: readonly ForgeLabel[] }) {
       ))}
       {labels.length > shown.length && (
         <span className="text-[10px] text-daintree-text/40">
-          Showing {shown.length} of {labels.length}
+          Showing {shown.length} of {labels.length} — open the {subject} for the rest
         </span>
       )}
     </div>
@@ -283,7 +286,7 @@ export function IssueTooltipContent({ data, freshness }: IssueTooltipContentProp
         <FreshnessMetaItem freshness={freshness} />
       </div>
 
-      {data.labels.length > 0 && <LabelRow labels={data.labels} />}
+      {data.labels.length > 0 && <LabelRow labels={data.labels} subject="issue" />}
     </div>
   );
 }
@@ -346,7 +349,7 @@ export function PRTooltipContent({ data, freshness }: PRTooltipContentProps) {
         <FreshnessMetaItem freshness={freshness} />
       </div>
 
-      {data.labels.length > 0 && <LabelRow labels={data.labels} />}
+      {data.labels.length > 0 && <LabelRow labels={data.labels} subject="pull request" />}
     </div>
   );
 }

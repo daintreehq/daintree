@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import { act, cleanup, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import type { GitRemoteCommitPreview } from "@shared/types/git";
+import { GIT_REMOTE_COMMIT_PREVIEW_MAX, type GitRemoteCommitPreview } from "@shared/types/git";
 import { ForcePushConfirmDialog } from "../ForcePushConfirmDialog";
 
 vi.mock("zustand/react/shallow", () => ({ useShallow: (fn: unknown) => fn }));
@@ -64,6 +64,10 @@ function renderDialog() {
   );
 }
 
+function confirmButton(): HTMLElement {
+  return screen.getByRole("button", { name: /force push/i });
+}
+
 /** Settle the preview fetch's promise chain. */
 async function flush() {
   await act(async () => {
@@ -91,9 +95,10 @@ describe("ForcePushConfirmDialog preview", () => {
     await flush();
 
     const [, , limit] = listRemoteCommits.mock.calls[0]!;
-    // The main handler clamps to 100; anything below it caps the D2 preview
-    // client-side for no reason.
-    expect(limit).toBe(100);
+    // Against the shared contract both sides read, not a copied number — the
+    // point is that the dialog never narrows the preview below what the main
+    // process would serve, whatever that ceiling becomes.
+    expect(limit).toBe(GIT_REMOTE_COMMIT_PREVIEW_MAX);
   });
 
   it("renders each fetched commit once, in the order the range returned them", async () => {
@@ -120,17 +125,28 @@ describe("ForcePushConfirmDialog preview", () => {
     expect(first.textContent).toContain("Ada");
   });
 
-  it("never reports a total below the commits it is already listing", async () => {
-    // `git log` and the range count are separate reads in the handler, so a
-    // fetch between them can return a stale, smaller total. The rows in hand
-    // prove the range holds at least that many.
+  it("refuses a self-contradictory preview instead of picking a number", async () => {
+    // `git log` and the range count are separate reads over a symbolic range,
+    // so a concurrent fetch or branch move can leave them disagreeing. Neither
+    // side is then trustworthy, and guessing which to believe would be guessing
+    // about what a force push discards.
     listRemoteCommits.mockResolvedValue(preview(12, 3));
     renderDialog();
     await flush();
 
-    expect(screen.getAllByTestId("force-push-commit-row")).toHaveLength(12);
-    expect(screen.queryByTestId("force-push-commit-cap")).toBeNull();
-    expect(screen.queryByText("3")).toBeNull();
+    expect(screen.queryAllByTestId("force-push-commit-row")).toHaveLength(0);
+    expect(confirmButton().getAttribute("aria-disabled")).toBe("true");
+    // And it recovers the same way a failed load does.
+    expect(screen.getByTestId("force-push-commits-retry")).toBeTruthy();
+  });
+
+  it("proceeds normally when the total merely exceeds the fetched rows", async () => {
+    listRemoteCommits.mockResolvedValue(preview(100, 237));
+    renderDialog();
+    await flush();
+
+    expect(screen.getAllByTestId("force-push-commit-row")).toHaveLength(100);
+    expect(confirmButton().hasAttribute("aria-disabled")).toBe(false);
   });
 
   it("adds no cap notice while every diverged commit is listed", async () => {
@@ -194,16 +210,13 @@ describe("ForcePushConfirmDialog preview", () => {
 
     // Without the preview the user has no visibility into what would be
     // discarded, so the destructive action stays closed.
-    const confirm = screen.getByRole("button", { name: /force push/i }) as HTMLButtonElement;
-    expect(confirm.disabled).toBe(true);
+    expect(confirmButton().getAttribute("aria-disabled")).toBe("true");
 
     await act(async () => {
       resolvePreview(preview(2));
       await Promise.resolve();
     });
-    expect(
-      (screen.getByRole("button", { name: /force push/i }) as HTMLButtonElement).disabled
-    ).toBe(false);
+    expect(confirmButton().hasAttribute("aria-disabled")).toBe(false);
   });
 
   it("offers a retry that refetches at the same ceiling after a failed load", async () => {
@@ -224,8 +237,6 @@ describe("ForcePushConfirmDialog preview", () => {
     // And it recovers: the error clears, rows appear, and confirm arms.
     expect(screen.queryByTestId("force-push-commits-retry")).toBeNull();
     expect(screen.getAllByTestId("force-push-commit-row")).toHaveLength(2);
-    expect(
-      (screen.getByRole("button", { name: /force push/i }) as HTMLButtonElement).disabled
-    ).toBe(false);
+    expect(confirmButton().hasAttribute("aria-disabled")).toBe(false);
   });
 });

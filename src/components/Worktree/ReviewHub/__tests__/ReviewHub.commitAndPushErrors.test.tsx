@@ -4,6 +4,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, act, fireEvent, within } from "@testing-library/react";
 import type { ReactNode } from "react";
+import { GIT_REMOTE_COMMIT_PREVIEW_MAX } from "@shared/types/git";
 import type { StagingStatus } from "@shared/types";
 import type { WorktreeState } from "@shared/types";
 
@@ -817,7 +818,11 @@ describe("ReviewHub", () => {
 
       // Dialog opens; commit list loads.
       await waitFor(() =>
-        expect(listRemoteCommitsMock).toHaveBeenCalledWith(WORKTREE_PATH, "feature/x", 100)
+        expect(listRemoteCommitsMock).toHaveBeenCalledWith(
+          WORKTREE_PATH,
+          "feature/x",
+          GIT_REMOTE_COMMIT_PREVIEW_MAX
+        )
       );
       await waitFor(() => screen.getByText("first remote commit"));
 
