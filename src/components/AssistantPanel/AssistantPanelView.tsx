@@ -49,7 +49,12 @@ export interface AssistantPanelViewProps {
   onSubmit: (text: string) => boolean;
   onInterrupt: () => void;
   onDecideApproval: (approvalId: string, decision: "approved" | "rejected") => void;
-  onAnswerQuestion?: (questionId: string, index: number) => void;
+  /**
+   * Answers an outstanding question; `index` of -1 dismisses. Reports whether the answer
+   * was accepted for delivery — see `AssistantQuestionCard`, which reopens its
+   * answered-once latch when it was not.
+   */
+  onAnswerQuestion?: (questionId: string, index: number) => boolean | Promise<boolean>;
   onGrantTool?: (approval: AssistantApproval, uses: number) => void;
   onRequestOperations?: () => void;
   /**
@@ -133,6 +138,19 @@ function liveStatusLabel(phase: string | null): string | null {
   if (!phase) return null;
   return LIVE_STATUS_LABEL[phase] ?? null;
 }
+
+/**
+ * Phases whose silence is the USER's, not the engine's.
+ *
+ * A stall warning says "this has been quiet longer than a working turn usually is".
+ * That is a real question about a model or a tool, and a meaningless one about a sheet
+ * someone is reading: an approval or a question is quiet because nobody has answered it
+ * yet, and it will stay quiet for exactly as long as the person takes. Warning about it
+ * paints the one surface waiting on a decision in the colour reserved for something
+ * going wrong, five seconds after asking — and the longer someone thinks, the more
+ * insistently the panel implies the engine has hung.
+ */
+export const PHASES_WAITING_ON_THE_USER = new Set(["awaiting_approval", "awaiting_question"]);
 
 /**
  * Formats spend. `complete: false` means the figure is a FLOOR — a call ran whose
@@ -377,7 +395,16 @@ function TurnBlock({
                 className="rounded-md border-l-2 border-[var(--assistant-border-strong)] bg-[var(--assistant-inset)]/60 px-2 py-1 text-[1em] text-[var(--assistant-fg-secondary)]"
               >
                 <span className="text-[var(--assistant-fg-secondary)]">
-                  {segment.text ? "You chose: " : "You dismissed: "}
+                  {/* "No answer" rather than "You dismissed".
+
+                    The wire says only `cancelled`, and two different things arrive
+                    that way: the user closing the sheet, and the question being
+                    abandoned underneath them by a timeout, an interrupt or a teardown.
+                    The engine tells those apart for the MODEL's benefit and does not
+                    put the distinction on this frame, so a transcript that said "you
+                    dismissed" was attributing to the user a decision they may never
+                    have been given the chance to make. */}
+                  {segment.text ? "You chose: " : "No answer: "}
                 </span>
                 {segment.text
                   ? `${segment.label ? `${segment.label} — ` : ""}${segment.text}`
@@ -759,7 +786,19 @@ export function AssistantPanelView({
   // False while a turn the assistant started ITSELF is running — including the window
   // before that turn opens, when only the phase has said so.
   const interruptible = openTurn ? openTurn.wake !== true : !state.phaseIsWake;
-  const busy = streaming || state.phase !== null;
+  // `awaitingLocalCommand` counts as busy so STOP stays reachable. That window belongs
+  // to a slash command applying an answer, and it is the one state with no other way
+  // out: the sheet is gone, the composer is leased, and if the command stalls (a backend
+  // that will not answer, a worker wedged on a network call) the panel would otherwise
+  // offer nothing at all. The engine cancels a slow command on interrupt, so Stop is a
+  // real remedy rather than a decoration.
+  //
+  // A MODEL's question is already covered by `state.phase` (`awaiting_question`), and
+  // that is right: its turn is genuinely running, and Stop cancels the turn rather than
+  // the question — a different act from Dismiss, which answers it. A LOCAL question
+  // brings no phase with it and needs none, because its command is what Stop would
+  // reach and `awaitingLocalCommand` is already here for exactly that.
+  const busy = streaming || state.phase !== null || state.awaitingLocalCommand;
 
   // Stick to the bottom only while the reader is already there. Yanking someone back
   // down while they are reading earlier output is the classic chat-scroll annoyance.
@@ -864,9 +903,13 @@ export function AssistantPanelView({
   const elapsedMs = running && state.turnStartedAt ? now - state.turnStartedAt : 0;
   const elapsed = elapsedMs >= 300 ? formatDuration(elapsedMs) : null;
   // Quiet for a while is normal — a slow model, a long tool — but indistinguishable
-  // from a hang unless the panel says which it thinks it is.
+  // from a hang unless the panel says which it thinks it is. Except when the quiet is
+  // the user's own: see PHASES_WAITING_ON_THE_USER.
   const stalled =
-    running && state.lastActivityAt !== null && now - state.lastActivityAt > STALL_THRESHOLD_MS;
+    running &&
+    !PHASES_WAITING_ON_THE_USER.has(state.phase ?? "") &&
+    state.lastActivityAt !== null &&
+    now - state.lastActivityAt > STALL_THRESHOLD_MS;
   const empty = state.turns.length === 0;
 
   // The splash belongs to a SESSION, not to this component.
@@ -968,6 +1011,95 @@ export function AssistantPanelView({
    * click that selected nothing focuses the composer and a drag that selected something
    * is left alone.
    */
+  /**
+   * Whether the composer is currently refusing input, and where focus should go back to
+   * when it stops.
+   *
+   * A ref because `focusComposer` reads it from inside a `setTimeout`, one task after
+   * the click: a value captured in that closure would be the state as it was when the
+   * handler was created, and this is exactly the fact that changes underneath it.
+   * Written from a LAYOUT effect rather than during render. Render has to stay pure, and
+   * a passive effect will not do: it runs after paint, so there is a real interval in
+   * which the sheet is on screen and this ref still says the composer is free. A layout
+   * effect runs before the browser can paint, and therefore before anything the user
+   * does in response to what they see.
+   */
+  /**
+   * Why the composer is refusing input, or null when it is not.
+   *
+   * Two reasons, in the order they occur: the sheet is up and the engine is parked on
+   * the answer, then the answer is given and the command that asked is still applying
+   * it. They read differently on purpose — the first names an action the user can take,
+   * the second says only that something is finishing.
+   */
+  const composerBlockedReason =
+    state.pendingQuestion && onAnswerQuestion
+      ? "Answer the question above to continue"
+      : state.awaitingLocalCommand
+        ? "Applying your answer…"
+        : null;
+  const composerBlocked = composerBlockedReason !== null;
+
+  const composerBlockedRef = useRef(false);
+  /**
+   * Whether focus was last seen INSIDE the question sheet.
+   *
+   * `document.activeElement === document.body` says focus is nowhere; it does not say
+   * the sheet is why. It is also where focus already was for someone driving the app
+   * with a screen reader's virtual cursor, or before anything had been clicked — and
+   * restoring on that signal alone hands the composer a caret nobody asked for, after a
+   * question they never touched.
+   */
+  const sheetHadFocusRef = useRef(false);
+  const noteFocus = useCallback((e: React.FocusEvent) => {
+    if (!(e.target instanceof HTMLElement)) return;
+    sheetHadFocusRef.current = e.target.closest("[data-escape-owner='question']") !== null;
+  }, []);
+
+  /**
+   * A press ANYWHERE clears the claim, unless it lands in the sheet.
+   *
+   * The focus listener above only ever hears about focus arriving inside this panel, so
+   * on its own it records "the sheet was the last thing this panel saw focused" — not
+   * "the sheet is where focus was lost". A click on non-focusable space outside the
+   * panel sends focus to `<body>` without firing anything the panel hears, and the
+   * settlement below would then satisfy both its conditions and pull the caret back out
+   * of nowhere the user asked for.
+   *
+   * Document-level and capture-phase, because the press it needs to hear about is by
+   * definition one that never reaches this component.
+   */
+  useEffect(() => {
+    if (!composerBlocked) return;
+    const onPress = (e: PointerEvent) => {
+      const target = e.target instanceof HTMLElement ? e.target : null;
+      if (!target?.closest("[data-escape-owner='question']")) sheetHadFocusRef.current = false;
+    };
+    document.addEventListener("pointerdown", onPress, true);
+    return () => document.removeEventListener("pointerdown", onPress, true);
+  }, [composerBlocked]);
+
+  useLayoutEffect(() => {
+    const blocked = composerBlocked;
+    const wasBlocked = composerBlockedRef.current;
+    composerBlockedRef.current = blocked;
+    if (!wasBlocked || blocked) return;
+    // The sheet unmounts when the engine confirms the answer, and it was holding focus.
+    // Without a hand-off the keyboard is nowhere: focus falls back to <body> and the
+    // next keystroke goes nowhere, with the composer that just became usable again only
+    // findable by mouse.
+    //
+    // Only when focus was actually LOST, though. A question can settle on its own — the
+    // five-minute timeout, an interrupt — long after the user moved on to a terminal or
+    // another pane, and yanking the caret back out of whatever they are typing in is a
+    // worse failure than the one this fixes. `<body>` (or nothing) is the signature of
+    // the removal; anything else is a place someone chose to be.
+    const active = document.activeElement;
+    const lost = active === null || active === document.body;
+    if (lost && sheetHadFocusRef.current) composerRef.current?.focus();
+    sheetHadFocusRef.current = false;
+  }, [composerBlocked]);
+
   const pressOriginRef = useRef<{ x: number; y: number } | null>(null);
   const notePress = useCallback((e: React.MouseEvent) => {
     pressOriginRef.current = e.button === 0 ? { x: e.clientX, y: e.clientY } : null;
@@ -980,6 +1112,12 @@ export function AssistantPanelView({
     if (e.button !== 0) return;
     const el = e.target instanceof HTMLElement ? e.target : null;
     if (el?.closest("button, a, input, textarea, [role='button'], [contenteditable]")) return;
+    // A sheet that OWNS Escape owns the keyboard. Its question text, its heading and its
+    // own background are none of them buttons, so a click on any of them fell through to
+    // here and pushed the caret into the composer — which, while a question is pending,
+    // is disabled. The keys the sheet binds (arrows, digits, Enter, its two-stage
+    // Escape) then reached nothing, and the only way out of the sheet was the mouse.
+    if (el?.closest("[data-escape-owner]")) return;
 
     // A press that MOVED was a drag, and a drag is never a request to start typing —
     // decided from the pointer rather than from the selection, because the two disagree
@@ -1003,6 +1141,10 @@ export function AssistantPanelView({
     // focus, which is why clicking a selection used to leave the caret nowhere at all.
     setTimeout(() => {
       if ((window.getSelection()?.toString().length ?? 0) > 0) return;
+      // Re-checked HERE, a task later, not only at the top. A question can arrive
+      // between the click and this callback, and the bar refuses focus while disabled
+      // anyway — but a request that is already wrong should not be made.
+      if (composerBlockedRef.current) return;
       // The composer is the input bar's editor now; the old textarea ref was left
       // dangling by the swap, so clicking the pane focused nothing.
       composerRef.current?.focus();
@@ -1076,6 +1218,9 @@ export function AssistantPanelView({
       // mono in its message body and sans in its chrome reads as two things stitched
       // together; the terminal beside it is one typeface throughout.
       className={cn("assistant-panel flex h-full min-h-0 cursor-text flex-col", className)}
+      // Marks the panel's own subtree, so the question sheet can ask whether focus was
+      // ALREADY in the assistant before it takes the keyboard. See AssistantQuestionCard.
+      data-assistant-surface=""
       // Custom properties are not part of `CSSProperties`, so the cast is at the point
       // of USE and covers only this object rather than widening the declaration above.
       style={
@@ -1097,6 +1242,7 @@ export function AssistantPanelView({
           ...shellVars,
         } as React.CSSProperties
       }
+      onFocusCapture={noteFocus}
       onMouseDown={notePress}
       onMouseUp={focusComposer}
       onKeyDown={onPanelKeyDown}
@@ -1259,60 +1405,101 @@ export function AssistantPanelView({
           either underneath a still-drawing splash read as two things happening on top
           of each other rather than one boot finishing before the panel does. */}
       {!booting && (
-        <div className="shrink-0 pb-2.5 pt-2.5">
-          {state.pendingQuestion && onAnswerQuestion ? (
-            // The sheet REPLACES the composer, as the cockpit's did: the engine has
-            // parked the tool dispatch, so there is nothing a typed message could reach.
-            // The status line below stays, because it is still true.
-            <AssistantQuestionCard question={state.pendingQuestion} onAnswer={onAnswerQuestion} />
-          ) : (
-            <>
-              {/* The terminal's OWN input bar, not a copy of it.
-                This was a copy: the same border, radius and `--ib-*` variables, hand
-                rebuilt around a plain textarea. It drifted immediately — different font,
-                different size, a different command menu — which is what a copy always
-                does. Now it is the component, so the two panes cannot look different
-                without someone changing the thing both of them render.
+        // NOT `shrink-0`. That protected the whole strip, sheet included, so below about
+        // 300px the composer and the sheet's own footer were simply pushed out of the
+        // pane. `shrink-0` belongs on the parts that must survive — the input bar and
+        // the status row below — leaving the question sheet as the one thing that gives
+        // way, which is what it is built to do.
+        <div className="flex min-h-0 flex-col pb-2.5 pt-2.5">
+          {/* The question sheet sits ABOVE the composer and the composer stays, disabled.
 
-                What the assistant supplies is the one thing that genuinely differs: its
-                commands come from the engine over the host protocol, not from disk. */}
-              <HybridInputBar
-                ref={composerRef}
-                terminalId={composerId}
-                // Not a terminal pane surface, so it neither records nor obeys the
-                // session-wide xterm-vs-input-bar preference. Writing it from here made
-                // every click in this composer re-run the focus effect of whatever grid
-                // terminal still held store focus, which took the caret back.
-                participatesInTerminalFocus={false}
-                cwd={cwd ?? ""}
-                agentId="daintree-assistant"
-                commands={slashCommands}
-                disabled={!live}
-                // The bar resolves Escape's local meanings first — close the completion
-                // menu, collapse the expanded editor — and forwards what is left. For a
-                // terminal that goes to the PTY; here it lands on the cockpit's Escape
-                // matrix (internal/ui/composer/hints.go), minus the draft-clearing branch
-                // the editor already owns.
-                onSendKey={(key) => {
-                  if (key !== "escape") return;
-                  // Retract before cancel, as the cockpit ordered it: a follow-up typed
-                  // mid-turn is buffered by the engine until the turn folds it in, so
-                  // Escape can still pull it back. Cancelling instead would abandon the
-                  // work when the user only asked to take back a message.
-                  if (state.queuedInterjections.length > 0 && onRetractInterjection) {
-                    onRetractInterjection();
-                    return;
-                  }
-                  if (busy && interruptible !== false) onInterrupt();
-                }}
-                // The bar hands back a PTY payload as well; the engine takes prose. The
-                // acceptance flag has to be RETURNED, not dropped: the shared send path
-                // clears the draft on a truthy result, so swallowing a refusal is what
-                // makes a prompt vanish when the session was not ready to take it.
-                onSend={({ text }) => (text.trim() ? onSubmit(text) : false)}
+            It used to take the composer's place. That kept the right invariant — the
+            engine has parked the tool dispatch, so there is nothing a typed message
+            could reach — by the wrong means: pulling the tallest element out of the
+            bottom strip moved every control under it, so a question arriving and a
+            question being answered each shifted the whole lower edge of the panel, and
+            the box someone was about to type into was not where they left it.
+
+            Disabled says the same thing and holds still. See AssistantQuestionCard. */}
+          {state.pendingQuestion && onAnswerQuestion && (
+            // Capped and SHRINKABLE. The strip below is `shrink-0` so the composer
+            // always survives; without a ceiling here a tall sheet takes the whole
+            // pane, collapses the transcript to nothing and pushes its own footer and
+            // the composer out of view. 18.5em is what the list used to cap itself at,
+            // moved to where the available height is actually known.
+            <div className="flex max-h-[24em] min-h-0 flex-col px-3.5 pb-2">
+              {/* KEYED on the question id. The sheet's whole state — the cursor, the
+                filter, the latch that stops it answering twice — belongs to one
+                question, and a new question must not inherit any of it. A key mounts a
+                fresh sheet; resetting the fields in an effect instead would let the new
+                question render for one commit under the old question's closed latch. */}
+              <AssistantQuestionCard
+                key={state.pendingQuestion.questionId}
+                question={state.pendingQuestion}
+                onAnswer={onAnswerQuestion}
               />
-            </>
+            </div>
           )}
+          {/* Wrapped only to be `shrink-0`: the bar is the one thing in this strip that
+              must never be squeezed, and it owns its own root element. */}
+          <div className="shrink-0">
+            {/* The terminal's OWN input bar, not a copy of it.
+              This was a copy: the same border, radius and `--ib-*` variables, hand
+              rebuilt around a plain textarea. It drifted immediately — different font,
+              different size, a different command menu — which is what a copy always
+              does. Now it is the component, so the two panes cannot look different
+              without someone changing the thing both of them render.
+
+              What the assistant supplies is the one thing that genuinely differs: its
+              commands come from the engine over the host protocol, not from disk. */}
+            <HybridInputBar
+              ref={composerRef}
+              terminalId={composerId}
+              // Not a terminal pane surface, so it neither records nor obeys the
+              // session-wide xterm-vs-input-bar preference. Writing it from here made
+              // every click in this composer re-run the focus effect of whatever grid
+              // terminal still held store focus, which took the caret back.
+              participatesInTerminalFocus={false}
+              cwd={cwd ?? ""}
+              agentId="daintree-assistant"
+              commands={slashCommands}
+              // Disabled while a question is open, and SAYING so. The engine is parked
+              // on the answer, so a prompt sent now reaches nothing; leaving the bar
+              // live would take words and drop them, which is the failure the sheet
+              // replacing the composer was originally protecting against.
+              //
+              // It stays disabled past the answer while a LOCAL question's command is
+              // still applying it (`awaitingLocalCommand`). The sheet vanishes as soon as
+              // the engine confirms the answer, which is a beat before the command that
+              // asked has finished acting on it — and a prompt sent in that beat is
+              // refused, making a liar of a question that promised the choice applies
+              // from the next message.
+              disabled={!live || composerBlocked}
+              placeholder={composerBlockedReason ?? undefined}
+              // The bar resolves Escape's local meanings first — close the completion
+              // menu, collapse the expanded editor — and forwards what is left. For a
+              // terminal that goes to the PTY; here it lands on the cockpit's Escape
+              // matrix (internal/ui/composer/hints.go), minus the draft-clearing branch
+              // the editor already owns.
+              onSendKey={(key) => {
+                if (key !== "escape") return;
+                // Retract before cancel, as the cockpit ordered it: a follow-up typed
+                // mid-turn is buffered by the engine until the turn folds it in, so
+                // Escape can still pull it back. Cancelling instead would abandon the
+                // work when the user only asked to take back a message.
+                if (state.queuedInterjections.length > 0 && onRetractInterjection) {
+                  onRetractInterjection();
+                  return;
+                }
+                if (busy && interruptible !== false) onInterrupt();
+              }}
+              // The bar hands back a PTY payload as well; the engine takes prose. The
+              // acceptance flag has to be RETURNED, not dropped: the shared send path
+              // clears the draft on a truthy result, so swallowing a refusal is what
+              // makes a prompt vanish when the session was not ready to take it.
+              onSend={({ text }) => (text.trim() ? onSubmit(text) : false)}
+            />
+          </div>
 
           {/* The status row under the composer.
 
@@ -1342,7 +1529,7 @@ export function AssistantPanelView({
 
           <div
             data-testid="assistant-status-row"
-            className="mt-1.5 flex items-center gap-2 px-3.5 text-[0.92em] text-[var(--assistant-fg-secondary)]"
+            className="mt-1.5 flex shrink-0 items-center gap-2 px-3.5 text-[0.92em] text-[var(--assistant-fg-secondary)]"
           >
             {/* A DOT, then the word, as the cockpit drew it. The word
               alone made the one line that is true for the whole session read as body
