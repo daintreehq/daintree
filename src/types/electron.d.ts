@@ -9,6 +9,7 @@ import type {
   TerminalInfoPayload,
 } from "@shared/types";
 import type { NotificationsE2EApi } from "@/lib/e2eNotificationBackdoor";
+import type { PendingMcpConfirm } from "@/store/mcpConfirmStore";
 
 declare global {
   interface Window {
@@ -29,6 +30,10 @@ declare global {
     }>;
     __DAINTREE_E2E_REFRESH_GITHUB_CONFIG__?: () => Promise<void>;
     __DAINTREE_E2E_TRIGGER_RECIPE_CONFLICT__?: (recipeName: string) => void;
+    /** Parks a synthetic MCP confirmation for the approval-dialog screenshot harness (#11981). */
+    __DAINTREE_E2E_ENQUEUE_MCP_CONFIRM__?: (item: Omit<PendingMcpConfirm, "enqueuedAt">) => void;
+    __DAINTREE_E2E_SET_MCP_PREVIEW__?: (requestId: string, preview: string[]) => void;
+    __DAINTREE_E2E_RESET_MCP_CONFIRM__?: () => void;
     /** Per-window store accessors for the multi-window isolation spec (#9599). */
     __DAINTREE_E2E_DIAGNOSTICS_STATE__?: () => { isOpen: boolean };
     __DAINTREE_E2E_OPEN_DIAGNOSTICS__?: () => void;

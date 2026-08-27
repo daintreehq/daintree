@@ -2,6 +2,11 @@ import { useEffect } from "react";
 import { useErrorStore, useDiagnosticsStore, usePerformanceModeStore } from "@/store";
 import { useRecipeConflictStore } from "@/store/recipeConflictStore";
 import { usePerfMetricsStore } from "@/store/perfMetricsStore";
+import {
+  requestMcpConfirmation,
+  useMcpConfirmStore,
+  type PendingMcpConfirm,
+} from "@/store/mcpConfirmStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { installE2EActionDispatchBridge } from "@/services/ActionService";
 import { loadE2ENotificationBackdoor } from "@/lazyPanels";
@@ -59,6 +64,23 @@ export function useE2EBridges(): void {
         });
       };
 
+      // Parks a synthetic MCP confirmation in the queue so the design-review
+      // screenshot harness can capture every approval state (provenance present
+      // or absent, destructive or safe, preview pending/populated/empty, queued
+      // depth) without standing up a real MCP client and a real destructive
+      // dispatch. Mirrors __DAINTREE_E2E_TRIGGER_RECIPE_CONFLICT__: the returned
+      // promise is deliberately not awaited — the harness screenshots the modal
+      // and moves on, and reset() clears the resolver map between states.
+      window.__DAINTREE_E2E_ENQUEUE_MCP_CONFIRM__ = (item) => {
+        void requestMcpConfirmation(item as Omit<PendingMcpConfirm, "enqueuedAt">);
+      };
+      window.__DAINTREE_E2E_SET_MCP_PREVIEW__ = (requestId, preview) => {
+        useMcpConfirmStore.getState().setPreview(requestId, preview);
+      };
+      window.__DAINTREE_E2E_RESET_MCP_CONFIRM__ = () => {
+        useMcpConfirmStore.getState().reset();
+      };
+
       // Per-window store accessors for the multi-window isolation spec (#9599).
       // Each project view is its own V8 context, so these Zustand singletons are
       // per-window — mutating one window's store must not leak into another's.
@@ -95,6 +117,9 @@ export function useE2EBridges(): void {
       delete window.__DAINTREE_E2E_CLEAR_ERRORS__;
       delete window.__DAINTREE_E2E_WORKTREES__;
       delete window.__DAINTREE_E2E_TRIGGER_RECIPE_CONFLICT__;
+      delete window.__DAINTREE_E2E_ENQUEUE_MCP_CONFIRM__;
+      delete window.__DAINTREE_E2E_SET_MCP_PREVIEW__;
+      delete window.__DAINTREE_E2E_RESET_MCP_CONFIRM__;
       delete window.__DAINTREE_E2E_DIAGNOSTICS_STATE__;
       delete window.__DAINTREE_E2E_OPEN_DIAGNOSTICS__;
       delete window.__DAINTREE_E2E_PERF_METRICS_STATE__;
