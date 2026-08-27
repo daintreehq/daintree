@@ -165,14 +165,14 @@ function RecentCallRow({ record }: { record: McpAuditRecord }) {
           </div>
           {hasArgs && (
             <div>
-              <div className="text-text-secondary">Arguments</div>
+              <div className="text-daintree-text/40">Arguments</div>
               <pre className="mt-0.5 max-h-32 overflow-y-auto whitespace-pre-wrap break-all font-mono text-daintree-text/70">
                 {record.argsSummary}
               </pre>
             </div>
           )}
           <div>
-            <div className="text-text-secondary">Result</div>
+            <div className="text-daintree-text/40">Result</div>
             {record.result === "rate_limited" && record.resultMeta?.retryAfter !== undefined ? (
               <p className="mt-0.5 text-daintree-text/45">
                 Retry in {record.resultMeta.retryAfter}s

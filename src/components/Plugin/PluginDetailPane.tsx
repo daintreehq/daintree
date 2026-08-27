@@ -127,7 +127,7 @@ function PluginContributedCommands({ commands }: { commands: PluginActionContrib
                 {command.description}
               </div>
             )}
-            <div className="text-[11px] text-text-secondary mt-0.5">
+            <div className="text-[11px] text-daintree-text/40 mt-0.5">
               {command.kind === "query"
                 ? "Available to agents and automation"
                 : "Run it from the command palette"}
@@ -345,7 +345,7 @@ export function PluginDetailPane({
               <p className="text-sm text-daintree-text/60 mt-1">{plugin.manifest.tagline}</p>
             )}
             {!plugin.isBuiltin && plugin.installedAt > 0 && (
-              <div className="text-[11px] text-text-secondary mt-1">
+              <div className="text-[11px] text-daintree-text/40 mt-1">
                 {plugin.updatedAt
                   ? `Updated ${formatRelativeTime(plugin.updatedAt)}`
                   : `Installed ${formatRelativeTime(plugin.installedAt)}`}
