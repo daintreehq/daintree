@@ -430,19 +430,22 @@ function agentRows(container: HTMLElement): string[] {
     .filter(Boolean);
 }
 
-// The verb in the label states the current state, so the pin's own accessible
-// name is the assertion target — no data attribute needed.
+// The control is presentational now — children of `role="option"` are, and a
+// real button there trips `nested-interactive` — so it has no accessible name of
+// its own to query by. The option carries the pin verb in ITS label; the control
+// is located through the row it belongs to and reports state on `data-pinned`.
 function pinFor(view: ReturnType<typeof render>, id: string): HTMLElement {
   const name = AGENT_NAMES[id] ?? id;
-  const pin = view.queryByLabelText(`Pin to toolbar: ${name}`);
-  const unpin = view.queryByLabelText(`Unpin from toolbar: ${name}`);
-  const found = pin ?? unpin;
+  const row = Array.from(view.container.querySelectorAll<HTMLElement>('[role="option"]')).find(
+    (option) => option.getAttribute("aria-label")?.startsWith(`${name},`)
+  );
+  const found = row?.querySelector<HTMLElement>("[data-launcher-pin]");
   if (!found) throw new Error(`no pin control for ${id}`);
   return found;
 }
 
 function isPinned(view: ReturnType<typeof render>, id: string): boolean {
-  return pinFor(view, id).getAttribute("aria-pressed") === "true";
+  return pinFor(view, id).getAttribute("data-pinned") === "true";
 }
 
 describe("agent pin sync — Settings > Toolbar and Agent Tray share state (#5112)", () => {

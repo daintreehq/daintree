@@ -1846,8 +1846,8 @@ describe("DockLaunchButton", () => {
     }
 
     /** Structural, not by label: the pin is the row's toggle-state control. */
-    function pinControl(row: HTMLElement): HTMLButtonElement | null {
-      return row.querySelector<HTMLButtonElement>("button[aria-pressed]");
+    function pinControl(row: HTMLElement): HTMLElement | null {
+      return row.querySelector<HTMLElement>("[data-launcher-pin]");
     }
 
     it("renders each option as a container with sibling buttons, never a nested button", () => {
@@ -1910,13 +1910,13 @@ describe("DockLaunchButton", () => {
       // pin has to read the position too or it describes a button that is not
       // rendered anywhere.
       const { container } = renderButton();
-      expect(pinControl(rowFor(container, "Claude"))?.getAttribute("aria-pressed")).toBe("false");
+      expect(pinControl(rowFor(container, "Claude"))?.getAttribute("data-pinned")).toBe("false");
     });
 
     it("reports an agent positioned on either side as pinned", () => {
       mockToolbarLayout = { pinnedButtons: {}, leftButtons: [], rightButtons: ["claude"] };
       const { container } = renderButton();
-      expect(pinControl(rowFor(container, "Claude"))?.getAttribute("aria-pressed")).toBe("true");
+      expect(pinControl(rowFor(container, "Claude"))?.getAttribute("data-pinned")).toBe("true");
     });
 
     it("lets an explicit pin outrank a missing position, and an explicit hide outrank one", () => {
@@ -1924,14 +1924,14 @@ describe("DockLaunchButton", () => {
       mockToolbarLayout = { pinnedButtons: {}, leftButtons: ["gemini"], rightButtons: [] };
       const { container } = renderButton();
 
-      expect(pinControl(rowFor(container, "Claude"))?.getAttribute("aria-pressed")).toBe("true");
-      expect(pinControl(rowFor(container, "Gemini"))?.getAttribute("aria-pressed")).toBe("false");
+      expect(pinControl(rowFor(container, "Claude"))?.getAttribute("data-pinned")).toBe("true");
+      expect(pinControl(rowFor(container, "Gemini"))?.getAttribute("data-pinned")).toBe("false");
     });
 
     it("writes an agent pin through the dispatcher that also gives it a position", () => {
       const { container } = renderButton();
       const pin = pinControl(rowFor(container, "Claude"))!;
-      expect(pin.getAttribute("aria-pressed")).toBe("false");
+      expect(pin.getAttribute("data-pinned")).toBe("false");
 
       fireEvent.click(pin);
 
@@ -1944,7 +1944,7 @@ describe("DockLaunchButton", () => {
       mockToolbarLayout = { pinnedButtons: {}, leftButtons: ["claude"], rightButtons: [] };
       const { container } = renderButton();
       const pin = pinControl(rowFor(container, "Claude"))!;
-      expect(pin.getAttribute("aria-pressed")).toBe("true");
+      expect(pin.getAttribute("data-pinned")).toBe("true");
 
       fireEvent.click(pin);
 
@@ -1964,7 +1964,7 @@ describe("DockLaunchButton", () => {
       mockToolbarLayout = { pinnedButtons: { browser: true }, leftButtons: [], rightButtons: [] };
       const { container } = renderButton();
       const pin = pinControl(rowFor(container, "Browser"))!;
-      expect(pin.getAttribute("aria-pressed")).toBe("true");
+      expect(pin.getAttribute("data-pinned")).toBe("true");
 
       fireEvent.click(pin);
 
@@ -2018,18 +2018,22 @@ describe("DockLaunchButton", () => {
       expect(setAgentPinnedMock).toHaveBeenCalledTimes(2);
     });
 
-    it("labels the pin control and keeps it out of the tab order", () => {
+    it("announces the pin on the option and keeps the control out of the tab order", () => {
       const { container } = renderButton();
-      const pin = pinControl(rowFor(container, "Claude"))!;
+      const row = rowFor(container, "Claude");
+      const pin = pinControl(row)!;
 
-      // Named for itself — the option's own label deliberately excludes it, so
-      // this is the only place the control says what it does.
-      expect(pin.getAttribute("aria-label")).toContain("Claude");
-      expect(pin.getAttribute("aria-keyshortcuts")).toBe("Alt+P");
+      // The control is presentational — children of `role="option"` are, and a
+      // real button there trips `nested-interactive` — so the chord and the verb
+      // have to be announced by the option that owns it. The control keeps only
+      // the mouse tooltip, which is not an accessibility surface.
+      expect(row.getAttribute("aria-keyshortcuts")).toBe("Alt+P");
+      expect(row.getAttribute("aria-label")).toContain("Alt+P");
       expect(pin.getAttribute("title")).toContain("Alt+P");
-      // A second tab stop inside every row would break the palette's keyboard
-      // model, which moves selection rather than focus.
+      // No second tab stop inside a row: the palette moves selection, not focus,
+      // and a focusable control here would break that model.
       expect(pin.tabIndex).toBe(-1);
+      expect(pin.getAttribute("role")).toBe("presentation");
     });
 
     it("names the pin shortcut's effect in the option's own name, flipped by state", () => {
@@ -2138,10 +2142,10 @@ describe("DockLaunchButton", () => {
       };
 
       const pressed = options(container).filter(
-        (row) => pinControl(row)?.getAttribute("aria-pressed") === "true"
+        (row) => pinControl(row)?.getAttribute("data-pinned") === "true"
       );
       const unpressed = options(container).filter(
-        (row) => pinControl(row)?.getAttribute("aria-pressed") === "false"
+        (row) => pinControl(row)?.getAttribute("data-pinned") === "false"
       );
       expect(pressed.length).toBeGreaterThan(0);
       expect(unpressed.length).toBeGreaterThan(0);
@@ -2165,32 +2169,50 @@ describe("DockLaunchButton", () => {
       expect(getAllByTestId("dock-launcher-band").map((el) => el.textContent)).toEqual(before);
     });
 
-    it("keeps the trailing slot on rows that cannot be pinned", () => {
-      // jsdom has no layout, so this checks the structure the alignment rests
-      // on rather than the width: an unpinnable row still ends with the same
-      // slot element, so its qualifier stops where a pinnable row's does.
-      // Dropping the slot for unpinnable rows changes the child count.
+    it("reserves the same trailing slots for every row under one heading", () => {
+      // jsdom has no layout, so this checks the structure the alignment rests on
+      // rather than the width. The rule is per BAND, not per row: revealing a
+      // control on hover must not shift the row under the pointer, and two rows
+      // under one heading must end their labels on one edge. It is no longer
+      // "every row in the list" — a recipe can hold neither control in any
+      // state, and reserving 48px on the band with the longest names in the
+      // palette bought alignment with a band it is not in.
       mockRecipes = [{ id: "r-1", name: "My recipe", worktreeId: undefined }];
       const { container } = renderButton();
 
-      const pinnable = rowFor(container, "Claude");
-      const notPinnable = rowFor(container, "My recipe");
-      expect(pinControl(notPinnable)).toBeNull();
-      // Both reserved slots are present on both rows even when empty — that is
-      // what keeps the two qualifiers ending on the same edge. Asserted on the
-      // slots themselves rather than a child count, because an agent row also
-      // carries a keyboard-shortcut hint that a recipe row never can.
       const slotsOf = (row: HTMLElement) =>
-        Array.from(row.querySelectorAll("[data-launcher-slot]")).map((el) =>
-          el.getAttribute("data-launcher-slot")
-        );
-      expect(slotsOf(notPinnable)).toEqual(slotsOf(pinnable));
-      // Leading disclosure, then the two trailing controls. The disclosure
-      // column is reserved for the same reason as the other two: only agents
-      // can expand, and letting the column collapse on every other row would
-      // step the icons in and out as the list is scrolled.
-      expect(slotsOf(notPinnable)).toEqual(["disclosure", "shortcut", "pin"]);
-      expect(notPinnable.lastElementChild?.tagName).toBe(pinnable.lastElementChild?.tagName);
+        Array.from(row.querySelectorAll("[data-launcher-slot]"))
+          .map((el) => el.getAttribute("data-launcher-slot"))
+          .join(",");
+
+      // Walk the listbox in DOM order, grouping rows under the heading above
+      // them, and require one slot signature per group.
+      const groups = new Map<string, Set<string>>();
+      let heading = "";
+      for (const node of listbox(container).querySelectorAll<HTMLElement>(
+        '[data-testid="dock-launcher-band"], [role="option"]'
+      )) {
+        if (node.getAttribute("data-testid") === "dock-launcher-band") {
+          heading = node.textContent ?? "";
+          continue;
+        }
+        // Cue rows carry no trailing label, so they have no edge to align.
+        if (node.getAttribute("data-row-kind") === "cue") continue;
+        const set = groups.get(heading) ?? new Set<string>();
+        set.add(slotsOf(node));
+        groups.set(heading, set);
+      }
+
+      expect(groups.size).toBeGreaterThan(1);
+      for (const [band, signatures] of groups) {
+        expect([band, signatures.size]).toEqual([band, 1]);
+      }
+
+      // The rows that can hold a control still reserve both, so revealing one on
+      // hover moves nothing; the recipe band keeps only its disclosure column.
+      expect(slotsOf(rowFor(container, "Claude"))).toBe("disclosure,shortcut,pin");
+      expect(slotsOf(rowFor(container, "My recipe"))).toBe("disclosure");
+      expect(pinControl(rowFor(container, "My recipe"))).toBeNull();
     });
 
     it("activates from the row itself, not only from an inner control", () => {
@@ -2210,7 +2232,7 @@ describe("DockLaunchButton", () => {
       const { container } = renderButton();
 
       const pin = pinControl(rowFor(container, "Claude"));
-      expect(pin?.getAttribute("aria-pressed")).toBe("false");
+      expect(pin?.getAttribute("data-pinned")).toBe("false");
       fireEvent.click(pin!);
       expect(setAgentPinnedMock).toHaveBeenCalledWith("claude", true);
     });
@@ -2578,7 +2600,7 @@ describe("DockLaunchButton — migrated toolbar affordances (#11691)", () => {
       // Reachable: it is still an option, so arrow keys land on it...
       expect(options(container)).toContain(row);
       // ...and its pin is still there, which is the whole reason it stays.
-      expect(row.querySelector("button[aria-pressed]")).toBeTruthy();
+      expect(row.querySelector("[data-launcher-pin]")).toBeTruthy();
     });
 
     it("opens nothing and stays open when a gated row is activated", () => {
@@ -2595,8 +2617,8 @@ describe("DockLaunchButton — migrated toolbar affordances (#11691)", () => {
 
     it("still pins a gated row", () => {
       const { container } = renderButton({ agents: READY, hasWorkspace: false });
-      const pin = rowByName(container, "File Browser").querySelector<HTMLButtonElement>(
-        "button[aria-pressed]"
+      const pin = rowByName(container, "File Browser").querySelector<HTMLElement>(
+        "[data-launcher-pin]"
       )!;
       fireEvent.click(pin);
       expect(setPanelButtonOnToolbarMock).toHaveBeenCalledWith("file-browser", true);

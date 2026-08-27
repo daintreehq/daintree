@@ -167,6 +167,11 @@ export function DockLaunchButton({
   const [expandedPresetParentKey, setExpandedPresetParentKey] = useState<string | null>(null);
   const [capturingRowKey, setCapturingRowKey] = useState<string | null>(null);
 
+  /** Pointer half of the Right/Left Arrow expansion. */
+  const toggleExpanded = useCallback((rowKey: string) => {
+    setExpandedPresetParentKey((current) => (current === rowKey ? null : rowKey));
+  }, []);
+
   // Subscribed here rather than threaded down from a host: the launcher already
   // owns its own model's store reads, and it serves both the dock and the
   // toolbar — neither of which is positioned to compute rows for it.
@@ -931,6 +936,7 @@ export function DockLaunchButton({
                       onActivate={activateRow}
                       onTogglePin={togglePin}
                       onStartCapture={setCapturingRowKey}
+                      onToggleExpanded={toggleExpanded}
                     />
                   )}
                 </Fragment>
@@ -1059,6 +1065,7 @@ interface DockLaunchOptionProps {
   onActivate: (row: DockLaunchRow) => void;
   onTogglePin: (target: DockLaunchPinTarget) => void;
   onStartCapture: (rowKey: string) => void;
+  onToggleExpanded: (rowKey: string) => void;
 }
 
 function DockLaunchOption({
@@ -1072,6 +1079,7 @@ function DockLaunchOption({
   onActivate,
   onTogglePin,
   onStartCapture,
+  onToggleExpanded,
 }: DockLaunchOptionProps) {
   const item = row.kind === "cue" ? undefined : row.item;
   const agent = item?.category === "agent" ? item.agent : undefined;
@@ -1115,6 +1123,12 @@ function DockLaunchOption({
       : row.kind === "preset"
         ? row.preset.label
         : item!.name;
+
+  // Whether this row reserves the two trailing control slots. See the comment at
+  // the slots themselves for why it is decided by category rather than per row.
+  const reservesControlSlots =
+    row.band === "results" ||
+    (row.kind === "item" && (item!.category === "agent" || item!.category === "panel"));
 
   // The one flag that separates the two modes. Browse keeps its per-band rows;
   // search collapses everything into a single `results` band.
@@ -1290,14 +1304,34 @@ function DockLaunchOption({
             would work right now. */}
         <span className="mr-0.5 w-3 shrink-0" data-launcher-slot="disclosure">
           {row.kind === "item" && rowHasPresets(row) && (
-            <ChevronRight
-              aria-hidden
-              className={cn(
-                "h-3 w-3 text-text-secondary transition-transform duration-150 ease-out",
-                "motion-reduce:transition-none",
-                isExpanded && "rotate-90"
-              )}
-            />
+            <span
+              // A chevron that launches the agent is worse than no chevron: it
+              // advertises the one thing it does not do, and the row it sits on
+              // starts a terminal. Presentational rather than a button — an
+              // option's descendants are presentational anyway, so a real button
+              // here would claim semantics the listbox flattens.
+              role="presentation"
+              data-launcher-disclosure=""
+              // The pointer target is bigger than the 12px column it draws in:
+              // negative margins let it cover a comfortable 20px without moving
+              // the icon that follows it.
+              className="-m-1 inline-flex size-5 items-center justify-center p-1"
+              onPointerDown={(event) => event.preventDefault()}
+              onClick={(event) => {
+                event.preventDefault();
+                event.stopPropagation();
+                onToggleExpanded(row.rowKey);
+              }}
+            >
+              <ChevronRight
+                aria-hidden
+                className={cn(
+                  "h-3 w-3 text-text-secondary transition-transform duration-150 ease-out",
+                  "motion-reduce:transition-none",
+                  isExpanded && "rotate-90"
+                )}
+              />
+            </span>
           )}
         </span>
         <DockLaunchOptionIcon row={row} />
@@ -1323,7 +1357,29 @@ function DockLaunchOption({
             />
           )}
         </span>
-        {/* `shrink` with a cap, not `shrink-0`. Copied from `PilotView`'s park
+        {/* The shared keycap, not bare text. Rendered flat it was the same size,
+            colour and weight as the qualifier beside it, so "Agent  Cmd+Alt+C"
+            read as one run of trailing text — and the dock button for the very
+            same agent, three inches away, already draws it as chips. */}
+        {effectiveCombo && (
+          <KbdChord
+            shortcut={effectiveCombo}
+            density="compact"
+            className="ml-2 shrink-0"
+            aria-label={displayCombo}
+          />
+        )}
+
+        {/* Last, immediately before the fixed rail, so its right edge is the same
+            on every row. The general pattern pins the shortcut to the trailing
+            edge and puts metadata before it, and that is right where a shortcut
+            is on every row — here it is on about a third of them, so ordering it
+            last made the category column a mixed search is scanned by jump left
+            on any row that happened to have one. The qualifier is the higher
+            priority signal in the mode where it appears, so it takes the stable
+            column and the shortcut floats.
+
+            `shrink` with a cap, not `shrink-0`. Copied from `PilotView`'s park
             note, which shares the row with a truncating title the same way: the
             qualifier gives ground before the name does, and the cap stops a long
             scope label from starving it in the first place.
@@ -1344,86 +1400,99 @@ function DockLaunchOption({
             {visualQualifier}
           </span>
         )}
-        {/* The shared keycap, not bare text. Rendered flat it was the same size,
-            colour and weight as the qualifier beside it, so "Agent  Cmd+Alt+C"
-            read as one run of trailing text — and the dock button for the very
-            same agent, three inches away, already draws it as chips. */}
-        {effectiveCombo && (
-          <KbdChord shortcut={effectiveCombo} className="ml-2 shrink-0" aria-label={displayCombo} />
-        )}
+        {/* Reserved wherever a control can ever appear, so revealing one on hover
+            never shifts the row under the pointer.
 
-        {/* Reserved on every row, not just the ones that use it. Opacity hides
-            the controls without releasing their box, so a recipe and an agent
-            end their trailing labels on the same edge. */}
-        <span className="ml-1 w-5 shrink-0" data-launcher-slot="shortcut">
-          {shortcutAgentId && (
-            <button
-              type="button"
-              tabIndex={-1}
-              aria-hidden="true"
-              data-testid={`launcher-shortcut-edit-${shortcutAgentId}`}
-              title={displayCombo ? "Change keyboard shortcut" : "Assign keyboard shortcut"}
-              onPointerDown={(event) => event.preventDefault()}
-              onClick={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                onStartCapture(row.rowKey);
-              }}
-              className={cn(
-                "inline-flex h-5 w-5 items-center justify-center rounded-[var(--radius-sm)] bg-transparent border-0",
-                "text-daintree-text/40 opacity-0 transition-[opacity,color,background-color]",
-                "hover:bg-overlay-soft hover:text-daintree-text",
-                "group-hover:opacity-100 group-aria-selected:opacity-100"
+            Not on every row any more. Recipes, presets and cues can hold neither
+            control in any state, so on them the 48px was buying alignment with a
+            band they are not in — while the recipe band carries the longest names
+            in the palette. Bands are type-homogeneous, so deciding this by
+            category keeps every row within a band on the same edge; search mixes
+            the types under one heading, so there it always reserves. */}
+        {reservesControlSlots && (
+          <>
+            <span className="ml-1 w-5 shrink-0" data-launcher-slot="shortcut">
+              {shortcutAgentId && (
+                <span
+                  // `role="presentation"`, not a `<button>`. These sit inside
+                  // `role="option"`, where ARIA treats children as presentational
+                  // and a real button trips `nested-interactive`. They were
+                  // already `tabIndex={-1}`, so no keyboard path is lost — focus
+                  // stays on the search box and rows are driven by
+                  // `aria-activedescendant`. Mirrors `ActionPaletteItem`, which
+                  // fixed the same thing on the sibling palette.
+                  role="presentation"
+                  data-testid={`launcher-shortcut-edit-${shortcutAgentId}`}
+                  title={displayCombo ? "Change keyboard shortcut" : "Assign keyboard shortcut"}
+                  onPointerDown={(event) => event.preventDefault()}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onStartCapture(row.rowKey);
+                  }}
+                  className={cn(
+                    "inline-flex h-5 w-5 items-center justify-center rounded-[var(--radius-sm)] bg-transparent border-0",
+                    "text-daintree-text/40 opacity-0 transition-[opacity,color,background-color]",
+                    "hover:bg-overlay-soft hover:text-daintree-text",
+                    "group-hover:opacity-100 group-aria-selected:opacity-100"
+                  )}
+                >
+                  <Keyboard className="h-3 w-3" aria-hidden />
+                </span>
               )}
-            >
-              <Keyboard className="h-3 w-3" aria-hidden />
-            </button>
-          )}
-        </span>
+            </span>
 
-        <span className="ml-1 w-5 shrink-0" data-launcher-slot="pin">
-          {pinTarget && (
-            <button
-              type="button"
-              tabIndex={-1}
-              aria-label={`${pinTarget.onToolbar ? TOOLBAR_UNPIN_LABEL : TOOLBAR_PIN_LABEL}: ${pinTarget.name}`}
-              aria-pressed={pinTarget.onToolbar}
-              aria-keyshortcuts="Alt+P"
-              title={`${pinTarget.onToolbar ? TOOLBAR_UNPIN_LABEL : TOOLBAR_PIN_LABEL} (Alt+P)`}
-              // preventDefault keeps focus on the search box. stopPropagation
-              // belongs on the click below and nowhere else: the row's own
-              // onClick is an ancestor of this one, so the pin must stop the
-              // click — but stopping the POINTERDOWN would hide it from Radix's
-              // DismissableLayer, which needs to see it to classify the next
-              // outside click as a dismissal.
-              onPointerDown={(event) => event.preventDefault()}
-              onClick={(event) => {
-                event.preventDefault();
-                event.stopPropagation();
-                onTogglePin(pinTarget);
-              }}
-              className={cn(
-                "inline-flex h-5 w-5 items-center justify-center rounded-[var(--radius-sm)] bg-transparent border-0",
-                "transition-[opacity,color,background-color] hover:bg-overlay-soft hover:text-daintree-text",
-                // Pinned rows read as state markers and stay visible; unpinned
-                // ones are controls that only appear once the row is under the
-                // pointer or the selection.
-                pinTarget.onToolbar
-                  ? "text-daintree-text/70 opacity-100"
-                  : "text-daintree-text/40 opacity-0 group-hover:opacity-100 group-aria-selected:opacity-100"
-              )}
-            >
-              {/* `Pin`, filled, for the pinned state — never `PinOff`. A pin
+            <span className="ml-1 w-5 shrink-0" data-launcher-slot="pin">
+              {pinTarget && (
+                <span
+                  role="presentation"
+                  data-launcher-pin=""
+                  // The state rides a data attribute because `aria-pressed` on a
+                  // presentational element is ignored — and it was never what
+                  // announced the pin anyway. The option's own `aria-label`
+                  // carries "Press Alt+P to pin/unpin to toolbar" and its
+                  // `aria-keyshortcuts` carries the chord.
+                  data-pinned={pinTarget.onToolbar}
+                  title={`${pinTarget.onToolbar ? TOOLBAR_UNPIN_LABEL : TOOLBAR_PIN_LABEL} (Alt+P)`}
+                  // preventDefault keeps focus on the search box. stopPropagation
+                  // belongs on the click below and nowhere else: the row's own
+                  // onClick is an ancestor of this one, so the pin must stop the
+                  // click — but stopping the POINTERDOWN would hide it from Radix's
+                  // DismissableLayer, which needs to see it to classify the next
+                  // outside click as a dismissal.
+                  onPointerDown={(event) => event.preventDefault()}
+                  onClick={(event) => {
+                    event.preventDefault();
+                    event.stopPropagation();
+                    onTogglePin(pinTarget);
+                  }}
+                  className={cn(
+                    "inline-flex h-5 w-5 items-center justify-center rounded-[var(--radius-sm)] bg-transparent border-0",
+                    "transition-[opacity,color,background-color] hover:bg-overlay-soft hover:text-daintree-text",
+                    // Pinned rows read as state markers and stay visible; unpinned
+                    // ones are controls that only appear once the row is under the
+                    // pointer or the selection.
+                    pinTarget.onToolbar
+                      ? "text-daintree-text/70 opacity-100"
+                      : "text-daintree-text/40 opacity-0 group-hover:opacity-100 group-aria-selected:opacity-100"
+                  )}
+                >
+                  {/* `Pin`, filled, for the pinned state — never `PinOff`. A pin
                   with a slash through it is the "off/muted/unavailable" glyph
                   in every system that defines one, so wearing it at rest made a
                   pinned row advertise that it was not pinned. Paired with
                   `aria-pressed="true"` it read as a double negative to a screen
                   reader too. Filled-for-selected, outline-for-unselected is the
                   convention the rest of the app's toggles follow. */}
-              <Pin className={cn("h-3 w-3", pinTarget.onToolbar && "fill-current")} aria-hidden />
-            </button>
-          )}
-        </span>
+                  <Pin
+                    className={cn("h-3 w-3", pinTarget.onToolbar && "fill-current")}
+                    aria-hidden
+                  />
+                </span>
+              )}
+            </span>
+          </>
+        )}
       </div>
     </>
   );

@@ -142,7 +142,7 @@ test.describe.serial("Core: Toolbar launcher (shared component)", () => {
     // Whether it is gated depends on the fixture's project state; what must hold
     // either way is that the row is an option carrying its own pin control, so
     // the affordance stays reachable when it IS gated.
-    await expect(row.locator("button[aria-pressed]")).toHaveCount(1);
+    await expect(row.locator("[data-launcher-pin]")).toHaveCount(1);
   });
 
   test("Escape clears a query before it closes the launcher", async () => {

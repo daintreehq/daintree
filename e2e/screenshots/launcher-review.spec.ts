@@ -151,7 +151,10 @@ function createRepo(): { dir: string; cleanup: () => void } {
     { id: "team-plan", name: "Plan first" },
     { id: "team-sonnet", name: "Sonnet" },
   ]) {
-    writeFileSync(path.join(presetsDir, `${preset.id}.json`), JSON.stringify(preset, null, 2) + "\n");
+    writeFileSync(
+      path.join(presetsDir, `${preset.id}.json`),
+      JSON.stringify(preset, null, 2) + "\n"
+    );
   }
 
   git("add -A", dir);
@@ -255,9 +258,7 @@ async function openLauncher(page: Page, trigger = DOCK_TRIGGER): Promise<void> {
   await page.locator(SEARCH_BOX).waitFor({ state: "visible", timeout: 8000 });
   // The agent inventory resolves asynchronously; capturing before it lands
   // photographs "Checking agents…" instead of the bands under review.
-  await expect
-    .poll(() => page.locator(OPTION).count(), { timeout: 10_000 })
-    .toBeGreaterThan(3);
+  await expect.poll(() => page.locator(OPTION).count(), { timeout: 10_000 }).toBeGreaterThan(3);
   await settle(page, 350);
 }
 
@@ -267,11 +268,22 @@ async function closeLauncher(page: Page): Promise<void> {
   // recording a shortcut vetoes one before either of those — so a fixed count
   // is not enough to guarantee the surface is gone.
   for (let attempt = 0; attempt < 4; attempt++) {
-    if (!(await page.locator(SEARCH_BOX).isVisible().catch(() => false))) return;
+    if (
+      !(await page
+        .locator(SEARCH_BOX)
+        .isVisible()
+        .catch(() => false))
+    )
+      return;
     await page.keyboard.press("Escape").catch(() => {});
     await settle(page, 200);
   }
-  if (await page.locator(SEARCH_BOX).isVisible().catch(() => false)) {
+  if (
+    await page
+      .locator(SEARCH_BOX)
+      .isVisible()
+      .catch(() => false)
+  ) {
     throw new Error("launcher would not close");
   }
 }

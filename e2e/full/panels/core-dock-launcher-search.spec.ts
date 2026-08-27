@@ -227,8 +227,8 @@ test.describe.serial("Core: Dock launcher search", () => {
 
     // By the option's own accessible name, anchored at the start — `hasText`
     // is a substring match and "browser" also ranks File Browser.
-    const pin = window.locator(`${OPTION}[aria-label^="Browser,"] button[aria-pressed]`);
-    await expect(pin).toHaveAttribute("aria-pressed", "false", { timeout: T_MEDIUM });
+    const pin = window.locator(`${OPTION}[aria-label^="Browser,"] [data-launcher-pin]`);
+    await expect(pin).toHaveAttribute("data-pinned", "false", { timeout: T_MEDIUM });
 
     await pin.click();
 
@@ -237,7 +237,7 @@ test.describe.serial("Core: Dock launcher search", () => {
     await expect(searchBox(window)).toBeVisible();
     await expect(searchBox(window)).toHaveValue("browser");
     expect(await searchBoxHasFocus(window)).toBe(true);
-    await expect(pin).toHaveAttribute("aria-pressed", "true", { timeout: T_MEDIUM });
+    await expect(pin).toHaveAttribute("data-pinned", "true", { timeout: T_MEDIUM });
 
     // The point of the affordance: the toolbar button beside the launcher is
     // how a pin becomes visible. The write is optimistic through an async IPC,
@@ -262,10 +262,10 @@ test.describe.serial("Core: Dock launcher search", () => {
     // and later specs share this window.
     await openLauncher(window);
     await searchBox(window).fill("browser");
-    const pinAgain = window.locator(`${OPTION}[aria-label^="Browser,"] button[aria-pressed]`);
-    await expect(pinAgain).toHaveAttribute("aria-pressed", "true", { timeout: T_MEDIUM });
+    const pinAgain = window.locator(`${OPTION}[aria-label^="Browser,"] [data-launcher-pin]`);
+    await expect(pinAgain).toHaveAttribute("data-pinned", "true", { timeout: T_MEDIUM });
     await pinAgain.click();
-    await expect(pinAgain).toHaveAttribute("aria-pressed", "false", { timeout: T_MEDIUM });
+    await expect(pinAgain).toHaveAttribute("data-pinned", "false", { timeout: T_MEDIUM });
     // Two presses: the first clears the populated query, the second closes.
     await window.keyboard.press("Escape");
     await window.keyboard.press("Escape");
