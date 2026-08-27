@@ -93,6 +93,12 @@ export const config: AgentConfig = {
     // folder-trust prompt, so it marks genuinely-ready-for-input. It is not the
     // only way boot can exit — a trust prompt trips the prompt-hint path first,
     // which is the desirable outcome (the agent really is awaiting input).
+    //
+    // Footer-derived patterns are the softest part of this config: `/statusline`
+    // lets a user replace the built-in footer entirely ("Statusline off. Run
+    // /statusline to re-enable"). Such a terminal loses `? for shortcuts` and
+    // falls back to the boot timeout and the silence path, which is a graceful
+    // degradation rather than a wrong state.
     bootCompletePatterns: ["\\?\\s+for\\s+shortcuts"],
     // The bare `>` input line. Anchored empty on purpose: `>` also prefixes the
     // selected row of every menu (`> 1. Yes`) and the echoed user turn (`> hi`),
@@ -120,8 +126,11 @@ export const config: AgentConfig = {
     primaryConfidence: 0.95,
     fallbackConfidence: 0.7,
     promptConfidence: 0.85,
-    // No `titleStatePatterns`: agy emits no OSC 0/1/2 title sequences at all
-    // (only OSC 8 hyperlinks), so there is no title glyph to key state on.
+    // No `titleStatePatterns`: across both captures agy emitted only OSC 8
+    // hyperlinks and no OSC 0/1/2 title sequence, so there is no title glyph to
+    // key state on. "By default" is the honest qualifier — the binary carries a
+    // `/title` toggle ("Toggle custom terminal window title"), off unless the
+    // user turns it on. If that ever ships on by default, revisit this.
   },
   // `sessionIdPattern` restored from real captured output. #11851 recorded 0
   // captures in 6 teardowns because the old pattern separated the flag and the
