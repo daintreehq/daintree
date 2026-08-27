@@ -331,7 +331,7 @@ Performance & Diagnostics:
   };
 
   return (
-    <AppDialog isOpen={isOpen} onClose={onClose} size="lg">
+    <AppDialog isOpen={isOpen} onClose={onClose} size="lg" data-testid="terminal-info-dialog">
       <AppDialog.Header>
         <AppDialog.Title icon={<Info className="h-5 w-5" />}>Terminal Information</AppDialog.Title>
         <AppDialog.CloseButton />
@@ -339,7 +339,12 @@ Performance & Diagnostics:
 
       <AppDialog.Body>
         {loading && (
-          <div className="text-center text-daintree-text/70 py-8" role="status" aria-live="polite">
+          <div
+            className="text-center text-daintree-text/70 py-8"
+            role="status"
+            aria-live="polite"
+            data-testid="terminal-info-loading"
+          >
             Loading terminal info...
           </div>
         )}
@@ -348,6 +353,7 @@ Performance & Diagnostics:
           <div
             className="bg-status-error/10 border border-status-error/30 rounded-[var(--radius-lg)] p-4 text-status-error select-text"
             role="alert"
+            data-testid="terminal-info-error"
           >
             <p className="font-semibold mb-1">Failed to load terminal information</p>
             <p className="text-sm font-mono break-all">{error}</p>
@@ -355,7 +361,7 @@ Performance & Diagnostics:
         )}
 
         {info && !loading && (
-          <div className="space-y-6">
+          <div className="space-y-6" data-testid="terminal-info-body">
             <InfoSection title="Session Metadata">
               <InfoRow label="Terminal ID" value={info.id} mono />
               <InfoRow label="Kind" value={info.kind || "terminal"} />
@@ -464,7 +470,7 @@ Performance & Diagnostics:
           <Button variant="ghost" onClick={onClose}>
             Close
           </Button>
-          <Button variant="contrast" onClick={copyToClipboard}>
+          <Button variant="contrast" onClick={copyToClipboard} data-testid="terminal-info-copy">
             Copy to Clipboard
           </Button>
         </AppDialog.Footer>
