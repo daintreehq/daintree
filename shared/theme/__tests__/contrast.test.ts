@@ -419,6 +419,26 @@ describe("getThemeContrastWarnings", () => {
     expect(messages.some((m) => m.includes("the surrounding palette surface"))).toBe(false);
   });
 
+  it("fails a rail that clears both ordinary backdrops but not a destructive row's fill", () => {
+    // The item primitives draw this rail as an inset focus ring, and a
+    // destructive row swaps `overlay-raised` out for `status-danger/10`. A pale
+    // danger token lifts that fill towards the rail: #5A5A5A is 3.04:1 on the
+    // black surface and on a black raised fill, but only 2.68:1 on the 10%
+    // wash #F5B5B5 leaves behind. Scoring the first two pairs alone calls this
+    // compliant and loses the ring on exactly the row that most needs it.
+    const scheme = makeFlatDarkScheme({
+      "overlay-raised": "#000000" as AppColorSchemeTokens["overlay-raised"],
+      "selection-outline": "#5A5A5A" as AppColorSchemeTokens["selection-outline"],
+      "status-danger": "#F5B5B5" as AppColorSchemeTokens["status-danger"],
+    });
+    const messages = getThemeContrastWarnings(scheme)
+      .filter((w) => w.message.includes("selection-outline against"))
+      .map((w) => w.message);
+    expect(messages.some((m) => m.includes("a destructive menu row's fill"))).toBe(true);
+    expect(messages.some((m) => m.includes("the selected row fill"))).toBe(false);
+    expect(messages.some((m) => m.includes("the surrounding palette surface"))).toBe(false);
+  });
+
   it("scores the dark palette surface as translucent, not as the solid sidebar", () => {
     // #5A5A5A clears 3:1 on a solid black sidebar, but the palette floats at 94%
     // over the app, and admitting 6% of a bright plane behind it drops the pair

@@ -189,6 +189,26 @@ type DropdownMenuSubTriggerProps = React.ComponentPropsWithoutRef<
   inset?: boolean;
 };
 
+/* Highlighted-row focus ring, shared by every item-shaped primitive below.
+ *
+ * `data-[highlighted]` is Radix's own highlight and fires for pointer and keyboard
+ * alike, so it stays the fill. It cannot be the WCAG 1.4.11 indicator on its own:
+ * `overlay-raised` clears about 1.1:1 against the surface these menus float on
+ * (`shared/theme/contrast.ts`), which is why the palette row grew a separate rail
+ * rather than a heavier fill. Keyboard focus gets the indicator instead.
+ *
+ * `selection-outline` rather than the accent the generic inset-ring recipe names:
+ * `getPaletteSelectionWarnings` already holds that token to 3:1 against both the
+ * raised fill and the `.surface-overlay` behind it, which is exactly the pair an
+ * inset ring on a highlighted row sits between. Accent is only scored against the
+ * display surfaces, and a select would then spend it twice — once on the trigger's
+ * focused border, once here.
+ *
+ * `outline-solid` is load-bearing, not decorative: `outline-hidden` sets
+ * `--tw-outline-style: none` on this element and `outline-2` reads that same
+ * variable back, so the ring resolves to `outline-style: none` without it. The
+ * suppression is kept so `forced-colors` can still recolour the outline (#6185).
+ */
 const DropdownMenuSubTrigger = React.forwardRef<
   React.ElementRef<typeof DropdownMenuPrimitiveType.SubTrigger>,
   DropdownMenuSubTriggerProps
@@ -200,7 +220,7 @@ const DropdownMenuSubTrigger = React.forwardRef<
     <SubTrigger
       ref={ref}
       className={cn(
-        "flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] px-2.5 py-1.5 text-xs outline-hidden transition-colors focus:bg-overlay-raised data-[highlighted]:bg-overlay-raised data-[state=open]:bg-overlay-raised",
+        "flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] px-2.5 py-1.5 text-xs outline-hidden transition-colors data-[highlighted]:bg-overlay-raised focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline focus-visible:outline-offset-[-2px] data-[state=open]:bg-overlay-raised",
         inset && "pl-8",
         className
       )}
@@ -314,7 +334,7 @@ const DropdownMenuItem = React.forwardRef<
     <Item
       ref={ref}
       className={cn(
-        "relative flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] px-2.5 py-1.5 text-xs outline-hidden transition-colors focus:bg-overlay-raised data-[highlighted]:bg-overlay-raised data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+        "relative flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] px-2.5 py-1.5 text-xs outline-hidden transition-colors data-[highlighted]:bg-overlay-raised focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline focus-visible:outline-offset-[-2px] data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
         inset && "pl-8",
         destructive &&
           "text-status-danger data-[highlighted]:text-status-danger data-[highlighted]:bg-status-danger/10",
@@ -445,7 +465,7 @@ const DropdownMenuRadioItem = React.forwardRef<
     <RadioItem
       ref={ref}
       className={cn(
-        "relative flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] py-1.5 pl-8 pr-2.5 text-xs outline-hidden transition-colors focus:bg-overlay-raised data-[highlighted]:bg-overlay-raised data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+        "relative flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] py-1.5 pl-8 pr-2.5 text-xs outline-hidden transition-colors data-[highlighted]:bg-overlay-raised focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline focus-visible:outline-offset-[-2px] data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
         className
       )}
       {...props}
@@ -477,7 +497,7 @@ const DropdownMenuCheckboxItem = React.forwardRef<
     <CheckboxItem
       ref={ref}
       className={cn(
-        "relative flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] py-1.5 pl-8 pr-2.5 text-xs outline-hidden transition-colors focus:bg-overlay-raised data-[highlighted]:bg-overlay-raised data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
+        "relative flex cursor-pointer select-none items-center rounded-[var(--radius-sm)] py-1.5 pl-8 pr-2.5 text-xs outline-hidden transition-colors data-[highlighted]:bg-overlay-raised focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline focus-visible:outline-offset-[-2px] data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
         className
       )}
       checked={checked}

@@ -274,6 +274,11 @@ interface SelectItemProps extends React.ComponentPropsWithoutRef<typeof SelectPr
   description?: React.ReactNode;
 }
 
+/* Same highlighted-row focus ring as the dropdown-menu primitives: Radix's
+ * `data-[highlighted]` fill is too low-contrast to be the indicator, so keyboard
+ * focus draws an inset `selection-outline` ring. `outline-solid` is load-bearing —
+ * `outline-hidden` sets `--tw-outline-style: none` and `outline-2` reads it back.
+ */
 const SelectItem = React.forwardRef<
   React.ElementRef<typeof SelectPrimitiveType.Item>,
   SelectItemProps
@@ -288,7 +293,7 @@ const SelectItem = React.forwardRef<
       ref={ref}
       className={cn(
         "relative flex w-full cursor-pointer select-none items-start rounded-[var(--radius-sm)] py-1.5 pl-8 pr-2.5 text-xs outline-hidden transition-colors",
-        "focus:bg-overlay-raised data-[highlighted]:bg-overlay-raised",
+        "data-[highlighted]:bg-overlay-raised focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-selection-outline focus-visible:outline-offset-[-2px]",
         "data-[disabled]:pointer-events-none data-[disabled]:opacity-50",
         className
       )}

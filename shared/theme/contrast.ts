@@ -647,6 +647,13 @@ function resolvePaletteSurfaces(scheme: AppColorScheme): string[] | null {
 
 const SELECTION_RAIL_MIN_CONTRAST = 3.0;
 
+// A destructive menu row replaces the raised fill with `status-danger/10`
+// (`data-[highlighted]:bg-status-danger/10` in the item primitives, which
+// tailwind-merge resolves in favour of the later class). The rail has to hold
+// its floor on that backdrop too, so the alpha is pinned here rather than left
+// implicit in the class string.
+const DESTRUCTIVE_ROW_FILL_OPACITY = 0.1;
+
 /** WCAG 1.4.11's non-text floor, same basis as the selection rail above. */
 const RECENT_ACTIVITY_DOT_MIN_CONTRAST = 3.0;
 
@@ -777,6 +784,7 @@ function getPaletteSelectionWarnings(scheme: AppColorScheme): AppThemeValidation
   const warnings: AppThemeValidationWarning[] = [];
   const railToken = scheme.tokens["selection-outline"];
   const fillToken = scheme.tokens["overlay-raised"];
+  const dangerToken = scheme.tokens["status-danger"];
 
   const surfaces = resolvePaletteSurfaces(scheme);
   if (surfaces === null) {
@@ -813,11 +821,36 @@ function getPaletteSelectionWarnings(scheme: AppColorScheme): AppThemeValidation
       return warnings;
     }
 
-    for (const [label, against] of [
-      ["the selected row fill", fill],
-      ["the surrounding palette surface", surface],
+    // The menu, context-menu and select item primitives draw this same token as
+    // an inset focus ring, on the same raised fill over the same
+    // `.surface-overlay` the palette floats on — so the two pairs above already
+    // cover the ordinary row. A destructive item is the one row that swaps the
+    // fill out, and a ring that vanishes only on "Delete" is the worst place to
+    // lose it.
+    const dangerBase = resolveOverBackdrop(dangerToken, surface);
+    if (dangerBase === null) {
+      warnings.push({
+        kind: "unevaluable",
+        message: `Cannot evaluate palette selection contrast: status-danger="${dangerToken}" is neither hex nor rgba()`,
+      });
+      return warnings;
+    }
+    const dangerFill = blendOverBackground(dangerBase, surface, DESTRUCTIVE_ROW_FILL_OPACITY);
+    const dangerRail = resolveOverBackdrop(railToken, dangerFill);
+    if (dangerRail === null) {
+      warnings.push({
+        kind: "unevaluable",
+        message: `Cannot evaluate palette selection contrast: selection-outline="${railToken}" is neither hex nor rgba()`,
+      });
+      return warnings;
+    }
+
+    for (const [label, ink, against] of [
+      ["the selected row fill", rail, fill],
+      ["the surrounding palette surface", rail, surface],
+      ["a destructive menu row's fill", dangerRail, dangerFill],
     ] as const) {
-      const ratio = contrastRatio(rail, against);
+      const ratio = contrastRatio(ink, against);
       const seen = worstByLabel.get(label);
       if (seen === undefined || ratio < seen) worstByLabel.set(label, ratio);
     }
