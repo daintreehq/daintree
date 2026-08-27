@@ -123,7 +123,7 @@ describe("DevPreviewDestructiveConfirmDialog", () => {
 
     // Confirm button is enabled once meta loads, even though sizes haven't resolved yet.
     const confirmBtn = screen.getByRole<HTMLButtonElement>("button", { name: /clear cache/i });
-    expect(confirmBtn.disabled).toBe(false);
+    expect(confirmBtn.hasAttribute("aria-disabled")).toBe(false);
 
     await act(async () => {
       sizesDeferred.resolve(baseSizes);
@@ -244,7 +244,7 @@ describe("DevPreviewDestructiveConfirmDialog", () => {
       expect(screen.getByTestId("dev-preview-destructive-meta-error")).toBeTruthy();
     });
     const confirmBtn = screen.getByRole<HTMLButtonElement>("button", { name: /clear cache/i });
-    expect(confirmBtn.disabled).toBe(true);
+    expect(confirmBtn.getAttribute("aria-disabled")).toBe("true");
 
     await act(async () => {
       sizesDeferred.resolve(baseSizes);
@@ -270,16 +270,18 @@ describe("DevPreviewDestructiveConfirmDialog", () => {
     );
 
     const confirmBtn = screen.getByRole<HTMLButtonElement>("button", { name: /clear cache/i });
-    expect(confirmBtn.disabled).toBe(true);
+    expect(confirmBtn.getAttribute("aria-disabled")).toBe("true");
 
     await act(async () => {
       metaDeferred.resolve(baseMeta);
     });
 
     await waitFor(() => {
-      expect(screen.getByRole<HTMLButtonElement>("button", { name: /clear cache/i }).disabled).toBe(
-        false
-      );
+      expect(
+        screen
+          .getByRole<HTMLButtonElement>("button", { name: /clear cache/i })
+          .hasAttribute("aria-disabled")
+      ).toBe(false);
     });
   });
 
@@ -305,7 +307,7 @@ describe("DevPreviewDestructiveConfirmDialog", () => {
     });
 
     const confirmBtn = screen.getByRole<HTMLButtonElement>("button", { name: /clear cache/i });
-    expect(confirmBtn.disabled).toBe(false);
+    expect(confirmBtn.hasAttribute("aria-disabled")).toBe(false);
   });
 
   it("passes panelId/projectId to both IPC calls and sets skipNodeModules for the cache tier", async () => {

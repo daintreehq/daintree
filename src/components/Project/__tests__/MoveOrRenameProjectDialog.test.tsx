@@ -83,7 +83,7 @@ describe("MoveOrRenameProjectDialog", () => {
     expect(screen.getByText("Move or rename project")).toBeTruthy();
     expect((screen.getByTestId("relocate-name-input") as HTMLInputElement).value).toBe("Proj");
     expect((screen.getByTestId("relocate-folder-input") as HTMLInputElement).value).toBe("proj");
-    expect(confirmButton().disabled).toBe(true);
+    expect(confirmButton().getAttribute("aria-disabled")).toBe("true");
     expect(previewRelocation).not.toHaveBeenCalled();
   });
 
@@ -95,7 +95,7 @@ describe("MoveOrRenameProjectDialog", () => {
 
     const btn = confirmButton();
     expect(btn.textContent).toContain("Rename project");
-    expect(btn.disabled).toBe(false);
+    expect(btn.hasAttribute("aria-disabled")).toBe(false);
 
     fireEvent.click(btn);
     await waitFor(() => expect(updateProject).toHaveBeenCalledWith("p1", { name: "Renamed" }));
@@ -111,10 +111,10 @@ describe("MoveOrRenameProjectDialog", () => {
 
     fireEvent.change(screen.getByTestId("relocate-folder-input"), { target: { value: "proj2" } });
     // Folder changed, preview not yet loaded → confirm gated.
-    expect(confirmButton().disabled).toBe(true);
+    expect(confirmButton().getAttribute("aria-disabled")).toBe("true");
 
     await waitFor(() => expect(previewRelocation).toHaveBeenCalled());
-    await waitFor(() => expect(confirmButton().disabled).toBe(false));
+    await waitFor(() => expect(confirmButton().hasAttribute("aria-disabled")).toBe(false));
   });
 
   it("blockers in the preview keep confirm disabled and surface their messages", async () => {
@@ -133,7 +133,7 @@ describe("MoveOrRenameProjectDialog", () => {
     await waitFor(() =>
       expect(screen.getByText(/Moving across volumes isn't supported yet/)).toBeTruthy()
     );
-    expect(confirmButton().disabled).toBe(true);
+    expect(confirmButton().getAttribute("aria-disabled")).toBe("true");
   });
 
   it("a full move calls applyRelocation with the previewed destination", async () => {
@@ -142,7 +142,7 @@ describe("MoveOrRenameProjectDialog", () => {
     render(<MoveOrRenameProjectDialog />);
 
     fireEvent.change(screen.getByTestId("relocate-folder-input"), { target: { value: "proj2" } });
-    await waitFor(() => expect(confirmButton().disabled).toBe(false));
+    await waitFor(() => expect(confirmButton().hasAttribute("aria-disabled")).toBe(false));
 
     fireEvent.click(confirmButton());
     await waitFor(() =>
@@ -186,7 +186,7 @@ describe("MoveOrRenameProjectDialog", () => {
     // Count > 1 is surfaced next to the agent name.
     expect(screen.getByText(/Codex \(2\)/)).toBeTruthy();
     // Continuity is informational — it must NOT disable confirm (only blockers do).
-    await waitFor(() => expect(confirmButton().disabled).toBe(false));
+    await waitFor(() => expect(confirmButton().hasAttribute("aria-disabled")).toBe(false));
   });
 
   it("renders a single-terminal agent without a count suffix (#11282 phase 5)", async () => {
@@ -217,7 +217,7 @@ describe("MoveOrRenameProjectDialog", () => {
 
     fireEvent.change(screen.getByTestId("relocate-folder-input"), { target: { value: "proj2" } });
 
-    await waitFor(() => expect(confirmButton().disabled).toBe(false));
+    await waitFor(() => expect(confirmButton().hasAttribute("aria-disabled")).toBe(false));
     // No agents → no continuity section.
     expect(screen.queryByTestId("relocate-continuity")).toBeNull();
     // The terminal line describes restart, not conversation preservation.
@@ -240,7 +240,7 @@ describe("MoveOrRenameProjectDialog", () => {
     await waitFor(() => {
       const btn = confirmButton();
       expect(btn.textContent).toContain("Reattach project");
-      expect(btn.disabled).toBe(false);
+      expect(btn.hasAttribute("aria-disabled")).toBe(false);
     });
 
     fireEvent.click(confirmButton());
@@ -263,7 +263,7 @@ describe("MoveOrRenameProjectDialog", () => {
 
     fireEvent.click(screen.getByTestId("relocate-browse-existing"));
     await waitFor(() => expect(previewRelocation).toHaveBeenCalled());
-    await waitFor(() => expect(confirmButton().disabled).toBe(false));
+    await waitFor(() => expect(confirmButton().hasAttribute("aria-disabled")).toBe(false));
 
     fireEvent.click(confirmButton());
     await waitFor(() =>
@@ -312,6 +312,6 @@ describe("MoveOrRenameProjectDialog", () => {
     resolveA(cleanPreview());
     await new Promise((r) => setTimeout(r, 0));
     expect(document.querySelector('[data-testid="relocate-preview"]')).toBeNull();
-    expect(confirmButton().disabled).toBe(true);
+    expect(confirmButton().getAttribute("aria-disabled")).toBe("true");
   });
 });

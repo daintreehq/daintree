@@ -212,6 +212,11 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
   const isTypedMatched = !hasTypedNameGate || typedValue === typedNameTarget;
 
   const handleConfirm = () => {
+    // `TypedNameConfirmInput` submits on Enter by calling straight through here,
+    // so neither `Button`'s loading guard nor the footer's disabled guard is on
+    // this path — without the check, Enter could fire the action a second time
+    // while the first is still running.
+    if (isConfirmLoading) return;
     if (isCooldownActive) return;
     if (hasTypedNameGate && !isTypedMatched) return;
     if (confirmDisabled) return;

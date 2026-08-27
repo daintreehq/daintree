@@ -148,12 +148,12 @@ describe("PluginConfirmDialog", () => {
       const confirmBtn = screen.getByRole("button", {
         name: "Delete worktree",
       }) as HTMLButtonElement;
-      expect(confirmBtn.disabled).toBe(true);
+      expect(confirmBtn.getAttribute("aria-disabled")).toBe("true");
 
       act(() => {
         vi.advanceTimersByTime(1200);
       });
-      expect(confirmBtn.disabled).toBe(false);
+      expect(confirmBtn.hasAttribute("aria-disabled")).toBe(false);
     } finally {
       vi.runOnlyPendingTimers();
       vi.useRealTimers();
@@ -169,7 +169,7 @@ describe("PluginConfirmDialog", () => {
       const confirmBtn = screen.getByRole("button", {
         name: "List worktrees",
       }) as HTMLButtonElement;
-      expect(confirmBtn.disabled).toBe(false);
+      expect(confirmBtn.hasAttribute("aria-disabled")).toBe(false);
     } finally {
       vi.runOnlyPendingTimers();
       vi.useRealTimers();
@@ -194,7 +194,7 @@ describe("PluginConfirmDialog", () => {
       const firstBtn = screen.getByRole("button", {
         name: "Delete worktree",
       }) as HTMLButtonElement;
-      expect(firstBtn.disabled).toBe(false);
+      expect(firstBtn.hasAttribute("aria-disabled")).toBe(false);
 
       act(() => {
         firstBtn.dispatchEvent(new MouseEvent("click", { bubbles: true }));
@@ -204,12 +204,12 @@ describe("PluginConfirmDialog", () => {
       const secondBtn = screen.getByRole("button", {
         name: "Reset branch",
       }) as HTMLButtonElement;
-      expect(secondBtn.disabled).toBe(true);
+      expect(secondBtn.getAttribute("aria-disabled")).toBe("true");
 
       act(() => {
         vi.advanceTimersByTime(1200);
       });
-      expect(secondBtn.disabled).toBe(false);
+      expect(secondBtn.hasAttribute("aria-disabled")).toBe(false);
     } finally {
       vi.runOnlyPendingTimers();
       vi.useRealTimers();
@@ -228,7 +228,7 @@ describe("PluginConfirmDialog", () => {
       const btn = screen.getByRole("button", {
         name: "Delete worktree",
       }) as HTMLButtonElement;
-      expect(btn.disabled).toBe(true);
+      expect(btn.getAttribute("aria-disabled")).toBe("true");
     } finally {
       vi.runOnlyPendingTimers();
       vi.useRealTimers();
