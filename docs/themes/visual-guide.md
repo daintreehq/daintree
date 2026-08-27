@@ -471,7 +471,7 @@ The settings dialog is split into two panes:
 |--------|                                  |
 | Panel  |  Each card uses:                 |
 | Wktree |  bg: settings-card-bg            |
-| Toolbar|  border: 1px border-default       |
+| Toolbar|  border: 1px border-default      |
 | Environ|  rounded corners                 |
 |--------|                                  |
 | CLI    |                                  |
