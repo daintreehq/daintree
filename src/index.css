@@ -2862,6 +2862,36 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     border: 2px solid ButtonText;
   }
 
+  /* …and the weight has to be re-asserted on everything else, or the signal
+   * above collapses. The `prefers-contrast: more` block later in this file sets
+   * `border-width: 2px` on bare `button` to anchor click targets, and Chromium
+   * reports `prefers-contrast: more` alongside `forced-colors: active` on a
+   * high-contrast Windows palette — so on the platform this block exists for,
+   * Cancel reached 2px, the destructive button was already 2px, and the two
+   * rendered identically. Pinning the others back to 1px rather than raising the
+   * destructive to 3px: the 1px/2px pair is the distinction that was designed,
+   * and the later block's own purpose — a visible border where Preflight left
+   * none — is already served by the 1px shorthand above.
+   *
+   * The specificity here is calibrated, not incidental, and it has to sit in a
+   * narrow band. `:where()` contributes nothing and `html` supplies the element,
+   * so the whole selector is (0,1,1):
+   *
+   *   - above the later generic `button` at (0,0,1), so it wins on rank rather
+   *     than on which block happens to come last in the file;
+   *   - BELOW `toolbar.css`'s armed/open rules at (0,2,0), which set their own
+   *     2px ButtonText border as the forced-colors fallback for a stripped tint
+   *     and inset ring. Spelling this out per-attribute instead — as
+   *     `[type="button"]:not(…)` — lands at (0,2,0), ties those, and wins on
+   *     source order, which silently flattens every pressed or open toolbar
+   *     control back to idle. */
+  html
+    :where(button, [role="button"], [type="button"], [type="submit"], [type="reset"]):not(
+      [data-variant="destructive"]
+    ) {
+    border-width: 1px;
+  }
+
   input,
   select,
   textarea {
