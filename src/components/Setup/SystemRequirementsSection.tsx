@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import { AlertTriangle, ChevronDown, CircleCheck, Loader2, RotateCw, CircleX } from "lucide-react";
 import { m, useReducedMotion } from "framer-motion";
 import { Skeleton, SkeletonBone } from "@/components/ui/Skeleton";
-import { UI_ENTER_DURATION } from "@/lib/animationUtils";
+import { UI_ENTER_DURATION, EASE_OUT_EXPO_FM } from "@/lib/animationUtils";
 import { useSystemHealthCheck } from "./useSystemHealthCheck";
 import { PrerequisiteCard } from "./SystemToolsStep";
 
@@ -118,7 +118,7 @@ export function SystemRequirementsSection({
         transition={
           prefersReducedMotion
             ? { duration: 0 }
-            : { duration: UI_ENTER_DURATION / 1000, ease: [0.16, 1, 0.3, 1] }
+            : { duration: UI_ENTER_DURATION / 1000, ease: EASE_OUT_EXPO_FM }
         }
         style={{ overflow: "hidden" }}
       >

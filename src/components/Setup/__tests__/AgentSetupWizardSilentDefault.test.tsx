@@ -150,12 +150,14 @@ vi.mock("@/components/ui/button", () => ({
     children,
     onClick,
     disabled,
+    "data-testid": testId,
   }: {
     children: React.ReactNode;
     onClick?: () => void;
     disabled?: boolean;
+    "data-testid"?: string;
   }) => (
-    <button onClick={onClick} disabled={disabled}>
+    <button onClick={onClick} disabled={disabled} data-testid={testId}>
       {children}
     </button>
   ),
@@ -215,9 +217,9 @@ describe("AgentSetupWizard silent-default privacy notify", () => {
 
     // Click the Skip button (rendered on the first-run entry step — appearance).
     const skipButton = Array.from(document.querySelectorAll("button")).find(
-      (b) => b.textContent === "Skip"
+      (b) => b.getAttribute("data-testid") === "agent-setup-exit"
     );
-    expect(skipButton, "Skip button should be present on the entry step").toBeDefined();
+    expect(skipButton, "the exit action should be present on the entry step").toBeDefined();
 
     await act(async () => {
       skipButton!.click();
@@ -320,7 +322,7 @@ describe("AgentSetupWizard silent-default privacy notify", () => {
     });
 
     const skipButton = Array.from(document.querySelectorAll("button")).find(
-      (b) => b.textContent === "Skip"
+      (b) => b.getAttribute("data-testid") === "agent-setup-exit"
     );
     await act(async () => {
       skipButton!.click();
@@ -337,7 +339,7 @@ describe("AgentSetupWizard silent-default privacy notify", () => {
     });
 
     const skipButton = Array.from(document.querySelectorAll("button")).find(
-      (b) => b.textContent === "Skip"
+      (b) => b.getAttribute("data-testid") === "agent-setup-exit"
     );
 
     await act(async () => {
@@ -401,7 +403,7 @@ describe("AgentSetupWizard silent-default privacy notify", () => {
     });
 
     const skipButton = Array.from(document.querySelectorAll("button")).find(
-      (b) => b.textContent === "Skip"
+      (b) => b.getAttribute("data-testid") === "agent-setup-exit"
     );
     await act(async () => {
       skipButton!.click();
@@ -421,7 +423,7 @@ describe("AgentSetupWizard silent-default privacy notify", () => {
     });
 
     const skipButton = Array.from(document.querySelectorAll("button")).find(
-      (b) => b.textContent === "Skip"
+      (b) => b.getAttribute("data-testid") === "agent-setup-exit"
     );
     await act(async () => {
       skipButton!.click();

@@ -129,9 +129,6 @@ const DURABLE_ALLOWLIST = new Set([
   // active focus region)
   "src/components/Plugin/PluginManagerView.tsx",
 
-  // Setup wizard step indicators, accent icon, telemetry toggle (one-time setup flow)
-  "src/components/Setup/AgentSetupWizard.tsx",
-
   // PresetColorPicker Done CTA (primary commit action) + focus-visible ring
   "src/components/Settings/PresetColorPicker.tsx",
 
@@ -194,7 +191,6 @@ const ALLOWLIST_BY_ISSUE: Record<string, string[]> = {
     "src/components/Settings/SettingsSwitchCard.tsx",
     "src/components/Settings/TerminalSettingsTab.tsx",
     "src/components/Settings/WorktreeSettingsTab.tsx",
-    "src/components/Setup/AgentCliStep.tsx",
     "src/components/Terminal/ContentGridDefault.tsx",
     "src/components/Terminal/ContentGridTwoPaneSplit.tsx",
     "src/components/Terminal/HybridInputBar.tsx",
