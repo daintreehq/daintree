@@ -316,8 +316,15 @@ export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDia
                     <li key={`${e.line}-${e.raw}`}>
                       <span className="text-text-secondary">Line {e.line}:</span>{" "}
                       <span className="font-medium text-daintree-text">{e.reason}</span>
+                      {/* Weight ranks the reason above the line it came from,
+                          the same way the outcome rows above rank a kept value.
+                          The raw line drops to its own row rather than sitting
+                          inline: it is arbitrary pasted text, and reasons like
+                          `Invalid key "2BAD_KEY"` already end in a quoted piece
+                          of it, so inline it reads as a continuation of the
+                          reason with or without a separator. */}
                       {e.raw.trim() !== "" && (
-                        <span className="ml-1 text-text-secondary"> {e.raw}</span>
+                        <div className="pl-4 break-all text-text-secondary">{e.raw}</div>
                       )}
                     </li>
                   ))}

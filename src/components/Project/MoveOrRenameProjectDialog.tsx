@@ -66,7 +66,7 @@ const CONTINUITY_PRESENTATION: Record<
   },
   unverified: {
     icon: HelpCircle,
-    className: "text-daintree-text/50",
+    className: "text-text-secondary",
     label: "Resume after move unverified",
     detailFallback: "Resuming this conversation after a move isn't confirmed",
   },

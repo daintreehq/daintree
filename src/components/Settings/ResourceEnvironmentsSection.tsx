@@ -430,11 +430,10 @@ export function ResourceEnvironmentsSection({
           </div>
           {/* Weight and colour rank the token above its description — an em dash
               between them read as one run of prose. Weight is also the half that
-              survives `prefers-contrast: more`, where `text-daintree-text/N` is
-              forced back to the solid token and the colour step disappears. The
-              literal space inside each detail span stays: adjacent inline spans
-              concatenate in the accessibility tree, and `ml-1` is what opens the
-              optical gap. */}
+              holds under `forced-colors: active`, which repaints every author
+              colour to the same system ink. The literal space inside each detail
+              span stays: adjacent inline spans concatenate in the accessibility
+              tree, and `ml-1` is what opens the optical gap. */}
           <div className="grid grid-cols-2 gap-x-4 gap-y-0.5">
             <div>
               <code className="font-medium text-daintree-text/85">{"{branch}"}</code>

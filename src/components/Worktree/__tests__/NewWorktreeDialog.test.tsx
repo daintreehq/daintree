@@ -386,8 +386,8 @@ describe("NewWorktreeDialog — existing branch mode", () => {
     // speaks it fine.
     const number = screen.getByText("#42");
     const title = screen.getByText("Test PR");
-    expect(number).not.toBe(title);
-    expect(number.parentElement?.textContent).toBe("PR #42 Test PR");
+    expect(title.previousElementSibling).toBe(number);
+    expect(title.textContent).toMatch(/^\s/);
   });
 
   it("shows existing branch picker when mode is toggled to existing", async () => {

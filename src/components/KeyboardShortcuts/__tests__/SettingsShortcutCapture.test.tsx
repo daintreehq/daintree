@@ -163,18 +163,17 @@ describe("SettingsShortcutCapture", () => {
       window.dispatchEvent(firstEvent);
     });
 
-    // Should show waiting state
+    // Should show waiting state, ranked against the captured combo by weight
+    // rather than a dash. Accent stays on the combo alone — the recording box
+    // already carries it as the one live signal, and a second accent tone
+    // would compete with it.
     const instruction = screen.getByText(/Press second key or wait to finish/);
-    expect(instruction).toBeTruthy();
-
-    // The captured combo and its instruction are ranked by weight, not by a dash.
-    // Accent stays on the combo alone — the recording box already carries it as
-    // the one live signal, and a second accent tone would compete with it.
     const combo = instruction.previousElementSibling;
     expect(combo).not.toBeNull();
-    expect(combo).not.toBe(instruction);
-    const announced = (instruction.parentElement?.textContent ?? "").replace(/\s+/g, " ").trim();
-    expect(announced).toBe(`${combo?.textContent} Press second key or wait to finish`);
+    expect(instruction.textContent).toMatch(/^\s/);
+    expect(instruction.parentElement?.textContent).toBe(
+      `${combo?.textContent}${instruction.textContent}`
+    );
 
     // Second key of chord
     const secondEvent = new KeyboardEvent("keydown", {

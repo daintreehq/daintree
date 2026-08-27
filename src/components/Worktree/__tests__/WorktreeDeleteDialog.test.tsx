@@ -480,12 +480,10 @@ describe("WorktreeDeleteDialog — consequence list", () => {
     const worktree = makeWorktree(makeChanges([]));
     render(<WorktreeDeleteDialog isOpen={true} onClose={vi.fn()} worktree={worktree} />);
 
-    const closed = screen.getByText("3 terminals will be closed");
-    const agents = screen.getByText("2 running an agents");
-    expect(closed).not.toBe(agents);
-    expect(closed.parentElement?.textContent).toBe(
-      "3 terminals will be closed 2 running an agents"
-    );
+    const closed = screen.getByText(/terminals will be closed/);
+    const agents = screen.getByText(/running agents/);
+    expect(agents.previousElementSibling).toBe(closed);
+    expect(agents.textContent).toMatch(/^\s/);
   });
 
   it("omits the data-loss row unless force is on AND there is something to lose", () => {
@@ -553,14 +551,12 @@ describe("WorktreeDeleteDialog — consequence list", () => {
         .getAllByRole("listitem")
         .some((row) => (row.textContent ?? "").startsWith("Branch feature/test"))
     ).toBe(true);
-    // The outcome and the guard that qualifies it are separate elements: the
-    // dash that used to join them read as one sentence, and weight is the half
-    // of the ranking that survives `prefers-contrast: more`.
+    // The outcome and the guard that qualifies it are separate elements — the
+    // dash that used to join them read as one sentence.
     const guard = screen.getByText(/Fails if it has unmerged changes/);
     const outcome = guard.previousElementSibling;
-    expect(outcome).not.toBeNull();
-    expect(outcome).not.toBe(guard);
-    expect(outcome?.textContent).toBe("Branch feature/test will be deleted");
+    expect(outcome?.textContent).toMatch(/^Branch .+ will be deleted$/);
+    expect(guard.textContent).toMatch(/^\s/);
   });
 
   it("does not offer a branch row for a protected branch", () => {

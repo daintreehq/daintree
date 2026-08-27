@@ -185,14 +185,14 @@ describe("MoveOrRenameProjectDialog", () => {
     expect(screen.getByText("Expected to resume automatically at the new location")).toBeTruthy();
     // Count > 1 is surfaced next to the agent name.
     expect(screen.getByText(/Codex \(2\)/)).toBeTruthy();
-    // The tier colour is meaning rather than emphasis, so it stays on the status
-    // and weight is what keeps the agent apart from it once increased contrast
-    // flattens the colour step.
+    // The tier colour is meaning rather than emphasis, so it stays on the
+    // status and weight is what keeps the agent name apart from it when
+    // forced-colors repaints both to the same ink.
     const claudeRow = screen.getByTestId("relocate-continuity-claude");
     const identity = within(claudeRow).getByText("Claude Code");
     const status = within(claudeRow).getByText("Provider migration required");
-    expect(identity).not.toBe(status);
-    expect(claudeRow.textContent).not.toContain("\u2014");
+    expect(status.previousElementSibling).toBe(identity);
+    expect(status.textContent).toMatch(/^\s/);
     // Continuity is informational — it must NOT disable confirm (only blockers do).
     await waitFor(() => expect(confirmButton().hasAttribute("aria-disabled")).toBe(false));
   });
@@ -235,9 +235,10 @@ describe("MoveOrRenameProjectDialog", () => {
     // The consequence outranks the reassurance by weight, not punctuation.
     const consequence = screen.getByText("2 terminals will be gracefully stopped");
     const reassurance = screen.getByText("They restart at the new location");
-    expect(consequence).not.toBe(reassurance);
+    expect(reassurance.previousElementSibling).toBe(consequence);
+    expect(reassurance.textContent).toMatch(/^\s/);
     expect(consequence.parentElement?.textContent).toBe(
-      "2 terminals will be gracefully stopped They restart at the new location"
+      `${consequence.textContent}${reassurance.textContent}`
     );
   });
 
