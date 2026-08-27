@@ -44,14 +44,15 @@ export function ResumeSessionLine() {
   return (
     // Hugs its content (centered) rather than stretching to the column width —
     // a stretched row strands "+N more" at the far edge, visually orphaned
-    // from the session it extends.
-    <div className="flex w-full max-w-lg items-center justify-center gap-1">
+    // from the session it extends. The width cap now comes from the launcher
+    // column, which owns the single measure every band shares.
+    <div className="flex w-full items-center justify-center gap-1">
       <button
         type="button"
         onClick={() => void resume(primary.session)}
         className="group flex min-w-0 items-center gap-2.5 rounded-[var(--radius-md)] px-2.5 py-1.5 text-left transition-colors hover:bg-overlay-subtle focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
       >
-        <History className="h-3.5 w-3.5 shrink-0 text-daintree-text/40" aria-hidden="true" />
+        <History className="h-3.5 w-3.5 shrink-0 text-text-muted" aria-hidden="true" />
         <span className="shrink-0">
           <PanelKindIcon iconId={primary.iconId} color={primary.color} size={15} />
         </span>
@@ -60,17 +61,15 @@ export function ResumeSessionLine() {
         </span>
         {primary.description && (
           // Shrinkable (no shrink-0): a long worktree/branch description must
-          // truncate inside max-w-lg, not push the row past it.
-          <span className="min-w-0 truncate text-xs text-daintree-text/40">
-            {primary.description}
-          </span>
+          // truncate inside the column's measure, not push the row past it.
+          <span className="min-w-0 truncate text-xs text-text-muted">{primary.description}</span>
         )}
       </button>
       {extraCount > 0 && (
         <button
           type="button"
           onClick={openLauncher}
-          className="shrink-0 rounded-[var(--radius-md)] px-2 py-1.5 text-xs text-daintree-text/45 transition-colors hover:bg-overlay-subtle hover:text-daintree-text/75 focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
+          className="shrink-0 rounded-[var(--radius-md)] px-2 py-1.5 text-xs text-text-secondary transition-colors hover:bg-overlay-subtle hover:text-daintree-text focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
           aria-label={`Browse ${extraCount} more resumable session${extraCount !== 1 ? "s" : ""}`}
         >
           +{extraCount} more

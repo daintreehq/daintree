@@ -8,7 +8,7 @@ describe("ContentGrid EmptyState — RecipeRunner integration", () => {
   it("identity is a centered stacked hero — mark above the name, one alignment axis", async () => {
     const content = await readFile(EMPTY_STATE_PATH, "utf-8");
     // Centered identity block…
-    expect(content).toContain('"mb-6 flex flex-col items-center text-center"');
+    expect(content).toMatch(/flex flex-col items-center text-center/);
     // …with the mark stacked above the name (no left-aligned lockup, no
     // gear-overlaid logo wrapper from the pre-redesign layout)…
     expect(content).toContain("identityMark");
@@ -32,8 +32,8 @@ describe("ContentGrid EmptyState — RecipeRunner integration", () => {
 
   it("derives hasEverLaunchedAgent from the panel store to gate teaching content", async () => {
     // RecipeRunner itself is deliberately NOT gated on hasEverLaunchedAgent
-    // (recipes are the launcher hero; see the CLAUDE.md recipe-gating gotcha) —
-    // the flag only gates teaching content like RotatingTip.
+    // (see the CLAUDE.md recipe-gating gotcha) — the flag only gates teaching
+    // content like RotatingTip.
     const content = await readFile(EMPTY_STATE_PATH, "utf-8");
     expect(content).toContain("hasEverLaunchedAgent");
     expect(content).toContain("usePanelStore");
@@ -44,8 +44,8 @@ describe("ContentGrid EmptyState — RecipeRunner integration", () => {
   // wait for the first launch (#6752) and are withheld from scratches entirely.
 });
 
-describe("ContentGrid EmptyState — recipe-forward launcher composition", () => {
-  it("composes recipes (hero), a single-line resume, and quick-launch actions", async () => {
+describe("ContentGrid EmptyState — anchor-forward launcher composition", () => {
+  it("composes the launch anchor, a single-line resume, and recipes", async () => {
     const content = await readFile(EMPTY_STATE_PATH, "utf-8");
     expect(content).toContain("<RecipeRunner");
     expect(content).toContain("<ResumeSessionLine />");

@@ -1,4 +1,4 @@
-import React, { useRef, useEffect } from "react";
+import React, { useRef } from "react";
 import { Search, Plus } from "lucide-react";
 import { RecipeRunnerItem } from "./RecipeRunnerItem";
 import type { RecipeSections, RankedRecipe } from "./recipeRunnerUtils";
@@ -44,11 +44,14 @@ export function RecipeRunnerList({
   const inputRef = useRef<HTMLInputElement>(null);
   const isSearchActive = searchQuery.trim().length > 0;
 
-  useEffect(() => {
-    if (showSearch) {
-      inputRef.current?.focus();
-    }
-  }, [showSearch]);
+  // Deliberately NOT focused on mount. This list is not a palette — it renders
+  // inside the canvas home, which a user reaches by closing their last panel or
+  // switching worktree, never by asking to search recipes. Focusing here stole
+  // the caret from whatever the user was doing every time a project with more
+  // than six recipes showed its empty canvas, and painted an accent ring on a
+  // surface nobody had navigated to. `ProjectPulseStrip` states the same rule
+  // for the same reason: "the empty grid must not steal focus just by
+  // rendering". Tab and the arrow keys still reach the field normally.
 
   // Build flat list for index computation
   let flatRecipes: TerminalRecipe[];

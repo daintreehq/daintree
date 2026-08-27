@@ -20,7 +20,7 @@ export function RecipeRunnerEmpty({
   return (
     <div
       data-testid="recipe-runner-empty"
-      className="flex flex-col items-stretch gap-3 py-2 w-full max-w-lg mx-auto"
+      className="flex flex-col items-stretch gap-3 py-2 w-full"
     >
       {hasSuggestions ? (
         <div className="flex flex-col gap-2">

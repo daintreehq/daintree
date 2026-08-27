@@ -554,6 +554,18 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
   void minuteTick;
   const updatedLabel = formatTimeSince(pulse.generatedAt, Date.now());
 
+  // pulse.rangeDays, not the selector's — the chip describes the same snapshot
+  // the coach line above it does.
+  const healthSection = usableHealth ? (
+    <HealthSignals health={usableHealth} rangeDays={pulse.rangeDays} />
+  ) : healthLoading ? (
+    <HealthSectionSkeleton />
+  ) : health && !health.hasRemote ? (
+    <NoRemoteHint />
+  ) : health && health.hasRemote ? (
+    <OfflineHint />
+  ) : null;
+
   return (
     <div
       className={cn(
@@ -628,24 +640,22 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
 
         <p className="text-xs text-daintree-text/80">{getCoachLine(pulse, usableHealth)}</p>
 
-        {/* Health section: always renders the wrapper so the 4 sub-variants
-            (signals, skeleton, no-remote hint, offline hint) can swap without
-            growing or collapsing the card. `min-h-9` matches the chip row
-            height (h-5 chip + pt-3 padding) so the loaded HealthSignals row
-            doesn't push siblings down when it resolves after pulse (#7671). */}
-        <div className="border-t border-daintree-border pt-3 min-h-9">
-          {usableHealth ? (
-            // pulse.rangeDays, not the selector's — the chip describes the same
-            // snapshot the coach line above it does.
-            <HealthSignals health={usableHealth} rangeDays={pulse.rangeDays} />
-          ) : healthLoading ? (
-            <HealthSectionSkeleton />
-          ) : health && !health.hasRemote ? (
-            <NoRemoteHint />
-          ) : health && health.hasRemote ? (
-            <OfflineHint />
-          ) : null}
-        </div>
+        {/* Health section: the wrapper reserves `min-h-9` (h-5 chip + pt-3) so
+            the four sub-variants — signals, skeleton, no-remote hint, offline
+            hint — swap without pushing siblings down when health resolves after
+            pulse (#7671).
+
+            But it only reserves for content that is actually coming. When no
+            forge provider ever resolves, `useProjectHealth` never enables its
+            poll, so `health` stays null and `healthLoading` stays false
+            forever: all four branches fall through and the rule plus the
+            reservation render a framed, permanently empty 36px block in the
+            middle of the card. A hairline around nothing reads as content that
+            failed to load. Reserve while a variant is still possible; render
+            nothing once it settles empty. */}
+        {healthSection !== null && (
+          <div className="border-t border-daintree-border pt-3 min-h-9">{healthSection}</div>
+        )}
 
         <div className="border-t border-daintree-border pt-3">
           <PulseSummary pulse={pulse} />

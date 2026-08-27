@@ -83,10 +83,24 @@ export function ProjectPulseStrip({ worktreeId }: ProjectPulseStripProps) {
     }
   }, [worktreeId, pulse, isLoading, error, fetchPulse]);
 
+  const expandedRef = useRef<HTMLDivElement>(null);
+
+  // Move focus into the expansion, but do NOT let the browser chase it. The
+  // collapse control sits at the bottom of a card several hundred pixels tall,
+  // so a plain `.focus()` scrolls the canvas until that button is visible —
+  // which drags the project identity and the launch anchor above it off the
+  // top of the screen. Expanding an ambient activity strip must not cost the
+  // user the thing they came here to click. `block: "nearest"` then keeps the
+  // card's own top edge in view, which is where the strip they clicked was.
   useEffect(() => {
     if (!toggledRef.current) return;
-    if (expanded) collapseButtonRef.current?.focus();
-    else stripButtonRef.current?.focus();
+    if (expanded) {
+      collapseButtonRef.current?.focus({ preventScroll: true });
+      expandedRef.current?.scrollIntoView({ block: "nearest" });
+    } else {
+      stripButtonRef.current?.focus({ preventScroll: true });
+      stripButtonRef.current?.scrollIntoView({ block: "nearest" });
+    }
   }, [expanded]);
 
   const miniCells = useMemo(() => {
@@ -111,7 +125,7 @@ export function ProjectPulseStrip({ worktreeId }: ProjectPulseStripProps) {
 
   if (expanded) {
     return (
-      <div className="flex w-full flex-col items-center gap-2">
+      <div ref={expandedRef} className="flex w-full flex-col items-center gap-2">
         <ProjectPulseCard worktreeId={worktreeId} />
         <button
           ref={collapseButtonRef}
@@ -144,7 +158,7 @@ export function ProjectPulseStrip({ worktreeId }: ProjectPulseStripProps) {
       onClick={expand}
       aria-expanded={false}
       aria-label={activityLabel}
-      className="group flex w-full max-w-lg items-center gap-3 rounded-[var(--radius-md)] border border-border-subtle px-3 py-2 text-left transition-colors hover:bg-overlay-subtle focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
+      className="group flex w-full items-center gap-3 rounded-[var(--radius-md)] border border-border-subtle px-3 py-2 text-left transition-colors hover:bg-overlay-subtle focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
     >
       <Activity className="h-3.5 w-3.5 shrink-0 text-status-success/70" aria-hidden="true" />
       <span className="shrink-0 text-xs font-medium text-daintree-text/70">Project pulse</span>
@@ -152,7 +166,7 @@ export function ProjectPulseStrip({ worktreeId }: ProjectPulseStripProps) {
       <span className="ml-auto flex shrink-0 items-center gap-2.5">
         {pulse ? (
           <>
-            <span className="font-mono text-xs text-daintree-text/50">
+            <span className="font-mono text-xs text-text-muted">
               {pulse.activeDays} active day{pulse.activeDays !== 1 ? "s" : ""}
             </span>
             {hasStreak && (
@@ -163,10 +177,10 @@ export function ProjectPulseStrip({ worktreeId }: ProjectPulseStripProps) {
             )}
           </>
         ) : (
-          <span className="text-xs text-daintree-text/40">View activity</span>
+          <span className="text-xs text-text-muted">View activity</span>
         )}
         <ChevronDown
-          className="h-4 w-4 text-daintree-text/40 transition-colors group-hover:text-daintree-text/70"
+          className="h-4 w-4 text-text-muted transition-colors group-hover:text-daintree-text"
           aria-hidden="true"
         />
       </span>
