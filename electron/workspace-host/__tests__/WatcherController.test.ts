@@ -1027,18 +1027,49 @@ describe("WatcherController", () => {
 
       ctrl.start();
       await settle();
+      const armsAfterFirstFailure = watcherStartCallCount;
 
       for (let i = 0; i < 10; i++) {
         await vi.advanceTimersByTimeAsync(31_000);
         await settle();
       }
       const armsAfterExhaustion = watcherStartCallCount;
+      // Retries genuinely happened (otherwise "it stopped" is vacuous)...
+      expect(armsAfterExhaustion).toBeGreaterThan(armsAfterFirstFailure);
+      // ...and they were charged to the shared budget, not a private counter:
+      // resetRetryBudget only reports true for a non-zero count.
+      expect(ctrl.resetRetryBudget()).toBe(true);
 
       // Hours of idling must not resurrect the loop — the whole point is that a
-      // genuinely broken path stops paying for retries.
+      // genuinely broken path stops paying for retries. (Measured before the
+      // reset above hands it a fresh budget: re-read the count now.)
+      const armsBeforeIdle = watcherStartCallCount;
       await vi.advanceTimersByTimeAsync(4 * 60 * 60 * 1000);
       await settle();
-      expect(watcherStartCallCount).toBe(armsAfterExhaustion);
+      expect(watcherStartCallCount).toBe(armsBeforeIdle);
+    });
+
+    it("does not spend a retry when something else armed the watcher first", async () => {
+      // The budget exists for genuine failures. A retry that fires to find the
+      // topology reconcile already armed a watcher has nothing to attempt, and
+      // consuming an attempt for it would starve the next real failure.
+      mockWatcherStartResult = false;
+      const host = makeHost({ isElevated: false });
+      const ctrl = new WatcherController(host as WatcherControllerHost);
+
+      ctrl.start();
+      await settle();
+
+      // External recovery lands before the backoff elapses.
+      mockWatcherStartResult = true;
+      ctrl.ensureState();
+      await settle();
+      expect(ctrl.currentMode).toBe("git-only");
+
+      await vi.advanceTimersByTimeAsync(31_000);
+      await settle();
+
+      expect(ctrl.resetRetryBudget()).toBe(false);
     });
 
     it("re-derives the target tier when elevation flips during the backoff", async () => {
@@ -1061,23 +1092,39 @@ describe("WatcherController", () => {
     });
 
     it("does not stack a second retry loop when the git-only fallback also fails", async () => {
-      // Recursive fails, its git-only fallback fails too: two failure paths,
-      // one timer. If they stacked, each 31s tick would arm twice.
+      // Recursive fails, and its git-only fallback fails too: two independent
+      // failure paths both reach scheduleRetry. Counting arms can't distinguish
+      // one loop from two (start()'s idempotency guard hides the duplicate), so
+      // assert on the timer itself — the controller must own exactly one.
       mockWatcherStartResult = false;
       const host = makeHost({ isElevated: true });
       const ctrl = new WatcherController(host as WatcherControllerHost);
 
       ctrl.start();
       await settle();
-      const armsAfterInitialFailure = watcherStartCallCount;
+      expect(vi.getTimerCount()).toBe(1);
+
+      // And still exactly one after the retry fires and fails again.
+      await vi.advanceTimersByTimeAsync(31_000);
+      await settle();
+      expect(vi.getTimerCount()).toBe(1);
+    });
+
+    it("arms exactly once per tick on the dark path", async () => {
+      mockWatcherStartResult = false;
+      const host = makeHost({ isElevated: false });
+      const ctrl = new WatcherController(host as WatcherControllerHost);
+
+      ctrl.start();
+      await settle();
+      expect(vi.getTimerCount()).toBe(1);
+      const armsBeforeTick = watcherStartCallCount;
 
       await vi.advanceTimersByTimeAsync(31_000);
       await settle();
-      const armsPerTick = watcherStartCallCount - armsAfterInitialFailure;
 
-      // One tick arms the recursive attempt plus at most its own git-only
-      // fallback — never two independent retry chains.
-      expect(armsPerTick).toBeLessThanOrEqual(2);
+      expect(watcherStartCallCount - armsBeforeTick).toBe(1);
+      expect(vi.getTimerCount()).toBe(1);
     });
 
     it("does not re-arm after the controller is stopped mid-backoff", async () => {
@@ -1088,6 +1135,8 @@ describe("WatcherController", () => {
       ctrl.start();
       await settle();
       const armsAtStop = watcherStartCallCount;
+      // Precondition: there IS a backoff to interrupt.
+      expect(vi.getTimerCount()).toBe(1);
 
       ctrl.stop();
       mockWatcherStartResult = true;

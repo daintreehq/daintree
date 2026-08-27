@@ -261,6 +261,67 @@ describe("useResolvedForgeProvider", () => {
       }
     });
 
+    it("collapses a provenance-change fan-out across every mounted consumer", async () => {
+      // The larger of the two fan-outs: each consumer owns its own listener, so
+      // a naive "discard the in-flight request, then re-run" in every listener
+      // has each one throwing away the request the previous listener started.
+      resolveProviderMock.mockResolvedValue({ entry: GITHUB_ENTRY, resolvedVia: "hostname" });
+      const projectId = nextProjectId();
+
+      const consumers = Array.from({ length: 6 }, () =>
+        renderHook(() => useResolvedForgeProvider(projectId))
+      );
+      await waitFor(() => expect(consumers[0]?.result.current.entry).toEqual(GITHUB_ENTRY));
+      const callsBeforeEvent = resolveProviderMock.mock.calls.length;
+
+      await act(async () => {
+        fireProvenanceChanged();
+      });
+
+      expect(resolveProviderMock.mock.calls.length).toBe(callsBeforeEvent + 1);
+      for (const consumer of consumers) {
+        await waitFor(() => expect(consumer.result.current.entry).toEqual(GITHUB_ENTRY));
+      }
+    });
+
+    it("collapses a remote-change fan-out across every mounted consumer", async () => {
+      resolveProviderMock.mockResolvedValue({ entry: GITHUB_ENTRY, resolvedVia: "hostname" });
+      const projectId = nextProjectId();
+
+      const consumers = Array.from({ length: 6 }, () =>
+        renderHook(() => useResolvedForgeProvider(projectId))
+      );
+      await waitFor(() => expect(consumers[0]?.result.current.entry).toEqual(GITHUB_ENTRY));
+      const callsBeforeEvent = resolveProviderMock.mock.calls.length;
+
+      await act(async () => {
+        fireRemoteChanged(projectId);
+      });
+
+      expect(resolveProviderMock.mock.calls.length).toBe(callsBeforeEvent + 1);
+    });
+
+    it("invalidates again on the next event rather than once per session", async () => {
+      // The burst marker must clear after the synchronous listener run, or the
+      // second event would join the first event's now-stale request.
+      resolveProviderMock.mockResolvedValue({ entry: GITHUB_ENTRY, resolvedVia: "hostname" });
+      const projectId = nextProjectId();
+
+      renderHook(() => useResolvedForgeProvider(projectId));
+      await waitFor(() => expect(resolveProviderMock).toHaveBeenCalledTimes(1));
+
+      await act(async () => {
+        fireRemoteChanged(projectId);
+      });
+      const callsAfterFirstEvent = resolveProviderMock.mock.calls.length;
+
+      await act(async () => {
+        fireRemoteChanged(projectId);
+      });
+
+      expect(resolveProviderMock.mock.calls.length).toBeGreaterThan(callsAfterFirstEvent);
+    });
+
     it("keeps different projects on their own requests", async () => {
       resolveProviderMock.mockResolvedValue({ entry: GITHUB_ENTRY, resolvedVia: "hostname" });
       const first = nextProjectId();

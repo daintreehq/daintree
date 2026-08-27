@@ -517,6 +517,10 @@ export class WatcherController {
     if (this.host.isElevated) {
       this.scheduleRetry();
     }
+    // A watcher that died mid-flight was, by definition, not reporting writes
+    // for some window before we noticed. Reconcile once on the way down rather
+    // than leaving whatever it missed invisible until the next heartbeat.
+    this.handleGitFileChange();
   }
 
   /**
@@ -546,8 +550,7 @@ export class WatcherController {
       return;
     }
 
-    this.watcherRetryCount++;
-    if (this.watcherRetryCount > WATCHER_MAX_RETRIES) {
+    if (this.watcherRetryCount >= WATCHER_MAX_RETRIES) {
       return;
     }
 
@@ -559,17 +562,24 @@ export class WatcherController {
       if (!this.hasWatcher) {
         // Dark: no watcher at all. Re-arm at whatever tier elevation now wants
         // — a worktree that gained focus during the backoff deserves recursive.
+        this.watcherRetryCount++;
         this.start();
         return;
       }
       if (this.host.isElevated && this.gitWatcherMode !== "recursive") {
         // Drop any current git-only instance so start()'s idempotent
         // guard doesn't bail; reconstruction installs the recursive variant.
+        this.watcherRetryCount++;
         this.cancelPendingArm();
         this.gitWatcher.clear();
         this.gitWatcherMode = "none";
         this.start("recursive");
       }
+      // Otherwise something external (ensureState, an elevation flip, the
+      // topology reconcile) already armed what this retry wanted. The budget is
+      // charged where the attempt is actually made, not where it's scheduled,
+      // so a retry that turned out to be unnecessary doesn't consume an attempt
+      // a later genuine failure will need.
     }, WATCHER_RETRY_INTERVAL_MS).unref();
   }
 

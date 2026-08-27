@@ -1460,6 +1460,81 @@ describe("GitFileWatcher", () => {
       expect(onWatcherFailed).toHaveBeenCalledTimes(1);
     });
 
+    it("treats a macOS dropped-events error as a rescan, not a dead watcher", async () => {
+      // @parcel/watcher has two error channels. This message comes from
+      // EventList::error() (FSEvents MustScanSubDirs), which is delivered
+      // through triggerCallbacks WITHOUT clearing the callbacks — the stream is
+      // alive and asking for a re-scan. Tearing it down would rebuild a healthy
+      // watcher under the very churn that provoked the overflow and burn the
+      // controller's bounded re-arm budget.
+      const onChange = vi.fn();
+      const onWatcherFailed = vi.fn();
+      const mock = setupSubscribeMock();
+
+      const origPlatform = process.platform;
+      Object.defineProperty(process, "platform", { value: "darwin", configurable: true });
+
+      try {
+        const gitWatcher = new GitFileWatcher({
+          worktreePath: "/repo",
+          branch: "main",
+          debounceMs: 300,
+          onChange,
+          watchWorktree: true,
+          onWatcherFailed,
+        });
+
+        await expect(gitWatcher.start()).resolves.toBe(true);
+        mock.resolve();
+        const cb = mock.getCallback();
+
+        fireError(
+          cb,
+          new Error("Events were dropped by the kernel. File system must be re-scanned.")
+        );
+
+        expect(onWatcherFailed).not.toHaveBeenCalled();
+        // Events WERE lost, so it must still force a reconcile rather than
+        // silently carrying on with a stale snapshot.
+        await vi.advanceTimersByTimeAsync(400);
+        expect(onChange).toHaveBeenCalled();
+      } finally {
+        Object.defineProperty(process, "platform", { value: origPlatform, configurable: true });
+      }
+    });
+
+    it("downgrades on a Windows buffer overflow despite it also losing events", async () => {
+      // Superficially the same situation as the macOS rescan above, but this
+      // message travels the fatal channel (Watcher::notifyError clears the
+      // callbacks), so the subscription really is dead and must be rebuilt.
+      const onWatcherFailed = vi.fn();
+      const mock = setupSubscribeMock();
+
+      const origPlatform = process.platform;
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+
+      try {
+        const gitWatcher = new GitFileWatcher({
+          worktreePath: "/repo",
+          branch: "main",
+          debounceMs: 300,
+          onChange: vi.fn(),
+          watchWorktree: true,
+          onWatcherFailed,
+        });
+
+        await expect(gitWatcher.start()).resolves.toBe(true);
+        mock.resolve();
+        const cb = mock.getCallback();
+
+        fireError(cb, new Error("Buffer overflow. Some events may have been lost."));
+
+        expect(onWatcherFailed).toHaveBeenCalledTimes(1);
+      } finally {
+        Object.defineProperty(process, "platform", { value: origPlatform, configurable: true });
+      }
+    });
+
     it("downgrades on a message-only Windows runtime error with no errno", async () => {
       // ReadDirectoryChangesW failures (buffer overflow, an AV lock, an
       // ancestor rename) surface through parcel as a plain message with no

@@ -16,7 +16,7 @@ import {
   credentialFieldsFor,
   pickPrimaryValue,
 } from "../../services/forge/forgeCredentialUtils.js";
-import type { AuthValidation, ResolvedForgeProvider } from "../../../shared/types/forge.js";
+import type { AuthValidation } from "../../../shared/types/forge.js";
 
 /**
  * Read the persisted global default provider id, normalizing legacy forms
@@ -119,82 +119,52 @@ export function registerForgeSettingsHandlers(): () => void {
     })
   );
 
-  // Strict singleflight at the IPC boundary, mirroring `ForgeBridge`'s
-  // `inFlightByArgs`. Resolution reaches `GitService.listRemotes` — a
-  // `git remote -v` spawn — and the renderer fans this call out across every
-  // mounted forge consumer, so concurrent identical requests would otherwise
-  // pay one git process each (#12042). Entries are evicted on settlement, not
-  // TTL-cached: joining a request that is literally still running can only
-  // return an answer computed microseconds earlier, whereas caching a settled
-  // one would need every settings/provenance/remote mutation to invalidate it.
-  const inFlightResolves = new Map<string, Promise<ResolvedForgeProvider>>();
-
   cleanups.push(
     typedHandle(CHANNELS.FORGE_RESOLVE_PROVIDER, async (projectId: unknown, remoteUrl: unknown) => {
       if (typeof projectId !== "string" || projectId.length === 0) {
         return { entry: null, resolvedVia: null };
       }
-      // Keyed on both arguments: an explicit remote URL asks a different
-      // question than "whichever remote this project routes through", and the
-      // Settings routing panel probes each remote in turn.
-      const flightKey = `${projectId}\u0000${typeof remoteUrl === "string" ? remoteUrl : ""}`;
-      const inFlight = inFlightResolves.get(flightKey);
-      if (inFlight) return inFlight;
-      const resolution = resolveProviderForProject(projectId, remoteUrl);
-      inFlightResolves.set(flightKey, resolution);
-      void resolution
-        .catch(() => undefined)
-        .finally(() => {
-          if (inFlightResolves.get(flightKey) === resolution) inFlightResolves.delete(flightKey);
+      try {
+        await awaitPluginInit();
+        const project = projectStore.getProjectById(projectId);
+        if (!project) return { entry: null, resolvedVia: null };
+
+        const settings = await projectStore.getProjectSettings(projectId).catch(() => null);
+        const forgeProviderOverride = settings?.forgeProviderOverride ?? null;
+
+        let effectiveRemoteUrl: string | null;
+        if (typeof remoteUrl === "string" && remoteUrl.length > 0) {
+          // An explicit URL means the caller is asking about one specific
+          // remote (the Settings routing panel probes each in turn) — the
+          // project's selection must not override that.
+          effectiveRemoteUrl = remoteUrl;
+        } else {
+          // No URL: answer for whichever remote the project actually routes
+          // through (#11408). This is the toolbar's pill-visibility gate, so an
+          // origin-only lookup here hid issues and PRs on every fork or mirror
+          // whose forge remote is named something else.
+          const gitService = gitServiceCache.getGitService(project.path);
+          effectiveRemoteUrl = await resolveEffectiveRemoteUrl(
+            gitService,
+            project.path,
+            settings?.forgeRemote ?? settings?.githubRemote ?? null,
+            forgeProviderOverride
+          );
+        }
+
+        const globalDefaultProviderId = readDefaultProviderId();
+
+        return resolveForgeProvider({
+          remoteUrl: effectiveRemoteUrl,
+          forgeProviderOverride,
+          globalDefaultProviderId,
         });
-      return resolution;
+      } catch (error) {
+        console.warn(`[forgeSettings] resolve failed for ${projectId}:`, error);
+        return { entry: null, resolvedVia: null };
+      }
     })
   );
-
-  async function resolveProviderForProject(
-    projectId: string,
-    remoteUrl: unknown
-  ): Promise<ResolvedForgeProvider> {
-    try {
-      await awaitPluginInit();
-      const project = projectStore.getProjectById(projectId);
-      if (!project) return { entry: null, resolvedVia: null };
-
-      const settings = await projectStore.getProjectSettings(projectId).catch(() => null);
-      const forgeProviderOverride = settings?.forgeProviderOverride ?? null;
-
-      let effectiveRemoteUrl: string | null;
-      if (typeof remoteUrl === "string" && remoteUrl.length > 0) {
-        // An explicit URL means the caller is asking about one specific
-        // remote (the Settings routing panel probes each in turn) — the
-        // project's selection must not override that.
-        effectiveRemoteUrl = remoteUrl;
-      } else {
-        // No URL: answer for whichever remote the project actually routes
-        // through (#11408). This is the toolbar's pill-visibility gate, so an
-        // origin-only lookup here hid issues and PRs on every fork or mirror
-        // whose forge remote is named something else.
-        const gitService = gitServiceCache.getGitService(project.path);
-        effectiveRemoteUrl = await resolveEffectiveRemoteUrl(
-          gitService,
-          project.path,
-          settings?.forgeRemote ?? settings?.githubRemote ?? null,
-          forgeProviderOverride
-        );
-      }
-
-      const globalDefaultProviderId = readDefaultProviderId();
-
-      return resolveForgeProvider({
-        remoteUrl: effectiveRemoteUrl,
-        forgeProviderOverride,
-        globalDefaultProviderId,
-      });
-    } catch (error) {
-      console.warn(`[forgeSettings] resolve failed for ${projectId}:`, error);
-      return { entry: null, resolvedVia: null };
-    }
-  }
 
   cleanups.push(
     typedHandle(

@@ -280,64 +280,6 @@ describe("registerForgeSettingsHandlers", () => {
     expect(resolverMock.resolveForgeProvider).toHaveBeenCalledTimes(1);
   });
 
-  it("collapses concurrent identical resolves into one remote read (#12042)", async () => {
-    // Every mounted forge consumer in the renderer resolves on mount and again
-    // on every provenance change, and each resolution reaches
-    // GitService.listRemotes — a `git remote -v` spawn.
-    let releaseRemotes: (remotes: Array<{ name: string; fetchUrl: string }>) => void = () => {};
-    gitServiceMock.listRemotes.mockImplementationOnce(
-      () =>
-        new Promise<Array<{ name: string; fetchUrl: string }>>((resolve) => {
-          releaseRemotes = resolve;
-        })
-    );
-    resolverMock.resolveForgeProvider.mockReturnValue({ entry: null, resolvedVia: null });
-    registerForgeSettingsHandlers();
-    const resolveProvider = findHandler("forge:resolve-provider");
-
-    const inFlight = Array.from(
-      { length: 5 },
-      () => resolveProvider(null, "project-1") as Promise<unknown>
-    );
-    for (let i = 0; i < 10; i++) await Promise.resolve();
-    releaseRemotes([{ name: "origin", fetchUrl: "https://github.com/owner/repo.git" }]);
-    const results = await Promise.all(inFlight);
-
-    expect(gitServiceMock.listRemotes).toHaveBeenCalledTimes(1);
-    // Joining must hand every caller the same answer, not drop the late ones.
-    for (const result of results) expect(result).toEqual(results[0]);
-  });
-
-  it("does not coalesce resolves for different projects or explicit remotes", async () => {
-    resolverMock.resolveForgeProvider.mockReturnValue({ entry: null, resolvedVia: null });
-    registerForgeSettingsHandlers();
-    const resolveProvider = findHandler("forge:resolve-provider");
-
-    await Promise.all([
-      resolveProvider(null, "project-1"),
-      resolveProvider(null, "project-2"),
-      // An explicit URL asks about one specific remote, not the project's
-      // routing choice — the Settings panel probes each remote in turn.
-      resolveProvider(null, "project-1", "https://github.com/owner/other.git"),
-    ]);
-
-    expect(projectStoreMock.getProjectById).toHaveBeenCalledTimes(3);
-  });
-
-  it("re-reads remotes once a resolve has settled", async () => {
-    // The in-flight entry must be evicted on settlement — a retained one would
-    // pin the toolbar to a stale provider for the life of the app.
-    resolverMock.resolveForgeProvider.mockReturnValue({ entry: null, resolvedVia: null });
-    registerForgeSettingsHandlers();
-    const resolveProvider = findHandler("forge:resolve-provider");
-
-    await resolveProvider(null, "project-1");
-    const readsAfterFirst = gitServiceMock.listRemotes.mock.calls.length;
-    await resolveProvider(null, "project-1");
-
-    expect(gitServiceMock.listRemotes.mock.calls.length).toBeGreaterThan(readsAfterFirst);
-  });
-
   it("cleanup removes all registered handlers", () => {
     const cleanup = registerForgeSettingsHandlers();
     cleanup();

@@ -149,12 +149,13 @@ describe("findWindowsShell (Windows shell discovery)", () => {
     // an unmemoized probe is where the reporter's 53 `where.exe` came from.
     execFileSyncMock.mockReturnValue(Buffer.from("") as never);
 
-    const first = findWindowsShell();
-    const probesAfterFirst = execFileSyncMock.mock.calls.length;
-    for (let i = 0; i < 20; i++) findWindowsShell();
+    expect(findWindowsShell()).toBe("pwsh.exe");
+    // Pinned, not captured: a memo that never probed at all would make a
+    // "count didn't grow" assertion pass for the wrong reason.
+    expect(execFileSyncMock).toHaveBeenCalledTimes(1);
 
-    expect(execFileSyncMock.mock.calls.length).toBe(probesAfterFirst);
-    expect(findWindowsShell()).toBe(first);
+    for (let i = 0; i < 20; i++) expect(findWindowsShell()).toBe("pwsh.exe");
+    expect(execFileSyncMock).toHaveBeenCalledTimes(1);
   });
 
   it("memoizes the COMSPEC fallback too, so a PowerShell-less box stops probing", () => {
@@ -164,10 +165,11 @@ describe("findWindowsShell (Windows shell discovery)", () => {
     process.env.COMSPEC = "C:\\custom\\cmd.exe";
 
     expect(findWindowsShell()).toBe("C:\\custom\\cmd.exe");
-    const probesAfterFirst = execFileSyncMock.mock.calls.length;
-    for (let i = 0; i < 5; i++) findWindowsShell();
+    // Both PowerShell probes ran once, and never again.
+    expect(execFileSyncMock).toHaveBeenCalledTimes(2);
 
-    expect(execFileSyncMock.mock.calls.length).toBe(probesAfterFirst);
+    for (let i = 0; i < 5; i++) findWindowsShell();
+    expect(execFileSyncMock).toHaveBeenCalledTimes(2);
   });
 
   it("falls back to powershell.exe when pwsh.exe is not on PATH", () => {

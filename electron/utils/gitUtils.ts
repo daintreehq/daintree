@@ -25,7 +25,13 @@ const SUCCESS_TTL_MS = Number.POSITIVE_INFINITY;
 // watcher's own 30s re-arm gets a genuine second attempt, without letting the
 // poll loop re-spawn `git rev-parse` at its own cadence.
 const DEFINITIVE_TTL_MS = 600_000;
-const TRANSIENT_TTL_MS = 15_000;
+// Starting window for a transient failure, doubling per consecutive failure up
+// to the definitive TTL. The first retry lands inside `WatcherController`'s 30s
+// re-arm so a one-off blip is gone before the watcher tries again, while a
+// genuinely unreachable path (disconnected network drive, git removed from
+// PATH) decays to the same cadence a definitive answer gets instead of paying
+// one `git rev-parse` every 15s per worktree forever.
+const TRANSIENT_TTL_BASE_MS = 15_000;
 const gitDirCache = new Cache<string, Promise<string | null>>({
   maxSize: 200,
   defaultTTL: DEFINITIVE_TTL_MS,
@@ -34,15 +40,24 @@ const gitCommonDirCache = new Cache<string, Promise<string | null>>({
   maxSize: 200,
   defaultTTL: DEFINITIVE_TTL_MS,
 });
+// Consecutive transient failures per worktree, driving the backoff above.
+// Same bounds as the resolution caches, and entries age out on their own so a
+// path that stops being asked about doesn't pin a counter.
+const transientFailureStreak = new Cache<string, number>({
+  maxSize: 200,
+  defaultTTL: DEFINITIVE_TTL_MS,
+});
 
 /** Exit code git uses for a fatal error, including "not a git repository". */
 const GIT_FATAL_EXIT_CODE = 128;
-// The one exit-128 fatal that is NOT a verdict about the path: git refuses to
-// operate until `safe.directory` is configured, which the user can fix without
-// the worktree ever changing. Matched on the stable English fragment git emits
-// for it; a locale that translates the message just falls back to the
-// definitive TTL, which is the pre-existing behaviour.
-const DUBIOUS_OWNERSHIP_PATTERN = /dubious ownership/i;
+// The ONE diagnostic that proves the path is durably not a repository. 128 is
+// git's generic `die()` status, so it is worthless on its own: a broken
+// `.git` pointer file, an unreadable object store, malformed config, an
+// unsafe-ownership refusal and an unsupported flag all exit 128 too, and none
+// of those say the worktree isn't a repo — caching them as if they did is the
+// ten-minute blackout this change exists to remove. `execGit` forces LC_ALL=C
+// so this message can't be translated out from under the match.
+const NOT_A_REPOSITORY_PATTERN = /not a git repository|this operation must be run in a work tree/i;
 
 type FailureKind = "definitive" | "transient";
 
@@ -50,12 +65,14 @@ type GitPathResolution = { path: string } | { path: null; failure: FailureKind }
 
 /**
  * Decide whether a failed `git rev-parse` is a verdict about the worktree or a
- * failure to reach one. Deliberately keyed on the error's SHAPE rather than its
- * message: `execFile` reports a spawn failure as a string `code` (ENOENT when
- * git isn't on PATH, EPERM/EACCES/EBUSY when an AV scanner or a filesystem
- * holds the path) and a timeout as `killed`/`signal`, while a real git verdict
- * is a clean numeric exit. Message matching would be locale-dependent, so it is
- * used only to *downgrade* a fatal to transient, never to promote one.
+ * failure to reach one. Conservative by construction: ONLY git's own "not a
+ * repository" diagnostic, delivered as a clean fatal exit, counts as a verdict.
+ * Everything else — spawn failures (ENOENT when git isn't on PATH,
+ * EPERM/EACCES/EBUSY when an AV scanner or a filesystem holds the path),
+ * timeouts, and every other fatal — is treated as "we failed to look", because
+ * mistaking one of those for a verdict re-creates the bug: `GitFileWatcher`
+ * bails on a null gitDir, so a long-cached wrong null keeps the watcher dark
+ * and the poll loop forcing `git status` at the profile cadence.
  */
 function classifyGitFailure(error: unknown, stderr: string): FailureKind {
   const err = error as NodeJS.ErrnoException & { killed?: boolean; signal?: string | null };
@@ -65,11 +82,19 @@ function classifyGitFailure(error: unknown, stderr: string): FailureKind {
   }
   // Spawn-level failure: `code` is an errno string, not an exit status.
   if (typeof err?.code === "string") return "transient";
-  // Any exit status other than git's fatal code isn't a "not a repository"
-  // answer — usage errors and the like say nothing durable about the path.
   if (err?.code !== GIT_FATAL_EXIT_CODE) return "transient";
-  if (DUBIOUS_OWNERSHIP_PATTERN.test(stderr)) return "transient";
-  return "definitive";
+  return NOT_A_REPOSITORY_PATTERN.test(stderr) ? "definitive" : "transient";
+}
+
+/**
+ * TTL for a transient failure on `worktreePath`, doubling per consecutive
+ * failure and capped at the definitive TTL so a permanently unreachable path
+ * costs no more than a non-repo one.
+ */
+function nextTransientTtlMs(worktreePath: string): number {
+  const streak = (transientFailureStreak.get(worktreePath) ?? 0) + 1;
+  transientFailureStreak.set(worktreePath, streak);
+  return Math.min(TRANSIENT_TTL_BASE_MS * 2 ** (streak - 1), DEFINITIVE_TTL_MS);
 }
 
 export interface GitDirOptions {
@@ -102,7 +127,17 @@ function execGit(args: string[], cwd: string, timeout: number): Promise<string> 
     execFile(
       "git",
       args,
-      { cwd, timeout, encoding: "utf-8", windowsHide: true },
+      {
+        cwd,
+        timeout,
+        encoding: "utf-8",
+        windowsHide: true,
+        // Pin the diagnostic language: `classifyGitFailure` reads stderr to tell
+        // "not a repository" from every other fatal, and a translated message
+        // would silently fall through to the transient branch. Output is a
+        // filesystem path either way, so the locale can't affect what we parse.
+        env: { ...process.env, LC_ALL: "C", LANG: "C" },
+      },
       (error, stdout, stderr) => {
         if (error) {
           reject(new GitExecError(error, typeof stderr === "string" ? stderr : ""));
@@ -234,11 +269,14 @@ function cachedResolveGitPath(
         return;
       }
       if (resolved.path !== null) {
+        transientFailureStreak.invalidate(worktreePath);
         cacheStore.set(worktreePath, promise, SUCCESS_TTL_MS);
       } else if (!cacheErrors) {
         cacheStore.invalidate(worktreePath);
       } else if (resolved.failure === "transient") {
-        cacheStore.set(worktreePath, promise, TRANSIENT_TTL_MS);
+        cacheStore.set(worktreePath, promise, nextTransientTtlMs(worktreePath));
+      } else {
+        transientFailureStreak.invalidate(worktreePath);
       }
     });
   }
@@ -307,16 +345,20 @@ export async function getGitBranch(
 export function clearGitDirCache(worktreePath?: string): void {
   if (worktreePath) {
     gitDirCache.invalidate(worktreePath);
+    transientFailureStreak.invalidate(worktreePath);
   } else {
     gitDirCache.clear();
+    transientFailureStreak.clear();
   }
 }
 
 export function clearGitCommonDirCache(worktreePath?: string): void {
   if (worktreePath) {
     gitCommonDirCache.invalidate(worktreePath);
+    transientFailureStreak.invalidate(worktreePath);
   } else {
     gitCommonDirCache.clear();
+    transientFailureStreak.clear();
   }
 }
 

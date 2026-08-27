@@ -65,6 +65,26 @@ function resolveProviderOnce(id: string): Promise<ForgeProviderResolution> {
   return request;
 }
 
+// Every mounted consumer owns its own provenance/remote-change listener, and
+// the preload multiplexer fires them all in ONE synchronous burst. A listener
+// that discards the in-flight request before re-running therefore discards the
+// request the previous listener just started — so N consumers would issue N
+// round-trips on exactly the events the coalescer exists for, which is the
+// larger of the two fan-outs. Discard once per burst instead: the first
+// listener drops the pre-invalidation request, and the rest join the fresh one
+// it started. The marker clears on the microtask after the burst, so the next
+// genuine event invalidates again.
+const discardedThisBurst = new Set<string>();
+
+function discardInFlightResolution(id: string): void {
+  if (discardedThisBurst.has(id)) return;
+  if (discardedThisBurst.size === 0) {
+    queueMicrotask(() => discardedThisBurst.clear());
+  }
+  discardedThisBurst.add(id);
+  inFlightResolutions.delete(id);
+}
+
 /**
  * Resolve the active forge provider for a project through the host's
  * precedence chain (per-project override → global default → hostname match).
@@ -133,7 +153,7 @@ export function useResolvedForgeProvider(
             resolutionCache.clear();
             // A resolution already in flight answers the pre-change registry;
             // joining it would hand every consumer a stale provider.
-            inFlightResolutions.clear();
+            discardInFlightResolution(projectId);
             run();
           })
         : null;
@@ -150,7 +170,7 @@ export function useResolvedForgeProvider(
         ? forge.onRemoteChanged((payload) => {
             if (payload.projectId !== projectId) return;
             resolutionCache.delete(projectId);
-            inFlightResolutions.delete(projectId);
+            discardInFlightResolution(projectId);
             run();
           })
         : null;
@@ -166,8 +186,9 @@ export function useResolvedForgeProvider(
     if (!projectId) return;
     resolutionCache.delete(projectId);
     // Manual refresh means "ignore what we have", including a round-trip that
-    // started before the user asked.
-    inFlightResolutions.delete(projectId);
+    // started before the user asked. Burst-scoped like the event paths so two
+    // components refreshing together still share one round-trip.
+    discardInFlightResolution(projectId);
     void resolve(projectId).then((next) => {
       if (next) setState(next);
     });
