@@ -902,7 +902,7 @@ describe("destructive-action danger metadata", () => {
       watcherDegraded: false,
       topologyWatcherDark: false,
       applySnapshot: () => {},
-      applyUpdate: () => {},
+      applyUpdate: () => true,
       applyRemove: () => {},
       setManualAssociation: () => {},
       clearManualAssociation: () => {},

@@ -100,7 +100,7 @@ function installViewStore(worktrees: Map<string, WorktreeSnapshot>) {
     watcherDegraded: false,
     topologyWatcherDark: false,
     applySnapshot: () => {},
-    applyUpdate: () => {},
+    applyUpdate: () => true,
     applyRemove: () => {},
     setManualAssociation: () => {},
     clearManualAssociation: () => {},
