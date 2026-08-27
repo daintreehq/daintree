@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
+import { Fragment, useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { useShallow } from "zustand/react/shallow";
 import Fuse, { type IFuseOptions } from "fuse.js";
-import { Keyboard, Pin, PinOff, Plug, Plus, Settings2, SquareTerminal } from "lucide-react";
+import { ChevronRight, Keyboard, Pin, Plug, Plus, Settings2, SquareTerminal } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from "@/components/ui/context-menu";
@@ -9,6 +9,7 @@ import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 import { useDockLaunchHoverSelection } from "./useDockLaunchHoverSelection";
 import { AppPalettePopover } from "@/components/ui/AppPalettePopover";
 import { AppPaletteDialog } from "@/components/ui/AppPaletteDialog";
+import { KbdChord } from "@/components/ui/Kbd";
 import { PALETTE_ROW_CLASS, PALETTE_SECTION_LABEL_CLASS } from "@/components/ui/paletteRowStyles";
 import { BrandMark, Workflow } from "@/components/icons";
 import { PanelKindIcon } from "@/components/PanelPalette/PanelKindIcon";
@@ -36,7 +37,7 @@ import { useProjectPresetsStore } from "@/store/projectPresetsStore";
 import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
 import { dispatchToolbarVisibility } from "@/lib/toolbarVisibilityDispatch";
 import { normalizeKeyForBinding } from "@/services/keybindingUtils";
-import { useKeybindingDisplay } from "@/hooks";
+import { useEffectiveCombo, useKeybindingDisplay } from "@/hooks";
 import { TOOLBAR_PIN_LABEL, TOOLBAR_UNPIN_LABEL } from "./toolbarMenuStrings";
 import { LAUNCHER_PANEL_ITEMS } from "./launcherPanelItems";
 import { useSearchablePalette } from "@/hooks/useSearchablePalette";
@@ -49,6 +50,7 @@ import {
   rowHasPresets,
   useDockLaunchModel,
   DOCK_LAUNCH_BAND_LABELS,
+  DOCK_LAUNCH_CATEGORY_LABELS,
   DOCK_LAUNCH_CUE_LABELS,
   type DockLaunchAgent,
   type DockLaunchInventoryState,
@@ -896,36 +898,70 @@ export function DockLaunchButton({
             <AppPaletteDialog.Empty query={query} emptyMessage="Nothing to launch" />
           ) : (
             <div ref={listboxRef} id={listboxId} role="listbox" aria-label="Launcher results">
-              {results.map((row, index) =>
-                capturingRowKey === row.rowKey ? (
-                  <DockLaunchCaptureRow
-                    key={row.rowKey}
-                    row={row}
-                    onDone={() => setCapturingRowKey(null)}
-                  />
-                ) : (
-                  <DockLaunchOption
-                    key={row.rowKey}
-                    row={row}
-                    index={index}
-                    isSelected={index === activeIndex}
-                    showBandLabel={row.band !== results[index - 1]?.band}
-                    optionId={getOptionId(row.rowKey)}
-                    pinTarget={resolvePinTarget(row)}
-                    isExpanded={expandedPresetParentKey === row.rowKey}
-                    onHover={handleRowHover}
-                    onActivate={activateRow}
-                    onTogglePin={togglePin}
-                    onStartCapture={setCapturingRowKey}
-                  />
-                )
-              )}
+              {results.map((row, index) => (
+                // The band heading is a sibling of the row, not a child of it.
+                // It used to live inside `DockLaunchOption`, which meant the
+                // capture row — a different component that replaces the option
+                // outright — rendered no heading, and recording a shortcut on
+                // the first agent silently deleted "Launch agent" from the list.
+                <Fragment key={row.rowKey}>
+                  {shouldShowBandLabel(results, index) && (
+                    <div
+                      // Decorative inside the listbox — the band is conveyed by
+                      // the row's own accessible name, and an extra child would
+                      // break option counting.
+                      aria-hidden="true"
+                      data-testid="dock-launcher-band"
+                      className={cn(PALETTE_SECTION_LABEL_CLASS, "px-2 pt-2 pb-1 first:pt-0")}
+                    >
+                      {DOCK_LAUNCH_BAND_LABELS[row.band]}
+                    </div>
+                  )}
+                  {capturingRowKey === row.rowKey ? (
+                    <DockLaunchCaptureRow row={row} onDone={() => setCapturingRowKey(null)} />
+                  ) : (
+                    <DockLaunchOption
+                      row={row}
+                      index={index}
+                      isSelected={index === activeIndex}
+                      optionId={getOptionId(row.rowKey)}
+                      pinTarget={resolvePinTarget(row)}
+                      isExpanded={expandedPresetParentKey === row.rowKey}
+                      onHover={handleRowHover}
+                      onActivate={activateRow}
+                      onTogglePin={togglePin}
+                      onStartCapture={setCapturingRowKey}
+                    />
+                  )}
+                </Fragment>
+              ))}
             </div>
           )}
         </AppPaletteDialog.Body>
       </AppPalettePopover.Content>
     </AppPalettePopover>
   );
+}
+
+/**
+ * Whether this row opens a new band, and therefore owes a heading.
+ *
+ * Not simply "the band changed". An expanded agent's presets are spliced into
+ * the flat list as `band: "presets"` rows sitting INSIDE their parent's band,
+ * so the first agent after them looked like the start of a new group and
+ * re-rendered "Launch agent" — splitting one list of three agents into two
+ * apparent lists of one and two. Walking back past the preset block asks the
+ * question the heading is actually answering: is this row in the same group as
+ * the last row that was not part of an expansion?
+ */
+function shouldShowBandLabel(rows: ReadonlyArray<DockLaunchRow>, index: number): boolean {
+  const row = rows[index];
+  if (!row) return false;
+  // The presets block gets exactly one heading, on its first row.
+  if (row.kind === "preset") return rows[index - 1]?.kind !== "preset";
+  let previous = index - 1;
+  while (previous >= 0 && rows[previous]?.kind === "preset") previous -= 1;
+  return previous < 0 || rows[previous]?.band !== row.band;
 }
 
 /**
@@ -1015,7 +1051,6 @@ interface DockLaunchOptionProps {
   row: DockLaunchRow;
   index: number;
   isSelected: boolean;
-  showBandLabel: boolean;
   optionId: string;
   /** Null for rows with no toolbar button to pin — the slot is still reserved. */
   pinTarget: DockLaunchPinTarget | null;
@@ -1030,7 +1065,6 @@ function DockLaunchOption({
   row,
   index,
   isSelected,
-  showBandLabel,
   optionId,
   pinTarget,
   isExpanded,
@@ -1054,9 +1088,12 @@ function DockLaunchOption({
       ? (LAUNCHER_PANEL_ITEMS.find((p) => p.id === getLauncherPanelButtonIdForKind(item.kindId))
           ?.actionId ?? "")
       : "";
-  const displayCombo = useKeybindingDisplay(
-    shortcutAgentId ? `agent.${shortcutAgentId}` : panelActionId
-  );
+  const comboActionId = shortcutAgentId ? `agent.${shortcutAgentId}` : panelActionId;
+  const displayCombo = useKeybindingDisplay(comboActionId);
+  // The canonical chord ("Cmd+Alt+C"), which is what `KbdChord` parses into
+  // per-key chips. `displayCombo` is already formatted for the platform and
+  // stays the human-readable string for the tooltip and the spoken label.
+  const effectiveCombo = useEffectiveCombo(comboActionId);
 
   // A filtered row must carry the same warnings as its unfiltered twin: an
   // agent that lands on the recovery panel instead of a session, or a shadowed
@@ -1079,9 +1116,18 @@ function DockLaunchOption({
         ? row.preset.label
         : item!.name;
 
-  // Where the row lands, or which recipe wins — rendered as the trailing label
-  // and reused as the option's accessible name below.
-  const qualifier =
+  // The one flag that separates the two modes. Browse keeps its per-band rows;
+  // search collapses everything into a single `results` band.
+  const isSearchResult = row.band === "results";
+
+  // Two qualifiers, deliberately different.
+  //
+  // `spokenQualifier` is what the screen reader hears, and it is the one this
+  // row has always produced. It stays exhaustive — category, destination and
+  // all — because the accessible name is a contract: `e2e/helpers/panels.ts`
+  // matches rows by the `[aria-label^="Name,"]` prefix, and a listener who
+  // cannot see the band heading has nothing else to place the row with.
+  const spokenQualifier =
     row.kind === "cue"
       ? undefined
       : row.kind === "preset"
@@ -1102,6 +1148,53 @@ function DockLaunchOption({
                 ? "Setup"
                 : "Agent";
 
+  // `visualQualifier` is what the eye sees, and the eye has the band heading
+  // that the ear does not. Every browse band is type-homogeneous — "Launch
+  // agent" holds only agents, "Open in dock" only dock panels — so restating
+  // the type on each row underneath spends the row's scarcest resource on a
+  // word the heading already said, three or six times in a column.
+  //
+  // Search is the opposite case. One flat "Search results" band mixes agents,
+  // panels and recipes, and nothing else places a row: a query for "re" returns
+  // a recipe named Review and a panel named Review, and the old labels told them
+  // apart with "Team" and "Grid" — a scope and a destination, neither of which
+  // says what the row IS. There the category is the whole point.
+  //
+  // State outranks category in both modes. A disabled reason, an agent that
+  // needs setting up, or a recipe a team override has shadowed all change what
+  // Enter does, which is the second question this palette exists to answer.
+  const visualQualifier =
+    row.kind === "cue"
+      ? undefined
+      : row.kind === "preset"
+        ? // The provenance heading is rendered directly above this row, so the
+          // group name here is the same word twice. "Current" is not.
+          row.preset.isSelected
+          ? "Current"
+          : undefined
+        : // State first, in both modes: these change what Enter does.
+          disabledReason !== undefined
+          ? disabledReason
+          : item!.category === "recipe" && item!.isShadowed
+            ? `${item!.scopeLabel} · Overridden by Team`
+            : item!.category === "agent" && item!.agentBand !== "launch"
+              ? // In browse, "Needs setup" and "Available agents" already say it.
+                isSearchResult
+                ? "Setup"
+                : undefined
+              : isSearchResult
+                ? // One axis for the whole result list. Giving the recipe its
+                  // scope and the panel its category put two different kinds of
+                  // answer in one column, so the two rows a query for "re"
+                  // returns — a recipe named Review and a panel named Review —
+                  // still had to be compared across "Team" and "Panel". Scope is
+                  // a browsing nicety; which of the two things this IS is the
+                  // question search has to answer.
+                  DOCK_LAUNCH_CATEGORY_LABELS[item!.category]
+                : item!.category === "recipe"
+                  ? item!.scopeLabel
+                  : undefined;
+
   // What the row conveys visually, in one string — the option is what
   // `aria-activedescendant` points at, and its children (the trailing qualifier,
   // the pin's own state, the New cue) stop being announced with it once the name
@@ -1113,7 +1206,7 @@ function DockLaunchOption({
   // NOT folded in: `title` alongside an `aria-label` computes as the
   // description, so repeating it here would announce it twice.
   const optionLabel = [
-    qualifier ? `${displayName}, ${qualifier}` : displayName,
+    spokenQualifier ? `${displayName}, ${spokenQualifier}` : displayName,
     agent?.isNew ? "New" : undefined,
     // Stated only where it applies, so the phrase never advertises a key that
     // would do nothing on this row.
@@ -1129,17 +1222,6 @@ function DockLaunchOption({
 
   return (
     <>
-      {showBandLabel && (
-        <div
-          // Decorative inside the listbox — the band is conveyed by the row's
-          // own trailing label, and an extra child would break option counting.
-          aria-hidden="true"
-          data-testid="dock-launcher-band"
-          className={cn(PALETTE_SECTION_LABEL_CLASS, "px-2 pt-2 pb-1 first:pt-0")}
-        >
-          {DOCK_LAUNCH_BAND_LABELS[row.band]}
-        </div>
-      )}
       {row.kind === "preset" && row.groupLabel && (
         <div
           // Same rule as the band heading above: decorative, because the row's
@@ -1191,27 +1273,83 @@ function DockLaunchOption({
           // Preset children are indented so the expansion reads as belonging to
           // the agent above it rather than as another top-level row.
           row.kind === "preset" && "pl-7",
-          isDimmed && "opacity-70"
+          // Deliberately NOT a whole-row `opacity-70`. Dimming the row dimmed
+          // the qualifier with it, so "Needs a project" — the reason Enter will
+          // not do the ordinary thing — ended up the faintest text on the row,
+          // which is exactly backwards. The name and icon recede instead; the
+          // reason keeps the metadata token every other row uses.
+          isDimmed && "text-daintree-text/60"
         )}
       >
+        {/* Leading disclosure, reserved on every row so the icon column holds
+            still. Leading rather than trailing on purpose: a trailing chevron
+            reads as "this navigates somewhere else", and these presets splice
+            into the list in place. Visible at rest rather than on hover — the
+            palette is driven from the keyboard, and an affordance that only a
+            pointer can discover tells a keyboard user nothing about a key that
+            would work right now. */}
+        <span className="mr-0.5 w-3 shrink-0" data-launcher-slot="disclosure">
+          {row.kind === "item" && rowHasPresets(row) && (
+            <ChevronRight
+              aria-hidden
+              className={cn(
+                "h-3 w-3 text-text-secondary transition-transform duration-150 ease-out",
+                "motion-reduce:transition-none",
+                isExpanded && "rotate-90"
+              )}
+            />
+          )}
+        </span>
         <DockLaunchOptionIcon row={row} />
-        <span className="truncate">{displayName}</span>
-        {agent?.isNew && (
-          <>
+        {/* `min-w-0 flex-1`: the name is the query the user came here with, and
+            it takes the width the row can spare rather than yielding to whatever
+            metadata sits beside it.
+
+            The "new" dot rides inside this group rather than after it. Left as a
+            sibling of a growing name it was pushed out to the metadata rail,
+            where a mark that means "this agent just appeared" sat among the
+            marks that mean state — and stopped reading as attached to the name
+            it qualifies. */}
+        <span className="flex min-w-0 flex-1 items-center">
+          <span className="truncate">{displayName}</span>
+          {/* Only on the agent's own row. The dot marks the AGENT as newly
+              detected, and repeating it on each of its preset children said the
+              same thing four times about one thing. */}
+          {agent?.isNew && row.kind !== "preset" && (
             <span
               data-testid={`launcher-new-pill-${agent.id}`}
               aria-hidden="true"
               className="ml-2 shrink-0 size-1.5 rounded-full bg-status-info ring-1 ring-daintree-sidebar"
             />
-          </>
-        )}
-        {qualifier && (
-          <span className="ml-auto pl-2 text-[11px] text-text-muted shrink-0">{qualifier}</span>
-        )}
-        {displayCombo && (
-          <span className="ml-2 shrink-0 text-[11px] text-text-muted tabular-nums">
-            {displayCombo}
+          )}
+        </span>
+        {/* `shrink` with a cap, not `shrink-0`. Copied from `PilotView`'s park
+            note, which shares the row with a truncating title the same way: the
+            qualifier gives ground before the name does, and the cap stops a long
+            scope label from starving it in the first place.
+
+            `text-secondary`, not `text-muted`. The visual guide files `muted`
+            under "Timestamps, disabled text, helper text (may fall below WCAG
+            AA)" and `secondary` under "metadata", and this row was one of only
+            two in the app on the wrong one. The one-step lift on selection is
+            what five sibling palettes already do. */}
+        {visualQualifier && (
+          <span
+            data-launcher-qualifier=""
+            className={cn(
+              "ml-2 min-w-0 max-w-[40%] shrink truncate text-[11px] text-text-secondary",
+              "transition-colors group-aria-selected:text-daintree-text/80"
+            )}
+          >
+            {visualQualifier}
           </span>
+        )}
+        {/* The shared keycap, not bare text. Rendered flat it was the same size,
+            colour and weight as the qualifier beside it, so "Agent  Cmd+Alt+C"
+            read as one run of trailing text — and the dock button for the very
+            same agent, three inches away, already draws it as chips. */}
+        {effectiveCombo && (
+          <KbdChord shortcut={effectiveCombo} className="ml-2 shrink-0" aria-label={displayCombo} />
         )}
 
         {/* Reserved on every row, not just the ones that use it. Opacity hides
@@ -1275,11 +1413,14 @@ function DockLaunchOption({
                   : "text-daintree-text/40 opacity-0 group-hover:opacity-100 group-aria-selected:opacity-100"
               )}
             >
-              {pinTarget.onToolbar ? (
-                <PinOff className="h-3 w-3" aria-hidden />
-              ) : (
-                <Pin className="h-3 w-3" aria-hidden />
-              )}
+              {/* `Pin`, filled, for the pinned state — never `PinOff`. A pin
+                  with a slash through it is the "off/muted/unavailable" glyph
+                  in every system that defines one, so wearing it at rest made a
+                  pinned row advertise that it was not pinned. Paired with
+                  `aria-pressed="true"` it read as a double negative to a screen
+                  reader too. Filled-for-selected, outline-for-unselected is the
+                  convention the rest of the app's toggles follow. */}
+              <Pin className={cn("h-3 w-3", pinTarget.onToolbar && "fill-current")} aria-hidden />
             </button>
           )}
         </span>

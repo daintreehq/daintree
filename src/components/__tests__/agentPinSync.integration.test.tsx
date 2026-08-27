@@ -98,7 +98,13 @@ vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: (...args: unknown[]) => dispatchMock(...args) },
 }));
 
-vi.mock("@/hooks", () => ({ useKeybindingDisplay: () => null }));
+// Both combo hooks, or the launcher row throws on the missing export: the
+// display string feeds the shortcut-edit tooltip and the canonical combo feeds
+// the `KbdChord` keycaps.
+vi.mock("@/hooks", () => ({
+  useKeybindingDisplay: () => null,
+  useEffectiveCombo: () => undefined,
+}));
 
 vi.mock("@shared/config/agentIds", () => {
   const BUILT_IN_AGENT_IDS = ["claude", "gemini", "codex"] as const;

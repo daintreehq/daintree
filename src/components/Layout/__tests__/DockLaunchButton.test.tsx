@@ -404,6 +404,17 @@ function searchInput(container: HTMLElement): HTMLInputElement {
   return input;
 }
 
+/**
+ * The row's visible trailing qualifier, or "" when it renders none.
+ *
+ * Read off `data-launcher-qualifier` rather than a class string or a position:
+ * the point of these tests is which INFORMATION reaches the row, and that has
+ * to keep holding when the treatment changes again.
+ */
+function qualifierTextOf(row: HTMLElement): string {
+  return row.querySelector("[data-launcher-qualifier]")?.textContent?.trim() ?? "";
+}
+
 function listbox(container: HTMLElement): HTMLElement {
   const node = container.querySelector<HTMLElement>('[role="listbox"]');
   if (!node) throw new Error("listbox not found");
@@ -2059,6 +2070,101 @@ describe("DockLaunchButton", () => {
       expect(row.getAttribute("aria-label")).not.toContain("blocked by endpoint security");
     });
 
+    it("never restates on a row the word its band heading already said", () => {
+      // The rule, not the wording. Every browse band is type-homogeneous, so a
+      // qualifier that repeats its own heading is spending the row's scarcest
+      // width on nothing. Restating the check against a literal list of banned
+      // words would need editing every time a band is renamed; comparing the two
+      // rendered strings keeps holding whatever they are called.
+      const { container, getAllByTestId } = renderButton({ pinnedCount: 0 });
+
+      const nodes = Array.from(
+        listbox(container).querySelectorAll<HTMLElement>(
+          '[data-testid="dock-launcher-band"], [role="option"]'
+        )
+      );
+      let heading = "";
+      const offenders: string[] = [];
+      for (const node of nodes) {
+        if (node.getAttribute("data-testid") === "dock-launcher-band") {
+          heading = (node.textContent ?? "").trim().toLowerCase();
+          continue;
+        }
+        const qualifier = qualifierTextOf(node);
+        if (!qualifier || !heading) continue;
+        // "Open in dock" states "dock"; "Launch agent" states "agent".
+        const headingWords = new Set(heading.split(/\s+/));
+        for (const word of qualifier.toLowerCase().split(/[\s·]+/)) {
+          if (headingWords.has(word)) offenders.push(`${heading} → ${qualifier}`);
+        }
+      }
+
+      expect(getAllByTestId("dock-launcher-band").length).toBeGreaterThan(1);
+      expect(offenders).toEqual([]);
+    });
+
+    it("gives every mixed search result a category, since no heading places it", () => {
+      // The complement of the rule above, and the reason it is safe: browse can
+      // drop the category because a heading carries it, and search cannot,
+      // because one flat "Search results" band mixes all three kinds. Asserted
+      // as "every row has one" rather than "this row says Panel" so it survives
+      // the category words being renamed.
+      mockRecipes = [{ id: "r-1", name: "Review", worktreeId: undefined }];
+      const { container } = renderButton();
+      fireEvent.change(searchInput(container), { target: { value: "review" } });
+
+      const rows = options(container);
+      expect(rows.length).toBeGreaterThan(1);
+      for (const row of rows) {
+        expect(qualifierTextOf(row)).toBeTruthy();
+      }
+    });
+
+    it("marks a pinned row with the same glyph as an unpinned one, not a negated one", () => {
+      // A pin with a slash through it is the "off/muted/unavailable" mark
+      // everywhere that defines one, so wearing it at rest made a pinned row
+      // advertise the opposite of its state — and paired with `aria-pressed`
+      // it read as a double negative. The rule is that the two states differ by
+      // treatment, not by swapping in a contradictory glyph.
+      // A toolbar position is what makes a row pinned; `pinnedCount` only
+      // decides where the Pinned/Other band line falls.
+      mockToolbarLayout = { pinnedButtons: {}, leftButtons: [], rightButtons: ["claude"] };
+      const { container } = renderButton();
+
+      const glyphNameOf = (row: HTMLElement): string | undefined => {
+        const control = pinControl(row);
+        const svg = control?.querySelector("svg");
+        return Array.from(svg?.classList ?? []).find((c) => c.startsWith("lucide-"));
+      };
+
+      const pressed = options(container).filter(
+        (row) => pinControl(row)?.getAttribute("aria-pressed") === "true"
+      );
+      const unpressed = options(container).filter(
+        (row) => pinControl(row)?.getAttribute("aria-pressed") === "false"
+      );
+      expect(pressed.length).toBeGreaterThan(0);
+      expect(unpressed.length).toBeGreaterThan(0);
+      expect(glyphNameOf(pressed[0]!)).toBe(glyphNameOf(unpressed[0]!));
+      for (const row of pressed) {
+        expect(glyphNameOf(row)).not.toContain("off");
+      }
+    });
+
+    it("keeps a band's heading while its first row is recording a shortcut", () => {
+      // The recorder replaces the whole option, and the heading used to be a
+      // child of it — so recording on the first agent deleted "Launch agent"
+      // and left the rows beneath it under no heading at all.
+      const { container, getAllByTestId } = renderButton();
+      const before = getAllByTestId("dock-launcher-band").map((el) => el.textContent);
+
+      const edit = container.querySelector<HTMLElement>('[data-testid^="launcher-shortcut-edit-"]');
+      expect(edit).not.toBeNull();
+      fireEvent.click(edit!);
+
+      expect(getAllByTestId("dock-launcher-band").map((el) => el.textContent)).toEqual(before);
+    });
+
     it("keeps the trailing slot on rows that cannot be pinned", () => {
       // jsdom has no layout, so this checks the structure the alignment rests
       // on rather than the width: an unpinnable row still ends with the same
@@ -2079,7 +2185,11 @@ describe("DockLaunchButton", () => {
           el.getAttribute("data-launcher-slot")
         );
       expect(slotsOf(notPinnable)).toEqual(slotsOf(pinnable));
-      expect(slotsOf(notPinnable)).toEqual(["shortcut", "pin"]);
+      // Leading disclosure, then the two trailing controls. The disclosure
+      // column is reserved for the same reason as the other two: only agents
+      // can expand, and letting the column collapse on every other row would
+      // step the icons in and out as the list is scrolled.
+      expect(slotsOf(notPinnable)).toEqual(["disclosure", "shortcut", "pin"]);
       expect(notPinnable.lastElementChild?.tagName).toBe(pinnable.lastElementChild?.tagName);
     });
 
@@ -2243,6 +2353,29 @@ describe("DockLaunchButton — migrated toolbar affordances (#11691)", () => {
 
       fireEvent.keyDown(input, { key: "ArrowLeft" });
       expect(presetRows(container)).toHaveLength(0);
+    });
+
+    it("keeps one heading per band when an agent's presets are spliced in", () => {
+      // Two agents, expanding the first: the bug only shows when a row of the
+      // parent's band FOLLOWS the preset block. Preset rows are siblings in the
+      // same flat list spliced inside their parent's band, so comparing each
+      // row's band with the row immediately before it made Gemini look like the
+      // start of a second "Launch agent" group.
+      const two = [
+        { id: "claude", name: "Claude", availability: "ready" as const },
+        { id: "gemini", name: "Gemini", availability: "ready" as const },
+      ];
+      const { container, getAllByTestId } = renderButton({ agents: two });
+      const bandsOf = () => getAllByTestId("dock-launcher-band").map((el) => el.textContent);
+      const before = bandsOf();
+
+      fireEvent.keyDown(searchInput(container), { key: "ArrowRight" });
+      expect(presetRows(container).length).toBeGreaterThan(0);
+
+      const after = bandsOf();
+      expect(after.filter((label, i) => after.indexOf(label) !== i)).toEqual([]);
+      // The expansion contributes its own heading and disturbs no other.
+      expect(after).toEqual(expect.arrayContaining(before));
     });
 
     it("selects the first preset once the expansion has rendered", () => {
