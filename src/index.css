@@ -406,7 +406,7 @@
    * token directly; these five survive only because Tailwind v4 generates
    * utilities on demand from this namespace, and the alpha-modified forms
    * still in the tree — the `text-daintree-text/NN` hierarchy ramp and the
-   * non-text alpha composites such as `ring-daintree-accent/30` — would stop
+   * non-text alpha composites such as `bg-daintree-text/10` — would stop
    * generating without them. They go when those do. */
   --color-daintree-bg: var(--theme-surface-canvas);
   --color-daintree-sidebar: var(--theme-surface-sidebar);

@@ -254,7 +254,7 @@ export function ContentGridEmptyState({
   // the launch anchor below it. At 100px the identity block alone ate the top
   // quarter of the canvas and pushed the anchor past three-quarters down.
   //
-  // The fallback mark rides the neutral `daintree-text` (text-primary) token,
+  // The fallback mark rides the neutral `text-primary` token,
   // NOT the hue-carrying `tint` — so it reads as the same grey the startup
   // skeleton's `.skeleton-logo` paints and crossfades in without a hue pop on
   // themed setups (where `tint` carries a brand hue). Theme-aware by

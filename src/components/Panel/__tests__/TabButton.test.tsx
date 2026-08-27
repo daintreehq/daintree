@@ -407,7 +407,9 @@ describe("TabButton", () => {
       render(<TabButton {...defaultProps} onRename={vi.fn()} />);
       fireEvent.doubleClick(screen.getByText("Test Agent"));
       const input = screen.getByTestId("motion-input") as HTMLInputElement;
-      expect(input.className).not.toMatch(/(outline|ring|border)-(daintree-accent|accent-primary)/);
+      expect(input.className).not.toMatch(
+        /(?:outline|ring|border)-(?:daintree-accent|accent-primary)(?![\w-])/
+      );
       expect(input.className).toContain("focus:outline-hidden");
     });
   });

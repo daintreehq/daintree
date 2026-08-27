@@ -543,10 +543,10 @@ Within some settings sections (e.g., General has Overview/Hibernation/Display), 
 The active subtab shows a 2px `accent-primary` colored line along the bottom:
 
 ```css
-isactive?"border-b-2 border-daintree-accent text-daintree-text": "border-b-2 border-transparent text-text-secondary";
+isactive?"border-b-2 border-accent-primary text-text-primary": "border-b-2 border-transparent text-text-secondary";
 ```
 
-Inactive tabs have a transparent bottom border (same 2px so layout doesn't shift) and use `text-secondary`. On hover, inactive tabs show `border-daintree-border` (a subtle gray line).
+Inactive tabs have a transparent bottom border (same 2px so layout doesn't shift) and use `text-secondary`. On hover, inactive tabs show `border-border-default` (a subtle gray line).
 
 ### Settings Cards
 

@@ -259,7 +259,7 @@ describe("TrashContainer", () => {
     expect(ghost.className).toContain("bg-overlay-soft");
     expect(ghost.className).toContain("ring-border-default");
     expect(ghost.className).toContain("cursor-copy");
-    expect(ghost.className).not.toContain("daintree-accent");
+    expect(ghost.className).not.toMatch(/(?:daintree-accent|accent-primary)(?![\\w-])/);
   });
 
   it("applies armed isOver classes on the real pill when dragged onto", () => {

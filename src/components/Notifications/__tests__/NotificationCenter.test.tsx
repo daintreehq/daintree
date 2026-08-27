@@ -708,8 +708,8 @@ describe("NotificationThread visual treatment", () => {
     const wrapper = screen.getByTestId("notification-thread");
     expect(wrapper.className).toMatch(/border-l-2/);
     expect(wrapper.className).toMatch(/border-tint\//);
-    expect(wrapper.className).not.toMatch(/border-(daintree-accent|accent-primary)/);
-    expect(wrapper.className).not.toMatch(/bg-(daintree-accent|accent-primary)/);
+    expect(wrapper.className).not.toMatch(/border-(?:daintree-accent|accent-primary)(?![\w-])/);
+    expect(wrapper.className).not.toMatch(/bg-(?:daintree-accent|accent-primary)(?![\w-])/);
   });
 
   it("does not render the thread rail wrapper for solo entries", async () => {

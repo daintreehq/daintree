@@ -338,7 +338,7 @@ describe("GitHubListItem", () => {
     expect(selectedOption.className).not.toBe(activeOption.className);
 
     for (const cls of [restingClass, activeOption.className, selectedOption.className]) {
-      expect(cls).not.toMatch(/daintree-accent/);
+      expect(cls).not.toMatch(/(?:daintree-accent|accent-primary)(?![\\w-])/);
     }
   });
 
