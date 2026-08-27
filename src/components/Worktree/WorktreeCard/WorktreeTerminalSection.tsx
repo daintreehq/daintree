@@ -23,6 +23,7 @@ import {
   GripVertical,
   PanelBottom,
   PanelTopClose,
+  Plus,
   SquareTerminal,
   X,
 } from "lucide-react";
@@ -33,7 +34,7 @@ import {
 import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
 import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
 import { useKeybindingScope } from "@/hooks/useKeybinding";
-import { SECTION_LABEL, SECTION_TRIGGER_SURFACE } from "./sectionChrome";
+import { SECTION_LABEL, SECTION_ROW, DISCLOSURE_WELL, GRID_SESSION_WELL } from "./sectionChrome";
 
 interface MarqueeBox {
   x: number;
@@ -172,6 +173,8 @@ function TerminalRow({ term, onClick }: TerminalRowProps) {
 
 export interface WorktreeTerminalSectionProps {
   worktreeId: string;
+  /** Opens the panel palette for this worktree. Drives the empty tray's row. */
+  onStartSession?: () => void;
   /** See {@link WorktreeDetailsSectionProps.variant} — same reasoning. */
   variant?: "sidebar" | "grid";
   isExpanded: boolean;
@@ -185,6 +188,7 @@ const FLEET_HINT_DISMISSED_KEY = "daintree:fleet-selection-hint-dismissed";
 
 export function WorktreeTerminalSection({
   worktreeId,
+  onStartSession,
   variant = "sidebar",
   isExpanded,
   counts,
@@ -376,21 +380,40 @@ export function WorktreeTerminalSection({
     setMarqueeBox(null);
   }, []);
 
+  /* No sessions. The grid card drops the section — it is a standalone surface
+     and ends cleanly on its own border. The sidebar card cannot: the tray IS
+     its terminator in a full-bleed list, and a list where only some cards
+     carry one separates unevenly, worst at exactly the idle cards that give
+     the eye least to hold on to.
+
+     So the row stays, but it does not spend itself saying "No sessions". A
+     count of zero is already legible from the empty card above it, and
+     repeated down a thirteen-card sidebar it is thirteen rows of nothing. The
+     empty-state rule here is to name the next action instead of the absence,
+     and the next action on an idle worktree is to start something in it —
+     which is also the one thing this row is positioned to offer. Quiet at
+     rest, so it reads as a footer and not as a call to action. */
   if (!showMetaFooter) {
-    return null;
+    if (!isSidebar) return null;
+    return (
+      <div id={terminalsId} className={DISCLOSURE_WELL}>
+        <button
+          type="button"
+          onClick={onStartSession}
+          className={cn(
+            SECTION_ROW,
+            "gap-1.5 text-[11px] text-text-secondary transition-colors hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]"
+          )}
+        >
+          <Plus className="h-3 w-3 shrink-0" aria-hidden="true" />
+          <span>Start a session</span>
+        </button>
+      </div>
+    );
   }
 
   return (
-    <div
-      id={terminalsId}
-      className={cn(
-        isSidebar
-          ? // Flat on the card surface, and separated from Details by a peer
-            // divider rather than by each section carrying its own well.
-            "mt-2 border-t border-border-subtle pt-2"
-          : "mt-3 rounded-[var(--radius-lg)] border border-border-default bg-surface-inset"
-      )}
-    >
+    <div id={terminalsId} className={isSidebar ? DISCLOSURE_WELL : GRID_SESSION_WELL}>
       {isExpanded ? (
         <>
           <button
@@ -400,12 +423,14 @@ export function WorktreeTerminalSection({
             className={cn(
               "worktree-section-button flex w-full items-center text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]",
               isSidebar
-                ? cn(SECTION_TRIGGER_SURFACE, "gap-1.5 py-1")
+                ? cn(SECTION_ROW, "gap-1.5")
                 : "justify-between rounded-t-[var(--radius-lg)] border-b border-border-default bg-surface-inset px-3 py-1.5"
             )}
             id={`${terminalsId}-button`}
           >
-            {isSidebar && <ChevronRight className="h-3 w-3 shrink-0 rotate-90 text-text-muted" />}
+            {isSidebar && (
+              <ChevronRight className="h-3 w-3 shrink-0 rotate-90 text-text-secondary" />
+            )}
             <span
               className={cn(
                 "flex items-center gap-1.5",
@@ -430,7 +455,7 @@ export function WorktreeTerminalSection({
               <div
                 className={cn(
                   "flex items-center justify-between py-1.5 text-[11px] text-text-muted",
-                  isSidebar ? "" : "border-b border-border-default bg-surface-inset px-3"
+                  isSidebar ? "px-3" : "border-b border-border-default bg-surface-inset px-3"
                 )}
               >
                 <span>Drag to select multiple, ⇧-click to add</span>
@@ -462,7 +487,7 @@ export function WorktreeTerminalSection({
               onPointerCancel={handlePointerCancel}
               className={cn(
                 "relative max-h-[300px] cursor-crosshair overflow-y-auto",
-                isSidebar ? "mt-1" : "bg-surface-inset"
+                !isSidebar && "bg-surface-inset"
               )}
             >
               {orderedWorktreeTerminals.map((term, index) => (
@@ -497,15 +522,13 @@ export function WorktreeTerminalSection({
           aria-controls={terminalsPanelId}
           className={cn(
             "worktree-section-button flex w-full items-center justify-between text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]",
-            isSidebar
-              ? cn(SECTION_TRIGGER_SURFACE, "py-1.5")
-              : "rounded-[var(--radius-lg)] px-3 py-1.5"
+            isSidebar ? SECTION_ROW : "rounded-[var(--radius-lg)] px-3 py-1.5"
           )}
           id={`${terminalsId}-button`}
         >
           <div className="flex items-center gap-1.5 text-[11px] text-text-secondary">
             {isSidebar && (
-              <ChevronRight className="h-3 w-3 shrink-0 text-text-muted" aria-hidden="true" />
+              <ChevronRight className="h-3 w-3 shrink-0 text-text-secondary" aria-hidden="true" />
             )}
             {SummaryIcon ? (
               <SummaryIcon className="w-3 h-3" />

@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import type { AgentState, WorktreeState } from "@/types";
 import type { WorktreeMenuActions } from "../WorktreeMenuItems";
 import type { GitStateIndicator } from "./hooks/useWorktreeStatus";
+import type { ChipState } from "../utils/computeChipState";
 import { cn } from "@/lib/utils";
 import { STATE_LABELS, STATE_PRIORITY } from "../terminalStateConfig";
 import { BranchLabel } from "../BranchLabel";
@@ -24,6 +25,13 @@ import { scheduleFlip } from "@/utils/flipScheduler";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { computeAlarmTier } from "@/lib/worktreeAlarmTier";
 
+/** Shared by the dot's tooltip and its accessible name, so they cannot drift. */
+const CHIP_LABELS: Record<Exclude<ChipState, null>, string> = {
+  waiting: "Agent waiting for input",
+  cleanup: "Ready for cleanup",
+  complete: "Complete: in review",
+};
+
 export interface WorktreeHeaderProps {
   worktree: WorktreeState;
   isActive: boolean;
@@ -33,6 +41,7 @@ export interface WorktreeHeaderProps {
   isMainWorktree: boolean;
   isMainOnStandardBranch?: boolean;
   isPinned: boolean;
+  chipState: ChipState;
   isCollapsed?: boolean;
   canCollapse?: boolean;
   onToggleCollapse?: (e: React.MouseEvent) => void;
@@ -165,6 +174,7 @@ export function WorktreeHeader({
   isMainWorktree,
   isMainOnStandardBranch,
   isPinned,
+  chipState,
   isCollapsed,
   canCollapse,
   onToggleCollapse,
@@ -322,7 +332,8 @@ export function WorktreeHeader({
           {isCollapsed && <CollapsedAlarmPill alarm={collapsedAlarm} />}
         </div>
 
-        {((isPinned && !isMainWorktree) ||
+        {(chipState !== null ||
+          (isPinned && !isMainWorktree) ||
           isExternal ||
           isProjectNotificationsMuted ||
           (worktree.worktreeMode && worktree.worktreeMode !== "local") ||
@@ -331,6 +342,40 @@ export function WorktreeHeader({
           hasDevServerSignal ||
           hasFreshnessPill) && (
           <div className="flex items-center gap-2 shrink-0">
+            {/* Worktree-level state — waiting / ready-for-cleanup / complete.
+                A dot, and in the title row, because it used to be a 12px
+                triangle clipped into the card's top-left corner. That corner
+                is the worst place for it now: it abuts the gutter and the
+                neighbouring card, so the one mark whose job is to say "this
+                card needs you" was the mark with the weakest claim to a card.
+                A corner ribbon also cannot be given a focus ring or a sane
+                bounding box, and it is a bespoke shape for an app concept.
+
+                `computeChipState` returns one state or none, never a
+                combination, which is exactly what a dot encodes. It sits with
+                the other non-interactive indicators rather than beside the
+                title's leading glyph, so the card keeps one leading mark
+                instead of two competing ones. */}
+            {chipState !== null && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span
+                    role="img"
+                    aria-label={CHIP_LABELS[chipState]}
+                    className={cn(
+                      // status-mark: the fill is the whole signal, so forced
+                      // colors has to repaint it rather than flatten it to the
+                      // canvas.
+                      "status-mark h-2 w-2 shrink-0 rounded-full",
+                      chipState === "waiting" && "bg-activity-waiting",
+                      chipState === "cleanup" && "bg-pr-merged",
+                      chipState === "complete" && "bg-category-blue"
+                    )}
+                  />
+                </TooltipTrigger>
+                <TooltipContent side="bottom">{CHIP_LABELS[chipState]}</TooltipContent>
+              </Tooltip>
+            )}
             {isPinned && !isMainWorktree && (
               <Pin
                 className="w-3.5 h-3.5 text-daintree-text/40 shrink-0 pointer-events-none"

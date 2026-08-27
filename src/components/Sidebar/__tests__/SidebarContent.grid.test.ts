@@ -102,9 +102,23 @@ describe("Worktree list keyboard grid — issue #6422 / virtualized rewrite", ()
     });
 
     it("uses group-hover/card for mouse row-level reveal (not self-scoped hover)", async () => {
+      // Discoverability is row-scoped: hovering anywhere on the card has to
+      // surface the grip, or nobody finds it. The grip rests at opacity 0, so
+      // the row-level reveal is the fade — not a colour change on something
+      // already painted.
       const cardSource = await fs.readFile(WORKTREE_CARD_PATH, "utf-8");
-      expect(cardSource).toContain("group-hover/card:text-text-primary/40");
-      expect(cardSource).toContain("group-hover/card:bg-overlay-soft");
+      expect(cardSource).toContain("group-hover/card:opacity-100");
+    });
+
+    it("keeps the grip's backplate self-scoped so row hover does not paint a bar", async () => {
+      // The grip is a full-height column. When its backplate came up on row
+      // hover it painted a bar down the whole card and became the most
+      // prominent thing on a row whose subject is the worktree — for a control
+      // most hovers never wanted. Brightening the glyph is the row-level
+      // affordance; the plate waits for the pointer to reach the grip.
+      const cardSource = await fs.readFile(WORKTREE_CARD_PATH, "utf-8");
+      expect(cardSource).not.toContain("group-hover/card:bg-overlay-soft");
+      expect(cardSource).toContain("hover:bg-overlay-soft");
     });
 
     it("keeps motion-reduce:transition-none on the drag handle for WCAG reduced-motion", async () => {

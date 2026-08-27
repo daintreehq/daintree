@@ -129,8 +129,8 @@ export const theme: BuiltInThemeSource = {
     "settings-nav-hover-bg": "rgba(220,232,196,0.05)",
     "sidebar-action-hover-bg": "rgba(220,232,196,0.05)",
     // Registry requires white-alpha ink for these two on dark.
-    "sidebar-active-bg": "rgba(255,255,255,0.05)",
-    "sidebar-hover-bg": "rgba(255,255,255,0.03)",
+    "sidebar-active-bg": "rgba(255,255,255,0.065)",
+    "sidebar-hover-bg": "rgba(255,255,255,0.048)",
     "toolbar-agent-hover-bg": "rgba(220,232,196,0.08)",
     "toolbar-control-active-bg": "rgba(220,232,196,0.12)",
     "toolbar-control-armed-bg": "rgba(220,232,196,0.12)",

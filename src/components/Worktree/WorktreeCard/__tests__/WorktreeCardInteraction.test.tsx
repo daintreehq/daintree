@@ -184,6 +184,15 @@ describe("WorktreeCard disabled drag handle (issue #8395)", () => {
   });
 
   it("gates the grip block on dragHandleListeners OR isDragHandleDisabled", () => {
-    expect(cardSource).toMatch(/\(dragHandleListeners\s*\|\|\s*isDragHandleDisabled\)\s*&&/);
+    // The gate is a named flag rather than the expression inlined at each use
+    // site: the card reads it three times now (the grip, the body padding, and
+    // the data attribute the footer aligns off), and three copies of the same
+    // condition is three chances for them to disagree about whether the row
+    // has a grip. Assert the definition and that nothing has drifted back to
+    // testing the raw expression in place.
+    expect(cardSource).toMatch(
+      /const hasRowDragHandle =\s*Boolean\(dragHandleListeners\)\s*\|\|\s*isDragHandleDisabled;/
+    );
+    expect(cardSource).toMatch(/\{hasRowDragHandle &&/);
   });
 });

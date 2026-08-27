@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 import { actionService } from "@/services/ActionService";
 import type { ComputedSubtitle, WorktreeReviewState } from "./hooks/useWorktreeStatus";
-import { SECTION_LABEL, SECTION_TRIGGER_SURFACE } from "./sectionChrome";
+import { SECTION_LABEL, SECTION_ROW, DISCLOSURE_WELL } from "./sectionChrome";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   ContextMenu,
@@ -201,7 +201,13 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
         id={detailsId}
         className={cn(
           isSidebar
-            ? "mt-2"
+            ? // Expanded Details is a well, exactly like sessions below it:
+              // once it has a body of its own to hold, it needs the contour
+              // that says the body belongs to it. Collapsed it is a single
+              // row, and a well around one row is a box around nothing.
+              isExpanded
+              ? DISCLOSURE_WELL
+              : "mt-2"
             : "mt-2 rounded-[var(--radius-lg)] border border-border-default bg-surface-inset p-3"
         )}
       >
@@ -218,7 +224,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                     // to stay attached to the body it just revealed. A divider
                     // there cuts the two apart and they read as separate
                     // components.
-                    cn(SECTION_TRIGGER_SURFACE, "gap-1.5 py-1")
+                    cn(SECTION_ROW, "gap-1.5")
                   : "justify-between rounded-t-[var(--radius-lg)] border-b border-border-default bg-surface-inset px-3 py-2.5"
               )}
               id={`${detailsId}-button`}
@@ -249,7 +255,9 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
               id={detailsPanelId}
               role="region"
               aria-labelledby={`${detailsId}-button`}
-              className={cn(isSidebar ? "mt-2" : "p-3")}
+              // Inside the well now, so it owns the well's padding. The
+              // trigger above it supplies the top inset.
+              className={cn(isSidebar ? "px-2.5 pb-2" : "p-3")}
             >
               <WorktreeDetails
                 variant={variant}
@@ -282,7 +290,12 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                   // backplate, not a permanent bordered well. Same hit area,
                   // same content, one less container.
                   isSidebar
-                    ? "-ml-1.5 rounded-[var(--radius-md)] py-1.5 pl-1.5 pr-1"
+                    ? // Same geometry as SECTION_ROW (it cannot use the class
+                      // itself — this row is a flex-1 sibling of the right
+                      // button group, not a full-width row). The old -ml-1.5
+                      // chip put this line's chevron 16px left of the session
+                      // row's directly beneath it.
+                      "rounded-[var(--radius-lg)] border border-transparent py-1.5 pl-1.5 pr-2.5"
                     : cn(
                         "px-3 py-2.5",
                         rightButtonGroupShown
@@ -300,7 +313,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                   className={cn(
                     "absolute inset-0",
                     isSidebar
-                      ? "rounded-[var(--radius-md)]"
+                      ? "rounded-[var(--radius-lg)]"
                       : rightButtonGroupShown
                         ? "rounded-l-[var(--radius-lg)]"
                         : "rounded-[var(--radius-lg)]",
