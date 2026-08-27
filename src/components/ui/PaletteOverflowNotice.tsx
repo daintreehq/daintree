@@ -19,7 +19,7 @@ export function PaletteOverflowNotice({ shown, total }: PaletteOverflowNoticePro
     <div
       role="status"
       aria-label={`${hidden} more results not shown — type to narrow your search`}
-      className="px-3 py-2 text-xs tabular-nums text-daintree-text/40 text-center border-t border-daintree-border/30"
+      className="px-3 py-2 text-xs tabular-nums text-text-secondary text-center border-t border-daintree-border/30"
     >
       +{hidden} more — type to narrow
     </div>

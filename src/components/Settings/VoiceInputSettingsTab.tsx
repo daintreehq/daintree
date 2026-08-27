@@ -467,7 +467,7 @@ export function VoiceInputSettingsTab() {
 
               <CorePromptViewer />
 
-              <p className="text-xs text-daintree-text/40">
+              <p className="text-xs text-text-secondary">
                 Your project name and custom dictionary are included automatically. Prompt caching
                 keeps costs minimal.
               </p>
@@ -669,7 +669,7 @@ function AdvancedSection({
       </button>
       {expanded && (
         <div className="space-y-3">
-          <p className="text-xs text-daintree-text/40">
+          <p className="text-xs text-text-secondary">
             Only needed for legacy user keys (starts with <code className="font-mono">sk-</code>).
           </p>
           <div className="space-y-1.5">
@@ -834,7 +834,7 @@ function MicPermissionRow({
         {statusDisplay.actions}
       </div>
       {statusDisplay.description && (
-        <p className="text-xs text-daintree-text/40 ml-[22px]">{statusDisplay.description}</p>
+        <p className="text-xs text-text-secondary ml-[22px]">{statusDisplay.description}</p>
       )}
     </div>
   );
@@ -1028,7 +1028,7 @@ function DictionarySection({
           ))}
         </div>
       ) : (
-        <p className="text-xs text-daintree-text/40 select-text">
+        <p className="text-xs text-text-secondary select-text">
           Domain-specific terms sent to the transcription service to boost recognition accuracy.
         </p>
       )}

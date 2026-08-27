@@ -379,7 +379,7 @@ export function GeneralTab({
 
           <div className="mt-3 flex items-center justify-between gap-3">
             <p
-              className="min-w-0 flex-1 truncate text-xs font-mono text-daintree-text/40"
+              className="min-w-0 flex-1 truncate text-xs font-mono text-text-secondary"
               title={currentProject.path}
             >
               {currentProject.path}
@@ -672,7 +672,7 @@ export function GeneralTab({
             <p className="text-sm text-daintree-text/60 text-center mb-1">
               Drag and drop an SVG file here
             </p>
-            <p className="text-xs text-daintree-text/40">or click to browse</p>
+            <p className="text-xs text-text-secondary">or click to browse</p>
           </div>
         )}
 

@@ -264,7 +264,7 @@ export function AgentCliStep({
                 <div className="flex-1 min-w-0">
                   <div className="text-sm font-medium text-daintree-text">{config.name}</div>
                   {description && (
-                    <div className="text-[11px] text-daintree-text/40 truncate">{description}</div>
+                    <div className="text-[11px] text-text-secondary truncate">{description}</div>
                   )}
                 </div>
                 <div className="flex items-center gap-2 shrink-0">
@@ -299,7 +299,7 @@ export function AgentCliStep({
                       Failed
                     </span>
                   ) : isManual ? (
-                    <span className="inline-flex items-center gap-1 text-[11px] text-daintree-text/40">
+                    <span className="inline-flex items-center gap-1 text-[11px] text-text-secondary">
                       Manual
                     </span>
                   ) : (
@@ -341,7 +341,7 @@ export function AgentCliStep({
 
               {isManual && currentBlock?.commands && (
                 <div className="pl-14 pt-1.5 pb-1 space-y-1">
-                  <div className="text-[11px] text-daintree-text/40 mb-1">
+                  <div className="text-[11px] text-text-secondary mb-1">
                     Run this command in your terminal. It will be detected automatically.
                   </div>
                   {currentBlock.commands.map((cmd) => (
@@ -379,7 +379,7 @@ export function AgentCliStep({
                   )}
                   {currentBlock?.commands && (
                     <div className="space-y-1">
-                      <div className="text-[11px] text-daintree-text/40">Or install manually:</div>
+                      <div className="text-[11px] text-text-secondary">Or install manually:</div>
                       {currentBlock.commands.map((cmd) => (
                         <CopyableCommand
                           key={cmd}

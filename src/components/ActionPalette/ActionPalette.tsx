@@ -21,7 +21,7 @@ import {
 } from "@/hooks/useActionPalette";
 
 const SECTION_HEADER_CLASS =
-  "px-3 py-1 text-[10px] font-medium tracking-wider uppercase text-daintree-text/40 select-none";
+  "px-3 py-1 text-[10px] font-medium tracking-wider uppercase text-text-secondary select-none";
 
 // Module-level so SearchablePalette receives a stable reference and skips
 // re-renders driven only by a freshly-created callback identity.

@@ -15,7 +15,7 @@ export function ScopeBanner({ scopeKind, scopeLabel }: ScopeBannerProps) {
       {scopeKind === "ccr" && (
         <span
           data-testid="preset-badge-auto"
-          className="text-[10px] text-daintree-text/40 bg-daintree-text/10 px-1.5 py-0.5 rounded"
+          className="text-[10px] text-text-secondary bg-daintree-text/10 px-1.5 py-0.5 rounded"
         >
           auto
         </span>
@@ -23,7 +23,7 @@ export function ScopeBanner({ scopeKind, scopeLabel }: ScopeBannerProps) {
       {scopeKind === "project" && (
         <span
           data-testid="preset-badge-project"
-          className="text-[10px] text-daintree-text/40 bg-daintree-text/10 px-1.5 py-0.5 rounded"
+          className="text-[10px] text-text-secondary bg-daintree-text/10 px-1.5 py-0.5 rounded"
         >
           project
         </span>

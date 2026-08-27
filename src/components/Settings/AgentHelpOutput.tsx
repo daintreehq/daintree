@@ -198,7 +198,7 @@ export function AgentHelpOutput({
       {!isLoading && isAgentMissing(availability) && !isCliLoading && (
         <div className="px-4 py-6 rounded-[var(--radius-md)] border border-daintree-border bg-surface text-center space-y-2">
           <p className="text-sm text-daintree-text/60">CLI not found</p>
-          <p className="text-xs text-daintree-text/40 select-text">
+          <p className="text-xs text-text-secondary select-text">
             {agentName} is not installed or not in your PATH
           </p>
           {usageUrl && (

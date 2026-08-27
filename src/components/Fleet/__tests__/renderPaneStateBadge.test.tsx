@@ -41,6 +41,23 @@ describe("renderPaneStateBadge", () => {
     expect(working.className).not.toContain("text-state-waiting");
   });
 
+  // The exited badge reads at the same text contrast as the live states, so the
+  // "dead pane recedes" signal rides the chip fill instead. Pinned as a relation
+  // between the states rather than against whichever fill class is in use.
+  it("drops the chip fill on exited panes while live states keep it", () => {
+    renderBadge("x", "exited");
+    renderBadge("w", "waiting", "question");
+    renderBadge("k", "working");
+    const fill = (id: string) =>
+      screen
+        .getByTestId(id)
+        .className.split(/\s+/)
+        .filter((c) => c.startsWith("bg-"))
+        .join(" ");
+    expect(fill("fleet-pane-state-w-waiting")).toBe(fill("fleet-pane-state-k-working"));
+    expect(fill("fleet-pane-state-x-exited")).not.toBe(fill("fleet-pane-state-w-waiting"));
+  });
+
   it("ignores a stale waiting reason on non-waiting states", () => {
     renderBadge("p2", "working", "approval");
     const badge = screen.getByTestId("fleet-pane-state-p2-working");

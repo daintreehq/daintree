@@ -98,7 +98,7 @@ function SystemHealthSection() {
                 )}
                 <span className="text-sm text-daintree-text">{label}</span>
                 {check.version && (
-                  <span className="text-xs text-daintree-text/40">v{check.version}</span>
+                  <span className="text-xs text-text-secondary">v{check.version}</span>
                 )}
                 {!check.available && (
                   <span className="ml-auto text-xs text-status-error">Not found</span>

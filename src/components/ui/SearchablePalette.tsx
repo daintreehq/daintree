@@ -363,7 +363,7 @@ export function SearchablePalette<T>({
 
   const autoEmptyChip =
     !emptyContent && emptyShortcut && emptyEntityName ? (
-      <p className="mt-2 text-xs text-daintree-text/40">
+      <p className="mt-2 text-xs text-text-secondary">
         Press <kbd className={KBD_CLASS}>{emptyShortcut}</kbd> to create {emptyEntityName}.
       </p>
     ) : null;

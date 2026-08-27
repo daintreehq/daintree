@@ -131,7 +131,7 @@ export function WorktreePalette({
       emptyMessage="No worktrees yet"
       totalResults={totalResults}
       emptyContent={
-        <p className="mt-2 text-xs text-daintree-text/40">
+        <p className="mt-2 text-xs text-text-secondary">
           {createWorktreeShortcut ? (
             <>
               Press <kbd className={KBD_CLASS}>{createWorktreeShortcut}</kbd> to create a worktree.

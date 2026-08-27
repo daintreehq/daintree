@@ -250,7 +250,7 @@ export function getBaseBranchStatusConfig(status: string): {
     BASE_BRANCH_STATUS_CONFIG[status] ?? {
       label: status,
       bg: "bg-tint/[0.06]",
-      text: "text-daintree-text/40",
+      text: "text-text-secondary",
     }
   );
 }

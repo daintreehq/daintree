@@ -682,7 +682,7 @@ function PanelRow({
       <span className="text-daintree-text/60 shrink-0">{getPanelIcon(panel.kind)}</span>
       <div className="flex-1 min-w-0">
         <div className="text-sm text-daintree-text truncate">{panel.title || panel.kind}</div>
-        {panel.cwd && <div className="text-xs text-daintree-text/40 truncate">{panel.cwd}</div>}
+        {panel.cwd && <div className="text-xs text-text-secondary truncate">{panel.cwd}</div>}
       </div>
       <div className="flex items-center gap-1.5 shrink-0">
         {panel.agentState && (
@@ -690,7 +690,7 @@ function PanelRow({
             {panel.agentState}
           </span>
         )}
-        <span className="text-xs text-daintree-text/40">{panel.location}</span>
+        <span className="text-xs text-text-secondary">{panel.location}</span>
         {panel.isSuspect && (
           <span
             className="text-status-warning"
@@ -750,12 +750,12 @@ function ActionTrailRow({ action }: { action: ActionBreadcrumb }) {
       className="flex items-baseline gap-2 px-2 py-1 text-xs"
       data-testid={`action-row-${action.id}`}
     >
-      <span className="text-daintree-text/40 tabular-nums shrink-0">{time}</span>
+      <span className="text-text-secondary tabular-nums shrink-0">{time}</span>
       <span className="font-mono text-daintree-text/80 truncate">{action.actionId}</span>
       {action.count > 1 && (
         <span className="text-daintree-text/50 tabular-nums shrink-0">×{action.count}</span>
       )}
-      <span className="text-daintree-text/40 shrink-0">{action.source}</span>
+      <span className="text-text-secondary shrink-0">{action.source}</span>
       {action.danger !== "safe" && (
         <span className="text-daintree-text/50 shrink-0">{action.danger}</span>
       )}
@@ -765,7 +765,7 @@ function ActionTrailRow({ action }: { action: ActionBreadcrumb }) {
         </span>
       )}
       {args && (
-        <span className="text-daintree-text/40 truncate font-mono" title={args}>
+        <span className="text-text-secondary truncate font-mono" title={args}>
           {args}
         </span>
       )}

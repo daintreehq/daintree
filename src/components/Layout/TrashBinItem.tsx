@@ -102,7 +102,7 @@ export function TrashBinItem({ terminal, trashedInfo, worktreeName }: TrashBinIt
             "text-[11px] tabular-nums transition-opacity",
             seconds <= COUNTDOWN_CRITICAL_SECONDS
               ? "opacity-100 text-status-warning/70"
-              : "text-daintree-text/40 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+              : "text-text-secondary opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
           )}
           aria-hidden="true"
         >

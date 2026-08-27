@@ -68,7 +68,7 @@ export function FileBrowserVisibilitySettings() {
       <div className="space-y-3">
         <ul className="flex flex-wrap gap-1.5" aria-label="Always-hidden patterns">
           {patterns.length === 0 && (
-            <li className="text-xs text-daintree-text/40">Nothing is hidden</li>
+            <li className="text-xs text-text-secondary">Nothing is hidden</li>
           )}
           {patterns.map((pattern) => (
             <li

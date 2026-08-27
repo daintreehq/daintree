@@ -334,7 +334,7 @@ function OverrideRow({
         />
         <span className="text-sm font-medium text-daintree-text">{label}</span>
         {!isOverridden && (
-          <span className="text-xs text-daintree-text/40">(using global default)</span>
+          <span className="text-xs text-text-secondary">(using global default)</span>
         )}
       </label>
       {description && !isOverridden && (

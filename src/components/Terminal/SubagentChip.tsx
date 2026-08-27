@@ -29,7 +29,7 @@ import type {
 const TONE_CLASSES: Record<"error" | "active" | "muted", string> = {
   error: "text-status-error",
   active: "text-status-info",
-  muted: "text-daintree-text/40",
+  muted: "text-text-secondary",
 };
 
 function TranscriptBody({
@@ -67,7 +67,7 @@ function TranscriptBody({
       )}
       {transcript.messages.map((message, index) => (
         <div key={`${transcript.subagentId}-${index}`} className="flex flex-col gap-0.5">
-          <span className="text-[10px] uppercase tracking-wider text-daintree-text/40">
+          <span className="text-[10px] uppercase tracking-wider text-text-secondary">
             {message.role === "task" ? "Task" : "Reply"}
           </span>
           <p className="text-xs text-daintree-text/80 whitespace-pre-wrap break-words">

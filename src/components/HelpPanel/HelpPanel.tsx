@@ -1535,7 +1535,7 @@ export function HelpPanel({
           edge. Raw args, the elapsed ticker, and the marketing link live in
           the popover / hover titles / header docs button now. */}
       {showTerminal && agentConfig && !isMissingCli && (
-        <div className="flex items-center justify-between gap-3 border-t border-daintree-border shrink-0 px-3 py-1.5 text-[11px] text-daintree-text/40">
+        <div className="flex items-center justify-between gap-3 border-t border-daintree-border shrink-0 px-3 py-1.5 text-[11px] text-text-secondary">
           <span className="flex items-center gap-2 min-w-0">
             <McpActivityStrip sessionId={sessionId} activity={session.mcpActivity} />
             <TurnOutcomePip outcome={session.outcomeAlert} onDismiss={dismissOutcomeAlert} />

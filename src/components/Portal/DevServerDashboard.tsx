@@ -83,7 +83,7 @@ function DevServerRow({
               :{port}
             </span>
           )}
-          <span className="flex-shrink-0 text-xs text-daintree-text/40">{presentation.label}</span>
+          <span className="flex-shrink-0 text-xs text-text-secondary">{presentation.label}</span>
         </div>
         {session.lastOutput && (
           <span className="truncate text-xs text-daintree-text/45">{session.lastOutput}</span>

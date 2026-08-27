@@ -649,7 +649,7 @@ export function DockedTabGroup({ group, panels }: DockedTabGroupProps) {
               </span>
 
               {/* Tab count indicator */}
-              <span className="text-[10px] text-daintree-text/40 tabular-nums shrink-0">
+              <span className="text-[10px] text-text-secondary tabular-nums shrink-0">
                 ({panels.length})
               </span>
 

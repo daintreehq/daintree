@@ -22,9 +22,12 @@ export function renderPaneStateBadge(
   // waiting state color and name the classified reason when the classifier
   // had real evidence. The `prompt` fallback keeps the generic "Waiting".
   const reason = state === "waiting" ? actionableWaitingReason(waitingReason) : null;
+  // Exited keeps a readable text tone, so the "dead pane recedes" signal moves
+  // off contrast onto the chip surface: exited drops the fill the live states carry.
+  // The `outline` tone washes every chip, so exited clears it back to the hairline.
   const tone =
     state === "exited"
-      ? "text-daintree-text/40"
+      ? "bg-transparent text-text-secondary"
       : state === "waiting"
         ? "text-state-waiting"
         : "text-daintree-text/70";

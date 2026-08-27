@@ -566,7 +566,7 @@ export function TerminalHeaderContent({
               className={cn(
                 "inline-flex items-center gap-1 text-[11px] font-mono shrink-0 transition-colors duration-150",
                 {
-                  "text-daintree-text/40": stickySeverity === "muted",
+                  "text-text-secondary": stickySeverity === "muted",
                   "text-status-warning": stickySeverity === "amber",
                   "text-status-error": stickySeverity === "red",
                 }

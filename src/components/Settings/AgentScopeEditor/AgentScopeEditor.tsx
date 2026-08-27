@@ -44,7 +44,7 @@ export function AgentScopeEditor(props: AgentScopeEditorProps) {
         <div className="flex items-center justify-between">
           <div>
             <label className="text-sm font-medium text-daintree-text">{title}</label>
-            <p className="text-xs text-daintree-text/40 select-text">
+            <p className="text-xs text-text-secondary select-text">
               Pick a scope — Default applies everywhere; presets override it.
             </p>
           </div>

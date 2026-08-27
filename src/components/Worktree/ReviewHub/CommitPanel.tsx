@@ -433,7 +433,7 @@ export function CommitPanel({
       <div
         className={cn(
           "flex justify-end text-[10px] tabular-nums -mt-1",
-          hasLineOverflow ? "text-status-warning" : "text-daintree-text/40"
+          hasLineOverflow ? "text-status-warning" : "text-text-secondary"
         )}
       >
         {subjectLine.length}/{MAX_SUBJECT_LENGTH}

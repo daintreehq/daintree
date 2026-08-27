@@ -207,7 +207,7 @@ export function AgentSelectorDropdown({
                     <Settings2 size={16} className="shrink-0 text-daintree-text/60" />
                     <div className="flex-1 min-w-0">
                       <div className="truncate">General</div>
-                      <div className="text-xs text-daintree-text/40 truncate">Global settings</div>
+                      <div className="text-xs text-text-secondary truncate">Global settings</div>
                     </div>
                   </>
                 ) : (
@@ -244,7 +244,7 @@ export function AgentSelectorDropdown({
             );
           })}
           {items.length === 1 && filterQuery && (
-            <div className="px-2 py-3 text-xs text-daintree-text/40 text-center">
+            <div className="px-2 py-3 text-xs text-text-secondary text-center">
               No agents match "{filterQuery}"
             </div>
           )}

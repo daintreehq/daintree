@@ -668,7 +668,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
                     {Math.round((1 - twoPaneSplitConfig.defaultRatio) * 100)}
                   </span>
                 </div>
-                <p className="text-xs text-daintree-text/40 select-text">
+                <p className="text-xs text-text-secondary select-text">
                   Default split ratio when no worktree-specific ratio is saved.
                 </p>
               </div>
@@ -732,7 +732,7 @@ export function TerminalSettingsTab({ activeSubtab, onSubtabChange }: TerminalSe
               />
             )}
 
-            <p className="text-xs text-daintree-text/40 leading-relaxed select-text">
+            <p className="text-xs text-text-secondary leading-relaxed select-text">
               {layoutConfig.strategy === "automatic" &&
                 "Uses a balanced square grid that adapts to the number of terminals (1-4 terminals use 2 columns, 5+ use up to 4 columns)."}
               {layoutConfig.strategy === "fixed-columns" &&

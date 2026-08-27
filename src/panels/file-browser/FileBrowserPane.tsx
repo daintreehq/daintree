@@ -1122,7 +1122,7 @@ export function FileBrowserPane({
                 </Tooltip>
               ) : (
                 <span
-                  className="min-w-0 flex-1 truncate font-mono text-[11px] text-daintree-text/40"
+                  className="min-w-0 flex-1 truncate font-mono text-[11px] text-text-secondary"
                   title={rootHoverPath}
                 >
                   {rootPath || (basePath ? basename(basePath) : "")}

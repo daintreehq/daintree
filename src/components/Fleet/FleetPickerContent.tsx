@@ -436,7 +436,7 @@ function SnippetLine({
   const after = line.slice(end);
   return (
     <p
-      className="font-mono text-[11px] text-daintree-text/40 truncate mt-0.5"
+      className="font-mono text-[11px] text-text-secondary truncate mt-0.5"
       data-testid={`${testIdPrefix}-snippet`}
     >
       {before}

@@ -452,7 +452,7 @@ function BackgroundSingleItem({
           {terminal.lastStateChange != null && (
             <LiveTimeAgo
               timestamp={terminal.lastStateChange}
-              className="text-[10px] text-daintree-text/40 shrink-0"
+              className="text-[10px] text-text-secondary shrink-0"
             />
           )}
         </div>
@@ -605,7 +605,7 @@ function BackgroundGroupItem({
 
         <button
           type="button"
-          className="text-[10px] text-daintree-text/40 shrink-0 hover:text-daintree-text transition-colors"
+          className="text-[10px] text-text-secondary shrink-0 hover:text-daintree-text transition-colors"
           onClick={() => onRestoreGroup(groupRestoreId, groupMetadata)}
         >
           Restore all

@@ -158,7 +158,7 @@ export function QuickCreatePalette({ palette }: QuickCreatePaletteProps) {
       emptyMessage="No recipes yet"
       emptyContent={
         <div className="flex flex-col items-center gap-3 mt-4">
-          <p className="text-xs text-daintree-text/40">
+          <p className="text-xs text-text-secondary">
             Create a recipe in the recipe editor to get started.
           </p>
           <Button

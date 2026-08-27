@@ -282,7 +282,7 @@ export function DiagnosticsPanel({ paneId, projectId, status }: DiagnosticsPanel
                       key={event.seq}
                       className="grid grid-cols-[auto_auto_minmax(0,1fr)] items-baseline gap-x-2 rounded px-2 py-0.5 hover:bg-overlay-subtle"
                     >
-                      <span className="font-mono tabular-nums text-daintree-text/40">
+                      <span className="font-mono tabular-nums text-text-secondary">
                         {formatTime(event.at)}
                       </span>
                       <span

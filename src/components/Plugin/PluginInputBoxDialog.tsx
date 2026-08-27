@@ -72,7 +72,7 @@ function InputBoxForm({ options, pluginId, onSubmit, onCancel }: InputBoxFormPro
             {options.validationMessage || "The value doesn't match the required format"}
           </p>
         )}
-        <p className="text-xs text-daintree-text/40">Requested by the '{pluginId}' plugin</p>
+        <p className="text-xs text-text-secondary">Requested by the '{pluginId}' plugin</p>
       </AppDialog.Body>
 
       <AppDialog.Footer

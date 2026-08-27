@@ -94,7 +94,7 @@ export function RecentCallsPopover({ records, loading, error }: RecentCallsPopov
             {groups.map((group, index) => (
               <li key={group.turnId ?? `unassociated-${index}`} className="py-1">
                 {group.turnId === null && (
-                  <div className="px-2 pb-0.5 text-[10px] text-daintree-text/40">
+                  <div className="px-2 pb-0.5 text-[10px] text-text-secondary">
                     Not tied to a turn
                   </div>
                 )}
@@ -145,7 +145,7 @@ function RecentCallRow({ record }: { record: McpAuditRecord }) {
         <span className="min-w-0 font-mono text-daintree-text/80 truncate">{record.toolId}</span>
         {/* Recency, not duration — calls are almost always sub-100ms, so
             "when did this run" is the metric worth a column. */}
-        <span className="text-daintree-text/40 whitespace-nowrap tabular-nums">
+        <span className="text-text-secondary whitespace-nowrap tabular-nums">
           {formatTimeAgo(record.timestamp)}
         </span>
       </button>

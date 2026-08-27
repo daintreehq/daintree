@@ -1527,7 +1527,7 @@ function SearchResults({
   return (
     <div className="space-y-1">
       <div className="flex items-center justify-between mb-3">
-        <p className="text-xs text-daintree-text/40">
+        <p className="text-xs text-text-secondary">
           <span className="tabular-nums">{results.length}</span> result
           {results.length === 1 ? "" : "s"}
         </p>
@@ -1562,7 +1562,7 @@ function SearchResults({
                   projectLabel={projectLabel}
                   crossScope={result.scope !== activeScope}
                 />
-                <span className="text-[10px] font-medium text-daintree-text/40 uppercase tracking-wide">
+                <span className="text-[10px] font-medium text-text-secondary uppercase tracking-wide">
                   {result.tabLabel}
                 </span>
                 {result.subtabLabel && (

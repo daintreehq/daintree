@@ -369,7 +369,7 @@ export function NotificationCenterEntry({
               {/* The clock means "snoozed until later"; the stamp beside it means
                   "arrived at". Abutting they read as one fact, so they get a
                   separator. */}
-              <span aria-hidden="true" className="text-[10px] leading-none text-text-secondary">
+              <span aria-hidden="true" className="text-[10px] leading-none text-daintree-text/40">
                 ·
               </span>
             </>

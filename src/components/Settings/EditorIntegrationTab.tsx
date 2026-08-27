@@ -252,7 +252,7 @@ export function EditorIntegrationTab() {
                   placeholder="{file}:{line}:{col}"
                   className="w-full bg-daintree-bg border border-border-strong rounded-[var(--radius-md)] px-3 py-1.5 text-sm text-daintree-text focus:outline-hidden focus:border-daintree-accent/40 transition-colors font-mono"
                 />
-                <p className="text-xs text-daintree-text/40 select-text">
+                <p className="text-xs text-text-secondary select-text">
                   Use <code className="font-mono">{"{file}"}</code>,{" "}
                   <code className="font-mono">{"{line}"}</code>,{" "}
                   <code className="font-mono">{"{col}"}</code> as placeholders.
@@ -294,7 +294,7 @@ export function EditorIntegrationTab() {
           {saveError && <p className="text-xs text-status-error">{saveError}</p>}
 
           {preferredEditor && (
-            <p className="text-xs text-daintree-text/40">
+            <p className="text-xs text-text-secondary">
               Saved: <span className="font-medium">{EDITOR_LABELS[preferredEditor.id]}</span>
             </p>
           )}

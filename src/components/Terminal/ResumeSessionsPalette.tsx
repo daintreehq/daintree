@@ -50,7 +50,7 @@ function ResumeSessionRow({ item, isSelected, matches, onSelect, itemRef }: Resu
         )}
       </div>
       {item.isStale && (
-        <span className="shrink-0 mt-0.5 text-[10px] font-medium text-daintree-text/40">
+        <span className="shrink-0 mt-0.5 text-[10px] font-medium text-text-secondary">
           Worktree removed
         </span>
       )}
@@ -196,7 +196,7 @@ export function ResumeSessionsPalette() {
               emptyMessage="No closed sessions yet"
               noMatchMessage={`No sessions match "${query.length > 40 ? query.slice(0, 40) + "…" : query}"`}
             >
-              <p className="mt-2 text-xs text-daintree-text/40">
+              <p className="mt-2 text-xs text-text-secondary">
                 Sessions you close appear here so you can pick them back up later.
               </p>
             </AppPaletteDialog.Empty>

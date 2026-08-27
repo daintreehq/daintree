@@ -94,7 +94,7 @@ export function PrStatusChip({ hasRemote, worktreePR, onOpenExternal }: PrStatus
 
   if (hasRemote && !worktreePR) {
     return (
-      <Badge tone="outline" className="text-[11px] text-daintree-text/40">
+      <Badge tone="outline" className="text-[11px] text-text-secondary">
         <GitPullRequest />
         <span>No PR</span>
       </Badge>

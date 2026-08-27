@@ -402,12 +402,12 @@ function TopProjects({
               <span className="text-sm font-semibold text-daintree-text/85 truncate block">
                 {project.name}
               </span>
-              <span className="text-xs text-daintree-text/40 truncate block" title={project.path}>
+              <span className="text-xs text-text-secondary truncate block" title={project.path}>
                 {middleTruncate(project.path, 48)}
               </span>
             </div>
             <span
-              className="text-xs text-daintree-text/40 shrink-0"
+              className="text-xs text-text-secondary shrink-0"
               title={new Date(project.lastOpened).toLocaleString()}
             >
               {formatTimeAgo(project.lastOpened)}
@@ -618,7 +618,7 @@ function InlineChecklist({
         <h3 className="text-xs font-medium text-daintree-text/50 uppercase tracking-wider">
           Getting started
         </h3>
-        <span className="text-[10px] text-daintree-text/40 font-mono">
+        <span className="text-[10px] text-text-secondary font-mono">
           {progressDone}/{progressTotal}
         </span>
       </div>

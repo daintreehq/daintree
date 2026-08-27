@@ -149,9 +149,7 @@ export function PanelPalette({
           )}
         </div>
         {badgeLabel && (
-          <span className="shrink-0 text-[10px] font-medium text-daintree-text/40">
-            {badgeLabel}
-          </span>
+          <span className="shrink-0 text-[10px] font-medium text-text-secondary">{badgeLabel}</span>
         )}
       </button>
     );

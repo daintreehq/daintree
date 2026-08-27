@@ -32,7 +32,7 @@ function PluginCard({ plugin, onSelect }: { plugin: LoadedPluginInfo; onSelect: 
           >
             {pluginLabel(plugin)}
           </span>
-          <span className="text-[11px] font-normal text-daintree-text/40">
+          <span className="text-[11px] font-normal text-text-secondary">
             v{plugin.manifest.version}
           </span>
           {disabled && <span className={CARD_BADGE_CLASS}>Disabled</span>}

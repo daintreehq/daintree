@@ -164,7 +164,7 @@ export function PromptHistoryPalette({ onOpenRef, ...props }: PromptHistoryPalet
       itemIdPrefix="prompt-history-option"
       emptyMessage="No history yet"
       emptyContent={
-        <p className="mt-2 text-xs text-daintree-text/40">
+        <p className="mt-2 text-xs text-text-secondary">
           History appears here as you send prompts to agents.
         </p>
       }

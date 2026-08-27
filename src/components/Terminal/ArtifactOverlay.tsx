@@ -21,7 +21,7 @@ export function getPatchStats(content: string): { additions: number; deletions: 
 
 export function patchLineClass(line: string): string {
   if (line.startsWith("+++") || line.startsWith("---") || line.startsWith("@@")) {
-    return "text-daintree-text/40";
+    return "text-text-secondary";
   }
   if (line.startsWith("+")) return "text-status-success bg-status-success/10";
   if (line.startsWith("-")) return "text-status-error bg-status-error/10";
@@ -168,11 +168,11 @@ function ArtifactItem({
           <span className={cn("font-mono text-xs shrink-0", colorClass.split(" ")[2])}>{icon}</span>
           <span className="text-sm text-daintree-text font-medium truncate">{title}</span>
           {artifact.language && artifact.language !== artifact.type && (
-            <span className="text-xs text-daintree-text/40 shrink-0">{artifact.language}</span>
+            <span className="text-xs text-text-secondary shrink-0">{artifact.language}</span>
           )}
         </div>
         <div className="flex items-center gap-2 shrink-0">
-          <span className="text-xs text-daintree-text/40">
+          <span className="text-xs text-text-secondary">
             {lineCount} line{lineCount !== 1 ? "s" : ""}
           </span>
           <span className="text-daintree-text/60">{isExpanded ? "▼" : "▶"}</span>
@@ -184,7 +184,7 @@ function ArtifactItem({
           <pre className="font-mono text-xs p-3 overflow-x-auto max-h-32 overflow-y-auto select-text">
             <code className="text-daintree-text">
               {previewLines.join("\n")}
-              {hasMore && <span className="text-daintree-text/40">{"\n"}...</span>}
+              {hasMore && <span className="text-text-secondary">{"\n"}...</span>}
             </code>
           </pre>
 
@@ -460,7 +460,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                   type="button"
                   onClick={clearArtifacts}
                   disabled={isBulkActionRunning}
-                  className="text-xs text-daintree-text/40 hover:text-daintree-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
+                  className="text-xs text-text-secondary hover:text-daintree-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
                   aria-label="Clear all artifacts"
                 >
                   Clear

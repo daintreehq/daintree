@@ -101,7 +101,7 @@ export function OverrideField({
         id={descriptionId}
         className={cn(
           "mt-1 text-xs",
-          isOverriding ? "text-text-muted" : "text-daintree-text/40 italic"
+          isOverriding ? "text-text-muted" : "text-text-secondary italic"
         )}
       >
         {isOverriding ? overrideDescription : inheritDescription}

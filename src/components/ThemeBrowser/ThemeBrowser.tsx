@@ -107,9 +107,7 @@ function ThemeRow({
           )}
         </div>
         {scheme.location && (
-          <span className="text-[11px] text-daintree-text/40 truncate block">
-            {scheme.location}
-          </span>
+          <span className="text-[11px] text-text-secondary truncate block">{scheme.location}</span>
         )}
       </div>
       <PaletteStrip scheme={scheme} />

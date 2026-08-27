@@ -129,7 +129,7 @@ export function SendToAgentPalette({
       emptyMessage="No other terminals available"
       totalResults={totalResults}
       emptyContent={
-        <p className="mt-2 text-xs text-daintree-text/40">
+        <p className="mt-2 text-xs text-text-secondary">
           {newTerminalShortcut ? (
             <>
               Press <kbd className={KBD_CLASS}>{newTerminalShortcut}</kbd> to create a new terminal.

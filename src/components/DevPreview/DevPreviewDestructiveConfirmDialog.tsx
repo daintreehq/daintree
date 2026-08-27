@@ -215,7 +215,7 @@ function CacheDirsPreview({ meta, sizes, sizesPending }: CacheDirsPreviewProps) 
                   </span>
                   {dir.exists ? (
                     <>
-                      <span className="text-[10px] text-daintree-text/40 shrink-0">
+                      <span className="text-[10px] text-text-secondary shrink-0">
                         {dir.mtimeMs ? formatRelativeTime(dir.mtimeMs) : null}
                       </span>
                       <span className="ml-auto tabular-nums text-daintree-text/60 shrink-0">
