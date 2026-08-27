@@ -39,12 +39,11 @@ export interface GitPushRangeFacts {
   /** Commits in the whole range, which may exceed the rows in `commits`. */
   total: number;
   /**
-   * `untracked` means there is no local remote-tracking ref for the
-   * destination, so the range is an upper bound rather than an exact answer —
-   * see `GitPushCommitPreview.rangeBasis`. It is NOT a claim that the push
-   * creates the branch; only the remote can settle that.
+   * How the rows were established — see `GitPushCommitPreview.rangeBasis`.
+   * `creates` and `tracked` are both settled answers; `unverified` is not, and
+   * an empty `unverified` range is NOT evidence the destination is up to date.
    */
-  rangeBasis: "tracked" | "untracked";
+  rangeBasis: "tracked" | "creates" | "unverified";
 }
 
 export interface GitRemoteOperationPreview {
@@ -181,9 +180,11 @@ export function formatGitRemoteOperationPreviewLines(
   const remoteRef = isPullRebase ? preview.pullSource : preview.destination;
   const destinationLine = remoteRef
     ? `${isPullRebase ? "Rebases onto" : "Destination"}: ${formatGitPushDestination(remoteRef)}${
-        preview.pushRange?.rangeBasis === "untracked"
-          ? " (no local copy of this branch — the commits below are an upper bound)"
-          : ""
+        preview.pushRange?.rangeBasis === "creates"
+          ? " (this push creates the branch)"
+          : preview.pushRange?.rangeBasis === "unverified"
+            ? " (could not reach the remote — the commits below are unverified)"
+            : ""
       }`
     : isPullRebase
       ? `${MCP_PREVIEW_CAUTION_PREFIX}This branch has no upstream to rebase onto — this operation will be refused.`

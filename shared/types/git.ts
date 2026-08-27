@@ -179,22 +179,20 @@ export interface GitRemoteCommitPreview {
 export interface GitPushCommitPreview {
   destination: GitPushDestination;
   /**
-   * How the range was measured, which decides how much the rows can be trusted.
+   * How the range was established, which decides what the rows may be called.
    *
-   * - `tracked` — the destination has a remote-tracking ref here, and the range
-   *   is exactly `<that ref>..<branch>`.
-   * - `untracked` — it does not, so the range is everything on the branch not
-   *   reachable from any ref this machine holds for that remote.
-   *
-   * `untracked` deliberately does NOT claim the push creates the branch. Only
-   * the remote can settle that, and a tracking ref can be missing because the
-   * branch is new, because it has never been fetched, because it was pruned, or
-   * because the fetch refspec excludes it. Where the branch does exist remotely
-   * and has simply not been fetched, this over-reports — the safe direction for
-   * a destructive preview, and the reason the renderer says so out loud rather
-   * than asserting a creation it cannot verify without a network round trip.
+   * - `tracked` — the delta against the destination tip is exact, either from a
+   *   local remote-tracking ref or from a tip the remote named that this
+   *   repository already has.
+   * - `creates` — the remote confirmed the destination branch does not exist, so
+   *   the push creates it and the rows are the branch's own history.
+   * - `unverified` — neither could be established (no tracking ref, and the
+   *   remote could not be reached or named a tip this repository does not hold).
+   *   The rows are a local approximation that can BOTH overstate and understate,
+   *   so callers must present them as unverified — and an empty one means
+   *   "nothing found locally", never "the destination is up to date".
    */
-  rangeBasis: "tracked" | "untracked";
+  rangeBasis: "tracked" | "creates" | "unverified";
   commits: GitRemoteCommit[];
   /** Total commits in the range, which may exceed the returned `commits`. */
   total: number;

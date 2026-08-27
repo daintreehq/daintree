@@ -12,7 +12,7 @@ function stubGit(overrides: {
   items?: Array<{ hash: string; message: string; author: { name: string } }>;
   pushCommits?: Array<{ hash: string; message: string; author: string }>;
   pushTotal?: number;
-  rangeBasis?: "tracked" | "untracked";
+  rangeBasis?: "tracked" | "creates" | "unverified";
   reject?: boolean;
   rejectCommits?: boolean;
   rejectPushCommits?: boolean;
@@ -94,11 +94,11 @@ describe("buildGitRemoteOperationPreview", () => {
     stubGit({
       pushCommits: [{ hash: "abcdef1234", message: "First", author: "Ada" }],
       pushTotal: 9,
-      rangeBasis: "untracked" as const,
+      rangeBasis: "unverified" as const,
     });
     await expect(buildGitRemoteOperationPreview("/repo", "push")).resolves.toMatchObject({
       commits: [{ hash: "abcdef1234", message: "First", author: "Ada" }],
-      pushRange: { total: 9, rangeBasis: "untracked" as const },
+      pushRange: { total: 9, rangeBasis: "unverified" as const },
     });
   });
 
@@ -388,23 +388,36 @@ describe("formatGitRemoteOperationPreviewLines", () => {
     expect(lines.join(" ")).not.toContain("more");
   });
 
-  // Deliberately NOT "creates this branch": a missing local remote-tracking ref
-  // does not prove the remote branch is absent, so the line states what was
-  // measured rather than asserting a creation only the remote can confirm.
-  it("marks an untracked range as an upper bound instead of claiming a creation", () => {
+  // A creation claim is only made from a `creates` basis, which main sets only
+  // after the REMOTE said it has no such branch — never from a missing local ref.
+  it("says a push creates the branch only when the remote confirmed it", () => {
     const lines = formatGitRemoteOperationPreviewLines(
       {
         branch: "spike",
         destination: { remote: "origin", branch: "spike" },
         pullSource: null,
         commits: [],
-        pushRange: { total: 0, rangeBasis: "untracked" as const },
+        pushRange: { total: 0, rangeBasis: "creates" as const },
       },
       "none",
       "push"
     );
-    expect(lines[0]).toContain("Destination: origin/spike");
-    expect(lines[0]).toContain("upper bound");
+    expect(lines[0]).toBe("Destination: origin/spike (this push creates the branch)");
+  });
+
+  it("says unverified, not creates, when the remote could not be reached", () => {
+    const lines = formatGitRemoteOperationPreviewLines(
+      {
+        branch: "spike",
+        destination: { remote: "origin", branch: "spike" },
+        pullSource: null,
+        commits: [],
+        pushRange: { total: 0, rangeBasis: "unverified" as const },
+      },
+      "none",
+      "push"
+    );
+    expect(lines[0]).toContain("unverified");
     expect(lines[0]).not.toContain("creates");
   });
 

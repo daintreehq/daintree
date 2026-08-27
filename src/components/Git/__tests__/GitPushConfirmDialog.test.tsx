@@ -95,7 +95,7 @@ describe("GitPushConfirmDialog", () => {
       destination: { remote: string; branch: string };
       pullSource: { remote: string; branch: string };
       commits: never[];
-      pushRange: { total: number; rangeBasis: "tracked" | "untracked" } | null;
+      pushRange: { total: number; rangeBasis: "tracked" | "creates" | "unverified" } | null;
     }>();
     mocks.buildPreview.mockReturnValue(gate.promise);
     render(<GitPushConfirmDialog />);
@@ -298,13 +298,13 @@ describe("GitPushConfirmDialog", () => {
 
   // An untracked range can only over-report, so the surface must say the list is
   // an upper bound rather than assert a branch creation it cannot verify.
-  it("calls an untracked range an upper bound, never a branch creation", async () => {
+  it("labels an unreachable remote as unverified, never as a branch creation", async () => {
     mocks.buildPreview.mockResolvedValue({
       branch: "spike",
       destination: { remote: "origin", branch: "spike" },
       pullSource: null,
       commits: [{ hash: "abcdef12", message: "One", author: "Ada" }],
-      pushRange: { total: 1, rangeBasis: "untracked" as const },
+      pushRange: { total: 1, rangeBasis: "unverified" as const },
     });
     render(<GitPushConfirmDialog />);
 
@@ -313,8 +313,80 @@ describe("GitPushConfirmDialog", () => {
     });
 
     const region = screen.getByTestId("git-push-destination-summary").parentElement!;
-    expect(region.textContent).toContain("upper bound");
+    expect(region.textContent).toContain("unverified");
     expect(region.textContent).not.toContain("creates this branch");
+  });
+
+  // An untracked range was never compared against the destination, so an empty
+  // one means "nothing found locally" — not "the destination is up to date".
+  it("never claims a destination is in sync from an unverified range", async () => {
+    mocks.buildPreview.mockResolvedValue({
+      branch: "spike",
+      destination: { remote: "origin", branch: "spike" },
+      pullSource: null,
+      commits: [],
+      pushRange: { total: 0, rangeBasis: "unverified" as const },
+    });
+    render(<GitPushConfirmDialog />);
+
+    await act(async () => {
+      void useGitPushConfirmStore.getState().requestConfirmation("/repo");
+    });
+
+    // The rule, not the wording: an unverified empty range gets its own state and
+    // must never produce the categorical "already has everything" claim.
+    expect(screen.queryByTestId("git-push-in-sync")).toBeNull();
+    const unverified = screen.getByTestId("git-push-empty-unverified");
+    expect(unverified.textContent).not.toContain("already has everything");
+    expect(unverified.textContent).toMatch(/n't confirmed|unverified/);
+  });
+
+  // The host stays mounted across close/open, so state survives. Approval must
+  // be gated on the preview belonging to THIS request, or a second confirm for a
+  // different worktree is approvable against the previous one's commits.
+  it("will not approve a preview belonging to a previous request", async () => {
+    mocks.buildPreview.mockResolvedValue({
+      branch: "main",
+      destination: { remote: "origin", branch: "main" },
+      pullSource: null,
+      commits: [{ hash: "abcdef12", message: "One", author: "Ada" }],
+      pushRange: { total: 1, rangeBasis: "tracked" as const },
+    });
+    render(<GitPushConfirmDialog />);
+
+    await act(async () => {
+      void useGitPushConfirmStore.getState().requestConfirmation("/repo-a");
+    });
+    expect(pushButton().hasAttribute("disabled")).toBe(false);
+
+    // A second request for a DIFFERENT worktree, held mid-flight.
+    const gate = deferred<never>();
+    mocks.buildPreview.mockReturnValue(gate.promise);
+    await act(async () => {
+      void useGitPushConfirmStore.getState().requestConfirmation("/repo-b");
+    });
+
+    expect(pushButton().hasAttribute("disabled")).toBe(true);
+  });
+
+  // The creation marker is the one claim that requires the remote to have spoken.
+  it("marks a branch creation only from a remote-confirmed range", async () => {
+    mocks.buildPreview.mockResolvedValue({
+      branch: "spike",
+      destination: { remote: "origin", branch: "spike" },
+      pullSource: null,
+      commits: [{ hash: "abcdef12", message: "One", author: "Ada" }],
+      pushRange: { total: 1, rangeBasis: "creates" as const },
+    });
+    render(<GitPushConfirmDialog />);
+
+    await act(async () => {
+      void useGitPushConfirmStore.getState().requestConfirmation("/repo");
+    });
+
+    const region = screen.getByTestId("git-push-destination-summary").parentElement!;
+    expect(region.textContent).toContain("creates this branch");
+    expect(region.textContent).not.toContain("unverified");
   });
 
   it("resolves the awaited confirm promise with the user's decision", async () => {

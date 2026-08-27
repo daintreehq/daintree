@@ -108,7 +108,10 @@ function commit(dir: string, file: string, body: string, message: string, author
   mkdirSync(path.dirname(target), { recursive: true });
   writeFileSync(target, body);
   git(["add", "-A"], dir);
-  git(["-c", `user.name=${author}`, "-c", "user.email=dev@daintree.dev", "commit", "-m", message], dir);
+  git(
+    ["-c", `user.name=${author}`, "-c", "user.email=dev@daintree.dev", "commit", "-m", message],
+    dir
+  );
 }
 
 /** Realistic subjects: a mix of lengths, conventional-commit prefixes, and one that clips. */
@@ -197,17 +200,17 @@ function createFixtureRepo(): { dir: string; cleanup: () => void } {
     "feat(git): render the resolved destination, the branch it comes from, and the exact commits the push would publish in one preview region instead of four",
     "Wilhelmina Fitzgerald-Mackintosh"
   );
-  commit(
-    dir,
-    "src/preview2.ts",
-    "export const two = 2;\n",
-    "fix: short one",
-    "Jean Bartik"
-  );
+  commit(dir, "src/preview2.ts", "export const two = 2;\n", "fix: short one", "Jean Bartik");
 
   // no destination: never pushed, no push config, two remotes -> genuinely ambiguous.
   git(["checkout", "-b", "spike/unconfigured-remote", "main~14"], dir);
-  commit(dir, "src/spike.ts", "export const spike = 1;\n", "spike: try the new layout", "Ada Lovelace");
+  commit(
+    dir,
+    "src/spike.ts",
+    "export const spike = 1;\n",
+    "spike: try the new layout",
+    "Ada Lovelace"
+  );
 
   git(["checkout", "main"], dir);
 
@@ -268,11 +271,7 @@ async function openPushConfirm(page: Page, cwd: string): Promise<void> {
   await page.evaluate((worktreePath) => {
     const dispatch = (
       window as unknown as {
-        __daintreeDispatchAction?: (
-          id: string,
-          args: unknown,
-          opts: unknown
-        ) => Promise<unknown>;
+        __daintreeDispatchAction?: (id: string, args: unknown, opts: unknown) => Promise<unknown>;
       }
     ).__daintreeDispatchAction;
     if (typeof dispatch !== "function") throw new Error("Action dispatch hook not available");
@@ -282,7 +281,14 @@ async function openPushConfirm(page: Page, cwd: string): Promise<void> {
 
 async function closeDialog(page: Page): Promise<void> {
   for (let i = 0; i < 3; i++) {
-    if (!(await page.locator(DIALOG).first().isVisible().catch(() => false))) return;
+    if (
+      !(await page
+        .locator(DIALOG)
+        .first()
+        .isVisible()
+        .catch(() => false))
+    )
+      return;
     await page.keyboard.press("Escape").catch(() => {});
     await settle(page, 200);
   }
@@ -421,8 +427,16 @@ test("git push confirm review — preview states", async () => {
 
     // 6. Preview load failure and its retry, through the real error path.
     await step("error", "main", async () => {
-      await injectFault(app, CH.stagingStatus, "fatal: not a git repository (or any parent up to mount point /)");
-      await injectFault(app, CH.listPushCommits, "fatal: not a git repository (or any parent up to mount point /)");
+      await injectFault(
+        app,
+        CH.stagingStatus,
+        "fatal: not a git repository (or any parent up to mount point /)"
+      );
+      await injectFault(
+        app,
+        CH.listPushCommits,
+        "fatal: not a git repository (or any parent up to mount point /)"
+      );
       await openPushConfirm(page, repo.dir);
       await snap(page, "40-load-error", { marker: TID.retry, locator: DIALOG });
     });

@@ -156,6 +156,51 @@ async function refExists(
   }
 }
 
+/** Upper bound on the one network read the push preview is allowed to make. */
+const PUSH_PREVIEW_LS_REMOTE_TIMEOUT_MS = 4000;
+
+/**
+ * The destination branch's tip according to the REMOTE, or `undefined` when the
+ * remote could not be asked.
+ *
+ * `null` is a real answer — the remote replied and has no such branch — and is
+ * what lets the preview say a push creates a branch instead of guessing from the
+ * absence of a local ref. `undefined` is "no answer", which the caller must
+ * treat as unverified rather than as absence.
+ *
+ * Bounded and swallowed on purpose. This runs while a confirm dialog is waiting,
+ * so a slow or unreachable remote must degrade the preview's precision, never
+ * hold the dialog open — the local approximation is still shown, labelled.
+ */
+async function readRemoteBranchTip(
+  git: Pick<Awaited<ReturnType<typeof createHardenedGit>>, "raw">,
+  remote: string,
+  branch: string
+): Promise<string | null | undefined> {
+  try {
+    const out = await Promise.race([
+      // `--` before the remote so a remote whose name survived the argv guard
+      // still cannot be read as an option, and the ref given in full.
+      git.raw(["ls-remote", "--heads", "--", remote, `refs/heads/${branch}`]),
+      new Promise<never>((_, reject) =>
+        setTimeout(
+          () => reject(new Error("ls-remote timed out")),
+          PUSH_PREVIEW_LS_REMOTE_TIMEOUT_MS
+        )
+      ),
+    ]);
+    const line = out
+      .split("\n")
+      .map((l) => l.trim())
+      .find((l) => l.length > 0);
+    if (!line) return null;
+    const sha = line.split(/\s+/)[0] ?? "";
+    return /^[0-9a-f]{40,64}$/i.test(sha) ? sha : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 /**
  * The commits a push would actually publish (#11979).
  *
@@ -208,17 +253,44 @@ const gitPushPreviewNamespace = defineIpcNamespace({
           const localRef = `refs/heads/${branchName}`;
           const hasRemoteRef = await refExists(git, destination.remoteTrackingRef);
 
-          // With no remote-tracking ref there is nothing to subtract, and
+          // With no remote-tracking ref there is nothing to subtract locally, and
           // `<missing>..<branch>` is a fatal argument rather than "everything".
-          // Fall back to whatever is not already reachable from any ref held for
-          // that remote. That over-reports when the branch exists remotely and
-          // simply has not been fetched — the safe direction for a destructive
-          // preview, and the reason `rangeBasis` travels with the rows so the
-          // surface can say the list is an upper bound instead of asserting a
-          // branch creation only the remote can confirm.
-          const revArgs = hasRemoteRef
-            ? [`${destination.remoteTrackingRef}..${localRef}`]
-            : [localRef, "--not", `--remotes=${destination.remote}`];
+          //
+          // Ask the remote before guessing. A missing tracking ref does not mean
+          // a missing branch — it also happens when the branch was never
+          // fetched, was pruned, or is excluded by the fetch refspec — and the
+          // purely local fallback is wrong in BOTH directions: it overstates when
+          // the destination exists but is unfetched, and understates a commit
+          // that sits on another ref of the same remote yet not on the
+          // destination branch, which this push would add.
+          let rangeBasis: GitPushCommitPreview["rangeBasis"];
+          let revArgs: string[];
+          if (hasRemoteRef) {
+            rangeBasis = "tracked";
+            revArgs = [`${destination.remoteTrackingRef}..${localRef}`];
+          } else {
+            const remoteTip = await readRemoteBranchTip(
+              git,
+              destination.remote,
+              destination.branch
+            );
+            if (remoteTip === null) {
+              // The remote answered and has no such branch: the push creates it,
+              // and what it publishes is the branch's own history.
+              rangeBasis = "creates";
+              revArgs = [localRef];
+            } else if (remoteTip && (await refExists(git, remoteTip))) {
+              // The remote named a tip this repository already holds, so the
+              // delta is exact even without a tracking ref.
+              rangeBasis = "tracked";
+              revArgs = [`${remoteTip}..${localRef}`];
+            } else {
+              // No answer, or a tip we cannot resolve. Fall back to the local
+              // approximation and mark it as what it is.
+              rangeBasis = "unverified";
+              revArgs = [localRef, "--not", `--remotes=${destination.remote}`];
+            }
+          }
 
           // No `--no-merges`: the "N more" tail is only honest while the listed
           // rows and `total` describe the same set the push would write.
@@ -227,7 +299,7 @@ const gitPushPreviewNamespace = defineIpcNamespace({
 
           return {
             destination: { remote: destination.remote, branch: destination.branch },
-            rangeBasis: hasRemoteRef ? "tracked" : "untracked",
+            rangeBasis,
             total,
             commits: log.all.map((commit) => ({
               hash: commit.hash,

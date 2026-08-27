@@ -6,6 +6,8 @@ import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { Skeleton } from "@/components/ui/Skeleton";
 import { AlertTriangle, RefreshCw } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { useDeferredLoading } from "@/hooks/useDeferredLoading";
+import { UI_DOHERTY_THRESHOLD } from "@/lib/animationUtils";
 import { formatErrorMessage } from "@shared/utils/errorMessage";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { useGitPushConfirmStore } from "@/store/gitPushConfirmStore";
@@ -53,6 +55,17 @@ function GitPushConfirmDialogInner() {
   const [pushRange, setPushRange] = useState<GitPushRangeFacts | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
+  /**
+   * The cwd the currently-held preview actually describes.
+   *
+   * Approval is gated on this matching the pending request, not merely on
+   * "something loaded". The dialog keeps its state across close/open — the host
+   * stays mounted and only returns null — so without this a second confirm for a
+   * DIFFERENT worktree renders the previous worktree's branch, destination and
+   * commits for the frames between render and effect, with Push enabled against
+   * them.
+   */
+  const [loadedFor, setLoadedFor] = useState<string | null>(null);
   const requestIdRef = useRef(0);
 
   const loadPreview = useCallback(() => {
@@ -64,6 +77,7 @@ function GitPushConfirmDialogInner() {
     setDestination(null);
     setCommits(null);
     setPushRange(null);
+    setLoadedFor(null);
 
     safeFireAndForget(
       // Shared with the MCP confirm surface so agent and human approvers see
@@ -75,6 +89,7 @@ function GitPushConfirmDialogInner() {
           setDestination(preview.destination);
           setCommits(preview.commits);
           setPushRange(preview.pushRange);
+          setLoadedFor(cwd);
         })
         .catch((err: unknown) => {
           if (requestIdRef.current !== requestId) return;
@@ -90,16 +105,27 @@ function GitPushConfirmDialogInner() {
 
   useEffect(() => {
     if (!cwd) {
+      // Bumped, not just cleared: a request already in flight when the dialog
+      // closes would otherwise land its `.then` and repopulate state while
+      // hidden, ready to be shown to whatever asks next.
+      requestIdRef.current++;
       setBranch(null);
       setDestination(null);
       setCommits(null);
       setPushRange(null);
+      setLoadedFor(null);
       setLoadError(null);
       setIsLoading(false);
       return;
     }
     loadPreview();
   }, [cwd, loadPreview]);
+
+  // The skeleton's 400ms gate lives in `animate-pulse-delayed`'s own
+  // animation-delay, so it is free. The footer hint is plain text and had no
+  // gate at all, which put a "checking…" line on screen for fetches that
+  // resolved before the bones ever became visible.
+  const showPendingHint = useDeferredLoading(isLoading, UI_DOHERTY_THRESHOLD);
 
   // Resolve false on unmount to prevent a leaked awaited Promise.
   useEffect(() => {
@@ -113,27 +139,33 @@ function GitPushConfirmDialogInner() {
   if (!pendingConfirm) return null;
 
   const destinationLabel = destination ? formatGitPushDestination(destination) : null;
-  const isLoaded_ = !isLoading && !loadError;
+  // Settled means "this request's own fresh answer is on screen". `isLoading`
+  // starts false and the fetch only begins in an effect, so a check that asked
+  // merely whether loading had finished classified the first painted frame as
+  // "no destination" and flashed that error before anything had been read.
+  const isSettled = !isLoading && !loadError && loadedFor === cwd;
   // Checked BEFORE the missing-destination branch. A detached HEAD also resolves
   // no destination, but telling someone with no branch checked out to configure
   // a push remote for it is both the wrong diagnosis and an unfollowable fix.
-  const isDetached = isLoaded_ && commits !== null && branch === null;
-  const isDestinationMissing = isLoaded_ && !isDetached && destination === null;
-  const isLoaded = isLoaded_ && commits !== null;
-  const isInSync = isLoaded && commits.length === 0 && destination !== null;
+  const isDetached = isSettled && commits !== null && branch === null;
+  const isDestinationMissing = isSettled && !isDetached && destination === null;
+  const isLoaded = isSettled && commits !== null;
+  const isCreatingBranch = pushRange?.rangeBasis === "creates";
+  const isUnverified = pushRange?.rangeBasis === "unverified";
+  // "Already has everything" is a categorical claim, so it needs a range that was
+  // actually settled against the destination. An unverified one was not, and an
+  // empty one there means "nothing found locally", not "nothing to send".
+  const isInSync = isLoaded && commits.length === 0 && destination !== null && !isUnverified;
+  const isEmptyUnverified =
+    isLoaded && commits.length === 0 && destination !== null && isUnverified;
   const total = pushRange?.total ?? commits?.length ?? 0;
-  // No remote-tracking ref means the range was measured against everything this
-  // machine holds for that remote, so it can only over-report. Saying so is the
-  // honest version of the "creates this branch" claim that cannot be verified
-  // without a network round trip.
-  const isUpperBound = pushRange?.rangeBasis === "untracked";
   const hiddenCount = commits ? Math.max(0, total - commits.length) : 0;
 
   // A destination nobody can name can't be approved — the handler would refuse
   // the write anyway, and guessing `origin` is the bug (#11746). `commits === null`
   // is "not loaded", which is a different thing from a loaded empty range: an
   // in-sync branch is approvable and pushes nothing (#9575).
-  const confirmDisabled = commits === null || !destination || !!loadError;
+  const confirmDisabled = !isSettled || commits === null || !destination || !!loadError;
 
   // Names the one unmet prerequisite rather than leaving a dead button to be
   // read as arbitrary. Ordered by which the user can act on first.
@@ -143,7 +175,7 @@ function GitPushConfirmDialogInner() {
       ? "Push stays blocked until a branch is checked out"
       : isDestinationMissing
         ? "Push stays blocked until a destination is set"
-        : isLoading
+        : showPendingHint
           ? "Checking what this would publish…"
           : null;
 
@@ -180,9 +212,9 @@ function GitPushConfirmDialogInner() {
       <div className="rounded border border-tint/[0.08] bg-tint/[0.04] text-xs">
         <dl className="px-3 py-2 space-y-1.5" data-testid="git-push-destination-summary">
           <SummaryRow label="From">
-            {branch ? (
+            {branch && isSettled ? (
               <RefChip value={branch} />
-            ) : isLoading ? (
+            ) : !isSettled && !loadError ? (
               <Bone className="w-40" />
             ) : loadError ? (
               <Unknown />
@@ -191,14 +223,15 @@ function GitPushConfirmDialogInner() {
             )}
           </SummaryRow>
           <SummaryRow label="To">
-            {destinationLabel ? (
+            {destinationLabel && isSettled ? (
               <span className="flex flex-wrap items-baseline gap-1.5">
                 <RefChip value={destinationLabel} emphasis />
-                {isUpperBound && (
-                  <span className="text-[10px] text-daintree-text/55">no local copy</span>
+                {isCreatingBranch && (
+                  <span className="text-[10px] text-daintree-text/55">creates this branch</span>
                 )}
+                {isUnverified && <span className="text-[10px] text-status-error">unverified</span>}
               </span>
-            ) : isLoading ? (
+            ) : !isSettled && !loadError ? (
               <Bone className="w-48" />
             ) : loadError ? (
               <Unknown />
@@ -215,7 +248,7 @@ function GitPushConfirmDialogInner() {
             className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60"
           >
             Commits to push
-            {isLoaded && total > 0 && (
+            {isSettled && total > 0 && (
               <span className="ml-1.5 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-[10px] font-medium normal-case tracking-normal">
                 {total}
               </span>
@@ -223,7 +256,7 @@ function GitPushConfirmDialogInner() {
           </span>
         </div>
 
-        {isLoading && (
+        {!isSettled && !loadError && (
           // `Skeleton` is what makes this reach a screen reader: the bones alone
           // are decorative, so a blocked Push with no announced busy state left
           // an AT user with a dead button and no explanation.
@@ -279,12 +312,14 @@ function GitPushConfirmDialogInner() {
             <div className="flex-1 min-w-0" data-testid="git-push-no-destination">
               <div className="font-medium">No destination git can name</div>
               <div className="mt-0.5 text-daintree-text/70">
-                This branch has no push destination, or more than one remote could be meant. Set an
-                upstream, or name the remote yourself:
-                {/* Its own line, and unbroken: wrapped inline it split as
-                    "with g / it config", which is not a command anyone can run. */}
+                This branch has no push destination, or more than one remote could be meant. Setting
+                an upstream resolves both:
+                {/* `git config branch.<n>.pushRemote <remote>` alone is NOT
+                    reliable here: under the default push.default it leaves the
+                    push ref empty, the resolver still refuses, and the user
+                    lands back on this screen having followed the instruction. */}
                 <span className="mt-1 block font-mono text-daintree-text/80 whitespace-nowrap overflow-x-auto">
-                  git config branch.&lt;name&gt;.pushRemote &lt;remote&gt;
+                  git push -u &lt;remote&gt; {branch ?? "<branch>"}
                 </span>
               </div>
             </div>
@@ -294,6 +329,13 @@ function GitPushConfirmDialogInner() {
         {isInSync && (
           <div className="px-3 py-3 text-daintree-text/60" data-testid="git-push-in-sync">
             Nothing to publish &mdash; {destinationLabel} already has everything on this branch.
+          </div>
+        )}
+
+        {isEmptyUnverified && (
+          <div className="px-3 py-3 text-daintree-text/60" data-testid="git-push-empty-unverified">
+            Nothing found to publish, but {destination?.remote} couldn&apos;t be reached to check{" "}
+            {destinationLabel} &mdash; so this isn&apos;t confirmed.
           </div>
         )}
 
@@ -331,10 +373,10 @@ function GitPushConfirmDialogInner() {
                   </span>
                 </li>
               ))}
-              {isUpperBound && (
-                <li className="text-[11px] text-daintree-text/55 pt-0.5">
-                  No local copy of {destinationLabel} &mdash; this list is an upper bound and may
-                  include commits it already has.
+              {isUnverified && (
+                <li className="text-[11px] text-status-error pt-0.5">
+                  Couldn&apos;t reach {destination?.remote} to check {destinationLabel}, so this
+                  list is unverified.
                 </li>
               )}
               {hiddenCount > 0 && (
@@ -346,6 +388,12 @@ function GitPushConfirmDialogInner() {
           </ScrollShadow>
         )}
       </div>
+      {/* The quietest tier on the surface, and last: this is the least specific
+          thing the dialog has to say, but it is the one question a push raises
+          that nothing else here answers. */}
+      <p className="text-[11px] text-daintree-text/55">
+        If the remote has moved on, Git refuses the push rather than overwriting it.
+      </p>
     </ConfirmDialog>
   );
 }
