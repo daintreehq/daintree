@@ -23,12 +23,13 @@
  * Steps (each also the DAINTREE_SHOT_ONLY filter name):
  *
  *   rest       the populated list at rest, popover + whole window
- *   scroll     scrolled to the very bottom — the clipped-last-row state
+ *   scroll     scrolled to the very bottom, and the assertion that the
+ *              scrollport is bounded by the panel rather than by its content
  *   actions    an action-carrying row parked at the bottom fold
- *   muted      the mute pill, driven through the real Pause menu
+ *   muted      the quiet-state strip, driven through the real Pause menu
  *   grouped    group-by-context on, so context section headers are present
  *   filters    Unread and Archived tabs
- *   empty      nothing to show
+ *   empty      nothing to show, captured both while muted and after resuming
  *   viewport   the same popover on a laptop window and on a large one
  *   contrast   `prefers-contrast: more`
  *   forced     `forced-colors: active`
