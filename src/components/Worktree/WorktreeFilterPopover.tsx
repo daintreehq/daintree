@@ -45,7 +45,7 @@ function FilterSection({
           onClick={() => setIsOpen(!isOpen)}
           aria-expanded={isOpen}
           aria-controls={contentId}
-          className="flex flex-1 items-center justify-between px-3 py-2 text-xs font-medium text-daintree-text/70 transition-colors hover:bg-overlay-soft"
+          className="flex flex-1 items-center justify-between px-3 py-1.5 text-xs font-medium text-daintree-text/70 transition-colors hover:bg-overlay-soft"
         >
           <span className="flex items-center gap-1.5">
             {title}
@@ -71,7 +71,7 @@ function FilterSection({
               onClear();
             }}
             aria-label={`Clear ${title} filters`}
-            className="shrink-0 px-2 py-2 text-[11px] text-daintree-text/50 transition-colors hover:text-daintree-text"
+            className="shrink-0 px-2 py-1.5 text-[11px] text-text-secondary transition-colors hover:text-daintree-text"
           >
             Clear
           </button>
@@ -90,7 +90,7 @@ function FilterSection({
         )}
       >
         <div className="overflow-hidden">
-          <div id={contentId} className="px-3 pb-3 pt-1">
+          <div id={contentId} className="px-3 pb-2.5 pt-0.5">
             {children}
           </div>
         </div>
@@ -119,8 +119,8 @@ function FilterChip({ label, isActive, onClick, count }: FilterChipProps) {
         isActive
           ? "bg-filter-selected-bg-soft border-daintree-border text-daintree-text"
           : isDimmed
-            ? "bg-daintree-bg border-daintree-border text-daintree-text/30 hover:bg-overlay-soft hover:text-daintree-text/50"
-            : "bg-daintree-bg border-daintree-border text-daintree-text/60 hover:bg-overlay-medium hover:text-daintree-text/80"
+            ? "bg-daintree-bg border-daintree-border text-daintree-text/45 hover:bg-overlay-soft hover:text-daintree-text/70"
+            : "bg-daintree-bg border-daintree-border text-daintree-text/75 hover:bg-overlay-medium hover:text-daintree-text"
       )}
     >
       {showCount ? `${label} (${count})` : label}
@@ -154,15 +154,15 @@ const TYPE_OPTIONS: { value: TypeFilter; label: string }[] = [
 ];
 
 const PR_ISSUE_OPTIONS: { value: PrIssueFilter; label: string }[] = [
-  { value: "hasIssue", label: "Has Issue" },
+  { value: "hasIssue", label: "Has issue" },
   { value: "hasPR", label: "Has PR" },
-  { value: "prOpen", label: "PR Open" },
-  { value: "prMerged", label: "PR Merged" },
-  { value: "prClosed", label: "PR Closed" },
+  { value: "prOpen", label: "PR open" },
+  { value: "prMerged", label: "PR merged" },
+  { value: "prClosed", label: "PR closed" },
 ];
 
 const SESSION_OPTIONS: { value: SessionFilter; label: string }[] = [
-  { value: "hasTerminals", label: "Has Terminals" },
+  { value: "hasTerminals", label: "Has terminals" },
   { value: "working", label: "Working" },
   { value: "waiting", label: "Waiting" },
   { value: "completed", label: "Completed" },
@@ -228,6 +228,7 @@ export function WorktreeFilterPopover({
     sessionFilters,
     activityFilters,
     devServerFilters,
+    quickStateFilter,
     setQuery,
     setOrderBy,
     setGroupByType,
@@ -244,8 +245,6 @@ export function WorktreeFilterPopover({
     clearActivityFilters,
     clearDevServerFilters,
     clearAll,
-    getActiveFilterCount,
-    hasActiveFilters,
   } = useWorktreeFilterStore(
     useShallow((state) => ({
       query: state.query,
@@ -257,6 +256,7 @@ export function WorktreeFilterPopover({
       sessionFilters: state.sessionFilters,
       activityFilters: state.activityFilters,
       devServerFilters: state.devServerFilters,
+      quickStateFilter: state.quickStateFilter,
       setQuery: state.setQuery,
       setOrderBy: state.setOrderBy,
       setGroupByType: state.setGroupByType,
@@ -273,15 +273,26 @@ export function WorktreeFilterPopover({
       clearActivityFilters: state.clearActivityFilters,
       clearDevServerFilters: state.clearDevServerFilters,
       clearAll: state.clearAll,
-      getActiveFilterCount: state.getActiveFilterCount,
-      hasActiveFilters: state.hasActiveFilters,
     }))
   );
 
-  const fullFilterCount = getActiveFilterCount();
-  const filterCount = hideSearchInput
-    ? fullFilterCount - (query.trim().length > 0 ? 1 : 0)
-    : fullFilterCount;
+  // Derived from the SUBSCRIBED snapshot, not from the store's imperative
+  // `getActiveFilterCount()` / `hasActiveFilters()` helpers. Those reread
+  // `_projectStore` live at call time, so the badge and the footer were reading
+  // the store at two different instants within one render and could disagree —
+  // which is how the "Clear all filters" footer went missing while the trigger
+  // was showing a count of 3. One snapshot, one number, three consumers.
+  const hasQuery = query.trim().length > 0;
+  const facetFilterCount =
+    statusFilters.size +
+    typeFilters.size +
+    prIssueFilters.size +
+    sessionFilters.size +
+    activityFilters.size +
+    devServerFilters.size +
+    (quickStateFilter !== "all" ? 1 : 0);
+  const fullFilterCount = facetFilterCount + (hasQuery ? 1 : 0);
+  const filterCount = hideSearchInput ? facetFilterCount : fullFilterCount;
   const showBadge = filterCount > 0;
 
   useEffect(() => {
@@ -313,8 +324,8 @@ export function WorktreeFilterPopover({
     if (debounceRef.current) {
       clearTimeout(debounceRef.current);
     }
-    // The footer (and this button) unmount the moment hasActiveFilters() goes
-    // false, so move focus onto the still-mounted popover content first — else
+    // The footer (and this button) unmount the moment the last filter clears,
+    // so move focus onto the still-mounted popover content first — else
     // it drops to document.body inside the open popover (issue #10315).
     contentRef.current?.focus();
     setLocalQuery("");
@@ -322,7 +333,8 @@ export function WorktreeFilterPopover({
   }, [clearAll]);
 
   const isField = appearance === "field";
-  const filtersActive = hasActiveFilters();
+  const filtersActive = showBadge;
+  const hasAnyFilter = fullFilterCount > 0;
 
   return (
     <Popover open={isOpen} onOpenChange={setIsOpen}>
@@ -330,6 +342,9 @@ export function WorktreeFilterPopover({
         <button
           className={cn(
             "flex shrink-0 items-center justify-center gap-1 rounded-[var(--radius-md)] transition-colors",
+            // Every other control in this rail carries the accent focus ring;
+            // without one here the browser painted its own blue outline.
+            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent",
             isField ? "self-stretch border border-daintree-border px-2" : "h-6 min-w-6 px-1.5",
             // Active state is a neutral fill + count, never a saturated colour or a
             // floating notification dot. A dot reads as "something new"; what matters
@@ -397,11 +412,18 @@ export function WorktreeFilterPopover({
           )}
 
           {/* Sort Order */}
-          <div className="p-3 border-b border-daintree-border">
-            <div className="text-[10px] font-medium text-daintree-text/50 uppercase tracking-wide mb-2">
+          <div className="px-3 pt-2.5 pb-2 border-b border-daintree-border">
+            <div
+              id="worktree-sort-by-label"
+              className="text-[10px] font-medium text-text-secondary uppercase tracking-wide mb-1.5"
+            >
               Sort by
             </div>
-            <div className="flex flex-col gap-1">
+            <div
+              role="radiogroup"
+              aria-labelledby="worktree-sort-by-label"
+              className="flex flex-col"
+            >
               {ORDER_OPTIONS.filter((option) => !(option.value === "manual" && groupByType)).map(
                 (option) => (
                   <button
@@ -412,6 +434,7 @@ export function WorktreeFilterPopover({
                     aria-checked={orderBy === option.value}
                     className={cn(
                       "flex items-center gap-2 px-2 py-1 text-xs rounded",
+                      "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-daintree-accent",
                       orderBy === option.value
                         ? "bg-overlay-raised text-daintree-text"
                         : "text-daintree-text/70 hover:bg-overlay-medium"
@@ -472,7 +495,7 @@ export function WorktreeFilterPopover({
           </FilterSection>
 
           <FilterSection
-            title="Branch Type"
+            title="Branch type"
             defaultOpen={typeFilters.size > 0}
             activeCount={typeFilters.size}
             onClear={clearTypeFilters}
@@ -567,7 +590,7 @@ export function WorktreeFilterPopover({
           </FilterSection>
 
           {/* Clear All */}
-          {hasActiveFilters() && (
+          {hasAnyFilter && (
             <div className="p-3 border-t border-daintree-border">
               <Button variant="subtle" size="xs" onClick={handleClearAll} className="w-full">
                 Clear all filters

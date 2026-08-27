@@ -26,7 +26,11 @@ describe("SidebarContent header reveal — issue #6964", () => {
   });
 
   it("keeps the named group/header parent so focus-within and hover variants resolve", () => {
-    expect(source).toMatch(/className="[^"]*\bgroup\/header\b/);
+    // Matched on the class name itself, not on `className="…` — the header
+    // composes its classes through cn() now that the bottom border is
+    // conditional, and the rule being protected is "the named group exists",
+    // not which attribute syntax declares it.
+    expect(source).toMatch(/["'\s]group\/header\b/);
   });
 
   it("uses a scoped transition covering opacity and visibility at Tier 1 duration-150", () => {

@@ -392,21 +392,25 @@ describe("SidebarContent initial loading skeleton — issues #7215, #8804", () =
     const branchStart = source.indexOf("if (isLoading && worktrees.length === 0)");
     const branchEnd = source.indexOf("if (worktrees.length === 0)", branchStart);
     const branch = source.slice(branchStart, branchEnd);
-    expect(branch).toMatch(/<h2[^>]*>Worktrees<\/h2>/);
-    // The loading header's vertical padding must match the loaded header's, or
-    // the bar shrinks and the list jumps up when worktrees finish loading
-    // (#10318). Compare the two against each other rather than pinning a literal.
-    const loadingHeaderDiv = branch.match(
-      /<div className="flex items-center [^"]*border-b[^"]*"/
-    )?.[0];
-    const loadedHeaderDiv = source.match(
-      /<div className="group\/header flex items-center [^"]*border-b[^"]*"/
-    )?.[0];
-    const loadingPy = loadingHeaderDiv?.match(/\bpy-\d+\b/)?.[0];
-    const loadedPy = loadedHeaderDiv?.match(/\bpy-\d+\b/)?.[0];
-    expect(loadingPy).toBeDefined();
-    expect(loadedPy).toBeDefined();
-    expect(loadingPy).toBe(loadedPy);
+    expect(branch).toMatch(/<h2[^>]*>\s*Worktrees\s*<\/h2>/);
+    // The loading header must be the same height as the loaded one, or the bar
+    // changes size when worktrees finish loading and the list jumps (#10318).
+    // Compare the two branches against each other, and read whichever utility
+    // is setting the height, so switching between a fixed height and vertical
+    // padding does not force an edit here.
+    function headerBox(chunk: string): { h: string | null; py: string | null } {
+      const cls = chunk.match(/className=(?:"|\{cn\(\s*")([^"]*\bitems-center\b[^"]*)"/)?.[1] ?? "";
+      return {
+        h: cls.match(/\bh-\d+\b/)?.[0] ?? null,
+        py: cls.match(/\bpy-[\d.]+\b/)?.[0] ?? null,
+      };
+    }
+    const loading = headerBox(branch);
+    const groupIdx = source.indexOf("group/header");
+    const loaded = headerBox(source.slice(source.lastIndexOf("<div", groupIdx)));
+    expect(loading.h ?? loading.py).not.toBeNull();
+    expect(loaded.h ?? loaded.py).not.toBeNull();
+    expect(loading).toEqual(loaded);
   });
 
   it("uses SkeletonBone with shimmer and no immediate prop (400ms Doherty gate) — #8804", () => {

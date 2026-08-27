@@ -47,12 +47,15 @@ describe("SidebarContent reconnecting indicator — issue #8074", () => {
     // Both badge branches must now stay single-line (whitespace-nowrap) and the
     // text size must match across them (text-xs parity), scoped to the badge so
     // an unrelated element keeping these classes can't mask a regression.
-    expect(source).toMatch(
-      /inline-flex items-center gap-1 whitespace-nowrap shrink-0 text-status-warning text-xs/
-    );
-    expect(source).toMatch(
-      /inline-flex items-center gap-1 whitespace-nowrap shrink-0 text-daintree-text\/60 text-xs/
-    );
+    // Asserted as a rule over both matched badges rather than as two literal
+    // class strings: the muted branch's colour token is free to change, the
+    // single-line + shared-text-size contract is not.
+    const badges = [
+      ...source.matchAll(/inline-flex items-center gap-1 whitespace-nowrap shrink-0 ([^"]*)"/g),
+    ].map((m) => m[1] ?? "");
+    expect(badges).toHaveLength(2);
+    for (const cls of badges) expect(cls).toContain("text-xs");
+    expect(badges.filter((cls) => cls.includes("text-status-warning"))).toHaveLength(1);
     // The relative-time detail moved off the visible badge into hover tooltip
     // content; the old inline combined template literal must be gone (the
     // explanatory comment at the tick may still mention the phrasing).
