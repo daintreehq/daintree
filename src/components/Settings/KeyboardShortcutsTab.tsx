@@ -466,7 +466,7 @@ export function KeyboardShortcutsTab() {
               <span className="text-xs text-daintree-text/60 text-right">Alt+Up / Alt+Down</span>
             </div>
           </div>
-          <p className="text-xs text-daintree-text/40 mt-2">
+          <p className="text-xs text-text-secondary mt-2">
             These shortcuts are fixed and can't be rebound
           </p>
         </div>
@@ -500,7 +500,7 @@ export function KeyboardShortcutsTab() {
               </span>
             </div>
           </div>
-          <p className="text-xs text-daintree-text/40 mt-2">
+          <p className="text-xs text-text-secondary mt-2">
             These shortcuts are fixed and can't be rebound
           </p>
         </div>

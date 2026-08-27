@@ -45,7 +45,7 @@ const STATUS_CONFIG: Record<GitStatus, { label: string; bg: string; text: string
   ignored: {
     label: "I",
     bg: "bg-tint/[0.06]",
-    text: "text-daintree-text/40",
+    text: "text-text-secondary",
   },
   conflicted: {
     label: "!",

@@ -204,7 +204,7 @@ export function ChordIndicator() {
           className="border-t border-[var(--border-overlay)] px-2 py-2 max-h-[22rem] overflow-y-auto"
         >
           {results.length === 0 ? (
-            <div className="px-2 py-3 text-xs text-daintree-text/40">No commands match</div>
+            <div className="px-2 py-3 text-xs text-text-secondary">No commands match</div>
           ) : (
             groups.map((group, groupIdx) => (
               <div key={group.category}>
@@ -249,7 +249,7 @@ export function ChordIndicator() {
           )}
         </div>
 
-        <div className="flex items-center gap-2 border-t border-[var(--border-overlay)] px-4 py-1.5 text-[11px] text-daintree-text/40 select-none">
+        <div className="flex items-center gap-2 border-t border-[var(--border-overlay)] px-4 py-1.5 text-[11px] text-text-secondary select-none">
           <span>↑↓ select</span>
           <span aria-hidden className="text-daintree-text/20">
             ·

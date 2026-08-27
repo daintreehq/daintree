@@ -259,10 +259,8 @@ export function PluginMcpServersSection({ pluginId, declared }: PluginMcpServers
   if (rows.length === 0) {
     return (
       <div className="space-y-3">
-        {showLoading && <p className="text-xs text-daintree-text/40">Loading…</p>}
-        {!loading && (
-          <p className="text-xs text-daintree-text/40">This plugin has no MCP servers.</p>
-        )}
+        {showLoading && <p className="text-xs text-text-secondary">Loading…</p>}
+        {!loading && <p className="text-xs text-text-secondary">This plugin has no MCP servers.</p>}
         {error && <SectionError message={error} />}
       </div>
     );
@@ -297,7 +295,7 @@ export function PluginMcpServersSection({ pluginId, declared }: PluginMcpServers
                 />
                 <div className="min-w-0 flex-1">
                   <div className="text-sm text-daintree-text truncate">{row.name}</div>
-                  <div className="text-[11px] text-daintree-text/40">
+                  <div className="text-[11px] text-text-secondary">
                     {STATUS_LABEL[status]}
                     {row.info?.pid != null && status === "ready" && ` · pid ${row.info.pid}`}
                   </div>
@@ -363,20 +361,20 @@ export function PluginMcpServersSection({ pluginId, declared }: PluginMcpServers
 
 function StderrView({ state }: { state: StderrState | undefined }) {
   if (!state || (state.loading && !state.result)) {
-    return <p className="text-[11px] text-daintree-text/40">Loading output…</p>;
+    return <p className="text-[11px] text-text-secondary">Loading output…</p>;
   }
   if (state.error) {
     return <p className="text-[11px] text-status-danger">{state.error}</p>;
   }
   const result = state.result;
   if (!result || result.lines.length === 0) {
-    return <p className="text-[11px] text-daintree-text/40">No output captured.</p>;
+    return <p className="text-[11px] text-text-secondary">No output captured.</p>;
   }
   const hidden = result.totalLines - result.lines.length;
   return (
     <div className="space-y-1.5">
       {hidden > 0 && (
-        <p className="text-[10px] text-daintree-text/40">
+        <p className="text-[10px] text-text-secondary">
           Showing the most recent {result.lines.length} of {result.totalLines} lines.
         </p>
       )}

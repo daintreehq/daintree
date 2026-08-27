@@ -74,7 +74,7 @@ function PluginCapabilityList({
 
   return (
     <div className="space-y-2">
-      <h4 className="text-[11px] font-medium uppercase tracking-wide text-daintree-text/40">
+      <h4 className="text-[11px] font-medium uppercase tracking-wide text-text-secondary">
         Permissions
       </h4>
       {plugin.pluginDanger === "confirm" && (
@@ -115,7 +115,7 @@ function PluginCapabilityList({
 function PluginContributedCommands({ commands }: { commands: PluginActionContribution[] }) {
   return (
     <div className="space-y-2">
-      <h4 className="text-[11px] font-medium uppercase tracking-wide text-daintree-text/40">
+      <h4 className="text-[11px] font-medium uppercase tracking-wide text-text-secondary">
         Commands
       </h4>
       <ul className="space-y-2">
@@ -127,7 +127,7 @@ function PluginContributedCommands({ commands }: { commands: PluginActionContrib
                 {command.description}
               </div>
             )}
-            <div className="text-[11px] text-daintree-text/40 mt-0.5">
+            <div className="text-[11px] text-text-secondary mt-0.5">
               {command.kind === "query"
                 ? "Available to agents and automation"
                 : "Run it from the command palette"}
@@ -148,14 +148,14 @@ function PluginContributedCommands({ commands }: { commands: PluginActionContrib
 function PluginContributedPanels({ panels }: { panels: PanelContribution[] }) {
   return (
     <div className="space-y-2">
-      <h4 className="text-[11px] font-medium uppercase tracking-wide text-daintree-text/40">
+      <h4 className="text-[11px] font-medium uppercase tracking-wide text-text-secondary">
         Panels
       </h4>
       <ul className="space-y-2">
         {panels.map((panel) => (
           <li key={panel.id} className="text-xs">
             <div className="text-daintree-text/80">{panel.name}</div>
-            <div className="text-[11px] text-daintree-text/40 mt-0.5">
+            <div className="text-[11px] text-text-secondary mt-0.5">
               {panel.showInPalette === false
                 ? "Opened by the plugin"
                 : "Open it from the new-panel menu"}
@@ -179,7 +179,7 @@ function PluginContributedPanels({ panels }: { panels: PanelContribution[] }) {
 function PluginContributors({ authors }: { authors: PluginAuthor[] }) {
   return (
     <div className="space-y-2">
-      <h4 className="text-[11px] font-medium uppercase tracking-wide text-daintree-text/40">
+      <h4 className="text-[11px] font-medium uppercase tracking-wide text-text-secondary">
         Contributors
       </h4>
       <ul className="space-y-2">
@@ -189,7 +189,7 @@ function PluginContributors({ authors }: { authors: PluginAuthor[] }) {
             <li key={`${name}-${index}`} className="text-xs">
               <div className="text-daintree-text/80">
                 {name}
-                {role && <span className="text-[11px] text-daintree-text/40"> · {role}</span>}
+                {role && <span className="text-[11px] text-text-secondary"> · {role}</span>}
               </div>
               {(url || email) && (
                 <div className="mt-0.5 flex flex-wrap items-center gap-x-3 gap-y-0.5">
@@ -322,7 +322,7 @@ export function PluginDetailPane({
           <div className="min-w-0">
             <div className="flex items-center gap-1.5 flex-wrap">
               <h3 className="text-base font-medium truncate">{label}</h3>
-              <span className="text-xs font-normal text-daintree-text/40">
+              <span className="text-xs font-normal text-text-secondary">
                 v{plugin.manifest.version}
               </span>
               <span className={BADGE_CLASS}>{categoryLabel}</span>
@@ -345,7 +345,7 @@ export function PluginDetailPane({
               <p className="text-sm text-daintree-text/60 mt-1">{plugin.manifest.tagline}</p>
             )}
             {!plugin.isBuiltin && plugin.installedAt > 0 && (
-              <div className="text-[11px] text-daintree-text/40 mt-1">
+              <div className="text-[11px] text-text-secondary mt-1">
                 {plugin.updatedAt
                   ? `Updated ${formatRelativeTime(plugin.updatedAt)}`
                   : `Installed ${formatRelativeTime(plugin.installedAt)}`}
@@ -432,7 +432,7 @@ export function PluginDetailPane({
               {plugin.manifest.description}
             </p>
           ) : (
-            <p className="text-xs text-daintree-text/40">No description provided.</p>
+            <p className="text-xs text-text-secondary">No description provided.</p>
           )}
 
           {commands.length > 0 && <PluginContributedCommands commands={commands} />}

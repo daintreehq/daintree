@@ -307,7 +307,7 @@ const SelectItem = React.forwardRef<
       {description ? (
         <span className="flex flex-col gap-0.5">
           <ItemText>{children}</ItemText>
-          <span className="text-[11px] text-daintree-text/40">{description}</span>
+          <span className="text-[11px] text-text-secondary">{description}</span>
         </span>
       ) : (
         <ItemText>{children}</ItemText>

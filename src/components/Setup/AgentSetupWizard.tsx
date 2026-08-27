@@ -1141,7 +1141,7 @@ function AgentsStep({
               <>
                 <div className="flex items-center gap-2 py-1">
                   <div className="h-px flex-1 bg-border-divider" />
-                  <span className="text-[11px] text-daintree-text/40 font-medium">More agents</span>
+                  <span className="text-[11px] text-text-secondary font-medium">More agents</span>
                   <div className="h-px flex-1 bg-border-divider" />
                 </div>
 

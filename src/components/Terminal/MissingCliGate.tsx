@@ -67,7 +67,7 @@ function StateBanner({ state, detail }: { state: AgentAvailabilityState; detail:
             {detail.message ?? "The agent executable was not detected on your system."}
           </p>
           {detail.resolvedPath && (
-            <p className="text-xs text-daintree-text/40 mt-1 font-mono select-text">
+            <p className="text-xs text-text-secondary mt-1 font-mono select-text">
               Last known path: {detail.resolvedPath}
             </p>
           )}
@@ -104,7 +104,7 @@ function StateBanner({ state, detail }: { state: AgentAvailabilityState; detail:
         <p className="text-xs text-daintree-text/60 mt-1">
           {detail.message ?? "The binary exists but execution was denied."}
         </p>
-        <p className="text-xs text-daintree-text/40 mt-1">
+        <p className="text-xs text-text-secondary mt-1">
           Check your endpoint security settings or add an allowlist entry.
         </p>
       </div>
@@ -139,7 +139,7 @@ function InstallCommands({ blocks }: { blocks: AgentInstallBlock[] }) {
           {block.notes && (
             <div className="mt-2 space-y-0.5">
               {block.notes.map((note, j) => (
-                <p key={j} className="text-xs text-daintree-text/40">
+                <p key={j} className="text-xs text-text-secondary">
                   {note}
                 </p>
               ))}
@@ -241,7 +241,7 @@ export function MissingCliGate({
           </div>
           <div>
             <h2 className="text-sm font-semibold">{agentName}</h2>
-            <p className="text-xs text-daintree-text/40">
+            <p className="text-xs text-text-secondary">
               {isAgentLaunchable(state)
                 ? "Ready to continue launch"
                 : "Setup required before launch"}
@@ -263,7 +263,7 @@ export function MissingCliGate({
             <p className="text-xs font-medium text-daintree-text/50">Troubleshooting</p>
             <ul className="list-disc list-inside space-y-0.5">
               {troubleshooting.map((tip, i) => (
-                <li key={i} className="text-xs text-daintree-text/40">
+                <li key={i} className="text-xs text-text-secondary">
                   {tip}
                 </li>
               ))}

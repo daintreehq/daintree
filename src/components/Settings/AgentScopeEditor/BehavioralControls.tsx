@@ -115,7 +115,7 @@ export function BehavioralControls({
           placeholder={customArgsPlaceholder}
           data-testid={scopeKind === "custom" ? "preset-custom-flags-input" : undefined}
         />
-        <p className="text-xs text-daintree-text/40 select-text">{customArgsDescription}</p>
+        <p className="text-xs text-text-secondary select-text">{customArgsDescription}</p>
       </div>
 
       <div id="agents-skip-permissions" className="space-y-1.5">
@@ -128,14 +128,14 @@ export function BehavioralControls({
           options={dangerousModeOptions}
         />
         {dangerousMode === "inherit" && (
-          <p className="text-xs text-daintree-text/40 select-text">
+          <p className="text-xs text-text-secondary select-text">
             Inherited from {inheritOriginLabel}
           </p>
         )}
         {effectiveSkipPerms && defaultDangerousArg && (
           <div className="flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-md)] bg-status-error/10 border border-status-error/20">
             <code className="text-xs text-status-error font-mono">{defaultDangerousArg}</code>
-            <span className="text-xs text-daintree-text/40">added to command</span>
+            <span className="text-xs text-text-secondary">added to command</span>
           </div>
         )}
       </div>
@@ -151,7 +151,7 @@ export function BehavioralControls({
             options={inlineModeOptions}
           />
           {inlineMode === "inherit" && (
-            <p className="text-xs text-daintree-text/40 select-text">
+            <p className="text-xs text-text-secondary select-text">
               Inherited from {inlineInheritOriginLabel}
             </p>
           )}

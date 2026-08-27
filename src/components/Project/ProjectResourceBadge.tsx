@@ -69,7 +69,7 @@ function HeapBar({ heapStats }: { heapStats: HeapStats }) {
     <div className="space-y-1">
       <div className="flex items-center justify-between text-[10px]">
         <span className="text-daintree-text/50">V8 Heap</span>
-        <span className="font-mono text-daintree-text/40">
+        <span className="font-mono text-text-secondary">
           {heapStats.usedMB.toFixed(0)} / {heapStats.limitMB}MB ({heapStats.percent.toFixed(0)}%)
         </span>
       </div>
@@ -92,7 +92,7 @@ function MemoryRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-center justify-between gap-2 text-[10px]">
       <span className="text-daintree-text/50 leading-tight">{label}</span>
-      <span className="font-mono tabular-nums text-daintree-text/40 shrink-0">{value}</span>
+      <span className="font-mono tabular-nums text-text-secondary shrink-0">{value}</span>
     </div>
   );
 }
@@ -176,7 +176,7 @@ function ProcessTable({ metrics }: { metrics: ProcessMetricEntry[] }) {
               >
                 {label} <span className="text-daintree-text/25">({proc.pid})</span>
               </span>
-              <div className="flex gap-2 text-daintree-text/40 shrink-0">
+              <div className="flex gap-2 text-text-secondary shrink-0">
                 <span>{proc.memoryMB}MB</span>
                 <span className="w-10 text-right">{proc.cpuPercent}%</span>
               </div>
@@ -224,7 +224,7 @@ function ProjectBreakdown({
                   <span className="text-daintree-text/25"> · {s.topProcess.name}</span>
                 )}
               </span>
-              <div className="flex gap-2 text-daintree-text/40 shrink-0">
+              <div className="flex gap-2 text-text-secondary shrink-0">
                 <span>{s.terminalCount} terms</span>
                 <span className="tabular-nums">{memLabel}</span>
               </div>
@@ -271,7 +271,7 @@ function DiagnosticsSection({
         Diagnostics
       </button>
       {expanded && (
-        <div className="space-y-1 text-[10px] font-mono text-daintree-text/40 pl-2">
+        <div className="space-y-1 text-[10px] font-mono text-text-secondary pl-2">
           <div>{trendText}</div>
           <div>Uptime: {formatUptime(diagnosticsInfo.uptimeSeconds)}</div>
           {diagnosticsInfo.eventLoopP99Ms > 50 && (
@@ -550,7 +550,7 @@ export function ProjectResourceBadge() {
               key={memoryState}
               className={`status-mark inline-flex h-2 w-2 rounded-full ${STATE_DOT_CLASSES[memoryState]} animate-diagnostics-flash shrink-0`}
             />
-            <span className="text-[10px] tabular-nums text-daintree-text/40 font-medium truncate">
+            <span className="text-[10px] tabular-nums text-text-secondary font-medium truncate">
               {stats.runningProjects} project{stats.runningProjects !== 1 ? "s" : ""} active
             </span>
           </div>

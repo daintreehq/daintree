@@ -82,7 +82,7 @@ export function SystemRequirementsSection({
         <span className="text-sm font-medium text-daintree-text">System requirements</span>
 
         {isChecking && (
-          <span className="flex items-center gap-1.5 ml-auto text-[11px] text-daintree-text/40">
+          <span className="flex items-center gap-1.5 ml-auto text-[11px] text-text-secondary">
             <Loader2 className="w-3 h-3 animate-spin" />
             Checking...
           </span>

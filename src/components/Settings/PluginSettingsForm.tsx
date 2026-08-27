@@ -458,7 +458,7 @@ function SettingField({
           {fieldLabel(def)}
         </label>
         <div className="flex items-center gap-1.5 shrink-0">
-          <span className="text-[10px] uppercase tracking-wide text-daintree-text/40">
+          <span className="text-[10px] uppercase tracking-wide text-text-secondary">
             {SCOPE_BADGE_LABEL[scope]}
           </span>
           {canReset && (
@@ -509,7 +509,7 @@ function SettingField({
       )}
 
       {!scopeReady && (
-        <p className="text-[11px] text-daintree-text/40">Open a project to edit this setting.</p>
+        <p className="text-[11px] text-text-secondary">Open a project to edit this setting.</p>
       )}
       {pathMissing && !error && (
         <p className="text-[11px] text-status-warning">

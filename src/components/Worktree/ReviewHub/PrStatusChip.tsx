@@ -58,11 +58,11 @@ export function PrStatusChip({ hasRemote, worktreePR, onOpenExternal }: PrStatus
           >
             #{worktreePR.prNumber}
           </span>
-          <span className="text-daintree-text/40">·</span>
+          <span className="text-text-secondary">·</span>
           <span className="text-daintree-text/60">{prStateLabel}</span>
           {ciVisual && (
             <>
-              <span className="text-daintree-text/40">·</span>
+              <span className="text-text-secondary">·</span>
               <span className="inline-flex items-center gap-1">
                 <span
                   className="inline-flex items-center justify-center w-3 h-3 shrink-0"
@@ -94,7 +94,7 @@ export function PrStatusChip({ hasRemote, worktreePR, onOpenExternal }: PrStatus
 
   if (hasRemote && !worktreePR) {
     return (
-      <Badge tone="outline" className="text-[11px] text-daintree-text/40">
+      <Badge tone="outline" className="text-[11px] text-text-secondary">
         <GitPullRequest />
         <span>No PR</span>
       </Badge>

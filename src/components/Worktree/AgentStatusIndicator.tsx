@@ -36,7 +36,7 @@ const STATE_CONFIG: Record<
   },
   exited: {
     icon: "–",
-    color: "text-daintree-text/40",
+    color: "text-text-secondary",
     tooltip: "Process exited",
   },
   directing: {

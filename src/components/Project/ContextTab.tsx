@@ -285,7 +285,7 @@ export function ContextTab({
                 placeholder="Default (100 MB)"
                 className="w-full bg-daintree-sidebar border border-daintree-border rounded px-2 py-1 text-sm text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
               />
-              <p className="text-xs text-daintree-text/40 mt-1">Total size limit for all files</p>
+              <p className="text-xs text-text-secondary mt-1">Total size limit for all files</p>
             </div>
             <div>
               <label className="block text-xs text-daintree-text/60 mb-1">
@@ -303,7 +303,7 @@ export function ContextTab({
                 placeholder="Default (up to 10 MB)"
                 className="w-full bg-daintree-sidebar border border-daintree-border rounded px-2 py-1 text-sm text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
               />
-              <p className="text-xs text-daintree-text/40 mt-1">Skip files larger than this</p>
+              <p className="text-xs text-text-secondary mt-1">Skip files larger than this</p>
             </div>
           </div>
 
@@ -323,9 +323,7 @@ export function ContextTab({
                 placeholder="Default (no truncation)"
                 className="w-full bg-daintree-sidebar border border-daintree-border rounded px-2 py-1 text-sm text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
               />
-              <p className="text-xs text-daintree-text/40 mt-1">
-                Total characters across all files
-              </p>
+              <p className="text-xs text-text-secondary mt-1">Total characters across all files</p>
             </div>
             <div>
               <label className="block text-xs text-daintree-text/60 mb-1">
@@ -344,7 +342,7 @@ export function ContextTab({
                 <option value="all">Include all files</option>
                 <option value="modified">Recently modified first</option>
               </select>
-              <p className="text-xs text-daintree-text/40 mt-1">
+              <p className="text-xs text-text-secondary mt-1">
                 Which files to prioritize when truncating
               </p>
             </div>
@@ -355,7 +353,7 @@ export function ContextTab({
             <label className="block text-xs text-daintree-text/60 mb-1">
               Always include (glob patterns)
             </label>
-            <p className="text-xs text-daintree-text/40 mb-2">
+            <p className="text-xs text-text-secondary mb-2">
               Files matching these patterns are included even when an exclude rule or the max file
               size would drop them
             </p>
@@ -418,7 +416,7 @@ export function ContextTab({
             <label className="block text-xs text-daintree-text/60 mb-1">
               Always exclude (glob patterns)
             </label>
-            <p className="text-xs text-daintree-text/40 mb-2">
+            <p className="text-xs text-text-secondary mb-2">
               Additional exclusion patterns beyond the default excluded paths above
             </p>
             <div className="space-y-2">
@@ -480,7 +478,7 @@ export function ContextTab({
             <div className="flex items-center justify-between">
               <div>
                 <h4 className="text-sm font-medium text-daintree-text/80">Test configuration</h4>
-                <p className="text-xs text-daintree-text/40">
+                <p className="text-xs text-text-secondary">
                   Preview what files would be included with current settings
                 </p>
               </div>
@@ -556,7 +554,7 @@ export function ContextTab({
                     {copyTreeSettings.charLimit !== undefined && (
                       // The dry run plans the character budget from byte sizes
                       // without reading content, so this preview is an estimate.
-                      <p className="text-xs text-daintree-text/40">
+                      <p className="text-xs text-text-secondary">
                         Estimated — the character budget is planned from file sizes
                       </p>
                     )}
@@ -596,7 +594,7 @@ export function ContextTab({
                               >
                                 {file.path}
                               </span>
-                              <span className="text-daintree-text/40 shrink-0">
+                              <span className="text-text-secondary shrink-0">
                                 {formatBytes(file.size)}
                               </span>
                             </li>

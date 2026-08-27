@@ -114,7 +114,7 @@ export const CAPABILITY_META = {
 export const SEVERITY_TEXT_CLASS: Record<CapabilitySeverity, string> = {
   danger: "text-status-danger",
   warning: "text-status-warning",
-  neutral: "text-daintree-text/40",
+  neutral: "text-text-secondary",
 };
 
 export function CapabilityRow({
@@ -156,7 +156,7 @@ export function CapabilityRow({
         >
           {meta.label}
         </div>
-        <div className="text-[11px] text-daintree-text/40">{meta.description}</div>
+        <div className="text-[11px] text-text-secondary">{meta.description}</div>
         {scoped && (
           <ul className="mt-0.5 space-y-0.5">
             {scopeEntries.map((entry) => (

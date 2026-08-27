@@ -1004,7 +1004,7 @@ export function GeneralTab({
                       </button>
                     ))}
                   </div>
-                  <p className="text-xs text-daintree-text/40">
+                  <p className="text-xs text-text-secondary">
                     A toast appears when background project terminals have been quiet this long,
                     with options to close them or dismiss the reminder.
                   </p>
@@ -1047,7 +1047,7 @@ export function GeneralTab({
                       </button>
                     ))}
                   </div>
-                  <p className="text-xs text-daintree-text/40">
+                  <p className="text-xs text-text-secondary">
                     Only projects with no terminals are auto-closed. The active project is never
                     touched, and reopening a project restores its panels.
                   </p>
@@ -1096,14 +1096,14 @@ export function GeneralTab({
                       </button>
                     ))}
                   </div>
-                  <p className="text-xs text-daintree-text/40">
+                  <p className="text-xs text-text-secondary">
                     Projects idle longer than this will have their processes stopped automatically.
                   </p>
                 </div>
               )}
             </SettingsSection>
           ) : (
-            <div className="text-sm text-daintree-text/40">Loading hibernation settings...</div>
+            <div className="text-sm text-text-secondary">Loading hibernation settings...</div>
           )}
         </>
       )}

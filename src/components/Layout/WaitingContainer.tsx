@@ -376,7 +376,7 @@ function WaitingSingleItem({
               <span className="text-daintree-text/30">·</span>
             )}
             {terminal.activityHeadline && (
-              <span className="truncate italic text-daintree-text/40">
+              <span className="truncate italic text-text-secondary">
                 {terminal.activityHeadline}
               </span>
             )}
@@ -402,7 +402,7 @@ function WaitingSingleItem({
         <LiveTimeAgo
           timestamp={terminal.lastStateChange}
           noTooltip
-          className="text-[10px] text-daintree-text/40 shrink-0"
+          className="text-[10px] text-text-secondary shrink-0"
         />
       )}
 

@@ -93,7 +93,7 @@ function PreferredSchemePicker({
 }) {
   return (
     <div className="space-y-1">
-      <p className="text-[10px] font-medium uppercase tracking-wider text-daintree-text/40">
+      <p className="text-[10px] font-medium uppercase tracking-wider text-text-secondary">
         {label}
       </p>
       <div className="flex flex-wrap gap-1.5">
@@ -567,7 +567,7 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
                         </summary>
                         <ul className="mt-1 space-y-0.5 pl-3">
                           {messages.map((message, index) => (
-                            <li key={index} className="break-words text-daintree-text/40">
+                            <li key={index} className="break-words text-text-secondary">
                               {message}
                             </li>
                           ))}

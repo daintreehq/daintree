@@ -547,7 +547,7 @@ export function TurnOutcomeDiagnostics({
             >
               Clear log
             </button>
-            <span className="ml-auto text-xs text-daintree-text/40">
+            <span className="ml-auto text-xs text-text-secondary">
               {totalRecords} turn{totalRecords !== 1 ? "s" : ""}
             </span>
           </div>

@@ -81,9 +81,9 @@ export function PrerequisiteCard({ spec, state }: { spec: PrerequisiteSpec; stat
             )}
           </div>
         ) : check?.version ? (
-          <span className="text-[11px] text-daintree-text/40 shrink-0">v{check.version}</span>
+          <span className="text-[11px] text-text-secondary shrink-0">v{check.version}</span>
         ) : check?.available ? (
-          <span className="text-[11px] text-daintree-text/40 shrink-0">Installed</span>
+          <span className="text-[11px] text-text-secondary shrink-0">Installed</span>
         ) : null}
       </div>
       {installBlocks && (

@@ -392,7 +392,7 @@ function ProjectRoutingPanel({
   }
 
   if (loading) {
-    return <p className="text-xs text-daintree-text/40">Loading remotes…</p>;
+    return <p className="text-xs text-text-secondary">Loading remotes…</p>;
   }
 
   if (error) {

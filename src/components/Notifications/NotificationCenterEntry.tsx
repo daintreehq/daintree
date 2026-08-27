@@ -381,7 +381,7 @@ export function NotificationCenterEntry({
                 data-testid="notification-timestamp"
                 title={ts.absolute}
                 aria-label={ts.absolute}
-                // A solid token, not `text-daintree-text/40`: slash-alpha
+                // A solid token, not `text-text-secondary`: slash-alpha
                 // composites against whatever is behind it and read at ~3.2:1
                 // here. `theme-tokens.md` gates `text-secondary` at >=3:1 across
                 // every theme and prefers a solid token for exactly this.

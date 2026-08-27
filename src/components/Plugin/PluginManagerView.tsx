@@ -44,7 +44,7 @@ const ROW_BADGE_CLASS =
 // role="group" inside role="listbox" is broken under Chromium 146 + VoiceOver
 // (LESSON #9006), so headers masquerade as non-interactive options instead.
 const SECTION_HEADER_CLASS =
-  "px-3 text-[10px] font-medium uppercase tracking-wider text-daintree-text/40 select-none";
+  "px-3 text-[10px] font-medium uppercase tracking-wider text-text-secondary select-none";
 
 // Operator chips surfaced below the search input so the filter syntax is
 // discoverable instead of hidden. Categories are the headline filters; the
@@ -140,7 +140,7 @@ function PluginRow({
             )}
           >
             <span className="truncate">{label}</span>
-            <span className="text-[11px] font-normal text-daintree-text/40">
+            <span className="text-[11px] font-normal text-text-secondary">
               v{plugin.manifest.version}
             </span>
           </span>
@@ -743,10 +743,10 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
               network-backed catalog ships separately; the slot keeps its place
               in the master column so the layout doesn't shift when it lands. */}
           <div className="px-4 py-3 border-t border-daintree-border shrink-0">
-            <p className="text-[10px] font-medium uppercase tracking-wider text-daintree-text/40 select-none">
+            <p className="text-[10px] font-medium uppercase tracking-wider text-text-secondary select-none">
               Browse
             </p>
-            <p className="text-[11px] text-daintree-text/40 mt-1">
+            <p className="text-[11px] text-text-secondary mt-1">
               Online plugin catalog coming soon.
             </p>
           </div>

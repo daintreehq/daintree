@@ -38,18 +38,18 @@ export function ReadOnlyDetail({ scopeKind, selectedPreset, onDuplicate }: ReadO
           </div>
         )}
         {selectedPreset.description && (
-          <p className="text-[11px] text-daintree-text/40 select-text">
+          <p className="text-[11px] text-text-secondary select-text">
             {selectedPreset.description}
           </p>
         )}
         {scopeKind === "project" && (
-          <p className="text-[10px] text-daintree-text/40 select-text">
+          <p className="text-[10px] text-text-secondary select-text">
             Sourced from <code>.daintree/presets/</code> in this project.
           </p>
         )}
       </div>
       <div className="px-3 py-2">
-        <p className="text-xs text-daintree-text/40 select-text">
+        <p className="text-xs text-text-secondary select-text">
           Read-only. Duplicate as custom to override behavioral settings or env.
         </p>
       </div>

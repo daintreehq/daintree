@@ -362,7 +362,7 @@ export function AutomationTab({
                   : "fix-bug"}
             </code>
             {branchPrefixMode === "username" && (
-              <p className="text-xs text-daintree-text/40 mt-1">
+              <p className="text-xs text-text-secondary mt-1">
                 Username is read from git config user.name at worktree creation time.
               </p>
             )}

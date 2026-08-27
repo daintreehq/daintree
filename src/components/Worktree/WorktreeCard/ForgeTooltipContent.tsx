@@ -239,7 +239,7 @@ function LabelRow({ labels, subject }: { labels: readonly ForgeLabel[]; subject:
         <LabelBadge key={label.name} name={label.name} color={label.color ?? "8b949e"} />
       ))}
       {labels.length > shown.length && (
-        <span className="text-[10px] text-daintree-text/40">
+        <span className="text-[10px] text-text-secondary">
           Showing {shown.length} of {labels.length} — open the {subject} for the rest
         </span>
       )}

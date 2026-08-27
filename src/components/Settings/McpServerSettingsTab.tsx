@@ -991,7 +991,7 @@ export function McpServerSettingsTab() {
                 >
                   Apply
                 </button>
-                <span className="text-xs text-daintree-text/40">
+                <span className="text-xs text-text-secondary">
                   Range {MCP_AUDIT_MIN_RECORDS}–{MCP_AUDIT_MAX_RECORDS}
                 </span>
               </div>

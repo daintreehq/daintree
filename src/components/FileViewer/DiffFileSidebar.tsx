@@ -197,7 +197,7 @@ export function DiffFileSidebar({
         )}
         {groups.map((group) => (
           <div key={group.dir || "(root)"} className="mb-1.5">
-            <div className="flex items-center gap-1.5 px-1.5 py-1 text-[11px] text-daintree-text/40">
+            <div className="flex items-center gap-1.5 px-1.5 py-1 text-[11px] text-text-secondary">
               <Folder className="h-3 w-3 shrink-0" />
               <span className="truncate font-mono">{formatDir(group.dir)}</span>
             </div>

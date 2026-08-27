@@ -426,6 +426,15 @@ describe("TerminalHeaderContent — agent state chip tooltip", () => {
 });
 
 describe("TerminalHeaderContent — resource severity hysteresis", () => {
+  // Muted severity is pinned by the absence of both escalated tones rather than
+  // by its own colour class. Which colour "muted" paints in is an implementation
+  // value — it moved off `text-daintree-text/40` in #12003 — while the ladder
+  // position these hysteresis tests exist to prove is what stays true.
+  function expectMutedSeverity(className: string | null) {
+    expect(className).not.toContain("text-status-warning");
+    expect(className).not.toContain("text-status-error");
+  }
+
   function makeResourceState(cpuPercent: number, memoryKb = 200_000) {
     return {
       cpuPercent,
@@ -454,9 +463,7 @@ describe("TerminalHeaderContent — resource severity hysteresis", () => {
 
     const { container } = render(<TerminalHeaderContent id="t1" kind="terminal" />);
     const wrapper = container.querySelector(".inline-flex.items-center.gap-1.text-\\[11px\\]");
-    expect(wrapper!.getAttribute("class")).toContain("text-daintree-text/40");
-    expect(wrapper!.getAttribute("class")).not.toContain("text-status-warning");
-    expect(wrapper!.getAttribute("class")).not.toContain("text-status-error");
+    expectMutedSeverity(wrapper!.getAttribute("class"));
   });
 
   // Vary `queueCount` between renders so React.memo doesn't skip the re-render
@@ -482,8 +489,7 @@ describe("TerminalHeaderContent — resource severity hysteresis", () => {
     pollResource(rerender, 60, 2);
 
     const wrapper = container.querySelector(".inline-flex.items-center.gap-1.text-\\[11px\\]");
-    expect(wrapper!.getAttribute("class")).toContain("text-daintree-text/40");
-    expect(wrapper!.getAttribute("class")).not.toContain("text-status-warning");
+    expectMutedSeverity(wrapper!.getAttribute("class"));
   });
 
   it("commits to amber after 3 consecutive polls above the threshold", () => {
@@ -500,7 +506,6 @@ describe("TerminalHeaderContent — resource severity hysteresis", () => {
 
     const wrapper = container.querySelector(".inline-flex.items-center.gap-1.text-\\[11px\\]");
     expect(wrapper!.getAttribute("class")).toContain("text-status-warning");
-    expect(wrapper!.getAttribute("class")).not.toContain("text-daintree-text/40");
   });
 
   it("commits red, amber, then muted on a sustained downward sequence", () => {
@@ -533,8 +538,7 @@ describe("TerminalHeaderContent — resource severity hysteresis", () => {
     pollResource(rerender, 10, 11);
     pollResource(rerender, 10, 12);
     pollResource(rerender, 10, 13);
-    expect(wrapperFor().getAttribute("class")).toContain("text-daintree-text/40");
-    expect(wrapperFor().getAttribute("class")).not.toContain("text-status-warning");
+    expectMutedSeverity(wrapperFor().getAttribute("class"));
   });
 
   it("does not de-escalate after only 4 polls below the threshold", () => {
@@ -638,9 +642,7 @@ describe("TerminalHeaderContent — resource severity hysteresis", () => {
     pollResource(rerender, 10, 6);
     pollResource(rerender, 10, 7);
     pollResource(rerender, 10, 8);
-    expect(wrapperFor().getAttribute("class")).toContain("text-daintree-text/40");
-    expect(wrapperFor().getAttribute("class")).not.toContain("text-status-warning");
-    expect(wrapperFor().getAttribute("class")).not.toContain("text-status-error");
+    expectMutedSeverity(wrapperFor().getAttribute("class"));
   });
 
   it("commits to red via the memory threshold alone", () => {
@@ -662,7 +664,6 @@ describe("TerminalHeaderContent — resource severity hysteresis", () => {
 
     const wrapper = container.querySelector(".inline-flex.items-center.gap-1.text-\\[11px\\]");
     expect(wrapper!.getAttribute("class")).toContain("text-status-error");
-    expect(wrapper!.getAttribute("class")).not.toContain("text-daintree-text/40");
   });
 
   it("resets sticky severity to muted when monitoring is disabled and re-enabled", () => {
@@ -688,8 +689,7 @@ describe("TerminalHeaderContent — resource severity hysteresis", () => {
     rerender(<TerminalHeaderContent id="t1" kind="terminal" queueCount={5} />);
 
     wrapper = container.querySelector(".inline-flex.items-center.gap-1.text-\\[11px\\]");
-    expect(wrapper!.getAttribute("class")).toContain("text-daintree-text/40");
-    expect(wrapper!.getAttribute("class")).not.toContain("text-status-warning");
+    expectMutedSeverity(wrapper!.getAttribute("class"));
   });
 
   it("resets candidate counter when severity oscillates back during the run", () => {
@@ -707,8 +707,7 @@ describe("TerminalHeaderContent — resource severity hysteresis", () => {
     pollResource(rerender, 60, 5);
 
     const wrapper = container.querySelector(".inline-flex.items-center.gap-1.text-\\[11px\\]");
-    expect(wrapper!.getAttribute("class")).toContain("text-daintree-text/40");
-    expect(wrapper!.getAttribute("class")).not.toContain("text-status-warning");
+    expectMutedSeverity(wrapper!.getAttribute("class"));
   });
 });
 

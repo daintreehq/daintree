@@ -498,7 +498,7 @@ function RelocationPreviewSection({
                           </span>
                           <span className={`ml-1 ${p.className}`}> {p.label}</span>
                         </div>
-                        <div className="text-daintree-text/40">
+                        <div className="text-text-secondary">
                           {agent.detail ?? p.detailFallback}
                         </div>
                       </div>
@@ -534,7 +534,7 @@ function RelocationPreviewSection({
           {preview.runningTerminalCount === 0 &&
             preview.linkedWorktrees.length === 0 &&
             preview.affectedPanelCount === 0 && (
-              <li className="text-daintree-text/40">
+              <li className="text-text-secondary">
                 No running terminals, worktrees, or panels affected
               </li>
             )}

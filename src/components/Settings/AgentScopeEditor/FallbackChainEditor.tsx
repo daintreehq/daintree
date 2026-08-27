@@ -38,7 +38,7 @@ export function FallbackChainEditor({
     <div className="space-y-1.5">
       <div>
         <label className="text-sm font-medium text-daintree-text">Fallback presets</label>
-        <p className="text-xs text-daintree-text/40 select-text">
+        <p className="text-xs text-text-secondary select-text">
           Tried in order if this preset's provider is unreachable. No retry for rate limits or
           prompt errors.
         </p>
@@ -54,7 +54,7 @@ export function FallbackChainEditor({
                 key={id}
                 className="flex items-center gap-2 rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg/30 px-2 py-1.5"
               >
-                <span className="text-[10px] text-daintree-text/40 font-mono shrink-0">
+                <span className="text-[10px] text-text-secondary font-mono shrink-0">
                   {idx + 1}.
                 </span>
                 <span
@@ -99,12 +99,12 @@ export function FallbackChainEditor({
         </select>
       )}
       {chain.length >= FALLBACK_CHAIN_MAX && (
-        <p className="text-[11px] text-daintree-text/40">
+        <p className="text-[11px] text-text-secondary">
           Maximum of {FALLBACK_CHAIN_MAX} fallbacks reached.
         </p>
       )}
       {chain.length < FALLBACK_CHAIN_MAX && candidates.length === 0 && (
-        <p className="text-[11px] text-daintree-text/40">
+        <p className="text-[11px] text-text-secondary">
           No other presets available for this agent.
         </p>
       )}

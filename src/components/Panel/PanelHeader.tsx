@@ -944,7 +944,7 @@ function PanelHeaderComponent({
       {/* Centered Zen Mode indicator (only visible when maximized) */}
       {isMaximized && activeCount > 0 && (
         <div
-          className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center gap-3 text-daintree-text/40 select-none pointer-events-none"
+          className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 flex items-center gap-3 text-text-secondary select-none pointer-events-none"
           role="status"
           aria-live="polite"
         >

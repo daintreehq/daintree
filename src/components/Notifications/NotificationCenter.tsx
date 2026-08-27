@@ -1512,7 +1512,7 @@ function ContextSectionHeader({
             Mark read
           </button>
         )}
-        <span aria-hidden="true" className="text-daintree-text/40 tabular-nums">
+        <span aria-hidden="true" className="text-text-secondary tabular-nums">
           {count}
         </span>
       </div>

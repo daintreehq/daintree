@@ -322,7 +322,7 @@ export function ForgeAuditLogViewer({
                     {record.providerId}
                   </div>
                   {record.argsSummary && record.argsSummary !== "{}" && (
-                    <div className="mt-0.5 font-mono text-daintree-text/40 truncate">
+                    <div className="mt-0.5 font-mono text-text-secondary truncate">
                       {record.argsSummary}
                     </div>
                   )}
@@ -332,7 +332,7 @@ export function ForgeAuditLogViewer({
                     </div>
                   )}
                 </div>
-                <div className="text-right text-daintree-text/40 whitespace-nowrap">
+                <div className="text-right text-text-secondary whitespace-nowrap">
                   <div>{formatRelativeTimestamp(record.timestamp, now)}</div>
                   <div>{record.durationMs}ms</div>
                 </div>
@@ -401,7 +401,7 @@ export function ForgeAuditLogViewer({
         >
           Clear log
         </button>
-        <span className="ml-auto text-xs text-daintree-text/40">
+        <span className="ml-auto text-xs text-text-secondary">
           {isFiltering
             ? `${filteredRecords.length} of ${records.length}`
             : `${records.length} of ${maxRecords}`}

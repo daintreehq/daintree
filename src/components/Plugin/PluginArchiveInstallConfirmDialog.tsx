@@ -235,10 +235,10 @@ function ArchiveRecipes({ recipes }: { recipes: { count: number; names: string[]
   if (recipes.count === 0) return null;
   return (
     <div className="space-y-2">
-      <h4 className="text-[11px] font-medium uppercase tracking-wide text-daintree-text/40">
+      <h4 className="text-[11px] font-medium uppercase tracking-wide text-text-secondary">
         Recipes
       </h4>
-      <p className="text-xs text-daintree-text/40">
+      <p className="text-xs text-text-secondary">
         Adds {recipes.count} launch {recipes.count === 1 ? "recipe" : "recipes"}, available in every
         project. Each starts terminals that run commands or agents.
       </p>
@@ -291,11 +291,11 @@ function ArchivePermissions({ capabilities }: { capabilities: readonly string[] 
 
   return (
     <div className="space-y-2">
-      <h4 className="text-[11px] font-medium uppercase tracking-wide text-daintree-text/40">
+      <h4 className="text-[11px] font-medium uppercase tracking-wide text-text-secondary">
         Permissions
       </h4>
       {granted.length === 0 ? (
-        <p className="text-xs text-daintree-text/40">No special permissions</p>
+        <p className="text-xs text-text-secondary">No special permissions</p>
       ) : (
         <>
           {worst === "danger" && (

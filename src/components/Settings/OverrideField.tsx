@@ -45,7 +45,7 @@ export function OverrideField({
       <div className="flex items-center gap-2 mb-1 min-h-[1.25rem]">
         <label htmlFor={id} className="block text-xs font-medium text-daintree-text/60">
           {label}
-          {hint && <span className="ml-1 text-daintree-text/40">{hint}</span>}
+          {hint && <span className="ml-1 text-text-secondary">{hint}</span>}
         </label>
         {isOverriding && (
           <span
@@ -101,7 +101,7 @@ export function OverrideField({
         id={descriptionId}
         className={cn(
           "mt-1 text-xs",
-          isOverriding ? "text-text-muted" : "text-daintree-text/40 italic"
+          isOverriding ? "text-text-muted" : "text-text-secondary italic"
         )}
       >
         {isOverriding ? overrideDescription : inheritDescription}

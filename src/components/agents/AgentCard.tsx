@@ -173,7 +173,7 @@ export function AgentIdentityBlock({
       <div className="flex-1 min-w-0">
         <div className="text-sm font-medium text-daintree-text">{name}</div>
         {description && (
-          <div className="text-[11px] text-daintree-text/40 truncate">{description}</div>
+          <div className="text-[11px] text-text-secondary truncate">{description}</div>
         )}
       </div>
     </>
@@ -222,7 +222,7 @@ export function AgentInstallSection({
   if (isCliLoading) {
     return (
       <div className="pt-4 border-t border-daintree-border">
-        <div className="text-xs text-daintree-text/40">Checking CLI availability...</div>
+        <div className="text-xs text-text-secondary">Checking CLI availability...</div>
       </div>
     );
   }
@@ -328,7 +328,7 @@ export function AgentInstallSection({
             )}
 
           <div className="px-3 py-2 rounded-[var(--radius-md)] bg-daintree-bg/50 border border-daintree-border/50">
-            <p className="text-xs text-daintree-text/40 select-text">
+            <p className="text-xs text-text-secondary select-text">
               Warning: Review commands before running them in your terminal
             </p>
           </div>

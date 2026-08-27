@@ -311,7 +311,7 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
                   Empty trash
                 </Button>
               ) : (
-                <span className="text-[11px] text-daintree-text/40">Auto-clears</span>
+                <span className="text-[11px] text-text-secondary">Auto-clears</span>
               )}
             </div>
 

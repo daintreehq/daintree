@@ -77,9 +77,7 @@ export function PluginConfirmPromptDialog() {
         onConfirm={() => resolveOnce(confirm.promptId, true)}
         variant={variant}
       >
-        <p className="text-xs text-daintree-text/40">
-          Requested by the '{confirm.pluginId}' plugin
-        </p>
+        <p className="text-xs text-text-secondary">Requested by the '{confirm.pluginId}' plugin</p>
       </ConfirmDialog>
     </ErrorBoundary>
   );

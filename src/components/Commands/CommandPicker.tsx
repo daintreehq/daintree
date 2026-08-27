@@ -172,7 +172,7 @@ export function CommandPicker({
             {category && (
               <div
                 className={cn(
-                  "px-3 py-1.5 text-[11px] font-medium uppercase tracking-wider text-daintree-text/40",
+                  "px-3 py-1.5 text-[11px] font-medium uppercase tracking-wider text-text-secondary",
                   index > 0 && "mt-2"
                 )}
               >
@@ -224,7 +224,7 @@ export function CommandPicker({
       itemIdPrefix="command"
       emptyMessage="No commands available"
       emptyContent={
-        <p className="mt-2 text-xs text-daintree-text/40">
+        <p className="mt-2 text-xs text-text-secondary">
           Commands are context-dependent and may vary by project.
         </p>
       }

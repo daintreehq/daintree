@@ -166,7 +166,7 @@ export function PluginQuickPickDialog() {
               <div className="text-xs text-daintree-text/50 truncate">{item.description}</div>
             )}
             {item.detail && (
-              <div className="text-xs text-daintree-text/40 truncate">{item.detail}</div>
+              <div className="text-xs text-text-secondary truncate">{item.detail}</div>
             )}
           </div>
         </button>

@@ -285,7 +285,7 @@ function GrantRow({
         )}
       </div>
       <div
-        className={cn("text-right text-daintree-text/40 whitespace-nowrap", !compact && "self-end")}
+        className={cn("text-right text-text-secondary whitespace-nowrap", !compact && "self-end")}
       >
         <div>{formatRelativeTimestamp(record.timestamp, now)}</div>
       </div>
@@ -543,10 +543,10 @@ export function McpAuditLogViewer({
                   <span className="font-medium text-daintree-text/90">
                     {OUTCOME_LABEL[group.turnRecord.outcome] ?? group.turnRecord.outcome}
                   </span>
-                  <span className="text-daintree-text/40">
+                  <span className="text-text-secondary">
                     {formatRelativeTimestamp(group.turnRecord.timestamp, now)}
                   </span>
-                  <span className="text-daintree-text/40">
+                  <span className="text-text-secondary">
                     {group.callCount} call{group.callCount !== 1 ? "s" : ""}
                   </span>
                   {group.unauthorizedCount > 0 && (
@@ -559,7 +559,7 @@ export function McpAuditLogViewer({
                       {group.errorCount} error{group.errorCount !== 1 ? "s" : ""}
                     </span>
                   )}
-                  <span className="text-daintree-text/40">{group.totalDurationMs}ms</span>
+                  <span className="text-text-secondary">{group.totalDurationMs}ms</span>
                 </div>
                 <ul className="ml-3 space-y-1 border-l-2 border-daintree-border/50 pl-3">
                   {group.records.map((record) =>
@@ -595,7 +595,7 @@ export function McpAuditLogViewer({
                             </div>
                           )}
                         </div>
-                        <div className="text-right text-daintree-text/40 whitespace-nowrap">
+                        <div className="text-right text-text-secondary whitespace-nowrap">
                           <div>{record.durationMs}ms</div>
                         </div>
                       </li>
@@ -617,7 +617,7 @@ export function McpAuditLogViewer({
               <li className="p-2 text-xs">
                 <div className="flex items-center gap-2 mb-1">
                   <span className="font-medium text-daintree-text/60">Unassociated</span>
-                  <span className="text-daintree-text/40">
+                  <span className="text-text-secondary">
                     {turnGroups.unassociated.length} record
                     {turnGroups.unassociated.length !== 1 ? "s" : ""}
                   </span>
@@ -646,7 +646,7 @@ export function McpAuditLogViewer({
                             {record.argsSummary || "{}"}
                           </div>
                         </div>
-                        <div className="text-right text-daintree-text/40 whitespace-nowrap">
+                        <div className="text-right text-text-secondary whitespace-nowrap">
                           <div>{record.durationMs}ms</div>
                         </div>
                       </li>
@@ -661,7 +661,7 @@ export function McpAuditLogViewer({
               <li className="p-2 text-xs">
                 <div className="flex items-center gap-2 mb-1">
                   <span className="font-medium text-daintree-text/60">Lifecycle events</span>
-                  <span className="text-daintree-text/40">
+                  <span className="text-text-secondary">
                     {turnGroups.lifecycle.length} event
                     {turnGroups.lifecycle.length !== 1 ? "s" : ""}
                   </span>
@@ -719,7 +719,7 @@ export function McpAuditLogViewer({
                       </div>
                     )}
                   </div>
-                  <div className="text-right text-daintree-text/40 whitespace-nowrap">
+                  <div className="text-right text-text-secondary whitespace-nowrap">
                     <div>{formatRelativeTimestamp(record.timestamp, now)}</div>
                     <div>{record.durationMs}ms</div>
                   </div>
@@ -764,7 +764,7 @@ export function McpAuditLogViewer({
                       </div>
                     )}
                   </div>
-                  <div className="text-right text-daintree-text/40 whitespace-nowrap">
+                  <div className="text-right text-text-secondary whitespace-nowrap">
                     <div>{formatRelativeTimestamp(record.timestamp, now)}</div>
                   </div>
                 </li>
@@ -837,7 +837,7 @@ export function McpAuditLogViewer({
             Clear log
           </button>
         )}
-        <span className="ml-auto text-xs text-daintree-text/40">
+        <span className="ml-auto text-xs text-text-secondary">
           {resultFilter !== "all" ||
           toolFilter.trim().length > 0 ||
           timeRange !== "all" ||

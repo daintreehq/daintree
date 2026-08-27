@@ -1216,7 +1216,7 @@ export function WorktreeOverviewModal({
                       <h3 className="text-xs font-medium text-daintree-text/60 uppercase tracking-wider">
                         {section.displayName}
                       </h3>
-                      <span className="text-xs text-daintree-text/40">
+                      <span className="text-xs text-text-secondary">
                         ({section.worktrees.length})
                       </span>
                     </div>,

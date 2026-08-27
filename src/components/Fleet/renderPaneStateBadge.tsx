@@ -24,7 +24,7 @@ export function renderPaneStateBadge(
   const reason = state === "waiting" ? actionableWaitingReason(waitingReason) : null;
   const tone =
     state === "exited"
-      ? "text-daintree-text/40"
+      ? "text-text-secondary"
       : state === "waiting"
         ? "text-state-waiting"
         : "text-daintree-text/70";

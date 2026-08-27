@@ -183,7 +183,7 @@ export function FleetCountChip({
             {scope.worktreeCount > 1 ? ` · ${scope.worktreeCount} worktrees` : ""}
           </span>
           {scope.exitedCount > 0 ? (
-            <span className="text-daintree-text/40 tabular-nums" data-testid="fleet-exited-count">
+            <span className="text-text-secondary tabular-nums" data-testid="fleet-exited-count">
               · {scope.exitedCount} exited
             </span>
           ) : null}

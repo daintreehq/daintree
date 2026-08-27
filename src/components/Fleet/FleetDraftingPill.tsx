@@ -242,7 +242,7 @@ function FleetResolutionRow({ preview }: FleetResolutionRowProps): ReactElement 
       {!excluded && (
         <div className="mt-1 border-t border-border-subtle pt-0.5">
           <div className="flex items-start gap-1.5">
-            <span className="text-[9px] uppercase tracking-wide text-daintree-text/40 mt-px shrink-0">
+            <span className="text-[9px] uppercase tracking-wide text-text-secondary mt-px shrink-0">
               {isOverridden ? "edited" : "resolved"}
             </span>
             <textarea

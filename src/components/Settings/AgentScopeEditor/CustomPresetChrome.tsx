@@ -110,7 +110,7 @@ export function CustomPresetChrome({
           placeholder={`Uses preset name (${selectedPreset.name})`}
           data-testid="preset-display-title-input"
         />
-        <p className="text-xs text-daintree-text/40 select-text">
+        <p className="text-xs text-text-secondary select-text">
           Shown on the panel tab and launch button. Leave empty to use the preset name.
         </p>
       </div>

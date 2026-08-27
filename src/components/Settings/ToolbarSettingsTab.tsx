@@ -266,7 +266,7 @@ function ToolbarSideColumn({
         <span className="text-xs font-medium uppercase tracking-wide text-daintree-text/60">
           {label}
         </span>
-        <span className="text-xs text-daintree-text/40 tabular-nums">
+        <span className="text-xs text-text-secondary tabular-nums">
           {visibleCount}/{buttonIds.length}
         </span>
       </div>
@@ -761,7 +761,7 @@ export function ToolbarSettingsTab() {
               <option value="browser">Browser</option>
               <option value="dev-server">Dev Preview</option>
             </select>
-            <p className="text-xs text-daintree-text/40 select-text">
+            <p className="text-xs text-text-secondary select-text">
               Default option to highlight when opening the launcher palette
             </p>
           </div>

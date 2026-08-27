@@ -394,7 +394,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
               </button>
             ))}
           </div>
-          <p className="text-xs text-daintree-text/40 mt-2 select-text">
+          <p className="text-xs text-text-secondary mt-2 select-text">
             Changes to telemetry level take effect on next app restart.
           </p>
 
@@ -508,7 +508,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                 </button>
               ))}
             </div>
-            <p className="text-xs text-daintree-text/40 mt-2 select-text">
+            <p className="text-xs text-text-secondary mt-2 select-text">
               Log pruning happens at startup. Changing this setting takes effect on next launch.
             </p>
           </SettingsSection>
@@ -553,7 +553,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                 </button>
               ))}
             </div>
-            <p className="text-xs text-daintree-text/40 mt-2 select-text">
+            <p className="text-xs text-text-secondary mt-2 select-text">
               Applies to every project. Shortening the window prunes older records immediately.
             </p>
             <div className="mt-4">

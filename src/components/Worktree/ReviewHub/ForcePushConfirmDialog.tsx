@@ -223,13 +223,13 @@ export function ForcePushConfirmDialog({
                   >
                     <span
                       className={cn(
-                        "font-mono text-[10px] text-daintree-text/40 shrink-0 tabular-nums"
+                        "font-mono text-[10px] text-text-secondary shrink-0 tabular-nums"
                       )}
                     >
                       {commit.hash.slice(0, SHORT_HASH_LEN)}
                     </span>
                     <span className="text-daintree-text/80 truncate min-w-0">{commit.message}</span>
-                    <span className="text-[10px] text-daintree-text/40 shrink-0 ml-auto">
+                    <span className="text-[10px] text-text-secondary shrink-0 ml-auto">
                       {commit.author}
                     </span>
                   </li>
@@ -240,7 +240,7 @@ export function ForcePushConfirmDialog({
                   // is that the divergence runs to hundreds of commits, not
                   // what the hundred-and-first one says.
                   <li
-                    className="text-[10px] text-daintree-text/40 italic pt-1"
+                    className="text-[10px] text-text-secondary italic pt-1"
                     data-testid="force-push-commit-cap"
                   >
                     Listing the {commits.length} most recent of {totalRemote}

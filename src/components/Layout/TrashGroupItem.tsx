@@ -143,7 +143,7 @@ export function TrashGroupItem({
               "text-[11px] tabular-nums transition-opacity",
               seconds <= COUNTDOWN_CRITICAL_SECONDS
                 ? "opacity-100 text-status-warning/70"
-                : "text-daintree-text/40 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
+                : "text-text-secondary opacity-0 group-hover:opacity-100 group-focus-within:opacity-100"
             )}
             aria-hidden="true"
           >
@@ -230,7 +230,7 @@ export function TrashGroupItem({
                     className={`truncate flex-1 ${isActiveTab ? "text-daintree-text/70 font-medium" : "text-daintree-text/50"}`}
                   >
                     {terminalName}
-                    {isActiveTab && <span className="ml-1 text-daintree-text/40">(active)</span>}
+                    {isActiveTab && <span className="ml-1 text-text-secondary">(active)</span>}
                   </span>
                   <div className="flex gap-0.5 opacity-0 group-hover/panel:opacity-100 transition-opacity">
                     <Tooltip>

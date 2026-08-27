@@ -234,7 +234,7 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
             ) : (
               <span
                 data-testid="why-slow-updated-note"
-                className="text-[10px] text-daintree-text/40 tabular-nums"
+                className="text-[10px] text-text-secondary tabular-nums"
               >
                 Updated {formatSnapshotAge(snapshotAgeMs)}
               </span>

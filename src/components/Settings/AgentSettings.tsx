@@ -410,7 +410,7 @@ export function AgentSettings({
                   </option>
                 ))}
               </select>
-              <p className="text-xs text-daintree-text/40 select-text">
+              <p className="text-xs text-text-secondary select-text">
                 Agent used for the help dock button
                 {helpShortcut && ` (${helpShortcut})`} and automated workflows ("What's Next?",
                 onboarding, project explanations). Distinct from the Portal "Default New Tab Agent"

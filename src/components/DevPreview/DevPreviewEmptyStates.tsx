@@ -167,7 +167,7 @@ export function DevPreviewEmptyStates({
                   We found a script in your package.json that looks like a dev server.
                 </p>
                 <div className="mb-3 px-3 py-1.5 rounded bg-overlay-subtle border border-overlay/30 inline-flex items-center gap-2">
-                  <span className="text-[11px] text-daintree-text/40">Auto-detected</span>
+                  <span className="text-[11px] text-text-secondary">Auto-detected</span>
                   <code className="text-xs text-daintree-text/70 font-mono">
                     {primaryCandidate.command}
                   </code>
@@ -230,7 +230,7 @@ export function DevPreviewEmptyStates({
                               <code className="text-daintree-text/70 font-mono text-[11px] flex-1 truncate">
                                 {c.command}
                               </code>
-                              <span className="text-daintree-text/40 shrink-0">{c.name}</span>
+                              <span className="text-text-secondary shrink-0">{c.name}</span>
                             </button>
                           ))}
                         </div>

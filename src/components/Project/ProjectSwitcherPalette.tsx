@@ -477,7 +477,7 @@ function RowStatusLine({ status }: { status: ProjectRowStatus }) {
           {index > 0 && (
             <>
               <span className="sr-only">, </span>
-              <span className="shrink-0 text-daintree-text/40" aria-hidden="true">
+              <span className="shrink-0 text-text-secondary" aria-hidden="true">
                 ·
               </span>
             </>
@@ -1706,7 +1706,7 @@ function ScratchSection({
       {!collapsed && (
         <div id="scratch-section-list">
           {scratches.length === 0 ? (
-            <div className="px-2 py-1 text-xs text-daintree-text/40">
+            <div className="px-2 py-1 text-xs text-text-secondary">
               Create a scratch workspace for a quick one-off task
             </div>
           ) : (
@@ -1798,7 +1798,7 @@ function ScratchSection({
                           <RowStatusLine status={status} />
                           {countdown && (
                             <div
-                              className="text-[11px] leading-none text-daintree-text/40 mt-0.5 truncate"
+                              className="text-[11px] leading-none text-text-secondary mt-0.5 truncate"
                               data-testid="scratch-cleanup-countdown"
                             >
                               {countdown}
@@ -2699,7 +2699,7 @@ function DeleteScratchConfirmDialog({
                  */}
                 Deleting scratch…
                 {progress.isStillWorking && (
-                  <span className="block text-daintree-text/40">Still working…</span>
+                  <span className="block text-text-secondary">Still working…</span>
                 )}
               </>
             )}

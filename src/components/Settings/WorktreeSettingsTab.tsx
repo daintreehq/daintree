@@ -337,7 +337,7 @@ export function WorktreeSettingsTab() {
             </button>
           </div>
 
-          <p className="text-xs text-daintree-text/40">
+          <p className="text-xs text-text-secondary">
             The path pattern determines where new worktrees are created when you use the New
             Worktree dialog. Relative paths (starting with . or ..) are resolved from the repository
             root.

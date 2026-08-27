@@ -635,7 +635,7 @@ export function ConflictPanel({
                       <TruncatedTooltip content={file.path}>
                         <div className="flex-1 min-w-0 flex items-baseline">
                           {dir && (
-                            <span className="shrink truncate text-daintree-text/40 font-mono text-[11px]">
+                            <span className="shrink truncate text-text-secondary font-mono text-[11px]">
                               {dir}/
                             </span>
                           )}
