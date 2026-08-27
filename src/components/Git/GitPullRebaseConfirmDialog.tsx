@@ -48,7 +48,7 @@ function GitPullRebaseConfirmDialogInner() {
     safeFireAndForget(
       // Shared with the MCP confirm surface so agent and human approvers see
       // the identical fresh branch/commit content (#11538).
-      buildGitRemoteOperationPreview(cwd)
+      buildGitRemoteOperationPreview(cwd, "pull-rebase")
         .then((preview) => {
           if (requestIdRef.current !== requestId) return;
           setBranch(preview.branch);

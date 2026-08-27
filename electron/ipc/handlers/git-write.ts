@@ -5,11 +5,13 @@ import { realpath } from "node:fs/promises";
 import path from "node:path";
 import { promisify } from "node:util";
 import { CHANNELS } from "../channels.js";
+import { defineIpcNamespace, op } from "../define.js";
 import { checkRateLimit, typedHandle, typedHandleWithContext, sendToRenderer } from "../utils.js";
 import type { HandlerDependencies, IpcContext } from "../types.js";
 import type { PushProgressEvent } from "../../../shared/types/ipc/gitPush.js";
 import type {
   ConflictedFileEntry,
+  GitPushCommitPreview,
   GitRemoteCommitPreview,
   GitStatus,
   RebaseSequence,
@@ -82,15 +84,20 @@ interface StagingFileEntry {
 }
 
 /**
- * `git rev-list --count <range>`. Falls back to 0 on unparseable output, which
+ * `git rev-list --count <rev spec>`. Falls back to 0 on unparseable output, which
  * renders as "no hidden tail" rather than a wrong count — the rows themselves
  * are still shown, so the preview degrades quietly instead of overstating.
+ *
+ * Takes the rev spec as an argument LIST rather than one range string: a push
+ * that creates a remote branch has no `a..b` range to measure and is expressed
+ * as `<branch> --not --remotes=<remote>` instead. Both forms have to reach
+ * `rev-list` unsplit, or a two-word spec would arrive as one bogus revision.
  */
 async function countCommitsInRange(
   git: Pick<Awaited<ReturnType<typeof createHardenedGit>>, "raw">,
-  range: string
+  revArgs: readonly string[]
 ): Promise<number> {
-  const out = await git.raw(["rev-list", "--count", range]);
+  const out = await git.raw(["rev-list", "--count", ...revArgs]);
   const parsed = Number.parseInt(out.trim(), 10);
   return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
 }
@@ -128,6 +135,124 @@ async function requireRemoteTarget(
     { cwd, op, rawMessage: message, branchName }
   );
 }
+
+/**
+ * Does `ref` name a commit that exists in this repository right now?
+ *
+ * `rev-parse --verify --quiet` exits non-zero without writing to stderr when it
+ * does not, which simple-git surfaces as a rejection — so absence arrives here
+ * as a throw, not as an empty string. `^{commit}` peels an annotated tag rather
+ * than reporting the tag object as a usable range endpoint.
+ */
+async function refExists(
+  git: Pick<Awaited<ReturnType<typeof createHardenedGit>>, "raw">,
+  ref: string
+): Promise<boolean> {
+  try {
+    const out = await git.raw(["rev-parse", "--verify", "--quiet", `${ref}^{commit}`]);
+    return out.trim().length > 0;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The commits a push would actually publish (#11979).
+ *
+ * The push confirm used to preview `git log HEAD` — the branch's recent history,
+ * which is only the same set when nothing on the branch has ever been pushed. A
+ * branch level with its remote previewed commits that were already published, and
+ * a branch 2 ahead of 14 previewed 12 that mostly were. For a D2 safeguard whose
+ * whole job is "a preview of the ACTUAL content", that is the wrong set.
+ *
+ * Ranged the same way the force-push discard preview is, and reversed: from the
+ * destination's remote-tracking ref up to the named local branch. The branch is
+ * named explicitly rather than read as `HEAD`, because the two diverge the moment
+ * anything checks out another branch between opening the dialog and confirming it.
+ *
+ * Fails CLOSED on an unresolvable destination, via the same `requireRemoteTarget`
+ * every remote-mutating path uses: returning an empty list would read as "nothing
+ * to publish", which is the reassuring answer and the wrong one (#11746).
+ */
+const gitPushPreviewNamespace = defineIpcNamespace({
+  name: "gitPushPreview",
+  ops: {
+    listPushCommits: op(
+      CHANNELS.GIT_LIST_PUSH_COMMITS,
+      async (payload: {
+        cwd: string;
+        branchName: string;
+        limit?: number;
+      }): Promise<GitPushCommitPreview> => {
+        checkRateLimit(CHANNELS.GIT_LIST_PUSH_COMMITS, 10, 10_000);
+        validateCwd(payload?.cwd);
+        if (typeof payload.branchName !== "string" || !payload.branchName.trim()) {
+          throw new Error("Invalid branch name");
+        }
+        const branchName = payload.branchName.trim();
+        const limit = Math.max(1, Math.min(100, payload.limit ?? 20));
+
+        const git = await createHardenedGit(payload.cwd);
+        try {
+          const destination = await requireRemoteTarget(
+            git,
+            branchName,
+            payload.cwd,
+            "list-push-commits"
+          );
+
+          // Every ref is written out in full so a branch named like a flag cannot
+          // reach argv as one: `refs/heads/` and `refs/remotes/` prefixes make a
+          // leading `-` impossible. The remote name is already argv-guarded by
+          // `isSafeRemoteName` inside the resolver.
+          const localRef = `refs/heads/${branchName}`;
+          const hasRemoteRef = await refExists(git, destination.remoteTrackingRef);
+
+          // A branch that has never been pushed has no remote-tracking ref to
+          // subtract, and `<missing>..<branch>` is a fatal argument rather than
+          // "everything". What such a push publishes is whatever is not already
+          // reachable from some other ref on that remote, which is what git
+          // itself would transfer — so ask for exactly that.
+          const revArgs = hasRemoteRef
+            ? [`${destination.remoteTrackingRef}..${localRef}`]
+            : [localRef, "--not", `--remotes=${destination.remote}`];
+
+          // No `--no-merges`: the "N more" tail is only honest while the listed
+          // rows and `total` describe the same set the push would write.
+          const log = await git.log([`--max-count=${limit}`, ...revArgs]);
+          const total = await countCommitsInRange(git, revArgs);
+
+          return {
+            destination: { remote: destination.remote, branch: destination.branch },
+            createsRemoteBranch: !hasRemoteRef,
+            total,
+            commits: log.all.map((commit) => ({
+              hash: commit.hash,
+              date: commit.date,
+              message: commit.message,
+              author: commit.author_name,
+            })),
+          };
+        } catch (error) {
+          if (error instanceof GitOperationError) throw error;
+          const errorMessage = formatErrorMessage(error, "git log failed");
+          const gitReason = classifyGitFailure(error, errorMessage);
+          throw new GitOperationError(
+            gitReason,
+            encodeGitOperationErrorMessage(gitReason, errorMessage, { branchName }),
+            {
+              cwd: payload.cwd,
+              op: "list-push-commits",
+              cause: error instanceof Error ? error : undefined,
+              rawMessage: errorMessage,
+              branchName,
+            }
+          );
+        }
+      }
+    ),
+  },
+});
 
 export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void {
   const handlers: Array<() => void> = [];
@@ -546,7 +671,7 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       // against a different repository's ref: `behindCount` comes from upstream
       // status, which in a triangular workflow tracks the fetch remote while the
       // force-push targets the push remote.
-      const total = await countCommitsInRange(git, range);
+      const total = await countCommitsInRange(git, [range]);
 
       return {
         destination: { remote: destination.remote, branch: destination.branch },
@@ -576,6 +701,8 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
     }
   };
   handlers.push(typedHandle(CHANNELS.GIT_LIST_REMOTE_COMMITS, handleListRemoteCommits));
+
+  handlers.push(gitPushPreviewNamespace.register());
 
   const handleGetUsername = async (cwd: string): Promise<string | null> => {
     checkRateLimit(CHANNELS.GIT_GET_USERNAME, 20, 10_000);

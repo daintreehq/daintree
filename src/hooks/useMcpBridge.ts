@@ -284,11 +284,11 @@ export async function buildMcpConfirmPreview(target: McpConfirmPreviewTarget): P
   }
   const operation = target.kind === "gitPush" ? "push" : "pull-rebase";
   try {
-    const preview = await buildGitRemoteOperationPreview(target.cwd);
+    const preview = await buildGitRemoteOperationPreview(target.cwd, operation);
     return formatGitRemoteOperationPreviewLines(
       preview,
       target.kind === "gitPush"
-        ? "No local commits found on this branch."
+        ? "Nothing to publish — the destination already has everything on this branch."
         : "No local commits to replay.",
       operation
     );

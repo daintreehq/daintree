@@ -934,6 +934,11 @@ export interface ElectronAPI extends GeneratedElectronAPI {
       branchName: string,
       limit?: number
     ): Promise<import("../git.js").GitRemoteCommitPreview>;
+    listPushCommits(
+      cwd: string,
+      branchName: string,
+      limit?: number
+    ): Promise<import("../git.js").GitPushCommitPreview>;
     onPushProgress(callback: (event: PushProgressEvent) => void): () => void;
     getStagingStatus(cwd: string): Promise<StagingStatus>;
     abortRepositoryOperation(cwd: string): Promise<void>;

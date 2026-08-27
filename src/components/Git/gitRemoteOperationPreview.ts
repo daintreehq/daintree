@@ -27,9 +27,31 @@ export interface GitPreviewCommit {
   author: string;
 }
 
+/**
+ * Push-only facts about the range `commits` was drawn from.
+ *
+ * Kept in its own object rather than flattened onto the preview so a
+ * pull-rebase preview cannot accidentally read a count that was never measured
+ * for it: `null` means "no range was measured", which is a different statement
+ * from "the range is empty".
+ */
+export interface GitPushRangeFacts {
+  /** Commits in the whole range, which may exceed the rows in `commits`. */
+  total: number;
+  /** The push would CREATE the remote branch rather than fast-forward it. */
+  createsRemoteBranch: boolean;
+}
+
 export interface GitRemoteOperationPreview {
   /** `null` for a detached HEAD — `getStagingStatus` reports no current branch. */
   branch: string | null;
+  /**
+   * The commits the operation would act on.
+   *
+   * For `"push"` this is the actual publish range (`<destination>..<branch>`),
+   * not the branch's recent history — see {@link buildGitRemoteOperationPreview}.
+   * For `"pull-rebase"` it stays the branch's recent local commits.
+   */
   commits: GitPreviewCommit[];
   /**
    * Where the operation would actually write, as git resolved it, or `null`
@@ -40,10 +62,15 @@ export interface GitRemoteOperationPreview {
   destination: GitPushDestination | null;
   /** Where a pull-and-rebase would integrate FROM — the upstream, not the push target. */
   pullSource: GitPushDestination | null;
+  /**
+   * Set only for `"push"`, and only once the destination resolved and the range
+   * was measured. `null` everywhere else.
+   */
+  pushRange: GitPushRangeFacts | null;
 }
 
 /**
- * Fetch the branch and recent local commits for `cwd`, fresh at call time.
+ * Fetch what `operation` would actually act on in `cwd`, fresh at call time.
  *
  * Deliberately un-cached: the preview must describe the repository state at the
  * moment the human is asked to approve, not a snapshot taken earlier (#8725).
@@ -51,28 +78,73 @@ export interface GitRemoteOperationPreview {
  * dialogs show a retryable error and keep confirm disabled; the MCP surface
  * shows a "couldn't verify" note).
  *
- * Caveat inherited from the IPC layer: `listCommits` swallows git failures in
- * main and resolves `{items: []}`, so a broken commit read is indistinguishable
- * here from a branch with no commits. Pre-existing behaviour — both dialogs read
- * the same IPC before this module existed — and not something this layer can
- * fix without changing that handler's contract for every caller.
+ * `operation` decides which commits are fetched, and the difference is the whole
+ * point of #11979:
+ *
+ * - **push** reads the real publish range through `git.listPushCommits`, which
+ *   ranges from the resolved destination's remote-tracking ref up to the named
+ *   branch. It also fails CLOSED: any git failure rejects, so "the read broke"
+ *   can never arrive looking like "there is nothing to publish".
+ * - **pull-rebase** keeps reading recent local history through `git.listCommits`.
+ *   That read swallows git failures into an empty list, so it cannot distinguish
+ *   a broken repository from an empty branch — a known weakness of that IPC's
+ *   contract, unchanged here because every other caller depends on it.
+ *
+ * The branch is read first and then named explicitly in the range read, rather
+ * than letting main resolve `HEAD` a second time: the two diverge the moment
+ * anything checks out another branch between the two calls, and a range measured
+ * against the wrong local branch can report "nothing to publish" for a push that
+ * publishes plenty.
  */
 export async function buildGitRemoteOperationPreview(
-  cwd: string
+  cwd: string,
+  operation: GitRemoteOperationKind
 ): Promise<GitRemoteOperationPreview> {
-  const [status, commitList] = await Promise.all([
-    window.electron.git.getStagingStatus(cwd),
-    window.electron.git.listCommits({ cwd, limit: PREVIEW_COMMIT_LIMIT }),
-  ]);
-  return {
+  const status = await window.electron.git.getStagingStatus(cwd);
+  const base = {
     branch: status.currentBranch,
     destination: status.pushDestination,
     pullSource: status.pullSource,
+  };
+
+  if (operation === "push") {
+    // No branch or no nameable destination means there is no range to measure.
+    // Both states already block confirm on their own terms, and the dialog says
+    // which one it is rather than showing an empty list that reads as "safe".
+    if (!status.currentBranch || !status.pushDestination) {
+      return { ...base, commits: [], pushRange: null };
+    }
+    const preview = await window.electron.git.listPushCommits(
+      cwd,
+      status.currentBranch,
+      PREVIEW_COMMIT_LIMIT
+    );
+    return {
+      ...base,
+      // Main resolves the destination independently for the range read. Prefer
+      // its answer: it is the one the rows were actually measured against.
+      destination: preview.destination,
+      commits: preview.commits.map((c) => ({
+        hash: c.hash,
+        message: c.message,
+        author: c.author,
+      })),
+      pushRange: {
+        total: preview.total,
+        createsRemoteBranch: preview.createsRemoteBranch,
+      },
+    };
+  }
+
+  const commitList = await window.electron.git.listCommits({ cwd, limit: PREVIEW_COMMIT_LIMIT });
+  return {
+    ...base,
     commits: commitList.items.map((c) => ({
       hash: c.hash,
       message: c.message,
       author: c.author.name,
     })),
+    pushRange: null,
   };
 }
 
@@ -103,19 +175,28 @@ export function formatGitRemoteOperationPreviewLines(
   const isPullRebase = operation === "pull-rebase";
   const remoteRef = isPullRebase ? preview.pullSource : preview.destination;
   const destinationLine = remoteRef
-    ? `${isPullRebase ? "Rebases onto" : "Destination"}: ${formatGitPushDestination(remoteRef)}`
+    ? `${isPullRebase ? "Rebases onto" : "Destination"}: ${formatGitPushDestination(remoteRef)}${
+        preview.pushRange?.createsRemoteBranch ? " (creates this branch)" : ""
+      }`
     : isPullRebase
       ? `${MCP_PREVIEW_CAUTION_PREFIX}This branch has no upstream to rebase onto — this operation will be refused.`
       : `${MCP_PREVIEW_CAUTION_PREFIX}No push destination is configured for this branch — this operation will be refused.`;
   if (preview.commits.length === 0) {
     return [destinationLine, branchLine, emptyNote];
   }
+  // The tail is only stated when a total was actually measured over the same
+  // range the rows came from. Deriving it from anything else would let the
+  // approver read a count that describes a different set of commits.
+  const hidden = preview.pushRange
+    ? Math.max(0, preview.pushRange.total - preview.commits.length)
+    : 0;
   return [
     destinationLine,
     branchLine,
     ...preview.commits.map(
       (c) => `  ${c.hash.slice(0, SHORT_HASH_LEN)} ${c.message} — ${c.author}`
     ),
+    ...(hidden > 0 ? [`  …and ${hidden} more`] : []),
   ];
 }
 

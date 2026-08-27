@@ -168,6 +168,28 @@ export interface GitRemoteCommitPreview {
   total: number;
 }
 
+/**
+ * What a push would actually publish, over the range git itself resolved.
+ *
+ * Distinct from a branch's recent history, which is what a plain `git log HEAD`
+ * returns: the two diverge for every branch that is not entirely unpushed, and a
+ * D2 confirm that shows the second while claiming the first is showing commits
+ * the push will not write (#11979).
+ */
+export interface GitPushCommitPreview {
+  destination: GitPushDestination;
+  /**
+   * The destination's remote-tracking ref does not exist locally, so this push
+   * CREATES the remote branch rather than fast-forwarding one. The range is then
+   * measured against every other ref on that remote, which is what git would
+   * actually transfer.
+   */
+  createsRemoteBranch: boolean;
+  commits: GitRemoteCommit[];
+  /** Total commits in the range, which may exceed the returned `commits`. */
+  total: number;
+}
+
 export interface StagingStatus {
   staged: StagingFileEntry[];
   unstaged: StagingFileEntry[];
