@@ -986,8 +986,8 @@ export function AgentSetupWizard({
             </Button>
           )}
           {/* Completion resolves to the forward move, matching CloneRepoDialog's
-              "Open Project" and GitInitDialog's "Continue" — the wizard's last
-              screen should start the work, not merely dismiss itself. With no
+              and GitInitDialog's "Open project" — the wizard's last screen
+              should start the work, not merely dismiss itself. With no
               agents installed there is nothing to launch, so finishing is the
               only action and it takes the primary slot. */}
           {state.step.type === "complete" &&

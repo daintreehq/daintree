@@ -1,7 +1,7 @@
 /**
  * @vitest-environment jsdom
  */
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
 import { render, screen, waitFor, act, fireEvent } from "@testing-library/react";
 import type { ReactNode, ButtonHTMLAttributes } from "react";
 import type { GitInitProgressEvent } from "@shared/types/ipc/gitInit";
@@ -21,6 +21,16 @@ vi.mock("@/clients", () => ({
     initGitGuided: initGitGuidedMock,
     onInitGitProgress: onInitGitProgressMock,
   },
+}));
+
+// `CopyableCommand` — the house component that now carries the git-identity
+// recovery lines — wraps its copy button in a Radix tooltip, which throws
+// outside a provider. In the app the provider is App.tsx's, above ModalHostLayer.
+vi.mock("@/components/ui/tooltip", () => ({
+  Tooltip: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipContent: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipProvider: ({ children }: { children: ReactNode }) => <>{children}</>,
+  TooltipTrigger: ({ children }: { children: ReactNode }) => <>{children}</>,
 }));
 
 vi.mock("@/components/ui/button", () => ({
@@ -63,6 +73,34 @@ vi.mock("@/components/ui/AppDialog", () => {
 });
 
 import { GitInitDialog } from "../GitInitDialog";
+
+// `InlineStatusBanner` — the failure treatment this dialog now shares with the
+// rest of the app — reads `prefers-reduced-motion` on render, and jsdom ships no
+// `matchMedia`. Same shim the other banner suites use.
+beforeAll(() => {
+  Object.defineProperty(window, "matchMedia", {
+    writable: true,
+    value: vi.fn().mockImplementation((query: string) => ({
+      matches: false,
+      media: query,
+      onchange: null,
+      addListener: vi.fn(),
+      removeListener: vi.fn(),
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
+      dispatchEvent: vi.fn(),
+    })),
+  });
+});
+
+/**
+ * Queried by their role in the dialog's mode, not by their label. "Try again"
+ * became "Retry" and "Continue" became "Open project" during the design pass,
+ * and a test that pins the words re-breaks on every copy change while proving
+ * nothing about behaviour.
+ */
+const startButton = () => screen.getByTestId<HTMLButtonElement>("git-init-start");
+const retryButton = () => screen.getByTestId<HTMLButtonElement>("git-init-retry");
 
 describe("GitInitDialog", () => {
   let progressHandler: ((event: GitInitProgressEvent) => void) | null = null;
@@ -115,9 +153,7 @@ describe("GitInitDialog", () => {
     await waitFor(() => expect(onInitGitProgressMock).toHaveBeenCalled());
     expect(initGitGuidedMock).not.toHaveBeenCalled();
 
-    const button = screen.getByRole("button", {
-      name: /initialize repository/i,
-    }) as HTMLButtonElement;
+    const button = startButton();
     expect(button.disabled).toBe(false);
 
     fireEvent.change(screen.getByLabelText(/initial commit message/i), {
@@ -171,7 +207,7 @@ describe("GitInitDialog", () => {
     const input = screen.getByLabelText(/initial commit message/i) as HTMLInputElement;
     expect(input.value).toBe("Initial commit");
 
-    fireEvent.click(screen.getByRole("button", { name: /initialize repository/i }));
+    fireEvent.click(startButton());
 
     await waitFor(() => {
       expect(initGitGuidedMock).toHaveBeenCalledWith(
@@ -187,9 +223,7 @@ describe("GitInitDialog", () => {
       target: { value: "   " },
     });
 
-    const button = screen.getByRole("button", {
-      name: /initialize repository/i,
-    }) as HTMLButtonElement;
+    const button = startButton();
     expect(button.disabled).toBe(true);
 
     fireEvent.click(button);
@@ -228,7 +262,7 @@ describe("GitInitDialog", () => {
     initGitGuidedMock.mockResolvedValueOnce({ outcome: "error", completedSteps: [] });
     renderDialog();
 
-    fireEvent.click(screen.getByRole("button", { name: /initialize repository/i }));
+    fireEvent.click(startButton());
 
     await waitFor(() => {
       expect(screen.getByText(/without a status update/i)).toBeTruthy();
@@ -245,7 +279,7 @@ describe("GitInitDialog", () => {
 
     await waitFor(() => {
       expect(screen.queryByText(/without a status update/i)).toBeNull();
-      expect(screen.getByRole("button", { name: /continue/i })).toBeTruthy();
+      expect(screen.getByTestId("git-init-open")).toBeTruthy();
     });
   });
 
@@ -261,7 +295,7 @@ describe("GitInitDialog", () => {
       target: { value: "feat: bootstrap" },
     });
 
-    fireEvent.click(screen.getByRole("button", { name: /initialize repository/i }));
+    fireEvent.click(startButton());
 
     await waitFor(() => {
       expect(initGitGuidedMock).toHaveBeenCalledWith(
@@ -281,7 +315,7 @@ describe("GitInitDialog", () => {
     fireEvent.click(screen.getByLabelText(/create initial commit/i));
     expect(screen.queryByLabelText(/initial commit message/i)).toBeNull();
 
-    fireEvent.click(screen.getByRole("button", { name: /initialize repository/i }));
+    fireEvent.click(startButton());
 
     await waitFor(() => {
       expect(initGitGuidedMock).toHaveBeenCalledWith(
@@ -299,7 +333,7 @@ describe("GitInitDialog", () => {
     fireEvent.change(screen.getByLabelText(/initial commit message/i), {
       target: { value: "feat: init" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /initialize repository/i }));
+    fireEvent.click(startButton());
 
     await waitFor(() => {
       expect(initGitGuidedMock).toHaveBeenCalledWith(
@@ -316,7 +350,7 @@ describe("GitInitDialog", () => {
     fireEvent.change(screen.getByLabelText(/initial commit message/i), {
       target: { value: "feat: init" },
     });
-    const button = screen.getByRole("button", { name: /initialize repository/i });
+    const button = startButton();
     fireEvent.click(button);
     fireEvent.click(button);
 
@@ -330,7 +364,7 @@ describe("GitInitDialog", () => {
     fireEvent.change(screen.getByLabelText(/initial commit message/i), {
       target: { value: "feat: init" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /initialize repository/i }));
+    fireEvent.click(startButton());
     await waitFor(() => expect(progressHandler).not.toBeNull());
 
     act(() => {
@@ -353,7 +387,7 @@ describe("GitInitDialog", () => {
     fireEvent.change(screen.getByLabelText(/initial commit message/i), {
       target: { value: "feat: init" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /initialize repository/i }));
+    fireEvent.click(startButton());
     await waitFor(() => expect(progressHandler).not.toBeNull());
 
     act(() => {
@@ -375,7 +409,7 @@ describe("GitInitDialog", () => {
     fireEvent.change(screen.getByLabelText(/initial commit message/i), {
       target: { value: "feat: init" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /initialize repository/i }));
+    fireEvent.click(startButton());
     await waitFor(() => expect(progressHandler).not.toBeNull());
 
     act(() => {
@@ -389,7 +423,7 @@ describe("GitInitDialog", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /try again/i })).toBeTruthy();
+      expect(retryButton()).toBeTruthy();
     });
 
     act(() => {
@@ -402,7 +436,7 @@ describe("GitInitDialog", () => {
     });
 
     expect(screen.queryByRole("button", { name: /continue/i })).toBeNull();
-    expect(screen.getByRole("button", { name: /try again/i })).toBeTruthy();
+    expect(retryButton()).toBeTruthy();
   });
 
   it("recovers cleanly when a retry succeeds", async () => {
@@ -412,16 +446,16 @@ describe("GitInitDialog", () => {
     fireEvent.change(screen.getByLabelText(/initial commit message/i), {
       target: { value: "feat: init" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /initialize repository/i }));
+    fireEvent.click(startButton());
 
     await waitFor(() => {
       expect(screen.getByText(/finished without a status update/i)).toBeTruthy();
     });
 
-    fireEvent.click(screen.getByRole("button", { name: /try again/i }));
+    fireEvent.click(retryButton());
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /continue/i })).toBeTruthy();
+      expect(screen.getByTestId("git-init-open")).toBeTruthy();
     });
     expect(screen.queryByText(/finished without a status update/i)).toBeNull();
     expect(screen.queryByText(/initialization failed/i)).toBeNull();
@@ -433,10 +467,10 @@ describe("GitInitDialog", () => {
     fireEvent.change(screen.getByLabelText(/initial commit message/i), {
       target: { value: "feat: init" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /initialize repository/i }));
+    fireEvent.click(startButton());
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /continue/i })).toBeTruthy();
+      expect(screen.getByTestId("git-init-open")).toBeTruthy();
     });
     expect(screen.queryByText(/initialization failed/i)).toBeNull();
   });
@@ -449,12 +483,12 @@ describe("GitInitDialog", () => {
     fireEvent.change(screen.getByLabelText(/initial commit message/i), {
       target: { value: "feat: init" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /initialize repository/i }));
+    fireEvent.click(startButton());
 
     await waitFor(() => {
       expect(screen.getByText(/finished without a status update/i)).toBeTruthy();
     });
-    expect(screen.getByRole("button", { name: /try again/i })).toBeTruthy();
+    expect(retryButton()).toBeTruthy();
   });
 
   it("clears a stale fallback error when the success event arrives late", async () => {
@@ -465,7 +499,7 @@ describe("GitInitDialog", () => {
     fireEvent.change(screen.getByLabelText(/initial commit message/i), {
       target: { value: "feat: init" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /initialize repository/i }));
+    fireEvent.click(startButton());
 
     await waitFor(() => {
       expect(screen.getByText(/finished without a status update/i)).toBeTruthy();
@@ -481,7 +515,7 @@ describe("GitInitDialog", () => {
     });
 
     await waitFor(() => {
-      expect(screen.getByRole("button", { name: /continue/i })).toBeTruthy();
+      expect(screen.getByTestId("git-init-open")).toBeTruthy();
     });
     expect(screen.queryByText(/finished without a status update/i)).toBeNull();
     expect(screen.queryByText(/initialization failed/i)).toBeNull();
@@ -516,13 +550,13 @@ describe("GitInitDialog", () => {
     fireEvent.change(screen.getByLabelText(/initial commit message/i), {
       target: { value: "feat: init" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /initialize repository/i }));
+    fireEvent.click(startButton());
 
     await waitFor(() => {
       expect(screen.getAllByText(/git config --global user\.name/i).length).toBeGreaterThan(0);
     });
     expect(screen.queryByText(/finished without a status update/i)).toBeNull();
-    expect(screen.getByRole("button", { name: /try again/i })).toBeTruthy();
+    expect(retryButton()).toBeTruthy();
   });
 
   it("surfaces the git config commands and offers Try again on identity error", async () => {
@@ -531,7 +565,7 @@ describe("GitInitDialog", () => {
     fireEvent.change(screen.getByLabelText(/initial commit message/i), {
       target: { value: "feat: init" },
     });
-    fireEvent.click(screen.getByRole("button", { name: /initialize repository/i }));
+    fireEvent.click(startButton());
     await waitFor(() => expect(progressHandler).not.toBeNull());
 
     const identityHelp =
@@ -561,7 +595,7 @@ describe("GitInitDialog", () => {
     });
 
     initGitGuidedMock.mockClear();
-    fireEvent.click(screen.getByRole("button", { name: /try again/i }));
+    fireEvent.click(retryButton());
 
     await waitFor(() => expect(initGitGuidedMock).toHaveBeenCalledTimes(1));
   });
@@ -594,9 +628,7 @@ describe("GitInitDialog", () => {
       renderDialog();
       fireEvent.change(nameInput(), { target: { value: "   " } });
 
-      const start = screen.getByRole<HTMLButtonElement>("button", {
-        name: /initialize repository/i,
-      });
+      const start = startButton();
       expect(start.disabled).toBe(true);
     });
 
@@ -616,7 +648,7 @@ describe("GitInitDialog", () => {
       renderDialog({ onSuccess });
 
       fireEvent.change(nameInput(), { target: { value: "  Renamed  " } });
-      fireEvent.click(screen.getByRole("button", { name: /initialize repository/i }));
+      fireEvent.click(startButton());
 
       await waitFor(() => expect(onSuccess).toHaveBeenCalledTimes(1), { timeout: 3000 });
       // Emoji is seeded from the folder name, and renaming must not re-derive it.
@@ -647,6 +679,187 @@ describe("GitInitDialog", () => {
 
       expect(nameInput().value).toBe("Second");
       expect(screen.getByRole("button", { name: /choose project emoji/i }).textContent).toBe("📦");
+    });
+  });
+
+  /**
+   * The design rules this dialog was rebuilt around, asserted as rules.
+   *
+   * Every one of these is a defect the surface actually shipped, and each is
+   * stated so that the labels, copy and layout can all move without the test
+   * needing an edit — only a change that reintroduces the defect fails.
+   */
+  describe("design invariants", () => {
+    /** Hold the IPC promise open so the dialog stays in its running mode. */
+    function startAndHang() {
+      initGitGuidedMock.mockImplementationOnce(() => new Promise(() => {}));
+      renderDialog();
+      fireEvent.click(startButton());
+    }
+
+    it("reports a step once — a finished step is stated by its completion, not also by its start", async () => {
+      startAndHang();
+      await waitFor(() => expect(progressHandler).not.toBeNull());
+
+      act(() => {
+        progressHandler?.({
+          step: "init",
+          status: "start",
+          message: "Initializing Git repository...",
+          timestamp: Date.now(),
+        });
+        progressHandler?.({
+          step: "init",
+          status: "success",
+          message: "Git repository initialized",
+          timestamp: Date.now(),
+        });
+        progressHandler?.({
+          step: "gitignore",
+          status: "start",
+          message: "Creating .gitignore file...",
+          timestamp: Date.now(),
+        });
+      });
+
+      await waitFor(
+        () => expect(screen.getAllByText(/Git repository initialized/).length).toBe(1),
+        {
+          timeout: 2000,
+        }
+      );
+      // The start narration for a step that already succeeded must not survive
+      // alongside its completion — that is what put four live spinners on a
+      // finished run.
+      expect(screen.queryByText(/Initializing Git repository/)).toBeNull();
+      // ...and the step that IS live is the one the progress readout names.
+      // (The label itself deliberately appears twice — once visibly, once in the
+      // sr-only live region — so count rows, not text nodes.)
+      expect(screen.getByRole("progressbar").getAttribute("aria-label")).toMatch(
+        /Creating \.gitignore file/
+      );
+    });
+
+    it("counts progress against the steps the submitted options imply, not a fixed total", async () => {
+      initGitGuidedMock.mockImplementationOnce(() => new Promise(() => {}));
+      renderDialog();
+      // Everything off: no gitignore, no commit — one step remains.
+      fireEvent.change(screen.getByLabelText(/gitignore template/i), {
+        target: { value: "none" },
+      });
+      fireEvent.click(screen.getByRole("checkbox"));
+      fireEvent.click(startButton());
+      await waitFor(() => expect(progressHandler).not.toBeNull());
+
+      act(() => {
+        progressHandler?.({
+          step: "init",
+          status: "start",
+          message: "Initializing Git repository...",
+          timestamp: Date.now(),
+        });
+      });
+
+      const bar = await waitFor(() => screen.getByRole("progressbar"), { timeout: 2000 });
+      expect(bar.getAttribute("aria-valuemax")).toBe("1");
+      expect(bar.getAttribute("aria-valuenow")).toBe("0");
+    });
+
+    it("states a failure once, however many error events describe it", async () => {
+      renderDialog();
+      fireEvent.click(startButton());
+      await waitFor(() => expect(progressHandler).not.toBeNull());
+
+      const identityHelp =
+        "Set your git identity, then create the initial commit manually:\n" +
+        '  git config --global user.name "Your Name"\n' +
+        '  git config --global user.email "you@example.com"';
+
+      // The main process reports the failing step AND the terminal outcome, both
+      // carrying the same remediation. The surface owes the user one statement.
+      act(() => {
+        progressHandler?.({
+          step: "commit",
+          status: "error",
+          message: "Git user identity not configured",
+          error: identityHelp,
+          timestamp: Date.now(),
+        });
+        progressHandler?.({
+          step: "complete",
+          status: "error",
+          message: "Repository initialized — initial commit skipped",
+          error: identityHelp,
+          timestamp: Date.now(),
+        });
+      });
+
+      await waitFor(() => expect(retryButton()).toBeTruthy());
+      expect(screen.getAllByText(/user\.name/).length).toBe(1);
+      expect(screen.getAllByText(/user\.email/).length).toBe(1);
+    });
+
+    it("keeps the recovery commands copyable rather than inert text", async () => {
+      renderDialog();
+      fireEvent.click(startButton());
+      await waitFor(() => expect(progressHandler).not.toBeNull());
+
+      act(() => {
+        progressHandler?.({
+          step: "commit",
+          status: "error",
+          message: "Git user identity not configured",
+          error:
+            "Set your git identity, then create the initial commit manually:\n" +
+            '  git config --global user.name "Your Name"\n' +
+            '  git config --global user.email "you@example.com"',
+          timestamp: Date.now(),
+        });
+      });
+
+      await waitFor(() => expect(retryButton()).toBeTruthy());
+      expect(screen.getAllByRole("button", { name: /copy command to clipboard/i }).length).toBe(2);
+    });
+
+    it("does not leave the configuration form standing while the operation runs", async () => {
+      startAndHang();
+      await waitFor(() => expect(progressHandler).not.toBeNull());
+
+      act(() => {
+        progressHandler?.({
+          step: "init",
+          status: "start",
+          message: "Initializing Git repository...",
+          timestamp: Date.now(),
+        });
+      });
+
+      await waitFor(() => expect(screen.getByRole("progressbar")).toBeTruthy(), { timeout: 2000 });
+      expect(screen.queryByLabelText(/gitignore template/i)).toBeNull();
+      expect(screen.queryByLabelText(/project name/i)).toBeNull();
+    });
+
+    it("explains every field that can dead the primary action", () => {
+      renderDialog();
+      const start = startButton();
+      const inputs = [
+        screen.getByLabelText<HTMLInputElement>(/project name/i),
+        screen.getByLabelText<HTMLInputElement>(/initial commit message/i),
+      ];
+
+      for (const input of inputs) {
+        const original = input.value;
+        fireEvent.change(input, { target: { value: "   " } });
+        expect(start.disabled).toBe(true);
+        // Emptying it must produce an explanation, and that explanation must be
+        // wired to the field it is about — not merely painted on the border.
+        const describedBy = input.getAttribute("aria-describedby");
+        expect(describedBy).toBeTruthy();
+        const message = document.getElementById(describedBy as string);
+        expect(message?.getAttribute("role")).toBe("alert");
+        expect(message?.textContent?.trim().length).toBeGreaterThan(0);
+        fireEvent.change(input, { target: { value: original } });
+      }
     });
   });
 });

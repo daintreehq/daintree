@@ -552,7 +552,20 @@ test("git init dialog review — configuration, progress, recovery and success",
     //     a Dock drop, so its keyboard affordances are design, not detail.
     await step("focus", async () => {
       await openGitSetup(folder("north-quay"));
-      await dialogButton("Initialize repository").focus();
+      // Tabbed to, not `.focus()`-ed. A programmatic focus call does not satisfy
+      // `:focus-visible` in Chromium, so the shot came back pixel-identical to the
+      // unfocused default and read as "this button has no focus ring" — a defect that
+      // was the harness's, not the dialog's. Walk the real tab order instead.
+      let focused = false;
+      for (let i = 0; i < 12 && !focused; i++) {
+        await page.keyboard.press("Tab");
+        focused = await dialogButton("Initialize repository").evaluate(
+          (el) => el === document.activeElement
+        );
+      }
+      if (!focused) {
+        throw new Error("[git-init-shots] tab order never reached the primary action");
+      }
       await snap(page, "60-focus-primary", { marker: TID.dialog, locator: DIALOG });
     });
 
