@@ -31,7 +31,7 @@
   /* Document scale: prose sizes are em-based, so one font-size tunes the
      whole hierarchy to the app's 14px reading surfaces. The measure caps
      line length for comfortable reading in maximized panels and dialogs. */
-  font-size: 0.875rem;
+  font-size: var(--text-sm);
   max-width: 48rem;
   margin-inline: auto;
 }

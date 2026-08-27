@@ -14,7 +14,7 @@
 .diff-viewer {
   font-family: var(--font-mono);
   /* Set per-surface by the diff workspace's text-size control (S/M/L). */
-  font-size: var(--diff-font-size, 12px);
+  font-size: var(--diff-font-size, var(--text-xs));
   line-height: 1.5;
 }
 
