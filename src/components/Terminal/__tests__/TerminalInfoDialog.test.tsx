@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen, waitFor, fireEvent } from "@testing-library/react";
+import { render, screen, waitFor, fireEvent, within } from "@testing-library/react";
 import { beforeAll, beforeEach, describe, expect, it, vi } from "vitest";
 import { TerminalInfoDialog } from "../TerminalInfoDialog";
 import type { TerminalInfoPayload } from "@/types/electron";
@@ -78,474 +78,331 @@ function makePayload(overrides?: Partial<TerminalInfoPayload>): TerminalInfoPayl
   };
 }
 
+function renderDialog() {
+  return render(<TerminalInfoDialog isOpen={true} onClose={vi.fn()} terminalId="test-id" />);
+}
+
+async function copyPayload(): Promise<string> {
+  const writeTextMock = vi.fn().mockResolvedValue(undefined);
+  Object.assign(navigator, { clipboard: { writeText: writeTextMock } });
+  const button = await screen.findByRole("button", { name: "Copy diagnostics" });
+  fireEvent.click(button);
+  await waitFor(() => expect(writeTextMock).toHaveBeenCalledOnce());
+  return String(writeTextMock.mock.calls[0]![0]);
+}
+
+/**
+ * Assert an element is actually presented, not merely mounted.
+ *
+ * `getByTestId` returns elements inside a `hidden` subtree, so an assertion built on it
+ * alone passes against a body that renders and is then hidden — which is exactly the
+ * shape of the defect these tests exist to catch.
+ */
+function expectPresented(el: HTMLElement): void {
+  for (let node: HTMLElement | null = el; node; node = node.parentElement) {
+    expect(node.hasAttribute("hidden")).toBe(false);
+    expect(node.style.display).not.toBe("none");
+  }
+}
+
+/** Every label rendered in the body, in DOM order. */
+function labelsInOrder(): string[] {
+  const body = screen.getByTestId("terminal-info-body");
+  return Array.from(body.querySelectorAll("dt")).map((el) => el.textContent ?? "");
+}
+
 describe("TerminalInfoDialog", () => {
   beforeEach(() => {
     vi.clearAllMocks();
     mockPanelsById = {};
   });
 
-  it("renders PTY Diagnostics section with all fields", async () => {
-    const payload = makePayload();
-    dispatchMock.mockResolvedValue({ ok: true, result: payload });
+  describe("hierarchy", () => {
+    // The rule, not the labels: whatever the overview and the deep diagnostics end up
+    // being called, liveness must not sit below the low-frequency internals. This is
+    // the whole point of #11978 and it is the thing a future round is most likely to
+    // undo by adding "just one more" row to the top.
+    it("puts the liveness overview ahead of every deep-diagnostic row", async () => {
+      dispatchMock.mockResolvedValue({ ok: true, result: makePayload() });
+      renderDialog();
 
-    render(<TerminalInfoDialog isOpen={true} onClose={vi.fn()} terminalId="test-id" />);
+      const body = await screen.findByTestId("terminal-info-body");
+      const overview = screen.getByTestId("terminal-info-overview");
+      const disclosureToggles = screen.getAllByRole("button", { expanded: false });
 
-    await waitFor(() => {
-      expect(screen.getByText("PTY Diagnostics")).toBeTruthy();
+      expect(disclosureToggles.length).toBeGreaterThan(0);
+      for (const toggle of disclosureToggles) {
+        expect(
+          overview.compareDocumentPosition(toggle) & Node.DOCUMENT_POSITION_FOLLOWING
+        ).toBeTruthy();
+      }
+      expect(body.contains(overview)).toBe(true);
     });
 
-    expect(screen.getByText("80 × 24")).toBeTruthy();
-    expect(screen.getByText("12345")).toBeTruthy();
-    expect(screen.getByText("/dev/ttys004")).toBeTruthy();
-    expect(screen.getByText("vim")).toBeTruthy();
+    it("keeps the deep diagnostics collapsed until asked for", async () => {
+      dispatchMock.mockResolvedValue({ ok: true, result: makePayload() });
+      renderDialog();
+
+      const toggles = await screen.findAllByRole("button", { expanded: false });
+      for (const toggle of toggles) {
+        const panelId = toggle.getAttribute("aria-controls");
+        expect(panelId).toBeTruthy();
+        const region = document.getElementById(panelId!);
+        // The disclosure contract: the toggle names a real region, and that region is
+        // hidden while the toggle reports collapsed.
+        expect(region).toBeTruthy();
+        expect(region!.hasAttribute("hidden")).toBe(true);
+      }
+
+      fireEvent.click(toggles[0]!);
+      const panelId = toggles[0]!.getAttribute("aria-controls")!;
+      expect(document.getElementById(panelId)!.hasAttribute("hidden")).toBe(false);
+      expect(toggles[0]!.getAttribute("aria-expanded")).toBe("true");
+    });
   });
 
-  it("shows exit code when terminal has exited", async () => {
-    const payload = makePayload({
-      hasPty: false,
-      exitCode: 42,
-      ptyPid: undefined,
-      ptyCols: undefined,
-      ptyRows: undefined,
+  describe("positional memory", () => {
+    // A properties sheet is scanned by position. If a row vanishes when its value is
+    // absent, the reader's memory of "PID is the second row" is wrong on the next
+    // terminal — so within a group every row renders whether or not it has a value.
+    it("renders the same rows for a sparse payload as for a populated one", async () => {
+      dispatchMock.mockResolvedValue({ ok: true, result: makePayload() });
+      const populated = renderDialog();
+      await screen.findByTestId("terminal-info-body");
+      const populatedLabels = labelsInOrder();
+      populated.unmount();
+
+      dispatchMock.mockResolvedValue({
+        ok: true,
+        result: makePayload({
+          ptyPid: undefined,
+          ptyCols: undefined,
+          ptyRows: undefined,
+          ptyForegroundProcess: undefined,
+          ptyTty: undefined,
+          shell: undefined,
+          spawnArgs: undefined,
+        }),
+      });
+      renderDialog();
+      await screen.findByTestId("terminal-info-body");
+
+      expect(labelsInOrder()).toEqual(populatedLabels);
     });
-    dispatchMock.mockResolvedValue({ ok: true, result: payload });
 
-    render(<TerminalInfoDialog isOpen={true} onClose={vi.fn()} terminalId="test-id" />);
+    it("distinguishes a field that does not apply from one it could not read", async () => {
+      dispatchMock.mockResolvedValue({
+        ok: true,
+        result: makePayload({ ptyPid: undefined, spawnArgs: [] }),
+      });
+      renderDialog();
+      await screen.findByTestId("terminal-info-body");
 
-    await waitFor(() => {
-      expect(screen.getByText("PTY Diagnostics")).toBeTruthy();
+      fireEvent.click(screen.getAllByRole("button", { expanded: false })[0]!);
+
+      const body = screen.getByTestId("terminal-info-body");
+      const cells = Array.from(body.querySelectorAll("dd")).map((el) => el.textContent ?? "");
+      // Unreadable telemetry and an empty-but-known list must not share one word.
+      expect(cells).toContain("Unavailable");
+      expect(cells.some((text) => text.includes("—"))).toBe(true);
     });
-
-    expect(screen.getByText("Exit Code:")).toBeTruthy();
-    expect(screen.getByText("42")).toBeTruthy();
   });
 
-  it("does not show exit code when PTY is active", async () => {
-    const payload = makePayload();
-    dispatchMock.mockResolvedValue({ ok: true, result: payload });
+  describe("an exited terminal", () => {
+    // The defect this whole run was worth doing for. A terminal preserved after a
+    // non-zero exit has no PTY record left in the host, so `terminal.info.get` throws
+    // — and the dialog used to answer with nothing but that error, on precisely the
+    // terminal someone opened it to debug.
+    it("still renders an inspector when the live read fails", async () => {
+      mockPanelsById = {
+        "test-id": {
+          id: "test-id",
+          kind: "terminal",
+          title: "build worker",
+          cwd: "/repo/apps/worker",
+          location: "grid",
+          runtimeStatus: "exited",
+          exitCode: 3,
+          spawnStatus: "ready",
+        },
+      };
+      dispatchMock.mockResolvedValue({
+        ok: false,
+        error: { message: "Failed to get terminal info: Terminal test-id not found" },
+      });
 
-    render(<TerminalInfoDialog isOpen={true} onClose={vi.fn()} terminalId="test-id" />);
+      renderDialog();
 
-    await waitFor(() => {
-      expect(screen.getByText("PTY Diagnostics")).toBeTruthy();
+      await screen.findByTestId("terminal-info-error");
+      // The body survives the failure, and the exit code — the single most useful fact
+      // about a dead terminal — is on screen.
+      expectPresented(screen.getByTestId("terminal-info-body"));
+      const liveness = screen.getByTestId("terminal-info-liveness");
+      expectPresented(liveness);
+      expect(liveness.textContent).toContain("3");
+      expectPresented(screen.getByText("build worker"));
+      expectPresented(screen.getByText("/repo/apps/worker"));
     });
 
-    expect(screen.queryByText("Exit Code:")).toBeNull();
+    it("reports liveness from the runtime status, not the spawn status", async () => {
+      // `spawnStatus` is live-only spawn-lifecycle state that stays "ready" forever
+      // after a successful spawn; `runtimeStatus` is the store's authoritative
+      // liveness signal. Reading the wrong one told the user a dead terminal was fine.
+      mockPanelsById = {
+        "test-id": {
+          id: "test-id",
+          kind: "terminal",
+          runtimeStatus: "exited",
+          spawnStatus: "ready",
+          exitCode: 0,
+        },
+      };
+      dispatchMock.mockResolvedValue({ ok: true, result: makePayload({ hasPty: true }) });
+
+      renderDialog();
+      await screen.findByTestId("terminal-info-body");
+
+      const livenessEl = screen.getByTestId("terminal-info-liveness");
+      expectPresented(livenessEl);
+      const liveness = livenessEl.textContent ?? "";
+      expect(liveness).toContain("Exited");
+      expect(liveness).not.toContain("ready");
+    });
+
+    it("reports a live terminal as running", async () => {
+      mockPanelsById = { "test-id": { id: "test-id", kind: "terminal", runtimeStatus: "active" } };
+      dispatchMock.mockResolvedValue({ ok: true, result: makePayload() });
+
+      renderDialog();
+      await screen.findByTestId("terminal-info-body");
+
+      expect(screen.getByTestId("terminal-info-liveness").textContent).toBe("Running");
+    });
+
+    it("offers a retry that re-issues the read", async () => {
+      dispatchMock.mockResolvedValue({ ok: false, error: { message: "pty host is gone" } });
+      renderDialog();
+      await screen.findByTestId("terminal-info-error");
+      const callsBefore = dispatchMock.mock.calls.length;
+
+      fireEvent.click(screen.getByRole("button", { name: "Retry" }));
+
+      await waitFor(() => expect(dispatchMock.mock.calls.length).toBeGreaterThan(callsBefore));
+    });
   });
 
-  it("omits TTY row when ptyTty is undefined", async () => {
-    const payload = makePayload({ ptyTty: undefined });
-    dispatchMock.mockResolvedValue({ ok: true, result: payload });
+  describe("the copied payload", () => {
+    it("stays complete when the deep diagnostics are collapsed", async () => {
+      dispatchMock.mockResolvedValue({ ok: true, result: makePayload() });
+      renderDialog();
+      await screen.findByTestId("terminal-info-body");
 
-    render(<TerminalInfoDialog isOpen={true} onClose={vi.fn()} terminalId="test-id" />);
+      // Nothing expanded — the collapsed rows must still reach the clipboard.
+      expect(screen.queryAllByRole("button", { expanded: true })).toHaveLength(0);
 
-    await waitFor(() => {
-      expect(screen.getByText("PTY Diagnostics")).toBeTruthy();
+      const text = await copyPayload();
+      expect(text).toContain("Shell PID: 12345");
+      expect(text).toContain("TTY device: /dev/ttys004");
+      expect(text).toContain("Dimensions: 80 × 24");
+      expect(text).toContain("Output buffer: 100 lines");
     });
 
-    expect(screen.queryByText("TTY Device:")).toBeNull();
+    it("carries the panel-store facts when the live read failed", async () => {
+      mockPanelsById = {
+        "test-id": {
+          id: "test-id",
+          kind: "terminal",
+          title: "build worker",
+          cwd: "/repo/apps/worker",
+          runtimeStatus: "exited",
+          exitCode: 3,
+          spawnedBy: "mcp",
+        },
+      };
+      dispatchMock.mockResolvedValue({ ok: false, error: { message: "Terminal not found" } });
+
+      renderDialog();
+      await screen.findByTestId("terminal-info-error");
+
+      const text = await copyPayload();
+      expect(text).toContain("Exit code: 3");
+      expect(text).toContain("build worker");
+      expect(text).toContain("/repo/apps/worker");
+      // And it says so, rather than presenting a half-payload as complete.
+      expect(text).toContain("could not be read");
+    });
+
+    it("names the assistant and the transport separately (#11808)", async () => {
+      mockPanelsById = { "test-id": { id: "test-id", kind: "terminal", spawnedBy: "assistant" } };
+      dispatchMock.mockResolvedValue({ ok: true, result: makePayload() });
+
+      renderDialog();
+      await screen.findByTestId("terminal-info-body");
+
+      // Two facts, not one: the actor and the fact it was still an MCP dispatch.
+      expect(screen.getByText("Daintree Assistant")).toBeTruthy();
+      const text = await copyPayload();
+      expect(text).toContain("Started by: Daintree Assistant");
+      expect(text).toContain("Started via MCP: Yes");
+    });
+
+    it("omits the initiator row for external MCP and user-started runs (#11808)", async () => {
+      mockPanelsById = { "test-id": { id: "test-id", kind: "terminal", spawnedBy: "mcp" } };
+      dispatchMock.mockResolvedValue({ ok: true, result: makePayload() });
+
+      renderDialog();
+      await screen.findByTestId("terminal-info-body");
+
+      expect(screen.queryByText("Daintree Assistant")).toBeNull();
+      const text = await copyPayload();
+      expect(text).toContain("Started via MCP: Yes");
+      expect(text).not.toContain("Started by:");
+    });
   });
 
-  it("renders gracefully when all new fields are undefined", async () => {
-    const payload = makePayload({
-      ptyPid: undefined,
-      ptyCols: undefined,
-      ptyRows: undefined,
-      ptyForegroundProcess: undefined,
-      ptyTty: undefined,
-      exitCode: undefined,
-    });
-    dispatchMock.mockResolvedValue({ ok: true, result: payload });
+  describe("agent sections", () => {
+    it("shows launch context and live state for an agent terminal", async () => {
+      dispatchMock.mockResolvedValue({
+        ok: true,
+        result: makePayload({
+          launchAgentId: "claude",
+          detectedAgentId: "claude",
+          agentState: "working",
+          agentLaunchFlags: ["--verbose"],
+          agentModelId: "claude-opus-4-6",
+        }),
+      });
 
-    render(<TerminalInfoDialog isOpen={true} onClose={vi.fn()} terminalId="test-id" />);
+      renderDialog();
+      await screen.findByTestId("terminal-info-body");
 
-    await waitFor(() => {
-      expect(screen.getByText("PTY Diagnostics")).toBeTruthy();
-    });
-
-    // Should show N/A for PID and foreground process
-    const naElements = screen.getAllByText("N/A");
-    expect(naElements.length).toBeGreaterThanOrEqual(2);
-  });
-
-  it("includes PTY Diagnostics in clipboard export", async () => {
-    const payload = makePayload();
-    dispatchMock.mockResolvedValue({ ok: true, result: payload });
-    const writeTextMock = vi.fn().mockResolvedValue(undefined);
-    Object.assign(navigator, { clipboard: { writeText: writeTextMock } });
-
-    render(<TerminalInfoDialog isOpen={true} onClose={vi.fn()} terminalId="test-id" />);
-
-    await waitFor(() => {
-      expect(screen.getByText("Copy to Clipboard")).toBeTruthy();
+      expect(screen.getByText("--verbose")).toBeTruthy();
+      expect(screen.getByText("claude-opus-4-6")).toBeTruthy();
+      const overview = screen.getByTestId("terminal-info-overview");
+      // The agent and its state belong in the overview, not four sections down.
+      expect(within(overview).getByText(/working/)).toBeTruthy();
     });
 
-    fireEvent.click(screen.getByText("Copy to Clipboard"));
+    it("omits both agent sections for a terminal that never saw an agent", async () => {
+      dispatchMock.mockResolvedValue({ ok: true, result: makePayload() });
+      renderDialog();
+      await screen.findByTestId("terminal-info-body");
 
-    expect(writeTextMock).toHaveBeenCalledOnce();
-    const clipboardText = writeTextMock.mock.calls[0]![0] as string;
-    expect(clipboardText).toContain("PTY Diagnostics:");
-    expect(clipboardText).toContain("Shell PID: 12345");
-    expect(clipboardText).toContain("TTY Device: /dev/ttys004");
-    expect(clipboardText).toContain("Foreground Process: vim");
-    expect(clipboardText).toContain("Dimensions: 80 × 24");
-  });
-
-  it("renders Spawn Command section with shell and arg chips", async () => {
-    const payload = makePayload({
-      spawnArgs: ["-l", "--rcfile", "/tmp/rc"],
-    });
-    dispatchMock.mockResolvedValue({ ok: true, result: payload });
-
-    render(<TerminalInfoDialog isOpen={true} onClose={vi.fn()} terminalId="test-id" />);
-
-    await waitFor(() => {
-      expect(screen.getByText("Spawn Command")).toBeTruthy();
+      const labels = labelsInOrder();
+      expect(labels).not.toContain("Launch agent");
+      expect(labels).not.toContain("Detected agent");
     });
 
-    expect(screen.getByText("Args:")).toBeTruthy();
-    expect(screen.getByText("-l")).toBeTruthy();
-    expect(screen.getByText("--rcfile")).toBeTruthy();
-    expect(screen.getByText("/tmp/rc")).toBeTruthy();
-  });
+    it("reports an agent that has exited rather than one that never started", async () => {
+      dispatchMock.mockResolvedValue({
+        ok: true,
+        result: makePayload({ detectedAgentId: undefined, everDetectedAgent: true }),
+      });
 
-  it("omits Args row when spawnArgs is undefined or empty", async () => {
-    const payload = makePayload({ spawnArgs: undefined });
-    dispatchMock.mockResolvedValue({ ok: true, result: payload });
+      renderDialog();
+      await screen.findByTestId("terminal-info-body");
 
-    render(<TerminalInfoDialog isOpen={true} onClose={vi.fn()} terminalId="test-id" />);
-
-    await waitFor(() => {
-      expect(screen.getByText("Spawn Command")).toBeTruthy();
+      expect(screen.getByText("Agent has exited")).toBeTruthy();
     });
-
-    expect(screen.queryByText("Args:")).toBeNull();
-  });
-
-  it("renders startup metadata attached to the panel for MCP-spawned terminals", async () => {
-    mockPanelsById = {
-      "test-id": {
-        id: "test-id",
-        spawnedBy: "mcp",
-        location: "dock",
-        command: "claude --model claude-sonnet-4-5",
-        startedAt: new Date("2026-03-19T09:46:00Z").getTime(),
-        spawnStatus: "spawning",
-        launchAgentId: "claude",
-        titleMode: "manual",
-        worktreeId: "wt-1",
-        agentPresetId: "preset-review",
-        agentPresetColor: "#123456",
-        originalPresetId: "preset-original",
-        agentSessionId: "agent-session-1",
-      },
-    };
-    const payload = makePayload({
-      launchAgentId: undefined,
-      command: undefined,
-      worktreeId: undefined,
-      titleMode: undefined,
-      agentPresetId: undefined,
-      agentPresetColor: undefined,
-      originalAgentPresetId: undefined,
-      agentSessionId: undefined,
-    });
-    dispatchMock.mockResolvedValue({ ok: true, result: payload });
-    const writeTextMock = vi.fn().mockResolvedValue(undefined);
-    Object.assign(navigator, { clipboard: { writeText: writeTextMock } });
-
-    render(<TerminalInfoDialog isOpen={true} onClose={vi.fn()} terminalId="test-id" />);
-
-    await waitFor(() => {
-      expect(screen.getByText("Session Metadata")).toBeTruthy();
-    });
-
-    expect(screen.getByText("Title Mode:")).toBeTruthy();
-    expect(screen.getByText("manual")).toBeTruthy();
-    expect(screen.getByText("Worktree ID:")).toBeTruthy();
-    expect(screen.getByText("wt-1")).toBeTruthy();
-    expect(screen.getByText("Location:")).toBeTruthy();
-    expect(screen.getByText("dock")).toBeTruthy();
-    expect(screen.getByText("Spawn Source:")).toBeTruthy();
-    expect(screen.getByText("mcp")).toBeTruthy();
-    expect(screen.getByText("Started via MCP:")).toBeTruthy();
-    expect(screen.getAllByText("Yes").length).toBeGreaterThan(0);
-    expect(screen.getByText("Spawn Status:")).toBeTruthy();
-    expect(screen.getByText("spawning")).toBeTruthy();
-    expect(screen.getByText("UI Created At:")).toBeTruthy();
-    expect(screen.getByText("Command:")).toBeTruthy();
-    expect(screen.getByText("claude --model claude-sonnet-4-5")).toBeTruthy();
-    expect(screen.getByText("Agent — Launch Context")).toBeTruthy();
-    expect(screen.getByText("Launch Agent:")).toBeTruthy();
-    expect(screen.getByText("preset-review")).toBeTruthy();
-    expect(screen.getByText("#123456")).toBeTruthy();
-    expect(screen.getByText("preset-original")).toBeTruthy();
-    expect(screen.getByText("Agent — Live State")).toBeTruthy();
-    expect(screen.getByText("agent-session-1")).toBeTruthy();
-
-    fireEvent.click(screen.getByText("Copy to Clipboard"));
-    const clipboardText = writeTextMock.mock.calls[0]![0] as string;
-    expect(clipboardText).toContain("Location: dock");
-    expect(clipboardText).toContain("Spawn Source: mcp");
-    expect(clipboardText).toContain("Started via MCP: Yes");
-    // An external client gets no initiator line — there is no Daintree surface
-    // to name, and claiming one would be worse than saying nothing (#11808).
-    expect(clipboardText).not.toContain("Started By:");
-    expect(clipboardText).toContain("Spawn Status: spawning");
-    expect(clipboardText).toContain("Command: claude --model claude-sonnet-4-5");
-    expect(clipboardText).toContain("Launch Agent: claude");
-    expect(clipboardText).toContain("Preset Color: #123456");
-    expect(clipboardText).toContain("Session ID: agent-session-1");
-  });
-
-  it("names the assistant as the initiator for assistant-launched runs (#11808)", async () => {
-    mockPanelsById = {
-      "test-id": { id: "test-id", spawnedBy: "assistant", location: "grid" },
-    };
-    dispatchMock.mockResolvedValue({ ok: true, result: makePayload() });
-    const writeTextMock = vi.fn().mockResolvedValue(undefined);
-    Object.assign(navigator, { clipboard: { writeText: writeTextMock } });
-
-    render(<TerminalInfoDialog isOpen={true} onClose={vi.fn()} terminalId="test-id" />);
-
-    await waitFor(() => {
-      expect(screen.getByText("Session Metadata")).toBeTruthy();
-    });
-
-    expect(screen.getByText("Started By:")).toBeTruthy();
-    expect(screen.getByText("Daintree Assistant")).toBeTruthy();
-    // Still an MCP dispatch — the actor is the new fact, not a replacement for
-    // the transport one.
-    expect(screen.getByText("Started via MCP:")).toBeTruthy();
-
-    fireEvent.click(screen.getByText("Copy to Clipboard"));
-    const clipboardText = writeTextMock.mock.calls[0]![0] as string;
-    expect(clipboardText).toContain("Spawn Source: assistant");
-    expect(clipboardText).toContain("Started By: Daintree Assistant");
-    expect(clipboardText).toContain("Started via MCP: Yes");
-  });
-
-  it("omits the initiator row for external MCP and user-started runs (#11808)", async () => {
-    mockPanelsById = {
-      "test-id": { id: "test-id", spawnedBy: "quickrun", location: "grid" },
-    };
-    dispatchMock.mockResolvedValue({ ok: true, result: makePayload() });
-    const writeTextMock = vi.fn().mockResolvedValue(undefined);
-    Object.assign(navigator, { clipboard: { writeText: writeTextMock } });
-
-    render(<TerminalInfoDialog isOpen={true} onClose={vi.fn()} terminalId="test-id" />);
-
-    await waitFor(() => {
-      expect(screen.getByText("Session Metadata")).toBeTruthy();
-    });
-
-    expect(screen.queryByText("Started By:")).toBeNull();
-
-    fireEvent.click(screen.getByText("Copy to Clipboard"));
-    const clipboardText = writeTextMock.mock.calls[0]![0] as string;
-    expect(clipboardText).toContain("Spawn Source: quickrun");
-    expect(clipboardText).not.toContain("Started By:");
-    expect(clipboardText).toContain("Started via MCP: No");
-  });
-
-  it("reports unknown provenance for a panel with no spawn source (#11808)", async () => {
-    // `spawnedBy` is runtime-only and never serialized, so every panel restored
-    // across a restart lands here — this is the common case, not an edge one.
-    mockPanelsById = { "test-id": { id: "test-id", location: "grid" } };
-    dispatchMock.mockResolvedValue({ ok: true, result: makePayload() });
-    const writeTextMock = vi.fn().mockResolvedValue(undefined);
-    Object.assign(navigator, { clipboard: { writeText: writeTextMock } });
-
-    render(<TerminalInfoDialog isOpen={true} onClose={vi.fn()} terminalId="test-id" />);
-
-    await waitFor(() => {
-      expect(screen.getByText("Session Metadata")).toBeTruthy();
-    });
-
-    expect(screen.queryByText("Started By:")).toBeNull();
-
-    fireEvent.click(screen.getByText("Copy to Clipboard"));
-    const clipboardText = writeTextMock.mock.calls[0]![0] as string;
-    expect(clipboardText).toContain("Spawn Source: N/A");
-    expect(clipboardText).toContain("Started via MCP: Unknown");
-    expect(clipboardText).not.toContain("Started By:");
-  });
-
-  it("renders Launch Context and Live State sections for agent terminals", async () => {
-    const payload = makePayload({
-      kind: "terminal",
-      launchAgentId: "claude",
-      detectedAgentId: "claude",
-      agentLaunchFlags: ["--dangerously-skip-permissions", "--verbose"],
-      agentModelId: "claude-opus-4-7",
-    });
-    dispatchMock.mockResolvedValue({ ok: true, result: payload });
-
-    render(<TerminalInfoDialog isOpen={true} onClose={vi.fn()} terminalId="test-id" />);
-
-    await waitFor(() => {
-      expect(screen.getByText("Agent — Launch Context")).toBeTruthy();
-    });
-
-    expect(screen.getByText("Launch Agent:")).toBeTruthy();
-    expect(screen.getAllByText("claude").length).toBeGreaterThanOrEqual(2);
-    expect(screen.getByText("Launch Flags:")).toBeTruthy();
-    expect(screen.getByText("--dangerously-skip-permissions")).toBeTruthy();
-    expect(screen.getByText("--verbose")).toBeTruthy();
-    expect(screen.getByText("Model:")).toBeTruthy();
-    expect(screen.getByText("claude-opus-4-7")).toBeTruthy();
-
-    // Live State section shows the detected agent identity
-    expect(screen.getByText("Agent — Live State")).toBeTruthy();
-    expect(screen.getByText("Detected Agent:")).toBeTruthy();
-    // "claude" appears for both launch hint and detected-agent rows.
-    expect(screen.getAllByText("claude").length).toBeGreaterThanOrEqual(2);
-  });
-
-  it("shows 'None — agent has exited' in Live State when agent panel has no detectedAgentId", async () => {
-    const payload = makePayload({
-      kind: "terminal",
-      launchAgentId: "claude",
-      detectedAgentId: undefined,
-      everDetectedAgent: true,
-      agentLaunchFlags: ["--verbose"],
-      agentModelId: "claude-opus-4-7",
-    });
-    dispatchMock.mockResolvedValue({ ok: true, result: payload });
-
-    render(<TerminalInfoDialog isOpen={true} onClose={vi.fn()} terminalId="test-id" />);
-
-    await waitFor(() => {
-      expect(screen.getByText("Agent — Live State")).toBeTruthy();
-    });
-
-    expect(screen.getByText("None — agent has exited")).toBeTruthy();
-  });
-
-  it("omits Agent sections entirely for plain terminals with no agent metadata", async () => {
-    const payload = makePayload({
-      launchAgentId: undefined,
-      detectedAgentId: undefined,
-      agentLaunchFlags: undefined,
-      agentModelId: undefined,
-    });
-    dispatchMock.mockResolvedValue({ ok: true, result: payload });
-
-    render(<TerminalInfoDialog isOpen={true} onClose={vi.fn()} terminalId="test-id" />);
-
-    await waitFor(() => {
-      expect(screen.getByText("Spawn Command")).toBeTruthy();
-    });
-
-    expect(screen.queryByText("Launch Agent:")).toBeNull();
-    expect(screen.queryByText("Launch Flags:")).toBeNull();
-    expect(screen.queryByText("Model:")).toBeNull();
-    expect(screen.queryByRole("heading", { name: "Agent — Launch Context" })).toBeNull();
-    expect(screen.queryByRole("heading", { name: "Agent — Live State" })).toBeNull();
-  });
-
-  it("includes Spawn Command and both Agent sections in clipboard export", async () => {
-    const payload = makePayload({
-      kind: "terminal",
-      launchAgentId: "claude",
-      detectedAgentId: "claude",
-      shell: "/usr/local/bin/claude",
-      command: "claude --model claude-opus-4-7",
-      spawnArgs: ["--model", "claude-opus-4-7"],
-      agentLaunchFlags: ["--dangerously-skip-permissions"],
-      agentModelId: "claude-opus-4-7",
-    });
-    dispatchMock.mockResolvedValue({ ok: true, result: payload });
-    const writeTextMock = vi.fn().mockResolvedValue(undefined);
-    Object.assign(navigator, { clipboard: { writeText: writeTextMock } });
-
-    render(<TerminalInfoDialog isOpen={true} onClose={vi.fn()} terminalId="test-id" />);
-
-    await waitFor(() => {
-      expect(screen.getByText("Copy to Clipboard")).toBeTruthy();
-    });
-
-    fireEvent.click(screen.getByText("Copy to Clipboard"));
-
-    expect(writeTextMock).toHaveBeenCalledOnce();
-    const clipboardText = writeTextMock.mock.calls[0]![0] as string;
-    expect(clipboardText).toContain("Spawn Command:");
-    expect(clipboardText).toContain("Shell: /usr/local/bin/claude");
-    expect(clipboardText).toContain("Args: --model claude-opus-4-7");
-    expect(clipboardText).toContain("Agent — Launch Context:");
-    expect(clipboardText).toContain("Launch Agent: claude");
-    expect(clipboardText).toContain("Command: claude --model claude-opus-4-7");
-    expect(clipboardText).toContain("Launch Flags: --dangerously-skip-permissions");
-    expect(clipboardText).toContain("Model: claude-opus-4-7");
-    expect(clipboardText).toContain("Agent — Live State:");
-    expect(clipboardText).toContain("Detected Agent ID: claude");
-  });
-
-  it("includes Live State but not Launch Context when only a runtime agent is detected", async () => {
-    const payload = makePayload({
-      launchAgentId: undefined,
-      detectedAgentId: "claude",
-    });
-    dispatchMock.mockResolvedValue({ ok: true, result: payload });
-    const writeTextMock = vi.fn().mockResolvedValue(undefined);
-    Object.assign(navigator, { clipboard: { writeText: writeTextMock } });
-
-    render(<TerminalInfoDialog isOpen={true} onClose={vi.fn()} terminalId="test-id" />);
-
-    await waitFor(() => {
-      expect(screen.getByText("Copy to Clipboard")).toBeTruthy();
-    });
-
-    expect(screen.getByText("Agent — Live State")).toBeTruthy();
-    expect(screen.queryByRole("heading", { name: "Agent — Launch Context" })).toBeNull();
-
-    fireEvent.click(screen.getByText("Copy to Clipboard"));
-    const clipboardText = writeTextMock.mock.calls[0]![0] as string;
-    expect(clipboardText).toContain("Agent — Live State:");
-    expect(clipboardText).toContain("Detected Agent ID: claude");
-    expect(clipboardText).not.toContain("Agent — Launch Context:");
-  });
-
-  it("renders empty spawnArgs as (none) in clipboard and omits the Args row in UI", async () => {
-    const payload = makePayload({ spawnArgs: [] });
-    dispatchMock.mockResolvedValue({ ok: true, result: payload });
-    const writeTextMock = vi.fn().mockResolvedValue(undefined);
-    Object.assign(navigator, { clipboard: { writeText: writeTextMock } });
-
-    render(<TerminalInfoDialog isOpen={true} onClose={vi.fn()} terminalId="test-id" />);
-
-    await waitFor(() => {
-      expect(screen.getByText("Copy to Clipboard")).toBeTruthy();
-    });
-
-    // UI omits the row entirely (matches InfoListRow convention)
-    expect(screen.queryByText("Args:")).toBeNull();
-
-    fireEvent.click(screen.getByText("Copy to Clipboard"));
-    const clipboardText = writeTextMock.mock.calls[0]![0] as string;
-    expect(clipboardText).toContain("Args: (none)");
-    expect(clipboardText).not.toContain("Args: N/A");
-  });
-
-  it("omits Agent sections from clipboard for non-agent terminals", async () => {
-    const payload = makePayload({ launchAgentId: undefined, spawnArgs: ["-l"] });
-    dispatchMock.mockResolvedValue({ ok: true, result: payload });
-    const writeTextMock = vi.fn().mockResolvedValue(undefined);
-    Object.assign(navigator, { clipboard: { writeText: writeTextMock } });
-
-    render(<TerminalInfoDialog isOpen={true} onClose={vi.fn()} terminalId="test-id" />);
-
-    await waitFor(() => {
-      expect(screen.getByText("Copy to Clipboard")).toBeTruthy();
-    });
-
-    fireEvent.click(screen.getByText("Copy to Clipboard"));
-
-    const clipboardText = writeTextMock.mock.calls[0]![0] as string;
-    expect(clipboardText).toContain("Spawn Command:");
-    expect(clipboardText).toContain("Args: -l");
-    expect(clipboardText).not.toContain("Agent — Launch Context:");
-    expect(clipboardText).not.toContain("Agent — Live State:");
-    expect(clipboardText).not.toContain("Launch Flags:");
   });
 });
