@@ -1148,14 +1148,23 @@ describe("resume configuration", () => {
     expect(signal?.perPressTimeoutMs).toBeGreaterThan(0);
   });
 
-  it("antigravity claims no session-id capture it cannot make", () => {
-    // 0 captures in 6 teardowns, and no public `agy` output to verify a
-    // corrected pattern against (#11851). Resuming by an id it already holds
-    // still works, and `-c` remains the path that actually restores.
+  it("antigravity captures the session id from its real `=` teardown line", () => {
+    // #11851 recorded 0 captures in 6 teardowns because the old pattern put a
+    // SPACE between the flag and the id. A live 1.1.22 capture shows agy prints
+    // an equals sign, so the pattern is back — pinned against the real line
+    // rather than against the shape that never matched.
     const resume = getAgentConfig("antigravity")?.resume;
     expect(resume?.kind).toBe("session-id");
     if (resume?.kind !== "session-id") return;
-    expect(resume.sessionIdPattern).toBeUndefined();
+    const captured =
+      "Resume with -c (or command below):\nagy --conversation=b0bced34-800c-4859-aaae-81d5f961c0f7".match(
+        new RegExp(resume.sessionIdPattern!)
+      );
+    expect(captured?.[1]).toBe("b0bced34-800c-4859-aaae-81d5f961c0f7");
+    // The space form is what #11851 proved agy never prints; it must not match.
+    expect(
+      "agy --conversation b0bced34-800c".match(new RegExp(resume.sessionIdPattern!))
+    ).toBeNull();
     // Staying `session-id` is load-bearing, not incidental: the resume-latest
     // builder is gated on that kind, so reclassifying would silently take away
     // the `-c` restore that actually works. Pinned as built commands rather than

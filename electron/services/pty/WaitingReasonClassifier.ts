@@ -28,6 +28,17 @@ const APPROVAL_PATTERNS: RegExp[] = [
   // Tool/edit/command confirmation questions that precede a selector.
   /\bdo you want to (?:proceed|continue|allow|run this|make this edit|create|apply)\b/i,
   /\bpress (?:enter|y) to (?:approve|allow|confirm|continue)\b/i,
+  // Antigravity phrases its two non-command approvals as statements rather
+  // than "do you want to…", and renders the selector cursor as a bare ">",
+  // which the glyph-marked row pattern above deliberately excludes. Without
+  // these, a blocked `agy` classified as an ordinary "prompt" wait.
+  //
+  // Both are anchored to the start of the row (behind optional chrome) and
+  // carry the trailing "?", because this array is shared by every agent:
+  // unanchored fragments would relabel ordinary prose mid-sentence ("To accept
+  // this file edit, pick the first option") as an approval wait.
+  /^[\s>❯›●○◉]*accept this (?:file )?edit\?/i,
+  /^[\s>❯›●○◉]*do you trust the contents of this (?:project|folder|directory)\b/i,
   // Shared with prompt-hint detection (allow once/always, approve once,
   // trust this directory, [y/n], proceed? [y…), minus the weak hints above.
   ...UNIVERSAL_APPROVAL_HINT_PATTERNS.filter((p) => !WEAK_APPROVAL_HINTS.has(p)).map(

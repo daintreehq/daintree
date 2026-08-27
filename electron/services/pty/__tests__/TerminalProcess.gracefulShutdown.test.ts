@@ -433,10 +433,11 @@ describe("TerminalProcess.gracefulShutdown — input-clear prelude", () => {
     expect(terminal.getInfo().agentSessionId).toBe("gemini-session-123");
   });
 
-  it("sends the quit command but scrapes nothing for a session-id agent with no pattern", async () => {
-    // Antigravity resumes by an id it holds but never prints one this tree can
-    // match, so it declares no `sessionIdPattern` (#11851). It must still be
-    // quit — just without a ghost regex burning the budget on unrelated output.
+  it("scrapes antigravity's session id from the `=` teardown split across chunks", async () => {
+    // #11851 removed antigravity's pattern after 0 captures in 6 teardowns. A
+    // live 1.1.22 capture showed why: agy writes `--conversation=<id>`, and the
+    // old pattern expected a space. The real teardown banner and the id arrive
+    // in separate PTY chunks, so scrape across the boundary, not within a chunk.
     const handles = createMockPty();
     const terminal = createAgentTerminal(handles, "antigravity");
 
@@ -446,8 +447,24 @@ describe("TerminalProcess.gracefulShutdown — input-clear prelude", () => {
 
     expect(handles.writeMock.mock.calls.map((c) => c[0]).join("")).toContain("/quit");
 
-    // Output that the old fabricated pattern was shaped to match must not be
-    // captured, because nothing claims it can be.
+    handles.emitData("Resume with -c (or command below):\r\nagy --conversa");
+    handles.emitData("tion=adf330da-a07e-477d-af57-51c0e0f1b2c3\r\n");
+    handles.emitExit(0);
+
+    await expect(shutdownPromise).resolves.toBe("adf330da-a07e-477d-af57-51c0e0f1b2c3");
+    expect(terminal.getInfo().agentSessionId).toBe("adf330da-a07e-477d-af57-51c0e0f1b2c3");
+  });
+
+  it("ignores the space-form `--conversation` that antigravity never prints", async () => {
+    // The shape #11851 proved agy does not emit. Keeping it unmatched is what
+    // stops a ghost regex from burning the shutdown budget on unrelated output.
+    const handles = createMockPty();
+    const terminal = createAgentTerminal(handles, "antigravity");
+
+    const shutdownPromise = terminal.gracefulShutdown();
+    await vi.advanceTimersByTimeAsync(GRACEFUL_SHUTDOWN_CLEAR_DELAY_MS);
+    await vi.advanceTimersByTimeAsync(SUBMIT_ENTER_DELAY_MS);
+
     handles.emitData("Run agy --conversation not-a-real-capture\n");
     handles.emitExit(0);
 
