@@ -88,12 +88,15 @@
     border: none;
   }
 
-  /* Border, not fill. A `Highlight` background makes Chromium paint a Canvas backplate
+  /* Outline, not fill. A `Highlight` background makes Chromium paint a Canvas backplate
      behind the label, which comes out as a solid white block where the text should be —
-     verified in the capture harness. An outline-weight border says "selected" without
-     putting text on a system-coloured ground. */
+     verified in the capture harness. An inset outline says "selected" without putting
+     text on a system-coloured ground, and — unlike a border on these Preflight
+     zero-border buttons — it takes no layout space, so the list does not jitter as the
+     active row moves. */
   .settings-nav-item[data-active="true"] {
-    border: 2px solid Highlight;
+    outline: 2px solid Highlight;
+    outline-offset: -2px;
   }
 
   .settings-scope-control [data-slot="segmented-thumb"] {

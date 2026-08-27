@@ -24,15 +24,8 @@ import {
   usePreferencesStore,
   useSettingsStore,
 } from "@/store";
-import {
-  X,
-  Search,
-  ChevronRight,
-  AlertTriangle,
-  ArrowLeftRight,
-  TriangleAlert,
-} from "lucide-react";
-import { Folder, Globe } from "@/components/icons";
+import { X, Search, ChevronRight, AlertTriangle } from "lucide-react";
+import { ArrowLeftRight, Folder, Globe, TriangleAlert } from "@/components/icons";
 import { cn } from "@/lib/utils";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { SegmentedRadioGroup } from "@/components/ui/SegmentedRadioGroup";

@@ -468,20 +468,6 @@ export async function expectToolbarButtonReachable(
  * More reliable than clicking the toolbar button, which may be
  * hidden in the overflow menu on small displays (e.g., Windows CI).
  */
-/**
- * Switch the settings dialog between global and project scope.
- *
- * The control is a segmented radiogroup, not a dropdown — there is no popup and no
- * `role="option"` to click. Waits for the segment to report itself checked so callers
- * do not race the scope swap.
- */
-export async function selectSettingsScope(page: Page, label: "Global" | "Project"): Promise<void> {
-  const option = page.locator(SEL.settings.scopeOption(label));
-  await option.waitFor({ state: "visible", timeout: 10000 });
-  await option.click();
-  await expect(option).toHaveAttribute("aria-checked", "true", { timeout: 5000 });
-}
-
 export async function openSettings(page: Page, timeout = 10000): Promise<void> {
   const heading = page.locator(SEL.settings.heading);
   const shortcutTimeout = process.env.CI && process.platform === "win32" ? 7000 : 3000;
@@ -502,6 +488,20 @@ export async function openSettings(page: Page, timeout = 10000): Promise<void> {
   // Fall back to clicking the settings button (handles overflow via menu)
   await clickToolbarButton(page, SEL.toolbar.openSettings);
   await heading.waitFor({ state: "visible", timeout });
+}
+
+/**
+ * Switch the settings dialog between global and project scope.
+ *
+ * The control is a segmented radiogroup, not a dropdown — there is no popup and no
+ * `role="option"` to click. Waits for the segment to report itself checked so callers
+ * do not race the scope swap.
+ */
+export async function selectSettingsScope(page: Page, label: "Global" | "Project"): Promise<void> {
+  const option = page.locator(SEL.settings.scopeOption(label));
+  await option.waitFor({ state: "visible", timeout: 10000 });
+  await option.click();
+  await expect(option).toHaveAttribute("aria-checked", "true", { timeout: 5000 });
 }
 
 /**

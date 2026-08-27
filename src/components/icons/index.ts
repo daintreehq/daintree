@@ -11,6 +11,7 @@ export * from "./brands";
 export {
   Activity, // project pulse / live activity heartbeat
   ArrowDownAZ, // alphabetical sort order (A to Z)
+  ArrowLeftRight, // a settings search hit that lives in the other scope — following it switches scope
   AtSign, // @file reference handed to an agent's prompt
   BellDot, // watch alert / notify on completion
   ChartNoAxesColumn, // frecency sort order ("Most used" — decayed access score)
@@ -41,5 +42,6 @@ export {
   Plug, // agent (integration that plugs into the host system)
   Plus, // the toolbar launcher — "make me a new thing" (agent, panel)
   Sprout, // origin / first step (main worktree, first agent launch)
+  TriangleAlert, // a setting failing validation — a shape, not a hue, so it survives forced colors
   Workflow, // terminal recipe / scripted command sequence
 } from "lucide-react";
