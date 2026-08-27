@@ -112,7 +112,11 @@ export function FileSection({
   const emptyFilteredNoun = isStaged ? "staged files" : "changed files";
 
   return (
-    <div ref={sectionRef} className={cn(isStaged && "border-b border-divider")}>
+    <div
+      ref={sectionRef}
+      data-testid={`review-hub-file-section-${section}`}
+      className={cn(isStaged && "border-b border-divider")}
+    >
       <div className="flex items-center justify-between px-4 py-2 bg-overlay-subtle gap-2">
         <span className="text-[11px] font-semibold uppercase tracking-wider text-daintree-text/60 shrink-0">
           {title}
