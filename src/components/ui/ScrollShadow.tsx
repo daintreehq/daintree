@@ -12,6 +12,25 @@ import {
 import { cn } from "@/lib/utils";
 import { useVerticalScrollShadows } from "@/hooks/useVerticalScrollShadows";
 
+/**
+ * The "there is more this way" cue.
+ *
+ * Normally a fade. Under `forced-colors: active` the UA drops the gradient, so
+ * the only signal that a bounded list continues would disappear — and a list
+ * that is cut off but looks finished is worse than one with no cue at all. A
+ * capped conflict preview showing four of five keys reads as complete
+ * (#11973).
+ *
+ * So in that mode only, the strip collapses to a rule on the scrollable edge.
+ * `border-color` resolves to `currentColor` and the UA repaints it to a system
+ * colour, which is the one thing guaranteed to be visible there. `opacity`
+ * survives forced-colors, so the rule still appears and disappears with the
+ * scroll position rather than sitting there permanently.
+ *
+ * Deliberately NOT applied under `prefers-contrast: more`: that mode keeps
+ * author colours, so the gradient still renders and still reads. The two media
+ * queries stay separate on purpose — see the block comments in `index.css`.
+ */
 function ScrollShadowOverlay({ edge, visible }: { edge: "top" | "bottom"; visible: boolean }) {
   return (
     <div
@@ -19,9 +38,10 @@ function ScrollShadowOverlay({ edge, visible }: { edge: "top" | "bottom"; visibl
       data-visible={visible}
       className={cn(
         "pointer-events-none absolute inset-x-0 z-10 h-8 transition-opacity duration-150 ease-out",
+        "forced-colors:h-0",
         edge === "top"
-          ? "top-0 bg-gradient-to-b from-[var(--scroll-shadow-color)] to-transparent"
-          : "bottom-0 bg-gradient-to-t from-[var(--scroll-shadow-color)] to-transparent",
+          ? "top-0 bg-gradient-to-b from-[var(--scroll-shadow-color)] to-transparent forced-colors:border-t-2"
+          : "bottom-0 bg-gradient-to-t from-[var(--scroll-shadow-color)] to-transparent forced-colors:border-b-2",
         visible ? "opacity-100" : "opacity-0"
       )}
     />
