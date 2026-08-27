@@ -3,7 +3,7 @@
  */
 import { describe, it, expect, afterEach } from "vitest";
 import { render, screen, cleanup } from "@testing-library/react";
-import { PathCaption } from "../projectDialogFields";
+import { PathCaption, FIELD_INPUT_CLASS } from "../projectDialogFields";
 
 afterEach(cleanup);
 
@@ -65,5 +65,27 @@ describe("PathCaption", () => {
 
     // Whatever the ellipsis hides visually stays reachable.
     expect(screen.getByTitle(path)).toBeTruthy();
+  });
+});
+
+describe("FIELD_INPUT_CLASS", () => {
+  it("pairs the accent focus ring with an error focus ring for the invalid case", () => {
+    // Not an assertion about which colours are used — those can change. The rule
+    // is that a field cannot advertise an accent focus ring without also saying
+    // what the ring becomes when the field is invalid, or an invalid focused
+    // field draws the accent ring concentric with its red error border and the
+    // louder of the two signals says nothing is wrong.
+    const declaresAccentFocusRing = /(?:^|\s)focus:ring-\S*accent/.test(FIELD_INPUT_CLASS);
+    const declaresInvalidFocusRing = /aria-invalid:focus:ring-\S*status-error/.test(
+      FIELD_INPUT_CLASS
+    );
+
+    expect(declaresAccentFocusRing && !declaresInvalidFocusRing).toBe(false);
+  });
+
+  it("marks the invalid border so the error state is not carried by the ring alone", () => {
+    // Colour is never the only carrier: the border changes too, which survives
+    // forced-colors and does not depend on the field being focused.
+    expect(/aria-invalid:border-\S*status-error/.test(FIELD_INPUT_CLASS)).toBe(true);
   });
 });
