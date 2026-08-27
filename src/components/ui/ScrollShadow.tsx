@@ -27,9 +27,13 @@ import { useVerticalScrollShadows } from "@/hooks/useVerticalScrollShadows";
  * survives forced-colors, so the rule still appears and disappears with the
  * scroll position rather than sitting there permanently.
  *
- * Deliberately NOT applied under `prefers-contrast: more`: that mode keeps
- * author colours, so the gradient still renders and still reads. The two media
- * queries stay separate on purpose — see the block comments in `index.css`.
+ * `prefers-contrast: more` gets its own, separate treatment. Author colours
+ * survive there, so the gradient would still render — but a fade-to-transparent
+ * wash lowers the contrast of real content at the scrolling edge, in the one
+ * mode that exists to raise it. So the strip collapses to a solid hairline
+ * instead of a border: same "there is more" cue, none of the wash. The two
+ * media queries stay separate on purpose — macOS fires only the former and
+ * Windows swaps in system colours; see the block comments in `index.css`.
  */
 function ScrollShadowOverlay({ edge, visible }: { edge: "top" | "bottom"; visible: boolean }) {
   return (
@@ -39,6 +43,18 @@ function ScrollShadowOverlay({ edge, visible }: { edge: "top" | "bottom"; visibl
       className={cn(
         "pointer-events-none absolute inset-x-0 z-10 h-8 transition-opacity duration-150 ease-out",
         "forced-colors:h-0",
+        // Under increased contrast the gradient is swapped for a solid
+        // hairline rather than removed. The wash itself is the problem — it
+        // lowers the contrast of real content at the scrolling edge, in the
+        // one mode that exists to raise it — but the cue is NOT decorative:
+        // `WebviewDialog` relies on it to stop page-controlled text concealing
+        // the request below the fold, `GitPushConfirmDialog` names it as what
+        // communicates "there is more", and `NotificationCenter` tests it as
+        // such. On macOS the scrollbar auto-hides, so deleting this outright
+        // would leave no at-rest signal at all. A solid rule says the same
+        // thing and reads better at high contrast.
+        // `forced-colors` is deliberately left to its own block above.
+        "contrast-more:bg-none contrast-more:h-px contrast-more:bg-border-strong",
         edge === "top"
           ? "top-0 bg-gradient-to-b from-[var(--scroll-shadow-color)] to-transparent forced-colors:border-t-2"
           : "bottom-0 bg-gradient-to-t from-[var(--scroll-shadow-color)] to-transparent forced-colors:border-b-2",
