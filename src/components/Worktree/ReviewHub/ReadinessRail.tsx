@@ -27,7 +27,11 @@ const LEVEL_LABEL = {
 const SEVERITY: Record<ReviewReadinessSeverity, { Icon: typeof CircleAlert; toneClass: string }> = {
   blocker: { Icon: CircleAlert, toneClass: "text-status-error" },
   warning: { Icon: AlertTriangle, toneClass: "text-status-warning" },
-  info: { Icon: Info, toneClass: "text-text-muted" },
+  // `secondary`, not `muted`: with the level word sr-only the glyph is the only visual
+  // severity carrier, so it owes the 3:1 non-text floor. `text-muted` is guarded at 3.5
+  // for light themes ONLY (`shared/theme/contrast.ts`) and runs ~2.2:1 on dark built-ins;
+  // `text-secondary` holds 3.0 against every display surface.
+  info: { Icon: Info, toneClass: "text-text-secondary" },
 };
 
 const CTA_LABELS: Record<ReviewReadinessCta["kind"], string> = {
