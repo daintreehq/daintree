@@ -129,9 +129,6 @@ const DURABLE_ALLOWLIST = new Set([
   // active focus region)
   "src/components/Plugin/PluginManagerView.tsx",
 
-  // Setup wizard step indicators, accent icon, telemetry toggle (one-time setup flow)
-  "src/components/Setup/AgentSetupWizard.tsx",
-
   // PresetColorPicker Done CTA (primary commit action) + focus-visible ring
   "src/components/Settings/PresetColorPicker.tsx",
 

@@ -1,7 +1,7 @@
 // @vitest-environment jsdom
 import React from "react";
 import { describe, it, expect, vi, beforeEach } from "vitest";
-import { render, fireEvent, screen } from "@testing-library/react";
+import { render, screen } from "@testing-library/react";
 
 const { dispatchMock, getDisplayComboMock } = vi.hoisted(() => ({
   dispatchMock: vi.fn(() => Promise.resolve()),
@@ -102,32 +102,30 @@ vi.mock("@/components/ui/Spinner", () => ({ Spinner: () => null }));
 
 import { CompleteStep } from "../AgentSetupWizard";
 
-describe("CompleteStep launch CTA", () => {
+describe("CompleteStep summary", () => {
   beforeEach(() => {
     dispatchMock.mockClear();
     getDisplayComboMock.mockReset();
     getDisplayComboMock.mockReturnValue("");
   });
 
-  it("renders 'Launch an agent' button when at least one agent is installed", () => {
-    render(<CompleteStep installedAgents={["claude"]} onClose={vi.fn()} />);
-    expect(screen.getByTestId("complete-step-launch-agent")).toBeTruthy();
-    expect(screen.getByRole("button", { name: /launch an agent/i })).toBeTruthy();
+  // The completion screen must resolve to a single primary action, and the
+  // shell's footer owns it. A button appearing back in the body would put a
+  // second competing exit on the last screen of the flow.
+  it("renders no action of its own — the shell footer owns the primary", () => {
+    const { container } = render(<CompleteStep installedAgents={["claude"]} />);
+    expect(container.querySelectorAll("button").length).toBe(0);
   });
 
-  it("does NOT render the launch button when no agents are installed (skip path)", () => {
-    render(<CompleteStep installedAgents={[]} onClose={vi.fn()} />);
-    expect(screen.queryByTestId("complete-step-launch-agent")).toBeNull();
+  it("summarises the installed agents it is given", () => {
+    render(<CompleteStep installedAgents={["claude"]} />);
+    expect(screen.getByTestId("agent-card-claude")).toBeTruthy();
+    expect(screen.getByText(/1 agent ready to use/i)).toBeTruthy();
   });
 
-  it("dispatches panel.palette and calls onClose when the launch CTA is clicked", () => {
-    const onClose = vi.fn();
-    render(<CompleteStep installedAgents={["claude"]} onClose={onClose} />);
-
-    fireEvent.click(screen.getByTestId("complete-step-launch-agent"));
-
-    expect(dispatchMock).toHaveBeenCalledTimes(1);
-    expect(dispatchMock).toHaveBeenCalledWith("panel.palette", undefined, { source: "user" });
-    expect(onClose).toHaveBeenCalledTimes(1);
+  it("explains the empty case instead of listing nothing", () => {
+    render(<CompleteStep installedAgents={[]} />);
+    expect(screen.queryByTestId("agent-card-claude")).toBeNull();
+    expect(screen.getByText(/no agents were installed/i)).toBeTruthy();
   });
 });

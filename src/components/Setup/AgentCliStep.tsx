@@ -202,15 +202,6 @@ export function AgentCliStep({
 
   return (
     <div className="flex flex-col gap-4">
-      <div className="flex items-center justify-between">
-        <div>
-          <h3 className="text-base font-semibold text-daintree-text mb-1">Install agents</h3>
-          <p className="text-sm text-daintree-text/60">
-            Install agents individually or use the batch button below.
-          </p>
-        </div>
-      </div>
-
       <div className="space-y-1.5 max-h-[320px] overflow-y-auto">
         {selectedAgentIds.map((agentId) => {
           const config = AGENT_REGISTRY[agentId];
@@ -293,7 +284,7 @@ export function AgentCliStep({
                       Manual
                     </span>
                   ) : (
-                    <span className="inline-flex items-center gap-1 text-[11px] text-daintree-text/30">
+                    <span className="inline-flex items-center gap-1 text-[11px] text-text-muted">
                       <CircleDashed className="w-3 h-3" />
                       Not installed
                     </span>
@@ -391,7 +382,7 @@ export function AgentCliStep({
           type="button"
           disabled={isBatchRunning}
           onClick={handleInstallAll}
-          className="flex items-center justify-center gap-2 w-full px-3 py-2 rounded-[var(--radius-md)] bg-daintree-accent text-accent-primary-foreground text-sm font-medium hover:bg-daintree-accent/90 transition-colors disabled:opacity-50 disabled:pointer-events-none"
+          className="flex items-center justify-center gap-2 w-full px-3 py-2 rounded-[var(--radius-md)] border border-border-strong bg-overlay-subtle text-daintree-text text-sm font-medium hover:bg-overlay-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-daintree-accent disabled:opacity-50 disabled:pointer-events-none"
         >
           {isBatchRunning ? (
             <>

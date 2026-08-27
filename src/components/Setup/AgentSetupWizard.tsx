@@ -15,10 +15,18 @@ import { logError } from "@/utils/logger";
 import type { CliAvailability } from "@shared/types";
 import { useAgentSetupPoll } from "./useAgentSetupPoll";
 import { isAgentInstalled, isAgentLaunchable } from "../../../shared/utils/agentAvailability";
-import { Sparkles, ChevronLeft, ChevronRight, ArrowRight, Check, Sun, Moon } from "lucide-react";
+import { Sparkles, ChevronLeft, ArrowRight, Check, Sun, Moon } from "lucide-react";
 import { AnimatePresence, m, useReducedMotion, type Variants } from "framer-motion";
 import { Plug } from "@/components/icons";
-import { UI_ENTER_DURATION, UI_EXIT_DURATION } from "@/lib/animationUtils";
+import { SettingsSwitch } from "@/components/Settings/SettingsSwitch";
+import {
+  UI_ENTER_DURATION,
+  UI_EXIT_DURATION,
+  UI_PALETTE_ENTER_DURATION,
+  UI_PALETTE_EXIT_DURATION,
+  EASE_OUT_EXPO_FM,
+  UI_EXIT_EASING_FM,
+} from "@/lib/animationUtils";
 import { cn } from "@/lib/utils";
 import { BUILT_IN_APP_SCHEMES } from "@/config/appColorSchemes";
 import { useAppThemeStore } from "@/store/appThemeStore";
@@ -198,27 +206,33 @@ export function sortTierByInstalled<T extends string>(
 
 // --- Step transition variants ---
 
+// Directional but subordinate to the content: a fixed short offset rather than
+// a percentage of the panel, which on the tallest step travelled ~200px and
+// read as the whole dialog swapping rather than the step advancing.
+const STEP_SLIDE_PX = 24;
+
 const stepVariants: Variants = {
   initial: (direction: number) => ({
-    x: `${direction * 30}%`,
+    x: direction * STEP_SLIDE_PX,
     opacity: 0,
   }),
   animate: {
     x: 0,
     opacity: 1,
-    transition: { duration: UI_ENTER_DURATION / 1000, ease: [0.16, 1, 0.3, 1] },
+    transition: { duration: UI_ENTER_DURATION / 1000, ease: EASE_OUT_EXPO_FM },
   },
   exit: (direction: number) => ({
-    x: `${direction * -30}%`,
+    x: direction * -STEP_SLIDE_PX,
     opacity: 0,
-    transition: { duration: UI_EXIT_DURATION / 1000, ease: [0.2, 0, 0.7, 0] },
+    transition: { duration: UI_EXIT_DURATION / 1000, ease: UI_EXIT_EASING_FM },
   }),
 };
 
+// Reduced motion drops the travel and keeps the cross-fade on the palette tier.
 const reducedStepVariants: Variants = {
   initial: { opacity: 0 },
-  animate: { opacity: 1, transition: { duration: 0.15 } },
-  exit: { opacity: 0, transition: { duration: 0.1 } },
+  animate: { opacity: 1, transition: { duration: UI_PALETTE_ENTER_DURATION / 1000 } },
+  exit: { opacity: 0, transition: { duration: UI_PALETTE_EXIT_DURATION / 1000 } },
 };
 
 // --- Wizard state machine ---
@@ -255,14 +269,92 @@ export type WizardAction =
 // First-run walks every step (appearance → agents → privacy → cli →
 // permissions → complete); re-runs from Settings start at `agents` and skip the
 // first-run-only consent steps (privacy, permissions — returning users already
-// have those toggles in Settings). The `cli` step is conditionally skipped when
-// all selected agents are already installed, but the dot count reflects the
-// maximum flow length — mirroring the pre-split behavior where the skippable
-// `cli` step still counted toward the total.
+// have those toggles in Settings). This is the MAXIMUM flow; `visibleFlowSteps`
+// narrows it to the route a given run actually takes, which is what the
+// "Step n of n" display counts.
 export function flowSteps(isFirstRun: boolean): WizardStep["type"][] {
   return isFirstRun
     ? ["appearance", "agents", "privacy", "cli", "permissions", "complete"]
     : ["agents", "cli", "complete"];
+}
+
+/**
+ * The wizard's step names, owned by the shell so every step gets the same top
+ * edge, type scale and spacing instead of each step component rolling its own.
+ */
+export const STEP_META: Record<WizardStep["type"], { title: string; subtitle: string }> = {
+  appearance: {
+    title: "Appearance",
+    subtitle: "Choose your preferred theme",
+  },
+  agents: {
+    title: "Choose your AI agents",
+    subtitle:
+      "Already-installed agents are pre-selected. You can change this anytime from Settings → Agents.",
+  },
+  privacy: {
+    title: "Privacy",
+    subtitle: "Help improve Daintree by sharing anonymous crash reports",
+  },
+  cli: {
+    title: "Install agents",
+    subtitle: "Install the agents you picked that aren't on your machine yet",
+  },
+  permissions: {
+    title: "Agent permissions",
+    subtitle:
+      "Keep prompts on unless you trust agents to run commands and edit files without asking",
+  },
+  complete: {
+    title: "Setup complete",
+    subtitle: "",
+  },
+};
+
+/**
+ * True when the `cli` step has nothing to do. The reducer branches on this to
+ * skip the step, and the progress display filters the step out for the same
+ * reason — they call the same predicate so the count can never disagree with
+ * the route the user is actually walked through.
+ */
+export function allSelectedAgentsInstalled(state: WizardState): boolean {
+  const selectedIds = Object.keys(state.selections).filter((id) => state.selections[id]);
+  return (
+    selectedIds.length > 0 && selectedIds.every((id) => isAgentLaunchable(state.availability[id]))
+  );
+}
+
+/**
+ * The steps this particular run will actually show. `flowSteps` is the maximum
+ * flow; when every selected agent is already installed the `cli` step never
+ * renders, and counting it would make the numbering skip (a user went
+ * "step 3 of 6" straight to "step 5 of 6") and overstate what is left.
+ *
+ * The denominator must never shift retroactively, so once the run is past the
+ * point where `cli` would have appeared the answer is read from `history` — the
+ * route actually taken — and not from availability. Availability keeps moving
+ * underneath us (the wizard re-probes every 3s, and an install completing would
+ * otherwise silently drop a step the user already walked through). Only while
+ * the user is still upstream of `cli` does the count track their selections,
+ * which is a step they are actively editing, and only the total moves — the
+ * number of steps already behind them never does.
+ */
+export function visibleFlowSteps(state: WizardState): WizardStep["type"][] {
+  const flow = flowSteps(state.isFirstRun);
+  const withoutCli = flow.filter((step) => step !== "cli");
+
+  if (state.step.type === "cli" || state.history.some((step) => step.type === "cli")) {
+    return flow;
+  }
+
+  const cliIndex = flow.indexOf("cli");
+  const currentIndex = flow.indexOf(state.step.type);
+  if (cliIndex !== -1 && currentIndex > cliIndex) {
+    // Downstream of `cli` and it is not in history: it was definitively skipped.
+    return withoutCli;
+  }
+
+  return allSelectedAgentsInstalled(state) ? withoutCli : flow;
 }
 
 export function buildInitialState(availability: CliAvailability, isFirstRun = false): WizardState {
@@ -281,10 +373,7 @@ export function buildInitialState(availability: CliAvailability, isFirstRun = fa
 // global permissions consent gate before the summary even when cli is skipped;
 // returning users go straight to complete.
 function resolvePostInstallStep(state: WizardState): WizardStep {
-  const selectedIds = Object.keys(state.selections).filter((id) => state.selections[id]);
-  const allSelectedInstalled =
-    selectedIds.length > 0 && selectedIds.every((id) => isAgentLaunchable(state.availability[id]));
-  if (allSelectedInstalled) {
+  if (allSelectedAgentsInstalled(state)) {
     return state.isFirstRun ? { type: "permissions" } : { type: "complete" };
   }
   return { type: "cli" };
@@ -538,6 +627,20 @@ export function AgentSetupWizard({
     onStepChangeRef.current?.(state.step);
   }, [state.step]);
 
+  // AppDialog's default `initialFocus="first"` lands on the header Close button
+  // — the one control that discards a first-run setup (and commits crash
+  // reporting off on the way out) if the user presses Enter. Take focus
+  // ourselves and put it on the step heading instead, which is also what the
+  // ARIA practices ask for on a step advance: land on the heading with
+  // tabindex=-1 so the step's name and instructions are read before the first
+  // control, rather than leaving focus on the button that was just pressed.
+  const stepHeadingRef = useRef<HTMLHeadingElement | null>(null);
+  useEffect(() => {
+    if (!isOpen) return;
+    const frame = requestAnimationFrame(() => stepHeadingRef.current?.focus());
+    return () => cancelAnimationFrame(frame);
+  }, [isOpen, state.step.type]);
+
   const installedAgents = useMemo(
     () => AGENT_ORDER.filter((id) => isAgentLaunchable(state.availability[id])),
     [state.availability]
@@ -551,9 +654,10 @@ export function AgentSetupWizard({
     [state.selections]
   );
 
-  const flow = useMemo(() => flowSteps(isFirstRun), [isFirstRun]);
+  const flow = useMemo(() => visibleFlowSteps(state), [state]);
   const totalSteps = flow.length;
   const stepNumber = Math.max(0, flow.indexOf(state.step.type));
+  const stepMeta = STEP_META[state.step.type];
 
   const handleAppearanceContinue = useCallback(() => {
     directionRef.current = 1;
@@ -625,6 +729,14 @@ export function AgentSetupWizard({
     onClose();
   }, [onClose]);
 
+  // Moved out of CompleteStep so the completion screen has one primary action
+  // in the footer rather than a second filled button in the body. The behaviour
+  // is unchanged: open the launcher palette, then close the wizard.
+  const handleLaunchAgent = useCallback(() => {
+    void actionService.dispatch("panel.palette", undefined, { source: "user" });
+    onClose();
+  }, [onClose]);
+
   const notifyTelemetryDefault = useCallback(() => {
     notify({
       type: "info",
@@ -654,7 +766,15 @@ export function AgentSetupWizard({
     }
   }, [onClose, isFirstRun, commitTelemetry, notifyTelemetryDefault]);
 
-  const showLoadingSelections = !state.selectionsInitialized && isAvailabilityLoading;
+  const showLoadingSelections = !state.selectionsInitialized;
+  const hasInstalledAgents = installedAgents.length > 0;
+
+  // Rides AppDialog's own hint slot (bottom-left), which is where the progress
+  // dots used to sit and where every other dialog puts footer context.
+  const footerHint =
+    state.step.type === "agents" && !showLoadingSelections && selectedAgentIds.length === 0 ? (
+      <span aria-live="polite">Select at least one agent to continue</span>
+    ) : undefined;
 
   const handleBeforeClose = useCallback(async () => {
     // Any first-run close before the summary records telemetry off — silence is
@@ -676,25 +796,57 @@ export function AgentSetupWizard({
       onBeforeClose={isFirstRun ? handleBeforeClose : undefined}
       size="lg"
       dismissible={!isSaving}
+      initialFocus="none"
+      data-testid="agent-setup-wizard"
     >
       <AppDialog.Header>
-        <AppDialog.Title icon={<Plug className="w-5 h-5 text-daintree-accent" />}>
-          {isFirstRun && state.step.type === "appearance" ? "Welcome to Daintree" : "Agent Setup"}
-        </AppDialog.Title>
+        <div className="flex items-center gap-3 min-w-0">
+          {/* Neutral, not accent: the header glyph is decoration, and the
+              footer's primary action is this dialog's one load-bearing signal. */}
+          <AppDialog.Title icon={<Plug className="w-5 h-5 text-text-secondary" />}>
+            {isFirstRun ? "Set up Daintree" : "Agent setup"}
+          </AppDialog.Title>
+          <span
+            className="text-sm tabular-nums text-text-secondary shrink-0"
+            data-testid="agent-setup-step-count"
+          >
+            Step {stepNumber + 1} of {totalSteps}
+          </span>
+        </div>
         <AppDialog.CloseButton />
       </AppDialog.Header>
 
       <AppDialog.Body>
-        <div className="relative overflow-hidden">
+        {/* A floor under the sparsest steps so the panel stops halving in height
+            between consent gates and the agent list; AppDialog's max-h still
+            caps the tall end and owns the scrolling. */}
+        <div className="relative overflow-hidden min-h-[22rem]">
           <AnimatePresence mode="wait" custom={directionRef.current}>
             <m.div
               key={state.step.type}
+              data-testid="agent-setup-step"
+              data-step={state.step.type}
               custom={directionRef.current}
               variants={prefersReducedMotion ? reducedStepVariants : stepVariants}
               initial="initial"
               animate="animate"
               exit="exit"
             >
+              {/* Owned by the shell, not the step: identical top edge, type
+                  scale and spacing on every step, and the persistent frame
+                  names the current task rather than leaving it to body copy. */}
+              <div className="mb-4">
+                <h3
+                  ref={stepHeadingRef}
+                  tabIndex={-1}
+                  className="text-base font-semibold text-daintree-text outline-hidden focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-4 focus-visible:outline-daintree-accent rounded-xs"
+                >
+                  {stepMeta.title}
+                </h3>
+                {stepMeta.subtitle && (
+                  <p className="text-sm text-text-secondary mt-1">{stepMeta.subtitle}</p>
+                )}
+              </div>
               {state.step.type === "appearance" && (
                 <AppearanceStep
                   selectedSchemeId={selectedSchemeId}
@@ -712,7 +864,6 @@ export function AgentSetupWizard({
                   }
                   onFatalFailureChange={setHasFatalHealthFailure}
                   onCheckingChange={setIsHealthChecking}
-                  isFirstRun={isFirstRun}
                 />
               )}
               {state.step.type === "privacy" && (
@@ -741,105 +892,105 @@ export function AgentSetupWizard({
                   onPermissionsChange={setPermissionsEnabled}
                 />
               )}
-              {state.step.type === "complete" && (
-                <CompleteStep installedAgents={installedAgents} onClose={onClose} />
-              )}
+              {state.step.type === "complete" && <CompleteStep installedAgents={installedAgents} />}
             </m.div>
           </AnimatePresence>
         </div>
       </AppDialog.Body>
 
-      <AppDialog.Footer>
-        <div className="flex items-center justify-between w-full">
-          <div className="flex items-center gap-1.5">
-            {Array.from({ length: totalSteps }).map((_, i) => (
-              <div
-                key={i}
-                aria-current={i === stepNumber ? "step" : undefined}
-                className={`w-1.5 h-1.5 rounded-full transition-colors ${
-                  i === stepNumber
-                    ? "bg-daintree-accent"
-                    : i < stepNumber
-                      ? "bg-daintree-accent/40"
-                      : "bg-daintree-text/15"
-                }`}
-              />
-            ))}
-          </div>
-          <div className="flex items-center gap-2">
-            {state.step.type === "agents" &&
-              !showLoadingSelections &&
-              selectedAgentIds.length === 0 && (
-                <span aria-live="polite" className="text-xs text-daintree-text/50">
-                  Select at least one agent to continue
-                </span>
-              )}
-            {state.step.type !== "complete" &&
-              (state.history.length > 0 ? (
-                <Button
-                  variant="ghost"
-                  onClick={handleBack}
-                  className="text-daintree-text/70"
-                  disabled={isSaving}
-                >
-                  <ChevronLeft className="w-4 h-4" />
-                  Back
-                </Button>
-              ) : (
-                <Button
-                  variant="ghost"
-                  onClick={handleSkip}
-                  disabled={isSaving}
-                  className="text-daintree-text/60"
-                >
-                  Skip
-                </Button>
-              ))}
-            {state.step.type === "appearance" && (
-              <Button variant="contrast" onClick={handleAppearanceContinue} disabled={isSaving}>
-                Continue
-                <ArrowRight className="w-4 h-4 ml-1" />
+      {/* The dialog's own accessible name stays pinned to the persistent header
+          title; the step change is announced here instead, so a screen reader
+          hears which step opened without the dialog appearing to be replaced. */}
+      <span className="sr-only" aria-live="polite">
+        {`Step ${stepNumber + 1} of ${totalSteps}: ${stepMeta.title}`}
+      </span>
+
+      <AppDialog.Footer hint={footerHint}>
+        <div className="flex items-center gap-3 ml-auto">
+          {state.step.type !== "complete" &&
+            (state.history.length > 0 ? (
+              <Button
+                variant="ghost"
+                onClick={handleBack}
+                className="text-daintree-text/70 hover:text-daintree-text"
+                disabled={isSaving}
+              >
+                <ChevronLeft className="w-4 h-4" />
+                Back
               </Button>
-            )}
-            {state.step.type === "agents" && (
+            ) : (
+              // Not "Skip": this closes the whole wizard, it does not skip the
+              // step. The first-run wording says the setup can be resumed;
+              // the re-run wording says the selection is being abandoned.
+              <Button
+                variant="ghost"
+                onClick={handleSkip}
+                disabled={isSaving}
+                data-testid="agent-setup-exit"
+                className="text-daintree-text/70 hover:text-daintree-text"
+              >
+                {isFirstRun ? "Set up later" : "Cancel"}
+              </Button>
+            ))}
+          {state.step.type === "appearance" && (
+            <Button variant="contrast" onClick={handleAppearanceContinue} disabled={isSaving}>
+              Continue
+              <ArrowRight className="w-4 h-4 ml-1" />
+            </Button>
+          )}
+          {state.step.type === "agents" && (
+            <Button
+              variant="contrast"
+              onClick={handleAgentsContinue}
+              disabled={
+                selectedAgentIds.length === 0 ||
+                isSaving ||
+                hasFatalHealthFailure ||
+                isHealthChecking
+              }
+            >
+              Continue
+              <ArrowRight className="w-4 h-4 ml-1" />
+            </Button>
+          )}
+          {state.step.type === "privacy" && (
+            <Button variant="contrast" onClick={handlePrivacyContinue} disabled={isSaving}>
+              Continue
+              <ArrowRight className="w-4 h-4 ml-1" />
+            </Button>
+          )}
+          {state.step.type === "cli" && (
+            <Button variant="contrast" onClick={handleCliContinue}>
+              Continue
+              <ArrowRight className="w-4 h-4 ml-1" />
+            </Button>
+          )}
+          {state.step.type === "permissions" && (
+            <Button variant="contrast" onClick={handlePermissionsContinue} disabled={isSaving}>
+              Continue
+              <ArrowRight className="w-4 h-4 ml-1" />
+            </Button>
+          )}
+          {/* Completion resolves to the forward move, matching CloneRepoDialog's
+              "Open Project" and GitInitDialog's "Continue" — the wizard's last
+              screen should start the work, not merely dismiss itself. With no
+              agents installed there is nothing to launch, so finishing is the
+              only action and it takes the primary slot. */}
+          {state.step.type === "complete" &&
+            (hasInstalledAgents ? (
               <Button
                 variant="contrast"
-                onClick={handleAgentsContinue}
-                disabled={
-                  selectedAgentIds.length === 0 ||
-                  isSaving ||
-                  hasFatalHealthFailure ||
-                  isHealthChecking
-                }
+                onClick={handleLaunchAgent}
+                data-testid="complete-step-launch-agent"
               >
-                Continue
-                <ArrowRight className="w-4 h-4 ml-1" />
+                <Sparkles className="w-4 h-4 mr-1" />
+                Launch an agent
               </Button>
-            )}
-            {state.step.type === "privacy" && (
-              <Button variant="contrast" onClick={handlePrivacyContinue} disabled={isSaving}>
-                Continue
-                <ArrowRight className="w-4 h-4 ml-1" />
-              </Button>
-            )}
-            {state.step.type === "cli" && (
-              <Button variant="contrast" onClick={handleCliContinue}>
-                Continue
-                <ChevronRight className="w-4 h-4 ml-1" />
-              </Button>
-            )}
-            {state.step.type === "permissions" && (
-              <Button variant="contrast" onClick={handlePermissionsContinue} disabled={isSaving}>
-                Continue
-                <ArrowRight className="w-4 h-4 ml-1" />
-              </Button>
-            )}
-            {state.step.type === "complete" && (
+            ) : (
               <Button variant="contrast" onClick={handleFinish}>
                 Finish setup
               </Button>
-            )}
-          </div>
+            ))}
         </div>
       </AppDialog.Footer>
     </AppDialog>
@@ -859,8 +1010,6 @@ function AppearanceStep({
 
   return (
     <section>
-      <h3 className="text-base font-semibold text-daintree-text mb-2">Appearance</h3>
-      <p className="text-sm text-daintree-text/60 mb-4">Choose your preferred theme</p>
       <div className="grid grid-cols-2 gap-4" role="listbox" aria-label="Select theme">
         {schemes.map((scheme) => {
           const isSelected = selectedSchemeId === scheme.id;
@@ -874,6 +1023,10 @@ function AppearanceStep({
               onClick={() => onThemeSelect(scheme.id)}
               className={cn(
                 "flex flex-col gap-2 p-3 rounded-[var(--radius-md)] border transition-colors text-left",
+                // Without this the cards fell through to the browser's default
+                // focus ring, which is the OS accent colour and ignores the
+                // theme and forced-colors entirely.
+                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-daintree-accent",
                 isSelected
                   ? "border-border-strong bg-overlay-selected"
                   : "border-daintree-border bg-daintree-bg hover:border-daintree-text/30"
@@ -913,7 +1066,6 @@ function AgentsStep({
   onToggle,
   onFatalFailureChange,
   onCheckingChange,
-  isFirstRun = false,
 }: {
   availability: CliAvailability;
   selections: Record<string, boolean>;
@@ -922,7 +1074,6 @@ function AgentsStep({
   onToggle: (agentId: string, checked: boolean) => void;
   onFatalFailureChange: (hasFatal: boolean) => void;
   onCheckingChange: (checking: boolean) => void;
-  isFirstRun?: boolean;
 }) {
   const featuredAgents = useMemo(
     () => sortTierByInstalled(FEATURED_AGENT_IDS, availability),
@@ -941,14 +1092,6 @@ function AgentsStep({
       />
 
       <section>
-        <h3 className="text-base font-semibold text-daintree-text mb-2">
-          {isFirstRun ? "Agents" : "Choose your AI agents"}
-        </h3>
-        <p className="text-sm text-daintree-text/60 mb-4">
-          Select the agents you want in your workflow. Already-installed agents are pre-selected.
-          You can change this anytime from{" "}
-          <span className="text-daintree-text/80">Settings → Agents</span>.
-        </p>
         {isLoading ? (
           <Skeleton label="Loading agents" className="space-y-2">
             {Array.from({ length: 5 }).map((_, i) => (
@@ -1024,42 +1167,25 @@ function PrivacyStep({
 
   return (
     <section>
-      <h3 className="text-base font-semibold text-daintree-text mb-2">Privacy</h3>
-      <p className="text-sm text-daintree-text/60 mb-4">
-        Help improve Daintree by sharing anonymous crash reports
-      </p>
-      <div className="space-y-2">
+      <div className="space-y-3 rounded-[var(--radius-lg)] border border-daintree-border p-4">
         <div className="flex items-center justify-between gap-3">
           <p id={crashReportingLabelId} className="text-sm font-medium text-daintree-text">
             Enable crash reporting
           </p>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={telemetryEnabled}
+          <SettingsSwitch
+            checked={telemetryEnabled ?? false}
+            onCheckedChange={onTelemetryChange}
             aria-labelledby={crashReportingLabelId}
-            onClick={() => onTelemetryChange(!telemetryEnabled)}
-            className={cn(
-              "relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors",
-              telemetryEnabled ? "bg-daintree-accent" : "bg-daintree-border"
-            )}
-          >
-            <span
-              className={cn(
-                "pointer-events-none inline-block h-4 w-4 rounded-full shadow transform transition-transform mt-0.5",
-                telemetryEnabled
-                  ? "translate-x-4 ml-0.5 bg-text-inverse"
-                  : "translate-x-0 ml-0.5 bg-daintree-text"
-              )}
-            />
-          </button>
+          />
         </div>
-        <p className="text-xs text-daintree-text/50">
+        <p className="text-xs text-text-secondary">
           No file contents or credentials are ever sent.
         </p>
+        {/* Underlined at rest: previously this read as a third line of body
+            copy and only became identifiable as a control on hover. */}
         <button
           type="button"
-          className="text-xs text-text-secondary hover:text-daintree-text underline-offset-2 hover:underline focus-visible:outline-hidden focus-visible:underline"
+          className="text-xs text-text-link underline underline-offset-2 hover:text-daintree-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-daintree-accent rounded-xs"
           onClick={() =>
             void actionService.dispatch(
               "telemetry.togglePreview",
@@ -1089,38 +1215,19 @@ function PermissionsStep({
 
   return (
     <section>
-      <h3 className="text-base font-semibold text-daintree-text mb-2">Agent permissions</h3>
-      <p className="text-sm text-daintree-text/60 mb-4">
-        Keep prompts on unless you trust agents to run commands and edit files without asking
-      </p>
-      <div className="space-y-2">
+      <div className="space-y-3 rounded-[var(--radius-lg)] border border-daintree-border p-4">
         <div className="flex items-center justify-between gap-3">
           <p id={labelId} className="text-sm font-medium text-daintree-text">
             Skip permission prompts for agents
           </p>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={permissionsEnabled}
+          <SettingsSwitch
+            checked={permissionsEnabled ?? false}
+            onCheckedChange={onPermissionsChange}
             aria-labelledby={labelId}
             aria-describedby={descriptionId}
-            onClick={() => onPermissionsChange(!permissionsEnabled)}
-            className={cn(
-              "relative inline-flex h-5 w-9 shrink-0 cursor-pointer rounded-full transition-colors",
-              permissionsEnabled ? "bg-daintree-accent" : "bg-daintree-border"
-            )}
-          >
-            <span
-              className={cn(
-                "pointer-events-none inline-block h-4 w-4 rounded-full shadow transform transition-transform mt-0.5",
-                permissionsEnabled
-                  ? "translate-x-4 ml-0.5 bg-text-inverse"
-                  : "translate-x-0 ml-0.5 bg-daintree-text"
-              )}
-            />
-          </button>
+          />
         </div>
-        <p id={descriptionId} className="text-xs text-daintree-text/50">
+        <p id={descriptionId} className="text-xs text-text-secondary">
           Agents act without confirmation — faster, but they run commands and edit files on their
           own. You can change this anytime in Settings → Agents.
         </p>
@@ -1131,28 +1238,14 @@ function PermissionsStep({
 
 // --- Complete step ---
 
-export function CompleteStep({
-  installedAgents,
-  onClose,
-}: {
-  installedAgents: string[];
-  onClose: () => void;
-}) {
+export function CompleteStep({ installedAgents }: { installedAgents: string[] }) {
   const hasAgents = installedAgents.length > 0;
 
-  const handleLaunch = useCallback(() => {
-    void actionService.dispatch("panel.palette", undefined, { source: "user" });
-    onClose();
-  }, [onClose]);
-
   return (
-    <div className="space-y-6 text-center py-4">
-      <div>
-        <div className="w-12 h-12 rounded-full bg-status-success/15 flex items-center justify-center mx-auto mb-4">
-          <Sparkles className="w-6 h-6 text-status-success" />
-        </div>
-        <h3 className="text-base font-semibold text-daintree-text mb-2">Setup complete</h3>
-        <p className="text-sm text-daintree-text/60">
+    <div className="space-y-4">
+      <div className="flex items-start gap-3">
+        <Sparkles className="w-5 h-5 text-status-success shrink-0 mt-0.5" aria-hidden="true" />
+        <p className="text-sm text-text-secondary">
           {hasAgents
             ? `You have ${installedAgents.length} agent${installedAgents.length === 1 ? "" : "s"} ready to use. Launch them from the toolbar or with keyboard shortcuts.`
             : "No agents were installed. You can install them later from Settings → Agents."}
@@ -1187,7 +1280,9 @@ export function CompleteStep({
                   </span>
                 )}
                 {shortcut && (
-                  <span className="text-[11px] text-daintree-text/40 ml-auto">{shortcut}</span>
+                  <span className="text-[11px] text-text-muted ml-auto tabular-nums">
+                    {shortcut}
+                  </span>
                 )}
               </div>
             );
@@ -1195,18 +1290,7 @@ export function CompleteStep({
         </div>
       )}
 
-      {hasAgents && (
-        <div className="flex justify-center">
-          <Button onClick={handleLaunch} data-testid="complete-step-launch-agent">
-            <Sparkles className="w-4 h-4 mr-1" />
-            Launch an agent
-          </Button>
-        </div>
-      )}
-
-      <p className="text-xs text-daintree-text/40">
-        You can re-run this wizard from Settings → Agents
-      </p>
+      <p className="text-xs text-text-muted">You can re-run this wizard from Settings → Agents</p>
     </div>
   );
 }

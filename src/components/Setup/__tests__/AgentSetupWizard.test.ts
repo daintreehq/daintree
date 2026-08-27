@@ -1,12 +1,17 @@
 import { describe, expect, it } from "vitest";
 import { LAUNCHABLE_AGENT_IDS } from "@shared/config/agentIds";
 import {
+  allSelectedAgentsInstalled,
   buildInitialState,
   FEATURED_AGENT_IDS,
   flowSteps,
   MORE_AGENT_IDS,
   sortTierByInstalled,
+  STEP_META,
+  visibleFlowSteps,
   wizardReducer,
+  type WizardAction,
+  type WizardState,
 } from "../AgentSetupWizard";
 import type { CliAvailability } from "@shared/types";
 
@@ -454,5 +459,116 @@ describe("AgentSetupWizard reducer", () => {
     state = wizardReducer(state, { type: "AGENTS_CONTINUE" });
     expect(state.step).toEqual({ type: "cli" });
     expect(state.selections.gemini).toBe(false);
+  });
+});
+
+describe("visibleFlowSteps — the progress a user is actually shown", () => {
+  const installed = { claude: "ready", codex: "ready" } as CliAvailability;
+  const missing = { claude: "ready", gemini: "missing" } as CliAvailability;
+
+  /** Replays a run and records the "Step n of m" that would render at each stop. */
+  function walk(state: WizardState, actions: WizardAction[]): string[] {
+    const seen: string[] = [];
+    const record = (s: WizardState) => {
+      const flow = visibleFlowSteps(s);
+      seen.push(`${flow.indexOf(s.step.type) + 1}/${flow.length}`);
+    };
+    record(state);
+    let current = state;
+    for (const action of actions) {
+      current = wizardReducer(current, action);
+      record(current);
+    }
+    return seen;
+  }
+
+  it("never skips a number, whether or not the install step is taken", () => {
+    const skipping = walk(
+      wizardReducer(buildInitialState(installed, true), {
+        type: "INIT_SELECTIONS",
+        payload: { claude: true, codex: true },
+      }),
+      [
+        { type: "APPEARANCE_CONTINUE" },
+        { type: "AGENTS_CONTINUE" },
+        { type: "PRIVACY_CONTINUE" },
+        { type: "PERMISSIONS_CONTINUE" },
+      ]
+    );
+    const installing = walk(
+      wizardReducer(buildInitialState(missing, true), {
+        type: "INIT_SELECTIONS",
+        payload: { claude: true, gemini: true },
+      }),
+      [
+        { type: "APPEARANCE_CONTINUE" },
+        { type: "AGENTS_CONTINUE" },
+        { type: "PRIVACY_CONTINUE" },
+        { type: "CLI_CONTINUE" },
+        { type: "PERMISSIONS_CONTINUE" },
+      ]
+    );
+
+    for (const run of [skipping, installing]) {
+      const positions = run.map((entry) => Number(entry.split("/")[0]));
+      expect(positions).toEqual(positions.map((_, i) => i + 1));
+    }
+  });
+
+  it("holds the total steady from the moment the install step is decided", () => {
+    // Past the cli branch, availability moving underneath the wizard (it
+    // re-probes while open) must not rewrite how many steps the run had.
+    let state = wizardReducer(buildInitialState(missing, true), {
+      type: "INIT_SELECTIONS",
+      payload: { claude: true, gemini: true },
+    });
+    for (const type of ["APPEARANCE_CONTINUE", "AGENTS_CONTINUE", "PRIVACY_CONTINUE"] as const) {
+      state = wizardReducer(state, { type });
+    }
+    expect(state.step).toEqual({ type: "cli" });
+    const totalOnCli = visibleFlowSteps(state).length;
+
+    state = wizardReducer(state, { type: "CLI_CONTINUE" });
+    state = wizardReducer(state, {
+      type: "SET_AVAILABILITY",
+      payload: { claude: "ready", gemini: "ready" } as CliAvailability,
+    });
+
+    expect(allSelectedAgentsInstalled(state)).toBe(true);
+    expect(visibleFlowSteps(state).length).toBe(totalOnCli);
+  });
+
+  it("drops the install step from the total only while the user can still change it", () => {
+    let state = wizardReducer(buildInitialState(installed, false), {
+      type: "INIT_SELECTIONS",
+      payload: { claude: true, codex: true },
+    });
+    expect(visibleFlowSteps(state)).not.toContain("cli");
+
+    // Picking an agent that is not installed puts the step back before they leave.
+    state = wizardReducer(state, {
+      type: "SET_AVAILABILITY",
+      payload: missing,
+    });
+    state = wizardReducer(state, { type: "TOGGLE_SELECTION", agentId: "gemini", checked: true });
+    expect(visibleFlowSteps(state)).toContain("cli");
+  });
+
+  it("is a subsequence of the maximum flow for both entry points", () => {
+    for (const isFirstRun of [true, false]) {
+      const state = buildInitialState(installed, isFirstRun);
+      const max = flowSteps(isFirstRun);
+      const visible = visibleFlowSteps(state);
+      expect(max.filter((step) => visible.includes(step))).toEqual(visible);
+    }
+  });
+});
+
+describe("STEP_META", () => {
+  it("names every step the flow can reach", () => {
+    const reachable = new Set([...flowSteps(true), ...flowSteps(false)]);
+    for (const step of reachable) {
+      expect(STEP_META[step]?.title, `${step} needs a title`).toBeTruthy();
+    }
   });
 });
