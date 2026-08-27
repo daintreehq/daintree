@@ -123,6 +123,7 @@ export function PluginMcpConfirmDialog() {
         onConfirm={() => resolveOnce(current.requestId, "approved-and-pin")}
         variant={variant}
         hasPreview={hasScrollableContent}
+        bodyResetKey={current.requestId}
         confirmCooldownMs={isDestructive ? CONFIRM_COOLDOWN_MS : undefined}
         cooldownKey={current.requestId}
         hint={<GateHint queueDepth={queueDepth} />}
@@ -374,10 +375,10 @@ function GateHint({ queueDepth }: { queueDepth: number }) {
     // "· …". Two lines fit both facts whole.
     return (
       <span aria-live="polite" className="min-w-0 leading-tight">
-        <span className="block truncate">
+        <span className="block">
           {queueDepth} more request{queueDepth === 1 ? "" : "s"} waiting
         </span>
-        <span className="block truncate">remembered until this tool changes</span>
+        <span className="block">remembered until this tool changes</span>
       </span>
     );
   }
