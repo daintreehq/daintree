@@ -95,6 +95,15 @@ let turnCounter = 0;
 /** Approvals this process is parked on: approvalId → resolver. */
 const pending = new Map();
 const pendingQuestions = new Map();
+/** Distinguishes successive `/backend` sheets, so a second one is a new question. */
+let backendQuestionSeq = 0;
+/** The engine's own menu, mirrored — see `BackendChoices` in internal/app/backendswitch.go. */
+const BACKEND_CHOICES = [
+  { label: "A", alias: "official", url: "https://assistant.daintree.org" },
+  { label: "B", alias: "local", url: "http://127.0.0.1:8473" },
+];
+/** Which one is answering. MUTATED by an answered `/backend`, as the real engine is. */
+let backendUrl = BACKEND_CHOICES[1].url;
 /** Counts operations requests, so each reading is DISTINGUISHABLE from the last. */
 let operationsReads = 0;
 /** Announced-but-unsettled calls, so an interrupt can terminalize them like the engine. */
@@ -449,6 +458,55 @@ const SCENARIOS = {
     const answer = "I couldn't reach the orchestration tools, so this is from memory only.";
     await streamText(turnId, answer);
     emit({ type: "turn:end", turnId, endedAt: now(), outcome: "hedged", content: answer });
+  },
+
+  /**
+   * The same question with enough options to cross the sheet's filter threshold.
+   *
+   * It exists because the sheet is TWO surfaces: a short list answers on a single
+   * keypress, a long one grows a filter box and gives those keys up to it. The second
+   * has no way to appear in a scenario built around three worktrees, so a visual review
+   * that only ever saw the short form would be reviewing half the component.
+   */
+  async questionLong(turnId) {
+    emit({ type: "turn:phase", turnId, phase: "awaiting_question" });
+    const options = [
+      "feature/db-migrate — 4 commits ahead, tests green",
+      "feature/forge-gitlab — 12 commits ahead, 1 failing check",
+      "feature/native-assistant — 31 commits ahead, tests green",
+      "feature/panel-search — 2 commits ahead, no checks yet",
+      "fix/compiler-budget — merged, worktree still on disk",
+      "main — the default branch",
+      "release/v0.22.0 — tagged, awaiting publish",
+      "Create a new worktree from main",
+    ];
+    emit({
+      type: "question:requested",
+      questionId: "qst_1",
+      toolCallId: "c1",
+      turnId,
+      question: "Which worktree should the migration run in?",
+      options: options.map((text, i) => ({ label: String.fromCharCode(65 + i), text })),
+      default: 2,
+      requestedAt: now(),
+    });
+
+    const index = await awaitQuestion("qst_1");
+    const chosen = index >= 0 && index < options.length;
+    emit({
+      type: "question:answered",
+      questionId: "qst_1",
+      choiceIndex: chosen ? index : -1,
+      cancelled: !chosen,
+      answeredAt: now(),
+      ...(chosen ? { label: String.fromCharCode(65 + index), text: options[index] } : {}),
+    });
+
+    const answer = chosen
+      ? `Running the migration in ${options[index]}.`
+      : "You closed the question, so I'll leave the migration alone.";
+    await streamText(turnId, answer);
+    emit({ type: "turn:end", turnId, endedAt: now(), outcome: "answered", content: answer });
   },
 
   /**
@@ -866,6 +924,78 @@ async function handleCommand(cmd) {
           type: "command:result",
           command: cmd.line,
           text: runAccountCommand(cmd.line.split(/\s+/)[0]),
+        });
+        return;
+      }
+
+      // `/backend` with no argument ASKS, exactly as the real engine now does: it opens
+      // a multiple-choice question on the same channel the model's questions use, waits
+      // for the answer on the command loop it is NOT blocking, and only then reports.
+      //
+      // Driven from the fake rather than only from `/scenario question` because the two
+      // exercise different halves: the scenario proves the sheet renders and answers
+      // during a model turn, and this proves the whole local-question path — a command
+      // that asks, a sheet with no turn behind it, an answer routed back to a parked
+      // command, and a result that reflects the choice.
+      if (cmd.line.trim() === "/backend") {
+        // Rows built from the LIVE choice, as the engine builds them (BackendChoices in
+        // internal/app/backendswitch.go marks whichever endpoint is answering). A fake
+        // that hardcoded "local · current" kept saying so after the user had switched
+        // away from it — asserting against a product that does not exist, which is the
+        // one thing a scripted engine must not do.
+        const options = BACKEND_CHOICES.map(({ label, alias, url }) => ({
+          label,
+          text: `${alias} — ${url}${url === backendUrl ? " · current" : ""}`,
+        }));
+        const questionId = `qst_backend_${++backendQuestionSeq}`;
+        emit({
+          type: "question:requested",
+          questionId,
+          // No turnId and no toolCallId: a command's question belongs to no turn, and
+          // stamping one is how an answer gets recorded inside a turn that never asked.
+          question:
+            "Which backend should answer? Your choice applies from the next message and is remembered for future sessions.",
+          options,
+          // The live endpoint, as the engine derives it — not a fixed row.
+          default: Math.max(
+            0,
+            BACKEND_CHOICES.findIndex((c) => c.url === backendUrl)
+          ),
+          requestedAt: now(),
+        });
+        awaitQuestion(questionId).then(async (index) => {
+          const chosen = index >= 0 && index < options.length;
+          emit({
+            type: "question:answered",
+            questionId,
+            choiceIndex: chosen ? index : -1,
+            cancelled: !chosen,
+            answeredAt: now(),
+            ...(chosen ? { label: options[index].label, text: options[index].text } : {}),
+          });
+          // A REAL gap between the answer and the result, `hold` rather than nothing.
+          //
+          // The engine has one: `question:answered` is posted before the parked command
+          // is woken, and the command then applies the choice. That gap is exactly the
+          // window the composer lease exists for, and a fake that closed it in the same
+          // tick would make the lease unobservable — a test that passes whether or not
+          // the lease is there at all.
+          //
+          // Longer than the engine's own, deliberately. The gap is observed from the
+          // far side of Playwright's polling, and a window shorter than a poll interval
+          // plus a round trip is one the assertion can walk straight past — which is
+          // the same unobservable test with extra steps.
+          await hold(1500);
+          if (chosen) backendUrl = BACKEND_CHOICES[index].url;
+          emit({
+            type: "command:result",
+            command: cmd.line,
+            // Both halves the engine reports (handlers_ui.go BackendSwitchText): where
+            // it now answers from, and that the choice persists.
+            text: chosen
+              ? `Backend is now ${backendUrl} — it answers from your next message.\n\nRemembered for future sessions.`
+              : `Still on ${backendUrl}. Nothing changed.`,
+          });
         });
         return;
       }

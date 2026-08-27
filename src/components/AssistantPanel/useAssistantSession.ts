@@ -40,8 +40,19 @@ export interface AssistantSessionActions {
   submit: (text: string) => boolean;
   interrupt: () => void;
   decideApproval: (approvalId: string, decision: "approved" | "rejected") => void;
-  /** Answer an outstanding question; `index` of -1 dismisses. */
-  answerQuestion: (questionId: string, index: number) => void;
+  /**
+   * Answer an outstanding question; `index` of -1 dismisses.
+   *
+   * Resolves to whether the answer was ACCEPTED for delivery — main answers
+   * `delivered: false` when the session is no longer owned or its process is gone, and
+   * the call can reject outright.
+   *
+   * Accepted, NOT flushed: a `true` means the engine's stdin took it (backpressure is
+   * "buffered", not "rejected" — see AssistantHostProcess.send). That is the right
+   * boundary for the sheet, which only needs to know whether the answer is on its way;
+   * a stricter one would invite retrying a command the engine is also about to receive.
+   */
+  answerQuestion: (questionId: string, index: number) => Promise<boolean>;
   /** Ask the engine for a fresh operations reading. */
   requestOperations: () => void;
   /**
@@ -424,11 +435,33 @@ export function useAssistantSession(opts: AssistantSessionOptions): AssistantSes
   );
 
   const answerQuestion = useCallback(
-    (questionId: string, choiceIndex: number) => {
+    async (questionId: string, choiceIndex: number): Promise<boolean> => {
       const sessionId = sessionIdRef.current;
-      if (sessionId) send({ type: "question:answer", sessionId, questionId, choiceIndex });
+      // No session at all: the engine died or was hibernated while the sheet was up, so
+      // there is nothing to answer.
+      if (!sessionId) return false;
+      try {
+        // NOT `send`, which is fire-and-forget. This is the one command whose acceptance
+        // the caller has to know about: the sheet stays on screen until the engine
+        // confirms, and it latches on the first answer so a double-click cannot send
+        // two — so an answer main refused (`delivered: false` when the session is no
+        // longer owned or its process is gone) would leave a visible sheet that ignores
+        // every retry until the question times out.
+        const result = await window.electron.assistantHost.send({
+          type: "question:answer",
+          sessionId,
+          questionId,
+          choiceIndex,
+        });
+        return result.delivered;
+      } catch {
+        // A rejected invoke is a refused answer like any other. Swallowed rather than
+        // rethrown: the caller's contract is a boolean, and the sheet staying answerable
+        // is the whole of what it does with a failure.
+        return false;
+      }
     },
-    [send]
+    []
   );
 
   const requestOperations = useCallback(() => {
