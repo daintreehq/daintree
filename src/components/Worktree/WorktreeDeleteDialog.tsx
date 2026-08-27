@@ -313,11 +313,19 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
     consequences.push({
       key: "terminals",
       tone: "neutral",
-      content: `${terminalCounts.total} terminal${terminalCounts.total === 1 ? "" : "s"} will be closed${
-        runningAgentCount > 0
-          ? ` — ${runningAgentCount} running an agent${runningAgentCount === 1 ? "" : "s"}`
-          : ""
-      }`,
+      content: (
+        <span>
+          <span>
+            {terminalCounts.total} terminal{terminalCounts.total === 1 ? "" : "s"} will be closed
+          </span>
+          {runningAgentCount > 0 && (
+            <span className="ml-1 text-text-secondary">
+              {" "}
+              {runningAgentCount} running an agent{runningAgentCount === 1 ? "" : "s"}
+            </span>
+          )}
+        </span>
+      ),
     });
   }
   if (hasDevPreview) {
@@ -343,11 +351,12 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
       key: "branch",
       tone: "neutral",
       content: (
-        <>
-          Branch <span className="font-mono break-all">{worktree.branch}</span> will be deleted
-          {" — "}
-          <span className="text-daintree-text/60">fails if it has unmerged changes</span>
-        </>
+        <span>
+          <span>
+            Branch <span className="font-mono break-all">{worktree.branch}</span> will be deleted
+          </span>
+          <span className="ml-1 text-text-secondary"> Fails if it has unmerged changes</span>
+        </span>
       ),
     });
   }

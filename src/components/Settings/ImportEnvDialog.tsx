@@ -315,9 +315,9 @@ export function ImportEnvDialog({ isOpen, onClose, env, onImport }: ImportEnvDia
                   {parsed.errors.map((e) => (
                     <li key={`${e.line}-${e.raw}`}>
                       <span className="text-text-secondary">Line {e.line}:</span>{" "}
-                      <span className="text-daintree-text">{e.reason}</span>
+                      <span className="font-medium text-daintree-text">{e.reason}</span>
                       {e.raw.trim() !== "" && (
-                        <span className="text-text-secondary"> — {e.raw}</span>
+                        <span className="ml-1 text-text-secondary"> {e.raw}</span>
                       )}
                     </li>
                   ))}

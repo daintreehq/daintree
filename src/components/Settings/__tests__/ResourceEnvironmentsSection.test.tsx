@@ -140,6 +140,14 @@ describe("ResourceEnvironmentsSection", () => {
     expect(screen.getByText(/replaced at runtime in all commands/i)).toBeTruthy();
     expect(screen.getByText("{branch}")).toBeTruthy();
     expect(screen.getByText("{worktree_name}")).toBeTruthy();
+
+    // Token and description are ranked by weight and colour, so they have to be
+    // separately styleable rather than one dash-joined run. The single space
+    // between them is what keeps them from announcing as "{branch}branch name".
+    const token = screen.getByText("{branch}");
+    const description = screen.getByText("branch name");
+    expect(token).not.toBe(description);
+    expect(token.parentElement?.textContent).toBe("{branch} branch name");
   });
 
   it("renders add environment button when no environments exist", () => {

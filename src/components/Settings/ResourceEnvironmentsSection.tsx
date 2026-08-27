@@ -428,38 +428,45 @@ export function ResourceEnvironmentsSection({
             <span className="font-medium text-daintree-text/70">Variables</span>{" "}
             <span className="text-daintree-text/40">(replaced at runtime in all commands):</span>
           </div>
+          {/* Weight and colour rank the token above its description — an em dash
+              between them read as one run of prose. Weight is also the half that
+              survives `prefers-contrast: more`, where `text-daintree-text/N` is
+              forced back to the solid token and the colour step disappears. The
+              literal space inside each detail span stays: adjacent inline spans
+              concatenate in the accessibility tree, and `ml-1` is what opens the
+              optical gap. */}
           <div className="grid grid-cols-2 gap-x-4 gap-y-0.5">
             <div>
-              <code className="text-text-secondary">{"{branch}"}</code>
-              <span className="text-daintree-text/40"> — branch name</span>
+              <code className="font-medium text-daintree-text/85">{"{branch}"}</code>
+              <span className="ml-1 text-text-secondary"> branch name</span>
             </div>
             <div>
-              <code className="text-text-secondary">{"{branch-slug}"}</code>
-              <span className="text-daintree-text/40"> — sanitized branch</span>
+              <code className="font-medium text-daintree-text/85">{"{branch-slug}"}</code>
+              <span className="ml-1 text-text-secondary"> sanitized branch</span>
             </div>
             <div>
-              <code className="text-text-secondary">{"{repo-name}"}</code>
-              <span className="text-daintree-text/40"> — repository folder</span>
+              <code className="font-medium text-daintree-text/85">{"{repo-name}"}</code>
+              <span className="ml-1 text-text-secondary"> repository folder</span>
             </div>
             <div>
-              <code className="text-text-secondary">{"{base-folder}"}</code>
-              <span className="text-daintree-text/40"> — alias for repo-name</span>
+              <code className="font-medium text-daintree-text/85">{"{base-folder}"}</code>
+              <span className="ml-1 text-text-secondary"> alias for repo-name</span>
             </div>
             <div>
-              <code className="text-text-secondary">{"{parent-dir}"}</code>
-              <span className="text-daintree-text/40"> — parent directory</span>
+              <code className="font-medium text-daintree-text/85">{"{parent-dir}"}</code>
+              <span className="ml-1 text-text-secondary"> parent directory</span>
             </div>
             <div>
-              <code className="text-text-secondary">{"{worktree_name}"}</code>
-              <span className="text-daintree-text/40"> — worktree name</span>
+              <code className="font-medium text-daintree-text/85">{"{worktree_name}"}</code>
+              <span className="ml-1 text-text-secondary"> worktree name</span>
             </div>
             <div>
-              <code className="text-text-secondary">{"{worktree_path}"}</code>
-              <span className="text-daintree-text/40"> — full worktree path</span>
+              <code className="font-medium text-daintree-text/85">{"{worktree_path}"}</code>
+              <span className="ml-1 text-text-secondary"> full worktree path</span>
             </div>
             <div>
-              <code className="text-text-secondary">{"{project_root}"}</code>
-              <span className="text-daintree-text/40"> — project root path</span>
+              <code className="font-medium text-daintree-text/85">{"{project_root}"}</code>
+              <span className="ml-1 text-text-secondary"> project root path</span>
             </div>
           </div>
         </div>

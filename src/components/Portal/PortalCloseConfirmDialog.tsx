@@ -102,8 +102,8 @@ export function PortalCloseConfirmDialog(): ReactElement | null {
       <ul className="max-h-48 space-y-1 overflow-y-auto rounded border border-daintree-border bg-daintree-bg/50 p-2">
         {pending.tabsToClose.map((tab) => (
           <li key={tab.id} className="truncate text-xs">
-            <span className="text-daintree-text">{tab.title || "Untitled"}</span>
-            {tab.url ? <span className="text-daintree-text/40"> — {tab.url}</span> : null}
+            <span className="font-medium text-daintree-text">{tab.title || "Untitled"}</span>
+            {tab.url ? <span className="ml-1 text-text-secondary"> {tab.url}</span> : null}
           </li>
         ))}
       </ul>

@@ -459,10 +459,12 @@ function RelocationPreviewSection({
         <ul className="space-y-1 text-xs text-daintree-text/70">
           {preview.runningTerminalCount > 0 && (
             <li>
-              {preview.runningTerminalCount === 1
-                ? "1 terminal will be gracefully stopped"
-                : `${preview.runningTerminalCount} terminals will be gracefully stopped`}{" "}
-              <span className="text-daintree-text/40">— they restart at the new location</span>
+              <span className="font-medium text-daintree-text/85">
+                {preview.runningTerminalCount === 1
+                  ? "1 terminal will be gracefully stopped"
+                  : `${preview.runningTerminalCount} terminals will be gracefully stopped`}
+              </span>
+              <span className="ml-1 text-text-secondary"> They restart at the new location</span>
             </li>
           )}
           {preview.agentContinuity.length > 0 && (
@@ -489,11 +491,12 @@ function RelocationPreviewSection({
                       />
                       <div className="space-y-0.5">
                         <div>
-                          {agent.count === 1
-                            ? agent.agentName
-                            : `${agent.agentName} (${agent.count})`}{" "}
-                          <span className="text-daintree-text/40">—</span>{" "}
-                          <span className={p.className}>{p.label}</span>
+                          <span className="font-medium text-daintree-text/85">
+                            {agent.count === 1
+                              ? agent.agentName
+                              : `${agent.agentName} (${agent.count})`}
+                          </span>
+                          <span className={`ml-1 ${p.className}`}> {p.label}</span>
                         </div>
                         <div className="text-daintree-text/40">
                           {agent.detail ?? p.detailFallback}

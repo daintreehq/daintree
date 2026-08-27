@@ -732,12 +732,19 @@ export function GeneralTab({
               </p>
               <ul className="space-y-1 text-xs text-daintree-text/60">
                 <li className="flex items-center gap-2">
-                  <span className="font-mono text-daintree-text/80">.daintree/project.json</span>—
-                  project name, emoji, color
+                  <span className="font-mono font-medium text-daintree-text/85">
+                    .daintree/project.json
+                  </span>
+                  <span className="text-text-secondary"> project name, emoji, color</span>
                 </li>
                 <li className="flex items-center gap-2">
-                  <span className="font-mono text-daintree-text/80">.daintree/settings.json</span>—
-                  run commands, dev server, context settings
+                  <span className="font-mono font-medium text-daintree-text/85">
+                    .daintree/settings.json
+                  </span>
+                  <span className="text-text-secondary">
+                    {" "}
+                    run commands, dev server, context settings
+                  </span>
                 </li>
               </ul>
               <p className="mt-2 text-xs text-daintree-text/50">

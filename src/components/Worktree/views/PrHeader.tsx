@@ -12,7 +12,8 @@ export function PrHeader({ pr }: PrHeaderProps) {
       <FolderGit2 className="w-4 h-4 text-daintree-text/60 shrink-0" aria-hidden="true" />
       <TruncatedTooltip content={`PR #${pr.number} — ${pr.title}`}>
         <span className="text-daintree-text/80 min-w-0 truncate">
-          PR <span className="font-medium text-daintree-text">#{pr.number}</span> — {pr.title}
+          PR <span className="font-medium text-daintree-text">#{pr.number}</span>
+          <span className="ml-1 text-text-secondary"> {pr.title}</span>
         </span>
       </TruncatedTooltip>
     </div>

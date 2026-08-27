@@ -1,6 +1,6 @@
 // @vitest-environment jsdom
 import { describe, it, expect, beforeEach, vi } from "vitest";
-import { render, screen, cleanup, fireEvent, waitFor } from "@testing-library/react";
+import { render, screen, cleanup, fireEvent, waitFor, within } from "@testing-library/react";
 import type { RelocationPreview } from "@shared/types/projectRelocation";
 
 // ConfirmDialog's scroll-shadow hook observes its scroll container, which jsdom
@@ -185,6 +185,14 @@ describe("MoveOrRenameProjectDialog", () => {
     expect(screen.getByText("Expected to resume automatically at the new location")).toBeTruthy();
     // Count > 1 is surfaced next to the agent name.
     expect(screen.getByText(/Codex \(2\)/)).toBeTruthy();
+    // The tier colour is meaning rather than emphasis, so it stays on the status
+    // and weight is what keeps the agent apart from it once increased contrast
+    // flattens the colour step.
+    const claudeRow = screen.getByTestId("relocate-continuity-claude");
+    const identity = within(claudeRow).getByText("Claude Code");
+    const status = within(claudeRow).getByText("Provider migration required");
+    expect(identity).not.toBe(status);
+    expect(claudeRow.textContent).not.toContain("\u2014");
     // Continuity is informational — it must NOT disable confirm (only blockers do).
     await waitFor(() => expect(confirmButton().hasAttribute("aria-disabled")).toBe(false));
   });
@@ -221,8 +229,16 @@ describe("MoveOrRenameProjectDialog", () => {
     // No agents → no continuity section.
     expect(screen.queryByTestId("relocate-continuity")).toBeNull();
     // The terminal line describes restart, not conversation preservation.
-    expect(screen.getByText(/they restart at the new location/)).toBeTruthy();
+    expect(screen.getByText(/They restart at the new location/)).toBeTruthy();
     expect(screen.queryByText(/sessions are preserved and restored/)).toBeNull();
+
+    // The consequence outranks the reassurance by weight, not punctuation.
+    const consequence = screen.getByText("2 terminals will be gracefully stopped");
+    const reassurance = screen.getByText("They restart at the new location");
+    expect(consequence).not.toBe(reassurance);
+    expect(consequence.parentElement?.textContent).toBe(
+      "2 terminals will be gracefully stopped They restart at the new location"
+    );
   });
 
   it("reattach mode browses to an existing folder then reattaches", async () => {
