@@ -370,4 +370,36 @@ test.describe.serial("Full: New Worktree Dialog", () => {
     );
     expect(fieldWidth).toBeLessThanOrEqual(Math.round(contentWidth));
   });
+
+  test("a long branch name crops in the footer instead of pushing the actions out", async () => {
+    const { window } = ctx;
+    await openDialog(window);
+
+    // Built from a repeat rather than a literal so the name is unambiguously
+    // wider than the footer at any font scale, and so the assertion below is
+    // about geometry rather than about where the crop happens to land.
+    const longBranch = `feature/${"payload-segment-".repeat(6)}end`;
+    await window.locator(SEL.worktree.branchNameInput).fill(longBranch);
+
+    const panel = window.locator(`${SEL.worktree.newDialog} > div`).first();
+    const panelBox = await panel.boundingBox();
+    expect(panelBox).not.toBeNull();
+
+    // The bug: the footer hint grew to its content width and shoved both
+    // actions past the panel's right edge, where they were clipped away.
+    for (const action of [
+      window.locator(SEL.worktree.createButton),
+      window.getByRole("button", { name: "Cancel", exact: true }),
+    ]) {
+      const box = await action.boundingBox();
+      expect(box).not.toBeNull();
+      expect(box!.x).toBeGreaterThanOrEqual(panelBox!.x - 1);
+      expect(box!.x + box!.width).toBeLessThanOrEqual(panelBox!.x + panelBox!.width + 1);
+    }
+
+    // Cropping is only acceptable because nothing is lost: the footer still
+    // carries the whole name for assistive tech and for the hover tooltip.
+    const footer = window.locator(`${SEL.worktree.newDialog} .border-t`).last();
+    await expect(footer).toContainText(longBranch);
+  });
 });

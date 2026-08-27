@@ -918,7 +918,7 @@ export function AgentSetupWizard({
       </span>
 
       <AppDialog.Footer hint={footerHint}>
-        <div className="flex items-center gap-3 ml-auto">
+        <div className="flex items-center gap-3 ml-auto shrink-0">
           {state.step.type !== "complete" &&
             (state.history.length > 0 ? (
               <Button

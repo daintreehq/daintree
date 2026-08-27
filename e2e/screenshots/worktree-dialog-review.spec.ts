@@ -191,10 +191,27 @@ async function openDialog(page: Page): Promise<void> {
 }
 
 async function closeDialog(page: Page): Promise<void> {
-  for (let i = 0; i < 3; i++) {
+  const dialog = page.locator(SEL.worktree.newDialog);
+  // Scoped to the dialog: two other "Discard" buttons live in settings.
+  const discard = dialog.getByRole("button", { name: "Discard", exact: true });
+
+  for (let i = 0; i < 4; i++) {
+    if (!(await dialog.isVisible().catch(() => false))) return;
+    // A dialog with edits answers Escape with "Discard unsaved changes?" rather
+    // than closing, which otherwise strands every later step behind it. Clear
+    // that prompt before pressing Escape again — a second Escape cancels the
+    // prompt instead, and the loop would chase its own tail.
+    if (await discard.isVisible({ timeout: 500 }).catch(() => false)) {
+      await discard.click().catch(() => {});
+      await settle(page, 300);
+      continue;
+    }
     await page.keyboard.press("Escape").catch(() => {});
-    await settle(page, 200);
+    await settle(page, 300);
   }
+
+  // Silence here would hand every later step a dialog it did not open.
+  await dialog.waitFor({ state: "hidden", timeout: 2000 });
 }
 
 test("new-worktree dialog review — rest and interactive states", async () => {
@@ -248,6 +265,23 @@ test("new-worktree dialog review — rest and interactive states", async () => {
         .catch(() => {});
       await settle(page, 900);
       await snap(page, "15-populated", PANEL);
+      await closeDialog(page);
+    });
+
+    // 2b. Long branch name — the footer echo has to crop rather than push the
+    // action buttons out of the dialog.
+    await step("long-branch", async () => {
+      await openDialog(page);
+      const input = page.locator(SEL.worktree.branchNameInput);
+      await input.click().catch(() => {});
+      await input.fill("feature/issue-12015-roll-redacted-payload-foo-bar-car").catch(() => {});
+      await page
+        .locator("h3", { hasText: "Destination" })
+        .first()
+        .click()
+        .catch(() => {});
+      await settle(page, 900);
+      await snap(page, "16-long-branch", PANEL);
       await closeDialog(page);
     });
 
