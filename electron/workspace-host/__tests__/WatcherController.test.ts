@@ -995,4 +995,126 @@ describe("WatcherController", () => {
       expect(result).toBe(true);
     });
   });
+  describe("dark-watcher recovery (#12042)", () => {
+    // Mode "none" is the only mode whose poll cadence falls back to the
+    // adaptive profile interval, so a git-only arm that fails leaves the
+    // monitor polling git several times a second. These cases pin that the
+    // controller digs itself out without an external reconcile.
+
+    it("re-arms after a git-only arm failure with no external ensureState call", async () => {
+      mockWatcherStartResult = false;
+      const host = makeHost({ isElevated: false });
+      const ctrl = new WatcherController(host as WatcherControllerHost);
+
+      ctrl.start();
+      await settle();
+      expect(ctrl.currentMode).toBe("none");
+      const armsAfterFailure = watcherStartCallCount;
+
+      // The fs error clears; nothing external touches the controller.
+      mockWatcherStartResult = true;
+      await vi.advanceTimersByTimeAsync(31_000);
+      await settle();
+
+      expect(watcherStartCallCount).toBeGreaterThan(armsAfterFailure);
+      expect(ctrl.currentMode).toBe("git-only");
+    });
+
+    it("stops re-arming once the retry budget is spent, however long it idles", async () => {
+      mockWatcherStartResult = false;
+      const host = makeHost({ isElevated: false });
+      const ctrl = new WatcherController(host as WatcherControllerHost);
+
+      ctrl.start();
+      await settle();
+
+      for (let i = 0; i < 10; i++) {
+        await vi.advanceTimersByTimeAsync(31_000);
+        await settle();
+      }
+      const armsAfterExhaustion = watcherStartCallCount;
+
+      // Hours of idling must not resurrect the loop — the whole point is that a
+      // genuinely broken path stops paying for retries.
+      await vi.advanceTimersByTimeAsync(4 * 60 * 60 * 1000);
+      await settle();
+      expect(watcherStartCallCount).toBe(armsAfterExhaustion);
+    });
+
+    it("re-derives the target tier when elevation flips during the backoff", async () => {
+      mockWatcherStartResult = false;
+      const host = makeHost({ isElevated: false });
+      const ctrl = new WatcherController(host as WatcherControllerHost);
+
+      ctrl.start();
+      await settle();
+      expect(ctrl.currentMode).toBe("none");
+
+      // The worktree gains focus while the re-arm is pending, and by the time
+      // it fires the recursive watcher is available again.
+      host.isElevated = true;
+      mockWatcherStartResult = true;
+      await vi.advanceTimersByTimeAsync(31_000);
+      await settle();
+
+      expect(ctrl.currentMode).toBe("recursive");
+    });
+
+    it("does not stack a second retry loop when the git-only fallback also fails", async () => {
+      // Recursive fails, its git-only fallback fails too: two failure paths,
+      // one timer. If they stacked, each 31s tick would arm twice.
+      mockWatcherStartResult = false;
+      const host = makeHost({ isElevated: true });
+      const ctrl = new WatcherController(host as WatcherControllerHost);
+
+      ctrl.start();
+      await settle();
+      const armsAfterInitialFailure = watcherStartCallCount;
+
+      await vi.advanceTimersByTimeAsync(31_000);
+      await settle();
+      const armsPerTick = watcherStartCallCount - armsAfterInitialFailure;
+
+      // One tick arms the recursive attempt plus at most its own git-only
+      // fallback — never two independent retry chains.
+      expect(armsPerTick).toBeLessThanOrEqual(2);
+    });
+
+    it("does not re-arm after the controller is stopped mid-backoff", async () => {
+      mockWatcherStartResult = false;
+      const host = makeHost({ isElevated: false });
+      const ctrl = new WatcherController(host as WatcherControllerHost);
+
+      ctrl.start();
+      await settle();
+      const armsAtStop = watcherStartCallCount;
+
+      ctrl.stop();
+      mockWatcherStartResult = true;
+      await vi.advanceTimersByTimeAsync(120_000);
+      await settle();
+
+      expect(watcherStartCallCount).toBe(armsAtStop);
+      expect(ctrl.currentMode).toBe("none");
+    });
+
+    it("does not signal recovery for a cold start that never reached recursive", async () => {
+      // wasDegraded must stay false: the host never surfaced a degraded
+      // indicator, so there is nothing to clear.
+      mockWatcherStartResult = false;
+      const host = makeHost({ isElevated: false });
+      const ctrl = new WatcherController(host as WatcherControllerHost);
+
+      ctrl.start();
+      await settle();
+
+      host.isElevated = true;
+      mockWatcherStartResult = true;
+      await vi.advanceTimersByTimeAsync(31_000);
+      await settle();
+
+      expect(ctrl.currentMode).toBe("recursive");
+      expect(host.onWatcherRecovered).not.toHaveBeenCalled();
+    });
+  });
 });

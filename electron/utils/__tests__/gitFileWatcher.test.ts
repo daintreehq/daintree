@@ -1425,7 +1425,7 @@ describe("GitFileWatcher", () => {
       }
     });
 
-    it("unknown runtime errors do not fire platform-specific callbacks", async () => {
+    it("unknown runtime errors downgrade without firing platform-specific callbacks", async () => {
       const onChange = vi.fn();
       const onWatcherFailed = vi.fn();
       const onInotifyLimitReached = vi.fn();
@@ -1451,9 +1451,51 @@ describe("GitFileWatcher", () => {
       otherError.code = "EACCES";
       fireError(cb, otherError);
 
+      // The limit callbacks stay platform-gated (they drive platform-specific
+      // user guidance), but the downgrade itself must not be: parcel clears the
+      // subscription's callbacks after any error, so the watcher is dead
+      // whatever the errno said (#12042).
       expect(onInotifyLimitReached).not.toHaveBeenCalled();
       expect(onEmfileLimitReached).not.toHaveBeenCalled();
-      expect(onWatcherFailed).not.toHaveBeenCalled();
+      expect(onWatcherFailed).toHaveBeenCalledTimes(1);
+    });
+
+    it("downgrades on a message-only Windows runtime error with no errno", async () => {
+      // ReadDirectoryChangesW failures (buffer overflow, an AV lock, an
+      // ancestor rename) surface through parcel as a plain message with no
+      // stable code — the shape a code-matching branch would miss entirely.
+      const onWatcherFailed = vi.fn();
+      const onInotifyLimitReached = vi.fn();
+      const onEmfileLimitReached = vi.fn();
+      const mock = setupSubscribeMock();
+
+      const origPlatform = process.platform;
+      Object.defineProperty(process, "platform", { value: "win32", configurable: true });
+
+      try {
+        const gitWatcher = new GitFileWatcher({
+          worktreePath: "/repo",
+          branch: "main",
+          debounceMs: 300,
+          onChange: vi.fn(),
+          watchWorktree: true,
+          onWatcherFailed,
+          onInotifyLimitReached,
+          onEmfileLimitReached,
+        });
+
+        await expect(gitWatcher.start()).resolves.toBe(true);
+        mock.resolve();
+        const cb = mock.getCallback();
+
+        fireError(cb, new Error("Events were dropped by the FS event stream"));
+
+        expect(onWatcherFailed).toHaveBeenCalledTimes(1);
+        expect(onInotifyLimitReached).not.toHaveBeenCalled();
+        expect(onEmfileLimitReached).not.toHaveBeenCalled();
+      } finally {
+        Object.defineProperty(process, "platform", { value: origPlatform, configurable: true });
+      }
     });
   });
 

@@ -38,6 +38,33 @@ const resolutionCache = new Map<string, ResolvedForgeProviderState>();
 // the stats pill mounted while only the stats instance saw the change.
 const resolveSeq = new Map<string, number>();
 
+type ForgeProviderResolution = Awaited<ReturnType<typeof window.electron.forge.resolveProvider>>;
+
+// Per-project in-flight resolution, shared across hook instances. Every mounted
+// consumer calls `run()` — and a provenance change makes ALL of them run at
+// once — so without this a single project resolves through ~10 simultaneous IPC
+// round-trips, each of which reaches `GitService.listRemotes` and spawns its own
+// `git remote -v` in main (#12042). The map holds only genuinely concurrent
+// calls: the entry is evicted on settlement (identity-guarded, so a late
+// eviction can't drop a newer entry) rather than TTL-cached, leaving the
+// existing settled-value `resolutionCache` as the only thing that outlives a
+// round-trip. Invalidations drop the in-flight entry BEFORE re-running, so a
+// post-invalidation caller can never join a request that predates the change.
+const inFlightResolutions = new Map<string, Promise<ForgeProviderResolution>>();
+
+function resolveProviderOnce(id: string): Promise<ForgeProviderResolution> {
+  const existing = inFlightResolutions.get(id);
+  if (existing) return existing;
+  const request = window.electron.forge.resolveProvider(id);
+  inFlightResolutions.set(id, request);
+  void request
+    .catch(() => undefined)
+    .finally(() => {
+      if (inFlightResolutions.get(id) === request) inFlightResolutions.delete(id);
+    });
+  return request;
+}
+
 /**
  * Resolve the active forge provider for a project through the host's
  * precedence chain (per-project override → global default → hostname match).
@@ -63,7 +90,7 @@ export function useResolvedForgeProvider(
     resolveSeq.set(id, seq);
     instanceSeqRef.current = seq;
     try {
-      const resolved = await window.electron.forge.resolveProvider(id);
+      const resolved = await resolveProviderOnce(id);
       const entry = resolved?.entry ?? null;
       const next: ResolvedForgeProviderState = {
         entry,
@@ -104,6 +131,9 @@ export function useResolvedForgeProvider(
       typeof plugin?.onProvenanceChanged === "function"
         ? plugin.onProvenanceChanged(() => {
             resolutionCache.clear();
+            // A resolution already in flight answers the pre-change registry;
+            // joining it would hand every consumer a stale provider.
+            inFlightResolutions.clear();
             run();
           })
         : null;
@@ -120,6 +150,7 @@ export function useResolvedForgeProvider(
         ? forge.onRemoteChanged((payload) => {
             if (payload.projectId !== projectId) return;
             resolutionCache.delete(projectId);
+            inFlightResolutions.delete(projectId);
             run();
           })
         : null;
@@ -134,6 +165,9 @@ export function useResolvedForgeProvider(
   const refresh = useCallback(() => {
     if (!projectId) return;
     resolutionCache.delete(projectId);
+    // Manual refresh means "ignore what we have", including a round-trip that
+    // started before the user asked.
+    inFlightResolutions.delete(projectId);
     void resolve(projectId).then((next) => {
       if (next) setState(next);
     });

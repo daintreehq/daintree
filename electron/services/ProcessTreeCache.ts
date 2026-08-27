@@ -1,9 +1,8 @@
-import { exec, execFile } from "child_process";
+import { execFile } from "child_process";
 import os from "node:os";
 import { promisify } from "util";
 import { logDebug } from "../utils/logger.js";
 
-const execAsync = promisify(exec);
 const execFileAsync = promisify(execFile);
 
 const BACKOFF_MULTIPLIER = 1.5;
@@ -268,8 +267,7 @@ export class ProcessTreeCache {
     // KernelModeTime/UserModeTime are cast to [string] to preserve UInt64 precision in JSON.
     // CreationDate uses .ToString('o') for consistent ISO 8601 across PS 5.1 and PS 7.
     // NOTE: Use regular string concatenation — template literals would interpolate $_ as JS variables.
-    const psCommand =
-      'powershell -NoProfile -NonInteractive -NoLogo -Command "' +
+    const psScript =
       "$ErrorActionPreference = 'SilentlyContinue'; " +
       "[Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false); " +
       "$OutputEncoding = [System.Text.UTF8Encoding]::new($false); " +
@@ -278,12 +276,23 @@ export class ProcessTreeCache {
       "@{N='UserModeTime';E={[string]$_.UserModeTime}}," +
       "@{N='WorkingSetSize';E={[string]$_.WorkingSetSize}}," +
       "@{N='CreationDate';E={if ($_.CreationDate) { $_.CreationDate.ToString('o') } else { $null }}} | " +
-      'ConvertTo-Json -Compress"';
+      "ConvertTo-Json -Compress";
 
-    const { stdout } = await execAsync(psCommand, {
-      timeout: 10000,
-      maxBuffer: 10 * 1024 * 1024,
-    });
+    // execFile, not exec: exec routes through `cmd.exe /c`, so every poll spawned
+    // an extra process AND the hide flag only covers that intermediary — the
+    // grandchild powershell.exe could still flash its own console window
+    // (#12042). Spawning powershell directly removes the cmd hop entirely and
+    // puts windowsHide on the process that actually has a console. argv form
+    // also means the script no longer needs a layer of cmd-level quoting.
+    const { stdout } = await execFileAsync(
+      "powershell.exe",
+      ["-NoProfile", "-NonInteractive", "-NoLogo", "-Command", psScript],
+      {
+        timeout: 10000,
+        maxBuffer: 10 * 1024 * 1024,
+        windowsHide: true,
+      }
+    );
 
     const trimmed = stdout.replace(/^\uFEFF/, "").trim();
     if (!trimmed || trimmed === "null") {

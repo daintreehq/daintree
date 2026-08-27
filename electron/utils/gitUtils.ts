@@ -7,19 +7,70 @@ import { Cache } from "./cache.js";
 // worktreePath → gitDir/commonDir is immutable for a live worktree and all
 // removal/switch paths invalidate explicitly via clearGitDirCache /
 // clearGitCommonDirCache, so successful resolutions never expire — a TTL
-// would only force periodic git re-resolution on hot poll paths. Cached
-// error (null) entries keep the default TTL so transient failures self-heal.
+// would only force periodic git re-resolution on hot poll paths.
 // The cache stores the resolution promise itself so concurrent callers for
 // the same worktree share a single git spawn.
 const SUCCESS_TTL_MS = Number.POSITIVE_INFINITY;
+// A null result is NOT one thing. "This is definitively not a repository" is a
+// stable answer worth caching for a long time — non-git folders are a supported
+// workspace mode and re-probing them every poll would be pure waste. A spawn
+// failure, a timeout, or a permission blip is the opposite: nothing about the
+// worktree changed, we simply failed to look. Caching those for the same ten
+// minutes is what darkens the git file watcher on Windows for #12042 —
+// `GitFileWatcher.start()` bails on a null gitDir, so one transient failure
+// leaves `WatcherController` in mode "none" (adaptive poll cadence, ~1.5s on
+// the Performance profile) and `GitStatusPass` skips its stat pre-check, which
+// is gated on a resolved gitDir. Every retry path then re-reads the same
+// cached null. Transient failures therefore expire fast enough that the
+// watcher's own 30s re-arm gets a genuine second attempt, without letting the
+// poll loop re-spawn `git rev-parse` at its own cadence.
+const DEFINITIVE_TTL_MS = 600_000;
+const TRANSIENT_TTL_MS = 15_000;
 const gitDirCache = new Cache<string, Promise<string | null>>({
   maxSize: 200,
-  defaultTTL: 600_000,
+  defaultTTL: DEFINITIVE_TTL_MS,
 });
 const gitCommonDirCache = new Cache<string, Promise<string | null>>({
   maxSize: 200,
-  defaultTTL: 600_000,
+  defaultTTL: DEFINITIVE_TTL_MS,
 });
+
+/** Exit code git uses for a fatal error, including "not a git repository". */
+const GIT_FATAL_EXIT_CODE = 128;
+// The one exit-128 fatal that is NOT a verdict about the path: git refuses to
+// operate until `safe.directory` is configured, which the user can fix without
+// the worktree ever changing. Matched on the stable English fragment git emits
+// for it; a locale that translates the message just falls back to the
+// definitive TTL, which is the pre-existing behaviour.
+const DUBIOUS_OWNERSHIP_PATTERN = /dubious ownership/i;
+
+type FailureKind = "definitive" | "transient";
+
+type GitPathResolution = { path: string } | { path: null; failure: FailureKind };
+
+/**
+ * Decide whether a failed `git rev-parse` is a verdict about the worktree or a
+ * failure to reach one. Deliberately keyed on the error's SHAPE rather than its
+ * message: `execFile` reports a spawn failure as a string `code` (ENOENT when
+ * git isn't on PATH, EPERM/EACCES/EBUSY when an AV scanner or a filesystem
+ * holds the path) and a timeout as `killed`/`signal`, while a real git verdict
+ * is a clean numeric exit. Message matching would be locale-dependent, so it is
+ * used only to *downgrade* a fatal to transient, never to promote one.
+ */
+function classifyGitFailure(error: unknown, stderr: string): FailureKind {
+  const err = error as NodeJS.ErrnoException & { killed?: boolean; signal?: string | null };
+  // Timed out (execFile's `timeout` kills the child) or killed by a signal.
+  if (err?.killed === true || (err?.signal !== undefined && err.signal !== null)) {
+    return "transient";
+  }
+  // Spawn-level failure: `code` is an errno string, not an exit status.
+  if (typeof err?.code === "string") return "transient";
+  // Any exit status other than git's fatal code isn't a "not a repository"
+  // answer — usage errors and the like say nothing durable about the path.
+  if (err?.code !== GIT_FATAL_EXIT_CODE) return "transient";
+  if (DUBIOUS_OWNERSHIP_PATTERN.test(stderr)) return "transient";
+  return "definitive";
+}
 
 export interface GitDirOptions {
   cache?: boolean;
@@ -28,15 +79,38 @@ export interface GitDirOptions {
   cacheErrors?: boolean;
 }
 
+/**
+ * Error carrying the stderr git printed alongside it, so callers can tell a
+ * "not a git repository" verdict from a fatal that only looks like one.
+ */
+class GitExecError extends Error {
+  constructor(
+    readonly originalError: unknown,
+    readonly stderr: string
+  ) {
+    super((originalError as Error)?.message ?? "git failed");
+    this.name = "GitExecError";
+  }
+}
+
 function execGit(args: string[], cwd: string, timeout: number): Promise<string> {
   return new Promise((resolve, reject) => {
-    execFile("git", args, { cwd, timeout, encoding: "utf-8" }, (error, stdout) => {
-      if (error) {
-        reject(error);
-      } else {
-        resolve(typeof stdout === "string" ? stdout : String(stdout));
+    // windowsHide keeps the probe from flashing a console window: libuv only
+    // sets CREATE_NO_WINDOW when the flag is passed, and Windows 11's default
+    // "let Windows decide" terminal host escalates an unhidden spawn into a
+    // full Windows Terminal window (#12042).
+    execFile(
+      "git",
+      args,
+      { cwd, timeout, encoding: "utf-8", windowsHide: true },
+      (error, stdout, stderr) => {
+        if (error) {
+          reject(new GitExecError(error, typeof stderr === "string" ? stderr : ""));
+        } else {
+          resolve(typeof stdout === "string" ? stdout : String(stdout));
+        }
       }
-    });
+    );
   });
 }
 
@@ -96,7 +170,7 @@ async function resolveGitPath(
   timeout: number,
   logErrors: boolean,
   warnMessage: string
-): Promise<string | null> {
+): Promise<GitPathResolution> {
   // Filesystem fast path: covers the regular-repo and linked-worktree shapes
   // without forking git. A null here is "can't prove it cheaply", not "not a
   // repo" — the subprocess below stays the source of truth for those.
@@ -108,19 +182,25 @@ async function resolveGitPath(
         : null;
   if (fastResolver) {
     const fast = await fastResolver(worktreePath);
-    if (fast !== null) return fast;
+    if (fast !== null) return { path: fast };
   }
   try {
     const result = (await execGit(["rev-parse", revParseFlag], worktreePath, timeout)).trim();
-    return isAbsolute(result) ? result : pathJoin(worktreePath, result);
+    return { path: isAbsolute(result) ? result : pathJoin(worktreePath, result) };
   } catch (error) {
+    const execError = error instanceof GitExecError ? error : null;
+    // Unwrap so the log keeps reporting git's own message, not the wrapper's.
+    const rootCause = execError ? execError.originalError : error;
     if (logErrors) {
       logWarn(warnMessage, {
         path: worktreePath,
-        error: (error as Error).message,
+        error: (rootCause as Error | undefined)?.message ?? String(rootCause),
       });
     }
-    return null;
+    return {
+      path: null,
+      failure: classifyGitFailure(rootCause, execError?.stderr ?? ""),
+    };
   }
 }
 
@@ -140,20 +220,25 @@ function cachedResolveGitPath(
     }
   }
 
-  const promise = resolveGitPath(revParseFlag, worktreePath, timeout, logErrors, warnMessage);
+  const resolution = resolveGitPath(revParseFlag, worktreePath, timeout, logErrors, warnMessage);
+  const promise = resolution.then((resolved) => resolved.path);
 
   if (cache) {
-    // Insert at the error TTL while in flight; upgrade to the permanent TTL
-    // on success, or drop the entry when errors shouldn't be cached.
+    // Insert at the definitive TTL while in flight; on settlement re-stamp with
+    // the TTL the outcome actually earns — permanent for a success, the short
+    // window for a transient failure, unchanged for a definitive one — or drop
+    // the entry when errors shouldn't be cached.
     cacheStore.set(worktreePath, promise);
-    void promise.then((resolved) => {
+    void resolution.then((resolved) => {
       if (cacheStore.get(worktreePath) !== promise) {
         return;
       }
-      if (resolved !== null) {
+      if (resolved.path !== null) {
         cacheStore.set(worktreePath, promise, SUCCESS_TTL_MS);
       } else if (!cacheErrors) {
         cacheStore.invalidate(worktreePath);
+      } else if (resolved.failure === "transient") {
+        cacheStore.set(worktreePath, promise, TRANSIENT_TTL_MS);
       }
     });
   }

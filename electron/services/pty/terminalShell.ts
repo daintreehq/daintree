@@ -16,16 +16,39 @@ function shellQuote(value: string): string {
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
 
+// Which PowerShell is on PATH is a process-lifetime constant, but
+// `getDefaultShell()` is on the hot path for every terminal spawn and every
+// shell-quoting decision — so an uncached probe ran `where.exe` (twice, when
+// pwsh is absent) per launch, which is where the reporter's 53 `where.exe`
+// spawns came from (#12042). The fallback is memoized too: a machine with
+// neither PowerShell would otherwise keep paying two failed spawns forever.
+// A PATH change now needs an app restart to take effect, which is the right
+// trade for a value read this often.
+let cachedWindowsShell: string | null = null;
+
 export function findWindowsShell(): string {
+  if (cachedWindowsShell !== null) return cachedWindowsShell;
+  cachedWindowsShell = probeWindowsShell();
+  return cachedWindowsShell;
+}
+
+function probeWindowsShell(): string {
   for (const shell of ["pwsh.exe", "powershell.exe"]) {
     try {
-      execFileSync("where", [shell], { stdio: "ignore", timeout: 3000 });
+      // windowsHide: libuv only sets CREATE_NO_WINDOW when the flag is passed,
+      // so without it this probe flashes a console window.
+      execFileSync("where", [shell], { stdio: "ignore", timeout: 3000, windowsHide: true });
       return shell;
     } catch {
       // not on PATH or timed out, try next
     }
   }
   return process.env.COMSPEC || "cmd.exe";
+}
+
+/** Test-only: drop the memoized Windows shell so a case can re-probe. */
+export function resetWindowsShellCache(): void {
+  cachedWindowsShell = null;
 }
 
 export function getDefaultShell(): string {

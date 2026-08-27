@@ -360,9 +360,19 @@ export class GitFileWatcher {
       path: this.worktreePath,
       error: message,
     });
-    if (phase === "startup") {
-      this.onWatcherFailed?.();
-    }
+    // Runtime errors downgrade too, not just startup ones. @parcel/watcher
+    // clears its subscription's callbacks once the native watcher reports an
+    // error, so a subscription that errors at runtime is dead — it will never
+    // deliver another event. Leaving it in place let the controller keep
+    // claiming "recursive" (and its 5-minute heartbeat cadence) over a watcher
+    // observing nothing (#12042). This is deliberately platform-agnostic:
+    // Windows surfaces its failure modes (ReadDirectoryChangesW buffer
+    // overflow, an AV/indexer lock on registration, an ancestor rename) as
+    // message-only errors with no stable errno, so gating recovery on
+    // recognising them would leave exactly the platform this was reported on
+    // uncovered. The linux/darwin branches above stay for their user-facing
+    // limit messaging, not for the downgrade itself.
+    this.onWatcherFailed?.();
   }
 
   /**
