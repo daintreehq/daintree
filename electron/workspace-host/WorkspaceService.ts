@@ -369,6 +369,19 @@ export class WorkspaceService {
   private seq = 0;
 
   /**
+   * Monotonic monitor-incarnation counter within `epoch`. Deliberately separate
+   * from `seq`: a generation is an identity for one monitor, not a position in
+   * the event stream, and minting one must not advance the stamp the renderer
+   * orders events by. A worktree id is its path, so a delete-then-create at the
+   * same location reuses the id — the incarnation is the only thing that tells
+   * the renderer's tombstone a real recreation apart from a buffered update
+   * belonging to the monitor that was just torn down (#11994). Reset on host
+   * restart, which is safe because that also mints a new `epoch` and the
+   * renderer drops every tombstone on an epoch transition.
+   */
+  private worktreeGeneration = 0;
+
+  /**
    * Epoch-scoped set of mutation IDs that have been successfully acknowledged
    * by this host run. The renderer mints a stable mutationId per delete intent
    * (#8405) and the host records each successful delete here so a replay of
@@ -1201,6 +1214,7 @@ export class WorkspaceService {
       worktreeId: monitor.id,
       epoch: this.epoch,
       seq: this.nextSeq(),
+      generation: monitor.generation,
     });
     events.emit("sys:worktree:remove", { worktreeId: monitor.id, timestamp: Date.now() });
   }
@@ -1396,10 +1410,10 @@ export class WorkspaceService {
           this.handleMonitorUpdate(monitor, snapshot);
         },
         onRemoved: (worktreeId) => {
-          this.handleExternalWorktreeRemoval(worktreeId);
+          this.handleExternalWorktreeRemoval(worktreeId, monitor);
         },
         onExternalRemoval: (worktreeId) => {
-          this.handleExternalWorktreeRemoval(worktreeId);
+          this.handleExternalWorktreeRemoval(worktreeId, monitor);
         },
         onResourceStatusPoll: (worktreeId) => {
           return this.runResourceAction(
@@ -1446,7 +1460,8 @@ export class WorkspaceService {
         },
       },
       this.mainBranch,
-      this.pollQueue
+      this.pollQueue,
+      ++this.worktreeGeneration
     );
 
     monitor.setIssueNumber(issueNumber ?? undefined);
@@ -2131,9 +2146,19 @@ export class WorkspaceService {
     }
   }
 
-  private handleExternalWorktreeRemoval(worktreeId: string): void {
+  /**
+   * `origin` is the monitor whose callback fired. A watcher/poll continuation
+   * belonging to a torn-down monitor can resume after a same-path worktree was
+   * recreated, and the id alone would then resolve to the *new* monitor and
+   * delete a live worktree the user just created (#11994). Identity, not id,
+   * is what makes the two incarnations distinguishable here.
+   */
+  private handleExternalWorktreeRemoval(worktreeId: string, origin?: WorktreeMonitor): void {
     const monitor = this.monitors.get(worktreeId);
     if (!monitor) {
+      return;
+    }
+    if (origin && origin !== monitor) {
       return;
     }
 

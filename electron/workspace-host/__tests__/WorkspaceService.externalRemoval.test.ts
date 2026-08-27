@@ -360,6 +360,52 @@ describe("WorkspaceService external worktree removal", () => {
     });
   });
 
+  describe("same-path re-creation (#11994)", () => {
+    // A worktree id is its path, so a delete-then-create at the same location
+    // reuses it. The monitor incarnation is the only thing that distinguishes
+    // the two, both for the renderer's tombstone and for fencing continuations
+    // still running against the torn-down monitor.
+    it("mints a higher incarnation for the replacement and stamps the removal with the old one", async () => {
+      await service["addNewWorktreeMonitor"](createTestWorktree(), false, true);
+      const first = service["monitors"].get(TEST_WORKTREE_PATH);
+
+      service["removeMonitor"](TEST_WORKTREE_PATH);
+
+      expect(mockSendEvent).toHaveBeenCalledWith(
+        expect.objectContaining({
+          type: "worktree-removed",
+          worktreeId: TEST_WORKTREE_PATH,
+          generation: first?.generation,
+        })
+      );
+
+      await service["addNewWorktreeMonitor"](createTestWorktree(), false, true);
+      const second = service["monitors"].get(TEST_WORKTREE_PATH);
+
+      expect(second).not.toBe(first);
+      expect(second!.generation).toBeGreaterThan(first!.generation);
+      expect(second!.getSnapshot().generation).toBe(second!.generation);
+    });
+
+    it("ignores a torn-down monitor's removal callback for the worktree that replaced it", async () => {
+      await service["addNewWorktreeMonitor"](createTestWorktree(), false, true);
+      const first = service["monitors"].get(TEST_WORKTREE_PATH)!;
+      service["removeMonitor"](TEST_WORKTREE_PATH);
+      await service["addNewWorktreeMonitor"](createTestWorktree(), false, true);
+      const second = service["monitors"].get(TEST_WORKTREE_PATH)!;
+      mockSendEvent.mockClear();
+
+      // The old monitor's watcher finally fires. Resolving by id alone would
+      // find — and delete — the live worktree the user just created.
+      service["handleExternalWorktreeRemoval"](TEST_WORKTREE_PATH, first);
+
+      expect(service["monitors"].get(TEST_WORKTREE_PATH)).toBe(second);
+      expect(mockSendEvent).not.toHaveBeenCalledWith(
+        expect.objectContaining({ type: "worktree-removed" })
+      );
+    });
+  });
+
   describe("periodic safety-net timer (#8510)", () => {
     it("clears a phantom monitor end-to-end when the interval fires", async () => {
       createAndRegisterMonitor();

@@ -518,3 +518,121 @@ describe("createWorktreeStore — removal tombstones (#8403)", () => {
     expect(store.getState().tombstones.size).toBe(0);
   });
 });
+
+describe("createWorktreeStore — same-path re-creation (#11994)", () => {
+  beforeEach(() => {
+    vi.useFakeTimers();
+    vi.setSystemTime(new Date("2026-01-01T00:00:00Z"));
+  });
+
+  afterEach(() => {
+    vi.useRealTimers();
+  });
+
+  // A worktree id is its path, so deleting and re-creating at the same location
+  // reuses the id and lands inside the removal tombstone's suppression window.
+  // The monitor incarnation is what separates the two cases: the host builds a
+  // new monitor for the new worktree, while the buffered update the tombstone
+  // exists to suppress is closure-bound to the torn-down one.
+  it("accepts a higher-generation update inside the suppression window", () => {
+    const store = createWorktreeStore();
+    store
+      .getState()
+      .applySnapshot([makeSnapshot("wt-1", { generation: 4 })], { epoch: "e", seq: 1 });
+    store.getState().applyRemove("wt-1", { epoch: "e", seq: 2 }, 4);
+    expect(store.getState().worktrees.has("wt-1")).toBe(false);
+
+    vi.advanceTimersByTime(10_000);
+    const applied = store
+      .getState()
+      .applyUpdate(makeSnapshot("wt-1", { generation: 5 }), { epoch: "e", seq: 3 });
+
+    expect(applied).toBe(true);
+    expect(store.getState().worktrees.has("wt-1")).toBe(true);
+    expect(store.getState().tombstones.has("wt-1")).toBe(false);
+  });
+
+  it("still suppresses a same-generation update inside the window", () => {
+    const store = createWorktreeStore();
+    store
+      .getState()
+      .applySnapshot([makeSnapshot("wt-1", { generation: 4 })], { epoch: "e", seq: 1 });
+    store.getState().applyRemove("wt-1", { epoch: "e", seq: 2 }, 4);
+
+    // The buffered pre-delete poll: same monitor, so same stamp, even though
+    // the host minted it a higher seq than the removal.
+    const applied = store
+      .getState()
+      .applyUpdate(makeSnapshot("wt-1", { generation: 4 }), { epoch: "e", seq: 3 });
+
+    expect(applied).toBe(false);
+    expect(store.getState().worktrees.has("wt-1")).toBe(false);
+  });
+
+  it("takes the removed row's generation when the event omits one", () => {
+    const store = createWorktreeStore();
+    store
+      .getState()
+      .applySnapshot([makeSnapshot("wt-1", { generation: 4 })], { epoch: "e", seq: 1 });
+    store.getState().applyRemove("wt-1", { epoch: "e", seq: 2 });
+
+    store.getState().applyUpdate(makeSnapshot("wt-1", { generation: 5 }), { epoch: "e", seq: 3 });
+
+    expect(store.getState().worktrees.has("wt-1")).toBe(true);
+  });
+
+  it("rejects a stale-incarnation update after the re-created row is live", () => {
+    const store = createWorktreeStore();
+    store.getState().applySnapshot([makeSnapshot("wt-1", { generation: 4, branch: "old" })], {
+      epoch: "e",
+      seq: 1,
+    });
+    store.getState().applyRemove("wt-1", { epoch: "e", seq: 2 }, 4);
+    store
+      .getState()
+      .applyUpdate(makeSnapshot("wt-1", { generation: 5, branch: "new" }), { epoch: "e", seq: 3 });
+
+    // The torn-down monitor's in-flight poll finally resolves and emits.
+    const applied = store
+      .getState()
+      .applyUpdate(makeSnapshot("wt-1", { generation: 4, branch: "old" }), { epoch: "e", seq: 4 });
+
+    expect(applied).toBe(false);
+    expect(store.getState().worktrees.get("wt-1")?.branch).toBe("new");
+  });
+
+  it("keeps accepting same-generation updates for a live row", () => {
+    const store = createWorktreeStore();
+    store
+      .getState()
+      .applySnapshot([makeSnapshot("wt-1", { generation: 5 })], { epoch: "e", seq: 1 });
+
+    const applied = store
+      .getState()
+      .applyUpdate(makeSnapshot("wt-1", { generation: 5, branch: "renamed" }), {
+        epoch: "e",
+        seq: 2,
+      });
+
+    expect(applied).toBe(true);
+    expect(store.getState().worktrees.get("wt-1")?.branch).toBe("renamed");
+  });
+
+  it("accepts a lower generation from a restarted host", () => {
+    const store = createWorktreeStore();
+    store
+      .getState()
+      .applySnapshot([makeSnapshot("wt-1", { generation: 9 })], { epoch: "e1", seq: 5 });
+    store.getState().applyRemove("wt-1", { epoch: "e1", seq: 6 }, 9);
+
+    // A restart resets the host's counter, so the new run's first monitor can
+    // carry a lower stamp than the tombstone. The epoch transition clears the
+    // tombstones before any incarnation comparison, so it must still land.
+    const applied = store
+      .getState()
+      .applyUpdate(makeSnapshot("wt-1", { generation: 1 }), { epoch: "e2", seq: 1 });
+
+    expect(applied).toBe(true);
+    expect(store.getState().worktrees.has("wt-1")).toBe(true);
+  });
+});
