@@ -113,7 +113,7 @@ describe("ScrollIndicator", () => {
   it("keeps showing the last positive count while fading out at count 0 (issue #10316)", () => {
     // Exit state: shouldRender stays true through the close animation while the
     // live count has already dropped to 0. The pill must render the latched
-    // count, not "0 more below".
+    // count, not a bare "0" — and its aria-label must latch with it.
     mockUseAnimatedPresence.mockReturnValue({ isVisible: false, shouldRender: true });
     const { rerender } = render(<ScrollIndicator direction="below" count={4} onClick={onClick} />);
     expect(screen.getByText("4")).toBeTruthy();
