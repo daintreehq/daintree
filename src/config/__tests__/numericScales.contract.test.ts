@@ -140,11 +140,6 @@ function isOffender(payload: string, scale: Scale): boolean {
  * Exact-count allowlist. Counting rather than just naming the file means a new
  * offender slipped into an already-listed file still fails, and an entry left
  * behind after its site is removed fails too — without pinning line numbers.
- */
-/**
- * Exact-count allowlist. Counting rather than just naming the file means a new
- * offender slipped into an already-listed file still fails, and an entry left
- * behind after its site is removed fails too — without pinning line numbers.
  *
  * `match` is compared exactly by default so an entry cannot quietly cover a
  * different value in the same file; `prefix: true` opts into covering a whole
