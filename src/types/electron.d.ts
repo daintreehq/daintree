@@ -10,6 +10,7 @@ import type {
 } from "@shared/types";
 import type { NotificationsE2EApi } from "@/lib/e2eNotificationBackdoor";
 import type { PendingMcpConfirm } from "@/store/mcpConfirmStore";
+import type { PendingPluginMcpConsent } from "@/store/pluginMcpConfirmStore";
 
 declare global {
   interface Window {
@@ -34,6 +35,11 @@ declare global {
     __DAINTREE_E2E_ENQUEUE_MCP_CONFIRM__?: (item: Omit<PendingMcpConfirm, "enqueuedAt">) => void;
     __DAINTREE_E2E_SET_MCP_PREVIEW__?: (requestId: string, preview: string[]) => void;
     __DAINTREE_E2E_RESET_MCP_CONFIRM__?: () => void;
+    /** Parks a synthetic plugin-MCP consent prompt for its screenshot harness (#11982). */
+    __DAINTREE_E2E_ENQUEUE_PLUGIN_MCP_CONFIRM__?: (
+      item: Omit<PendingPluginMcpConsent, "enqueuedAt">
+    ) => void;
+    __DAINTREE_E2E_RESET_PLUGIN_MCP_CONFIRM__?: () => void;
     /** Per-window store accessors for the multi-window isolation spec (#9599). */
     __DAINTREE_E2E_DIAGNOSTICS_STATE__?: () => { isOpen: boolean };
     __DAINTREE_E2E_OPEN_DIAGNOSTICS__?: () => void;

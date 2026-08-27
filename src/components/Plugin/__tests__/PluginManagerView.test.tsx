@@ -3,6 +3,7 @@
 import { describe, expect, it, vi, beforeEach } from "vitest";
 import { fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import { PluginManagerView } from "../PluginManagerView";
+import { CAPABILITY_META } from "../capabilityMeta";
 import { usePluginManagerStore } from "@/store/pluginManagerStore";
 import { TooltipProvider } from "@/components/ui/tooltip";
 import type { LoadedPluginInfo, SettingDefinition } from "@shared/types/plugin";
@@ -702,7 +703,10 @@ describe("PluginManagerView", () => {
 
     await waitFor(() => expect(screen.getByText("Update 'Acme Demo'?")).toBeTruthy());
     expect(screen.getByText("v2.0.0")).toBeTruthy();
-    expect(screen.getByText("network:fetch")).toBeTruthy();
+    // The update dialog surfaces the incoming version's capabilities as human
+    // consequence, not raw manifest tokens — `network:fetch` does not tell a
+    // user what they are about to grant.
+    expect(screen.getByText(CAPABILITY_META["network:fetch"].label)).toBeTruthy();
 
     fireEvent.click(screen.getByRole("button", { name: "Reinstall plugin" }));
     await waitFor(() =>

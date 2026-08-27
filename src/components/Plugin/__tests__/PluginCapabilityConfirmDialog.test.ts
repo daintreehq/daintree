@@ -1,9 +1,6 @@
 import { describe, expect, it } from "vitest";
-import {
-  capabilityAction,
-  capabilityDescription,
-  titleFor,
-} from "../PluginCapabilityConfirmDialog";
+import { capabilityAction, titleFor } from "../PluginCapabilityConfirmDialog";
+import { CAPABILITY_META } from "../capabilityMeta";
 import { BUILT_IN_PLUGIN_CAPABILITIES, type BuiltInPluginCapability } from "@shared/types/plugin";
 
 const GATED: BuiltInPluginCapability[] = [
@@ -25,7 +22,9 @@ describe("PluginCapabilityConfirmDialog microcopy", () => {
   });
 
   it("gives each gated capability a distinct, non-empty description", () => {
-    const descriptions = GATED.map(capabilityDescription);
+    // CAPABILITY_META is what the dialog renders through CapabilityRow, so the
+    // invariant lives against the copy that actually reaches the user.
+    const descriptions = GATED.map((c) => CAPABILITY_META[c].description);
     for (const d of descriptions) expect(d.length).toBeGreaterThan(0);
     expect(new Set(descriptions).size).toBe(GATED.length);
   });
@@ -39,7 +38,7 @@ describe("PluginCapabilityConfirmDialog microcopy", () => {
   it("falls back to a generic phrase for any non-gated capability without throwing", () => {
     for (const cap of BUILT_IN_PLUGIN_CAPABILITIES) {
       expect(capabilityAction(cap).length).toBeGreaterThan(0);
-      expect(capabilityDescription(cap).length).toBeGreaterThan(0);
+      expect(CAPABILITY_META[cap].description.length).toBeGreaterThan(0);
     }
   });
 });

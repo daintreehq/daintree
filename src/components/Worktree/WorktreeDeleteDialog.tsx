@@ -318,6 +318,10 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
       onClose={onClose}
       size="md"
       variant="destructive"
+      // The body lists what will happen and, when the worktree is dirty, the
+      // files that will be lost — structured evidence, so a dialog rather than
+      // an alertdialog, which APG reserves for a brief message read out whole.
+      hasPreview
       data-testid="delete-worktree-dialog"
     >
       <AppDialog.Body>

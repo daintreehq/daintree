@@ -7,6 +7,7 @@ import {
   useMcpConfirmStore,
   type PendingMcpConfirm,
 } from "@/store/mcpConfirmStore";
+import { usePluginMcpConfirmStore } from "@/store/pluginMcpConfirmStore";
 import { getCurrentViewStore } from "@/store/createWorktreeStore";
 import { installE2EActionDispatchBridge } from "@/services/ActionService";
 import { loadE2ENotificationBackdoor } from "@/lazyPanels";
@@ -81,6 +82,19 @@ export function useE2EBridges(): void {
         useMcpConfirmStore.getState().reset();
       };
 
+      // Same idea for the plugin-MCP consent queue. This one enqueues straight
+      // into the store rather than through a request helper: the production
+      // path registers a resolver keyed by requestId, and the harness has no
+      // promise to settle — it parks the display payload, screenshots it, and
+      // resets. `resolveCurrent` no-ops on the missing resolver, so a state
+      // dismissed mid-capture still advances the queue cleanly.
+      window.__DAINTREE_E2E_ENQUEUE_PLUGIN_MCP_CONFIRM__ = (item) => {
+        usePluginMcpConfirmStore.getState().enqueue({ ...item, enqueuedAt: Date.now() });
+      };
+      window.__DAINTREE_E2E_RESET_PLUGIN_MCP_CONFIRM__ = () => {
+        usePluginMcpConfirmStore.getState().reset();
+      };
+
       // Per-window store accessors for the multi-window isolation spec (#9599).
       // Each project view is its own V8 context, so these Zustand singletons are
       // per-window — mutating one window's store must not leak into another's.
@@ -120,6 +134,8 @@ export function useE2EBridges(): void {
       delete window.__DAINTREE_E2E_ENQUEUE_MCP_CONFIRM__;
       delete window.__DAINTREE_E2E_SET_MCP_PREVIEW__;
       delete window.__DAINTREE_E2E_RESET_MCP_CONFIRM__;
+      delete window.__DAINTREE_E2E_ENQUEUE_PLUGIN_MCP_CONFIRM__;
+      delete window.__DAINTREE_E2E_RESET_PLUGIN_MCP_CONFIRM__;
       delete window.__DAINTREE_E2E_DIAGNOSTICS_STATE__;
       delete window.__DAINTREE_E2E_OPEN_DIAGNOSTICS__;
       delete window.__DAINTREE_E2E_PERF_METRICS_STATE__;

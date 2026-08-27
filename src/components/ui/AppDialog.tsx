@@ -1,5 +1,6 @@
 import {
   useEffect,
+  useLayoutEffect,
   useRef,
   useState,
   useCallback,
@@ -548,9 +549,35 @@ AppDialog.CloseButton = function AppDialogCloseButton({
 interface AppDialogBodyProps {
   children: React.ReactNode;
   className?: string;
+  /**
+   * Scrolls the body back to the top whenever this value changes. For a
+   * queue-driven singleton dialog, one request is promoted into the same
+   * mounted dialog as the last one resolves — so without this the next request
+   * opens at the previous request's scroll offset, showing a freshly promoted
+   * tool's body already scrolled past the part that identifies it. Keying the
+   * caller's own content resets that content's state but not this scroller,
+   * which is the element that actually holds the offset.
+   *
+   * Omit it and nothing changes.
+   */
+  resetScrollKey?: string | number;
 }
 
-AppDialog.Body = function AppDialogBody({ children, className }: AppDialogBodyProps) {
+AppDialog.Body = function AppDialogBody({
+  children,
+  className,
+  resetScrollKey,
+}: AppDialogBodyProps) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+
+  // Layout effect, not passive: the reset has to land before paint, or the
+  // promoted request is briefly visible at the old offset.
+  useLayoutEffect(() => {
+    if (resetScrollKey === undefined) return;
+    const el = scrollRef.current;
+    if (el) el.scrollTop = 0;
+  }, [resetScrollKey]);
+
   return (
     // `className` belongs on the padded scroll box, not on ScrollShadow's outer
     // wrapper — the wrapper's children are the two absolute edge overlays plus
@@ -566,6 +593,7 @@ AppDialog.Body = function AppDialogBody({ children, className }: AppDialogBodyPr
     // swapping sections. `both-edges` keeps the padding symmetric; reserving
     // one side only trades a jump for a permanent lopsided inset.
     <ScrollShadow
+      ref={scrollRef}
       className="flex-1 min-h-0"
       scrollClassName={cn("p-6 [scrollbar-gutter:stable_both-edges]", className)}
     >
@@ -641,12 +669,19 @@ AppDialog.Footer = function AppDialogFooter({
         className
       )}
     >
+      {/* min-w-0 so a long hint can shrink and truncate rather than squeezing the
+          action row: as a flex child its default min-width:auto floor is its own
+          content, so without this it pushes the buttons past the card edge and
+          the primary label gets clipped. The actions never yield — a hint is
+          explanatory, an action is how the dialog is answered. */}
       {hint && (
-        <div className="text-[12px] text-daintree-text/55 flex items-center gap-1">{hint}</div>
+        <div className="text-[12px] text-daintree-text/55 flex min-w-0 items-center gap-1">
+          {hint}
+        </div>
       )}
       {children}
       {!children && (
-        <div className="flex items-center gap-3">
+        <div className="flex shrink-0 items-center gap-3">
           {secondaryAction && (
             <Button
               variant="ghost"

@@ -95,6 +95,13 @@ type ConfirmDialogBaseProps = {
    * variants, per WAI-ARIA APG guidance.
    */
   hasPreview?: boolean;
+  /**
+   * Forwarded to {@link AppDialog.Body.resetScrollKey}: scrolls the body back
+   * to the top when it changes. Queue-driven singletons pass the per-item id so
+   * a freshly promoted item opens at the top rather than inheriting the
+   * previous item's scroll offset.
+   */
+  bodyResetKey?: string | number;
 };
 
 export type ConfirmDialogProps =
@@ -127,6 +134,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
     restoreFocusTo,
     hasPreview = false,
     hint,
+    bodyResetKey,
   } = props;
   const rawTypedNameTarget = (props as { typedNameTarget?: string }).typedNameTarget;
   const typedNameTarget = variant === "destructive" ? rawTypedNameTarget : undefined;
@@ -226,7 +234,7 @@ export function ConfirmDialog(props: ConfirmDialogProps) {
         {onClose && <AppDialog.CloseButton />}
       </AppDialog.Header>
 
-      <AppDialog.Body className="space-y-3">
+      <AppDialog.Body className="space-y-3" resetScrollKey={bodyResetKey}>
         {description && <AppDialog.Description>{description}</AppDialog.Description>}
         {children}
         {hasTypedNameGate && (

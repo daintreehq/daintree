@@ -19,6 +19,7 @@ import { AppDialog } from "@/components/ui/AppDialog";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { ScrollShadow } from "@/components/ui/ScrollShadow";
 import { InlineStatusBanner } from "@/components/Terminal/InlineStatusBanner";
+import { CapabilityRow } from "@/components/Plugin/capabilityMeta";
 import { usePluginManagerStore } from "@/store/pluginManagerStore";
 import { useOverlayClaim } from "@/hooks";
 import { useEscapeStack } from "@/hooks/useEscapeStack";
@@ -848,11 +849,18 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                 )}
             </div>
             {pm.pendingUpdate.result.capabilities.length > 0 && (
-              <div>
-                <span className="text-daintree-text/50">Capabilities</span>{" "}
-                <span className="text-daintree-text">
-                  {pm.pendingUpdate.result.capabilities.join(", ")}
-                </span>
+              <div className="space-y-1.5">
+                <span className="text-daintree-text/50">Capabilities</span>
+                {/* Human labels, not raw manifest tokens: this dialog is where
+                    a user decides whether an update's privilege change is
+                    acceptable, and `fs:project-write` does not say what it
+                    grants. Same rows the Permissions tab and the consent
+                    dialogs use. */}
+                <ul className="space-y-1.5">
+                  {pm.pendingUpdate.result.capabilities.map((cap) => (
+                    <CapabilityRow key={cap} capability={cap} />
+                  ))}
+                </ul>
               </div>
             )}
           </div>

@@ -1229,6 +1229,9 @@ export function WorktreeOverviewModal({
         }
         cancelLabel="Cancel"
         variant="destructive"
+        // Scrollable per-worktree table of what is about to be deleted — a
+        // dialog, not an alertdialog.
+        hasPreview={bulkRemove.targets.length > 0}
         typedNameTarget={bulkRemove.typedNameTarget}
         onConfirm={bulkRemove.handleConfirm}
         isConfirmLoading={bulkRemove.isExecuting}

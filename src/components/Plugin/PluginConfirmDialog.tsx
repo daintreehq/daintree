@@ -78,6 +78,10 @@ export function PluginConfirmDialog() {
         cancelLabel="Cancel"
         onConfirm={() => resolveOnce(current.requestId, "approved")}
         variant={variant}
+        // A redacted args block is structured evidence, so this is a dialog
+        // rather than an alertdialog. A no-argument action drops the block
+        // entirely and really is the brief message alertdialog is for.
+        hasPreview={hasArgs}
         confirmCooldownMs={isDestructive ? CONFIRM_COOLDOWN_MS : undefined}
         cooldownKey={current.requestId}
       >
