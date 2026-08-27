@@ -292,7 +292,7 @@ function LocalCommitRow({ commit, optionId, isActive, isExpanded, onToggle }: Lo
               )}
             >
               <div className="overflow-hidden">
-                <pre className="mt-2 rounded-[var(--radius-sm)] bg-surface-inset px-3 py-2 text-xs font-mono whitespace-pre-wrap break-words text-daintree-text">
+                <pre className="mt-2 rounded-[var(--radius-sm)] bg-surface-inset px-3 py-2 text-xs font-mono whitespace-pre-wrap break-words text-text-primary">
                   {trimmedBody}
                 </pre>
               </div>
@@ -501,7 +501,7 @@ export function LocalCommitsDropdown({
         variant="ghost"
         size="sm"
         onClick={handleRetry}
-        className="ml-auto h-6 text-xs text-muted-foreground hover:text-daintree-text shrink-0"
+        className="ml-auto h-6 text-xs text-muted-foreground hover:text-text-primary shrink-0"
       >
         <RefreshCw className="h-3 w-3" />
         Retry
@@ -546,7 +546,7 @@ export function LocalCommitsDropdown({
             aria-controls={listId}
             aria-activedescendant={activeCommitId}
             aria-label="Search commits"
-            className="flex-1 min-w-0 text-sm bg-transparent text-daintree-text placeholder:text-muted-foreground focus:outline-hidden"
+            className="flex-1 min-w-0 text-sm bg-transparent text-text-primary placeholder:text-muted-foreground focus:outline-hidden"
           />
         </div>
       </div>
@@ -596,11 +596,11 @@ export function LocalCommitsDropdown({
                   onClick={handleLoadMore}
                   disabled={loadingMore}
                   className={cn(
-                    "w-full text-muted-foreground hover:text-daintree-text",
+                    "w-full text-muted-foreground hover:text-text-primary",
                     // Neutral cursor highlight, matching the row active state —
                     // the search input's focus-within ring is this popover's one
                     // accent signal (accent-restraint policy).
-                    isLoadMoreActive && "bg-muted/50 text-daintree-text"
+                    isLoadMoreActive && "bg-muted/50 text-text-primary"
                   )}
                 >
                   {loadingMore ? (
@@ -624,7 +624,7 @@ export function LocalCommitsDropdown({
               variant="ghost"
               size="sm"
               onClick={handleRetry}
-              className="mt-2 text-muted-foreground hover:text-daintree-text"
+              className="mt-2 text-muted-foreground hover:text-text-primary"
             >
               <RefreshCw className="h-3.5 w-3.5" />
               Retry
@@ -639,7 +639,7 @@ export function LocalCommitsDropdown({
           variant="ghost"
           size="sm"
           onClick={onClose}
-          className="text-muted-foreground hover:text-daintree-text"
+          className="text-muted-foreground hover:text-text-primary"
         >
           Close
         </Button>

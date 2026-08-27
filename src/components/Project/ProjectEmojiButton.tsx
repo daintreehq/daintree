@@ -36,9 +36,9 @@ export function ProjectEmojiButton({
           disabled={disabled}
           className={cn(
             "flex h-9 w-9 shrink-0 items-center justify-center rounded-[var(--radius-md)]",
-            "border border-daintree-border bg-muted/50 text-lg leading-none",
+            "border border-border-default bg-muted/50 text-lg leading-none",
             "transition-colors hover:bg-muted disabled:opacity-50",
-            "focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
+            "focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
             className
           )}
         >

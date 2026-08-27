@@ -962,8 +962,8 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
               className={cn(
                 "inline-flex items-center px-2 py-0.5 text-2xs rounded-full transition-colors",
                 filter === "all"
-                  ? "bg-filter-selected-bg-strong text-daintree-text font-medium"
-                  : "text-daintree-text/60 hover:text-daintree-text hover:bg-tint/[0.04]"
+                  ? "bg-filter-selected-bg-strong text-text-primary font-medium"
+                  : "text-daintree-text/60 hover:text-text-primary hover:bg-tint/[0.04]"
               )}
             >
               All
@@ -975,8 +975,8 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
               className={cn(
                 "inline-flex items-center px-2 py-0.5 text-2xs rounded-full transition-colors",
                 filter === "unread"
-                  ? "bg-filter-selected-bg-strong text-daintree-text font-medium"
-                  : "text-daintree-text/60 hover:text-daintree-text hover:bg-tint/[0.04]"
+                  ? "bg-filter-selected-bg-strong text-text-primary font-medium"
+                  : "text-daintree-text/60 hover:text-text-primary hover:bg-tint/[0.04]"
               )}
             >
               Unread
@@ -991,8 +991,8 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
               className={cn(
                 "inline-flex items-center px-2 py-0.5 text-2xs rounded-full transition-colors",
                 filter === "archived"
-                  ? "bg-filter-selected-bg-strong text-daintree-text font-medium"
-                  : "text-daintree-text/60 hover:text-daintree-text hover:bg-tint/[0.04]"
+                  ? "bg-filter-selected-bg-strong text-text-primary font-medium"
+                  : "text-daintree-text/60 hover:text-text-primary hover:bg-tint/[0.04]"
               )}
             >
               Archived
@@ -1008,8 +1008,8 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                 className={cn(
                   "inline-flex items-center px-2 py-0.5 text-2xs rounded-full transition-colors",
                   filter === "snoozed"
-                    ? "bg-filter-selected-bg-strong text-daintree-text font-medium"
-                    : "text-daintree-text/60 hover:text-daintree-text hover:bg-tint/[0.04]"
+                    ? "bg-filter-selected-bg-strong text-text-primary font-medium"
+                    : "text-daintree-text/60 hover:text-text-primary hover:bg-tint/[0.04]"
                 )}
               >
                 Snoozed
@@ -1031,7 +1031,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
                 onClick={handleResumeNotifications}
                 aria-label="Resume notifications"
                 title="Resume notifications"
-                className="inline-flex shrink-0 items-center justify-center rounded-[var(--radius-sm)] px-1.5 py-0.5 text-2xs font-medium text-daintree-text/70 hover:bg-overlay-raised hover:text-daintree-text transition-colors"
+                className="inline-flex shrink-0 items-center justify-center rounded-[var(--radius-sm)] px-1.5 py-0.5 text-2xs font-medium text-daintree-text/70 hover:bg-overlay-raised hover:text-text-primary transition-colors"
               >
                 Resume
               </button>
@@ -1174,7 +1174,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
               "bg-overlay-raised border border-border-strong",
               "shadow-[var(--theme-shadow-floating)]",
               "text-2xs font-medium text-daintree-text/80",
-              "hover:text-daintree-text hover:bg-overlay-raised",
+              "hover:text-text-primary hover:bg-overlay-raised",
               "transition-[translate,opacity] motion-reduce:transition-none",
               showJumpPill
                 ? "opacity-100 translate-y-0 pointer-events-auto"
@@ -1541,7 +1541,7 @@ function NewSinceLastLookedDivider({
         <button
           type="button"
           onClick={onMarkRead}
-          className="inline-flex items-center rounded-[var(--radius-sm)] px-1.5 py-0.5 normal-case tracking-normal text-daintree-text/60 hover:bg-overlay-raised hover:text-daintree-text transition-colors"
+          className="inline-flex items-center rounded-[var(--radius-sm)] px-1.5 py-0.5 normal-case tracking-normal text-daintree-text/60 hover:bg-overlay-raised hover:text-text-primary transition-colors"
         >
           {unreadCount === 1 ? "Mark this read" : `Mark these ${unreadCount} read`}
         </button>

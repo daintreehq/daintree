@@ -173,11 +173,11 @@ export function EnvironmentVariablesEditor({
               return (
                 <div
                   key={`global-${key}`}
-                  className="flex items-center gap-2 p-2 rounded-[var(--radius-md)] bg-daintree-bg border border-daintree-border opacity-70"
+                  className="flex items-center gap-2 p-2 rounded-[var(--radius-md)] bg-surface-canvas border border-border-default opacity-70"
                 >
                   <span
                     className={cn(
-                      "flex-1 text-sm text-daintree-text font-mono px-2 py-1",
+                      "flex-1 text-sm text-text-primary font-mono px-2 py-1",
                       isOverridden && "line-through text-daintree-text/40"
                     )}
                   >
@@ -200,7 +200,7 @@ export function EnvironmentVariablesEditor({
               );
             })}
           </div>
-          <div className="border-t border-daintree-border mb-4" />
+          <div className="border-t border-border-default mb-4" />
         </>
       )}
 
@@ -216,7 +216,7 @@ export function EnvironmentVariablesEditor({
               type="button"
               onClick={handleSave}
               disabled={isSaving}
-              className="text-xs text-text-secondary hover:text-daintree-text underline-offset-2 hover:underline transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+              className="text-xs text-text-secondary hover:text-text-primary underline-offset-2 hover:underline transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
             >
               {settings.insecureEnvironmentVariables.length === 1
                 ? "Move 1 value out of shared settings"
@@ -232,7 +232,7 @@ export function EnvironmentVariablesEditor({
 
       <div className="space-y-2">
         {rows.length === 0 ? (
-          <div className="text-sm text-daintree-text/60 text-center py-8 border border-dashed border-daintree-border rounded-[var(--radius-md)]">
+          <div className="text-sm text-daintree-text/60 text-center py-8 border border-dashed border-border-default rounded-[var(--radius-md)]">
             No environment variables configured yet
           </div>
         ) : (
@@ -247,8 +247,8 @@ export function EnvironmentVariablesEditor({
               <div key={row.id}>
                 <div
                   className={cn(
-                    "flex items-center gap-2 p-2 rounded-[var(--radius-md)] bg-daintree-bg border",
-                    error ? "border-status-error/40" : "border-daintree-border"
+                    "flex items-center gap-2 p-2 rounded-[var(--radius-md)] bg-surface-canvas border",
+                    error ? "border-status-error/40" : "border-border-default"
                   )}
                 >
                   {isSecured && (
@@ -269,7 +269,7 @@ export function EnvironmentVariablesEditor({
                     onChange={(e) => updateRow(index, "key", e.target.value)}
                     spellCheck={false}
                     autoCapitalize="none"
-                    className="flex-1 bg-transparent border border-border-strong rounded px-2 py-1 text-sm text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
+                    className="flex-1 bg-transparent border border-border-strong rounded px-2 py-1 text-sm text-text-primary font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30"
                     placeholder="VARIABLE_NAME"
                     aria-label="Environment variable name"
                   />
@@ -283,7 +283,7 @@ export function EnvironmentVariablesEditor({
                       autoCapitalize="none"
                       autoComplete={isSensitive ? "new-password" : "off"}
                       className={cn(
-                        "w-full bg-daintree-sidebar border border-border-strong rounded px-2 py-1 text-sm text-daintree-text font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30",
+                        "w-full bg-surface-sidebar border border-border-strong rounded px-2 py-1 text-sm text-text-primary font-mono focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30",
                         isSensitive && "pr-8"
                       )}
                       placeholder="value"

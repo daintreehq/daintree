@@ -62,7 +62,7 @@ export function SaveFleetForm({ armedCount }: SaveFleetFormProps): ReactElement 
           className={cn(
             "flex-1 rounded px-2 py-1 transition-colors",
             kind === "snapshot"
-              ? "bg-tint/[0.14] text-daintree-text"
+              ? "bg-tint/[0.14] text-text-primary"
               : "bg-tint/[0.04] text-daintree-text/70 hover:bg-tint/[0.08]"
           )}
         >
@@ -80,7 +80,7 @@ export function SaveFleetForm({ armedCount }: SaveFleetFormProps): ReactElement 
           className={cn(
             "flex-1 rounded px-2 py-1 transition-colors",
             kind === "predicate"
-              ? "bg-tint/[0.14] text-daintree-text"
+              ? "bg-tint/[0.14] text-text-primary"
               : "bg-tint/[0.04] text-daintree-text/70 hover:bg-tint/[0.08]"
           )}
         >
@@ -98,7 +98,7 @@ export function SaveFleetForm({ armedCount }: SaveFleetFormProps): ReactElement 
             }}
             onClick={(e) => e.stopPropagation()}
             onPointerDown={(e) => e.stopPropagation()}
-            className="flex-1 rounded bg-tint/[0.08] px-1.5 py-1 text-daintree-text"
+            className="flex-1 rounded bg-tint/[0.08] px-1.5 py-1 text-text-primary"
           >
             <option value="current">This worktree</option>
             <option value="all">All worktrees</option>
@@ -114,7 +114,7 @@ export function SaveFleetForm({ armedCount }: SaveFleetFormProps): ReactElement 
             }}
             onClick={(e) => e.stopPropagation()}
             onPointerDown={(e) => e.stopPropagation()}
-            className="flex-1 rounded bg-tint/[0.08] px-1.5 py-1 text-daintree-text"
+            className="flex-1 rounded bg-tint/[0.08] px-1.5 py-1 text-text-primary"
           >
             <option value="all">All</option>
             <option value="waiting">Waiting</option>
@@ -146,7 +146,7 @@ export function SaveFleetForm({ armedCount }: SaveFleetFormProps): ReactElement 
                 : "Arm panes first…"
               : "Name…"
           }
-          className="flex-1 rounded bg-tint/[0.08] px-2 py-1 text-2xs text-daintree-text placeholder:text-text-placeholder outline-hidden focus:bg-tint/[0.14]"
+          className="flex-1 rounded bg-tint/[0.08] px-2 py-1 text-2xs text-text-primary placeholder:text-text-placeholder outline-hidden focus:bg-tint/[0.14]"
           data-testid="fleet-save-form-name"
         />
         <button

@@ -338,7 +338,7 @@ function CapabilitiesDisclosure({
         className={cn(
           "flex w-full items-center gap-1.5 rounded-[var(--radius-sm)] py-1 text-left",
           "transition-colors duration-150 ease-out hover:bg-overlay-subtle",
-          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:-outline-offset-2"
+          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
         )}
       >
         <ChevronRight
@@ -387,7 +387,7 @@ function ArgumentsDisclosure({ argsSummary }: { argsSummary: string }) {
         className={cn(
           "flex w-full items-center gap-1.5 rounded-[var(--radius-sm)] py-1 text-left",
           "transition-colors duration-150 ease-out hover:bg-overlay-subtle",
-          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:-outline-offset-2"
+          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
         )}
       >
         <ChevronRight

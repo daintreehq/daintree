@@ -864,7 +864,7 @@ export function WorktreeCard({
             // light themes.
             worktree.isCurrent &&
               variant !== "sidebar" &&
-              "before:absolute before:right-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-l before:bg-daintree-accent before:content-['']",
+              "before:absolute before:right-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-l before:bg-accent-primary before:content-['']",
             isBeingDeleted && !deleteError && "opacity-50 pointer-events-none"
           )}
           // sidebar.css scopes the card's plane, gutter and hover states to

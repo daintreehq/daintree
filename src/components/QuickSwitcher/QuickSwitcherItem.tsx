@@ -31,7 +31,7 @@ export function QuickSwitcherItem({
         PALETTE_ROW_CLASS,
         "group w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left",
         "text-daintree-text/70",
-        "hover:bg-overlay-subtle hover:text-daintree-text"
+        "hover:bg-overlay-subtle hover:text-text-primary"
       )}
       onClick={() => onSelect(item)}
       aria-selected={isSelected}
@@ -49,7 +49,7 @@ export function QuickSwitcherItem({
 
       <div className="flex-1 min-w-0 overflow-hidden">
         <div className="flex items-center gap-2">
-          <span className="text-sm font-medium text-daintree-text truncate">{item.title}</span>
+          <span className="text-sm font-medium text-text-primary truncate">{item.title}</span>
           <span
             className={cn(
               "shrink-0 px-1.5 py-0.5 text-xs rounded-[var(--radius-sm)] border",

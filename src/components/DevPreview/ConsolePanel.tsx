@@ -154,7 +154,7 @@ const ConsoleRow = memo(function ConsoleRow({
             <button
               type="button"
               onClick={handleCopy}
-              className="p-0.5 rounded hover:bg-overlay-medium text-daintree-text/50 hover:text-daintree-text transition-colors"
+              className="p-0.5 rounded hover:bg-overlay-medium text-daintree-text/50 hover:text-text-primary transition-colors"
               aria-label="Copy console message"
             >
               {copied ? (
@@ -325,7 +325,7 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
     "px-2 py-0.5 rounded text-3xs font-medium transition-colors focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-accent/50";
 
   return (
-    <div className="flex h-full flex-col bg-daintree-bg">
+    <div className="flex h-full flex-col bg-surface-canvas">
       {/* Toolbar */}
       <div className="flex items-center gap-1.5 px-2 py-1 border-b border-overlay bg-surface shrink-0">
         <span className="text-3xs font-semibold uppercase tracking-wide text-daintree-text/50 mr-1">
@@ -343,7 +343,7 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
               className={cn(
                 buttonClass,
                 levelFilter === filter
-                  ? "bg-overlay-emphasis text-daintree-text"
+                  ? "bg-overlay-emphasis text-text-primary"
                   : "text-daintree-text/50 hover:bg-overlay-soft hover:text-daintree-text/70"
               )}
             >
@@ -365,7 +365,7 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
           onChange={(e) => setSearch(e.target.value)}
           placeholder="Filter…"
           aria-label="Filter console messages"
-          className="flex-1 min-w-0 max-w-[160px] px-2 py-0.5 text-2xs rounded bg-daintree-bg border border-overlay focus:outline-hidden focus:border-border-strong text-daintree-text placeholder:text-text-placeholder"
+          className="flex-1 min-w-0 max-w-[160px] px-2 py-0.5 text-2xs rounded bg-surface-canvas border border-overlay focus:outline-hidden focus:border-border-strong text-text-primary placeholder:text-text-placeholder"
         />
 
         <div className="flex-1" />
@@ -377,7 +377,7 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
               <button
                 type="button"
                 onClick={handleScrollToBottom}
-                className="p-1 rounded hover:bg-overlay-medium text-daintree-text/50 hover:text-daintree-text transition-colors"
+                className="p-1 rounded hover:bg-overlay-medium text-daintree-text/50 hover:text-text-primary transition-colors"
                 aria-label="Scroll to bottom"
               >
                 <ChevronDown className="w-3.5 h-3.5" />
@@ -394,7 +394,7 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
               type="button"
               onClick={handleCopyVisible}
               disabled={filtered.length === 0}
-              className="p-1 rounded hover:bg-overlay-medium text-daintree-text/50 hover:text-daintree-text transition-colors disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-daintree-text/50"
+              className="p-1 rounded hover:bg-overlay-medium text-daintree-text/50 hover:text-text-primary transition-colors disabled:opacity-40 disabled:hover:bg-transparent disabled:hover:text-daintree-text/50"
               aria-label="Copy visible console messages"
             >
               {allCopied ? (
@@ -413,7 +413,7 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
             <button
               type="button"
               onClick={handleClear}
-              className="p-1 rounded hover:bg-overlay-medium text-daintree-text/50 hover:text-daintree-text transition-colors"
+              className="p-1 rounded hover:bg-overlay-medium text-daintree-text/50 hover:text-text-primary transition-colors"
               aria-label="Clear console"
             >
               <Trash2 className="w-3.5 h-3.5" />

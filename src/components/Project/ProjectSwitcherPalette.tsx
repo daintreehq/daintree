@@ -629,13 +629,13 @@ function ProjectListItem({
           ? // Hover still has to answer: the band wash used to sit under this
             // row permanently, which both marked it and made it look hovered
             // already, so pointing at it said nothing back.
-            "text-daintree-text hover:bg-overlay-subtle"
+            "text-text-primary hover:bg-overlay-subtle"
           : project.isMissing
             ? // A missing project stays dimmed while selected: the row's own
               // brightness is what says the folder is gone, and restoring it
               // under the highlight would erase that.
               "text-daintree-text/50 hover:bg-overlay-subtle aria-selected:text-daintree-text/50"
-            : "text-daintree-text/70 hover:bg-overlay-subtle hover:text-daintree-text"
+            : "text-daintree-text/70 hover:bg-overlay-subtle hover:text-text-primary"
       )}
       // The current project is selectable too: picking where you already are is
       // a "never mind", and the handler closes the palette rather than sitting
@@ -655,7 +655,7 @@ function ProjectListItem({
         style={{
           background: project.color
             ? `var(--project-tile-wash, linear-gradient(to bottom, rgba(0,0,0,0.1), rgba(0,0,0,0.2))), ${getProjectGradient(project.color)}`
-            : "var(--project-tile-wash, linear-gradient(to bottom, rgba(0,0,0,0.1), rgba(0,0,0,0.2))), var(--color-daintree-sidebar)",
+            : "var(--project-tile-wash, linear-gradient(to bottom, rgba(0,0,0,0.1), rgba(0,0,0,0.2))), var(--color-surface-sidebar)",
         }}
       >
         <span className="leading-none select-none filter drop-shadow-sm">{project.emoji}</span>
@@ -669,7 +669,7 @@ function ProjectListItem({
               project.isMissing
                 ? "text-daintree-text/50"
                 : project.isActive || isSelected
-                  ? "text-daintree-text"
+                  ? "text-text-primary"
                   : "text-daintree-text/85"
             )}
           >
@@ -850,8 +850,8 @@ function ScratchListItem({
         PALETTE_ROW_CLASS,
         "group w-full flex items-center gap-2 px-2 py-1 rounded-[var(--radius-md)] text-left cursor-pointer",
         scratch.isActive
-          ? "text-daintree-text hover:bg-overlay-subtle"
-          : "text-daintree-text/70 hover:bg-overlay-subtle hover:text-daintree-text"
+          ? "text-text-primary hover:bg-overlay-subtle"
+          : "text-daintree-text/70 hover:bg-overlay-subtle hover:text-text-primary"
       )}
       onClick={() => onSelect(scratch)}
     >
@@ -871,7 +871,7 @@ function ScratchListItem({
           <span
             className={cn(
               "truncate text-sm font-semibold leading-tight",
-              scratch.isActive || isSelected ? "text-daintree-text" : "text-daintree-text/85"
+              scratch.isActive || isSelected ? "text-text-primary" : "text-daintree-text/85"
             )}
           >
             {scratch.name}
@@ -1553,7 +1553,7 @@ function ScratchNameEditor({
         onChange={(e) => setValue(e.target.value)}
         onKeyDown={handleKeyDown}
         onBlur={onCancel}
-        className="flex-1 min-w-0 bg-overlay-soft border border-[var(--border-overlay)] rounded-[var(--radius-md)] px-2 py-1 text-sm text-daintree-text outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
+        className="flex-1 min-w-0 bg-overlay-soft border border-[var(--border-overlay)] rounded-[var(--radius-md)] px-2 py-1 text-sm text-text-primary outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-1"
       />
     </div>
   );
@@ -1743,8 +1743,8 @@ function ScratchSection({
                         className={cn(
                           "w-full flex items-center gap-2 px-2 py-1 rounded-[var(--radius-md)] text-left transition-colors",
                           scratch.isActive
-                            ? "text-daintree-text"
-                            : "text-daintree-text/70 hover:text-daintree-text",
+                            ? "text-text-primary"
+                            : "text-daintree-text/70 hover:text-text-primary",
                           // Reserved like `PALETTE_ROW_CLASS` does, though this
                           // row never draws one: the ranked scratch rows carry a
                           // border, and without it here the same scratch shifted
@@ -1769,7 +1769,7 @@ function ScratchSection({
                           <div
                             className={cn(
                               "truncate text-sm font-semibold leading-tight",
-                              scratch.isActive ? "text-daintree-text" : "text-daintree-text/85"
+                              scratch.isActive ? "text-text-primary" : "text-daintree-text/85"
                             )}
                           >
                             {scratch.name}
@@ -1868,7 +1868,7 @@ function ScratchSection({
                 onClick={() => setEditor({ kind: "create" })}
                 className={cn(
                   "w-full flex items-center gap-2 px-2 py-1 mt-1 rounded-[var(--radius-md)] text-left transition-colors",
-                  "border border-transparent text-daintree-text/70 hover:bg-overlay-subtle hover:text-daintree-text",
+                  "border border-transparent text-daintree-text/70 hover:bg-overlay-subtle hover:text-text-primary",
                   PALETTE_ROW_FOCUS_CLASS
                 )}
                 data-testid="scratch-create-button"
@@ -1976,7 +1976,7 @@ function ProjectSwitcherFooter({
         <button
           type="button"
           onClick={onOpenPilot}
-          className="inline-flex items-center shrink-0 text-daintree-text/50 transition-colors duration-150 ease-out hover:text-daintree-text"
+          className="inline-flex items-center shrink-0 text-daintree-text/50 transition-colors duration-150 ease-out hover:text-text-primary"
           data-testid="project-switcher-open-pilot"
           {...(pilotShortcut ? { "aria-keyshortcuts": pilotShortcut } : {})}
         >
@@ -2089,7 +2089,7 @@ const PROJECT_ACTION_ROW_CLASS = cn(
   // vertical halves were 2px of pure height, pushing the block off the 48px
   // its tile and `py-2` add up to.
   "border-x border-transparent",
-  "text-daintree-text/70 hover:bg-overlay-subtle hover:text-daintree-text",
+  "text-daintree-text/70 hover:bg-overlay-subtle hover:text-text-primary",
   PALETTE_ROW_FOCUS_CLASS
 );
 

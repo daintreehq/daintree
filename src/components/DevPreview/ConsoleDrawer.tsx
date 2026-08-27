@@ -115,9 +115,9 @@ function DrawerTabButton({
       aria-controls={controlsId}
       className={cn(
         "relative px-3 py-1.5 text-xs font-medium rounded transition-colors",
-        "hover:text-daintree-text hover:bg-overlay-soft",
+        "hover:text-text-primary hover:bg-overlay-soft",
         "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-status-info",
-        isActive ? "text-daintree-text" : "text-daintree-text/65"
+        isActive ? "text-text-primary" : "text-daintree-text/65"
       )}
     >
       {label}

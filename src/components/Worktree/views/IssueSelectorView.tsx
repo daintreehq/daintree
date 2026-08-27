@@ -67,7 +67,7 @@ export function AssignIssueToggle({
   disabled,
 }: AssignIssueToggleProps) {
   return (
-    <label className="flex w-fit cursor-pointer items-center gap-2 text-xs text-text-secondary hover:text-daintree-text">
+    <label className="flex w-fit cursor-pointer items-center gap-2 text-xs text-text-secondary hover:text-text-primary">
       <span className="relative inline-flex shrink-0">
         <input
           type="checkbox"
@@ -77,9 +77,9 @@ export function AssignIssueToggle({
           aria-label="Assign issue to me when creating worktree"
           className={cn(
             "h-4 w-7 appearance-none rounded-full border transition-colors duration-150 ease-out",
-            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
+            "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
             assignWorktreeToSelf
-              ? "border-daintree-text bg-daintree-text"
+              ? "border-text-primary bg-text-primary"
               : "border-border-strong bg-surface-inset",
             disabled && "cursor-not-allowed opacity-50"
           )}

@@ -37,7 +37,7 @@ export function FallbackChainEditor({
   return (
     <div className="space-y-1.5">
       <div>
-        <label className="text-sm font-medium text-daintree-text">Fallback presets</label>
+        <label className="text-sm font-medium text-text-primary">Fallback presets</label>
         <p className="text-xs text-text-secondary select-text">
           Tried in order if this preset's provider is unreachable. No retry for rate limits or
           prompt errors.
@@ -52,14 +52,14 @@ export function FallbackChainEditor({
             return (
               <li
                 key={id}
-                className="flex items-center gap-2 rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg/30 px-2 py-1.5"
+                className="flex items-center gap-2 rounded-[var(--radius-md)] border border-border-default bg-daintree-bg/30 px-2 py-1.5"
               >
                 <span className="text-3xs text-text-secondary font-mono shrink-0">{idx + 1}.</span>
                 <span
                   className={
                     missing
                       ? "text-xs text-status-error truncate"
-                      : "text-xs text-daintree-text truncate"
+                      : "text-xs text-text-primary truncate"
                   }
                 >
                   {name}
@@ -80,7 +80,7 @@ export function FallbackChainEditor({
       )}
       {chain.length < FALLBACK_CHAIN_MAX && candidates.length > 0 && (
         <select
-          className="w-full rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg px-3 py-2 text-sm"
+          className="w-full rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas px-3 py-2 text-sm"
           value=""
           onChange={(e) => {
             const v = e.target.value;

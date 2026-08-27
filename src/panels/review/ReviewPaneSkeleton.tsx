@@ -8,7 +8,7 @@ export function ReviewPaneSkeleton() {
   const label = "Loading review panel";
   return (
     <div className="relative flex flex-col h-full w-full">
-      <Skeleton label={label} className="flex flex-col h-full w-full bg-daintree-bg">
+      <Skeleton label={label} className="flex flex-col h-full w-full bg-surface-canvas">
         {/* Header — matches ReviewHubContent: title, branch chip, diff-mode toggle */}
         <div
           className="flex items-center justify-between px-4 py-3 border-b border-divider shrink-0"

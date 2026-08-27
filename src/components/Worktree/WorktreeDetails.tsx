@@ -189,7 +189,7 @@ export function WorktreeDetails({
                       // `break-all` rather than the inherited word wrap: a bare
                       // GitHub URL has no break opportunity and used to run
                       // straight out of the card and off the sidebar.
-                      className="rounded break-all text-text-link underline hover:brightness-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+                      className="rounded break-all text-text-link underline hover:brightness-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                       onClick={(e) => handleLinkClick(e, segment.content)}
                     >
                       {segment.content}
@@ -253,7 +253,7 @@ export function WorktreeDetails({
                           e.stopPropagation();
                           fileChangeListRef.current?.openFirstFile(e.currentTarget);
                         }}
-                        className="shrink-0 rounded p-1 text-text-muted transition-colors hover:bg-overlay-soft hover:text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+                        className="shrink-0 rounded p-1 text-text-muted transition-colors hover:bg-overlay-soft hover:text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
                         aria-label="Open changes"
                       >
                         <FileDiff className="w-3.5 h-3.5" aria-hidden="true" />
@@ -302,7 +302,7 @@ export function WorktreeDetails({
                 }}
                 className={cn(
                   "flex min-w-0 flex-1 items-center gap-1.5 truncate rounded text-left font-mono text-xs text-text-muted hover:text-text-secondary",
-                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent",
+                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
                   isFocused && "text-text-secondary"
                 )}
               >
@@ -318,7 +318,7 @@ export function WorktreeDetails({
               <button
                 type="button"
                 onClick={handleCopyPath}
-                className="shrink-0 rounded p-1 text-text-muted transition-colors hover:bg-overlay-soft hover:text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+                className="shrink-0 rounded p-1 text-text-muted transition-colors hover:bg-overlay-soft hover:text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
                 aria-label="Copy path to clipboard"
               >
                 {pathCopied ? (

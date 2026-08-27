@@ -20,8 +20,8 @@
 
 /* Base diff table styling */
 .diff-viewer .diff {
-  background: var(--color-daintree-bg);
-  color: var(--color-daintree-text);
+  background: var(--color-surface-canvas);
+  color: var(--color-text-primary);
   table-layout: auto;
   width: max-content;
   min-width: 100%;
@@ -71,7 +71,7 @@
   position: sticky;
   left: 0;
   z-index: 2;
-  background: var(--color-daintree-sidebar);
+  background: var(--color-surface-sidebar);
   color: var(--color-state-idle);
   padding: 0 8px;
   /* width acts as a hint under table-layout:auto; min-width keeps it from
@@ -81,7 +81,7 @@
   text-align: right;
   cursor: default;
   user-select: none;
-  border-right: 1px solid var(--color-daintree-border);
+  border-right: 1px solid var(--color-border-default);
   /* Keep the +/- marker on the line number's line: the column width is an
      exact-fit calc(ch + 21px), so a subpixel deficit (fractional zoom,
      proportional monospace fallback, high-DPI) lets the line-breaking
@@ -118,7 +118,7 @@
    path survives even if white-space changes on a sub-path. The wrap-on rule
    above re-enables wrapping via [data-wrap="true"]. */
 .diff-viewer .diff-code {
-  background: var(--color-daintree-bg);
+  background: var(--color-surface-canvas);
   padding: 0 12px;
   white-space: pre;
   word-break: normal;
@@ -142,7 +142,7 @@
    background-color — visually identical to the previous transparent mix over
    the sidebar surface. */
 .diff-viewer .diff-gutter-insert {
-  background-color: var(--color-daintree-sidebar);
+  background-color: var(--color-surface-sidebar);
   background-image: linear-gradient(
     color-mix(in oklab, var(--color-status-success) 20%, transparent),
     color-mix(in oklab, var(--color-status-success) 20%, transparent)
@@ -156,7 +156,7 @@
 }
 
 .diff-viewer .diff-gutter-delete {
-  background-color: var(--color-daintree-sidebar);
+  background-color: var(--color-surface-sidebar);
   background-image: linear-gradient(
     color-mix(in oklab, var(--color-status-danger) 20%, transparent),
     color-mix(in oklab, var(--color-status-danger) 20%, transparent)
@@ -171,13 +171,13 @@
 .diff-viewer .diff-gutter-omit {
   background-color: color-mix(
     in oklab,
-    var(--color-daintree-sidebar) 45%,
-    var(--color-daintree-bg)
+    var(--color-surface-sidebar) 45%,
+    var(--color-surface-canvas)
   );
   background-image: repeating-linear-gradient(
     -45deg,
     transparent 0 5px,
-    color-mix(in oklab, var(--color-daintree-border) 55%, transparent) 5px 6px
+    color-mix(in oklab, var(--color-border-default) 55%, transparent) 5px 6px
   );
 }
 
@@ -186,7 +186,7 @@
 }
 
 /* Word-level edit highlighting — noticeable but calm. The pill's luminance
-   is anchored to the theme canvas (status hue mixed INTO --color-daintree-bg,
+   is anchored to the theme canvas (status hue mixed INTO --color-surface-canvas,
    oklch to keep chroma), so the syntax-colored text always keeps its
    contrast: with muted status hues on a near-black canvas even this 40% mix
    leaves the background around 0.10 relative luminance, well under the 0.134
@@ -206,12 +206,12 @@
   --diff-code-insert-edit-background-color: color-mix(
     in oklch,
     var(--color-status-success) 40%,
-    var(--color-daintree-bg)
+    var(--color-surface-canvas)
   );
   --diff-code-delete-edit-background-color: color-mix(
     in oklch,
     var(--color-status-danger) 40%,
-    var(--color-daintree-bg)
+    var(--color-surface-canvas)
   );
 }
 
@@ -249,7 +249,7 @@
 
 .light .diff-viewer .diff-code-omit,
 .light .diff-viewer .diff-gutter-omit {
-  background-color: color-mix(in oklab, var(--color-daintree-sidebar) 45%, var(--color-surface));
+  background-color: color-mix(in oklab, var(--color-surface-sidebar) 45%, var(--color-surface));
 }
 
 /* Light edit pills consume the per-palette tokens (theme-engine owned, D1b
@@ -270,9 +270,9 @@
    cell of a split row plain. */
 .diff-viewer tr.diff-line-moved-old td.diff-code-delete,
 .diff-viewer tr.diff-line-moved-new td.diff-code-insert {
-  background: color-mix(in oklch, var(--color-status-info) 13%, var(--color-daintree-bg));
+  background: color-mix(in oklch, var(--color-status-info) 13%, var(--color-surface-canvas));
   box-shadow: inset 2px 0 0
-    color-mix(in oklch, var(--color-status-info) 60%, var(--color-daintree-bg));
+    color-mix(in oklch, var(--color-status-info) 60%, var(--color-surface-canvas));
 }
 
 .diff-viewer tr.diff-line-moved-old td.diff-gutter-delete,
@@ -286,7 +286,7 @@
 .diff-viewer .diff-ws-space {
   background-image: radial-gradient(
     circle at 0.5ch 50%,
-    color-mix(in oklab, var(--color-daintree-text) 55%, transparent) 1px,
+    color-mix(in oklab, var(--color-text-primary) 55%, transparent) 1px,
     transparent 1.5px
   );
   background-size: 1ch 100%;
@@ -302,7 +302,7 @@
   position: absolute;
   left: 0;
   top: 0;
-  color: color-mix(in oklab, var(--color-daintree-text) 55%, transparent);
+  color: color-mix(in oklab, var(--color-text-primary) 55%, transparent);
   pointer-events: none;
 }
 
@@ -311,7 +311,7 @@
    flagged span is whitespace, so there are no glyphs to obscure) but still
    background-anchored like the pills above. */
 .diff-viewer .diff-ws-trailing {
-  background: color-mix(in oklch, var(--color-status-danger) 30%, var(--color-daintree-bg));
+  background: color-mix(in oklch, var(--color-status-danger) 30%, var(--color-surface-canvas));
   border-radius: var(--radius-xs);
 }
 
@@ -336,14 +336,14 @@
   color: var(--color-status-info);
   padding: 4px 12px;
   font-size: var(--text-2xs);
-  border-top: 1px solid var(--color-daintree-border);
-  border-bottom: 1px solid var(--color-daintree-border);
+  border-top: 1px solid var(--color-border-default);
+  border-bottom: 1px solid var(--color-border-default);
 }
 
 .diff-viewer .diff-decoration-gutter {
   background: var(--color-surface);
-  border-top: 1px solid var(--color-daintree-border);
-  border-bottom: 1px solid var(--color-daintree-border);
+  border-top: 1px solid var(--color-border-default);
+  border-bottom: 1px solid var(--color-border-default);
 }
 
 .diff-viewer .diff-hunk-header-inner {
@@ -361,7 +361,7 @@
 }
 
 .diff-viewer .diff-hunk-header-hidden-count {
-  color: var(--color-text-muted, var(--color-daintree-text));
+  color: var(--color-text-muted, var(--color-text-primary));
   opacity: 0.6;
 }
 
@@ -377,8 +377,8 @@
   gap: 4px;
   padding: 1px 6px;
   border-radius: var(--radius-sm);
-  color: var(--color-daintree-text);
-  background: var(--color-daintree-border);
+  color: var(--color-text-primary);
+  background: var(--color-border-default);
   font-size: var(--text-2xs);
   transition-property: color, background-color;
   transition-duration: 150ms;
@@ -386,7 +386,7 @@
 }
 
 .diff-viewer .diff-hunk-header-expanders button:hover {
-  background: color-mix(in oklab, var(--color-daintree-border) 80%, var(--color-daintree-text));
+  background: color-mix(in oklab, var(--color-border-default) 80%, var(--color-text-primary));
 }
 
 /* Per-hunk copy: ghost button that surfaces on header hover (or keyboard
@@ -396,7 +396,7 @@
   align-items: center;
   padding: 2px 4px;
   border-radius: var(--radius-sm);
-  color: var(--color-text-muted, var(--color-daintree-text));
+  color: var(--color-text-muted, var(--color-text-primary));
   opacity: 0;
   transition-property: color, background-color, opacity;
   transition-duration: 150ms;
@@ -410,8 +410,8 @@
 }
 
 .diff-viewer .diff-hunk-header-copy:hover {
-  color: var(--color-daintree-text);
-  background: var(--color-daintree-border);
+  color: var(--color-text-primary);
+  background: var(--color-border-default);
 }
 
 /* Keyboard hunk nav target: keep the hunk header clear of the sticky dialog
@@ -447,7 +447,7 @@
 }
 
 .diff-scroll-root::-webkit-scrollbar-track {
-  background: var(--color-daintree-bg);
+  background: var(--color-surface-canvas);
 }
 
 .diff-scroll-root::-webkit-scrollbar-thumb {
@@ -596,7 +596,7 @@
 
 /* Mark the center divider on the new-side gutter. */
 .diff-viewer .diff-file-centered td.diff-gutter:nth-child(3) {
-  border-left: 1px solid var(--color-daintree-border);
+  border-left: 1px solid var(--color-border-default);
 }
 
 /* The single horizontal scrollbar driving both panes. Sticky against the
@@ -609,7 +609,7 @@
   z-index: 3;
   overflow-x: auto;
   height: 0;
-  background: var(--color-daintree-bg);
+  background: var(--color-surface-canvas);
   /* The global `* { scrollbar-width: thin; scrollbar-color: … }` opts every
      element into STANDARD scrollbars, which disqualifies ::-webkit-scrollbar
      styling (Chromium 121+) and renders as a macOS overlay — invisible unless
@@ -641,13 +641,13 @@
 }
 
 .diff-viewer .diff-hscrollbar::-webkit-scrollbar-track {
-  background: var(--color-daintree-bg);
+  background: var(--color-surface-canvas);
 }
 
 .diff-viewer .diff-hscrollbar::-webkit-scrollbar-thumb {
   background: var(--color-state-idle);
   border-radius: 6px;
-  border: 3px solid var(--color-daintree-bg);
+  border: 3px solid var(--color-surface-canvas);
 }
 
 .diff-viewer .diff-hscrollbar::-webkit-scrollbar-thumb:hover {
@@ -673,7 +673,7 @@
 }
 
 .diff-viewer .diff-file-scroll::-webkit-scrollbar-track {
-  background: var(--color-daintree-bg);
+  background: var(--color-surface-canvas);
 }
 
 .diff-viewer .diff-file-scroll::-webkit-scrollbar-thumb {
@@ -749,12 +749,12 @@
     --diff-code-insert-edit-background-color: color-mix(
       in oklch,
       var(--color-status-success) 50%,
-      var(--color-daintree-bg)
+      var(--color-surface-canvas)
     );
     --diff-code-delete-edit-background-color: color-mix(
       in oklch,
       var(--color-status-danger) 50%,
-      var(--color-daintree-bg)
+      var(--color-surface-canvas)
     );
   }
   /* Diff viewer fills are low-alpha tints by default; raise the mixes and add
@@ -785,7 +785,7 @@
      status-colored border the rules above add to insert/delete cells. */
   .diff-viewer tr.diff-line-moved-old td.diff-code-delete,
   .diff-viewer tr.diff-line-moved-new td.diff-code-insert {
-    background: color-mix(in oklch, var(--color-status-info) 24%, var(--color-daintree-bg));
+    background: color-mix(in oklch, var(--color-status-info) 24%, var(--color-surface-canvas));
     border-left-color: var(--color-status-info);
     box-shadow: none;
   }
@@ -793,11 +793,11 @@
   .diff-viewer .diff-ws-space {
     background-image: radial-gradient(
       circle at 0.5ch 50%,
-      var(--color-daintree-text) 1px,
+      var(--color-text-primary) 1px,
       transparent 1.5px
     );
   }
   .diff-viewer .diff-ws-tab::before {
-    color: var(--color-daintree-text);
+    color: var(--color-text-primary);
   }
 }

@@ -169,7 +169,7 @@ export function LogEntry({ entry, isExpanded, onToggle, count = 1, copyMeta }: L
           <span className="text-daintree-text/60 text-xs font-mono shrink-0">[{entry.source}]</span>
         )}
 
-        <span className="text-daintree-text text-xs font-mono break-words min-w-0 flex-1">
+        <span className="text-text-primary text-xs font-mono break-words min-w-0 flex-1">
           {entry.message}
         </span>
 
@@ -218,7 +218,7 @@ export function LogEntry({ entry, isExpanded, onToggle, count = 1, copyMeta }: L
           role="region"
           aria-label="Log entry context"
         >
-          <pre className="text-daintree-text whitespace-pre-wrap select-text">{formatContext(entry.context!)}</pre>
+          <pre className="text-text-primary whitespace-pre-wrap select-text">{formatContext(entry.context!)}</pre>
         </div>
       )}
     </div>

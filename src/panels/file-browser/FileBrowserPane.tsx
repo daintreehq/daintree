@@ -1043,7 +1043,7 @@ export function FileBrowserPane({
           cell directly, the dialog via the registry's `dialogFullHeight` pin
           on the AppDialog surface — so a plain flex-1/min-h-0 chain fills it
           without the content-sized-parent collapse trap. */}
-      <div className="flex min-h-0 w-full flex-1 bg-daintree-bg">
+      <div className="flex min-h-0 w-full flex-1 bg-surface-canvas">
         {/* Collapsed unmounts the column entirely (not width 0): a persistent
             toggle in the viewer header re-opens it, so there's no orphaned
             control to home. The tree data hook stays mounted in the pane, so
@@ -1059,8 +1059,8 @@ export function FileBrowserPane({
             // viewer restores the split. The right border goes with the divider,
             // since there is nothing on the other side of it.
             className={cn(
-              "relative flex min-h-0 flex-col self-stretch bg-daintree-sidebar",
-              viewerCollapsed ? "min-w-0 flex-1" : "shrink-0 border-r border-daintree-border"
+              "relative flex min-h-0 flex-col self-stretch bg-surface-sidebar",
+              viewerCollapsed ? "min-w-0 flex-1" : "shrink-0 border-r border-border-default"
             )}
             style={viewerCollapsed ? undefined : { width: sidebarWidth }}
           >
@@ -1205,7 +1205,7 @@ export function FileBrowserPane({
                 <div
                   className={cn(
                     "h-8 w-px rounded-full transition-[width] delay-100 duration-150 group-hover:w-0.5",
-                    "bg-daintree-text/20 group-hover:bg-daintree-text/35 group-focus:bg-daintree-accent",
+                    "bg-daintree-text/20 group-hover:bg-daintree-text/35 group-focus:bg-accent-primary",
                     isResizing && "bg-daintree-text/50"
                   )}
                 />
@@ -1401,7 +1401,7 @@ export function FileBrowserPane({
             <button
               type="button"
               onClick={revealSelection}
-              className="shrink-0 truncate border-t border-daintree-border px-3 py-1 text-left font-mono text-2xs text-daintree-text/60 transition-colors duration-150 ease-out hover:bg-tint/5 hover:text-daintree-text"
+              className="shrink-0 truncate border-t border-border-default px-3 py-1 text-left font-mono text-2xs text-daintree-text/60 transition-colors duration-150 ease-out hover:bg-tint/5 hover:text-text-primary"
             >
               Reveal {selectedFileName}
             </button>

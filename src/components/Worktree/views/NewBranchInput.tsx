@@ -155,7 +155,7 @@ export function NewBranchInput({
                     "flex items-center gap-2 px-2 py-1.5 text-sm rounded-[var(--radius-sm)] cursor-pointer"
                   )}
                 >
-                  <span className="font-mono text-xs text-daintree-text">
+                  <span className="font-mono text-xs text-text-primary">
                     {suggestion.type.prefix}/
                   </span>
                   <span className="text-text-secondary">{suggestion.type.displayName}</span>

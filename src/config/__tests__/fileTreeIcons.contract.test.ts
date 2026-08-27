@@ -71,7 +71,7 @@ describe("file-tree icon contrast contract (#11596)", () => {
     // And `transparent`, `inherit` or the same secondary token the icons
     // already carry would all satisfy a bare "sets a color" assertion while
     // leaving Increase Contrast users exactly where they started.
-    expect(body).toMatch(/(^|[;{\s])color:\s*var\(--color-daintree-text\)/);
+    expect(body).toMatch(/(^|[;{\s])color:\s*var\(--color-text-primary\)/);
     // The base token would be a no-op here, and a category hue would be the
     // tint #11596 introduced and this change removed, sneaking back in through
     // the contrast rule.

@@ -62,7 +62,7 @@ export function CommitInfoTooltip({
             <CommitAuthorAvatar author={author} forgeAvatarUrl={forgeAvatarUrl} size={32} />
           )}
           <div className="flex min-w-0 flex-col">
-            <span className="truncate text-xs font-semibold text-daintree-text">
+            <span className="truncate text-xs font-semibold text-text-primary">
               {author ? author.name : "Last commit"}
             </span>
             <span className="text-2xs text-text-muted" title={committedAbsolute!}>

@@ -434,7 +434,7 @@ export function ConflictPanel({
           <GitMerge className="w-4 h-4 text-status-warning mt-0.5 shrink-0" />
           <div className="flex-1 min-w-0">
             <div className="flex items-baseline gap-2 flex-wrap">
-              <span className="text-sm font-semibold text-daintree-text">
+              <span className="text-sm font-semibold text-text-primary">
                 Resolve {operationLabel} Conflicts
               </span>
               {operationState === "REBASING" &&
@@ -513,7 +513,7 @@ export function ConflictPanel({
                           {dir}/
                         </span>
                       )}
-                      <span className="shrink truncate text-daintree-text font-medium font-mono text-2xs">
+                      <span className="shrink truncate text-text-primary font-medium font-mono text-2xs">
                         {base}
                       </span>
                       <span className="ml-2 text-3xs uppercase tracking-wider text-daintree-text/50 font-mono">

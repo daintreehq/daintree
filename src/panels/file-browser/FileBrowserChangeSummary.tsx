@@ -33,7 +33,7 @@ export function FileBrowserChangeSummary({ changes, onSelect }: FileBrowserChang
   return (
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <div className="shrink-0 px-4 pb-2 pt-4">
-        <h2 className="text-sm font-medium text-daintree-text">Changed files</h2>
+        <h2 className="text-sm font-medium text-text-primary">Changed files</h2>
         <p className="mt-0.5 text-xs text-daintree-text/60">Pick a file to read it here</p>
       </div>
       <ul className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
@@ -73,7 +73,7 @@ export function FileBrowserChangeSummary({ changes, onSelect }: FileBrowserChang
                   "flex w-full items-center gap-2 rounded px-2 py-1 text-left font-mono text-xs",
                   "transition-colors duration-150 ease-out",
                   isReadable
-                    ? "cursor-pointer text-daintree-text/80 hover:bg-tint/5 hover:text-daintree-text"
+                    ? "cursor-pointer text-daintree-text/80 hover:bg-tint/5 hover:text-text-primary"
                     : "cursor-default text-daintree-text/40"
                 )}
               >

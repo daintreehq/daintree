@@ -97,7 +97,7 @@ export function QuickStateFilterBar({
                 onClick={() => onChange(isActive ? "all" : option.value)}
                 className={cn(
                   "inline-flex items-center justify-center gap-1 min-w-0 px-2 py-1.5 transition-colors",
-                  "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-daintree-accent",
+                  "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
                   // "All" is the only labelled segment and always carries the
                   // total — give it the lion's share; the icon-only status
                   // segments split the rest equally.
@@ -122,7 +122,7 @@ export function QuickStateFilterBar({
                     aria-hidden="true"
                     className={cn(
                       "text-xs",
-                      isActive ? "font-medium text-daintree-text" : "text-daintree-text/60"
+                      isActive ? "font-medium text-text-primary" : "text-daintree-text/60"
                     )}
                   >
                     All
@@ -133,7 +133,7 @@ export function QuickStateFilterBar({
                     aria-hidden="true"
                     className={cn(
                       "text-xs tabular-nums",
-                      isActive ? "text-daintree-text" : "text-daintree-text/60"
+                      isActive ? "text-text-primary" : "text-daintree-text/60"
                     )}
                   >
                     {rawCount}

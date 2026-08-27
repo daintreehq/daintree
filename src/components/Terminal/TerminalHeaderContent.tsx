@@ -542,7 +542,7 @@ export function TerminalHeaderContent({
         <Tooltip>
           <TooltipTrigger asChild>
             <div
-              className="inline-flex items-center gap-1 text-xs font-sans bg-overlay-medium text-daintree-text px-1.5 py-0.5 rounded"
+              className="inline-flex items-center gap-1 text-xs font-sans bg-overlay-medium text-text-primary px-1.5 py-0.5 rounded"
               role="status"
               aria-live="off"
             >

@@ -8,6 +8,7 @@ const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(TEST_DIR, "../../..");
 const INDEX_CSS_PATH = path.join(REPO_ROOT, "src/index.css");
 const SRC_ROOT = path.join(REPO_ROOT, "src");
+const RENDERER_ROOTS = [SRC_ROOT, path.join(REPO_ROOT, "plugins/builtin/github/renderer")];
 const NON_COLOR_THEME_TOKENS = new Set([
   "shadow-ambient",
   "shadow-floating",
@@ -72,11 +73,11 @@ describe("color system contract", () => {
 
   it("uses only exported theme-style color utilities in renderer source", () => {
     const utilityRegex =
-      /\b(?:bg|text|border|ring|outline|placeholder|fill|stroke)-((?:daintree|surface|text|accent|status|activity|category|pr|overlay|scrim|state|server|terminal|cat|filter)[a-z0-9-]*)(?:\/[^\s"'`)]+)?/g;
+      /\b(?:bg|text|border|ring-offset|ring|outline|divide|accent|placeholder|fill|stroke)-((?:daintree|surface|text|border|accent|status|activity|category|pr|overlay|scrim|state|server|terminal|cat|filter)[a-z0-9-]*)(?:\/[^\s"'`)]+)?/g;
 
     const missing = new Map<string, string[]>();
 
-    for (const filePath of collectSourceFiles(SRC_ROOT)) {
+    for (const filePath of RENDERER_ROOTS.flatMap(collectSourceFiles)) {
       const source = fs.readFileSync(filePath, "utf8");
       const matches = new Set(Array.from(source.matchAll(utilityRegex), (match) => match[1]!));
 
@@ -111,6 +112,101 @@ describe("color system contract", () => {
     expect(indexCss).toMatch(
       /--color-accent-primary-foreground:\s*var\(--theme-accent-foreground\)/
     );
+  });
+
+  // #12031 renamed ~2.3k solid call sites off the legacy `daintree-*` vocabulary
+  // onto the semantic tokens it aliased. The rename is only a no-op while both
+  // spellings still resolve to the same `--theme-*` terminal, so resolve them
+  // through the real declarations rather than trusting the alias block to read
+  // the way it did the day it was written.
+  it("resolves each surviving daintree-* alias to the same theme token as its replacement", () => {
+    const declarations = new Map(
+      Array.from(indexCss.matchAll(/--color-([a-z0-9-]+):\s*([^;]+);/g), (m) => [
+        m[1]!,
+        m[2]!.trim(),
+      ])
+    );
+
+    function resolve(name: string): string {
+      const seen = new Set<string>();
+      let current = name;
+      for (;;) {
+        if (seen.has(current)) throw new Error(`--color-${name} resolves through a cycle`);
+        seen.add(current);
+        const value = declarations.get(current);
+        expect(value, `--color-${current} is not declared`).toBeDefined();
+        const hop = value!.match(/^var\(\s*--color-([a-z0-9-]+)\s*\)$/);
+        if (!hop) return value!;
+        current = hop[1]!;
+      }
+    }
+
+    const renames: Record<string, string> = {
+      "daintree-bg": "surface-canvas",
+      "daintree-sidebar": "surface-sidebar",
+      "daintree-border": "border-default",
+      "daintree-text": "text-primary",
+      "daintree-accent": "accent-primary",
+    };
+
+    for (const [legacy, semantic] of Object.entries(renames)) {
+      expect(
+        resolve(legacy),
+        `--color-${legacy} and --color-${semantic} must paint the same colour, or the ` +
+          `#12031 rename of every ${legacy.replace("daintree-", "")} call site changed pixels`
+      ).toBe(resolve(semantic));
+    }
+  });
+
+  // The two aliases #12031 deleted had no consumers. Removing a live one would
+  // silently stop Tailwind generating the alpha-modified utilities still in the
+  // tree (`text-daintree-text/60`, `ring-daintree-accent/30`).
+  it("keeps a daintree-* alias declared for every alpha-modified use still in the tree", () => {
+    const alphaUse =
+      /(?<=[a-z0-9\]])-daintree-(sidebar|border|accent|text|bg)\/(?:\[[\d.]+\]|\d+)/g;
+
+    const needed = new Set<string>();
+    for (const filePath of RENDERER_ROOTS.flatMap(collectSourceFiles)) {
+      const source = fs.readFileSync(filePath, "utf8");
+      for (const match of source.matchAll(alphaUse)) needed.add(`daintree-${match[1]!}`);
+    }
+
+    const undeclared = Array.from(needed).filter((name) => !exportedColorVars.has(name));
+    expect(undeclared, `alpha-modified utilities reference undeclared --color-* aliases`).toEqual(
+      []
+    );
+  });
+
+  // The other half of the #12031 no-op proof. The alias-equality test above shows
+  // the mapping is value-preserving; this one shows it was actually applied, so
+  // a solid legacy utility cannot creep back in from a copied recipe or a
+  // reverted hunk. Alpha-modified forms are deliberately still allowed — they
+  // are the deferred ramp.
+  it("has no solid daintree-* utility or raw alias read left in renderer source", () => {
+    const solidUtility =
+      /(?<!--color)(?<=[a-z0-9\]])-daintree-(sidebar|border|accent|text|bg)(?![\w-]|\\*\/)/g;
+    const rawRead = /var\(\s*--color-daintree-/g;
+
+    const offenders = new Map<string, string[]>();
+    for (const filePath of RENDERER_ROOTS.flatMap(collectSourceFiles)) {
+      const source = fs.readFileSync(filePath, "utf8");
+      const hits = [
+        ...Array.from(source.matchAll(solidUtility), (m) => m[0]!),
+        ...Array.from(source.matchAll(rawRead), (m) => m[0]!),
+      ];
+      if (hits.length > 0) {
+        offenders.set(path.relative(REPO_ROOT, filePath), Array.from(new Set(hits)));
+      }
+    }
+
+    expect(
+      Object.fromEntries(offenders),
+      `Solid legacy colour utilities are retired — use the semantic token the alias ` +
+        `points at (daintree-bg -> surface-canvas, daintree-sidebar -> surface-sidebar, ` +
+        `daintree-border -> border-default, daintree-text -> text-primary, ` +
+        `daintree-accent -> accent-primary). Alpha-modified forms are still allowed ` +
+        `until the opacity ramp lands.`
+    ).toEqual({});
   });
 
   it("defines --dock-shadow with alpha-pinned relative color (visible on light themes)", () => {

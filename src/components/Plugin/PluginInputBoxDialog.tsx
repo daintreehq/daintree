@@ -65,7 +65,7 @@ function InputBoxForm({ options, pluginId, onSubmit, onCancel }: InputBoxFormPro
               handleSubmit();
             }
           }}
-          className="w-full rounded-md bg-overlay-subtle px-3 py-2 text-sm text-daintree-text placeholder:text-daintree-text/40"
+          className="w-full rounded-md bg-overlay-subtle px-3 py-2 text-sm text-text-primary placeholder:text-daintree-text/40"
         />
         {showError && !isValid && (
           <p className="text-xs text-status-error">

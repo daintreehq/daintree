@@ -9,7 +9,7 @@ import { useDiagnosticsStore } from "@/store/diagnosticsStore";
 import { ToolbarContextMenuItems } from "./ToolbarContextMenuItems";
 import { DIAGNOSTICS_DOCK_REGION_ID } from "@/components/Diagnostics/regionIds";
 
-const toolbarIconButtonClass = "toolbar-icon-button text-daintree-text";
+const toolbarIconButtonClass = "toolbar-icon-button text-text-primary";
 
 interface ToolbarProblemsButtonProps {
   errorCount: number;
@@ -72,7 +72,7 @@ export function ToolbarProblemsButton({
                 data-visible={errorCount > 0}
                 className="toolbar-problems-badge toolbar-badge absolute top-1.5 right-1.5 w-2 h-2 rounded-full"
               />
-              {/* Persistent watcher-unreliable pip. 6px + ring-daintree-sidebar
+              {/* Persistent watcher-unreliable pip. 6px + ring-surface-sidebar
                   per the toolbar pip vocabulary (semantic-status dot); pinned
                   to the opposite corner so it never collides with the 8px
                   error badge when both are visible. Shared by recursive-watcher
@@ -81,7 +81,7 @@ export function ToolbarProblemsButton({
               <span
                 data-testid="watcher-degraded-badge"
                 data-visible={watcherUnreliable}
-                className="toolbar-badge absolute bottom-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-status-warning ring-1 ring-daintree-sidebar"
+                className="toolbar-badge absolute bottom-1.5 right-1.5 w-1.5 h-1.5 rounded-full bg-status-warning ring-1 ring-surface-sidebar"
               />
             </Button>
           </TooltipTrigger>

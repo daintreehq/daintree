@@ -30,7 +30,7 @@ import { cn } from "@/lib/utils";
 export const CHOICE_SHELL =
   "rounded-[var(--radius-md)] border transition-colors duration-150 " +
   "has-[input:focus-visible]:outline has-[input:focus-visible]:outline-2 " +
-  "has-[input:focus-visible]:outline-daintree-accent has-[input:focus-visible]:outline-offset-2";
+  "has-[input:focus-visible]:outline-accent-primary has-[input:focus-visible]:outline-offset-2";
 
 export const CHOICE_PAD = "px-3 py-2.5";
 
@@ -45,7 +45,7 @@ export const CHOICE_SELECTED =
   "border-border-strong bg-overlay-selected outline outline-2 outline-transparent";
 
 export const CHOICE_UNSELECTED =
-  "border-daintree-border hover:bg-overlay-soft hover:border-daintree-text/30";
+  "border-border-default hover:bg-overlay-soft hover:border-daintree-text/30";
 
 /** Control (~13px) + `gap-3`, so a nested control lines up with the label column. */
 export const CHOICE_LABEL_INSET = "ml-[25px]";
@@ -67,7 +67,7 @@ export function RadioChoiceGroup({
   return (
     <fieldset className={cn("space-y-2", className)}>
       <legend
-        className={cn(legendHidden ? "sr-only" : "text-sm font-medium text-daintree-text mb-2")}
+        className={cn(legendHidden ? "sr-only" : "text-sm font-medium text-text-primary mb-2")}
       >
         {legend}
       </legend>
@@ -151,7 +151,7 @@ export function RadioChoiceRow({
         className="mt-1 shrink-0 focus-visible:outline focus-visible:outline-2 focus-visible:outline-transparent"
       />
       <span className="min-w-0">
-        <span id={labelId} className="block text-sm font-medium text-daintree-text">
+        <span id={labelId} className="block text-sm font-medium text-text-primary">
           {label}
         </span>
         {description && (

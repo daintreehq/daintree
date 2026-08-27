@@ -241,7 +241,7 @@ export function TerminalStartupPlaceholder({
   const showSpinner = useDohertyGate(true);
 
   return (
-    <div className="relative flex flex-1 min-h-0 w-full flex-col items-center justify-center bg-daintree-bg px-4">
+    <div className="relative flex flex-1 min-h-0 w-full flex-col items-center justify-center bg-surface-canvas px-4">
       <div
         className="flex max-w-[28ch] flex-col items-center gap-3 text-center"
         role="status"
@@ -1333,7 +1333,7 @@ function TerminalPaneComponent({
       })()}
     >
       {terminalErrors.length > 0 && (
-        <div className="px-2 py-1 border-b border-daintree-border bg-[color-mix(in_oklab,var(--color-status-error)_5%,transparent)] shrink-0">
+        <div className="px-2 py-1 border-b border-border-default bg-[color-mix(in_oklab,var(--color-status-error)_5%,transparent)] shrink-0">
           <CompactErrorList
             errors={terminalErrors}
             maxInline={2}
@@ -1488,7 +1488,7 @@ function TerminalPaneComponent({
         />
       </BannerSlot>
 
-      <div className="flex-1 min-h-0 bg-daintree-bg flex flex-col">
+      <div className="flex-1 min-h-0 bg-surface-canvas flex flex-col">
         {spawnStatus === "missing-cli" && agentId ? (
           <MissingCliGate
             agentId={agentId}
@@ -1506,7 +1506,7 @@ function TerminalPaneComponent({
         ) : spawnStatus === "spawning" && !eagerAttach ? (
           <TerminalStartupPlaceholder agentId={agentId} onCancel={() => onClose()} />
         ) : spawnStatus === "failed" ? (
-          <div className="flex-1 min-h-0 bg-daintree-bg flex items-center justify-center">
+          <div className="flex-1 min-h-0 bg-surface-canvas flex items-center justify-center">
             <p className="text-sm text-daintree-text/50">Terminal failed to start</p>
           </div>
         ) : (

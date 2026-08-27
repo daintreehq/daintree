@@ -117,7 +117,7 @@ describe("NotificationCenterEntry unread signal", () => {
     expect(row).not.toBeNull();
     if (row instanceof HTMLElement) {
       expect(row.className).not.toMatch(/border-l-2/);
-      expect(row.className).not.toMatch(/border-daintree-accent/);
+      expect(row.className).not.toMatch(/border-(?:daintree-accent|accent-primary)(?![\w-])/);
       expect(row.className).not.toMatch(/bg-daintree-accent\/\[0\.04\]/);
     }
   });
@@ -224,7 +224,7 @@ describe("NotificationCenterEntry thread count chip", () => {
     render(<NotificationCenterEntry entry={makeEntry({ title: "Build" })} threadCount={2} />);
     const chip = screen.getByLabelText("2 events");
     expect(chip.className).toMatch(/bg-tint\//);
-    expect(chip.className).not.toMatch(/bg-daintree-accent/);
+    expect(chip.className).not.toMatch(/bg-(?:daintree-accent|accent-primary)(?![\w-])/);
     expect(chip.className).not.toMatch(/text-accent-primary/);
   });
 

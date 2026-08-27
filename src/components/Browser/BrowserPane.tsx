@@ -952,7 +952,7 @@ export function BrowserPane({
           </div>
         )}
         {!hasValidUrl ? (
-          <div className="absolute inset-0 flex flex-col items-center justify-center bg-daintree-bg text-daintree-text p-6">
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-surface-canvas text-text-primary p-6">
             <div className="flex flex-col items-center text-center max-w-md">
               <h3 className="text-sm font-medium text-daintree-text/70 mb-1">Browser</h3>
               <p className="text-xs text-daintree-text/50 mb-4 leading-relaxed">
@@ -975,13 +975,13 @@ export function BrowserPane({
             </div>
           </div>
         ) : !hasBeenVisible ? (
-          <div className="absolute inset-0 flex flex-col items-center justify-center bg-daintree-bg text-daintree-text">
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-surface-canvas text-text-primary">
             <p className="text-xs text-daintree-text/50">
               Browser will load when this panel is first viewed
             </p>
           </div>
         ) : isEvicted ? (
-          <div className="absolute inset-0 flex flex-col items-center justify-center bg-daintree-bg text-daintree-text p-6">
+          <div className="absolute inset-0 flex flex-col items-center justify-center bg-surface-canvas text-text-primary p-6">
             <p className="text-xs text-daintree-text/50">Reclaimed for memory</p>
           </div>
         ) : (
@@ -989,7 +989,7 @@ export function BrowserPane({
             {loadError && (
               <div
                 role="alert"
-                className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-daintree-bg text-daintree-text p-6"
+                className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-surface-canvas text-text-primary p-6"
               >
                 <AlertTriangle className="w-6 h-6 text-status-warning mb-3" />
                 <h3 className="text-sm font-medium text-daintree-text/70 mb-1">
@@ -1131,7 +1131,7 @@ export function BrowserPane({
             <div className="relative flex-1 min-h-0">
               {isDragging && <div className="absolute inset-0 z-10 bg-transparent" />}
               {showLoadingOverlay && (
-                <div className="absolute inset-0 flex flex-col items-center justify-center bg-daintree-bg z-10 gap-3">
+                <div className="absolute inset-0 flex flex-col items-center justify-center bg-surface-canvas z-10 gap-3">
                   {/* aria-busy on the status wrapper suppresses inner live regions,
                       so the slow-load escalation announces via the sibling
                       aria-live span below (SkeletonHint pattern). */}
@@ -1177,7 +1177,7 @@ export function BrowserPane({
                 allowpopups=""
                 className={cn(
                   "w-full h-full border-0",
-                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
+                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
                   isDragging && "invisible pointer-events-none"
                 )}
               />

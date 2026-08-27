@@ -175,7 +175,7 @@ function LoadMoreFooter({ context }: { context?: LoadMoreFooterContext }) {
               // Neutral, not accent: the keyboard cursor uses the same neutral
               // lift here that it uses on a row, so the two can never both claim
               // the accent at once.
-              isLoadMoreActive && "bg-overlay-soft text-daintree-text"
+              isLoadMoreActive && "bg-overlay-soft text-text-primary"
             )}
           >
             {showLoadingMoreSpinner ? (
@@ -985,7 +985,7 @@ export function GitHubResourceList({
               // single focus anchor for this region, so it gets the whole
               // accent budget rather than two washed-out fractions of it.
               "transition-[border-color] duration-150 ease-out",
-              "focus-within:border-daintree-accent"
+              "focus-within:border-accent-primary"
             )}
           >
             <Search
@@ -1012,7 +1012,7 @@ export function GitHubResourceList({
                  Without this the app's capture-phase global handler consumes
                  them first and the row menu stays pointer-only. */
               data-row-menu=""
-              className="flex-1 min-w-0 text-sm bg-transparent text-daintree-text placeholder:text-text-secondary focus:outline-hidden"
+              className="flex-1 min-w-0 text-sm bg-transparent text-text-primary placeholder:text-text-secondary focus:outline-hidden"
             />
             {searchQuery && (
               <button
@@ -1021,7 +1021,7 @@ export function GitHubResourceList({
                 aria-label="Clear search"
                 className={cn(
                   "flex items-center justify-center w-5 h-5 rounded shrink-0",
-                  "text-text-secondary hover:text-daintree-text",
+                  "text-text-secondary hover:text-text-primary",
                   "transition-colors duration-150 ease-out"
                 )}
               >
@@ -1042,7 +1042,7 @@ export function GitHubResourceList({
                 }
                 className={cn(
                   "flex items-center justify-center w-8 h-8 rounded-[var(--radius-md)] shrink-0",
-                  "text-text-secondary hover:text-daintree-text hover:bg-overlay-medium",
+                  "text-text-secondary hover:text-text-primary hover:bg-overlay-medium",
                   "transition-[background-color,color] duration-150 ease-out disabled:cursor-default",
                   showSpinner && "text-status-info"
                 )}
@@ -1078,12 +1078,12 @@ export function GitHubResourceList({
                 title={sortOrder === "created" ? "Sort" : "Sort: recently updated"}
                 className={cn(
                   "flex items-center justify-center w-8 h-8 rounded-[var(--radius-md)] shrink-0",
-                  "text-text-secondary hover:text-daintree-text hover:bg-overlay-medium",
+                  "text-text-secondary hover:text-text-primary hover:bg-overlay-medium",
                   "transition-[background-color,color] duration-150 ease-out",
                   // A non-default sort is a neutral lifted state, not a badge.
                   // The old blue dot read as unread activity and said nothing
                   // about which order was in force.
-                  sortOrder !== "created" && "bg-overlay-soft text-daintree-text"
+                  sortOrder !== "created" && "bg-overlay-soft text-text-primary"
                 )}
               >
                 <ArrowUpDown className="w-3.5 h-3.5" />
@@ -1138,18 +1138,18 @@ export function GitHubResourceList({
                         "flex items-center gap-2 px-2 py-1 text-xs rounded",
                         "transition-[background-color,color] duration-150 ease-out",
                         "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2",
-                        "focus-visible:outline-daintree-accent",
+                        "focus-visible:outline-accent-primary",
                         sortOrder === option.value
-                          ? "bg-overlay-soft text-daintree-text"
-                          : "text-text-secondary hover:bg-overlay-medium hover:text-daintree-text"
+                          ? "bg-overlay-soft text-text-primary"
+                          : "text-text-secondary hover:bg-overlay-medium hover:text-text-primary"
                       )}
                     >
                       <div
                         className={cn(
                           "w-3 h-3 rounded-full border",
                           sortOrder === option.value
-                            ? "border-daintree-text bg-daintree-text"
-                            : "border-daintree-border"
+                            ? "border-text-primary bg-text-primary"
+                            : "border-border-default"
                         )}
                       >
                         {sortOrder === option.value && (
@@ -1189,7 +1189,7 @@ export function GitHubResourceList({
                       selection.selectAll(data);
                     }
                   }}
-                  className="text-xs text-text-secondary hover:text-daintree-text focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-accent transition-colors duration-150 ease-out px-1 py-0.5 rounded"
+                  className="text-xs text-text-secondary hover:text-text-primary focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-accent-primary transition-colors duration-150 ease-out px-1 py-0.5 rounded"
                 >
                   {allSelected ? "Deselect all" : `Select all (${data.length})`}
                 </button>
@@ -1199,7 +1199,7 @@ export function GitHubResourceList({
                     onClick={() => {
                       selection.selectAll(unassigned);
                     }}
-                    className="text-xs text-text-secondary hover:text-daintree-text focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-accent transition-colors duration-150 ease-out px-1 py-0.5 rounded"
+                    className="text-xs text-text-secondary hover:text-text-primary focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-accent-primary transition-colors duration-150 ease-out px-1 py-0.5 rounded"
                   >
                     {`Select unassigned (${unassigned.length})`}
                   </button>
@@ -1243,10 +1243,10 @@ export function GitHubResourceList({
                   "flex-1 px-3 py-1 text-xs font-medium rounded",
                   "transition-[background-color,color] duration-150 ease-out",
                   "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2",
-                  "focus-visible:outline-daintree-accent",
+                  "focus-visible:outline-accent-primary",
                   isActive
-                    ? "bg-overlay-medium text-daintree-text"
-                    : "text-text-secondary hover:text-daintree-text"
+                    ? "bg-overlay-medium text-text-primary"
+                    : "text-text-secondary hover:text-text-primary"
                 )}
               >
                 {tab.label}

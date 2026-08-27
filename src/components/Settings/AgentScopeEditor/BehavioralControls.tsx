@@ -89,7 +89,7 @@ export function BehavioralControls({
     <>
       <div id="agents-custom-args" className="group/args space-y-1.5">
         <div className="flex items-center gap-2">
-          <label className="text-sm font-medium text-daintree-text">Custom arguments</label>
+          <label className="text-sm font-medium text-text-primary">Custom arguments</label>
           {scopeKind === "custom" && customFlagsOverride !== undefined && (
             <>
               <span
@@ -99,7 +99,7 @@ export function BehavioralControls({
               <button
                 type="button"
                 aria-label={`Reset custom arguments override for ${scopeLabel}`}
-                className="p-0.5 rounded-sm text-daintree-text/40 hover:text-daintree-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent transition-colors"
+                className="p-0.5 rounded-sm text-daintree-text/40 hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary transition-colors"
                 onClick={onCustomFlagsOverrideReset}
                 data-testid="preset-custom-flags-reset"
               >
@@ -109,7 +109,7 @@ export function BehavioralControls({
           )}
         </div>
         <input
-          className="w-full rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg px-3 py-2 text-sm font-mono focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50 placeholder:text-text-placeholder"
+          className="w-full rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas px-3 py-2 text-sm font-mono focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50 placeholder:text-text-placeholder"
           value={customArgsValue}
           onChange={(e) => onCustomFlagsChange(e.target.value)}
           placeholder={customArgsPlaceholder}

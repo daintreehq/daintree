@@ -717,7 +717,7 @@ AppDialog.Footer = function AppDialogFooter({
               }}
               aria-disabled={secondaryAction.disabled || undefined}
               className={cn(
-                "text-daintree-text/70 hover:text-daintree-text",
+                "text-daintree-text/70 hover:text-text-primary",
                 secondaryAction.disabled && DISABLED_ACTION_CLASSES
               )}
               data-confirm-role="cancel"

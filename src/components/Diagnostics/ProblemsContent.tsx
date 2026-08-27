@@ -122,10 +122,10 @@ function ErrorRow({
         <td className={cn("px-3 py-2 text-xs whitespace-nowrap font-medium", typeColor)}>
           {typeLabel}
         </td>
-        <td className="px-3 py-2 text-sm text-daintree-text max-w-md">
+        <td className="px-3 py-2 text-sm text-text-primary max-w-md">
           <button
             onClick={onToggleExpand}
-            className="text-left w-full hover:text-daintree-text transition-colors"
+            className="text-left w-full hover:text-text-primary transition-colors"
             aria-expanded={isExpanded}
             aria-controls={`error-details-${error.id}`}
           >
@@ -175,7 +175,7 @@ function ErrorRow({
                 e.stopPropagation();
                 onDismiss();
               }}
-              className="p-1 text-daintree-text/60 hover:text-daintree-text"
+              className="p-1 text-daintree-text/60 hover:text-text-primary"
               aria-label="Dismiss error"
             >
               ×
@@ -195,7 +195,7 @@ function ErrorRow({
                   <button
                     type="button"
                     onClick={handleCopyDetails}
-                    className="shrink-0 p-1.5 text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-border/50 rounded transition-colors"
+                    className="shrink-0 p-1.5 text-daintree-text/60 hover:text-text-primary hover:bg-daintree-border/50 rounded transition-colors"
                     aria-label={copied ? "Copied to clipboard" : "Copy error details to clipboard"}
                   >
                     {copied ? (
@@ -266,7 +266,7 @@ export function ProblemsContent({ onRetry, onCancelRetry, className }: ProblemsC
         </div>
       ) : (
         <table className="w-full">
-          <thead className="sticky top-0 bg-daintree-sidebar border-b border-daintree-border">
+          <thead className="sticky top-0 bg-surface-sidebar border-b border-border-default">
             <tr>
               <th className="px-3 py-2 text-left text-xs font-medium text-daintree-text/60 w-24">
                 Time

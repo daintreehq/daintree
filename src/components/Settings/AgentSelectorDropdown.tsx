@@ -97,7 +97,7 @@ export function AgentSelectorDropdown({
           data-testid="agent-selector-trigger"
           className={cn(
             "flex items-center gap-2 w-full px-3 py-2 text-sm rounded-[var(--radius-md)]",
-            "border border-daintree-border bg-daintree-bg text-daintree-text",
+            "border border-border-default bg-surface-canvas text-text-primary",
             "hover:border-daintree-accent/50 transition-colors",
             "focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50"
           )}
@@ -153,7 +153,7 @@ export function AgentSelectorDropdown({
         style={{ width: "var(--radix-popover-trigger-width)" }}
         onEscapeKeyDown={(e) => e.stopPropagation()}
       >
-        <div className="flex items-center gap-1.5 px-3 py-2 border-b border-daintree-border">
+        <div className="flex items-center gap-1.5 px-3 py-2 border-b border-border-default">
           <Search size={14} className="shrink-0 text-daintree-text/40" aria-hidden="true" />
           <input
             ref={inputRef}
@@ -171,7 +171,7 @@ export function AgentSelectorDropdown({
             aria-activedescendant={
               items[activeIndex] ? `agent-selector-item-${items[activeIndex].id}` : undefined
             }
-            className="flex-1 min-w-0 text-xs bg-transparent text-daintree-text placeholder:text-text-placeholder focus:outline-hidden"
+            className="flex-1 min-w-0 text-xs bg-transparent text-text-primary placeholder:text-text-placeholder focus:outline-hidden"
           />
         </div>
         <div
@@ -198,8 +198,8 @@ export function AgentSelectorDropdown({
                 className={cn(
                   "flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-sm)] cursor-pointer text-sm",
                   isActive && "bg-overlay-selected",
-                  isSelected && "text-daintree-text font-medium",
-                  !isActive && !isSelected && "text-daintree-text"
+                  isSelected && "text-text-primary font-medium",
+                  !isActive && !isSelected && "text-text-primary"
                 )}
               >
                 {item.kind === "general" ? (

@@ -882,7 +882,7 @@ export function DiffPane({
                       onClick={() => navigateFile(-1)}
                       disabled={!hasPrevFile}
                       aria-label="Previous file"
-                      className="p-1.5 rounded transition-colors text-muted-foreground hover:text-daintree-text hover:bg-daintree-border disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+                      className="p-1.5 rounded transition-colors text-muted-foreground hover:text-text-primary hover:bg-border-default disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
                     >
                       <ChevronLeft className="w-4 h-4" />
                     </button>
@@ -902,7 +902,7 @@ export function DiffPane({
                       onClick={() => navigateFile(1)}
                       disabled={!hasNextFile}
                       aria-label="Next file"
-                      className="p-1.5 rounded transition-colors text-muted-foreground hover:text-daintree-text hover:bg-daintree-border disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
+                      className="p-1.5 rounded transition-colors text-muted-foreground hover:text-text-primary hover:bg-border-default disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none"
                     >
                       <ChevronRight className="w-4 h-4" />
                     </button>

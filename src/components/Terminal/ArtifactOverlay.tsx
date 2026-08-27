@@ -72,7 +72,7 @@ const ARTIFACT_TYPE_COLORS: Record<string, string> = {
   file: "border-state-working bg-[color-mix(in_oklab,var(--color-state-working)_10%,transparent)] text-state-working",
   summary:
     "border-status-warning bg-[color-mix(in_oklab,var(--color-status-warning)_10%,transparent)] text-status-warning",
-  other: "border-daintree-border bg-daintree-sidebar/10 text-daintree-text/60",
+  other: "border-border-default bg-daintree-sidebar/10 text-daintree-text/60",
 };
 
 const ARTIFACT_TYPE_ICONS: Record<string, string> = {
@@ -166,7 +166,7 @@ function ArtifactItem({
       >
         <div className="flex items-center gap-2 min-w-0">
           <span className={cn("font-mono text-xs shrink-0", colorClass.split(" ")[2])}>{icon}</span>
-          <span className="text-sm text-daintree-text font-medium truncate">{title}</span>
+          <span className="text-sm text-text-primary font-medium truncate">{title}</span>
           {artifact.language && artifact.language !== artifact.type && (
             <span className="text-xs text-text-secondary shrink-0">{artifact.language}</span>
           )}
@@ -182,13 +182,13 @@ function ArtifactItem({
       {isExpanded && (
         <div className="bg-daintree-bg/50">
           <pre className="font-mono text-xs p-3 overflow-x-auto max-h-32 overflow-y-auto select-text">
-            <code className="text-daintree-text">
+            <code className="text-text-primary">
               {previewLines.join("\n")}
               {hasMore && <span className="text-text-secondary">{"\n"}...</span>}
             </code>
           </pre>
 
-          <div className="flex items-center gap-2 px-3 py-2 bg-daintree-sidebar/50 border-t border-daintree-border">
+          <div className="flex items-center gap-2 px-3 py-2 bg-daintree-sidebar/50 border-t border-border-default">
             <button
               onClick={handleCopy}
               disabled={isProcessing}
@@ -205,7 +205,7 @@ function ArtifactItem({
               disabled={isProcessing}
               className={cn(
                 "px-3 py-1 text-xs rounded transition-colors",
-                "bg-daintree-border hover:bg-[color-mix(in_oklab,var(--color-daintree-border)_100%,white_20%)] text-daintree-text",
+                "bg-border-default hover:bg-[color-mix(in_oklab,var(--color-border-default)_100%,white_20%)] text-text-primary",
                 "disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
               )}
             >
@@ -220,7 +220,7 @@ function ArtifactItem({
                       disabled={isProcessing || !canApplyPatch}
                       className={cn(
                         "px-3 py-1 text-xs rounded transition-colors",
-                        "bg-status-success hover:brightness-110 text-daintree-bg",
+                        "bg-status-success hover:brightness-110 text-surface-canvas",
                         "disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
                       )}
                     >
@@ -429,7 +429,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
         <button
           onClick={() => setIsExpanded(true)}
           className={cn(
-            "px-3 py-2 rounded-[var(--radius-md)] bg-daintree-bg shadow-[var(--theme-shadow-floating)]",
+            "px-3 py-2 rounded-[var(--radius-md)] bg-surface-canvas shadow-[var(--theme-shadow-floating)]",
             "border border-status-info/30 text-status-info hover:bg-status-info/10",
             "text-sm font-medium transition-colors",
             "flex items-center gap-2"
@@ -443,15 +443,15 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
       ) : (
         <div
           className={cn(
-            "bg-daintree-sidebar border border-daintree-border rounded-[var(--radius-lg)] shadow-[var(--theme-shadow-floating)]",
+            "bg-surface-sidebar border border-border-default rounded-[var(--radius-lg)] shadow-[var(--theme-shadow-floating)]",
             "w-96 max-h-96 flex flex-col overflow-hidden"
           )}
         >
-          <div className="bg-daintree-bg border-b border-daintree-border">
+          <div className="bg-surface-canvas border-b border-border-default">
             <div className="flex items-center justify-between px-4 py-3">
               <div className="flex items-center gap-2">
                 <span className="font-mono text-status-info">{"{ }"}</span>
-                <span className="text-sm font-medium tabular-nums text-daintree-text">
+                <span className="text-sm font-medium tabular-nums text-text-primary">
                   {artifacts.length} Artifact{artifacts.length !== 1 ? "s" : ""}
                 </span>
               </div>
@@ -460,7 +460,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                   type="button"
                   onClick={clearArtifacts}
                   disabled={isBulkActionRunning}
-                  className="text-xs text-text-secondary hover:text-daintree-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
+                  className="text-xs text-text-secondary hover:text-text-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
                   aria-label="Clear all artifacts"
                 >
                   Clear
@@ -473,7 +473,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                     setIsExpanded(false);
                   }}
                   disabled={isBulkActionRunning}
-                  className="text-daintree-text/40 hover:text-daintree-text transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
+                  className="text-daintree-text/40 hover:text-text-primary transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
                   aria-label="Close artifact overlay"
                 >
                   ×
@@ -507,8 +507,8 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                             className={cn(
                               "px-2 py-1 text-xs rounded transition-colors",
                               includeAllTypes
-                                ? "bg-daintree-border text-daintree-text"
-                                : "bg-daintree-sidebar text-daintree-text/60",
+                                ? "bg-border-default text-text-primary"
+                                : "bg-surface-sidebar text-daintree-text/60",
                               "hover:brightness-110",
                               "disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
                             )}
@@ -530,7 +530,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                     disabled={isBulkActionRunning}
                     className={cn(
                       "px-3 py-1 text-xs rounded transition-colors",
-                      "bg-daintree-border hover:bg-[color-mix(in_oklab,var(--color-daintree-border)_100%,white_20%)] text-daintree-text",
+                      "bg-border-default hover:bg-[color-mix(in_oklab,var(--color-border-default)_100%,white_20%)] text-text-primary",
                       "disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
                     )}
                   >
@@ -547,7 +547,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                           disabled={isBulkActionRunning || !canApplyAll}
                           className={cn(
                             "px-3 py-1 text-xs rounded transition-colors",
-                            "bg-status-success hover:brightness-110 text-daintree-bg",
+                            "bg-status-success hover:brightness-110 text-surface-canvas",
                             "disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
                           )}
                         >

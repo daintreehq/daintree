@@ -167,9 +167,9 @@ export function SegmentedRadioGroup<T extends string>({
               "relative z-10 px-2.5 py-1 text-xs font-medium rounded-[var(--radius-sm)]",
               fullWidth && "flex-1 min-w-0 truncate",
               "transition-colors duration-150 ease-out",
-              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1",
+              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-1",
               "disabled:cursor-not-allowed disabled:pointer-events-none",
-              isActive ? "text-daintree-text" : "text-text-secondary hover:text-daintree-text",
+              isActive ? "text-text-primary" : "text-text-secondary hover:text-text-primary",
               // Belt and braces: if the thumb could not be measured, the checked
               // segment still has to look checked. A brighter label alone is not a
               // selected state.

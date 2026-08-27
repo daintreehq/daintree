@@ -145,7 +145,7 @@ export function StatusContainer({ config, terminals, compact = false }: StatusCo
                         className="h-3 w-3"
                       />
                     </div>
-                    <span className="text-xs truncate font-medium text-daintree-text/70 group-hover:text-daintree-text transition-colors">
+                    <span className="text-xs truncate font-medium text-daintree-text/70 group-hover:text-text-primary transition-colors">
                       {terminal.title}
                     </span>
                   </div>

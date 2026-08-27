@@ -50,13 +50,13 @@ export function ResumeSessionLine() {
       <button
         type="button"
         onClick={() => void resume(primary.session)}
-        className="group flex min-w-0 items-center gap-2.5 rounded-[var(--radius-md)] px-2.5 py-1.5 text-left transition-colors hover:bg-overlay-subtle focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
+        className="group flex min-w-0 items-center gap-2.5 rounded-[var(--radius-md)] px-2.5 py-1.5 text-left transition-colors hover:bg-overlay-subtle focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
       >
         <History className="h-3.5 w-3.5 shrink-0 text-text-secondary" aria-hidden="true" />
         <span className="shrink-0">
           <PanelKindIcon iconId={primary.iconId} color={primary.color} size={15} />
         </span>
-        <span className="truncate text-sm text-daintree-text/75 group-hover:text-daintree-text">
+        <span className="truncate text-sm text-daintree-text/75 group-hover:text-text-primary">
           {primary.name}
         </span>
         {primary.description && (
@@ -77,7 +77,7 @@ export function ResumeSessionLine() {
         <button
           type="button"
           onClick={openLauncher}
-          className="shrink-0 rounded-[var(--radius-md)] px-2 py-1.5 text-xs text-text-secondary transition-colors hover:bg-overlay-subtle hover:text-daintree-text focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
+          className="shrink-0 rounded-[var(--radius-md)] px-2 py-1.5 text-xs text-text-secondary transition-colors hover:bg-overlay-subtle hover:text-text-primary focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
           aria-label={`Browse ${extraCount} more resumable session${extraCount !== 1 ? "s" : ""}`}
         >
           +{extraCount} more

@@ -231,14 +231,14 @@ export function RecipesTab({
           {recipesLoading ? (
             <Skeleton
               label="Loading recipes"
-              className="space-y-2 p-3 border border-dashed border-daintree-border rounded-[var(--radius-md)]"
+              className="space-y-2 p-3 border border-dashed border-border-default rounded-[var(--radius-md)]"
             >
               <SkeletonBone className="h-14 w-full" />
               <SkeletonBone className="h-14 w-full" />
               <SkeletonBone className="h-14 w-full" />
             </Skeleton>
           ) : recipes.length === 0 ? (
-            <div className="border border-dashed border-daintree-border rounded-[var(--radius-md)]">
+            <div className="border border-dashed border-border-default rounded-[var(--radius-md)]">
               <EmptyState
                 variant="zero-data"
                 scale="sidebar"
@@ -247,7 +247,7 @@ export function RecipesTab({
               />
             </div>
           ) : (
-            <div className="border border-daintree-border rounded-[var(--radius-md)] divide-y divide-daintree-border">
+            <div className="border border-border-default rounded-[var(--radius-md)] divide-y divide-border-default">
               {recipes.map((recipe) => {
                 const exported = exportFeedback === recipe.id;
                 const isEligibleForDefault = !recipe.worktreeId && !recipe.shadowedBy;
@@ -490,7 +490,7 @@ export function RecipesTab({
             value={importJson}
             onChange={(e) => setImportJson(e.target.value)}
             placeholder='{"name": "My Recipe", "terminals": [...]}'
-            className="w-full h-64 px-3 py-2 bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] text-sm text-daintree-text font-mono focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/30 resize-none"
+            className="w-full h-64 px-3 py-2 bg-surface-canvas border border-border-default rounded-[var(--radius-md)] text-sm text-text-primary font-mono focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/30 resize-none"
             spellCheck={false}
           />
           {importError && (

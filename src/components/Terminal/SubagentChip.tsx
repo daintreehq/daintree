@@ -50,7 +50,7 @@ function TranscriptBody({
         <button
           type="button"
           onClick={onRetry}
-          className="text-xs text-daintree-text/70 hover:text-daintree-text underline underline-offset-2 transition-colors"
+          className="text-xs text-daintree-text/70 hover:text-text-primary underline underline-offset-2 transition-colors"
         >
           Retry
         </button>
@@ -145,7 +145,7 @@ function SubagentRow({
         <Chevron className="w-3 h-3 mt-0.5 shrink-0 text-daintree-text/40" aria-hidden="true" />
         <span className="flex-1 min-w-0 flex flex-col gap-0.5">
           <span className="flex items-center gap-2">
-            <span className="text-xs font-medium text-daintree-text truncate">
+            <span className="text-xs font-medium text-text-primary truncate">
               {subagentTitle(subagent)}
             </span>
             <span className={cn("text-3xs shrink-0", TONE_CLASSES[tone])}>
@@ -234,7 +234,7 @@ export function SubagentChip({ terminalId }: { terminalId: string }) {
       <PopoverTrigger asChild>
         <button
           type="button"
-          className="inline-flex items-center gap-1 text-xs font-sans bg-overlay-soft text-daintree-text/60 px-1.5 py-0.5 rounded border border-divider hover:text-daintree-text transition-colors"
+          className="inline-flex items-center gap-1 text-xs font-sans bg-overlay-soft text-daintree-text/60 px-1.5 py-0.5 rounded border border-divider hover:text-text-primary transition-colors"
           aria-label={`${subagents.length} ${label} subagent${subagents.length === 1 ? "" : "s"}`}
         >
           <Network className="w-3 h-3" aria-hidden="true" />
@@ -243,12 +243,12 @@ export function SubagentChip({ terminalId }: { terminalId: string }) {
       </PopoverTrigger>
       <PopoverContent align="end" className="w-80 p-0">
         <div className="flex items-center justify-between px-3 py-2 border-b border-divider">
-          <span className="text-xs font-medium text-daintree-text">{label} subagents</span>
+          <span className="text-xs font-medium text-text-primary">{label} subagents</span>
           <button
             type="button"
             onClick={refresh}
             disabled={isLoading}
-            className="text-daintree-text/40 hover:text-daintree-text transition-colors disabled:opacity-50 disabled:pointer-events-none"
+            className="text-daintree-text/40 hover:text-text-primary transition-colors disabled:opacity-50 disabled:pointer-events-none"
             aria-label="Refresh subagents"
           >
             <RefreshCw className={cn("w-3 h-3", isLoading && "animate-spin")} aria-hidden="true" />

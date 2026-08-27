@@ -40,7 +40,7 @@ function CheckBadge({ done, isPopping, onPopEnd }: CheckBadgeProps) {
       onAnimationEnd={onPopEnd}
       className={cn(
         "h-4 w-4 rounded-full border flex items-center justify-center shrink-0 transition-colors duration-150",
-        done ? "bg-daintree-accent border-daintree-accent" : "border-daintree-text/30",
+        done ? "bg-accent-primary border-accent-primary" : "border-daintree-text/30",
         isPopping && "animate-badge-bump"
       )}
     >
@@ -181,7 +181,7 @@ export function GettingStartedChecklist({
         className={cn(
           "pointer-events-auto relative w-full",
           "rounded-[var(--radius-sm)] border",
-          "text-sm text-daintree-text",
+          "text-sm text-text-primary",
           "shadow-[var(--theme-shadow-floating)]",
           "transition-[translate,opacity,background-color,border-color] duration-200 ease-out",
           "motion-reduce:transition-none motion-reduce:duration-0 motion-reduce:translate-none",
@@ -189,8 +189,8 @@ export function GettingStartedChecklist({
           allComplete
             ? "bg-surface-panel border-border-default"
             : [
-                "bg-[color-mix(in_oklab,var(--color-daintree-accent)_8%,var(--color-daintree-bg))]",
-                "border-[color:color-mix(in_oklab,var(--color-daintree-accent)_20%,transparent)]",
+                "bg-[color-mix(in_oklab,var(--color-accent-primary)_8%,var(--color-surface-canvas))]",
+                "border-[color:color-mix(in_oklab,var(--color-accent-primary)_20%,transparent)]",
               ],
           "backdrop-blur-sm"
         )}
@@ -206,7 +206,7 @@ export function GettingStartedChecklist({
                 aria-controls={CHECKLIST_BODY_ID}
                 className="flex items-center gap-2 text-left flex-1 min-w-0"
               >
-                <h4 className="font-medium leading-tight tracking-tight text-xs font-mono text-daintree-accent">
+                <h4 className="font-medium leading-tight tracking-tight text-xs font-mono text-accent-primary">
                   Getting started
                 </h4>
                 <AnimatedLabel
@@ -214,7 +214,7 @@ export function GettingStartedChecklist({
                   animateKey={counterAnimateKey}
                   textClassName={cn(
                     "text-3xs font-mono tabular-nums",
-                    allComplete ? "text-daintree-accent" : "text-daintree-text/50"
+                    allComplete ? "text-accent-primary" : "text-daintree-text/50"
                   )}
                 />
                 {collapsed ? (
@@ -237,7 +237,7 @@ export function GettingStartedChecklist({
                   "h-6 w-6 flex items-center justify-center shrink-0",
                   "text-daintree-text/60 transition-colors",
                   "hover:text-daintree-text/90 hover:bg-tint/10",
-                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                 )}
               >
                 <X className="h-3.5 w-3.5" />
@@ -262,7 +262,7 @@ export function GettingStartedChecklist({
           <div className="px-3 pb-3 space-y-1.5">
             {/* Endowed progress: Install Daintree (always complete) */}
             <div className="flex items-start gap-2.5 rounded-[var(--radius-xs)] px-2 py-1.5 opacity-60">
-              <div className="h-4 w-4 rounded-full bg-daintree-accent border border-daintree-accent flex items-center justify-center shrink-0">
+              <div className="h-4 w-4 rounded-full bg-accent-primary border border-accent-primary flex items-center justify-center shrink-0">
                 <Check className="h-2.5 w-2.5 text-accent-primary-foreground" />
               </div>
               <Download className="h-3.5 w-3.5 text-daintree-text/40 shrink-0" />
@@ -336,7 +336,7 @@ export function GettingStartedChecklist({
                       sharedClasses,
                       "w-full text-left cursor-pointer",
                       "hover:bg-tint/10",
-                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                     )}
                   >
                     {content}
@@ -356,7 +356,7 @@ export function GettingStartedChecklist({
                 "w-full text-left px-2 py-1 rounded-[var(--radius-xs)]",
                 "text-3xs text-daintree-text/50 transition-colors duration-150",
                 "hover:text-daintree-text/80 hover:bg-tint/10",
-                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
               )}
             >
               View keyboard shortcuts

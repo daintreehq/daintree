@@ -1272,7 +1272,7 @@ describe("Toast overflow pill (issue #6424)", () => {
       useNotificationHistoryStore.setState({ evictedToInboxCount: 1 });
     });
     const pill = screen.getByTestId("toast-overflow-pill");
-    expect(pill.className).not.toContain("bg-daintree-accent");
+    expect(pill.className).not.toContain("bg-accent-primary");
     expect(pill.className).not.toContain("text-accent-primary");
   });
 

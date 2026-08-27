@@ -23,7 +23,7 @@ const LazyNotificationCenter = lazy(() =>
   preloadNotificationCenter().then((m) => ({ default: m.NotificationCenter }))
 );
 
-const toolbarIconButtonClass = "toolbar-icon-button text-daintree-text";
+const toolbarIconButtonClass = "toolbar-icon-button text-text-primary";
 
 const timeFormatter = new Intl.DateTimeFormat(undefined, {
   hour: "numeric",

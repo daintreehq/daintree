@@ -32,7 +32,7 @@ export interface PluginViewDiagnosticsFallbackProps {
 }
 
 const BUTTON_BASE = "rounded px-3 py-1.5 text-xs transition-colors";
-const NEUTRAL_BUTTON = "bg-daintree-border text-daintree-text hover:bg-daintree-border/80";
+const NEUTRAL_BUTTON = "bg-border-default text-text-primary hover:bg-daintree-border/80";
 
 function buildTrace(error: Error, errorInfo: React.ErrorInfo | undefined): string {
   return [
@@ -170,7 +170,7 @@ export function PluginViewDiagnosticsFallback({
           data-testid="plugin-view-diagnostics-retry"
           className={cn(
             BUTTON_BASE,
-            "bg-status-error text-daintree-bg hover:bg-[color-mix(in_oklab,var(--color-status-error)_85%,transparent)]"
+            "bg-status-error text-surface-canvas hover:bg-[color-mix(in_oklab,var(--color-status-error)_85%,transparent)]"
           )}
         >
           Try again

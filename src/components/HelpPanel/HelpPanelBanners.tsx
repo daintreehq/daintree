@@ -69,7 +69,7 @@ function GrantActiveBanner({
       aria-live="polite"
       className={cn(
         "flex items-center gap-2 px-3 py-2 mx-3 mt-3 mb-1",
-        "rounded-[var(--radius-md)] bg-overlay-subtle border border-daintree-border",
+        "rounded-[var(--radius-md)] bg-overlay-subtle border border-border-default",
         "text-xs text-daintree-text/80"
       )}
       data-testid="help-grant-active-banner"
@@ -91,9 +91,9 @@ function GrantActiveBanner({
         disabled={isRevoking}
         className={cn(
           "px-2 py-1 rounded-[var(--radius-sm)] text-xs",
-          "text-daintree-text/65 hover:text-daintree-text",
+          "text-daintree-text/65 hover:text-text-primary",
           "disabled:opacity-50 disabled:cursor-not-allowed transition-colors",
-          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
         )}
       >
         Revoke access
@@ -121,7 +121,7 @@ function GrantEndedBanner({
       aria-live="polite"
       className={cn(
         "flex items-start gap-2 px-3 py-2 mx-3 mt-3 mb-1",
-        "rounded-[var(--radius-md)] bg-overlay-subtle border border-daintree-border",
+        "rounded-[var(--radius-md)] bg-overlay-subtle border border-border-default",
         "text-xs text-daintree-text/80"
       )}
       data-testid="help-grant-ended-banner"
@@ -135,7 +135,7 @@ function GrantEndedBanner({
         type="button"
         onClick={onDismiss}
         aria-label="Dismiss approval notice"
-        className="text-daintree-text/50 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+        className="text-daintree-text/50 hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
       >
         <X className="w-3 h-3" />
       </button>
@@ -248,7 +248,7 @@ export function HelpPanelBanners({
           aria-live="polite"
           className={cn(
             "flex items-start gap-2 px-3 py-2 mx-3 mt-3 mb-1",
-            "rounded-[var(--radius-md)] bg-overlay-subtle border border-daintree-border",
+            "rounded-[var(--radius-md)] bg-overlay-subtle border border-border-default",
             "text-xs text-daintree-text/80"
           )}
           data-testid="help-resume-banner"
@@ -258,7 +258,7 @@ export function HelpPanelBanners({
             type="button"
             onClick={onDismissResume}
             aria-label="Dismiss resume notice"
-            className="text-daintree-text/50 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+            className="text-daintree-text/50 hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
           >
             <X className="w-3 h-3" />
           </button>
@@ -289,7 +289,7 @@ export function HelpPanelBanners({
               aria-hidden="true"
             />
             <div className="flex-1 select-text">
-              <p className="font-medium text-daintree-text">Tool not permitted</p>
+              <p className="font-medium text-text-primary">Tool not permitted</p>
               <p className="mt-0.5 text-daintree-text/70">
                 {tierMismatch.targetTier
                   ? `${tierMismatch.toolId} needs ${tierMismatch.targetTier} tier access.`
@@ -300,7 +300,7 @@ export function HelpPanelBanners({
               type="button"
               onClick={onDismissTierMismatch}
               aria-label="Dismiss tier mismatch notice"
-              className="text-daintree-text/50 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+              className="text-daintree-text/50 hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
             >
               <X className="w-3 h-3" />
             </button>
@@ -313,9 +313,9 @@ export function HelpPanelBanners({
                 disabled={isApprovingTier}
                 className={cn(
                   "px-2 py-1 rounded-[var(--radius-sm)] text-xs font-medium",
-                  "bg-daintree-text/10 hover:bg-daintree-text/15 text-daintree-text",
+                  "bg-daintree-text/10 hover:bg-daintree-text/15 text-text-primary",
                   "disabled:opacity-50 disabled:cursor-not-allowed transition-colors",
-                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                 )}
               >
                 Approve once
@@ -328,7 +328,7 @@ export function HelpPanelBanners({
                   "px-2 py-1 rounded-[var(--radius-sm)] text-xs font-medium",
                   "bg-daintree-text/5 hover:bg-daintree-text/10 text-daintree-text/85",
                   "disabled:opacity-50 disabled:cursor-not-allowed transition-colors",
-                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                 )}
               >
                 Always allow for this project
@@ -339,9 +339,9 @@ export function HelpPanelBanners({
                 disabled={isApprovingTier}
                 className={cn(
                   "px-2 py-1 rounded-[var(--radius-sm)] text-xs",
-                  "text-daintree-text/65 hover:text-daintree-text",
+                  "text-daintree-text/65 hover:text-text-primary",
                   "disabled:opacity-50 disabled:cursor-not-allowed transition-colors",
-                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                 )}
               >
                 Cancel
@@ -367,14 +367,14 @@ export function HelpPanelBanners({
               aria-hidden="true"
             />
             <div className="flex-1 select-text">
-              <p className="font-medium text-daintree-text">Assistant couldn't start</p>
+              <p className="font-medium text-text-primary">Assistant couldn't start</p>
               <p className="mt-0.5 text-daintree-text/70">{LAUNCH_ERROR_BODY[launchError.kind]}</p>
             </div>
             <button
               type="button"
               onClick={onDismissLaunchError}
               aria-label="Dismiss launch error"
-              className="text-daintree-text/50 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+              className="text-daintree-text/50 hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
             >
               <X className="w-3 h-3" />
             </button>
@@ -397,10 +397,10 @@ export function HelpPanelBanners({
                   className={cn(
                     "px-2 py-1 rounded-[var(--radius-sm)] text-xs",
                     cta.variant === "primary"
-                      ? "font-medium bg-daintree-text/10 hover:bg-daintree-text/15 text-daintree-text"
-                      : "text-daintree-text/65 hover:text-daintree-text",
+                      ? "font-medium bg-daintree-text/10 hover:bg-daintree-text/15 text-text-primary"
+                      : "text-daintree-text/65 hover:text-text-primary",
                     "transition-colors",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                   )}
                 >
                   {cta.label}
@@ -427,7 +427,7 @@ export function HelpPanelBanners({
               aria-hidden="true"
             />
             <div className="flex-1 select-text">
-              <p className="font-medium text-daintree-text">Session ended</p>
+              <p className="font-medium text-text-primary">Session ended</p>
               <p className="mt-0.5 text-daintree-text/70">
                 This assistant session was stopped after too many blocked requests. Start a new
                 session to continue.
@@ -437,7 +437,7 @@ export function HelpPanelBanners({
               type="button"
               onClick={onDismissSessionRevoked}
               aria-label="Dismiss session ended notice"
-              className="text-daintree-text/50 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+              className="text-daintree-text/50 hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
             >
               <X className="w-3 h-3" />
             </button>
@@ -448,9 +448,9 @@ export function HelpPanelBanners({
               onClick={onStartNewSession}
               className={cn(
                 "px-2 py-1 rounded-[var(--radius-sm)] text-xs font-medium",
-                "bg-daintree-text/10 hover:bg-daintree-text/15 text-daintree-text",
+                "bg-daintree-text/10 hover:bg-daintree-text/15 text-text-primary",
                 "transition-colors",
-                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
               )}
             >
               Start new session

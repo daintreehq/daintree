@@ -80,9 +80,9 @@ export function PrStatusChip({ hasRemote, worktreePR, onOpenExternal }: PrStatus
           onClick={() => onOpenExternal(worktreePR.prUrl)}
           className={cn(
             "inline-flex items-center justify-center p-0.5 rounded",
-            "text-daintree-text/60 hover:bg-tint/5 hover:text-daintree-text",
+            "text-daintree-text/60 hover:bg-tint/5 hover:text-text-primary",
             "transition-colors cursor-pointer",
-            "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
+            "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
           )}
           aria-label={`View pull request #${worktreePR.prNumber}`}
         >

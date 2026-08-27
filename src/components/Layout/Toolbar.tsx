@@ -148,7 +148,7 @@ const LazyCopyTreeRecentsPanel = lazy(() =>
 
 type OverflowMenuMeta = { label: string; icon: React.ComponentType<{ className?: string }> };
 
-const toolbarIconButtonClass = "toolbar-icon-button text-daintree-text relative";
+const toolbarIconButtonClass = "toolbar-icon-button text-text-primary relative";
 
 // These controls are project-only visually, but their no-drag rectangles must
 // exist on first paint so secondary windows don't cache them as titlebar drag.
@@ -548,7 +548,7 @@ function AgentOverflowItem({
           <span
             aria-hidden="true"
             className={cn(
-              "status-mark absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full ring-1 ring-daintree-bg",
+              "status-mark absolute -top-0.5 -right-0.5 h-1.5 w-1.5 rounded-full ring-1 ring-surface-canvas",
               dotColor
             )}
           />
@@ -1294,7 +1294,7 @@ export function Toolbar({
                       aria-disabled={isCopyingTree || !activeWorktree || undefined}
                       className={cn(
                         "toolbar-icon-button relative",
-                        "text-daintree-text",
+                        "text-text-primary",
                         isCopyingTree && "cursor-wait opacity-70",
                         "aria-disabled:opacity-50 aria-disabled:cursor-not-allowed"
                       )}
@@ -1932,7 +1932,7 @@ export function Toolbar({
       <TooltipTrigger asChild>
         <button
           data-toolbar-item=""
-          className="toolbar-project-pill app-no-drag pointer-events-auto flex h-9 min-w-0 max-w-full items-center justify-center gap-2 overflow-hidden border px-3 outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+          className="toolbar-project-pill app-no-drag pointer-events-auto flex h-9 min-w-0 max-w-full items-center justify-center gap-2 overflow-hidden border px-3 outline-hidden focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
           data-testid="project-switcher-trigger"
           aria-label={workspaceIdentity.ariaLabel}
           role={workspaceIdentity.kind !== "none" ? "combobox" : undefined}
@@ -1957,7 +1957,7 @@ export function Toolbar({
           )}
           <span
             className={cn(
-              "min-w-0 truncate text-xs tracking-wide text-daintree-text",
+              "min-w-0 truncate text-xs tracking-wide text-text-primary",
               workspaceIdentity.kind !== "none" ? "font-semibold" : "font-medium"
             )}
           >

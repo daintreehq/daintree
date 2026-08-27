@@ -13,7 +13,7 @@ export interface WslGitBannerProps {
 }
 
 const BANNER_SHELL = cn(
-  "mx-3 my-2 rounded-md border border-daintree-border bg-overlay-subtle px-3 py-2",
+  "mx-3 my-2 rounded-md border border-border-default bg-overlay-subtle px-3 py-2",
   "flex items-start gap-3 text-sm"
 );
 
@@ -115,7 +115,7 @@ export const WslGitBanner = React.memo(function WslGitBanner({
             onClick={handleEnable}
             disabled={busy}
             className={cn(
-              "rounded border border-daintree-border bg-overlay-strong px-2 py-1 text-xs",
+              "rounded border border-border-default bg-overlay-strong px-2 py-1 text-xs",
               "transition-colors duration-150 hover:bg-overlay-hover",
               "disabled:cursor-not-allowed disabled:opacity-60"
             )}
@@ -158,7 +158,7 @@ export const WslGitBanner = React.memo(function WslGitBanner({
             onClick={handleReprobe}
             disabled={reprobing}
             className={cn(
-              "shrink-0 rounded border border-daintree-border bg-overlay-strong px-2 py-1 text-xs",
+              "shrink-0 rounded border border-border-default bg-overlay-strong px-2 py-1 text-xs",
               "transition-colors duration-150 hover:bg-overlay-hover",
               "disabled:cursor-not-allowed disabled:opacity-60"
             )}
@@ -200,7 +200,7 @@ export const WslGitBanner = React.memo(function WslGitBanner({
           onClick={handleReprobe}
           disabled={reprobing}
           className={cn(
-            "rounded border border-daintree-border bg-overlay-strong px-2 py-1 text-xs",
+            "rounded border border-border-default bg-overlay-strong px-2 py-1 text-xs",
             "transition-colors duration-150 hover:bg-overlay-hover",
             "disabled:cursor-not-allowed disabled:opacity-60"
           )}

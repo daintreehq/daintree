@@ -208,7 +208,7 @@ function FolderListingRowView({ row, context }: FolderListingRowViewProps) {
         // this listing is showing, so no row is ever the standing selection —
         // a highlight would only ever paint for the frame before it unmounts.
         "text-daintree-text/70 transition-colors duration-150 ease-out hover:bg-tint/5",
-        "data-[state=open]:bg-overlay-raised data-[state=open]:text-daintree-text"
+        "data-[state=open]:bg-overlay-raised data-[state=open]:text-text-primary"
       )}
     >
       <span className="flex min-w-0 flex-1 items-center gap-1.5">

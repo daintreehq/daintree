@@ -108,7 +108,7 @@ export function FigureLightbox({
               type="button"
               onClick={() => onSelectFigure(figures[selectedIndex - 1]!.figureNumber)}
               aria-label="Previous figure"
-              className="absolute left-2 top-1/2 -translate-y-1/2 p-2 rounded-full bg-scrim-medium text-daintree-text/80 hover:text-daintree-text hover:bg-overlay-raised transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+              className="absolute left-2 top-1/2 -translate-y-1/2 p-2 rounded-full bg-scrim-medium text-daintree-text/80 hover:text-text-primary hover:bg-overlay-raised transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
             >
               <ChevronLeft className="w-5 h-5" aria-hidden="true" />
             </button>
@@ -118,7 +118,7 @@ export function FigureLightbox({
               type="button"
               onClick={() => onSelectFigure(figures[selectedIndex + 1]!.figureNumber)}
               aria-label="Next figure"
-              className="absolute right-2 top-1/2 -translate-y-1/2 p-2 rounded-full bg-scrim-medium text-daintree-text/80 hover:text-daintree-text hover:bg-overlay-raised transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+              className="absolute right-2 top-1/2 -translate-y-1/2 p-2 rounded-full bg-scrim-medium text-daintree-text/80 hover:text-text-primary hover:bg-overlay-raised transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
             >
               <ChevronRight className="w-5 h-5" aria-hidden="true" />
             </button>
@@ -128,9 +128,9 @@ export function FigureLightbox({
         {/* Attribution frame — kept outside the <img> so a documentation image
             can't pass as Daintree's own UI. Figure number is the primary label;
             the source label and caption sit beneath it. */}
-        <div className="flex flex-col gap-1 border-t border-daintree-border pt-3">
+        <div className="flex flex-col gap-1 border-t border-border-default pt-3">
           <div className="flex items-baseline justify-between gap-2">
-            <p className="text-sm font-medium text-daintree-text">Figure {figure.figureNumber}</p>
+            <p className="text-sm font-medium text-text-primary">Figure {figure.figureNumber}</p>
             <p className="text-2xs text-daintree-text/45 shrink-0">
               {figure.figureLabel} · Daintree docs
             </p>

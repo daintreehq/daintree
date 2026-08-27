@@ -36,11 +36,11 @@ export function PrerequisiteCard({ spec, state }: { spec: PrerequisiteSpec; stat
     check?.available && !check.meetsMinVersion && check.minVersion && check.version;
 
   return (
-    <div className="rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg/30">
+    <div className="rounded-[var(--radius-md)] border border-border-default bg-daintree-bg/30">
       <div className="flex items-center gap-3 px-3 py-2.5">
         <StatusIcon check={check} loading={loading} />
         <div className="flex-1 min-w-0">
-          <div className="text-sm font-medium text-daintree-text truncate">{label}</div>
+          <div className="text-sm font-medium text-text-primary truncate">{label}</div>
         </div>
         {loading ? (
           <span className="text-2xs text-daintree-text/30 shrink-0">Checking…</span>
@@ -57,7 +57,7 @@ export function PrerequisiteCard({ spec, state }: { spec: PrerequisiteSpec; stat
                 onClick={() => setExpanded((v) => !v)}
                 aria-expanded={expanded}
                 aria-controls={`install-panel-${spec.tool}`}
-                className="inline-flex items-center gap-1 text-2xs text-text-secondary hover:text-daintree-text underline-offset-2 hover:underline shrink-0"
+                className="inline-flex items-center gap-1 text-2xs text-text-secondary hover:text-text-primary underline-offset-2 hover:underline shrink-0"
               >
                 {expanded ? (
                   <ChevronDown className="w-3 h-3" />
@@ -70,7 +70,7 @@ export function PrerequisiteCard({ spec, state }: { spec: PrerequisiteSpec; stat
             {check.installUrl && (
               <a
                 href={check.installUrl}
-                className="inline-flex items-center gap-1 text-2xs text-daintree-text/40 hover:text-daintree-text shrink-0"
+                className="inline-flex items-center gap-1 text-2xs text-daintree-text/40 hover:text-text-primary shrink-0"
                 onClick={(e) => {
                   e.preventDefault();
                   void systemClient.openExternal(check.installUrl!);

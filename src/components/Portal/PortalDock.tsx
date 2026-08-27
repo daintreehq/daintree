@@ -468,7 +468,7 @@ export function PortalDock() {
           aria-label="Portal"
           data-macro-focus={isMacroFocused ? "true" : undefined}
           className={cn(
-            "flex flex-col h-full bg-daintree-bg relative portal-dock outline-hidden",
+            "flex flex-col h-full bg-surface-canvas relative portal-dock outline-hidden",
             "data-[macro-focus=true]:ring-2 data-[macro-focus=true]:ring-border-default data-[macro-focus=true]:ring-inset"
           )}
           style={{ width }}
@@ -498,7 +498,7 @@ export function PortalDock() {
               className={cn(
                 "w-px h-8 rounded-full transition-[width] duration-150 delay-100 group-hover:w-0.5",
                 "bg-daintree-text/20",
-                "group-hover:bg-daintree-text/35 group-focus:bg-daintree-accent",
+                "group-hover:bg-daintree-text/35 group-focus:bg-accent-primary",
                 isResizing && "bg-daintree-text/50"
               )}
             />
@@ -535,7 +535,7 @@ export function PortalDock() {
             ) : showSkeleton ? (
               <PortalTabSkeleton />
             ) : (
-              <div className="flex-1 bg-daintree-sidebar" />
+              <div className="flex-1 bg-surface-sidebar" />
             )}
           </div>
           {showDevDashboard && <DevServerDashboard />}

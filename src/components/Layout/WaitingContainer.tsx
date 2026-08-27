@@ -213,7 +213,7 @@ export function WaitingContainer({ compact = false }: WaitingContainerProps) {
             <span className="relative">
               <WaitingIcon className="w-3.5 h-3.5 text-state-waiting" aria-hidden="true" />
               {compact && displayCount > 0 && (
-                <span className="absolute -top-1.5 -right-1.5 z-10 flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full text-3xs font-bold tabular-nums shadow-sm bg-state-waiting text-daintree-bg">
+                <span className="absolute -top-1.5 -right-1.5 z-10 flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full text-3xs font-bold tabular-nums shadow-sm bg-state-waiting text-surface-canvas">
                   <AnimatedLabel label={displayCount > 9 ? "9+" : String(displayCount)} />
                 </span>
               )}
@@ -345,7 +345,7 @@ function WaitingSingleItem({
         }
       }}
       className={cn(
-        "flex items-center gap-2 px-3 py-2.5 hover:bg-muted/50 focus:bg-muted/50 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-daintree-accent outline-hidden transition-colors group/row cursor-pointer w-full select-none",
+        "flex items-center gap-2 px-3 py-2.5 hover:bg-muted/50 focus:bg-muted/50 focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-accent-primary outline-hidden transition-colors group/row cursor-pointer w-full select-none",
         compact && "py-1.5 pl-1.5"
       )}
       aria-label={
@@ -363,7 +363,7 @@ function WaitingSingleItem({
       <div className="flex-1 flex items-center gap-1.5 min-w-0">
         <span
           className={cn(
-            "min-w-0 truncate font-medium text-daintree-text/80 group-hover/row:text-daintree-text transition-colors",
+            "min-w-0 truncate font-medium text-daintree-text/80 group-hover/row:text-text-primary transition-colors",
             compact ? "text-2xs" : "text-xs"
           )}
         >
@@ -472,7 +472,7 @@ function WaitingGroupItem({
         </div>
 
         <div className="flex-1 min-w-0">
-          <div className="text-xs font-medium text-daintree-text/70 group-hover:text-daintree-text truncate transition-colors">
+          <div className="text-xs font-medium text-daintree-text/70 group-hover:text-text-primary truncate transition-colors">
             {groupName}
           </div>
         </div>

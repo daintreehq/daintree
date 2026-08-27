@@ -16,9 +16,9 @@ function PluginCard({ plugin, onSelect }: { plugin: LoadedPluginInfo; onSelect: 
       type="button"
       onClick={onSelect}
       className={cn(
-        "flex items-start gap-3 p-4 text-left rounded-[var(--radius-lg)] border border-daintree-border bg-overlay-subtle transition-colors",
+        "flex items-start gap-3 p-4 text-left rounded-[var(--radius-lg)] border border-border-default bg-overlay-subtle transition-colors",
         "hover:bg-overlay-soft hover:border-border-interactive",
-        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
       )}
     >
       <PluginIconTile manifest={plugin.manifest} size="md" dimmed={disabled} />
@@ -27,7 +27,7 @@ function PluginCard({ plugin, onSelect }: { plugin: LoadedPluginInfo; onSelect: 
           <span
             className={cn(
               "text-sm font-medium truncate",
-              disabled ? "text-daintree-text/50" : "text-daintree-text"
+              disabled ? "text-daintree-text/50" : "text-text-primary"
             )}
           >
             {pluginLabel(plugin)}
@@ -73,7 +73,7 @@ export function PluginCatalog({
   return (
     <div className="space-y-8">
       <div>
-        <h3 className="text-lg font-semibold text-daintree-text">Explore plugins</h3>
+        <h3 className="text-lg font-semibold text-text-primary">Explore plugins</h3>
         <p className="text-sm text-daintree-text/50 mt-1">
           First-party plugins that ship with Daintree, with more on the way
         </p>
@@ -86,7 +86,7 @@ export function PluginCatalog({
           <section key={category.id} aria-label={category.label}>
             <div className="flex items-center gap-2">
               <CategoryIcon className="w-4 h-4 text-daintree-text/50" aria-hidden="true" />
-              <h4 className="text-sm font-medium text-daintree-text">{category.label}</h4>
+              <h4 className="text-sm font-medium text-text-primary">{category.label}</h4>
               <span className="text-2xs text-daintree-text/40">{sectionPlugins.length}</span>
             </div>
             <p className="text-xs text-daintree-text/45 mt-0.5">{category.blurb}</p>

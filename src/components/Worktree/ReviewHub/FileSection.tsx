@@ -202,7 +202,7 @@ export function FileSection({
                 "flex items-center gap-1 h-5 pl-1.5 pr-1.5 rounded min-w-0",
                 "bg-tint/[0.04] border border-border-strong",
                 "hover:bg-tint/[0.06] transition-colors",
-                "focus-within:border-daintree-accent",
+                "focus-within:border-accent-primary",
                 // The strip IS the field, so it owns the forced-colors focus
                 // boundary. Without this the inner input painted its own
                 // rectangle inside the wrapper and the pair read as two
@@ -225,7 +225,7 @@ export function FileSection({
                 onChange={(e) => setFilterQuery(e.target.value)}
                 className={cn(
                   "w-[104px] min-w-0 bg-transparent text-2xs",
-                  "text-daintree-text placeholder:text-text-placeholder",
+                  "text-text-primary placeholder:text-text-placeholder",
                   // The transparent-outline utility below is what forced
                   // colors would normally turn into a visible box. That is
                   // right for a standalone control and wrong inside a strip
@@ -244,7 +244,7 @@ export function FileSection({
                     // disappears as settings change, and an intrinsically-sized
                     // trigger drags the filter field with it every time.
                     "toolbar-icon-button inline-flex w-8 shrink-0 items-center justify-center gap-1 rounded p-1",
-                    nonDefaultViewCount > 0 && "text-daintree-text"
+                    nonDefaultViewCount > 0 && "text-text-primary"
                   )}
                   data-testid={`${section}-section-view-trigger`}
                   aria-label={
@@ -400,7 +400,7 @@ export function FileSection({
             <button
               type="button"
               onClick={() => setView((prev) => ({ ...prev, showGenerated: true }))}
-              className="text-xs text-daintree-text/60 hover:text-daintree-text transition-colors underline underline-offset-2"
+              className="text-xs text-daintree-text/60 hover:text-text-primary transition-colors underline underline-offset-2"
             >
               Show generated files
             </button>
@@ -415,7 +415,7 @@ export function FileSection({
             <button
               type="button"
               onClick={clearFilter}
-              className="text-xs text-daintree-text/60 hover:text-daintree-text transition-colors underline underline-offset-2"
+              className="text-xs text-daintree-text/60 hover:text-text-primary transition-colors underline underline-offset-2"
             >
               Clear filter
             </button>
@@ -430,7 +430,7 @@ export function FileSection({
             <button
               type="button"
               onClick={() => setView((prev) => ({ ...prev, showGenerated: true }))}
-              className="text-xs text-daintree-text/60 hover:text-daintree-text transition-colors underline underline-offset-2"
+              className="text-xs text-daintree-text/60 hover:text-text-primary transition-colors underline underline-offset-2"
             >
               Show generated files
             </button>

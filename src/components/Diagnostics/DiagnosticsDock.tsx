@@ -50,9 +50,9 @@ function TabButton({ tab, label, isActive, onClick, badge }: TabButtonProps) {
       tabIndex={isActive ? 0 : -1}
       className={cn(
         "px-3 py-1.5 text-sm font-medium transition-colors relative rounded",
-        "hover:text-daintree-text hover:bg-overlay-soft",
-        "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent focus-visible:ring-offset-2 focus-visible:ring-offset-daintree-sidebar",
-        isActive ? "text-daintree-text" : "text-daintree-text/65"
+        "hover:text-text-primary hover:bg-overlay-soft",
+        "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface-sidebar",
+        isActive ? "text-text-primary" : "text-daintree-text/65"
       )}
       role="tab"
       aria-selected={isActive}
@@ -321,7 +321,7 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
           className={cn(
             "w-10 h-px rounded-full transition-[height] duration-150 delay-100 group-hover:h-0.5",
             "bg-daintree-text/15",
-            "group-hover:bg-daintree-text/30 group-focus-visible:bg-daintree-accent",
+            "group-hover:bg-daintree-text/30 group-focus-visible:bg-accent-primary",
             isResizing && "bg-daintree-text/50"
           )}
         />
@@ -363,7 +363,7 @@ export function DiagnosticsDock({ onRetry, onCancelRetry, className }: Diagnosti
             <TooltipTrigger asChild>
               <button
                 onClick={closeDock}
-                className="p-1.5 hover:bg-tint/[0.06] rounded-[var(--radius-md)] transition-colors text-daintree-text/60 hover:text-daintree-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+                className="p-1.5 hover:bg-tint/[0.06] rounded-[var(--radius-md)] transition-colors text-daintree-text/60 hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
                 aria-label="Close diagnostics dock"
               >
                 <X className="w-4 h-4" />

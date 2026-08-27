@@ -260,14 +260,14 @@ export function TurnOutcomeDiagnostics({
       ) : (
         <>
           {/* Outcome counts */}
-          <div className="rounded-[var(--radius-md)] border border-daintree-border bg-overlay-subtle/40">
+          <div className="rounded-[var(--radius-md)] border border-border-default bg-overlay-subtle/40">
             <button
               type="button"
               onClick={() => setOutcomeSectionOpen((v) => !v)}
               aria-expanded={outcomeSectionOpen}
               className={cn(
                 "w-full flex items-center justify-between gap-3 px-3 py-2 text-xs",
-                "text-daintree-text/80 hover:text-daintree-text transition-colors"
+                "text-daintree-text/80 hover:text-text-primary transition-colors"
               )}
             >
               <span className="flex items-center gap-2">
@@ -300,7 +300,7 @@ export function TurnOutcomeDiagnostics({
                         <th className="text-right font-medium py-1 pl-2 w-16">Rate</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-daintree-border">
+                    <tbody className="divide-y divide-border-default">
                       {OUTCOME_ORDER.map((cls) => {
                         const count = outcomeCounts.get(cls) ?? 0;
                         const rate = totalRecords > 0 ? (count / totalRecords) * 100 : 0;
@@ -322,14 +322,14 @@ export function TurnOutcomeDiagnostics({
           </div>
 
           {/* Per-tool rollups: tool-error rate */}
-          <div className="rounded-[var(--radius-md)] border border-daintree-border bg-overlay-subtle/40">
+          <div className="rounded-[var(--radius-md)] border border-border-default bg-overlay-subtle/40">
             <button
               type="button"
               onClick={() => setToolErrorOpen((v) => !v)}
               aria-expanded={toolErrorOpen}
               className={cn(
                 "w-full flex items-center justify-between gap-3 px-3 py-2 text-xs",
-                "text-daintree-text/80 hover:text-daintree-text transition-colors"
+                "text-daintree-text/80 hover:text-text-primary transition-colors"
               )}
             >
               <span className="flex items-center gap-2">
@@ -363,7 +363,7 @@ export function TurnOutcomeDiagnostics({
                         <th className="text-right font-medium py-1 pl-2 w-40">Recommendation</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-daintree-border">
+                    <tbody className="divide-y divide-border-default">
                       {toolErrorRollups.map((row) => (
                         <tr key={row.toolId} className="text-daintree-text/80">
                           <td className="py-1 pr-2 truncate">{row.toolId}</td>
@@ -389,14 +389,14 @@ export function TurnOutcomeDiagnostics({
           </div>
 
           {/* Per-tool rollups: tier-rejected rate */}
-          <div className="rounded-[var(--radius-md)] border border-daintree-border bg-overlay-subtle/40">
+          <div className="rounded-[var(--radius-md)] border border-border-default bg-overlay-subtle/40">
             <button
               type="button"
               onClick={() => setTierRejectedOpen((v) => !v)}
               aria-expanded={tierRejectedOpen}
               className={cn(
                 "w-full flex items-center justify-between gap-3 px-3 py-2 text-xs",
-                "text-daintree-text/80 hover:text-daintree-text transition-colors"
+                "text-daintree-text/80 hover:text-text-primary transition-colors"
               )}
             >
               <span className="flex items-center gap-2">
@@ -432,7 +432,7 @@ export function TurnOutcomeDiagnostics({
                         <th className="text-right font-medium py-1 pl-2 w-40">Recommendation</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-daintree-border">
+                    <tbody className="divide-y divide-border-default">
                       {tierRejectedRollups.map((row) => (
                         <tr key={row.toolId} className="text-daintree-text/80">
                           <td className="py-1 pr-2 truncate">{row.toolId}</td>
@@ -458,14 +458,14 @@ export function TurnOutcomeDiagnostics({
           </div>
 
           {/* Per-tool rollups: agent-stuck rate */}
-          <div className="rounded-[var(--radius-md)] border border-daintree-border bg-overlay-subtle/40">
+          <div className="rounded-[var(--radius-md)] border border-border-default bg-overlay-subtle/40">
             <button
               type="button"
               onClick={() => setAgentStuckOpen((v) => !v)}
               aria-expanded={agentStuckOpen}
               className={cn(
                 "w-full flex items-center justify-between gap-3 px-3 py-2 text-xs",
-                "text-daintree-text/80 hover:text-daintree-text transition-colors"
+                "text-daintree-text/80 hover:text-text-primary transition-colors"
               )}
             >
               <span className="flex items-center gap-2">
@@ -499,7 +499,7 @@ export function TurnOutcomeDiagnostics({
                         <th className="text-right font-medium py-1 pl-2 w-40">Recommendation</th>
                       </tr>
                     </thead>
-                    <tbody className="divide-y divide-daintree-border">
+                    <tbody className="divide-y divide-border-default">
                       {agentStuckRollups.map((row) => (
                         <tr key={row.toolId} className="text-daintree-text/80">
                           <td className="py-1 pr-2 truncate">{row.toolId}</td>
@@ -529,7 +529,7 @@ export function TurnOutcomeDiagnostics({
               type="button"
               onClick={handleRefresh}
               disabled={loading}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-[var(--radius-md)] border border-daintree-border text-daintree-text/70 hover:text-daintree-text hover:bg-overlay-soft transition-colors"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-[var(--radius-md)] border border-border-default text-daintree-text/70 hover:text-text-primary hover:bg-overlay-soft transition-colors"
             >
               <RefreshCw className="w-3.5 h-3.5" />
               Refresh
@@ -541,8 +541,8 @@ export function TurnOutcomeDiagnostics({
               className={cn(
                 "px-3 py-1.5 text-xs font-medium rounded-[var(--radius-md)] border transition-colors",
                 records.length === 0
-                  ? "border-daintree-border text-daintree-text/30 cursor-not-allowed"
-                  : "border-daintree-border text-status-danger hover:text-status-danger hover:bg-status-danger/10 hover:border-status-danger/20"
+                  ? "border-border-default text-daintree-text/30 cursor-not-allowed"
+                  : "border-border-default text-status-danger hover:text-status-danger hover:bg-status-danger/10 hover:border-status-danger/20"
               )}
             >
               Clear log

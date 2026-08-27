@@ -617,7 +617,7 @@ describe("WelcomeScreen", () => {
     ];
     for (const { state, expected } of scenarios) {
       const { unmount } = render(<WelcomeScreen gettingStarted={makeGettingStarted(state)} />);
-      const bar = document.querySelector(".bg-daintree-accent.rounded-full") as HTMLElement;
+      const bar = document.querySelector(".bg-accent-primary.rounded-full") as HTMLElement;
       expect(bar?.style.width).toBe(expected);
       unmount();
     }

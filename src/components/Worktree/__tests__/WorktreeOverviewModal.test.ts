@@ -127,7 +127,7 @@ describe("WorktreeOverviewModal — clickable aggregate stats (#8385)", () => {
       const stats = statsSlice(source);
       expect(stats).toContain("focus-visible:outline-hidden");
       expect(stats).toContain("focus-visible:ring-2");
-      expect(stats).toContain("focus-visible:ring-daintree-accent");
+      expect(stats).toContain("focus-visible:ring-accent-primary");
     });
 
     it("wrapper uses role='group' instead of role='status'", () => {
@@ -210,10 +210,10 @@ describe("WorktreeOverviewModal — clickable aggregate stats (#8385)", () => {
     it("uses neutral (non-state-colored) text on the finished chip label", () => {
       const chip = finishedChipSlice(source);
       // Label text is neutral; only the dot carries semantic color.
-      expect(chip).toMatch(/quickStateFilter === "finished"\s*\?\s*"text-daintree-text"/);
+      expect(chip).toMatch(/quickStateFilter === "finished"\s*\?\s*"text-text-primary"/);
       expect(chip).not.toContain("text-status-warning");
       expect(chip).not.toContain("text-[var(--color-state-working)]");
-      expect(chip).not.toContain("text-daintree-accent");
+      expect(chip).not.toContain("text-accent-primary");
     });
 
     it("renders the finished count text", () => {
@@ -228,7 +228,7 @@ describe("WorktreeOverviewModal — clickable aggregate stats (#8385)", () => {
     it("working chip label is neutral, not state-colored", () => {
       const start = source.indexOf('aria-pressed={quickStateFilter === "working"}');
       const chip = source.slice(start, source.indexOf("} working", start));
-      expect(chip).toMatch(/quickStateFilter === "working"\s*\?\s*"text-daintree-text"/);
+      expect(chip).toMatch(/quickStateFilter === "working"\s*\?\s*"text-text-primary"/);
       expect(chip).not.toContain("text-[var(--color-state-working)]");
       // The dot keeps its semantic state color.
       expect(chip).toContain("bg-[var(--color-state-working)]");
@@ -237,7 +237,7 @@ describe("WorktreeOverviewModal — clickable aggregate stats (#8385)", () => {
     it("waiting chip label is neutral, not state-colored", () => {
       const start = source.indexOf('aria-pressed={quickStateFilter === "waiting"}');
       const chip = source.slice(start, source.indexOf("} waiting", start));
-      expect(chip).toMatch(/quickStateFilter === "waiting"\s*\?\s*"text-daintree-text"/);
+      expect(chip).toMatch(/quickStateFilter === "waiting"\s*\?\s*"text-text-primary"/);
       expect(chip).not.toContain("text-status-warning");
       // The dot keeps its semantic color.
       expect(chip).toContain("bg-status-warning");
@@ -293,10 +293,10 @@ describe("WorktreeOverviewModal — clickable aggregate stats (#8385)", () => {
       // truth, but a local guard catches regressions before that contract
       // test runs.
       const selectionAccentTokens = [
-        "bg-daintree-accent",
+        "bg-accent-primary",
         "bg-accent-primary",
         "bg-accent-soft",
-        "text-daintree-accent",
+        "text-accent-primary",
         "text-accent-primary",
       ];
       for (const token of selectionAccentTokens) {

@@ -192,7 +192,7 @@ function OverviewGridCell(props: OverviewWorktreeCardProps & { isCursor?: boolea
         "transition-[background-color,box-shadow,outline-color] duration-150 ease-out",
         "hover:bg-overlay-subtle hover:shadow-[var(--theme-shadow-ambient)]",
         isSelected && "bg-overlay-subtle ring-1 ring-inset ring-border-default",
-        isCursor && "outline outline-2 -outline-offset-2 outline-daintree-accent"
+        isCursor && "outline outline-2 -outline-offset-2 outline-accent-primary"
       )}
     >
       <OverviewWorktreeCard {...props} variant="grid" />
@@ -900,7 +900,7 @@ export function WorktreeOverviewModal({
                       onClick={() => setHideMainWorktree(!hideMainWorktree)}
                       className={cn(
                         "flex shrink-0 items-center gap-1.5 px-2 rounded-full text-xs transition-colors",
-                        "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent",
+                        "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary",
                         hideMainWorktree
                           ? "bg-tint/[0.06] text-daintree-text/40 hover:text-daintree-text/60"
                           : "bg-tint/[0.10] text-daintree-text/70 hover:text-daintree-text/90"
@@ -942,7 +942,7 @@ export function WorktreeOverviewModal({
             <div className="flex items-center gap-3 min-w-0">
               {/* Visual only — the announcement is owned by the status region
                   above, so this must not be a second live region. */}
-              <span className="text-daintree-text font-medium text-sm tabular-nums">
+              <span className="text-text-primary font-medium text-sm tabular-nums">
                 {selectedIds.size} of {filteredWorktrees.length} selected
               </span>
               <button
@@ -950,10 +950,10 @@ export function WorktreeOverviewModal({
                 onClick={clearSelection}
                 className={cn(
                   "flex items-center gap-1.5 px-2 py-1 rounded text-xs",
-                  "text-daintree-text/60 hover:text-daintree-text",
+                  "text-daintree-text/60 hover:text-text-primary",
                   "hover:bg-tint/[0.06]",
                   "transition-colors",
-                  "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
+                  "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
                 )}
                 aria-label="Clear selection"
               >
@@ -1009,7 +1009,7 @@ export function WorktreeOverviewModal({
                       }
                       className={cn(
                         "flex items-center gap-1 text-xs tabular-nums rounded-full px-2 py-1 transition-colors",
-                        "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent",
+                        "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary",
                         quickStateFilter === "waiting"
                           ? "bg-overlay-subtle shadow-[inset_0_-2px_0_0_var(--color-text-secondary)]"
                           : "hover:bg-tint/[0.04]"
@@ -1019,7 +1019,7 @@ export function WorktreeOverviewModal({
                       <span
                         className={
                           quickStateFilter === "waiting"
-                            ? "text-daintree-text"
+                            ? "text-text-primary"
                             : "text-daintree-text/60"
                         }
                       >
@@ -1036,7 +1036,7 @@ export function WorktreeOverviewModal({
                       }
                       className={cn(
                         "flex items-center gap-1 text-xs tabular-nums rounded-full px-2 py-1 transition-colors",
-                        "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent",
+                        "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary",
                         quickStateFilter === "working"
                           ? "bg-overlay-subtle shadow-[inset_0_-2px_0_0_var(--color-text-secondary)]"
                           : "hover:bg-tint/[0.04]"
@@ -1046,7 +1046,7 @@ export function WorktreeOverviewModal({
                       <span
                         className={
                           quickStateFilter === "working"
-                            ? "text-daintree-text"
+                            ? "text-text-primary"
                             : "text-daintree-text/60"
                         }
                       >
@@ -1063,7 +1063,7 @@ export function WorktreeOverviewModal({
                       }
                       className={cn(
                         "flex items-center gap-1 text-xs tabular-nums rounded-full px-2 py-1 transition-colors",
-                        "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent",
+                        "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary",
                         quickStateFilter === "finished"
                           ? "bg-overlay-subtle shadow-[inset_0_-2px_0_0_var(--color-text-secondary)]"
                           : "hover:bg-tint/[0.04]"
@@ -1073,7 +1073,7 @@ export function WorktreeOverviewModal({
                       <span
                         className={
                           quickStateFilter === "finished"
-                            ? "text-daintree-text"
+                            ? "text-text-primary"
                             : "text-daintree-text/60"
                         }
                       >
@@ -1093,10 +1093,10 @@ export function WorktreeOverviewModal({
                         onClick={clearAllFilters}
                         className={cn(
                           "flex items-center gap-1.5 px-2 py-1 rounded text-xs",
-                          "text-daintree-text/60 hover:text-daintree-text",
+                          "text-daintree-text/60 hover:text-text-primary",
                           "hover:bg-tint/[0.06]",
                           "transition-colors",
-                          "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
+                          "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
                         )}
                         aria-label="Clear all filters"
                       >
@@ -1363,7 +1363,7 @@ export function WorktreeOverviewModal({
               const risks = describeBulkRemoveRisks(target);
               return (
                 <div key={target.id} className="flex flex-col gap-1 px-3 py-2 bg-daintree-bg/40">
-                  <div className="flex items-center gap-2 text-sm text-daintree-text">
+                  <div className="flex items-center gap-2 text-sm text-text-primary">
                     <GitBranch className="w-3.5 h-3.5 shrink-0 text-daintree-text/50" />
                     {/* The branch is what truncates, so the branch is what the
                         tooltip has to reveal — it used to show the path, which

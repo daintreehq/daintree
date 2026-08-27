@@ -160,7 +160,7 @@ export function NonMainSecondaryRow({
             if (isActive) badges.onOpenPlan?.();
           }}
           data-no-dnd
-          className="flex items-center gap-1 text-xs text-left cursor-pointer transition-colors text-daintree-text/70 hover:text-daintree-text focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+          className="flex items-center gap-1 text-xs text-left cursor-pointer transition-colors text-daintree-text/70 hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
           aria-disabled={!isActive || undefined}
           aria-label="View agent plan file"
         >

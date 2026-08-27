@@ -68,7 +68,7 @@ export function SystemRequirementsSection({
   const hasWarning = allDone && warningTools.length > 0;
 
   return (
-    <div className="rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg/30">
+    <div className="rounded-[var(--radius-md)] border border-border-default bg-daintree-bg/30">
       <button
         type="button"
         onClick={() => setUserExpanded((v) => !v)}
@@ -79,7 +79,7 @@ export function SystemRequirementsSection({
         <ChevronDown
           className={`w-3.5 h-3.5 text-daintree-text/40 shrink-0 transition-transform ${isExpanded ? "" : "-rotate-90"}`}
         />
-        <span className="text-sm font-medium text-daintree-text">System requirements</span>
+        <span className="text-sm font-medium text-text-primary">System requirements</span>
 
         {isChecking && (
           <span className="flex items-center gap-1.5 ml-auto text-2xs text-text-secondary">
@@ -183,7 +183,7 @@ export function SystemRequirementsSection({
             type="button"
             onClick={() => void runCheck()}
             disabled={isChecking}
-            className="inline-flex items-center gap-1.5 text-xs text-daintree-text/50 hover:text-daintree-text disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none transition-colors"
+            className="inline-flex items-center gap-1.5 text-xs text-daintree-text/50 hover:text-text-primary disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none transition-colors"
           >
             <RotateCw className={`w-3 h-3 ${isChecking ? "animate-spin" : ""}`} />
             {isChecking ? "Checking..." : "Re-check"}

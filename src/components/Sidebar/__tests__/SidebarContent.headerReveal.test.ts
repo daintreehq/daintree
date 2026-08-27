@@ -57,7 +57,7 @@ describe("SidebarContent header reveal — issue #6964", () => {
 
   it("renders focus-visible outlines on all four header icon buttons — issue #7602", () => {
     const header = headerSlice(source);
-    const focusVisibleCount = (header.match(/focus-visible:outline-daintree-accent/g) ?? []).length;
+    const focusVisibleCount = (header.match(/focus-visible:outline-accent-primary/g) ?? []).length;
     expect(focusVisibleCount).toBe(4);
     expect(header).toContain("focus-visible:outline focus-visible:outline-2");
   });

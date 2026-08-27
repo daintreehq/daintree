@@ -103,7 +103,7 @@ function AgentShortcutRow({ agentId, agentName }: { agentId: BuiltInAgentId; age
     >
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
-          <div className="text-sm font-medium text-daintree-text">Keyboard shortcut</div>
+          <div className="text-sm font-medium text-text-primary">Keyboard shortcut</div>
           <div className="text-xs text-daintree-text/50 mt-0.5 select-text">
             Launch {agentName} from anywhere with a key combination
           </div>
@@ -113,7 +113,7 @@ function AgentShortcutRow({ agentId, agentName }: { agentId: BuiltInAgentId; age
             {displayCombo ? (
               <span
                 data-testid={`agent-shortcut-pill-${agentId}`}
-                className="px-2 py-0.5 text-xs font-mono rounded bg-daintree-border text-daintree-text"
+                className="px-2 py-0.5 text-xs font-mono rounded bg-border-default text-text-primary"
               >
                 {displayCombo}
               </span>
@@ -124,7 +124,7 @@ function AgentShortcutRow({ agentId, agentName }: { agentId: BuiltInAgentId; age
               type="button"
               onClick={() => setIsEditing(true)}
               data-testid={`agent-shortcut-edit-${agentId}`}
-              className="px-2 py-0.5 text-xs text-daintree-text/60 hover:text-daintree-text transition-colors"
+              className="px-2 py-0.5 text-xs text-daintree-text/60 hover:text-text-primary transition-colors"
             >
               {displayCombo ? "Change" : "Assign"}
             </button>
@@ -134,7 +134,7 @@ function AgentShortcutRow({ agentId, agentName }: { agentId: BuiltInAgentId; age
                 onClick={() => void handleReset()}
                 aria-label={`Reset ${agentName} shortcut to default`}
                 data-testid={`agent-shortcut-reset-${agentId}`}
-                className="p-0.5 text-daintree-text/60 hover:text-daintree-text transition-colors"
+                className="p-0.5 text-daintree-text/60 hover:text-text-primary transition-colors"
               >
                 <RotateCcw className="w-3 h-3" />
               </button>
@@ -373,7 +373,7 @@ export function AgentSettings({
             onClick={() => {
               window.dispatchEvent(new CustomEvent("daintree:open-agent-setup-wizard"));
             }}
-            className="text-daintree-text/60 hover:text-daintree-text shrink-0"
+            className="text-daintree-text/60 hover:text-text-primary shrink-0"
           >
             <Plug className="w-3.5 h-3.5" />
             Run setup wizard
@@ -388,20 +388,20 @@ export function AgentSettings({
 
         {isGeneralActive && (
           <Card id="agents-general" className="space-y-4">
-            <div className="pb-3 border-b border-daintree-border">
-              <h4 className="text-sm font-medium text-daintree-text">Global agent settings</h4>
+            <div className="pb-3 border-b border-border-default">
+              <h4 className="text-sm font-medium text-text-primary">Global agent settings</h4>
               <p className="text-xs text-daintree-text/50 mt-0.5 select-text">
                 Settings that apply across all agents
               </p>
             </div>
             <div id="agents-default-agent" className="space-y-2">
-              <label className="text-sm font-medium text-daintree-text block">Default agent</label>
+              <label className="text-sm font-medium text-text-primary block">Default agent</label>
               <select
                 value={defaultAgent ?? ""}
                 onChange={(e) =>
                   setDefaultAgent(e.target.value ? (e.target.value as DefaultAgentId) : undefined)
                 }
-                className="w-full px-3 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg text-daintree-text focus:border-daintree-accent/40 focus:outline-hidden transition-colors"
+                className="w-full px-3 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas text-text-primary focus:border-daintree-accent/40 focus:outline-hidden transition-colors"
               >
                 <option value="">None (first available)</option>
                 {agentOptions.map((agent) => (
@@ -459,7 +459,7 @@ export function AgentSettings({
                   <Button
                     size="sm"
                     variant="ghost"
-                    className="text-daintree-text/50 hover:text-daintree-text"
+                    className="text-daintree-text/50 hover:text-text-primary"
                     onClick={async () => {
                       const url = activeAgent.usageUrl?.trim();
                       if (!url) return;
@@ -482,7 +482,7 @@ export function AgentSettings({
                 <Button
                   size="sm"
                   variant="ghost"
-                  className="text-daintree-text/50 hover:text-daintree-text"
+                  className="text-daintree-text/50 hover:text-text-primary"
                   onClick={async () => {
                     await reset(activeAgent.id);
                     onSettingsChange?.();

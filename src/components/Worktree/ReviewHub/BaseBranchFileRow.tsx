@@ -48,7 +48,7 @@ export function BaseBranchFileRow({
           onClick={onClick}
           className={cn(
             "relative flex min-w-0 flex-1 items-baseline rounded text-left",
-            "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
+            "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
           )}
         >
           <span
@@ -77,7 +77,7 @@ export function BaseBranchFileRow({
             data-testid="base-branch-file-row-base"
             className={cn(
               "shrink truncate font-medium font-mono text-2xs transition-colors",
-              "text-daintree-text group-hover/baserow:text-daintree-text"
+              "text-text-primary group-hover/baserow:text-text-primary"
             )}
           >
             {base}

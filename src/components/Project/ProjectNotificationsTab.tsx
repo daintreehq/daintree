@@ -90,7 +90,7 @@ export function ProjectNotificationsTab({ overrides, onChange }: ProjectNotifica
                 setGlobalError("Failed to load global settings");
               });
           }}
-          className="text-text-secondary hover:text-daintree-text underline-offset-2 underline hover:underline"
+          className="text-text-secondary hover:text-text-primary underline-offset-2 underline hover:underline"
         >
           Retry
         </button>
@@ -164,7 +164,7 @@ export function ProjectNotificationsTab({ overrides, onChange }: ProjectNotifica
               scope={scopeFor("waitingEnabled")}
             />
             {(effective("waitingEnabled") as boolean) && (
-              <div className="ml-6 space-y-3 border-l border-daintree-border pl-4 mt-2">
+              <div className="ml-6 space-y-3 border-l border-border-default pl-4 mt-2">
                 <OverrideRow
                   label="Escalate if still waiting"
                   description="Fire an additional OS notification if a docked agent remains waiting"
@@ -296,7 +296,7 @@ export function ProjectNotificationsTab({ overrides, onChange }: ProjectNotifica
                   <button
                     onClick={() => handlePreview(effective(field) as string)}
                     title={`Preview ${label.toLowerCase()}`}
-                    className="flex items-center gap-1.5 px-3 py-2 text-sm rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg text-daintree-text hover:bg-tint/[0.06] transition-colors"
+                    className="flex items-center gap-1.5 px-3 py-2 text-sm rounded-[var(--radius-md)] border border-border-default bg-surface-canvas text-text-primary hover:bg-tint/[0.06] transition-colors"
                   >
                     <Play className="h-3.5 w-3.5" />
                     Preview
@@ -330,9 +330,9 @@ function OverrideRow({
           type="checkbox"
           checked={isOverridden}
           onChange={(e) => onToggleOverride(e.target.checked)}
-          className="rounded border-daintree-border text-daintree-accent focus:ring-daintree-accent/30"
+          className="rounded border-border-default text-accent-primary focus:ring-daintree-accent/30"
         />
-        <span className="text-sm font-medium text-daintree-text">{label}</span>
+        <span className="text-sm font-medium text-text-primary">{label}</span>
         {!isOverridden && (
           <span className="text-xs text-text-secondary">(using global default)</span>
         )}

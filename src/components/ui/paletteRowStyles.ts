@@ -45,7 +45,7 @@ export const PALETTE_ROW_CLASS = cn(
   // `.palette-row::before` in `index.css` for why. The transparent border stays:
   // it holds the row's content box on the same column as the palette's other
   // families, and the `forced-colors` fallback still draws an outline there.
-  "aria-selected:bg-overlay-raised aria-selected:text-daintree-text"
+  "aria-selected:bg-overlay-raised aria-selected:text-text-primary"
 );
 
 /**
@@ -78,4 +78,4 @@ export const PALETTE_SECTION_LABEL_CLASS =
  * a second signal competing with the roving cursor's neutral highlight.
  */
 export const PALETTE_ROW_FOCUS_CLASS =
-  "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-daintree-accent";
+  "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary";

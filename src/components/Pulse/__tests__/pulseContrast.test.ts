@@ -87,7 +87,7 @@ describe("ProjectPulseCard — visual contrast (issue #2645)", () => {
       "color-mix(in oklab, var(--color-accent-primary) 12%, transparent)"
     );
     expect(content).not.toContain("border-daintree-accent/25");
-    expect(content).not.toContain("text-daintree-accent");
+    expect(content).not.toContain("text-accent-primary");
   });
 });
 
@@ -153,7 +153,7 @@ describe("PulseHeatmap — contrast on elevated card (issue #2645)", () => {
 describe("PulseHeatmap — accent restraint (issue #7229)", () => {
   it("most-recent-active cell uses a neutral ring, not the accent token", async () => {
     const content = await readFile(HEATMAP_PATH, "utf-8");
-    expect(content).not.toContain("ring-daintree-accent");
+    expect(content).not.toContain("ring-accent-primary");
     expect(content).toContain("ring-daintree-text/25");
   });
 });
@@ -171,7 +171,7 @@ describe("ProjectPulseCard — slot stability (issue #7671)", () => {
     const content = await readFile(CARD_PATH, "utf-8");
     // The wrapping div holds the slot at a constant height while the loaded
     // health row, skeleton, no-remote hint, and offline hint swap inside it.
-    expect(content).toContain('"border-t border-daintree-border pt-3 min-h-9"');
+    expect(content).toContain('"border-t border-border-default pt-3 min-h-9"');
   });
 
   it("non-loaded variants centre content vertically inside the reserved slot", async () => {
@@ -297,7 +297,7 @@ describe("PulseHeatmap — legend (issue #9819)", () => {
     expect(legendBlock).toBeTruthy();
     expect(legendBlock![0]).not.toContain("text-accent-primary");
     expect(legendBlock![0]).not.toContain("var(--color-accent-primary)");
-    expect(legendBlock![0]).not.toContain("ring-daintree-accent");
+    expect(legendBlock![0]).not.toContain("ring-accent-primary");
   });
 
   it("legend shares the heatmap row width via getPulseHeatmapRowWidth", async () => {
@@ -370,7 +370,7 @@ describe("PulseHeatmap — high-contrast shape cue (issue #9819)", () => {
     const block = mediaBlockSlice(content, "@media (prefers-contrast: more)");
     expect(block).toContain(".pulse-heat-cell");
     expect(block).toMatch(/\.pulse-heat-cell\s*{[^}]*border-width:\s*1px/);
-    expect(block).toContain("border-color: var(--color-daintree-text)");
+    expect(block).toContain("border-color: var(--color-text-primary)");
   });
 
   it("the two contrast blocks stay separate (CLAUDE.md dual-block guard)", async () => {

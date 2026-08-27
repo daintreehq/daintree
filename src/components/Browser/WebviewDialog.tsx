@@ -195,7 +195,7 @@ export function WebviewDialog({ dialog, onRespond }: WebviewDialogProps) {
             {dialog.origin ? (
               <>
                 Message from{" "}
-                <span className="font-mono text-daintree-text break-all">{dialog.origin}</span>
+                <span className="font-mono text-text-primary break-all">{dialog.origin}</span>
               </>
             ) : (
               "Message from this page"
@@ -250,7 +250,7 @@ export function WebviewDialog({ dialog, onRespond }: WebviewDialogProps) {
             <Button
               variant="ghost"
               onClick={handleCancel}
-              className="text-daintree-text/70 hover:text-daintree-text"
+              className="text-daintree-text/70 hover:text-text-primary"
               data-confirm-role="cancel"
             >
               Cancel

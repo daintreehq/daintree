@@ -264,7 +264,7 @@ describe("QuickStateFilterBar", () => {
     const inactiveCount = within(waiting).getByText("1");
     const activeClass = activeCount.getAttribute("class") ?? "";
     const inactiveClass = inactiveCount.getAttribute("class") ?? "";
-    expect(activeClass).toContain("text-daintree-text");
+    expect(activeClass).toContain("text-text-primary");
     expect(activeClass).not.toContain("text-daintree-text/");
     expect(inactiveClass).toContain("text-daintree-text/60");
   });

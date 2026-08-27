@@ -52,7 +52,7 @@ const CTA_LABELS: Record<ReviewReadinessCta["kind"], string> = {
    however right its colour and width look. Restating the style under the variant is what
    makes the focus indicator visible; the capture harness asserts the computed outline. */
 const FOCUS_RING =
-  "outline-hidden focus-visible:outline focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2";
+  "outline-hidden focus-visible:outline focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2";
 
 const CTA_CLASS = cn(
   "inline-flex items-center gap-1 shrink-0 px-2 py-0.5 rounded text-2xs font-medium transition-colors",
@@ -161,7 +161,7 @@ function ReadinessOverflow({
         aria-label={`${items.length} more: ${items.map((i) => i.label).join(", ")}`}
         className={cn(
           "inline-flex items-center gap-0.5 shrink-0 px-1.5 py-0.5 rounded text-2xs transition-colors",
-          "text-text-secondary hover:text-daintree-text hover:bg-tint/[0.06]",
+          "text-text-secondary hover:text-text-primary hover:bg-tint/[0.06]",
           FOCUS_RING
         )}
       >
@@ -185,7 +185,7 @@ function ReadinessOverflow({
               >
                 <Icon className={cn("w-3.5 h-3.5 shrink-0 mt-px", toneClass)} aria-hidden="true" />
                 <span className="min-w-0 flex-1">
-                  <span className="font-medium text-daintree-text">{item.label}</span>
+                  <span className="font-medium text-text-primary">{item.label}</span>
                   {item.detail && <span className="block text-text-secondary">{item.detail}</span>}
                 </span>
                 {item.action && (

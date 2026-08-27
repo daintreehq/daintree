@@ -528,7 +528,7 @@ export const DiffViewer = forwardRef<HTMLDivElement, DiffViewerProps>(function D
               <button
                 type="button"
                 onClick={onRetry}
-                className="px-3 py-1.5 text-xs font-medium rounded bg-daintree-border hover:bg-daintree-border/80 text-daintree-text transition-colors"
+                className="px-3 py-1.5 text-xs font-medium rounded bg-border-default hover:bg-daintree-border/80 text-text-primary transition-colors"
               >
                 Retry
               </button>
@@ -1133,7 +1133,7 @@ function FileDiff({
   return (
     <div className="mb-2" style={fileStyle}>
       {relPath && (
-        <div className="sticky top-0 z-10 flex items-center justify-between px-3 py-1.5 bg-daintree-sidebar border-b border-daintree-border text-xs font-mono">
+        <div className="sticky top-0 z-10 flex items-center justify-between px-3 py-1.5 bg-surface-sidebar border-b border-border-default text-xs font-mono">
           <TruncatedTooltip content={relPath}>
             <span className="truncate text-daintree-text/80">
               {relPath.includes("/") ? (
@@ -1141,7 +1141,7 @@ function FileDiff({
                   <span className="text-daintree-text/45">
                     {relPath.slice(0, relPath.lastIndexOf("/") + 1)}
                   </span>
-                  <span className="text-daintree-text">
+                  <span className="text-text-primary">
                     {relPath.slice(relPath.lastIndexOf("/") + 1)}
                   </span>
                 </>
@@ -1176,7 +1176,7 @@ function FileDiff({
                 onClick={() => void handleCopyFileDiff()}
                 title={fileCopied ? "Copied!" : "Copy file diff"}
                 aria-label={fileCopied ? "Copied!" : "Copy file diff"}
-                className="shrink-0 flex items-center px-1.5 py-0.5 rounded hover:bg-tint/5 hover:text-daintree-text transition-colors"
+                className="shrink-0 flex items-center px-1.5 py-0.5 rounded hover:bg-tint/5 hover:text-text-primary transition-colors"
               >
                 {fileCopied ? <Check className="w-3 h-3" /> : <Copy className="w-3 h-3" />}
               </button>
@@ -1185,7 +1185,7 @@ function FileDiff({
               <button
                 onClick={handleOpenInEditor}
                 title={`Open in editor${firstHunkLine ? ` at line ${firstHunkLine}` : ""}`}
-                className="shrink-0 flex items-center gap-1 px-2 py-0.5 rounded hover:bg-tint/5 hover:text-daintree-text transition-colors"
+                className="shrink-0 flex items-center gap-1 px-2 py-0.5 rounded hover:bg-tint/5 hover:text-text-primary transition-colors"
               >
                 <ExternalLink className="w-3 h-3" />
                 Open

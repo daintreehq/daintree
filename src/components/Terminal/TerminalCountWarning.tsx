@@ -117,7 +117,7 @@ export function TerminalCountWarning({ className, onOpenBulkActions }: TerminalC
           <button
             type="button"
             onClick={handleCleanup}
-            className="mt-1 text-xs underline text-daintree-text/70 hover:text-daintree-text transition-colors inline-flex items-center gap-1 outline-hidden focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-daintree-accent rounded-sm"
+            className="mt-1 text-xs underline text-daintree-text/70 hover:text-text-primary transition-colors inline-flex items-center gap-1 outline-hidden focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary rounded-sm"
           >
             <Trash2 className="h-3 w-3" />
             Close <span className="tabular-nums">{completedCount}</span> completed agent

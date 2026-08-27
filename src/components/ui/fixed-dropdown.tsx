@@ -223,7 +223,7 @@ export function FixedDropdown({
     <div
       ref={contentRef}
       className={cn(
-        "absolute pointer-events-auto overflow-hidden rounded-[var(--radius-lg)] surface-overlay shadow-overlay text-daintree-text",
+        "absolute pointer-events-auto overflow-hidden rounded-[var(--radius-lg)] surface-overlay shadow-overlay text-text-primary",
         // Tailwind v4 translate-*/scale-* emit the individual `translate` and
         // `scale` properties, which `transform` in a transition list does NOT
         // cover — list them explicitly or the rise/zoom snaps.

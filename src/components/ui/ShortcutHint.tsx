@@ -106,7 +106,7 @@ export function ShortcutHint() {
             className={cn(
               "flex items-center gap-2 px-3 py-1.5",
               "rounded-[var(--radius-md)] surface-overlay shadow-overlay",
-              "text-xs text-daintree-text",
+              "text-xs text-text-primary",
               "transition duration-150",
               "motion-reduce:transition-none motion-reduce:duration-0 motion-reduce:transform-none",
               isVisible ? "opacity-100 translate-y-0" : "opacity-0 translate-y-1"

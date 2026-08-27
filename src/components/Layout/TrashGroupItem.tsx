@@ -128,7 +128,7 @@ export function TrashGroupItem({
         </div>
 
         <div className="flex-1 min-w-0">
-          <div className="text-xs font-medium text-daintree-text/70 group-hover:text-daintree-text truncate transition-colors">
+          <div className="text-xs font-medium text-daintree-text/70 group-hover:text-text-primary truncate transition-colors">
             {groupName}
             {worktreeName ? (
               <span className="text-daintree-text/50 ml-1 font-normal">({worktreeName})</span>

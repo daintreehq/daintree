@@ -202,7 +202,7 @@ function FleetResolutionRow({ preview }: FleetResolutionRowProps): ReactElement 
               onChange={(e) => setSkipped(terminalId, !e.target.checked)}
               data-testid="fleet-resolution-row-include"
               aria-label={`Include ${title} in broadcast`}
-              className="h-3 w-3 cursor-pointer rounded border-daintree-border transition-colors duration-150"
+              className="h-3 w-3 cursor-pointer rounded border-border-default transition-colors duration-150"
             />
           </label>
         )}
@@ -256,7 +256,7 @@ function FleetResolutionRow({ preview }: FleetResolutionRowProps): ReactElement 
               data-testid="fleet-resolution-row-textarea"
               aria-label={`Override payload for ${title}`}
               className={cn(
-                "flex-1 resize-y bg-transparent text-2xs leading-relaxed break-all text-daintree-text",
+                "flex-1 resize-y bg-transparent text-2xs leading-relaxed break-all text-text-primary",
                 "rounded-sm border border-transparent px-1 py-0.5 outline-hidden transition-colors duration-150",
                 "hover:border-border-subtle focus:border-border-subtle",
                 isSkipped && "cursor-not-allowed line-through",

@@ -116,7 +116,7 @@ export function BranchPickerPanel({
                 <button
                   type="button"
                   onClick={() => setQuery("")}
-                  className="text-xs px-3 py-1.5 text-daintree-text/60 hover:text-daintree-text hover:bg-overlay-soft rounded transition-colors"
+                  className="text-xs px-3 py-1.5 text-daintree-text/60 hover:text-text-primary hover:bg-overlay-soft rounded transition-colors"
                 >
                   Clear search
                 </button>
@@ -162,7 +162,7 @@ export function BranchPickerPanel({
       {isTruncated && (
         // Counted off the rows actually rendered rather than restating the cap, so
         // the footnote can't claim a number the list doesn't show.
-        <div className="border-t border-daintree-border px-3 py-2 text-xs text-daintree-text/60">
+        <div className="border-t border-border-default px-3 py-2 text-xs text-daintree-text/60">
           Showing {selectableRows.length} of {matchedTotal}{" "}
           {trimmedQuery ? "matches — keep typing to narrow" : "branches — search to narrow"}
         </div>
@@ -238,7 +238,7 @@ function BranchPickerRowItem({
         )}
         {isSelectedValue && (
           <>
-            <Check className="h-4 w-4 text-daintree-text" aria-hidden="true" />
+            <Check className="h-4 w-4 text-text-primary" aria-hidden="true" />
             <span className="sr-only">Currently selected</span>
           </>
         )}

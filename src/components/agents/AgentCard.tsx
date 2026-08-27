@@ -84,13 +84,13 @@ function OnboardingCard({
   return (
     <label
       className={cn(
-        "flex items-center gap-3 px-3 rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg/30 cursor-pointer hover:bg-daintree-bg/60 transition-colors",
+        "flex items-center gap-3 px-3 rounded-[var(--radius-md)] border border-border-default bg-daintree-bg/30 cursor-pointer hover:bg-daintree-bg/60 transition-colors",
         compact ? "py-2" : "py-2.5"
       )}
     >
       <input
         type="checkbox"
-        className="w-4 h-4 accent-daintree-accent shrink-0"
+        className="w-4 h-4 accent-accent-primary shrink-0"
         checked={isChecked}
         onChange={(e) => onToggle(agentId, e.target.checked)}
         disabled={isSaving}
@@ -126,14 +126,14 @@ function ManagementCard({
   const { name, color, Icon } = identity;
 
   return (
-    <div className="rounded-[var(--radius-lg)] border border-daintree-border bg-surface p-4 space-y-4">
-      <div className="flex items-center justify-between pb-3 border-b border-daintree-border">
+    <div className="rounded-[var(--radius-lg)] border border-border-default bg-surface p-4 space-y-4">
+      <div className="flex items-center justify-between pb-3 border-b border-border-default">
         <div className="flex items-center gap-3">
           <BrandMark brandColor={color}>
             <Icon size={24} />
           </BrandMark>
           <div>
-            <h4 className="text-sm font-medium text-daintree-text">{name} settings</h4>
+            <h4 className="text-sm font-medium text-text-primary">{name} settings</h4>
             <p className="text-xs text-daintree-text/50 select-text">
               Configure how {name.toLowerCase()} runs in terminals
             </p>
@@ -171,7 +171,7 @@ export function AgentIdentityBlock({
         </BrandMark>
       </div>
       <div className="flex-1 min-w-0">
-        <div className="text-sm font-medium text-daintree-text">{name}</div>
+        <div className="text-sm font-medium text-text-primary">{name}</div>
         {description && <div className="text-2xs text-text-secondary truncate">{description}</div>}
       </div>
     </>
@@ -219,7 +219,7 @@ export function AgentInstallSection({
 
   if (isCliLoading) {
     return (
-      <div className="pt-4 border-t border-daintree-border">
+      <div className="pt-4 border-t border-border-default">
         <div className="text-xs text-text-secondary">Checking CLI availability...</div>
       </div>
     );
@@ -251,12 +251,12 @@ export function AgentInstallSection({
   return (
     <div
       id="agents-installation"
-      className="rounded-[var(--radius-lg)] border border-daintree-border bg-surface p-4 space-y-4"
+      className="rounded-[var(--radius-lg)] border border-border-default bg-surface p-4 space-y-4"
     >
-      <div className="pb-3 border-b border-daintree-border">
+      <div className="pb-3 border-b border-border-default">
         <div className="flex items-center justify-between">
           <div>
-            <h5 className="text-sm font-medium text-daintree-text">{headerLabel}</h5>
+            <h5 className="text-sm font-medium text-text-primary">{headerLabel}</h5>
             <p className="text-xs text-daintree-text/50 select-text">{headerDescription}</p>
           </div>
           <Button
@@ -264,7 +264,7 @@ export function AgentInstallSection({
             variant="ghost"
             onClick={onRefresh}
             disabled={isRefreshingCli}
-            className="text-daintree-text/50 hover:text-daintree-text"
+            className="text-daintree-text/50 hover:text-text-primary"
           >
             <SpinningIcon icon={RefreshCw} active={isRefreshingCli} size={14} className="mr-1.5" />
             Re-check
@@ -332,7 +332,7 @@ export function AgentInstallSection({
           </div>
         </div>
       ) : hasInstallConfig?.docsUrl ? (
-        <div className="px-4 py-6 rounded-[var(--radius-md)] border border-daintree-border bg-surface text-center">
+        <div className="px-4 py-6 rounded-[var(--radius-md)] border border-border-default bg-surface text-center">
           <p className="text-xs text-daintree-text/60 mb-3">
             No OS-specific install instructions available
           </p>
@@ -353,7 +353,7 @@ export function AgentInstallSection({
           </Button>
         </div>
       ) : (
-        <div className="px-4 py-6 rounded-[var(--radius-md)] border border-daintree-border bg-surface text-center">
+        <div className="px-4 py-6 rounded-[var(--radius-md)] border border-border-default bg-surface text-center">
           <p className="text-xs text-daintree-text/60">
             No installation instructions configured for this agent
           </p>
@@ -372,7 +372,7 @@ export function AgentInstallSection({
               });
             }
           }}
-          className="w-full text-daintree-text/50 hover:text-daintree-text"
+          className="w-full text-daintree-text/50 hover:text-text-primary"
         >
           <ExternalLink size={14} />
           View official documentation

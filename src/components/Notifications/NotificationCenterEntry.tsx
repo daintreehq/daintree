@@ -60,9 +60,9 @@ function formatSnoozedUntil(snoozedUntil: number): string {
  */
 const ROW_CONTROL_CLASS = cn(
   "h-6 w-6 shrink-0 flex items-center justify-center rounded-[var(--radius-sm)]",
-  "text-text-muted transition-colors hover:bg-overlay-soft hover:text-daintree-text",
+  "text-text-muted transition-colors hover:bg-overlay-soft hover:text-text-primary",
   "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2",
-  "focus-visible:outline-daintree-accent focus-visible:text-daintree-text"
+  "focus-visible:outline-accent-primary focus-visible:text-text-primary"
 );
 
 const TYPE_CONFIG = {
@@ -228,7 +228,7 @@ export function NotificationCenterEntry({
           <div className="col-start-1 row-start-1 flex min-w-0 items-center gap-1.5">
             <p
               className={cn(
-                "text-xs text-daintree-text truncate",
+                "text-xs text-text-primary truncate",
                 isNew ? "font-semibold" : "font-normal"
               )}
             >
@@ -320,7 +320,7 @@ export function NotificationCenterEntry({
                           // status-info as the fill and border (that is what
                           // marks it primary) and take the label from the gated
                           // text ramp.
-                          "border border-status-info/30 bg-status-info/15 text-daintree-text hover:bg-status-info/20"
+                          "border border-status-info/30 bg-status-info/15 text-text-primary hover:bg-status-info/20"
                       : "border border-daintree-text/10 text-text-muted cursor-not-allowed"
                   )}
                 >

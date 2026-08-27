@@ -60,9 +60,9 @@ export function OverrideField({
             aria-label="Reset to global"
             onClick={onReset}
             className={cn(
-              "inline-flex items-center gap-1 px-1.5 py-0.5 rounded-sm text-2xs text-text-muted hover:text-daintree-text hover:bg-overlay-subtle",
+              "inline-flex items-center gap-1 px-1.5 py-0.5 rounded-sm text-2xs text-text-muted hover:text-text-primary hover:bg-overlay-subtle",
               "invisible group-hover:visible group-focus-within:visible focus-visible:visible",
-              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent",
+              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
               "transition-colors"
             )}
           >
@@ -88,10 +88,10 @@ export function OverrideField({
         aria-describedby={describedBy}
         aria-invalid={error ? true : undefined}
         className={cn(
-          "w-full bg-daintree-bg border rounded px-3 py-2 text-sm text-daintree-text font-mono",
+          "w-full bg-surface-canvas border rounded px-3 py-2 text-sm text-text-primary font-mono",
           "focus:outline-hidden focus:border-daintree-accent/40 focus:ring-1 focus:ring-daintree-accent/30",
           "transition-colors placeholder:text-text-placeholder disabled:opacity-50 disabled:cursor-not-allowed",
-          isOverriding ? "border-status-info/40" : "border-daintree-border",
+          isOverriding ? "border-status-info/40" : "border-border-default",
           error && "border-status-error",
           inputClassName
         )}

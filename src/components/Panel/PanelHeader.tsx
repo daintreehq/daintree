@@ -577,7 +577,7 @@ function PanelHeaderComponent({
             <button
               type="button"
               onPointerDown={(e) => e.stopPropagation()}
-              className="shrink-0 p-1.5 hover:bg-daintree-text/10 text-daintree-text/40 hover:text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
+              className="shrink-0 p-1.5 hover:bg-daintree-text/10 text-daintree-text/40 hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-1"
               aria-label="Show hidden tabs"
               aria-haspopup="menu"
               data-testid="panel-tabs-overflow"
@@ -667,7 +667,7 @@ function PanelHeaderComponent({
       className={cn(
         "text-xs transition-colors relative overflow-hidden group select-none",
         isMaximized
-          ? "h-10 bg-daintree-sidebar border-daintree-border"
+          ? "h-10 bg-surface-sidebar border-border-default"
           : location === "dock"
             ? "bg-surface"
             : isFocused || isSelected
@@ -774,7 +774,7 @@ function PanelHeaderComponent({
               onto the tab strip, where selection is each tab's to signal. */}
           <span
             data-brand-active={isFocused || isSelected || undefined}
-            className="shrink-0 flex items-center justify-center w-3.5 h-3.5 text-daintree-text"
+            className="shrink-0 flex items-center justify-center w-3.5 h-3.5 text-text-primary"
           >
             <TerminalIcon
               kind={kind}
@@ -796,7 +796,7 @@ function PanelHeaderComponent({
               onChange={(e) => onEditingValueChange(e.target.value)}
               onKeyDown={onTitleInputKeyDown}
               onBlur={onTitleSave}
-              className="text-xs font-medium bg-overlay-soft border border-transparent px-1 h-5 min-w-32 text-daintree-text select-text transition-colors focus:outline-hidden"
+              className="text-xs font-medium bg-overlay-soft border border-transparent px-1 h-5 min-w-32 text-text-primary select-text transition-colors focus:outline-hidden"
               aria-label={getAriaLabel()}
             />
           ) : (
@@ -806,8 +806,8 @@ function PanelHeaderComponent({
                   <span
                     className={cn(
                       "text-xs font-medium font-sans select-none transition-colors block truncate min-w-0 min-h-6 leading-6",
-                      isFocused || isSelected ? "text-daintree-text" : "text-daintree-text/70",
-                      onTitleChange && "cursor-text hover:text-daintree-text",
+                      isFocused || isSelected ? "text-text-primary" : "text-daintree-text/70",
+                      onTitleChange && "cursor-text hover:text-text-primary",
                       isPinged &&
                         !isMaximized &&
                         (wasJustSelected ? "animate-eco-title-select" : "animate-eco-title")
@@ -886,7 +886,7 @@ function PanelHeaderComponent({
             <span
               role="status"
               aria-label="Watching — waiting for agent completion"
-              className="text-daintree-accent cursor-default"
+              className="text-accent-primary cursor-default"
             >
               <BellDot className="w-3 h-3 animate-pulse motion-reduce:animate-none" />
             </span>
@@ -905,7 +905,7 @@ function PanelHeaderComponent({
                     onAddTab();
                   }}
                   onPointerDown={(e) => e.stopPropagation()}
-                  className="shrink-0 p-1.5 opacity-0 group-hover:opacity-100 hover:bg-daintree-text/10 text-daintree-text/40 hover:text-daintree-text transition-[opacity,color,background-color] focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1"
+                  className="shrink-0 p-1.5 opacity-0 group-hover:opacity-100 hover:bg-daintree-text/10 text-daintree-text/40 hover:text-text-primary transition-[opacity,color,background-color] focus-visible:opacity-100 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-1"
                   aria-label="Duplicate panel as new tab"
                   aria-keyshortcuts={duplicateAriaShortcut}
                   type="button"
@@ -993,7 +993,7 @@ function PanelHeaderComponent({
                   <button
                     type="button"
                     onPointerDown={(e) => e.stopPropagation()}
-                    className="p-1.5 rounded-sm hover:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 text-daintree-text/60 hover:text-daintree-text transition-colors"
+                    className="p-1.5 rounded-sm hover:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2 text-daintree-text/60 hover:text-text-primary transition-colors"
                     aria-label="More panel actions"
                   >
                     <Ellipsis className="w-3 h-3" aria-hidden="true" />
@@ -1150,7 +1150,7 @@ function PanelHeaderComponent({
                   onMinimize!();
                 }}
                 onPointerDown={(e) => e.stopPropagation()}
-                className="p-1.5 rounded-sm hover:bg-daintree-text/10 focus-visible:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 text-daintree-text/60 hover:text-daintree-text transition-colors"
+                className="p-1.5 rounded-sm hover:bg-daintree-text/10 focus-visible:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2 text-daintree-text/60 hover:text-text-primary transition-colors"
                 aria-label="Move to dock"
                 aria-keyshortcuts={moveToDockAriaShortcut}
                 data-testid="panel-move-to-dock"
@@ -1179,7 +1179,7 @@ function PanelHeaderComponent({
                       onRestore();
                     }}
                     onPointerDown={(e) => e.stopPropagation()}
-                    className="p-1.5 rounded-sm hover:bg-daintree-text/10 focus-visible:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 text-daintree-text/60 hover:text-daintree-text transition-colors"
+                    className="p-1.5 rounded-sm hover:bg-daintree-text/10 focus-visible:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2 text-daintree-text/60 hover:text-text-primary transition-colors"
                     aria-label="Move to grid"
                     data-testid="panel-move-to-grid"
                   >
@@ -1200,7 +1200,7 @@ function PanelHeaderComponent({
                   onToggleMaximize();
                 }}
                 onPointerDown={(e) => e.stopPropagation()}
-                className="flex items-center gap-1.5 px-2 py-1 rounded-sm hover:bg-daintree-text/10 focus-visible:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 text-daintree-text/60 hover:text-daintree-text transition-colors"
+                className="flex items-center gap-1.5 px-2 py-1 rounded-sm hover:bg-daintree-text/10 focus-visible:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2 text-daintree-text/60 hover:text-text-primary transition-colors"
                 aria-label="Restore grid view"
                 aria-keyshortcuts={maximizeAriaShortcut}
               >
@@ -1223,7 +1223,7 @@ function PanelHeaderComponent({
                     onToggleMaximize();
                   }}
                   onPointerDown={(e) => e.stopPropagation()}
-                  className="p-1.5 rounded-sm hover:bg-daintree-text/10 focus-visible:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 text-daintree-text/60 hover:text-daintree-text transition-colors"
+                  className="p-1.5 rounded-sm hover:bg-daintree-text/10 focus-visible:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2 text-daintree-text/60 hover:text-text-primary transition-colors"
                   aria-label="Maximize"
                   aria-keyshortcuts={maximizeAriaShortcut}
                 >

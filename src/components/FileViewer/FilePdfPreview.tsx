@@ -57,7 +57,7 @@ export function FilePdfPreview({ filePath, rootPath, label, reloadKey }: FilePdf
       src={src}
       title={label}
       referrerPolicy="no-referrer"
-      className="h-full w-full border-0 bg-daintree-bg"
+      className="h-full w-full border-0 bg-surface-canvas"
     />
   );
 }

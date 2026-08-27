@@ -13,12 +13,12 @@ export function ReadOnlyDetail({ scopeKind, selectedPreset, onDuplicate }: ReadO
     scopeKind === "ccr" ? stripCcrPrefix(selectedPreset.name) : selectedPreset.name;
 
   return (
-    <div className="rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg/30 divide-y divide-daintree-border/50">
+    <div className="rounded-[var(--radius-md)] border border-border-default bg-daintree-bg/30 divide-y divide-daintree-border/50">
       <div className="px-3 py-2.5 space-y-2">
         <div className="flex items-center gap-1.5">
-          <span className="text-xs font-medium text-daintree-text">{displayName}</span>
+          <span className="text-xs font-medium text-text-primary">{displayName}</span>
           <button
-            className="ml-auto text-daintree-text/30 hover:text-daintree-text transition-colors"
+            className="ml-auto text-daintree-text/30 hover:text-text-primary transition-colors"
             onClick={() => onDuplicate(selectedPreset)}
             aria-label={`Duplicate ${displayName}`}
             title="Duplicate as custom"

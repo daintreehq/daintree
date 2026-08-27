@@ -204,7 +204,7 @@ export function usePanelPalette(): UsePanelPaletteReturn {
         id: MORE_AGENTS_PANEL_ID,
         name: "More agents...",
         iconId: "sparkles",
-        color: "var(--color-daintree-text)",
+        color: "var(--color-text-primary)",
         description: "Set up additional AI agents",
         category: "agent" as const,
       },

@@ -94,7 +94,7 @@ function ShortcutRow({
     return (
       <div data-testid="shortcut-row" className="py-2 border-b border-daintree-border/50">
         <div className="flex items-center justify-between mb-2">
-          <span className="text-sm text-daintree-text">
+          <span className="text-sm text-text-primary">
             {binding.description || binding.actionId}
           </span>
         </div>
@@ -114,9 +114,7 @@ function ShortcutRow({
   return (
     <div data-testid="shortcut-row" className="py-2 border-b border-daintree-border/50">
       <div className="flex items-center justify-between group/row">
-        <span className="text-sm text-daintree-text">
-          {binding.description || binding.actionId}
-        </span>
+        <span className="text-sm text-text-primary">{binding.description || binding.actionId}</span>
         <div className="flex items-center gap-2">
           {binding.effectiveCombo ? (
             <span
@@ -124,7 +122,7 @@ function ShortcutRow({
                 "px-2 py-0.5 text-xs font-mono rounded",
                 binding.isOverridden
                   ? "bg-status-info/15 text-status-info"
-                  : "bg-daintree-border text-daintree-text"
+                  : "bg-border-default text-text-primary"
               )}
             >
               {keybindingService.formatComboForDisplay(binding.effectiveCombo)}
@@ -134,7 +132,7 @@ function ShortcutRow({
           )}
           <button
             onClick={onEdit}
-            className="px-2 py-0.5 text-xs text-daintree-text/60 hover:text-daintree-text opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100 focus-visible:opacity-100 transition-opacity"
+            className="px-2 py-0.5 text-xs text-daintree-text/60 hover:text-text-primary opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100 focus-visible:opacity-100 transition-opacity"
           >
             Edit
           </button>
@@ -143,7 +141,7 @@ function ShortcutRow({
               <TooltipTrigger asChild>
                 <button
                   onClick={onReset}
-                  className="p-0.5 text-daintree-text/60 hover:text-daintree-text opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100 focus-visible:opacity-100 transition-opacity"
+                  className="p-0.5 text-daintree-text/60 hover:text-text-primary opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100 focus-visible:opacity-100 transition-opacity"
                   aria-label="Reset to default"
                 >
                   <RotateCcw className="w-3 h-3" />
@@ -351,7 +349,7 @@ export function KeyboardShortcutsTab() {
         <div
           className={cn(
             "flex items-center gap-1.5 px-2 py-1.5 flex-1 min-w-0 rounded-[var(--radius-md)]",
-            "bg-daintree-bg border border-border-strong",
+            "bg-surface-canvas border border-border-strong",
             "focus-within:border-daintree-accent/40 focus-within:ring-1 focus-within:ring-daintree-accent/20"
           )}
         >
@@ -367,14 +365,14 @@ export function KeyboardShortcutsTab() {
             onChange={(e) => setSearchQuery(e.target.value)}
             onKeyDown={handleSearchKeyDown}
             aria-label="Search shortcuts"
-            className="flex-1 min-w-0 text-xs bg-transparent text-daintree-text placeholder:text-text-placeholder focus:outline-hidden"
+            className="flex-1 min-w-0 text-xs bg-transparent text-text-primary placeholder:text-text-placeholder focus:outline-hidden"
           />
           {searchQuery && (
             <button
               type="button"
               onClick={handleClearSearch}
               aria-label="Clear search"
-              className="flex items-center justify-center w-5 h-5 rounded shrink-0 text-daintree-text/40 hover:text-daintree-text"
+              className="flex items-center justify-center w-5 h-5 rounded shrink-0 text-daintree-text/40 hover:text-text-primary"
             >
               <X className="w-3 h-3" />
             </button>
@@ -385,12 +383,12 @@ export function KeyboardShortcutsTab() {
           onClick={handleOpenResetDialog}
           disabled={isResetting}
           className={cn(
-            "flex items-center gap-1.5 px-3 py-2 text-sm border border-daintree-border rounded transition-colors",
+            "flex items-center gap-1.5 px-3 py-2 text-sm border border-border-default rounded transition-colors",
             isResetting
               ? "opacity-50 cursor-not-allowed text-daintree-text/40"
               : hasOverrides
-                ? "text-daintree-text/60 hover:text-daintree-text hover:border-daintree-accent"
-                : "text-daintree-text/40 hover:text-daintree-text/60 hover:border-daintree-border"
+                ? "text-daintree-text/60 hover:text-text-primary hover:border-accent-primary"
+                : "text-daintree-text/40 hover:text-daintree-text/60 hover:border-border-default"
           )}
         >
           <RotateCcw className="w-3.5 h-3.5" />
@@ -450,19 +448,19 @@ export function KeyboardShortcutsTab() {
           </h4>
           <div className="space-y-0">
             <div className="flex items-center justify-between gap-4 py-2 border-b border-daintree-border/50">
-              <span className="text-sm text-daintree-text shrink-0">Move selection</span>
+              <span className="text-sm text-text-primary shrink-0">Move selection</span>
               <span className="text-xs text-daintree-text/60 text-right">
                 Arrow keys or j / k; PageUp / PageDown and Home / End jump further
               </span>
             </div>
             <div className="flex items-center justify-between gap-4 py-2 border-b border-daintree-border/50">
-              <span className="text-sm text-daintree-text shrink-0">Open worktree</span>
+              <span className="text-sm text-text-primary shrink-0">Open worktree</span>
               <span className="text-xs text-daintree-text/60 text-right">
                 Space or Enter; Enter or ArrowRight moves into the row's actions
               </span>
             </div>
             <div className="flex items-center justify-between gap-4 py-2 border-b border-daintree-border/50">
-              <span className="text-sm text-daintree-text shrink-0">Reorder worktree</span>
+              <span className="text-sm text-text-primary shrink-0">Reorder worktree</span>
               <span className="text-xs text-daintree-text/60 text-right">Alt+Up / Alt+Down</span>
             </div>
           </div>
@@ -480,20 +478,20 @@ export function KeyboardShortcutsTab() {
           </h4>
           <div className="space-y-0">
             <div className="flex items-center justify-between gap-4 py-2 border-b border-daintree-border/50">
-              <span className="text-sm text-daintree-text shrink-0">Reorder panel</span>
+              <span className="text-sm text-text-primary shrink-0">Reorder panel</span>
               <span className="text-xs text-daintree-text/60 text-right">
                 Focus the panel header, then Space to pick up, arrows to move, Space to drop, Esc to
                 cancel
               </span>
             </div>
             <div className="flex items-center justify-between gap-4 py-2 border-b border-daintree-border/50">
-              <span className="text-sm text-daintree-text shrink-0">Reorder tab</span>
+              <span className="text-sm text-text-primary shrink-0">Reorder tab</span>
               <span className="text-xs text-daintree-text/60 text-right">
                 Focus the active tab, then Space to pick up, arrows to move, Space to drop
               </span>
             </div>
             <div className="flex items-center justify-between gap-4 py-2 border-b border-daintree-border/50">
-              <span className="text-sm text-daintree-text shrink-0">Reorder worktree</span>
+              <span className="text-sm text-text-primary shrink-0">Reorder worktree</span>
               <span className="text-xs text-daintree-text/60 text-right">
                 {formatShortcutForTooltip("Alt+Up")} / {formatShortcutForTooltip("Alt+Down")} in the
                 sidebar

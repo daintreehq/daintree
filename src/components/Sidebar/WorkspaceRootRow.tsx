@@ -88,7 +88,7 @@ export function WorkspaceRootRow({
             <div className="flex items-center gap-2 min-w-0">
               <KindIcon className="w-4 h-4 shrink-0 text-daintree-text/60" aria-hidden="true" />
               <TruncatedTooltip content={workspace.name}>
-                <span className="truncate min-w-0 text-sm leading-[inherit] font-medium text-daintree-text">
+                <span className="truncate min-w-0 text-sm leading-[inherit] font-medium text-text-primary">
                   {workspace.name}
                 </span>
               </TruncatedTooltip>
@@ -108,7 +108,7 @@ export function WorkspaceRootRow({
                           source: "user",
                         });
                       }}
-                      className="p-1 text-daintree-text/40 hover:text-daintree-text hover:bg-tint/[0.06] rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+                      className="p-1 text-daintree-text/40 hover:text-text-primary hover:bg-tint/[0.06] rounded transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
                       aria-label="Browse files"
                     >
                       <FolderTree className="w-3.5 h-3.5" aria-hidden="true" />

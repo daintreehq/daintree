@@ -176,7 +176,7 @@ export function FleetCountChip({
           <FleetWorktreeDots scope={scope} />
           <AnimatedLabel
             label={String(armedCount)}
-            textClassName="font-semibold tabular-nums text-daintree-text"
+            textClassName="font-semibold tabular-nums text-text-primary"
           />
           <span className="text-daintree-text/70">
             in fleet
@@ -219,7 +219,7 @@ export function FleetCountChip({
                         type="button"
                         onClick={() => focusArmedPane(id)}
                         aria-label={`Focus ${title}`}
-                        className="flex-1 truncate px-2 py-1 text-left text-xs leading-[inherit] text-daintree-text"
+                        className="flex-1 truncate px-2 py-1 text-left text-xs leading-[inherit] text-text-primary"
                       >
                         {title}
                       </button>
@@ -236,7 +236,7 @@ export function FleetCountChip({
                         type="button"
                         onClick={() => disarmId(id)}
                         aria-label={`Disarm ${title}`}
-                        className="inline-flex shrink-0 items-center rounded p-0.5 mr-1 text-daintree-text/50 transition-colors hover:bg-tint/[0.08] hover:text-daintree-text"
+                        className="inline-flex shrink-0 items-center rounded p-0.5 mr-1 text-daintree-text/50 transition-colors hover:bg-tint/[0.08] hover:text-text-primary"
                       >
                         <X className="h-3.5 w-3.5" />
                       </button>
@@ -251,9 +251,9 @@ export function FleetCountChip({
               data-testid="fleet-armed-list-add-panes"
               className={cn(
                 "mt-1 flex items-center gap-2 rounded px-2 py-1.5 text-xs leading-[inherit] text-daintree-text/80",
-                "hover:bg-tint/[0.08] hover:text-daintree-text",
+                "hover:bg-tint/[0.08] hover:text-text-primary",
                 "border-t border-daintree-border/50 pt-2",
-                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
               )}
             >
               <Plus className="h-3.5 w-3.5" aria-hidden="true" />
@@ -270,8 +270,8 @@ export function FleetCountChip({
                 data-testid="fleet-picker-back"
                 className={cn(
                   "inline-flex items-center gap-1 rounded px-1.5 py-1 text-xs leading-[inherit] text-daintree-text/70",
-                  "hover:bg-tint/[0.08] hover:text-daintree-text",
-                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+                  "hover:bg-tint/[0.08] hover:text-text-primary",
+                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
                 )}
               >
                 <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" />
@@ -294,8 +294,8 @@ export function FleetCountChip({
                   onClick={() => setPopoverMode("list")}
                   className={cn(
                     "rounded px-2 py-1 text-2xs text-daintree-text/70",
-                    "hover:bg-tint/[0.08] hover:text-daintree-text",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+                    "hover:bg-tint/[0.08] hover:text-text-primary",
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
                   )}
                 >
                   Cancel
@@ -309,7 +309,7 @@ export function FleetCountChip({
                     "rounded border border-category-amber-border bg-category-amber-subtle px-2 py-1 text-2xs text-category-amber-text transition",
                     "hover:brightness-110",
                     "disabled:cursor-not-allowed disabled:opacity-40 disabled:pointer-events-none",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
                   )}
                 >
                   {picker.confirmedIds.length === 0 ? "Add" : `Add ${picker.confirmedIds.length}`}

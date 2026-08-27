@@ -198,7 +198,7 @@ function quietPhrase(count: number): string {
 }
 
 /** The resting tone. Selected is the shared row class's to own, off the attribute. */
-const ROW_TONE = "text-daintree-text/70 hover:bg-overlay-subtle hover:text-daintree-text";
+const ROW_TONE = "text-daintree-text/70 hover:bg-overlay-subtle hover:text-text-primary";
 
 /**
  * 16px, down from the switcher's 32px.
@@ -238,7 +238,7 @@ function WorkspaceTile({ group }: { group: PilotProjectGroup }) {
       style={{
         background: group.color
           ? `var(--project-tile-wash, linear-gradient(to bottom, rgba(0,0,0,0.1), rgba(0,0,0,0.2))), ${getProjectGradient(group.color)}`
-          : "var(--project-tile-wash, linear-gradient(to bottom, rgba(0,0,0,0.1), rgba(0,0,0,0.2))), var(--color-daintree-sidebar)",
+          : "var(--project-tile-wash, linear-gradient(to bottom, rgba(0,0,0,0.1), rgba(0,0,0,0.2))), var(--color-surface-sidebar)",
       }}
     >
       <span className="leading-none select-none filter drop-shadow-sm">{group.emoji}</span>
@@ -514,7 +514,7 @@ function RunRow({
       <span
         className={cn(
           "min-w-0 flex-1 truncate text-sm leading-tight",
-          isSelected ? "text-daintree-text" : "text-daintree-text/85"
+          isSelected ? "text-text-primary" : "text-daintree-text/85"
         )}
       >
         {row.title}
@@ -607,8 +607,8 @@ function FooterHint({
       data-testid={testId}
       className={cn(
         "flex shrink-0 items-center rounded-[var(--radius-sm)] px-1 py-0.5 transition-colors",
-        "hover:bg-overlay-subtle hover:text-daintree-text",
-        "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-daintree-accent"
+        "hover:bg-overlay-subtle hover:text-text-primary",
+        "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
       )}
     >
       <kbd className={KBD_CLASS}>{keys}</kbd>
@@ -697,8 +697,8 @@ function PilotFooter({
             // what it is about.
             className={cn(
               "truncate rounded-[var(--radius-sm)] px-1.5 py-0.5 text-daintree-text/70 transition-colors",
-              "hover:bg-overlay-subtle hover:text-daintree-text",
-              "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-daintree-accent"
+              "hover:bg-overlay-subtle hover:text-text-primary",
+              "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
             )}
           >
             {summary}
@@ -1741,8 +1741,8 @@ export function PilotView() {
                   className={cn(
                     "flex shrink-0 items-center gap-0.5 rounded-[var(--radius-sm)] py-0.5 pr-1.5 pl-0.5",
                     "text-text-secondary transition-colors",
-                    "hover:bg-overlay-subtle hover:text-daintree-text",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-daintree-accent"
+                    "hover:bg-overlay-subtle hover:text-text-primary",
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
                   )}
                 >
                   <ChevronLeft className="h-3 w-3" aria-hidden="true" />
@@ -1936,8 +1936,8 @@ export function PilotView() {
                   }}
                   className={cn(
                     "rounded-[var(--radius-sm)] px-2 py-1 text-xs text-daintree-text/70 transition-colors",
-                    "hover:bg-overlay-subtle hover:text-daintree-text",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-daintree-accent"
+                    "hover:bg-overlay-subtle hover:text-text-primary",
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
                   )}
                 >
                   Clear filter

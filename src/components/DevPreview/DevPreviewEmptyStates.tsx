@@ -103,7 +103,7 @@ export function DevPreviewEmptyStates({
 
   if (status === "error" && error) {
     return (
-      <div className="absolute inset-0 flex flex-col items-center justify-center bg-daintree-bg text-daintree-text p-6">
+      <div className="absolute inset-0 flex flex-col items-center justify-center bg-surface-canvas text-text-primary p-6">
         <AlertTriangle className="w-6 h-6 text-status-warning mb-3" />
         <h3 className="text-sm font-medium text-daintree-text/70 mb-1">
           {error.type === "port-conflict"
@@ -155,7 +155,7 @@ export function DevPreviewEmptyStates({
 
   if (!currentUrl || status !== "running") {
     return (
-      <div className="absolute inset-0 flex flex-col items-center justify-center bg-daintree-bg text-daintree-text p-6">
+      <div className="absolute inset-0 flex flex-col items-center justify-center bg-surface-canvas text-text-primary p-6">
         {isUnconfigured ? (
           <div className="flex flex-col items-center text-center max-w-md">
             {primaryCandidate ? (
@@ -335,7 +335,7 @@ export function DevPreviewEmptyStates({
 
   if (!hasBeenVisible) {
     return (
-      <div className="absolute inset-0 flex flex-col items-center justify-center bg-daintree-bg text-daintree-text">
+      <div className="absolute inset-0 flex flex-col items-center justify-center bg-surface-canvas text-text-primary">
         <p className="text-xs text-daintree-text/50">
           Preview will load when this panel is first viewed
         </p>
@@ -345,7 +345,7 @@ export function DevPreviewEmptyStates({
 
   if (isEvicted) {
     return (
-      <div className="absolute inset-0 flex flex-col items-center justify-center bg-daintree-bg text-daintree-text p-6">
+      <div className="absolute inset-0 flex flex-col items-center justify-center bg-surface-canvas text-text-primary p-6">
         <p className="text-xs text-daintree-text/50">
           Preview paused to save memory — will reload when opened
         </p>

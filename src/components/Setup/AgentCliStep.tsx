@@ -251,7 +251,7 @@ export function AgentCliStep({
                     ? "bg-overlay-soft border-border-strong"
                     : isError
                       ? "bg-status-error/5 border-status-error/20"
-                      : "bg-daintree-bg/30 border-daintree-border"
+                      : "bg-daintree-bg/30 border-border-default"
                 }`}
               >
                 {/* The box only aligns the row; the mark carries its own colour and
@@ -262,7 +262,7 @@ export function AgentCliStep({
                   </BrandMark>
                 </div>
                 <div className="flex-1 min-w-0">
-                  <div className="text-sm font-medium text-daintree-text">{config.name}</div>
+                  <div className="text-sm font-medium text-text-primary">{config.name}</div>
                   {description && (
                     <div className="text-2xs text-text-secondary truncate">{description}</div>
                   )}
@@ -273,7 +273,7 @@ export function AgentCliStep({
                       <TooltipTrigger asChild>
                         <button
                           type="button"
-                          className="text-daintree-text/30 hover:text-daintree-text transition-colors p-0.5 cursor-pointer"
+                          className="text-daintree-text/30 hover:text-text-primary transition-colors p-0.5 cursor-pointer"
                           onClick={() => systemClient.openExternal(config.install!.docsUrl!)}
                           aria-label="Open documentation"
                         >
@@ -312,7 +312,7 @@ export function AgentCliStep({
                     <button
                       type="button"
                       onClick={() => handleInstall(agentId)}
-                      className="inline-flex items-center gap-1 px-2 py-1 rounded text-2xs font-medium text-daintree-text hover:bg-overlay-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-daintree-accent"
+                      className="inline-flex items-center gap-1 px-2 py-1 rounded text-2xs font-medium text-text-primary hover:bg-overlay-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary"
                     >
                       <Download className="w-3 h-3" />
                       Install
@@ -331,7 +331,7 @@ export function AgentCliStep({
                       disabled={isInstalling || isBatchRunning}
                       onClick={() => handleMethodChange(agentId, idx)}
                       data-selected={idx === currentMethodIdx || undefined}
-                      className="px-1.5 py-0.5 rounded text-3xs text-daintree-text/50 transition-colors hover:text-daintree-text/80 data-[selected]:bg-tint/[0.12] data-[selected]:text-daintree-text disabled:opacity-50 disabled:pointer-events-none"
+                      className="px-1.5 py-0.5 rounded text-3xs text-daintree-text/50 transition-colors hover:text-daintree-text/80 data-[selected]:bg-tint/[0.12] data-[selected]:text-text-primary disabled:opacity-50 disabled:pointer-events-none"
                     >
                       {block.label ?? `Method ${idx + 1}`}
                     </button>
@@ -371,7 +371,7 @@ export function AgentCliStep({
                       <pre
                         id={`error-log-${agentId}`}
                         hidden={!isErrorExpanded}
-                        className="text-3xs text-status-error/80 bg-daintree-bg border border-daintree-border rounded-[var(--radius-sm)] p-2 max-h-[120px] overflow-y-auto whitespace-pre-wrap font-mono"
+                        className="text-3xs text-status-error/80 bg-surface-canvas border border-border-default rounded-[var(--radius-sm)] p-2 max-h-[120px] overflow-y-auto whitespace-pre-wrap font-mono"
                       >
                         {errorLog}
                       </pre>
@@ -401,7 +401,7 @@ export function AgentCliStep({
           type="button"
           disabled={isBatchRunning}
           onClick={handleInstallAll}
-          className="flex items-center justify-center gap-2 w-full px-3 py-2 rounded-[var(--radius-md)] border border-border-strong bg-overlay-subtle text-daintree-text text-sm font-medium hover:bg-overlay-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-daintree-accent disabled:opacity-50 disabled:pointer-events-none"
+          className="flex items-center justify-center gap-2 w-full px-3 py-2 rounded-[var(--radius-md)] border border-border-strong bg-overlay-subtle text-text-primary text-sm font-medium hover:bg-overlay-medium transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary disabled:opacity-50 disabled:pointer-events-none"
         >
           {isBatchRunning ? (
             <>
@@ -418,7 +418,7 @@ export function AgentCliStep({
       )}
 
       {!isFirstRun && agentsWithDangerousToggle.length > 0 && (
-        <div className="border-t border-daintree-border pt-3 space-y-2">
+        <div className="border-t border-border-default pt-3 space-y-2">
           <div className="text-xs font-medium text-daintree-text/60">Skip permissions</div>
           <div className="space-y-1.5">
             {agentsWithDangerousToggle.map((agentId) => {
@@ -431,7 +431,7 @@ export function AgentCliStep({
               return (
                 <label
                   key={agentId}
-                  className="flex items-center gap-3 px-3 py-1.5 rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg/30 cursor-pointer hover:bg-daintree-bg/60 transition-colors"
+                  className="flex items-center gap-3 px-3 py-1.5 rounded-[var(--radius-md)] border border-border-default bg-daintree-bg/30 cursor-pointer hover:bg-daintree-bg/60 transition-colors"
                 >
                   <input
                     type="checkbox"

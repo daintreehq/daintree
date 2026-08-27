@@ -287,8 +287,8 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
                   className={cn(
                     "absolute -top-1.5 -right-1.5 z-10 flex items-center justify-center min-w-[14px] h-[14px] px-0.5 rounded-full text-3xs font-bold tabular-nums shadow-sm",
                     waitingCount > 0
-                      ? "bg-state-waiting text-daintree-bg"
-                      : "bg-daintree-text/20 text-daintree-text"
+                      ? "bg-state-waiting text-surface-canvas"
+                      : "bg-daintree-text/20 text-text-primary"
                   )}
                 >
                   <AnimatedLabel label={displayCount > 9 ? "9+" : String(displayCount)} />
@@ -443,7 +443,7 @@ function BackgroundSingleItem({
         <div className="flex items-center gap-1.5 min-w-0">
           <span
             className={cn(
-              "truncate font-medium text-daintree-text/80 group-hover:text-daintree-text transition-colors",
+              "truncate font-medium text-daintree-text/80 group-hover:text-text-primary transition-colors",
               compact ? "text-2xs" : "text-xs"
             )}
           >
@@ -593,7 +593,7 @@ function BackgroundGroupItem({
         </div>
 
         <div className="flex-1 min-w-0">
-          <div className="text-xs font-medium text-daintree-text/70 group-hover:text-daintree-text truncate transition-colors">
+          <div className="text-xs font-medium text-daintree-text/70 group-hover:text-text-primary truncate transition-colors">
             {groupName}
             {groupWaiting > 0 && (
               <span className="ml-1.5 text-3xs text-state-waiting font-normal tabular-nums">
@@ -605,7 +605,7 @@ function BackgroundGroupItem({
 
         <button
           type="button"
-          className="text-3xs text-text-secondary shrink-0 hover:text-daintree-text transition-colors"
+          className="text-3xs text-text-secondary shrink-0 hover:text-text-primary transition-colors"
           onClick={() => onRestoreGroup(groupRestoreId, groupMetadata)}
         >
           Restore all

@@ -144,9 +144,11 @@ describe("WorktreeCard row affordances polish (issue #8099)", () => {
   });
 
   it("resource action buttons use outline (not ring-2) for forced-colors survival", () => {
-    expect(detailsSource).not.toMatch(/focus-visible:ring-2\s+focus-visible:ring-daintree-accent/);
     expect(detailsSource).not.toMatch(
-      /focus-visible:outline-hidden\s+focus-visible:ring-2\s+focus-visible:ring-daintree-accent/
+      /focus-visible:ring-2\s+focus-visible:ring-(?:daintree-accent|accent-primary)(?![\w-])/
+    );
+    expect(detailsSource).not.toMatch(
+      /focus-visible:outline-hidden\s+focus-visible:ring-2\s+focus-visible:ring-(?:daintree-accent|accent-primary)(?![\w-])/
     );
   });
 
@@ -170,7 +172,7 @@ describe("WorktreeCard row affordances polish (issue #8099)", () => {
 
   it("environment popover trigger uses outline (not ring-1) for forced-colors survival", () => {
     expect(envPopoverSource).not.toMatch(
-      /focus-visible:ring-1\s+focus-visible:ring-daintree-accent/
+      /focus-visible:ring-1\s+focus-visible:ring-(?:daintree-accent|accent-primary)(?![\w-])/
     );
     expect(envPopoverSource).toContain("focus-visible:outline-2");
   });

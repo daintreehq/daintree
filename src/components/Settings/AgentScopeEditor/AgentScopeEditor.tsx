@@ -39,11 +39,11 @@ export function AgentScopeEditor(props: AgentScopeEditorProps) {
     <Card id="agents-presets" className="space-y-4">
       {/* Header: title + Add button */}
       <div
-        className={`pb-3${scope.allPresets.length > 0 ? " border-b border-daintree-border" : ""}`}
+        className={`pb-3${scope.allPresets.length > 0 ? " border-b border-border-default" : ""}`}
       >
         <div className="flex items-center justify-between">
           <div>
-            <label className="text-sm font-medium text-daintree-text">{title}</label>
+            <label className="text-sm font-medium text-text-primary">{title}</label>
             <p className="text-xs text-text-secondary select-text">
               Pick a scope — Default applies everywhere; presets override it.
             </p>

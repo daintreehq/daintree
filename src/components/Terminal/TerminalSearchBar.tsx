@@ -320,7 +320,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
       className={cn(
         "absolute top-2 right-2 z-20",
         "flex items-center gap-1 px-2 py-1",
-        "bg-daintree-sidebar border border-daintree-border rounded-[var(--radius-md)] shadow-[var(--theme-shadow-floating)]",
+        "bg-surface-sidebar border border-border-default rounded-[var(--radius-md)] shadow-[var(--theme-shadow-floating)]",
         className
       )}
       onClick={(e) => e.stopPropagation()}
@@ -339,12 +339,12 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
             data-terminal-search-input
             className={cn(
               "w-44 px-2 py-1 text-sm rounded transition-colors",
-              "bg-daintree-bg border",
+              "bg-surface-canvas border",
               "focus:outline-hidden focus:ring-1",
-              "text-daintree-text placeholder:text-text-placeholder",
+              "text-text-primary placeholder:text-text-placeholder",
               searchStatus === "invalidRegex"
                 ? "border-status-error/50 focus:border-status-error focus:ring-status-error/30"
-                : "border-daintree-border focus:ring-status-info"
+                : "border-border-default focus:ring-status-info"
             )}
           />
         </TooltipTrigger>
@@ -360,8 +360,8 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
             className={cn(
               "px-1.5 py-1 text-xs rounded transition-colors",
               caseSensitive
-                ? "bg-status-info text-daintree-bg"
-                : "text-daintree-text/60 hover:text-daintree-text hover:bg-overlay-medium"
+                ? "bg-status-info text-surface-canvas"
+                : "text-daintree-text/60 hover:text-text-primary hover:bg-overlay-medium"
             )}
             aria-label="Toggle case sensitivity"
             aria-pressed={caseSensitive}
@@ -379,8 +379,8 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
             className={cn(
               "px-1.5 py-1 text-xs font-mono rounded transition-colors",
               regexEnabled
-                ? "bg-status-info text-daintree-bg"
-                : "text-daintree-text/60 hover:text-daintree-text hover:bg-overlay-medium"
+                ? "bg-status-info text-surface-canvas"
+                : "text-daintree-text/60 hover:text-text-primary hover:bg-overlay-medium"
             )}
             aria-label="Toggle regex mode"
             aria-pressed={regexEnabled}
@@ -398,8 +398,8 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
             className={cn(
               "px-1.5 py-1 text-xs rounded transition-colors",
               wholeWord
-                ? "bg-status-info text-daintree-bg"
-                : "text-daintree-text/60 hover:text-daintree-text hover:bg-overlay-medium"
+                ? "bg-status-info text-surface-canvas"
+                : "text-daintree-text/60 hover:text-text-primary hover:bg-overlay-medium"
             )}
             aria-label="Toggle whole word"
             aria-pressed={wholeWord}
@@ -452,7 +452,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
               disabled={!searchTerm}
               className={cn(
                 "p-1 rounded transition-colors",
-                "text-daintree-text/60 hover:text-daintree-text hover:bg-overlay-medium",
+                "text-daintree-text/60 hover:text-text-primary hover:bg-overlay-medium",
                 "disabled:opacity-40 disabled:pointer-events-none"
               )}
               aria-label="Previous match"
@@ -472,7 +472,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
               disabled={!searchTerm}
               className={cn(
                 "p-1 rounded transition-colors",
-                "text-daintree-text/60 hover:text-daintree-text hover:bg-overlay-medium",
+                "text-daintree-text/60 hover:text-text-primary hover:bg-overlay-medium",
                 "disabled:opacity-40 disabled:pointer-events-none"
               )}
               aria-label="Next match"
@@ -490,7 +490,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
             onClick={handleClose}
             className={cn(
               "p-1 rounded transition-colors",
-              "text-daintree-text/60 hover:text-daintree-text hover:bg-overlay-medium"
+              "text-daintree-text/60 hover:text-text-primary hover:bg-overlay-medium"
             )}
             aria-label="Close search"
           >

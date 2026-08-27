@@ -156,9 +156,9 @@ export function IssueSelector({
               aria-controls={LIST_ID}
               className={cn(
                 "flex h-full min-w-0 flex-1 items-center justify-between gap-2 px-2.5",
-                "text-sm text-daintree-text transition-colors duration-150 ease-out",
+                "text-sm text-text-primary transition-colors duration-150 ease-out",
                 "hover:bg-surface-hover",
-                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:-outline-offset-2",
+                "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2",
                 "disabled:cursor-not-allowed"
               )}
               disabled={disabled}
@@ -192,8 +192,8 @@ export function IssueSelector({
                   className={cn(
                     "flex h-full w-8 shrink-0 items-center justify-center border-l border-border-subtle",
                     "text-text-secondary transition-colors duration-150 ease-out",
-                    "hover:bg-overlay-hover hover:text-daintree-text",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:-outline-offset-2"
+                    "hover:bg-overlay-hover hover:text-text-primary",
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
                   )}
                 >
                   <X className="h-3.5 w-3.5" aria-hidden="true" />
@@ -269,7 +269,7 @@ export function IssueSelector({
                       setQuery("");
                       inputRef.current?.focus();
                     }}
-                    className="text-xs px-3 py-1.5 text-daintree-text/60 hover:text-daintree-text hover:bg-overlay-soft rounded transition-colors"
+                    className="text-xs px-3 py-1.5 text-daintree-text/60 hover:text-text-primary hover:bg-overlay-soft rounded transition-colors"
                   >
                     Clear search
                   </button>
@@ -302,7 +302,7 @@ export function IssueSelector({
                 </span>
                 {selectedIssue?.number === issue.number && (
                   <>
-                    <Check className="h-4 w-4 shrink-0 text-daintree-text" aria-hidden="true" />
+                    <Check className="h-4 w-4 shrink-0 text-text-primary" aria-hidden="true" />
                     <span className="sr-only">Currently selected</span>
                   </>
                 )}

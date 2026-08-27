@@ -227,7 +227,7 @@ function RecipeRow({
       )}
       {isSelectedValue && (
         <>
-          <Check className="h-4 w-4 shrink-0 text-daintree-text" aria-hidden="true" />
+          <Check className="h-4 w-4 shrink-0 text-text-primary" aria-hidden="true" />
           <span className="sr-only">Currently selected</span>
         </>
       )}

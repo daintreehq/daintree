@@ -10,16 +10,22 @@ const PLUGIN_RENDERER_ROOTS = [path.join(REPO_ROOT, "plugins/builtin/github/rend
 
 // ── Forbidden accent token patterns ────────────────────────────────────
 
+// Both vocabularies stay listed: #12031 renamed every solid call site to the
+// semantic spelling, but the alpha-modified legacy forms it left behind
+// (`ring-daintree-accent/30`, `border-daintree-accent/40`) are still accent.
 const FORBIDDEN_UTILITIES = [
   "bg-daintree-accent",
   "text-daintree-accent",
   "border-daintree-accent",
   "ring-daintree-accent",
   "outline-daintree-accent",
+  "fill-daintree-accent",
   "bg-accent-primary",
   "text-accent-primary",
   "border-accent-primary",
-  "fill-daintree-accent",
+  "ring-accent-primary",
+  "outline-accent-primary",
+  "fill-accent-primary",
   "bg-accent-soft",
 ] as const;
 
@@ -47,10 +53,17 @@ function assertAccentMatch(m: { 0: string; 1?: string; index?: number } | undefi
 // focus-visible:ring-daintree-accent/50, focus-within:outline-daintree-accent.
 // bg-* and text-* accent tokens with focus variants are still flagged (decorative, not structural).
 // group-focus/peer-focus are parent/sibling state selectors, not structural focus rings.
+const FOCUS_RING_UTILITIES: readonly string[] = [
+  "border-daintree-accent",
+  "ring-daintree-accent",
+  "outline-daintree-accent",
+  "border-accent-primary",
+  "ring-accent-primary",
+  "outline-accent-primary",
+];
+
 function isFocusRing(context: string, matchIndex: number, utility: string): boolean {
-  if (
-    !["border-daintree-accent", "ring-daintree-accent", "outline-daintree-accent"].includes(utility)
-  ) {
+  if (!FOCUS_RING_UTILITIES.includes(utility)) {
     return false;
   }
 
@@ -228,7 +241,11 @@ describe("accent guard", () => {
       "bg-accent-primary",
       "text-accent-primary",
       "border-accent-primary",
+      "ring-accent-primary",
+      "ring-accent-primary/50",
+      "outline-accent-primary",
       "fill-daintree-accent",
+      "fill-accent-primary",
       "bg-accent-soft",
       "bg-accent-soft/20",
       // With variants — utility should still be matched
@@ -240,6 +257,7 @@ describe("accent guard", () => {
     const negatives = [
       // Native CSS accent-color property — not a Tailwind color utility
       "accent-daintree-accent",
+      "accent-accent-primary",
       // -foreground is a distinct token
       "text-accent-primary-foreground",
       "bg-accent-primary-foreground",
@@ -275,12 +293,6 @@ describe("accent guard", () => {
   });
 
   describe("focus ring auto-exclusion", () => {
-    const FOCUS_RING_UTILITIES = [
-      "border-daintree-accent",
-      "ring-daintree-accent",
-      "outline-daintree-accent",
-    ];
-
     function isExcluded(input: string): boolean {
       const matches = Array.from(input.matchAll(FORBIDDEN_PATTERN));
       expect(matches.length, `no match found for: ${input}`).toBeGreaterThan(0);
@@ -316,6 +328,10 @@ describe("accent guard", () => {
       "focus:outline-daintree-accent",
       // stacked variants
       "motion-safe:focus-visible:ring-daintree-accent/20",
+      // semantic spelling (#12031) — same structural exclusion
+      "focus-within:border-accent-primary",
+      "focus-visible:ring-accent-primary/20",
+      "focus-visible:outline-accent-primary",
     ];
 
     const stillFlagged = [
@@ -339,6 +355,10 @@ describe("accent guard", () => {
       "border-daintree-accent",
       "ring-daintree-accent",
       "outline-daintree-accent",
+      // semantic spelling (#12031) — same rules apply
+      "hover:border-accent-primary",
+      "group-focus:ring-accent-primary",
+      "outline-accent-primary",
     ];
 
     for (const input of excluded) {

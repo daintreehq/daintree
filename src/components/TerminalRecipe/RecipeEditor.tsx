@@ -289,7 +289,7 @@ export function RecipeEditor({
                 <div
                   className={cn(
                     FIELD_SURFACE,
-                    "flex h-8 items-center px-2.5 text-sm text-daintree-text opacity-75"
+                    "flex h-8 items-center px-2.5 text-sm text-text-primary opacity-75"
                   )}
                 >
                   {isInRepoRecipeId(recipe) || recipe.projectId !== undefined
@@ -325,7 +325,7 @@ export function RecipeEditor({
                 checked={showInEmptyState}
                 onChange={(e) => setShowInEmptyState(e.target.checked)}
                 aria-describedby="show-in-empty-state-help"
-                className="w-4 h-4 rounded border-daintree-border bg-daintree-bg checked:bg-daintree-accent checked:border-daintree-accent focus:ring-2 focus:ring-daintree-accent/30"
+                className="w-4 h-4 rounded border-border-default bg-surface-canvas checked:bg-accent-primary checked:border-accent-primary focus:ring-2 focus:ring-daintree-accent/30"
               />
             </FormRow>
 
@@ -370,13 +370,13 @@ export function RecipeEditor({
                 {terminals.map((terminal, index) => (
                   <div
                     key={index}
-                    className="bg-daintree-bg border border-daintree-border rounded-[var(--radius-md)] p-3"
+                    className="bg-surface-canvas border border-border-default rounded-[var(--radius-md)] p-3"
                   >
                     <div className="flex items-start gap-3">
                       <div className="flex-1">
                         <label
                           htmlFor={`terminal-type-${index}`}
-                          className="block text-xs font-medium text-daintree-text mb-1"
+                          className="block text-xs font-medium text-text-primary mb-1"
                         >
                           Type
                         </label>
@@ -410,7 +410,7 @@ export function RecipeEditor({
                               return updated;
                             });
                           }}
-                          className="w-full px-2 pr-8 py-1.5 bg-daintree-sidebar border border-daintree-border rounded text-sm text-daintree-text"
+                          className="w-full px-2 pr-8 py-1.5 bg-surface-sidebar border border-border-default rounded text-sm text-text-primary"
                         >
                           {TERMINAL_TYPES.map((type) => (
                             <option key={type} value={type}>
@@ -423,7 +423,7 @@ export function RecipeEditor({
                       <div className="flex-1">
                         <label
                           htmlFor={`terminal-title-${index}`}
-                          className="block text-xs font-medium text-daintree-text mb-1"
+                          className="block text-xs font-medium text-text-primary mb-1"
                         >
                           Title (optional)
                         </label>
@@ -433,7 +433,7 @@ export function RecipeEditor({
                           value={terminal.title || ""}
                           onChange={(e) => handleTerminalChange(index, "title", e.target.value)}
                           placeholder="Default"
-                          className="w-full px-2 py-1.5 bg-daintree-sidebar border border-daintree-border rounded text-sm text-daintree-text"
+                          className="w-full px-2 py-1.5 bg-surface-sidebar border border-border-default rounded text-sm text-text-primary"
                         />
                       </div>
 
@@ -454,7 +454,7 @@ export function RecipeEditor({
                         <div className="mt-2">
                           <label
                             htmlFor={`terminal-command-${index}`}
-                            className="block text-xs font-medium text-daintree-text mb-1"
+                            className="block text-xs font-medium text-text-primary mb-1"
                           >
                             Command (optional)
                           </label>
@@ -464,13 +464,13 @@ export function RecipeEditor({
                             value={terminal.command || ""}
                             onChange={(e) => handleTerminalChange(index, "command", e.target.value)}
                             placeholder="e.g., npm run dev"
-                            className="w-full px-2 py-1.5 bg-daintree-sidebar border border-daintree-border rounded text-sm text-daintree-text"
+                            className="w-full px-2 py-1.5 bg-surface-sidebar border border-border-default rounded text-sm text-text-primary"
                           />
                         </div>
                         <div className="mt-2">
                           <label
                             htmlFor={`terminal-exit-behavior-${index}`}
-                            className="block text-xs font-medium text-daintree-text mb-1"
+                            className="block text-xs font-medium text-text-primary mb-1"
                           >
                             After Exit
                           </label>
@@ -485,7 +485,7 @@ export function RecipeEditor({
                               )
                             }
                             aria-describedby={`terminal-exit-behavior-help-${index}`}
-                            className="w-full px-2 pr-8 py-1.5 bg-daintree-sidebar border border-daintree-border rounded text-sm text-daintree-text"
+                            className="w-full px-2 pr-8 py-1.5 bg-surface-sidebar border border-border-default rounded text-sm text-text-primary"
                           >
                             <option value="trash">Send to Trash (default)</option>
                             <option value="keep">Keep for Review</option>
@@ -506,7 +506,7 @@ export function RecipeEditor({
                         <div className="mt-2">
                           <label
                             htmlFor={`terminal-args-${index}`}
-                            className="block text-xs font-medium text-daintree-text mb-1"
+                            className="block text-xs font-medium text-text-primary mb-1"
                           >
                             Arguments (optional)
                           </label>
@@ -517,7 +517,7 @@ export function RecipeEditor({
                             onChange={(e) => handleTerminalChange(index, "args", e.target.value)}
                             placeholder="e.g., --model claude-opus-4-5"
                             aria-describedby={`terminal-args-help-${index}`}
-                            className="w-full px-2 py-1.5 bg-daintree-sidebar border border-daintree-border rounded text-sm text-daintree-text"
+                            className="w-full px-2 py-1.5 bg-surface-sidebar border border-border-default rounded text-sm text-text-primary"
                           />
                           <p
                             id={`terminal-args-help-${index}`}
@@ -529,7 +529,7 @@ export function RecipeEditor({
                         <div className="mt-2">
                           <label
                             htmlFor={`terminal-initial-prompt-${index}`}
-                            className="block text-xs font-medium text-daintree-text mb-1"
+                            className="block text-xs font-medium text-text-primary mb-1"
                           >
                             Initial Prompt (optional)
                           </label>
@@ -542,7 +542,7 @@ export function RecipeEditor({
                             placeholder="e.g., Review the latest changes and suggest improvements"
                             rows={2}
                             aria-describedby={`terminal-initial-prompt-help-${index}`}
-                            className="w-full px-2 py-1.5 bg-daintree-sidebar border border-daintree-border rounded text-sm text-daintree-text resize-y min-h-[60px]"
+                            className="w-full px-2 py-1.5 bg-surface-sidebar border border-border-default rounded text-sm text-text-primary resize-y min-h-[60px]"
                           />
                           <RecipeVariablePreview
                             initialPrompt={terminal.initialPrompt || ""}
@@ -563,7 +563,7 @@ export function RecipeEditor({
                         <div className="mt-2">
                           <label
                             htmlFor={`terminal-agent-exit-behavior-${index}`}
-                            className="block text-xs font-medium text-daintree-text mb-1"
+                            className="block text-xs font-medium text-text-primary mb-1"
                           >
                             After Exit
                           </label>
@@ -578,7 +578,7 @@ export function RecipeEditor({
                               )
                             }
                             aria-describedby={`terminal-agent-exit-behavior-help-${index}`}
-                            className="w-full px-2 pr-8 py-1.5 bg-daintree-sidebar border border-daintree-border rounded text-sm text-daintree-text"
+                            className="w-full px-2 pr-8 py-1.5 bg-surface-sidebar border border-border-default rounded text-sm text-text-primary"
                           >
                             <option value="keep">Keep for Review (default)</option>
                             <option value="trash">Send to Trash</option>
@@ -599,7 +599,7 @@ export function RecipeEditor({
                         <div className="mt-2">
                           <label
                             htmlFor={`terminal-dev-command-${index}`}
-                            className="block text-xs font-medium text-daintree-text mb-1"
+                            className="block text-xs font-medium text-text-primary mb-1"
                           >
                             Dev Command (optional)
                           </label>
@@ -612,7 +612,7 @@ export function RecipeEditor({
                             }
                             placeholder="e.g., npm run dev"
                             aria-describedby={`terminal-dev-command-help-${index}`}
-                            className="w-full px-2 py-1.5 bg-daintree-sidebar border border-daintree-border rounded text-sm text-daintree-text"
+                            className="w-full px-2 py-1.5 bg-surface-sidebar border border-border-default rounded text-sm text-text-primary"
                           />
                           <p
                             id={`terminal-dev-command-help-${index}`}
@@ -624,7 +624,7 @@ export function RecipeEditor({
                         <div className="mt-2">
                           <label
                             htmlFor={`terminal-dev-exit-behavior-${index}`}
-                            className="block text-xs font-medium text-daintree-text mb-1"
+                            className="block text-xs font-medium text-text-primary mb-1"
                           >
                             After Exit
                           </label>
@@ -639,7 +639,7 @@ export function RecipeEditor({
                               )
                             }
                             aria-describedby={`terminal-dev-exit-behavior-help-${index}`}
-                            className="w-full px-2 pr-8 py-1.5 bg-daintree-sidebar border border-daintree-border rounded text-sm text-daintree-text"
+                            className="w-full px-2 pr-8 py-1.5 bg-surface-sidebar border border-border-default rounded text-sm text-text-primary"
                           >
                             <option value="trash">Send to Trash (default)</option>
                             <option value="keep">Keep for Review</option>

@@ -1579,7 +1579,11 @@ export function ReviewHubContent({
   return (
     <>
       <div
-        className={cn("relative flex flex-col flex-1 min-h-0", "bg-daintree-bg", "outline-hidden")}
+        className={cn(
+          "relative flex flex-col flex-1 min-h-0",
+          "bg-surface-canvas",
+          "outline-hidden"
+        )}
         data-testid="review-hub-content"
       >
         {/* Header */}
@@ -1590,7 +1594,7 @@ export function ReviewHubContent({
             {!isDialog && (
               <h2
                 id="review-hub-title"
-                className="text-daintree-text font-semibold text-sm tracking-wide shrink-0"
+                className="text-text-primary font-semibold text-sm tracking-wide shrink-0"
               >
                 Review & Commit
               </h2>
@@ -1630,10 +1634,10 @@ export function ReviewHubContent({
                 onClick={() => handleDiffModeChange("working-tree")}
                 className={cn(
                   "px-2 py-1 transition-colors",
-                  "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent",
+                  "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary",
                   diffMode === "working-tree"
-                    ? "bg-filter-selected-bg-strong text-daintree-text"
-                    : "text-daintree-text/50 hover:text-daintree-text hover:bg-tint/[0.06]"
+                    ? "bg-filter-selected-bg-strong text-text-primary"
+                    : "text-daintree-text/50 hover:text-text-primary hover:bg-tint/[0.06]"
                 )}
                 aria-pressed={diffMode === "working-tree"}
               >
@@ -1644,11 +1648,11 @@ export function ReviewHubContent({
                 disabled={!status?.currentBranch || status.currentBranch === mainBranch}
                 className={cn(
                   "px-2 py-1 transition-colors border-l border-tint/[0.08]",
-                  "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent",
+                  "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary",
                   "disabled:opacity-40 disabled:cursor-not-allowed",
                   diffMode === "base-branch"
-                    ? "bg-filter-selected-bg-strong text-daintree-text"
-                    : "text-daintree-text/50 hover:text-daintree-text hover:bg-tint/[0.06]"
+                    ? "bg-filter-selected-bg-strong text-text-primary"
+                    : "text-daintree-text/50 hover:text-text-primary hover:bg-tint/[0.06]"
                 )}
                 aria-pressed={diffMode === "base-branch"}
               >
@@ -1662,8 +1666,8 @@ export function ReviewHubContent({
                 disabled={loading}
                 className={cn(
                   "p-1.5 rounded transition-colors",
-                  "text-daintree-text/60 hover:text-daintree-text hover:bg-tint/[0.06]",
-                  "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
+                  "text-daintree-text/60 hover:text-text-primary hover:bg-tint/[0.06]",
+                  "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
                 )}
                 aria-label="Refresh"
               >
@@ -1681,8 +1685,8 @@ export function ReviewHubContent({
                 onClick={onClose}
                 className={cn(
                   "p-1.5 rounded transition-colors",
-                  "text-daintree-text/60 hover:text-daintree-text hover:bg-tint/[0.06]",
-                  "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
+                  "text-daintree-text/60 hover:text-text-primary hover:bg-tint/[0.06]",
+                  "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
                 )}
                 aria-label="Close"
                 data-testid="review-hub-close"
@@ -2023,8 +2027,8 @@ export function ReviewHubContent({
                         aria-controls={`review-hub-files-${worktreePath}`}
                         data-testid="review-hub-file-list-toggle"
                         className={cn(
-                          "inline-flex items-center gap-1 text-2xs font-medium text-daintree-text/70 hover:text-daintree-text transition-colors",
-                          "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-accent rounded"
+                          "inline-flex items-center gap-1 text-2xs font-medium text-daintree-text/70 hover:text-text-primary transition-colors",
+                          "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-accent-primary rounded"
                         )}
                       >
                         <ChevronRight
@@ -2225,7 +2229,7 @@ export function ReviewHubContent({
           <span>
             Replays{" "}
             {aheadCount != null ? (
-              <span className="font-medium text-daintree-text">
+              <span className="font-medium text-text-primary">
                 {aheadCount} local commit{aheadCount === 1 ? "" : "s"}
               </span>
             ) : (
@@ -2233,7 +2237,7 @@ export function ReviewHubContent({
             )}{" "}
             on top of{" "}
             {behindCount != null ? (
-              <span className="font-medium text-daintree-text">
+              <span className="font-medium text-text-primary">
                 {behindCount} incoming commit{behindCount === 1 ? "" : "s"}
               </span>
             ) : (

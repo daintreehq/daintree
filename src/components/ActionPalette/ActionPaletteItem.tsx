@@ -138,7 +138,7 @@ function ActionPaletteItemInner({
         PALETTE_ROW_CLASS,
         "group w-full flex items-start gap-3 px-3 py-2 rounded-[var(--radius-md)]",
         "text-daintree-text/70",
-        "hover:bg-overlay-subtle hover:text-daintree-text",
+        "hover:bg-overlay-subtle hover:text-text-primary",
         !item.enabled && "opacity-50"
       )}
       id={`action-option-${item.id}`}
@@ -243,7 +243,7 @@ function ActionPaletteItemInner({
             className={cn(
               "inline-flex items-center justify-center w-6 h-6 rounded-[var(--radius-sm)] bg-transparent border-0",
               "text-daintree-text/40 opacity-0 group-hover:opacity-100 group-aria-selected:opacity-100",
-              "hover:bg-overlay-soft hover:text-daintree-text transition-colors",
+              "hover:bg-overlay-soft hover:text-text-primary transition-colors",
               "focus-visible:opacity-100"
             )}
           >
@@ -264,7 +264,7 @@ function ActionPaletteItemInner({
               isPinned
                 ? "text-daintree-text/70 opacity-100"
                 : "text-daintree-text/40 opacity-0 group-hover:opacity-100 group-aria-selected:opacity-100",
-              "hover:text-daintree-text focus-visible:opacity-100"
+              "hover:text-text-primary focus-visible:opacity-100"
             )}
           >
             {isPinned ? (

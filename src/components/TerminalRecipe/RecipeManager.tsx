@@ -341,7 +341,7 @@ export function RecipeManager({
             </h3>
             <p className="text-xs text-daintree-text/60 mb-3">Available across all projects</p>
             {globalRecipes.length === 0 ? (
-              <div className="border border-dashed border-daintree-border rounded-[var(--radius-md)]">
+              <div className="border border-dashed border-border-default rounded-[var(--radius-md)]">
                 <EmptyState
                   variant="zero-data"
                   scale="canvas"
@@ -358,7 +358,7 @@ export function RecipeManager({
               </div>
             ) : (
               <>
-                <div className="border border-daintree-border rounded-[var(--radius-md)] divide-y divide-daintree-border">
+                <div className="border border-border-default rounded-[var(--radius-md)] divide-y divide-border-default">
                   {globalRecipes.map((r) => renderRecipeRow(r))}
                 </div>
                 <div className="flex gap-2 mt-2">
@@ -381,7 +381,7 @@ export function RecipeManager({
               <p className="text-xs text-daintree-text/60 mb-3">
                 Provided by installed plugins and available in every project
               </p>
-              <div className="border border-daintree-border rounded-[var(--radius-md)] divide-y divide-daintree-border">
+              <div className="border border-border-default rounded-[var(--radius-md)] divide-y divide-border-default">
                 {pluginRecipes.map((r) => renderRecipeRow(r))}
               </div>
             </div>
@@ -397,7 +397,7 @@ export function RecipeManager({
               <p className="text-xs text-daintree-text/60 mb-3">
                 Shared via .daintree/recipes/ in the repository
               </p>
-              <div className="border border-daintree-border rounded-[var(--radius-md)] divide-y divide-daintree-border">
+              <div className="border border-border-default rounded-[var(--radius-md)] divide-y divide-border-default">
                 {inRepoRecipes.map((r) => renderRecipeRow(r))}
               </div>
             </div>
@@ -416,7 +416,7 @@ export function RecipeManager({
             </h3>
             <p className="text-xs text-daintree-text/60 mb-3">Specific to the current project</p>
             {projectRecipes.length === 0 ? (
-              <div className="border border-dashed border-daintree-border rounded-[var(--radius-md)]">
+              <div className="border border-dashed border-border-default rounded-[var(--radius-md)]">
                 <EmptyState
                   variant="zero-data"
                   scale="canvas"
@@ -449,7 +449,7 @@ export function RecipeManager({
               </div>
             ) : (
               <>
-                <div className="border border-daintree-border rounded-[var(--radius-md)] divide-y divide-daintree-border">
+                <div className="border border-border-default rounded-[var(--radius-md)] divide-y divide-border-default">
                   {projectRecipes.map((r) => renderRecipeRow(r, false, inRepoNames.has(r.name)))}
                 </div>
                 <div className="flex gap-2 mt-2">
@@ -575,7 +575,7 @@ export function RecipeManager({
             className={cn(
               FIELD_SURFACE,
               FIELD_FOCUS,
-              "mt-3 w-full h-48 px-2.5 py-2 text-sm text-daintree-text font-mono resize-none",
+              "mt-3 w-full h-48 px-2.5 py-2 text-sm text-text-primary font-mono resize-none",
               "placeholder:text-text-placeholder"
             )}
             spellCheck={false}

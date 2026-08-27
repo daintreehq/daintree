@@ -323,7 +323,7 @@ export function FleetArmingRibbon(): ReactElement | null {
           aria-live="polite"
           aria-atomic="true"
           className={cn(
-            "relative flex items-center gap-3 border-b border-daintree-border px-3 py-2 text-xs leading-[inherit] text-daintree-text",
+            "relative flex items-center gap-3 border-b border-border-default px-3 py-2 text-xs leading-[inherit] text-text-primary",
             // Keep the Fleet surface continuous through confirm-pending so the
             // mode chrome doesn't visually exit and re-enter during a confirm.
             "bg-category-amber-subtle",
@@ -332,7 +332,7 @@ export function FleetArmingRibbon(): ReactElement | null {
           data-testid="fleet-arming-ribbon"
           data-pending-action={pending.kind}
         >
-          <span className="font-medium text-daintree-accent">{message}</span>
+          <span className="font-medium text-accent-primary">{message}</span>
           <div className="ml-auto flex items-center gap-2 text-2xs text-daintree-text/70">
             <span>
               <kbd className="rounded border border-daintree-text/20 bg-tint/[0.08] px-1 py-0.5 font-mono text-3xs">
@@ -504,7 +504,7 @@ export function FleetArmingRibbon(): ReactElement | null {
           tabIndex={-1}
           onKeyDown={handleRibbonKeyDown}
           className={cn(
-            "relative flex items-center gap-3 overflow-hidden border-b border-daintree-border px-3 py-2 text-xs leading-[inherit] text-daintree-text outline-hidden",
+            "relative flex items-center gap-3 overflow-hidden border-b border-border-default px-3 py-2 text-xs leading-[inherit] text-text-primary outline-hidden",
             "bg-category-amber-subtle",
             // Non-color structural cue: 2px amber left-edge stripe, so the
             // "mode surface" reads even with CVD / low-saturation themes where
@@ -519,7 +519,7 @@ export function FleetArmingRibbon(): ReactElement | null {
             onClick={exitFleet}
             aria-label="Exit fleet mode"
             data-testid="fleet-leading-exit"
-            className="rounded p-1 text-daintree-text/50 transition-colors hover:bg-tint/[0.08] hover:text-daintree-text"
+            className="rounded p-1 text-daintree-text/50 transition-colors hover:bg-tint/[0.08] hover:text-text-primary"
           >
             <X className="h-3.5 w-3.5" />
           </button>
@@ -550,7 +550,7 @@ export function FleetArmingRibbon(): ReactElement | null {
               onClick={cancelActiveBroadcast}
               aria-label="Cancel broadcast"
               data-testid="fleet-broadcast-cancel"
-              className="rounded px-1.5 py-0.5 text-2xs text-daintree-text/70 transition-colors hover:bg-tint/[0.08] hover:text-daintree-text"
+              className="rounded px-1.5 py-0.5 text-2xs text-daintree-text/70 transition-colors hover:bg-tint/[0.08] hover:text-text-primary"
             >
               Cancel
             </button>
@@ -567,7 +567,7 @@ export function FleetArmingRibbon(): ReactElement | null {
                   onClick={dismissRun}
                   aria-label="Dismiss run summary"
                   data-testid="fleet-run-dismiss"
-                  className="rounded p-0.5 text-daintree-text/50 transition-colors hover:bg-tint/[0.08] hover:text-daintree-text"
+                  className="rounded p-0.5 text-daintree-text/50 transition-colors hover:bg-tint/[0.08] hover:text-text-primary"
                 >
                   <X className="h-3 w-3" />
                 </button>
@@ -585,7 +585,7 @@ export function FleetArmingRibbon(): ReactElement | null {
               <button
                 type="button"
                 aria-label="Open selection menu"
-                className="rounded p-1 text-daintree-text/60 transition-colors hover:bg-tint/[0.08] hover:text-daintree-text"
+                className="rounded p-1 text-daintree-text/60 transition-colors hover:bg-tint/[0.08] hover:text-text-primary"
                 data-testid="fleet-selection-menu-trigger"
               >
                 <MoreHorizontal className="h-3.5 w-3.5" />
@@ -603,7 +603,7 @@ export function FleetArmingRibbon(): ReactElement | null {
               data-testid="fleet-exit"
               className={cn(
                 "inline-flex items-center gap-1.5 rounded px-2 py-0.5 text-2xs transition-colors",
-                "bg-tint/[0.08] text-daintree-text/80 hover:bg-tint/[0.14] hover:text-daintree-text"
+                "bg-tint/[0.08] text-daintree-text/80 hover:bg-tint/[0.14] hover:text-text-primary"
               )}
             >
               <span>Exit</span>

@@ -11,12 +11,12 @@ export const FIELD_SURFACE =
   "bg-surface-input border border-border-strong rounded-[var(--radius-md)] transition-colors duration-150 ease-out";
 
 export const FIELD_FOCUS =
-  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2";
+  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2";
 
 export const FIELD_INPUT = cn(
   FIELD_SURFACE,
   FIELD_FOCUS,
-  "w-full h-8 px-2.5 text-sm text-daintree-text placeholder:text-text-placeholder",
+  "w-full h-8 px-2.5 text-sm text-text-primary placeholder:text-text-placeholder",
   "disabled:opacity-50 disabled:cursor-not-allowed"
 );
 
@@ -26,8 +26,8 @@ export const FIELD_INPUT = cn(
  */
 export const FIELD_TRIGGER = cn(
   FIELD_SURFACE,
-  "w-full h-8 justify-between px-2.5 font-normal text-daintree-text",
-  "hover:bg-surface-hover hover:text-daintree-text hover:border-border-default"
+  "w-full h-8 justify-between px-2.5 font-normal text-text-primary",
+  "hover:bg-surface-hover hover:text-text-primary hover:border-border-default"
 );
 
 const LABEL_CLASSES = "text-xs text-text-secondary";
@@ -84,7 +84,7 @@ export function FormSection({ title, action, children }: FormSectionProps) {
   return (
     <>
       <div className="col-span-2 flex items-center gap-3 [&:not(:first-child)]:mt-4">
-        <h3 className="text-xs font-semibold text-daintree-text shrink-0">{title}</h3>
+        <h3 className="text-xs font-semibold text-text-primary shrink-0">{title}</h3>
         <span className="h-px flex-1 bg-border-subtle" aria-hidden="true" />
         {action}
       </div>

@@ -243,11 +243,11 @@ describe("GettingStartedChecklist", () => {
       );
       const muted = screen.getByText("2/5");
       expect(muted.className).toContain("text-daintree-text/50");
-      expect(muted.className).not.toContain("text-daintree-accent");
+      expect(muted.className).not.toContain("text-accent-primary");
 
       rerender(<GettingStartedChecklist {...defaultProps} checklist={allComplete} />);
       const accented = screen.getByText("All set");
-      expect(accented.className).toContain("text-daintree-accent");
+      expect(accented.className).toContain("text-accent-primary");
       expect(accented.className).not.toContain("text-daintree-text/50");
     });
   });

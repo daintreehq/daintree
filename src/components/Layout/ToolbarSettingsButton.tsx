@@ -14,7 +14,7 @@ import { useAriaKeyshortcuts, useKeybindingDisplay, useShortcutHintHover } from 
 import { useToolbarPreferencesStore } from "@/store/toolbarPreferencesStore";
 import { TOOLBAR_UNPIN_LABEL } from "./toolbarMenuStrings";
 
-const toolbarIconButtonClass = "toolbar-icon-button text-daintree-text relative";
+const toolbarIconButtonClass = "toolbar-icon-button text-text-primary relative";
 
 const SETTINGS_CONTEXT_MENU_TABS = [
   { tab: "general", label: "General" },

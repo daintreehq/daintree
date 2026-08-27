@@ -32,7 +32,7 @@ export const PopoverSearchField = forwardRef<HTMLInputElement, PopoverSearchFiel
       // top area is the text box" has to mean to a pointer.
       <label
         className={cn(
-          "flex items-center gap-2 border-b border-daintree-border px-3",
+          "flex items-center gap-2 border-b border-border-default px-3",
           "transition-colors duration-150 ease-out",
           "focus-within:bg-overlay-soft focus-within:border-selection-outline",
           fieldClassName
@@ -45,7 +45,7 @@ export const PopoverSearchField = forwardRef<HTMLInputElement, PopoverSearchFiel
           ref={ref}
           type="text"
           className={cn(
-            "h-10 min-w-0 flex-1 bg-transparent text-sm text-daintree-text",
+            "h-10 min-w-0 flex-1 bg-transparent text-sm text-text-primary",
             "placeholder:text-text-placeholder outline-hidden",
             "disabled:cursor-not-allowed disabled:opacity-50",
             className

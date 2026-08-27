@@ -156,7 +156,7 @@ describe("TabButton", () => {
     render(<TabButton {...defaultProps} isActive={true} />);
     const indicator = screen.queryByTestId("motion-div");
     expect(indicator).not.toBeNull();
-    expect(indicator?.className).toContain("bg-daintree-accent");
+    expect(indicator?.className).toContain("bg-accent-primary");
   });
 
   it("does not render the active indicator when isActive is false", () => {
@@ -407,7 +407,9 @@ describe("TabButton", () => {
       render(<TabButton {...defaultProps} onRename={vi.fn()} />);
       fireEvent.doubleClick(screen.getByText("Test Agent"));
       const input = screen.getByTestId("motion-input") as HTMLInputElement;
-      expect(input.className).not.toMatch(/(outline|ring|border)-daintree-accent/);
+      expect(input.className).not.toMatch(
+        /(?:outline|ring|border)-(?:daintree-accent|accent-primary)(?![\w-])/
+      );
       expect(input.className).toContain("focus:outline-hidden");
     });
   });

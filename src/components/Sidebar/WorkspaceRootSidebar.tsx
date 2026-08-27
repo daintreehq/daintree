@@ -33,7 +33,7 @@ export function WorkspaceRootSidebar({
         {/* Not "Worktrees": this workspace has none, and naming the slot after
             a concept it can't hold is what made the header wrong for two of the
             three workspace kinds. */}
-        <h2 className="truncate text-daintree-text font-semibold text-sm tracking-wide">
+        <h2 className="truncate text-text-primary font-semibold text-sm tracking-wide">
           Workspace
         </h2>
       </div>

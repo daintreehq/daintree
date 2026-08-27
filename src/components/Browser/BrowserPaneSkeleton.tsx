@@ -53,7 +53,7 @@ export function BrowserPaneSkeleton({ label = "Loading browser panel" }: Browser
         </div>
 
         {/* Content area — empty, no animation */}
-        <div className="flex-1 min-h-0 bg-daintree-bg" />
+        <div className="flex-1 min-h-0 bg-surface-canvas" />
       </div>
 
       {/* Long-tail loading hint — sibling of role="status" so the live region

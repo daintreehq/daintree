@@ -176,7 +176,7 @@ export function CommitListItem({
               )}
             >
               <div className="overflow-hidden">
-                <pre className="mt-2 rounded-[var(--radius-sm)] bg-surface-inset px-3 py-2 text-xs font-mono whitespace-pre-wrap break-words text-daintree-text">
+                <pre className="mt-2 rounded-[var(--radius-sm)] bg-surface-inset px-3 py-2 text-xs font-mono whitespace-pre-wrap break-words text-text-primary">
                   {trimmedBody}
                 </pre>
               </div>

@@ -105,11 +105,11 @@ const SEVERITY_VAR: Record<Exclude<InlineStatusBannerSeverity, "neutral">, strin
 function getButtonClasses(variant: ButtonVariant): string {
   switch (variant) {
     case "primary":
-      return "bg-daintree-border text-daintree-text hover:bg-daintree-border/80";
+      return "bg-border-default text-text-primary hover:bg-daintree-border/80";
     case "accent":
       return "bg-status-info/10 text-status-info hover:bg-status-info/20";
     case "dismiss":
-      return "text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-border/50";
+      return "text-daintree-text/60 hover:text-text-primary hover:bg-daintree-border/50";
     case "danger":
     case "dangerFilled":
       return "rounded transition-colors";
@@ -233,7 +233,7 @@ export function InlineStatusBanner({
       }}
       aria-label={closeAriaLabel}
       className={cn(
-        "p-1 rounded text-daintree-text/60 hover:text-daintree-text hover:bg-daintree-border/50 transition-colors outline-hidden focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-daintree-accent shrink-0",
+        "p-1 rounded text-daintree-text/60 hover:text-text-primary hover:bg-daintree-border/50 transition-colors outline-hidden focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary shrink-0",
         isTitleBarSurface && "app-no-drag"
       )}
     >
@@ -290,7 +290,7 @@ export function InlineStatusBanner({
           <div className="flex-1 min-w-0">
             <div className="flex justify-between items-start gap-2">
               <span
-                className={cn("text-sm font-medium", isNeutral && "text-daintree-text")}
+                className={cn("text-sm font-medium", isNeutral && "text-text-primary")}
                 style={isNeutral ? undefined : { color: `var(${colorVar})` }}
               >
                 {title}
@@ -333,7 +333,7 @@ export function InlineStatusBanner({
           </div>
         ) : (
           <span
-            className={cn("text-sm", isNeutral && "text-daintree-text")}
+            className={cn("text-sm", isNeutral && "text-text-primary")}
             style={isNeutral ? undefined : { color: `var(${colorVar})` }}
           >
             {title}
@@ -375,7 +375,7 @@ export function InlineStatusBanner({
                   action.iconOnly
                     ? "p-1"
                     : "flex items-center gap-1.5 px-2 py-1 text-xs font-medium",
-                  "transition-colors outline-hidden focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-daintree-accent",
+                  "transition-colors outline-hidden focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-accent-primary",
                   variantClasses,
                   (variant === "danger" || variant === "dangerFilled") &&
                     "hover:[color:var(--hover-color)] hover:[background:var(--hover-bg)]",

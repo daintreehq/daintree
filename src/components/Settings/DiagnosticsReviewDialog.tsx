@@ -200,7 +200,7 @@ export function DiagnosticsReviewDialog({
       <AppDialog.Body className="space-y-4">
         <div>
           <div className="flex items-center justify-between mb-2">
-            <h4 className="text-sm font-medium text-daintree-text">Sections</h4>
+            <h4 className="text-sm font-medium text-text-primary">Sections</h4>
             <Button variant="ghost" size="sm" onClick={toggleAll} className="text-xs h-6 px-2">
               {allEnabled ? "Deselect All" : "Select All"}
             </Button>
@@ -212,7 +212,7 @@ export function DiagnosticsReviewDialog({
                 className={cn(
                   "flex items-center gap-2 px-2.5 py-1.5 rounded border text-xs cursor-pointer transition-colors",
                   enabledSections[key]
-                    ? "border-daintree-border bg-daintree-bg/50 text-daintree-text"
+                    ? "border-border-default bg-daintree-bg/50 text-text-primary"
                     : "border-daintree-border/40 bg-transparent text-daintree-text/40 line-through"
                 )}
               >
@@ -221,9 +221,9 @@ export function DiagnosticsReviewDialog({
                   onCheckedChange={() => toggleSection(key)}
                   className={cn(
                     "flex shrink-0 w-3.5 h-3.5 rounded-sm border transition-colors",
-                    "bg-daintree-bg border-border-strong",
-                    "data-[state=checked]:bg-daintree-text data-[state=checked]:border-daintree-text",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+                    "bg-surface-canvas border-border-strong",
+                    "data-[state=checked]:bg-text-primary data-[state=checked]:border-text-primary",
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
                   )}
                 >
                   <CheckboxPrimitive.Indicator className="flex items-center justify-center text-text-inverse">
@@ -237,7 +237,7 @@ export function DiagnosticsReviewDialog({
         </div>
 
         <div>
-          <h4 className="text-sm font-medium text-daintree-text flex items-center gap-1.5 mb-2">
+          <h4 className="text-sm font-medium text-text-primary flex items-center gap-1.5 mb-2">
             <Clock className="w-3.5 h-3.5" />
             Log time window
           </h4>
@@ -248,8 +248,8 @@ export function DiagnosticsReviewDialog({
             }}
             aria-label="Log time window"
             className={cn(
-              "h-8 text-xs w-full px-2 rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg",
-              "text-daintree-text focus:outline-hidden focus:border-daintree-accent/40"
+              "h-8 text-xs w-full px-2 rounded-[var(--radius-md)] border border-border-default bg-surface-canvas",
+              "text-text-primary focus:outline-hidden focus:border-daintree-accent/40"
             )}
           >
             {TIME_WINDOW_OPTIONS.map((opt) => (
@@ -261,7 +261,7 @@ export function DiagnosticsReviewDialog({
         </div>
 
         <div>
-          <h4 className="text-sm font-medium text-daintree-text flex items-center gap-1.5 mb-2">
+          <h4 className="text-sm font-medium text-text-primary flex items-center gap-1.5 mb-2">
             <ShieldOff className="w-3.5 h-3.5" />
             Prebuilt redactions
           </h4>
@@ -272,7 +272,7 @@ export function DiagnosticsReviewDialog({
                 className={cn(
                   "flex items-center gap-2 px-2.5 py-1.5 rounded border text-xs cursor-pointer transition-colors",
                   prebuiltIds.has(preset.id)
-                    ? "border-daintree-border bg-daintree-bg/50 text-daintree-text"
+                    ? "border-border-default bg-daintree-bg/50 text-text-primary"
                     : "border-daintree-border/40 bg-transparent text-daintree-text/60"
                 )}
               >
@@ -281,9 +281,9 @@ export function DiagnosticsReviewDialog({
                   onCheckedChange={() => togglePrebuilt(preset.id)}
                   className={cn(
                     "flex shrink-0 w-3.5 h-3.5 rounded-sm border transition-colors",
-                    "bg-daintree-bg border-border-strong",
-                    "data-[state=checked]:bg-daintree-text data-[state=checked]:border-daintree-text",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+                    "bg-surface-canvas border-border-strong",
+                    "data-[state=checked]:bg-text-primary data-[state=checked]:border-text-primary",
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
                   )}
                 >
                   <CheckboxPrimitive.Indicator className="flex items-center justify-center text-text-inverse">
@@ -298,7 +298,7 @@ export function DiagnosticsReviewDialog({
 
         <div>
           <div className="flex items-center justify-between mb-2">
-            <h4 className="text-sm font-medium text-daintree-text flex items-center gap-1.5">
+            <h4 className="text-sm font-medium text-text-primary flex items-center gap-1.5">
               <Replace className="w-3.5 h-3.5" />
               Find &amp; Replace
             </h4>
@@ -315,8 +315,8 @@ export function DiagnosticsReviewDialog({
                   onChange={(e) => updateReplacement(i, "find", e.target.value)}
                   placeholder="Find text"
                   className={cn(
-                    "h-7 text-xs flex-1 px-2 rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg",
-                    "text-daintree-text placeholder:text-text-placeholder",
+                    "h-7 text-xs flex-1 px-2 rounded-[var(--radius-md)] border border-border-default bg-surface-canvas",
+                    "text-text-primary placeholder:text-text-placeholder",
                     "focus:outline-hidden focus:border-daintree-accent/40"
                   )}
                 />
@@ -327,8 +327,8 @@ export function DiagnosticsReviewDialog({
                   onChange={(e) => updateReplacement(i, "replace", e.target.value)}
                   placeholder="Replace with"
                   className={cn(
-                    "h-7 text-xs flex-1 px-2 rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg",
-                    "text-daintree-text placeholder:text-text-placeholder",
+                    "h-7 text-xs flex-1 px-2 rounded-[var(--radius-md)] border border-border-default bg-surface-canvas",
+                    "text-text-primary placeholder:text-text-placeholder",
                     "focus:outline-hidden focus:border-daintree-accent/40"
                   )}
                 />
@@ -358,7 +358,7 @@ export function DiagnosticsReviewDialog({
             {showPreview ? "Hide Preview" : "Show Preview"}
           </Button>
           {showPreview && (
-            <pre className="text-3xs leading-relaxed font-mono bg-daintree-bg border border-daintree-border rounded p-3 max-h-64 overflow-auto text-daintree-text/80 whitespace-pre-wrap break-all">
+            <pre className="text-3xs leading-relaxed font-mono bg-surface-canvas border border-border-default rounded p-3 max-h-64 overflow-auto text-daintree-text/80 whitespace-pre-wrap break-all">
               {previewJson}
             </pre>
           )}

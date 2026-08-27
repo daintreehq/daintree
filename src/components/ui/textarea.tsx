@@ -11,7 +11,7 @@ import { useFieldControl } from "@/components/ui/field";
  * narrow.
  */
 const textareaVariants = cva(
-  "w-full bg-surface-input border border-border-strong rounded-[var(--radius-md)] text-text-primary placeholder:text-text-placeholder transition-colors duration-150 ease-out focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2 disabled:opacity-50 disabled:cursor-not-allowed",
+  "w-full bg-surface-input border border-border-strong rounded-[var(--radius-md)] text-text-primary placeholder:text-text-placeholder transition-colors duration-150 ease-out focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2 disabled:opacity-50 disabled:cursor-not-allowed",
   {
     variants: {
       density: {

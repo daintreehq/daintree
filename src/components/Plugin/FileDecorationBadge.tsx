@@ -57,7 +57,7 @@ export function FileDecorationBadge({ decoration, className }: FileDecorationBad
         className={cn(
           shared,
           "hover:bg-tint/10 transition-colors cursor-pointer",
-          "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-accent"
+          "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-accent-primary"
         )}
       >
         {badge}

@@ -75,7 +75,7 @@ function TerminalRow({ term, onClick }: TerminalRowProps) {
       className={cn(
         "rounded-[var(--radius-md)]",
         isArmed && "outline outline-2 outline-offset-[-2px]",
-        isArmed && isPrimary && "outline-solid outline-daintree-accent",
+        isArmed && isPrimary && "outline-solid outline-accent-primary",
         isArmed && !isPrimary && "outline-dashed outline-border-strong"
       )}
     >
@@ -92,7 +92,7 @@ function TerminalRow({ term, onClick }: TerminalRowProps) {
               onClick(term);
             }}
             aria-selected={isArmed}
-            className="flex items-center gap-2 min-w-0 flex-1 text-left cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px] rounded"
+            className="flex items-center gap-2 min-w-0 flex-1 text-left cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px] rounded"
           >
             <div className="shrink-0 opacity-60 group-hover/termrow:opacity-100 transition-opacity">
               <TerminalIcon kind={term.kind} chrome={chrome} className="w-3 h-3" />
@@ -100,7 +100,7 @@ function TerminalRow({ term, onClick }: TerminalRowProps) {
             <div className="flex flex-col min-w-0">
               <span
                 ref={ref}
-                className="truncate text-xs font-medium text-text-secondary transition-colors group-hover/termrow:text-daintree-text"
+                className="truncate text-xs font-medium text-text-secondary transition-colors group-hover/termrow:text-text-primary"
               >
                 {term.title}
               </span>
@@ -121,7 +121,7 @@ function TerminalRow({ term, onClick }: TerminalRowProps) {
         <div className="flex items-center gap-2.5 shrink-0">
           {isArmed && armBadge !== undefined && (
             <span
-              className="inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-daintree-accent px-1 text-4xs font-mono font-semibold text-accent-primary-foreground tabular-nums"
+              className="inline-flex h-4 min-w-[1rem] items-center justify-center rounded-full bg-accent-primary px-1 text-4xs font-mono font-semibold text-accent-primary-foreground tabular-nums"
               aria-label={`Armed position ${armBadge}`}
             >
               {armBadge}
@@ -163,7 +163,7 @@ function TerminalRow({ term, onClick }: TerminalRowProps) {
             ref={dragHandle?.setActivatorNodeRef}
             type="button"
             data-drag-handle
-            className="cursor-grab rounded text-text-primary/25 group-hover/termrow:text-text-primary/40 transition-colors hover:text-text-secondary focus-visible:text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-1 active:cursor-grabbing"
+            className="cursor-grab rounded text-text-primary/25 group-hover/termrow:text-text-primary/40 transition-colors hover:text-text-secondary focus-visible:text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-1 active:cursor-grabbing"
             aria-label="Drag to move terminal"
             {...(dragHandle?.listeners as React.HTMLAttributes<HTMLElement> | undefined)}
           >
@@ -414,7 +414,7 @@ export function WorktreeTerminalSection({
           onClick={onStartSession}
           className={cn(
             SECTION_ROW,
-            "gap-1.5 text-2xs text-text-secondary transition-colors hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]"
+            "gap-1.5 text-2xs text-text-secondary transition-colors hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]"
           )}
         >
           <Plus className="h-3 w-3 shrink-0" aria-hidden="true" />
@@ -433,7 +433,7 @@ export function WorktreeTerminalSection({
             aria-expanded={true}
             aria-controls={terminalsPanelId}
             className={cn(
-              "worktree-section-button flex w-full items-center text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]",
+              "worktree-section-button flex w-full items-center text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]",
               isSidebar
                 ? cn(SECTION_ROW, "gap-1.5")
                 : "justify-between rounded-t-[var(--radius-lg)] border-b border-border-default bg-surface-inset px-3 py-1.5"
@@ -543,7 +543,7 @@ export function WorktreeTerminalSection({
           aria-expanded={false}
           aria-controls={terminalsPanelId}
           className={cn(
-            "worktree-section-button flex w-full items-center justify-between text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]",
+            "worktree-section-button flex w-full items-center justify-between text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]",
             isSidebar ? SECTION_ROW : "rounded-[var(--radius-lg)] px-3 py-1.5"
           )}
           id={`${terminalsId}-button`}

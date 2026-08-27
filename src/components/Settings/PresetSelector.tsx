@@ -100,14 +100,14 @@ export function PresetSelector({
           aria-haspopup="listbox"
           className={cn(
             "flex items-center gap-2 w-full px-3 py-1.5 text-sm rounded-[var(--radius-md)]",
-            "border border-border-strong bg-daintree-bg text-daintree-text",
+            "border border-border-strong bg-surface-canvas text-text-primary",
             "hover:border-daintree-accent/50 transition-colors",
             "focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50"
           )}
           data-testid="preset-selector-trigger"
         >
           <span
-            className="w-2.5 h-2.5 rounded-full shrink-0 border border-daintree-border"
+            className="w-2.5 h-2.5 rounded-full shrink-0 border border-border-default"
             style={{ backgroundColor: selectedItem.color }}
             aria-hidden="true"
           />
@@ -253,12 +253,12 @@ function PresetOption({
       className={cn(
         "flex items-center gap-2 px-2 py-1.5 rounded-[var(--radius-sm)] cursor-pointer text-sm",
         "hover:bg-overlay-soft focus:bg-overlay-soft focus:outline-hidden",
-        "focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-[-2px]",
-        isSelected && "text-daintree-text font-medium bg-overlay-selected"
+        "focus-visible:outline-solid focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]",
+        isSelected && "text-text-primary font-medium bg-overlay-selected"
       )}
     >
       <span
-        className="w-2.5 h-2.5 rounded-full shrink-0 border border-daintree-border"
+        className="w-2.5 h-2.5 rounded-full shrink-0 border border-border-default"
         style={{ backgroundColor: color }}
         aria-hidden="true"
       />

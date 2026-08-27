@@ -86,7 +86,7 @@ export function ForgeStatPill({
               // act on — a bare `transition-opacity` here replaces the cva's
               // `transition` outright under tailwind-merge, which left both the
               // hover tint and the press scale uninterpolated.
-              "toolbar-stat-pill h-full flex-1 justify-center gap-2 rounded-none px-2 text-daintree-text transition-[opacity,background-color,scale] hover:bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] hover:text-text-primary",
+              "toolbar-stat-pill h-full flex-1 justify-center gap-2 rounded-none px-2 text-text-primary transition-[opacity,background-color,scale] hover:bg-[var(--toolbar-stats-hover-bg,var(--theme-overlay-hover))] hover:text-text-primary",
               activityChip != null && "relative",
               className,
               open &&

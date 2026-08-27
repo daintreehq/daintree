@@ -76,7 +76,7 @@ export function RecipeRunnerItem({
               // over 150ms. A disabled card never enters :active, so the scale
               // needs no disabled: reset. `launcher-press` is what lets reduced
               // motion suppress the scale — see the rule in `index.css`.
-              "launcher-press group flex flex-col items-start gap-1.5 p-3 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-subtle hover:bg-overlay-soft hover:border-border-default transition-colors active:scale-[0.98] active:duration-[1ms] text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-overlay-subtle disabled:hover:border-border-subtle group-focus-within/recipes:aria-selected:ring-2 group-focus-within/recipes:aria-selected:ring-daintree-accent/60",
+              "launcher-press group flex flex-col items-start gap-1.5 p-3 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-subtle hover:bg-overlay-soft hover:border-border-default transition-colors active:scale-[0.98] active:duration-[1ms] text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-overlay-subtle disabled:hover:border-border-subtle group-focus-within/recipes:aria-selected:ring-2 group-focus-within/recipes:aria-selected:ring-daintree-accent/60",
               recipe.shadowedBy && "opacity-60"
             )}
           >
@@ -88,7 +88,7 @@ export function RecipeRunnerItem({
                 )}
                 aria-hidden
               />
-              <span className="flex-1 text-sm font-medium text-daintree-text truncate">
+              <span className="flex-1 text-sm font-medium text-text-primary truncate">
                 {recipe.name}
               </span>
               {recipe.shadowedBy && (
@@ -144,7 +144,7 @@ export function RecipeRunnerItem({
           disabled={disabled}
           tabIndex={disabled ? -1 : (tabIndex ?? 0)}
           className={cn(
-            "launcher-press group w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-subtle hover:bg-overlay-soft hover:border-border-default transition-colors active:scale-[0.98] active:duration-[1ms] text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-overlay-subtle disabled:hover:border-border-subtle group-focus-within/recipes:aria-selected:ring-2 group-focus-within/recipes:aria-selected:ring-daintree-accent/60",
+            "launcher-press group w-full flex items-center gap-2 px-3 py-2 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-subtle hover:bg-overlay-soft hover:border-border-default transition-colors active:scale-[0.98] active:duration-[1ms] text-left focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-overlay-subtle disabled:hover:border-border-subtle group-focus-within/recipes:aria-selected:ring-2 group-focus-within/recipes:aria-selected:ring-daintree-accent/60",
             recipe.shadowedBy && "opacity-60"
           )}
         >
@@ -152,7 +152,7 @@ export function RecipeRunnerItem({
             className="h-3.5 w-3.5 text-status-success/50 group-hover:text-status-success transition-colors shrink-0"
             aria-hidden
           />
-          <span className="flex-1 text-sm font-medium text-daintree-text truncate">
+          <span className="flex-1 text-sm font-medium text-text-primary truncate">
             {recipe.name}
           </span>
           <span className="text-2xs text-text-muted shrink-0">{scopeLabel}</span>

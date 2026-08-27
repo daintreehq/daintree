@@ -154,7 +154,7 @@ export function AddPresetDialog({
                       id={providerId}
                       value={selectedTemplateId}
                       onChange={(e) => setSelectedTemplateId(e.target.value)}
-                      className="w-full rounded-[var(--radius-md)] border border-border-strong bg-surface-input px-3 py-1.5 text-sm text-daintree-text transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+                      className="w-full rounded-[var(--radius-md)] border border-border-strong bg-surface-input px-3 py-1.5 text-sm text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                       data-testid="template-select"
                     >
                       {templates.map((t) => (

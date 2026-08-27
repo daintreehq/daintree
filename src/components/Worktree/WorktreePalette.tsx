@@ -30,7 +30,7 @@ function WorktreeListItem({ worktree, isActive, isSelected, onClick }: WorktreeL
           // with it; takes the selected treatment from the family now.
           PALETTE_ROW_CLASS,
           "group w-full text-left px-3 py-2 rounded-[var(--radius-lg)] flex flex-col gap-0.5",
-          "bg-daintree-bg hover:bg-surface"
+          "bg-surface-canvas hover:bg-surface"
         )}
         aria-selected={isSelected}
         role="option"
@@ -38,7 +38,7 @@ function WorktreeListItem({ worktree, isActive, isSelected, onClick }: WorktreeL
         <div className="flex items-center justify-between gap-2 text-sm">
           {/* Both sides truncate: branch names have no length worth trusting,
               so no tier is wide enough to make this unnecessary. */}
-          <span className="font-medium text-daintree-text truncate">{worktree.name}</span>
+          <span className="font-medium text-text-primary truncate">{worktree.name}</span>
           <div className="flex items-center gap-2 min-w-0 text-xs text-daintree-text/60">
             {worktree.branch && (
               <span className="font-mono text-daintree-text/70 truncate">{worktree.branch}</span>

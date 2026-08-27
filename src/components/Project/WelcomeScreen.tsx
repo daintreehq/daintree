@@ -157,7 +157,7 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
                   "var(--welcome-mark-color, color-mix(in oklab, var(--theme-tint) 50%, transparent))",
               }}
             />
-            <h1 className="text-2xl font-semibold text-daintree-text tracking-tight mb-2">
+            <h1 className="text-2xl font-semibold text-text-primary tracking-tight mb-2">
               Welcome to Daintree
             </h1>
             <p className="text-sm text-daintree-text/60 leading-relaxed font-medium">
@@ -211,7 +211,7 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
                   className={cn(
                     "flex flex-col items-start gap-1 rounded-[var(--radius-md)] p-3 text-left",
                     "transition-colors duration-150",
-                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2",
+                    "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
                     lifted
                       ? // Correct elevate-to-select inversion (ring-border-strong
                         // + elevated fill). Dark keeps its /95 wash; on light the
@@ -225,7 +225,7 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
                         "ring-1 ring-border-strong/40 hover:bg-overlay-soft [.light_&]:hover:bg-overlay-medium"
                   )}
                 >
-                  <span className="flex items-center gap-2 text-sm font-medium text-daintree-text">
+                  <span className="flex items-center gap-2 text-sm font-medium text-text-primary">
                     <Icon className="h-4 w-4 shrink-0 text-daintree-text/70" />
                     {title}
                   </span>
@@ -253,7 +253,7 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
                 return (
                   <div key={actionId} className="flex items-center justify-between gap-3">
                     <span className="text-sm text-daintree-text/70">{label}</span>
-                    <kbd className="shrink-0 bg-daintree-bg border border-daintree-border rounded px-1.5 py-0.5 text-xs font-mono text-daintree-text/80 shadow-sm">
+                    <kbd className="shrink-0 bg-surface-canvas border border-border-default rounded px-1.5 py-0.5 text-xs font-mono text-daintree-text/80 shadow-sm">
                       {combo}
                     </kbd>
                   </div>
@@ -382,7 +382,7 @@ function TopProjects({
             className={cn(
               "w-full flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] text-left transition-colors",
               "hover:bg-overlay-soft",
-              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+              "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
             )}
           >
             <div
@@ -391,7 +391,7 @@ function TopProjects({
               style={{
                 background: project.color
                   ? `var(--project-tile-wash, linear-gradient(to bottom, rgba(0,0,0,0.1), rgba(0,0,0,0.2))), ${getProjectGradient(project.color)}`
-                  : "var(--project-tile-wash, linear-gradient(to bottom, rgba(0,0,0,0.1), rgba(0,0,0,0.2))), var(--color-daintree-sidebar)",
+                  : "var(--project-tile-wash, linear-gradient(to bottom, rgba(0,0,0,0.1), rgba(0,0,0,0.2))), var(--color-surface-sidebar)",
               }}
             >
               <span className="leading-none select-none filter drop-shadow-sm">
@@ -447,7 +447,7 @@ function AgentSetupBannerCard() {
           onClick={handleDismiss}
           aria-label="Dismiss agent setup banner"
           data-testid="agent-setup-banner-dismiss"
-          className="absolute top-2 right-2 inline-flex h-6 w-6 items-center justify-center rounded-sm text-daintree-text/40 transition-colors hover:bg-overlay-emphasis hover:text-daintree-text/80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+          className="absolute top-2 right-2 inline-flex h-6 w-6 items-center justify-center rounded-sm text-daintree-text/40 transition-colors hover:bg-overlay-emphasis hover:text-daintree-text/80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
         >
           <X className="h-3.5 w-3.5" />
         </button>
@@ -538,7 +538,7 @@ function AgentWelcomeCard() {
           type="button"
           onClick={handleDismiss}
           aria-label="Dismiss welcome card"
-          className="absolute top-2 right-2 inline-flex h-6 w-6 items-center justify-center rounded-sm text-daintree-text/40 transition-colors hover:bg-overlay-emphasis hover:text-daintree-text/80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+          className="absolute top-2 right-2 inline-flex h-6 w-6 items-center justify-center rounded-sm text-daintree-text/40 transition-colors hover:bg-overlay-emphasis hover:text-daintree-text/80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
         >
           <X className="h-3.5 w-3.5" />
         </button>
@@ -626,7 +626,7 @@ function InlineChecklist({
       {/* Progress bar */}
       <div className="w-full h-1 bg-daintree-border/50 rounded-full mb-4 overflow-hidden">
         <div
-          className="h-full bg-daintree-accent rounded-full transition-[width] duration-500"
+          className="h-full bg-accent-primary rounded-full transition-[width] duration-500"
           style={{ width: `${(progressDone / progressTotal) * 100}%` }}
         />
       </div>
@@ -639,7 +639,7 @@ function InlineChecklist({
           return (
             <>
               <div className="flex items-start gap-2.5 px-2 py-1.5 opacity-60">
-                <div className="h-4 w-4 rounded-full bg-daintree-accent border border-daintree-accent flex items-center justify-center shrink-0">
+                <div className="h-4 w-4 rounded-full bg-accent-primary border border-accent-primary flex items-center justify-center shrink-0">
                   <Check className="h-2.5 w-2.5 text-accent-primary-foreground" />
                 </div>
                 <Download className="h-3.5 w-3.5 text-daintree-text/40 shrink-0" />
@@ -655,9 +655,7 @@ function InlineChecklist({
                     <div
                       className={cn(
                         "h-4 w-4 rounded-full border flex items-center justify-center shrink-0 transition-colors duration-150",
-                        done
-                          ? "bg-daintree-accent border-daintree-accent"
-                          : "border-daintree-text/30"
+                        done ? "bg-accent-primary border-accent-primary" : "border-daintree-text/30"
                       )}
                     >
                       {done && <Check className="h-2.5 w-2.5 text-accent-primary-foreground" />}
@@ -719,7 +717,7 @@ function InlineChecklist({
                       sharedClasses,
                       "w-full text-left cursor-pointer",
                       "hover:bg-tint/10",
-                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent focus-visible:outline-offset-2"
+                      "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                     )}
                   >
                     {content}

@@ -497,7 +497,7 @@ function RefChip({ value, emphasis }: { value: string; emphasis?: boolean }) {
     <span
       className={cn(
         "inline-flex items-baseline px-1.5 py-0.5 rounded bg-tint/[0.07] border border-tint/[0.08] text-2xs font-mono break-words",
-        emphasis ? "text-daintree-text" : "text-daintree-text/70"
+        emphasis ? "text-text-primary" : "text-daintree-text/70"
       )}
     >
       {value}

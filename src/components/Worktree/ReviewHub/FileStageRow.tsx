@@ -198,7 +198,7 @@ function FileStageRowComponent({
           aria-label={`View diff: ${file.path}`}
           className={cn(
             "relative flex min-w-0 flex-1 items-baseline rounded text-left",
-            "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-daintree-accent"
+            "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
           )}
         >
           <span
@@ -231,7 +231,7 @@ function FileStageRowComponent({
               "shrink truncate font-medium font-mono text-2xs transition-colors",
               generated
                 ? "text-daintree-text/40"
-                : "text-daintree-text group-hover/stagerow:text-daintree-text"
+                : "text-text-primary group-hover/stagerow:text-text-primary"
             )}
           >
             {base}
@@ -274,7 +274,7 @@ function FileStageRowComponent({
                 }
                 className={cn(
                   "w-3 h-3 rounded cursor-pointer accent-status-success",
-                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
                 )}
               />
               <span>Viewed</span>
@@ -293,7 +293,7 @@ function FileStageRowComponent({
             onClick={handleToggle}
             className={cn(
               "w-5 h-5 flex items-center justify-center rounded shrink-0 ml-2 transition-colors",
-              "hover:bg-tint/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-daintree-accent"
+              "hover:bg-tint/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
             )}
             aria-label={isStaged ? `Unstage ${file.path}` : `Stage ${file.path}`}
           >

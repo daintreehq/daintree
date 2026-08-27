@@ -34,7 +34,7 @@ export function CustomPresetChrome({
   return (
     <div
       id="agents-preset-detail"
-      className="rounded-[var(--radius-md)] border border-daintree-border bg-daintree-bg/30 px-3 py-2.5 space-y-2.5"
+      className="rounded-[var(--radius-md)] border border-border-default bg-daintree-bg/30 px-3 py-2.5 space-y-2.5"
     >
       <div className="flex items-center gap-2">
         <PresetColorPicker
@@ -45,7 +45,7 @@ export function CustomPresetChrome({
         />
         {isEditing ? (
           <input
-            className="flex-1 text-sm font-medium bg-daintree-bg border border-border-strong rounded px-2 py-0.5 focus:outline-hidden"
+            className="flex-1 text-sm font-medium bg-surface-canvas border border-border-strong rounded px-2 py-0.5 focus:outline-hidden"
             value={editName}
             onChange={(e) => onEditNameChange(e.target.value)}
             onBlur={onCommitEdit}
@@ -66,7 +66,7 @@ export function CustomPresetChrome({
           />
         ) : (
           <button
-            className="flex items-center gap-1.5 text-sm font-medium text-daintree-text hover:text-daintree-text/80 hover:underline underline-offset-2 transition-colors text-left"
+            className="flex items-center gap-1.5 text-sm font-medium text-text-primary hover:text-daintree-text/80 hover:underline underline-offset-2 transition-colors text-left"
             onClick={() => onStartEdit(selectedPreset)}
             aria-label={`Edit ${selectedPreset.name}`}
             title="Click to rename"
@@ -77,7 +77,7 @@ export function CustomPresetChrome({
         )}
         <div className="flex items-center gap-1.5 ml-auto shrink-0">
           <button
-            className="text-daintree-text/30 hover:text-daintree-text transition-colors"
+            className="text-daintree-text/30 hover:text-text-primary transition-colors"
             onClick={() => onDuplicate(selectedPreset)}
             aria-label={`Duplicate ${selectedPreset.name}`}
             title="Duplicate"
@@ -103,7 +103,7 @@ export function CustomPresetChrome({
         </label>
         <input
           id="preset-display-title-input"
-          className="w-full rounded-[var(--radius-md)] border border-border-strong bg-daintree-bg px-3 py-1.5 text-sm focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50 placeholder:text-text-placeholder"
+          className="w-full rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas px-3 py-1.5 text-sm focus:outline-hidden focus:ring-2 focus:ring-daintree-accent/50 placeholder:text-text-placeholder"
           value={selectedPreset.displayTitle ?? ""}
           onChange={(e) => onDisplayTitleChange(e.target.value)}
           maxLength={100}
