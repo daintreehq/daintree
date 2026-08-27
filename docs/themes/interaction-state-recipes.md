@@ -6,7 +6,7 @@ This document maps each interactive component role to its canonical Tailwind cla
 
 - **Never use `transition-all`** — forces Chromium to interpolate every computed property on every frame. Use specific transitions: `transition-colors`, `transition-opacity`, `transition-transform`, or explicit property lists like `transition-[width,height]`. (See lesson #4738)
 - **Never use `text-text-inverse` for hover states** — renders invisible in dark themes. Use theme-aware text colors like `text-text-primary` instead. (See lesson #4630)
-- **Prefer `outline` for focus rings** — `outline` is transparent and supports Windows High Contrast Mode. `ring` (box-shadow-based) is acceptable for active/dock states (e.g., `ring-1 ring-daintree-accent/30`), but for keyboard focus, always use `focus-visible:outline-*`.
+- **Prefer `outline` for focus rings** — `outline` is transparent and supports Windows High Contrast Mode. `ring` (box-shadow-based) is acceptable for active/dock states (e.g., `ring-1 ring-accent-primary/30`), but for keyboard focus, always use `focus-visible:outline-*`.
 - **Always use `:focus-visible`** — `:focus` shows rings on mouse clicks; `:focus-visible` only shows for keyboard navigation.
 - **Never use accent color as default hover** — it's a scarce resource reserved for one load-bearing signal per component.
 
