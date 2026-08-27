@@ -259,7 +259,9 @@ export function LauncherQuickActions() {
   const handleChipKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>, index: number) => {
     // Modified chords belong to the app's global keybindings, not to us.
     if (e.altKey || e.ctrlKey || e.metaKey || chips.length === 0) return;
-    let next = index;
+    // Declared without an initializer: every branch below either assigns or
+    // returns, so a default would be dead.
+    let next: number;
     if (e.key === "ArrowRight" || e.key === "ArrowDown") next = (index + 1) % chips.length;
     else if (e.key === "ArrowLeft" || e.key === "ArrowUp")
       next = (index - 1 + chips.length) % chips.length;
