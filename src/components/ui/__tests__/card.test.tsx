@@ -31,16 +31,20 @@ describe("Card rendering", () => {
     expect(card.id).toBe("settings-block");
   });
 
-  it("becomes the supplied element under asChild with no wrapper left behind", () => {
+  it("hosts its own interactive content without swallowing the semantics", () => {
     const onClick = vi.fn();
-    const { container } = render(
-      <Card asChild interactive>
+    render(
+      <Card interactive data-testid="card">
         <button type="button" onClick={onClick}>
           Pick this preset
         </button>
       </Card>
     );
-    expect(container.querySelectorAll("div")).toHaveLength(0);
+    const card = screen.getByTestId("card");
+    // The frame stays a plain div — it never becomes the control itself.
+    expect(card.tagName).toBe("DIV");
+    expect(card.getAttribute("role")).toBeNull();
+
     fireEvent.click(screen.getByRole("button", { name: "Pick this preset" }));
     expect(onClick).toHaveBeenCalledTimes(1);
   });
@@ -119,6 +123,17 @@ describe("cardVariants", () => {
     for (const variant of VARIANTS) {
       expectNoUnfocusedAccent(cardVariants({ variant, interactive: true }));
     }
+  });
+
+  it("exposes the resolved variant and padding for call sites to assert on", () => {
+    render(
+      <Card variant="elevated" padding="lg" data-testid="card">
+        Body
+      </Card>
+    );
+    const card = screen.getByTestId("card");
+    expect(card.getAttribute("data-variant")).toBe("elevated");
+    expect(card.getAttribute("data-padding")).toBe("lg");
   });
 
   it("lets a consumer class win its property group outright", () => {

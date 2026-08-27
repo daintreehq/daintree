@@ -59,18 +59,20 @@ describe("Badge rendering", () => {
     expect(badge.getAttribute("data-tone")).toBe("warning");
   });
 
-  it("becomes the supplied element under asChild with no wrapper left behind", () => {
+  // The supported way to make a badge clickable: a real button owns the
+  // semantics and the badge stays presentational inside it, so a tooltip
+  // trigger still has a genuine interactive element to attach to.
+  it("stays presentational inside an interactive wrapper", () => {
     const onClick = vi.fn();
-    const { container } = render(
-      <Badge asChild tone="info">
-        <button type="button" onClick={onClick}>
-          Open
-        </button>
-      </Badge>
+    render(
+      <button type="button" onClick={onClick}>
+        <Badge tone="info">Open</Badge>
+      </button>
     );
-    expect(container.querySelectorAll("span")).toHaveLength(0);
     const button = screen.getByRole("button", { name: "Open" });
-    expect(button.getAttribute("data-slot")).toBe("badge");
+    // No nested interactive element inside the button.
+    expect(button.querySelector("button")).toBeNull();
+    expect(button.querySelector('[data-slot="badge"]')!.tagName).toBe("SPAN");
 
     fireEvent.click(button);
     expect(onClick).toHaveBeenCalledTimes(1);

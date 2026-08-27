@@ -1,5 +1,4 @@
 import * as React from "react";
-import { Slot } from "@radix-ui/react-slot";
 import { cva, type VariantProps } from "class-variance-authority";
 
 import { cn } from "@/lib/utils";
@@ -40,24 +39,15 @@ const cardVariants = cva("rounded-[var(--radius-lg)] border", {
 
 export interface CardProps
   extends React.HTMLAttributes<HTMLDivElement>, VariantProps<typeof cardVariants> {
-  /** Render as the child element — a whole-card button or link. */
-  asChild?: boolean;
   ref?: React.Ref<HTMLDivElement>;
 }
 
-function Card({
-  className,
-  variant,
-  padding,
-  interactive,
-  asChild = false,
-  ref,
-  ...props
-}: CardProps) {
-  const Comp = asChild ? Slot : "div";
-
+// No `asChild`: it would pull `@radix-ui/react-slot` into the eager graph
+// (#7659) for an affordance nothing needs yet. A whole-card button can wrap
+// this one, or `asChild` can be added back alongside the call site that wants it.
+function Card({ className, variant, padding, interactive, ref, ...props }: CardProps) {
   return (
-    <Comp
+    <div
       ref={ref}
       className={cn(cardVariants({ variant, padding, interactive }), className)}
       {...props}

@@ -1,5 +1,4 @@
 import * as React from "react";
-import { Slot } from "@radix-ui/react-slot";
 import { cva, type VariantProps } from "class-variance-authority";
 
 import { cn } from "@/lib/utils";
@@ -45,15 +44,15 @@ const badgeVariants = cva(
 
 export interface BadgeProps
   extends React.HTMLAttributes<HTMLSpanElement>, VariantProps<typeof badgeVariants> {
-  asChild?: boolean;
   ref?: React.Ref<HTMLSpanElement>;
 }
 
-function Badge({ className, size, tone, shape, asChild = false, ref, ...props }: BadgeProps) {
-  const Comp = asChild ? Slot : "span";
-
+// No `asChild`: it would pull `@radix-ui/react-slot` into the eager graph
+// (#7659) to serve an interactive badge, and an interactive badge should be a
+// real `<button>` wrapping this one anyway.
+function Badge({ className, size, tone, shape, ref, ...props }: BadgeProps) {
   return (
-    <Comp
+    <span
       ref={ref}
       className={cn(badgeVariants({ size, tone, shape }), className)}
       {...props}
