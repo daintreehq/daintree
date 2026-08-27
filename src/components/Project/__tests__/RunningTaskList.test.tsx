@@ -104,21 +104,45 @@ describe("RunningTaskList overflow", () => {
     }
   });
 
-  it("counts only the hidden tasks on the trigger", () => {
-    seedTasks(8);
+  it("keeps the trigger's accessible name bounded, not a command dump", () => {
+    // A task command is an arbitrary-length string; enumerating the hidden ones
+    // would read a paragraph before the button's own state.
+    seedTasks(9, { command: "x".repeat(300) });
     render(<RunningTaskList worktreeId={WORKTREE_ID} />);
-    const trigger = screen.getByTestId("running-task-overflow");
-    expect(trigger.textContent).toContain("3");
-    expect(trigger.textContent).not.toContain("8");
+
+    const label = screen.getByTestId("running-task-overflow").getAttribute("aria-label") ?? "";
+    expect(label).toContain("4");
+    expect(label.length).toBeLessThan(80);
   });
 
-  it("names the hidden commands on the trigger so AT can judge before opening", () => {
-    seedTasks(7);
+  it("partitions the tasks without dropping or duplicating one", () => {
+    // Reads the split off the rendered output rather than restating the
+    // component's private cap.
+    seedTasks(11);
     render(<RunningTaskList worktreeId={WORKTREE_ID} />);
-    const label = screen.getByTestId("running-task-overflow").getAttribute("aria-label") ?? "";
-    expect(label).toContain("cmd-5");
-    expect(label).toContain("cmd-6");
-    expect(label).not.toContain("cmd-0");
+
+    const commands = Array.from({ length: 11 }, (_, i) => `cmd-${i}`);
+    const visible = () => commands.filter((c) => screen.queryAllByText(c).length > 0);
+
+    const inline = visible();
+    expect(inline.length).toBeGreaterThan(0);
+    expect(inline.length).toBeLessThan(commands.length);
+
+    openOverflow();
+    const all = visible();
+    expect(all).toHaveLength(commands.length);
+    expect(new Set(all).size).toBe(commands.length);
+  });
+
+  it("keeps the trigger's count equal to what the disclosure reveals", () => {
+    seedTasks(11);
+    render(<RunningTaskList worktreeId={WORKTREE_ID} />);
+
+    const shownBefore = Array.from({ length: 11 }, (_, i) => `cmd-${i}`).filter(
+      (c) => screen.queryAllByText(c).length > 0
+    ).length;
+    const trigger = screen.getByTestId("running-task-overflow");
+    expect(trigger.textContent).toContain(String(11 - shownBefore));
   });
 
   it("stops a hidden task, killing that task's own terminal", () => {

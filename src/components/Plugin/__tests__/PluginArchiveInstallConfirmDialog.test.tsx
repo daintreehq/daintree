@@ -534,9 +534,26 @@ describe("PluginArchiveInstallConfirmDialog", () => {
       render(<PluginArchiveInstallConfirmDialog />);
       enqueue(recipeIntent(24));
 
-      for (const i of [0, 9, 10, 23]) {
-        expect(screen.getByText(`Recipe ${i}`)).toBeTruthy();
-      }
+      const rendered = Array.from(
+        screen.getByTestId("archive-recipe-list").querySelectorAll("li"),
+        (li) => li.textContent
+      );
+      expect(rendered).toEqual(Array.from({ length: 24 }, (_, i) => `Recipe ${i}`));
+    });
+
+    it("renders one row per contribution when two recipes share a name", () => {
+      render(<PluginArchiveInstallConfirmDialog />);
+      enqueue(
+        intent({
+          manifest: {
+            ...intent().manifest,
+            recipes: { count: 2, names: ["Deploy", "Deploy"] },
+          },
+        })
+      );
+
+      // Two recipes are two things to approve even when they read alike.
+      expect(screen.getByTestId("archive-recipe-list").querySelectorAll("li")).toHaveLength(2);
     });
 
     it("leaves no overflow count beside the recipe list", () => {

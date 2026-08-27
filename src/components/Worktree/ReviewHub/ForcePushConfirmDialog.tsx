@@ -109,9 +109,14 @@ export function ForcePushConfirmDialog({
   const commits = preview?.commits ?? null;
   // Both the rows and the total come from the same `HEAD..<push ref>` range, so
   // the tail can't be computed against a different repository's ref (#11746).
-  const totalRemote = preview?.total ?? 0;
-  const hiddenCount =
-    commits !== null && totalRemote > commits.length ? totalRemote - commits.length : 0;
+  // `git log` and the range count are two reads in the handler, so a fetch
+  // landing between them can return a total below the rows already in hand. The
+  // rows are proof the range holds at least that many, so the larger of the two
+  // is the only figure that can't understate what a force push would discard —
+  // and a badge reading 3 above 12 listed commits is the kind of contradiction
+  // a destructive confirm can least afford.
+  const totalRemote = Math.max(preview?.total ?? 0, commits?.length ?? 0);
+  const hiddenCount = commits !== null ? Math.max(0, totalRemote - commits.length) : 0;
   // Optional-chained rather than keyed off `preview` alone: this crosses the
   // IPC boundary, so a payload missing the field must degrade to the branch
   // name rather than throwing inside a destructive confirm.

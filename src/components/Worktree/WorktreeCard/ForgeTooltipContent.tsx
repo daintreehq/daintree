@@ -188,7 +188,11 @@ interface LabelBadgeProps {
 function LabelBadge({ name, color }: LabelBadgeProps) {
   return (
     <span
-      className="inline-flex items-center max-w-full min-w-0 break-words px-1.5 py-0.5 rounded-full text-[10px] font-medium"
+      // `inline-block`, not `inline-flex`: `break-words` acts on an element's
+      // own inline content, and a flex container's anonymous text child keeps
+      // its min-content width instead, so one long label used to paint past
+      // the badge and get clipped by the tooltip.
+      className="inline-block max-w-full break-words [overflow-wrap:anywhere] px-1.5 py-0.5 rounded-full text-[10px] font-medium"
       style={{
         backgroundColor: `#${color}20`,
         color: `#${color}`,
@@ -201,22 +205,41 @@ function LabelBadge({ name, color }: LabelBadgeProps) {
 }
 
 /**
+ * How many label chips a hover tooltip will render.
+ *
+ * Double the builtin GitHub provider's own `labels(first: 10)` page, so in
+ * practice every label an issue carries is shown and this never engages. It
+ * exists because `ForgeLabel[]` is unbounded in the provider contract: a plugin
+ * forge could return hundreds, and a tooltip can't scroll, so the row would
+ * grow past the viewport and be clipped by the tooltip's own `overflow-hidden`.
+ */
+const MAX_TOOLTIP_LABELS = 20;
+
+/**
  * Every label, not the first four.
  *
  * The row used to cut off at four and count the rest, which put the tail behind
  * a "+N more" that sits inside a hover tooltip — there is no further surface to
  * open from there, so the count named content the user could not reach
- * (#12001). The forge queries already bound this: `labels(first: 10)`, so the
- * honest version adds at most six chips to a wrapping row. `LabelBadge` wraps
- * rather than widens, so a single long provider-supplied label can't push the
- * tooltip past its `max-w-[280px]`.
+ * (#12001). `LabelBadge` wraps rather than widens, so a single long
+ * provider-supplied label can't push the tooltip past its `max-w-[280px]`.
+ *
+ * Past `MAX_TOOLTIP_LABELS` the row states what it is showing as a fact rather
+ * than counting a remainder: there is genuinely no surface to route to from
+ * inside a tooltip, and the badge itself already opens the issue.
  */
 function LabelRow({ labels }: { labels: readonly ForgeLabel[] }) {
+  const shown = labels.slice(0, MAX_TOOLTIP_LABELS);
   return (
-    <div className="flex flex-wrap gap-1 pt-1">
-      {labels.map((label) => (
+    <div className="flex flex-wrap items-baseline gap-1 pt-1">
+      {shown.map((label) => (
         <LabelBadge key={label.name} name={label.name} color={label.color ?? "8b949e"} />
       ))}
+      {labels.length > shown.length && (
+        <span className="text-[10px] text-daintree-text/40">
+          Showing {shown.length} of {labels.length}
+        </span>
+      )}
     </div>
   );
 }

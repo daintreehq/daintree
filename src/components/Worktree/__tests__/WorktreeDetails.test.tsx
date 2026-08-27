@@ -254,6 +254,24 @@ describe("WorktreeDetails error overflow", () => {
     expect(screen.getByText("Worktree failure 5")).toBeDefined();
   });
 
+  it("opens the disclosure without triggering the card behind it", () => {
+    // WorktreeDetails renders inside a click-to-select card; from the overview
+    // modal that selection unmounts the card, so an unstopped click would open
+    // the disclosure and destroy it in the same gesture.
+    const onParentClick = vi.fn();
+    render(
+      <TooltipProvider>
+        <div onClick={onParentClick}>
+          <WorktreeDetails {...baseProps} worktreeErrors={errors(6)} />
+        </div>
+      </TooltipProvider>
+    );
+
+    fireEvent.click(screen.getByTestId("compact-error-overflow"));
+    expect(onParentClick).not.toHaveBeenCalled();
+    expect(screen.getByText("Worktree failure 5")).toBeDefined();
+  });
+
   it("routes a hidden error's dismissal back to the surface's own handler", () => {
     const onDismissError = vi.fn();
     renderDetails({ worktreeErrors: errors(5), onDismissError });

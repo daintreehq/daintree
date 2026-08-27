@@ -96,10 +96,41 @@ describe("ForcePushConfirmDialog preview", () => {
     expect(limit).toBe(100);
   });
 
-  it("renders one row per fetched commit", async () => {
+  it("renders each fetched commit once, in the order the range returned them", async () => {
     listRemoteCommits.mockResolvedValue(preview(12));
     renderDialog();
     await waitFor(() => expect(screen.getAllByTestId("force-push-commit-row")).toHaveLength(12));
+
+    const rows = screen.getAllByTestId("force-push-commit-row");
+    const messages = rows.map((r) => r.textContent ?? "");
+    expect(messages[0]).toContain("remote commit 0");
+    expect(messages.at(-1)).toContain("remote commit 11");
+    expect(new Set(messages).size).toBe(rows.length);
+  });
+
+  it("shows each row's own short hash and author, not just its subject", async () => {
+    // A D2 preview is judged on whether the content identifies the commits, so
+    // a row that renders only a message is not a preview.
+    listRemoteCommits.mockResolvedValue(preview(2));
+    renderDialog();
+    await flush();
+
+    const first = screen.getAllByTestId("force-push-commit-row")[0]!;
+    expect(first.textContent).toContain("aaaaaaa");
+    expect(first.textContent).toContain("Ada");
+  });
+
+  it("never reports a total below the commits it is already listing", async () => {
+    // `git log` and the range count are separate reads in the handler, so a
+    // fetch between them can return a stale, smaller total. The rows in hand
+    // prove the range holds at least that many.
+    listRemoteCommits.mockResolvedValue(preview(12, 3));
+    renderDialog();
+    await flush();
+
+    expect(screen.getAllByTestId("force-push-commit-row")).toHaveLength(12);
+    expect(screen.queryByTestId("force-push-commit-cap")).toBeNull();
+    expect(screen.queryByText("3")).toBeNull();
   });
 
   it("adds no cap notice while every diverged commit is listed", async () => {
@@ -187,7 +218,14 @@ describe("ForcePushConfirmDialog preview", () => {
       await Promise.resolve();
     });
 
-    expect(listRemoteCommits).toHaveBeenCalledTimes(2);
-    expect(listRemoteCommits.mock.calls[1]![2]).toBe(100);
+    // Same request as the first attempt — a retry that quietly narrowed the
+    // range would hand back a different preview than the one that failed.
+    expect(listRemoteCommits.mock.calls[1]).toEqual(listRemoteCommits.mock.calls[0]);
+    // And it recovers: the error clears, rows appear, and confirm arms.
+    expect(screen.queryByTestId("force-push-commits-retry")).toBeNull();
+    expect(screen.getAllByTestId("force-push-commit-row")).toHaveLength(2);
+    expect(
+      (screen.getByRole("button", { name: /force push/i }) as HTMLButtonElement).disabled
+    ).toBe(false);
   });
 });

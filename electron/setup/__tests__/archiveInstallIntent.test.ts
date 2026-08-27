@@ -469,10 +469,34 @@ describe("archiveInstallIntent", () => {
     const [intent] = intentsFrom(painted.sent);
     const recipes = (intent as { manifest: { recipes: { count: number; names: string[] } } })
       .manifest.recipes;
-    expect(recipes.names).toHaveLength(declared.length);
+    // The whole ordered sequence: a length check alone would pass if a middle
+    // entry were duplicated or reordered.
+    expect(recipes.names).toEqual(declared.map((r) => r.name));
     expect(recipes.count).toBe(recipes.names.length);
-    // The last one specifically: a `.slice()` regression keeps the head intact.
-    expect(recipes.names.at(-1)).toBe(declared.at(-1)!.name);
+  });
+
+  it("preserves two recipes that declare the same name (#12001)", async () => {
+    const painted = makePainted();
+    deepLinkMock.painted = painted.wc;
+    archiveMock.readArchiveManifest.mockResolvedValue(
+      manifest({
+        contributes: {
+          recipes: [
+            { id: "a", name: "Deploy", terminals: [] },
+            { id: "b", name: "Deploy", terminals: [] },
+          ],
+        },
+      } as unknown as Partial<PluginManifest>)
+    );
+
+    const { enqueueArchiveInstallIntent } = await importFresh();
+    await enqueueArchiveInstallIntent(P("dupe-recipes.dntr"));
+
+    const [intent] = intentsFrom(painted.sent);
+    const recipes = (intent as { manifest: { recipes: { count: number; names: string[] } } })
+      .manifest.recipes;
+    // Two recipes are two things to approve even when they read alike.
+    expect(recipes.names).toEqual(["Deploy", "Deploy"]);
   });
 
   it("still clamps and sanitizes names once the subset cap is gone (#12001)", async () => {

@@ -1,5 +1,5 @@
 // @vitest-environment jsdom
-import { render, screen } from "@testing-library/react";
+import { cleanup, render, screen } from "@testing-library/react";
 import { describe, expect, it, vi } from "vitest";
 import type { ForgeUser, IssueTooltipData, PRTooltipData } from "@shared/types/forge";
 
@@ -301,9 +301,31 @@ describe("ForgeTooltipContent labels", () => {
     expect(screen.queryByText(/more$/)).toBeNull();
   });
 
-  it("renders no label row when there are no labels", () => {
-    const { container } = render(<IssueTooltipContent data={{ ...issueData, labels: [] }} />);
-    expect(container.textContent).not.toContain("label-");
+  it("renders no label row at all when there are no labels", () => {
+    const withLabels = render(<IssueTooltipContent data={{ ...issueData, labels: manyLabels }} />);
+    const withLabelsNodes = withLabels.container.querySelectorAll("div").length;
+    cleanup();
+
+    const empty = render(<IssueTooltipContent data={{ ...issueData, labels: [] }} />);
+    // An empty row shell would still take the row's `pt-1`, opening a gap under
+    // the metadata line for nothing.
+    expect(empty.container.querySelectorAll("div").length).toBeLessThan(withLabelsNodes);
+  });
+
+  it("bounds the row when a provider returns far more labels than a forge page", () => {
+    // `ForgeLabel[]` is unbounded in the provider contract and a tooltip can't
+    // scroll, so an unbounded row would run past the viewport and be clipped by
+    // the tooltip's own overflow.
+    const flood = Array.from({ length: 300 }, (_, i) => ({ name: `flood-${i}`, color: "8b949e" }));
+    const { container } = render(<IssueTooltipContent data={{ ...issueData, labels: flood }} />);
+
+    const rendered = container.textContent ?? "";
+    const chips = flood.filter((l) => screen.queryByText(l.name) !== null);
+    expect(chips.length).toBeLessThan(flood.length);
+    // And it says what it is showing rather than counting a remainder nothing
+    // could open.
+    expect(rendered).toContain(String(flood.length));
+    expect(rendered).not.toMatch(/\+\d+ more/);
   });
 
   it("falls back to a neutral colour for a label the provider left uncoloured", () => {

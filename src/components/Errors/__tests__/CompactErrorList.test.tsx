@@ -83,14 +83,39 @@ describe("CompactErrorList", () => {
     expect(screen.getByTestId("compact-error-overflow").textContent).toMatch(/2 more errors/);
   });
 
-  it("names the hidden messages on the trigger so AT can judge before opening", () => {
-    render(<CompactErrorList errors={makeErrors(5)} maxInline={3} onDismiss={vi.fn()} />);
+  it("keeps the trigger's accessible name bounded, not an error-message dump", () => {
+    // An error message is an arbitrary-length string. Enumerating the hidden
+    // ones would make focusing this button read a paragraph before its state,
+    // and the popover exposes the rows themselves once opened.
+    const errors = makeErrors(4).map((e) => ({ ...e, message: "x".repeat(400) }));
+    render(<CompactErrorList errors={errors} maxInline={1} onDismiss={vi.fn()} />);
+
     const label = screen.getByTestId("compact-error-overflow").getAttribute("aria-label") ?? "";
-    expect(label).toContain("Failure 3");
-    expect(label).toContain("Failure 4");
-    // The inline ones are already on screen; repeating them would double the
-    // announcement.
-    expect(label).not.toContain("Failure 0");
+    expect(label).toContain("3");
+    expect(label.length).toBeLessThan(80);
+  });
+
+  it("puts everything behind the disclosure when nothing may render inline", () => {
+    render(<CompactErrorList errors={makeErrors(3)} maxInline={0} onDismiss={vi.fn()} />);
+    expect(screen.queryByText("Failure 0")).toBeNull();
+
+    openOverflow();
+    expect(screen.getByText("Failure 0")).toBeTruthy();
+  });
+
+  it("partitions the list without dropping or duplicating an error", () => {
+    const errors = makeErrors(9);
+    render(<CompactErrorList errors={errors} maxInline={4} onDismiss={vi.fn()} />);
+
+    const visible = () =>
+      errors.filter((e) => screen.queryByText(e.message) !== null).map((e) => e.message);
+    const inline = visible();
+    openOverflow();
+    const all = visible();
+
+    expect(inline.length).toBeGreaterThan(0);
+    expect(all).toHaveLength(errors.length);
+    expect(new Set(all).size).toBe(errors.length);
   });
 
   it("keeps dismiss wired for a hidden error, forwarding its own id", () => {
@@ -135,9 +160,59 @@ describe("CompactErrorList", () => {
     expect(screen.getByText("Failure 4")).toBeTruthy();
 
     rerender(<CompactErrorList errors={makeErrors(2)} maxInline={2} onDismiss={vi.fn()} />);
-    // Unmounting the disclosure with the tail is what stops a reopened popover
-    // from anchoring to a trigger that no longer has anything behind it.
     expect(screen.queryByTestId("compact-error-overflow")).toBeNull();
     expect(screen.queryByText("Failure 4")).toBeNull();
+  });
+
+  it("comes back closed after the tail empties and refills", () => {
+    // The open flag has to die with the tail. Held a level up it would survive
+    // it, and a later error would remount the disclosure already open — taking
+    // focus from whatever the user moved on to.
+    const { rerender } = render(
+      <CompactErrorList errors={makeErrors(5)} maxInline={2} onDismiss={vi.fn()} />
+    );
+    openOverflow();
+    expect(screen.getByText("Failure 4")).toBeTruthy();
+
+    rerender(<CompactErrorList errors={makeErrors(2)} maxInline={2} onDismiss={vi.fn()} />);
+    rerender(<CompactErrorList errors={makeErrors(5)} maxInline={2} onDismiss={vi.fn()} />);
+
+    expect(screen.getByTestId("compact-error-overflow")).toBeTruthy();
+    expect(screen.queryByText("Failure 4")).toBeNull();
+  });
+
+  it("keeps a click on the trigger out of an enclosing click handler", () => {
+    // These banners live inside a click-to-select worktree card; from the
+    // overview modal that selection unmounts the card, so an unstopped click
+    // would open the disclosure and destroy it in the same gesture.
+    const onParentClick = vi.fn();
+    render(
+      <div onClick={onParentClick}>
+        <CompactErrorList errors={makeErrors(5)} maxInline={2} onDismiss={vi.fn()} />
+      </div>
+    );
+
+    openOverflow();
+    expect(onParentClick).not.toHaveBeenCalled();
+    expect(screen.getByText("Failure 4")).toBeTruthy();
+  });
+
+  it("keeps a hidden row's own action out of an enclosing click handler", () => {
+    // A portal moves the DOM but not the React tree, so the row's buttons still
+    // bubble to the card without a boundary on the content itself.
+    const onParentClick = vi.fn();
+    const onDismiss = vi.fn();
+    render(
+      <div onClick={onParentClick}>
+        <CompactErrorList errors={makeErrors(5)} maxInline={2} onDismiss={onDismiss} />
+      </div>
+    );
+
+    openOverflow();
+    const row = screen.getByText("Failure 4").closest("div")!;
+    fireEvent.click(within(row.parentElement ?? row).getAllByLabelText(/dismiss/i)[0]!);
+
+    expect(onDismiss).toHaveBeenCalledWith("err-4");
+    expect(onParentClick).not.toHaveBeenCalled();
   });
 });

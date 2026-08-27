@@ -214,9 +214,11 @@ function TaskOverflow({
       <PopoverTrigger
         type="button"
         data-testid="running-task-overflow"
-        aria-label={`${tasks.length} more ${tasks.length === 1 ? "task" : "tasks"}: ${tasks
-          .map((t) => t.command || t.title)
-          .join(", ")}`}
+        // Deliberately not an enumeration of every hidden command: a task
+        // command is an arbitrary-length string, and concatenating several
+        // makes focusing this button read a paragraph before its state. The
+        // popover is labelled and exposes the rows themselves once opened.
+        aria-label={`Show ${tasks.length} more running ${tasks.length === 1 ? "task" : "tasks"}`}
         className={cn(
           "flex w-full items-center gap-0.5 px-2 py-0.5 rounded-[var(--radius-sm)] text-[10px] font-sans transition-colors",
           "text-daintree-text/40 hover:text-daintree-text/70 hover:bg-tint/[0.04]",
@@ -308,7 +310,7 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
       )}
 
       {/* Actions */}
-      <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 transition-opacity shrink-0">
+      <div className="flex items-center gap-0.5 opacity-0 group-hover:opacity-100 group-focus-within:opacity-100 transition-opacity shrink-0">
         {isActive && (
           <button
             onClick={(e) => {
