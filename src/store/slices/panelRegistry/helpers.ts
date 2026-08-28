@@ -40,10 +40,35 @@ export function recordExplicitWorktreeAttribution(id: string, worktreeId: string
  * substitute a root or an active worktree for an absent one.
  *
  * Lives here for the same reason `recordExplicitWorktreeAttribution` does: the
- * single-panel move (`restart.ts`), the grouped move (`tabGroups.ts`) and the
- * layout-undo restore all need it, and importing one from another would close a
+ * moves (`restart.ts`, `tabGroups.ts`), the promotions (`core.ts`,
+ * `ordering.ts`), the restores (`trashActions.ts`, `background.ts`) and the
+ * layout-undo pass all need it, and importing one from another would close a
  * cycle.
  */
+export function syncWorktreeAttributionToHost(id: string, worktreeId: string | null): void {
+  try {
+    terminalClient.updateWorktreeId(id, worktreeId);
+  } catch (error) {
+    logWarn("[PanelRegistry] Failed to sync worktree filing to the pty host", { id, error });
+  }
+}
+
+/**
+ * Mirror a panel's own current filing onto the pty-host record, skipping
+ * non-PTY kinds that have no record to update.
+ *
+ * Callers read the panel back out of the store after their commit rather than
+ * reusing the value they wrote: a promotion or restore that adopted a worktree
+ * can be overtaken by a move landing between the two, and the live panel is
+ * what the palette should agree with.
+ */
+export function syncLiveWorktreeAttributionToHost(
+  livePanel: { id: string; worktreeId?: string; kind?: PanelKind } | undefined
+): void {
+  if (!livePanel || !panelKindHasPty(livePanel.kind ?? "terminal")) return;
+  syncWorktreeAttributionToHost(livePanel.id, livePanel.worktreeId ?? null);
+}
+
 /**
  * Close the window between reading a spawn payload's worktree and the pty-host
  * actually holding a record for it.
@@ -69,14 +94,6 @@ export function reconcileWorktreeAfterSpawn(
   if (!livePanel || !panelKindHasPty(livePanel.kind ?? "terminal")) return;
   if (livePanel.worktreeId === spawnedWith) return;
   syncWorktreeAttributionToHost(id, livePanel.worktreeId ?? null);
-}
-
-export function syncWorktreeAttributionToHost(id: string, worktreeId: string | null): void {
-  try {
-    terminalClient.updateWorktreeId(id, worktreeId);
-  } catch (error) {
-    logWarn("[PanelRegistry] Failed to sync worktree filing to the pty host", { id, error });
-  }
 }
 
 type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];

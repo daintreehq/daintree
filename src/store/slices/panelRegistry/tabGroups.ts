@@ -13,6 +13,7 @@ import {
   deriveRuntimeStatus,
   dissolvePanelFromGroup,
   recordExplicitWorktreeAttribution,
+  syncLiveWorktreeAttributionToHost,
   syncWorktreeAttributionToHost,
 } from "./helpers";
 import {
@@ -434,6 +435,10 @@ export const createTabGroupActions = (
     if (adoptedWorktreeId !== null) {
       for (const pid of backfilledPanelIds) {
         recordExplicitWorktreeAttribution(pid, adoptedWorktreeId);
+        // Per member, for the same reason the ledger write is: one promotion
+        // re-files every run in the group, and the pty-host record each is
+        // grouped by in the fleet palette only moves if it is told (#12060).
+        syncLiveWorktreeAttributionToHost(get().panelsById[pid]);
       }
     }
 

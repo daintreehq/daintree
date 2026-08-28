@@ -18,6 +18,7 @@ import {
   stopDevPreviewByPanelId,
   dissolvePanelFromGroup,
   computeRestoredTabGroup,
+  syncWorktreeAttributionToHost,
 } from "./helpers";
 
 type Set = PanelRegistryStoreApi["setState"];
@@ -238,6 +239,15 @@ export const createBackgroundActions = (
     });
 
     if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
+      // A restore can re-file the run — onto a caller-named worktree, or onto
+      // the active one when it rescues a worktree-less pane dock→grid. The PTY
+      // survived the backgrounding, so its host record still carries the old
+      // filing and the fleet palette would keep grouping by it (#12060).
+      const restored = get().panelsById[id];
+      if (restored && restored.worktreeId !== terminal.worktreeId) {
+        syncWorktreeAttributionToHost(id, restored.worktreeId ?? null);
+      }
+
       if (restoreLocation === "dock") {
         optimizeForDock(id);
       } else {
@@ -291,6 +301,13 @@ export const createBackgroundActions = (
         : (anchorPanel?.groupMetadata?.worktreeId ??
           (rescuedToGrid && activeWorktreeId !== null ? activeWorktreeId : undefined));
 
+    // Captured before the commit: read afterwards, every member would already
+    // describe the destination and no move would look like one.
+    const worktreeBeforeRestore = new Map<string, string | undefined>();
+    for (const { id } of groupPanels) {
+      worktreeBeforeRestore.set(id, get().panelsById[id]?.worktreeId);
+    }
+
     set((state) => {
       const panelIdsInGroup = new Set(groupPanels.map(({ id }) => id));
       const newById = { ...state.panelsById };
@@ -320,6 +337,16 @@ export const createBackgroundActions = (
         backgroundedTerminals: newBackgrounded,
       };
     });
+
+    // Per member, exactly as the single restore does its own: a grouped restore
+    // re-files every one of them, and the host record each is grouped by in the
+    // fleet palette only moves if it is told (#12060).
+    for (const [pid, previous] of worktreeBeforeRestore) {
+      const restored = get().panelsById[pid];
+      if (!restored || !panelKindHasPty(restored.kind ?? "terminal")) continue;
+      if (restored.worktreeId === previous) continue;
+      syncWorktreeAttributionToHost(pid, restored.worktreeId ?? null);
+    }
 
     // Recreate the tab group if we have multiple valid panels
     const restoredPanelIds = groupPanels.map(({ id }) => id);

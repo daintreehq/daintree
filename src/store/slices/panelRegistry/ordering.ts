@@ -5,7 +5,11 @@ import { terminalInstanceService } from "@/services/TerminalInstanceService";
 import { TerminalRefreshTier } from "@/types";
 import { saveNormalized, saveTabGroups } from "./persistence";
 import { optimizeForDock } from "./layout";
-import { deriveRuntimeStatus, removePanelIdsFromTabGroups } from "./helpers";
+import {
+  deriveRuntimeStatus,
+  removePanelIdsFromTabGroups,
+  syncLiveWorktreeAttributionToHost,
+} from "./helpers";
 import { buildWorktreeIndex, panelMatchesWorktreeScope } from "./worktreeIndex";
 import { getNarrowPanel } from "./selectors";
 import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
@@ -188,6 +192,10 @@ export const createOrderingActions = (
           "explicit"
         );
       }
+      // A drag out of the dock onto a worktree's grid re-files the run, and the
+      // pty-host record the fleet palette groups by only moves if it is told
+      // (#12060).
+      syncLiveWorktreeAttributionToHost(get().panelsById[id]);
     }
 
     const terminal = get().panelsById[id];

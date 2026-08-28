@@ -539,6 +539,15 @@ export const createTrashActions = (
       });
 
       if (terminal && panelKindHasPty(terminal.kind ?? "terminal")) {
+        // This last defensive restore boundary rescues a worktree-less pane
+        // dock→grid onto the active worktree too, so it re-files the run the
+        // same way `restoreTerminal` does — and the host record the fleet
+        // palette groups by only moves if it is told (#12060).
+        const restored = get().panelsById[id];
+        if (restored && restored.worktreeId !== terminal.worktreeId) {
+          syncWorktreeAttributionToHost(id, restored.worktreeId ?? null);
+        }
+
         if (restoreLocation === "dock") {
           optimizeForDock(id);
         } else {
