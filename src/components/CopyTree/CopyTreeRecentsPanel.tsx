@@ -115,7 +115,14 @@ export function CopyTreeRecentsPanel({
       data-copy-tree-panel=""
       role="dialog"
       aria-label="Copy context"
-      className="w-[320px] max-h-[420px] flex flex-col"
+      // Keeps its own 420px ceiling — this panel's proportions are not being
+      // redesigned here — but stops that ceiling exceeding the room actually
+      // left under the anchor, so a short window no longer runs the list off
+      // the bottom of the screen. The variable comes from FixedDropdown's
+      // positioning pass; the fallback preserves the previous behaviour if
+      // this ever renders outside that shell. Same mechanism the notification
+      // center adopted in #12061.
+      className="w-[320px] max-h-[min(420px,var(--fixed-dropdown-available-height,420px))] flex flex-col"
     >
       {/* No headings: the framed primary button IS the header, and everything
           under the divider is self-evidently the run history — each row names

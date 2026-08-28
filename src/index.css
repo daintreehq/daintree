@@ -3015,6 +3015,34 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     border: 1px solid CanvasText;
   }
 
+  /* Inbox thread rail. This used to be a `border-l-2`, which survived the
+     override on its own but pushed every threaded row 2px right of every solo
+     one. It is now an absolutely positioned background, and a background is
+     forced to Canvas here — so repaint it, or threaded rows lose their only
+     at-rest marker in the one mode that has no other way to show it. */
+  [data-notification-thread-rail="true"] {
+    background-color: CanvasText !important;
+  }
+
+  /* Inbox filter segments. Selection is carried by a fill, which the UA
+     flattens to Canvas, so all four chips arrive as the same outlined pill and
+     the panel stops saying which filter you are looking at — you cannot tell
+     Archived from All. Same shape of problem as the destructive button above,
+     and the same remedy: the selected one takes the heavier border. Not
+     Highlight — this block already spends Highlight on `*:focus-visible`, and a
+     chip can be both selected and focused. */
+  [data-notification-filter="true"][aria-pressed="true"] {
+    border: 2px solid ButtonText;
+  }
+
+  /* Inbox row actions. Primary is marked by a status-info fill and border; both
+     are flattened, leaving "Pull and rebase" and "Open review" identical, so the
+     recommended action loses its recommendation at exactly the moment the row is
+     reporting a failure. */
+  [data-notification-action="primary"] {
+    border: 2px solid ButtonText;
+  }
+
   /* Shared hook for status marks painted as a background — the small discs and
      the rotated anomaly diamond scattered across settings, panels, the toolbar
      and the worktree surfaces (#12000). The UA forces every one of those fills
@@ -3133,6 +3161,18 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
   .terminal-selected-quiet,
   .terminal-focused {
     border-width: 2px;
+  }
+
+  /* Inbox filter segments. This mode outlines the unselected chips but leaves
+     the selected one carrying only its fill, so the one chip that is different
+     is the one missing the silhouette its siblings share and the row reads as
+     three buttons plus a smudge. Give the selected chip the same ring, inset so
+     it sits inside the pill rather than growing it. Separate from the
+     forced-colors rule on purpose — author colours survive here, so the fill
+     still does its job and only the outline is missing. */
+  [data-notification-filter="true"][aria-pressed="true"] {
+    outline: 1px solid var(--color-border-strong);
+    outline-offset: -1px;
   }
 
   /* Overview grid membership: the neutral inset ring is deliberately quiet at

@@ -18,7 +18,7 @@ import { actionService } from "@/services/ActionService";
 import { EVENT_KIND_LABEL, isNotificationEventKind, notify } from "@/lib/notify";
 import type { ActionId } from "@shared/types/actions";
 import type { NotificationType } from "@/store/notificationStore";
-import { DURATION_250 } from "@/lib/animationUtils";
+import { DURATION_150, DURATION_250 } from "@/lib/animationUtils";
 import { useCopyWithFeedback } from "@/hooks/useCopyWithFeedback";
 import {
   formatNotificationCountAriaLabel,
@@ -195,7 +195,7 @@ export function NotificationCenterEntry({
       role={role}
       onFocus={onFocus}
       className={cn(
-        "group flex items-start gap-2 px-3 py-2.5 hover:bg-overlay-subtle transition-colors",
+        "group flex items-start gap-2 pl-4 pr-3 py-2.5 hover:bg-overlay-subtle transition-colors",
         // The shared palette-row focus treatment, not a bespoke ring: `outline`
         // survives Windows High Contrast where a box-shadow ring does not, and
         // the offset is negative because this row is full-bleed inside three
@@ -205,9 +205,12 @@ export function NotificationCenterEntry({
       )}
     >
       <div className={cn("relative shrink-0", config.className)}>
-        {/* The unread dot floats in the row's px-3 gutter (absolute, anchored
-            to the icon) so read rows don't carry a phantom spacer column and
-            the icon shares the 12px gutter with the header and section labels. */}
+        {/* The unread dot floats in the row's left gutter (absolute, anchored to
+            the icon) so read rows don't carry a phantom spacer column. The
+            gutter is 16px rather than 12px so this 6px dot sits inside the
+            panel's margin instead of hanging off the edge next to the thread
+            rail — the icon still shares that gutter with the header, the chip
+            row and the section labels. */}
         {isNew && (
           <span
             aria-hidden="true"
@@ -242,7 +245,7 @@ export function NotificationCenterEntry({
                 // to Canvas there, leaving a bare numeral that reads as part of
                 // the title.
                 data-notification-count="true"
-                style={{ animationDuration: "150ms" }}
+                style={{ animationDuration: `${DURATION_150}ms` }}
                 className={cn(
                   "shrink-0 rounded-full bg-tint/15 px-1.5 py-0.5 text-3xs font-medium leading-none text-daintree-text/60 tabular-nums min-w-[2.5ch] text-center",
                   bumpKey > 0 && "animate-badge-bump"
@@ -274,7 +277,7 @@ export function NotificationCenterEntry({
             key={bumpKey}
             aria-label={formatNotificationCountAriaLabel(safeCount)}
             data-notification-count="true"
-            style={{ animationDuration: "150ms" }}
+            style={{ animationDuration: `${DURATION_150}ms` }}
             className={cn(
               "col-span-2 row-start-2 mt-0.5 justify-self-start rounded-full bg-tint/15 px-1.5 py-0.5 text-3xs font-medium leading-none text-daintree-text/60 tabular-nums min-w-[2.5ch] text-center",
               bumpKey > 0 && "animate-badge-bump"
@@ -292,6 +295,15 @@ export function NotificationCenterEntry({
                 <button
                   key={`${action.actionId}-${index}`}
                   type="button"
+                  // Handle for the `forced-colors: active` block in index.css.
+                  // Primary is marked by its status-info fill and border, and
+                  // the UA flattens both — so "Pull and rebase" and "Open
+                  // review" render as the same white pill and the recommended
+                  // action stops being recommended. Same fix as the destructive
+                  // button in that block: a heavier border.
+                  data-notification-action={
+                    action.variant === "secondary" ? "secondary" : "primary"
+                  }
                   aria-disabled={!isAvailable || undefined}
                   title={
                     !isAvailable ? (manifest?.disabledReason ?? "Action unavailable") : undefined
