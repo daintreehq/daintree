@@ -115,7 +115,7 @@ export function FileBrowserVisibilitySettings() {
             onClick={commitAdd}
             disabled={draft.trim() === ""}
             aria-label="Add pattern"
-            className="flex items-center gap-1 rounded-[var(--radius-md)] border border-border-default px-3 py-1.5 text-sm text-daintree-text/70 transition-colors hover:bg-daintree-border/50 hover:text-text-primary disabled:opacity-50"
+            className="flex items-center gap-1 rounded-[var(--radius-md)] border border-border-default px-3 py-1.5 text-sm text-text-secondary transition-colors hover:bg-daintree-border/50 hover:text-text-primary disabled:opacity-50"
           >
             <Plus className="h-4 w-4" />
             Add
@@ -131,7 +131,7 @@ export function FileBrowserVisibilitySettings() {
               resetPatterns();
               setError(null);
             }}
-            className="flex items-center gap-1 text-xs text-daintree-text/50 transition-colors hover:text-text-primary"
+            className="flex items-center gap-1 text-xs text-text-secondary transition-colors hover:text-text-primary"
           >
             <RotateCcw className="h-3 w-3" />
             Reset to defaults

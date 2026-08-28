@@ -54,11 +54,11 @@ function ThemeListItem({
       <div className="flex-1 min-w-0">
         <div className="text-sm font-medium text-text-primary truncate">{scheme.name}</div>
         {scheme.location && (
-          <div className="text-2xs text-daintree-text/50 truncate">{scheme.location}</div>
+          <div className="text-2xs text-text-secondary truncate">{scheme.location}</div>
         )}
       </div>
       <div className="flex items-center gap-2 shrink-0">
-        <span className="text-3xs uppercase tracking-wider text-daintree-text/40 transition-colors group-aria-selected:text-daintree-text/60">
+        <span className="text-3xs uppercase tracking-wider text-text-secondary transition-colors group-aria-selected:text-text-primary">
           {scheme.type === "light" ? "Light" : "Dark"}
         </span>
         {isActive && (

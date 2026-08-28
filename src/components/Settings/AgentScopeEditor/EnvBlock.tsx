@@ -19,8 +19,8 @@ function EnvVarReference({ suggestions }: { suggestions: EnvSuggestion[] }) {
       <p className="text-2xs text-text-secondary pb-0.5">Available env overrides:</p>
       {suggestions.map(({ key, hint }) => (
         <div key={key} className="flex items-baseline gap-2 font-mono">
-          <span className="text-2xs text-daintree-text/60 shrink-0">{key}</span>
-          <span className="text-3xs text-daintree-text/30">{hint}</span>
+          <span className="text-2xs text-text-secondary shrink-0">{key}</span>
+          <span className="text-3xs text-text-placeholder">{hint}</span>
         </div>
       ))}
     </div>
@@ -61,7 +61,7 @@ export function EnvBlock({
   return (
     <>
       <div className="space-y-1.5">
-        <span className="text-2xs text-daintree-text/50 font-medium uppercase tracking-wide block">
+        <span className="text-2xs text-text-secondary font-medium uppercase tracking-wide block">
           Env overrides
         </span>
         <EnvVarEditor

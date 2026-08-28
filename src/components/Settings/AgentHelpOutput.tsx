@@ -123,7 +123,7 @@ export function AgentHelpOutput({
         )}
 
         <div className="relative max-h-80 overflow-auto rounded-[var(--radius-md)] border border-border-default bg-surface-canvas">
-          <pre className="p-3 text-xs font-mono text-daintree-text/90 whitespace-pre-wrap break-words select-text">
+          <pre className="p-3 text-xs font-mono text-text-primary whitespace-pre-wrap break-words select-text">
             {cleanStdout}
             {cleanStderr && (
               <>
@@ -133,7 +133,7 @@ export function AgentHelpOutput({
             )}
           </pre>
           {helpResult.truncated && (
-            <div className="sticky bottom-0 px-3 py-2 bg-daintree-bg/95 border-t border-border-default text-xs text-daintree-text/50">
+            <div className="sticky bottom-0 px-3 py-2 bg-daintree-bg/95 border-t border-border-default text-xs text-text-secondary">
               Output truncated (exceeded size limit)
             </div>
           )}
@@ -148,7 +148,7 @@ export function AgentHelpOutput({
         <div className="flex items-center justify-between">
           <div>
             <h5 className="text-sm font-medium text-text-primary">Help output</h5>
-            <p className="text-xs text-daintree-text/50 select-text">
+            <p className="text-xs text-text-secondary select-text">
               Available CLI flags for {agentName}
             </p>
           </div>
@@ -160,7 +160,7 @@ export function AgentHelpOutput({
                 variant="ghost"
                 onClick={() => void loadHelp(!!helpResult)}
                 disabled={isLoading}
-                className="text-daintree-text/50 hover:text-text-primary"
+                className="text-text-secondary hover:text-text-primary"
               >
                 <RefreshCw size={14} />
                 {helpResult ? "Refresh" : "Load"}
@@ -172,7 +172,7 @@ export function AgentHelpOutput({
                   variant="ghost"
                   onClick={() => void handleCopy()}
                   disabled={isLoading}
-                  className="text-daintree-text/50 hover:text-text-primary"
+                  className="text-text-secondary hover:text-text-primary"
                 >
                   <Copy size={14} />
                   {isCopied ? "Copied!" : "Copy"}
@@ -197,7 +197,7 @@ export function AgentHelpOutput({
 
       {!isLoading && isAgentMissing(availability) && !isCliLoading && (
         <div className="px-4 py-6 rounded-[var(--radius-md)] border border-border-default bg-surface text-center space-y-2">
-          <p className="text-sm text-daintree-text/60">CLI not found</p>
+          <p className="text-sm text-text-secondary">CLI not found</p>
           <p className="text-xs text-text-secondary select-text">
             {agentName} is not installed or not in your PATH
           </p>

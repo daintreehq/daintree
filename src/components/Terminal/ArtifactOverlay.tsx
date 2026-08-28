@@ -25,7 +25,7 @@ export function patchLineClass(line: string): string {
   }
   if (line.startsWith("+")) return "text-status-success bg-status-success/10";
   if (line.startsWith("-")) return "text-status-error bg-status-error/10";
-  return "text-daintree-text/80";
+  return "text-text-primary";
 }
 
 function PatchDiffLines({ content, className }: { content: string; className?: string }) {
@@ -49,7 +49,7 @@ function PatchDiffPreview({ content }: { content: string }) {
   return (
     <div className="rounded border border-tint/[0.08] bg-tint/[0.04]">
       <div className="px-3 py-2 border-b border-tint/[0.08]">
-        <span className="text-2xs font-semibold uppercase tracking-wider text-daintree-text/60">
+        <span className="text-2xs font-semibold uppercase tracking-wider text-text-secondary">
           Patch contents
         </span>
       </div>
@@ -71,7 +71,7 @@ const ARTIFACT_TYPE_COLORS: Record<string, string> = {
   file: "border-state-working bg-[color-mix(in_oklab,var(--color-state-working)_10%,transparent)] text-state-working",
   summary:
     "border-status-warning bg-[color-mix(in_oklab,var(--color-status-warning)_10%,transparent)] text-status-warning",
-  other: "border-border-default bg-daintree-sidebar/10 text-daintree-text/60",
+  other: "border-border-default bg-daintree-sidebar/10 text-text-secondary",
 };
 
 const ARTIFACT_TYPE_ICONS: Record<string, string> = {
@@ -174,7 +174,7 @@ function ArtifactItem({
           <span className="text-xs text-text-secondary">
             {lineCount} line{lineCount !== 1 ? "s" : ""}
           </span>
-          <span className="text-daintree-text/60">{isExpanded ? "▼" : "▶"}</span>
+          <span className="text-text-secondary">{isExpanded ? "▼" : "▶"}</span>
         </div>
       </button>
 
@@ -507,7 +507,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                               "px-2 py-1 text-xs rounded transition-colors",
                               includeAllTypes
                                 ? "bg-border-default text-text-primary"
-                                : "bg-surface-sidebar text-daintree-text/60",
+                                : "bg-surface-sidebar text-text-secondary",
                               "hover:brightness-110",
                               "disabled:opacity-50 disabled:cursor-not-allowed disabled:pointer-events-none"
                             )}
@@ -560,7 +560,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                   </Tooltip>
                 )}
                 {bulkProgress && (
-                  <span className="text-xs tabular-nums text-daintree-text/60 ml-auto">
+                  <span className="text-xs tabular-nums text-text-secondary ml-auto">
                     {bulkProgress.action === "copy" && "Copying…"}
                     {bulkProgress.action === "save" &&
                       `Saving ${bulkProgress.current}/${bulkProgress.total}…`}
@@ -636,7 +636,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
         {pendingBulkPatches && (
           <div className="rounded border border-tint/[0.08] bg-tint/[0.04]">
             <div className="px-3 py-2 border-b border-tint/[0.08]">
-              <span className="text-2xs font-semibold uppercase tracking-wider text-daintree-text/60">
+              <span className="text-2xs font-semibold uppercase tracking-wider text-text-secondary">
                 Patches to apply
               </span>
             </div>
@@ -654,7 +654,7 @@ export function ArtifactOverlay({ terminalId, worktreeId, cwd, className }: Arti
                       <span className="text-daintree-text/40 text-3xs shrink-0 hidden group-open:inline">
                         ▼
                       </span>
-                      <span className="text-daintree-text/80 truncate min-w-0">
+                      <span className="text-text-primary truncate min-w-0">
                         {patch.filename || patch.language || "patch"}
                       </span>
                       <span className="font-mono text-3xs shrink-0 ml-auto tabular-nums">

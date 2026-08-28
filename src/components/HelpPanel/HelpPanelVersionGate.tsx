@@ -20,10 +20,10 @@ export function HelpPanelVersionGate({
       className="flex-1 flex flex-col items-center justify-center gap-3 p-8 text-center"
       data-testid="help-version-too-old"
     >
-      <p className="text-sm text-daintree-text/70">
+      <p className="text-sm text-text-secondary">
         Update {versionTooOld.agentName} to use Daintree Assistant
       </p>
-      <p className="text-xs text-daintree-text/50 max-w-[32ch]">
+      <p className="text-xs text-text-secondary max-w-[32ch]">
         Daintree Assistant needs {versionTooOld.agentName} {versionTooOld.requiredVersion} or later.
         You're on {versionTooOld.installedVersion}.
       </p>
@@ -45,9 +45,9 @@ export function HelpPanelVersionGate({
         onClick={onCheckAgain}
         disabled={isCheckingVersion}
         className={cn(
-          "text-2xs text-daintree-text/40 transition-colors",
-          "hover:text-daintree-text/60",
-          "disabled:opacity-50 disabled:cursor-default disabled:hover:text-daintree-text/40",
+          "text-2xs text-text-secondary transition-colors",
+          "hover:text-text-primary",
+          "disabled:opacity-50 disabled:cursor-default disabled:hover:text-text-secondary",
           "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
         )}
       >

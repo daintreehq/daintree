@@ -104,7 +104,7 @@ function MetricTile({ label, value, unit, tone = "default" }: MetricTileProps) {
         tone === "alert" && "border-status-error/40 bg-status-error/5"
       )}
     >
-      <span className="text-3xs uppercase tracking-wide text-daintree-text/55 font-medium">
+      <span className="text-3xs uppercase tracking-wide text-text-secondary font-medium">
         {label}
       </span>
       <div className="flex items-baseline gap-1">
@@ -117,7 +117,7 @@ function MetricTile({ label, value, unit, tone = "default" }: MetricTileProps) {
         >
           {value}
         </span>
-        {unit ? <span className="text-xs text-daintree-text/55 font-mono">{unit}</span> : null}
+        {unit ? <span className="text-xs text-text-secondary font-mono">{unit}</span> : null}
       </div>
     </div>
   );
@@ -243,7 +243,7 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
           <button
             onClick={() => void refresh()}
             disabled={isRefreshing}
-            className="flex items-center gap-1.5 px-2 py-1 rounded-[var(--radius-md)] text-xs text-daintree-text/70 hover:text-text-primary hover:bg-tint/[0.06] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary disabled:opacity-50"
+            className="flex items-center gap-1.5 px-2 py-1 rounded-[var(--radius-md)] text-xs text-text-secondary hover:text-text-primary hover:bg-tint/[0.06] transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary disabled:opacity-50"
             aria-label="Refresh diagnostics snapshot"
           >
             <SpinningIcon icon={RefreshCw} active={isRefreshing} className="w-3.5 h-3.5" />
@@ -259,7 +259,7 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
       {/* Suppressed while a refresh is failing: "right now" from stale data
           would contradict the stale note in the header. */}
       {snapshot && !error && isAllClear(snapshot) ? (
-        <p data-testid="why-slow-all-clear" className="text-xs text-daintree-text/55 mb-3">
+        <p data-testid="why-slow-all-clear" className="text-xs text-text-secondary mb-3">
           Nothing is slowing Daintree down right now
         </p>
       ) : null}
@@ -268,7 +268,7 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
         <div className="flex flex-col gap-4">
           {/* Resource profile + reasons */}
           <section>
-            <h3 className="text-3xs uppercase tracking-wide text-daintree-text/55 font-medium mb-2">
+            <h3 className="text-3xs uppercase tracking-wide text-text-secondary font-medium mb-2">
               Resource profile
             </h3>
             {resource ? (
@@ -325,22 +325,22 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
                         )}
                       >
                         <span>{r.detail}</span>
-                        <span className="text-daintree-text/45 font-normal">+{r.contribution}</span>
+                        <span className="text-text-secondary font-normal">+{r.contribution}</span>
                       </li>
                     ))}
                   </ul>
                 ) : (
-                  <p className="text-xs text-daintree-text/45">No active pressure signals.</p>
+                  <p className="text-xs text-text-secondary">No active pressure signals.</p>
                 )}
               </div>
             ) : (
-              <p className="text-xs text-daintree-text/45">Resource profile unavailable.</p>
+              <p className="text-xs text-text-secondary">Resource profile unavailable.</p>
             )}
           </section>
 
           {/* Rendering + throttle */}
           <section>
-            <h3 className="text-3xs uppercase tracking-wide text-daintree-text/55 font-medium mb-2">
+            <h3 className="text-3xs uppercase tracking-wide text-text-secondary font-medium mb-2">
               Rendering &amp; throttle
             </h3>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -375,15 +375,13 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
                 ))}
               </div>
             ) : (
-              <p className="text-xs text-daintree-text/45 mt-2">
-                No terminal renderer reports yet.
-              </p>
+              <p className="text-xs text-text-secondary mt-2">No terminal renderer reports yet.</p>
             )}
           </section>
 
           {/* Memory: Daintree's own processes vs terminal descendant workloads */}
           <section>
-            <h3 className="text-3xs uppercase tracking-wide text-daintree-text/55 font-medium mb-2">
+            <h3 className="text-3xs uppercase tracking-wide text-text-secondary font-medium mb-2">
               Memory
             </h3>
             {memory && memoryWorkloads ? (
@@ -420,13 +418,13 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
                 ) : null}
               </div>
             ) : (
-              <p className="text-xs text-daintree-text/45">Memory attribution unavailable.</p>
+              <p className="text-xs text-text-secondary">Memory attribution unavailable.</p>
             )}
           </section>
 
           {/* PTY + worktrees */}
           <section>
-            <h3 className="text-3xs uppercase tracking-wide text-daintree-text/55 font-medium mb-2">
+            <h3 className="text-3xs uppercase tracking-wide text-text-secondary font-medium mb-2">
               PTY &amp; worktrees
             </h3>
             <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
@@ -481,7 +479,7 @@ export function WhySlowContent({ className }: WhySlowContentProps) {
           </section>
         </div>
       ) : (
-        !error && <p className="text-xs text-daintree-text/45">Loading…</p>
+        !error && <p className="text-xs text-text-secondary">Loading…</p>
       )}
     </div>
   );
@@ -491,7 +489,7 @@ function Badge({ children, tone = "default" }: { children: ReactNode; tone?: Met
   return (
     <span
       className={cn(
-        "inline-flex items-center px-1.5 py-0.5 rounded text-2xs font-mono border border-daintree-border/40 bg-daintree-sidebar/40 text-daintree-text/75",
+        "inline-flex items-center px-1.5 py-0.5 rounded text-2xs font-mono border border-daintree-border/40 bg-daintree-sidebar/40 text-text-primary",
         tone === "warn" && "border-status-warning/40 bg-status-warning/10 text-status-warning",
         tone === "alert" && "border-status-error/40 bg-status-error/10 text-status-error"
       )}

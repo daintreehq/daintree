@@ -56,7 +56,7 @@ const FOCUS_RING =
 
 const CTA_CLASS = cn(
   "inline-flex items-center gap-1 shrink-0 px-2 py-0.5 rounded text-2xs font-medium transition-colors",
-  "bg-filter-selected-bg-soft hover:bg-tint/[0.14] text-daintree-text/80",
+  "bg-filter-selected-bg-soft hover:bg-tint/[0.14] text-text-primary",
   FOCUS_RING
 );
 
@@ -112,7 +112,7 @@ export function ReadinessRail({ summary, onCta }: ReadinessRailProps) {
               turns the pair into one run of prose, which is how three items used to
               read as a single sentence. Weight also survives `prefers-contrast:
               more`, where the colour difference is flattened away. */}
-          <span className="font-medium text-daintree-text/85">{primary.label}</span>
+          <span className="font-medium text-text-primary">{primary.label}</span>
           {primary.detail && (
             // The literal space stays: adjacent inline spans concatenate in the
             // accessibility tree, so dropping it would announce "changedCheck". The

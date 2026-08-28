@@ -269,7 +269,7 @@ export function IssueSelector({
                       setQuery("");
                       inputRef.current?.focus();
                     }}
-                    className="text-xs px-3 py-1.5 text-daintree-text/60 hover:text-text-primary hover:bg-overlay-soft rounded transition-colors"
+                    className="text-xs px-3 py-1.5 text-text-secondary hover:text-text-primary hover:bg-overlay-soft rounded transition-colors"
                   >
                     Clear search
                   </button>

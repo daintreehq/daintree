@@ -340,7 +340,7 @@ export function PilotFilterBar({
               aria-hidden="true"
               className={cn(
                 "truncate text-xs",
-                isActive ? "font-medium text-text-primary" : "text-daintree-text/60"
+                isActive ? "font-medium text-text-primary" : "text-text-secondary"
               )}
             >
               {label}
@@ -349,7 +349,7 @@ export function PilotFilterBar({
               aria-hidden="true"
               className={cn(
                 "text-xs tabular-nums",
-                isActive ? "text-text-primary" : "text-daintree-text/60"
+                isActive ? "text-text-primary" : "text-text-secondary"
               )}
             >
               {count}

@@ -67,7 +67,7 @@ export function EnvironmentPopover({
             ? "text-status-error"
             : resourceStatusColor === "neutral" || resourceStatusLabel
               ? "text-status-info/70"
-              : "text-daintree-text/30"
+              : "text-text-placeholder"
   );
 
   const hasDetails =

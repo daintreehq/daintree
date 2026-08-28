@@ -195,26 +195,26 @@ function ArchiveIdentityCard({ intent }: { intent: PendingPluginArchiveInstall }
         <div className="min-w-0 flex-1">
           <div className="flex items-center gap-2 min-w-0">
             <span className="text-sm font-medium text-text-primary truncate">{label}</span>
-            <span className="inline-block shrink-0 px-1.5 py-0.5 rounded-sm text-3xs font-mono tabular-nums bg-overlay-subtle border border-daintree-border/50 text-daintree-text/60 max-w-[10rem] truncate">
+            <span className="inline-block shrink-0 px-1.5 py-0.5 rounded-sm text-3xs font-mono tabular-nums bg-overlay-subtle border border-daintree-border/50 text-text-secondary max-w-[10rem] truncate">
               v{manifest.version}
             </span>
           </div>
-          <div className="mt-0.5 text-2xs font-mono text-daintree-text/45 truncate">
+          <div className="mt-0.5 text-2xs font-mono text-text-secondary truncate">
             {manifest.name}
           </div>
         </div>
       </div>
       <div className="mt-3 pt-2.5 border-t border-tint/[0.08] space-y-1.5">
-        <div className="flex items-start gap-1.5 text-2xs text-daintree-text/50">
+        <div className="flex items-start gap-1.5 text-2xs text-text-secondary">
           <FileArchive className="w-3 h-3 shrink-0 mt-[1.5px] text-daintree-text/35" aria-hidden />
           <span className="font-mono break-all min-w-0">{archiveFileName}</span>
         </div>
-        <div className="flex items-start gap-1.5 text-2xs text-daintree-text/50">
+        <div className="flex items-start gap-1.5 text-2xs text-text-secondary">
           <Users className="w-3 h-3 shrink-0 mt-[1.5px] text-daintree-text/35" aria-hidden />
           {manifest.authors.length > 0 ? (
             <span className="break-words min-w-0">{formatAuthors(manifest.authors)}</span>
           ) : (
-            <span className="italic text-daintree-text/35">No authors declared</span>
+            <span className="italic text-text-placeholder">No authors declared</span>
           )}
         </div>
       </div>
@@ -258,7 +258,7 @@ function ArchiveRecipes({ recipes }: { recipes: { count: number; names: string[]
           {recipes.names.map((name, index) => (
             <li
               key={`${name}-${index}`}
-              className="text-xs text-daintree-text/70 break-words min-w-0"
+              className="text-xs text-text-secondary break-words min-w-0"
             >
               {name}
             </li>

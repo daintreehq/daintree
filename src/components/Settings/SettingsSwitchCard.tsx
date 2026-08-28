@@ -69,7 +69,7 @@ export function SettingsSwitchCard({
       className={cn(
         "relative w-full flex items-center justify-between transition-colors",
         isCard ? "p-4 rounded-[var(--radius-lg)] border hover:bg-tint/5" : "py-2",
-        "border-border-default text-daintree-text/70",
+        "border-border-default text-text-secondary",
         isEnabled && "border-border-default text-text-primary",
         !disabled && "cursor-pointer",
         disabled && "opacity-50"
@@ -94,7 +94,7 @@ export function SettingsSwitchCard({
             {title}
             {scopeBadge}
             {lifecycleBadge && (
-              <span className="inline-flex items-center px-1.5 py-0.5 rounded-sm text-3xs font-medium bg-overlay-subtle border border-daintree-border/50 text-daintree-text/50 uppercase tracking-wide">
+              <span className="inline-flex items-center px-1.5 py-0.5 rounded-sm text-3xs font-medium bg-overlay-subtle border border-daintree-border/50 text-text-secondary uppercase tracking-wide">
                 {lifecycleBadge}
               </span>
             )}

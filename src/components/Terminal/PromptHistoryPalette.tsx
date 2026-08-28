@@ -61,11 +61,11 @@ export function PromptHistoryRow({
       <span className="truncate font-mono text-xs">{truncatePrompt(item.prompt)}</span>
       <div className="flex items-center gap-2 shrink-0">
         {item.agentId && (
-          <span className="text-3xs px-1.5 py-0.5 rounded bg-border-default text-daintree-text/60">
+          <span className="text-3xs px-1.5 py-0.5 rounded bg-border-default text-text-secondary">
             {item.agentId}
           </span>
         )}
-        <span className="text-3xs text-daintree-text/40 transition-colors group-aria-selected:text-daintree-text/60">
+        <span className="text-3xs text-text-secondary transition-colors group-aria-selected:text-text-primary">
           {formatRelativeTime(item.addedAt)}
         </span>
       </div>
@@ -133,7 +133,7 @@ export function PromptHistoryPalette({ onOpenRef, ...props }: PromptHistoryPalet
       <button
         type="button"
         onClick={toggleScope}
-        className="shrink-0 text-2xs px-2 py-0.5 rounded-[var(--radius-sm)] bg-daintree-border/50 hover:bg-border-default text-daintree-text/60 hover:text-daintree-text/80 transition-colors"
+        className="shrink-0 text-2xs px-2 py-0.5 rounded-[var(--radius-sm)] bg-daintree-border/50 hover:bg-border-default text-text-secondary hover:text-text-primary transition-colors"
       >
         {scope === "project" ? "This project" : "All projects"}
       </button>

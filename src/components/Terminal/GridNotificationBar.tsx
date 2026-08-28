@@ -289,7 +289,7 @@ export function GridNotificationBar({ className }: GridNotificationBarProps) {
                     {displayedNotification.title}
                   </p>
                 )}
-                <div className="text-xs leading-snug text-daintree-text/90">
+                <div className="text-xs leading-snug text-text-primary">
                   {displayedNotification.message}
                 </div>
               </div>

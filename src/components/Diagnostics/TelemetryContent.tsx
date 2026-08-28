@@ -58,7 +58,7 @@ function TelemetryRow({ event, isSelected, onSelect }: RowProps) {
           {kindLabel(event.kind)}
         </span>
         <span className="font-mono text-xs text-text-primary truncate flex-1">{event.label}</span>
-        <span className="text-3xs text-daintree-text/50 font-mono tabular-nums shrink-0">
+        <span className="text-3xs text-text-secondary font-mono tabular-nums shrink-0">
           {formatClockTime(event.timestamp)}
         </span>
       </div>
@@ -139,7 +139,7 @@ function TelemetryDetail({ event }: DetailProps) {
               </span>
               <span className="font-mono text-sm text-text-primary truncate">{event.label}</span>
             </div>
-            <div className="flex items-center gap-2 text-2xs text-daintree-text/50 font-mono">
+            <div className="flex items-center gap-2 text-2xs text-text-secondary font-mono">
               <span>{new Date(event.timestamp).toISOString()}</span>
               <span aria-hidden>•</span>
               <span>ID {event.id.slice(0, 8)}</span>

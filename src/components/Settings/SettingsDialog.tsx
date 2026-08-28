@@ -1377,7 +1377,7 @@ function MatchBadge({ count }: { count: number }) {
   return (
     <span
       aria-hidden="true"
-      className="ml-auto text-3xs font-medium tabular-nums px-1.5 py-0.5 rounded-full bg-tint/10 text-daintree-text/60 leading-none"
+      className="ml-auto text-3xs font-medium tabular-nums px-1.5 py-0.5 rounded-full bg-tint/10 text-text-secondary leading-none"
     >
       {count}
     </span>
@@ -1454,7 +1454,7 @@ export function ScopeChip({
         "text-3xs font-medium leading-none px-1.5 py-0.5 rounded-full",
         // Neutral by construction: this sits next to N other results and the dialog's
         // one accent is already spent on the nav's active marker.
-        crossScope ? "bg-tint/20 text-daintree-text/80" : "bg-tint/10 text-daintree-text/60"
+        crossScope ? "bg-tint/20 text-text-primary" : "bg-tint/10 text-text-secondary"
       )}
       title={title}
     >
@@ -1531,7 +1531,7 @@ function SearchResults({
           <span className="tabular-nums">{results.length}</span> result
           {results.length === 1 ? "" : "s"}
         </p>
-        <p className="text-3xs text-daintree-text/30">
+        <p className="text-3xs text-text-placeholder">
           <kbd className="settings-kbd px-1 py-0.5 rounded border font-mono">↑↓</kbd> navigate{" "}
           <kbd className="settings-kbd px-1 py-0.5 rounded border font-mono">↵</kbd> go
         </p>
@@ -1568,11 +1568,11 @@ function SearchResults({
                 {result.subtabLabel && (
                   <>
                     <span className="text-3xs text-daintree-text/30">›</span>
-                    <span className="text-3xs text-daintree-text/50">{result.subtabLabel}</span>
+                    <span className="text-3xs text-text-secondary">{result.subtabLabel}</span>
                   </>
                 )}
                 <span className="text-3xs text-daintree-text/30">›</span>
-                <span className="text-3xs text-daintree-text/50">{result.section}</span>
+                <span className="text-3xs text-text-secondary">{result.section}</span>
                 {result.requiresEnabled && (
                   <span className="ml-auto inline-flex items-center gap-1 rounded-full bg-status-warning/10 px-1.5 py-0.5 text-3xs font-medium text-status-warning shrink-0">
                     <AlertTriangle className="w-3 h-3" />
@@ -1583,7 +1583,7 @@ function SearchResults({
               <div className="text-sm font-medium text-text-primary">
                 <HighlightText text={result.title} query={query} />
               </div>
-              <div className="text-xs text-daintree-text/50 mt-0.5 leading-relaxed">
+              <div className="text-xs text-text-secondary mt-0.5 leading-relaxed">
                 <HighlightText text={result.description} query={query} />
               </div>
             </div>

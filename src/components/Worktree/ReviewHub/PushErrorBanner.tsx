@@ -61,7 +61,7 @@ export function PushErrorBanner({
         "disabled:opacity-50 disabled:cursor-not-allowed",
         isPrimary
           ? "bg-status-warning/20 hover:bg-status-warning/30 text-status-warning"
-          : "bg-filter-selected-bg-soft hover:bg-tint/[0.14] text-daintree-text/80"
+          : "bg-filter-selected-bg-soft hover:bg-tint/[0.14] text-text-primary"
       )}
     >
       {isLoading && cta.kind === "pull-rebase" ? "Pulling…" : cta.label}

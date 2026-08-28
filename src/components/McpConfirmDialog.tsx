@@ -252,7 +252,7 @@ export function confirmTitle(current: PendingMcpConfirm): string {
 }
 
 /** Shared micro-label, matching the section-heading grammar used app-wide. */
-const MICRO_LABEL = "text-2xs font-semibold uppercase tracking-wider text-daintree-text/60";
+const MICRO_LABEL = "text-2xs font-semibold uppercase tracking-wider text-text-secondary";
 
 /**
  * Who is asking, in one line.
@@ -295,11 +295,11 @@ function RequesterRow({ current }: { current: PendingMcpConfirm }) {
           aria-hidden="true"
           className="w-3 h-3 shrink-0 translate-y-0.5 text-daintree-text/45"
         />
-        <span className="truncate text-daintree-text/80" title={callerInfo?.userAgent}>
+        <span className="truncate text-text-primary" title={callerInfo?.userAgent}>
           {name}
         </span>
         {detail && (
-          <span className="shrink-0 font-mono text-2xs text-daintree-text/45">{detail}</span>
+          <span className="shrink-0 font-mono text-2xs text-text-secondary">{detail}</span>
         )}
       </span>
     </div>
@@ -327,7 +327,7 @@ function ConsequenceNote({
     return (
       <div className="space-y-1">
         <div className={MICRO_LABEL}>Why this is gated</div>
-        <div className="text-xs text-daintree-text/70 break-words">{children}</div>
+        <div className="text-xs text-text-secondary break-words">{children}</div>
       </div>
     );
   }
@@ -337,7 +337,7 @@ function ConsequenceNote({
       <AlertTriangle aria-hidden="true" className="w-4 h-4 shrink-0 mt-px text-status-danger" />
       <div className="min-w-0 space-y-1">
         <div className={cn(MICRO_LABEL, "text-status-danger/80")}>What this does</div>
-        <div className="text-xs text-daintree-text/80 break-words">{children}</div>
+        <div className="text-xs text-text-primary break-words">{children}</div>
       </div>
     </div>
   );
@@ -467,7 +467,7 @@ function ArgumentsDisclosure({ argsSummary }: { argsSummary: string }) {
         <span className={MICRO_LABEL}>Arguments</span>
       </button>
       {expanded && (
-        <pre className="mt-1 max-h-40 overflow-y-auto rounded-[var(--radius-md)] bg-overlay-subtle px-2 py-1.5 font-mono text-xs break-words whitespace-pre-wrap text-daintree-text/80">
+        <pre className="mt-1 max-h-40 overflow-y-auto rounded-[var(--radius-md)] bg-overlay-subtle px-2 py-1.5 font-mono text-xs break-words whitespace-pre-wrap text-text-primary">
           {argsSummary}
         </pre>
       )}

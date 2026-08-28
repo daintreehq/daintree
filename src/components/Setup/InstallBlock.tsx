@@ -8,10 +8,10 @@ export function InstallBlock({ block }: { block: AgentInstallBlock }) {
   return (
     <div className="rounded-[var(--radius-md)] border border-border-default bg-daintree-bg/50 p-3">
       {block.label && (
-        <div className="text-xs font-medium text-daintree-text/60 mb-2">{block.label}</div>
+        <div className="text-xs font-medium text-text-secondary mb-2">{block.label}</div>
       )}
       {block.steps && block.steps.length > 0 && (
-        <ol className="list-decimal list-inside text-xs text-daintree-text/60 space-y-1 mb-2">
+        <ol className="list-decimal list-inside text-xs text-text-secondary space-y-1 mb-2">
           {block.steps.map((step, i) => (
             <li key={i}>{step}</li>
           ))}

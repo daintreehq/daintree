@@ -43,7 +43,7 @@ export function PrerequisiteCard({ spec, state }: { spec: PrerequisiteSpec; stat
           <div className="text-sm font-medium text-text-primary truncate">{label}</div>
         </div>
         {loading ? (
-          <span className="text-2xs text-daintree-text/30 shrink-0">Checking…</span>
+          <span className="text-2xs text-text-placeholder shrink-0">Checking…</span>
         ) : needsInstall ? (
           <div className="flex items-center gap-2 shrink-0 min-w-0">
             {versionMismatch && (

@@ -113,7 +113,7 @@ export function ErrorFallback({
             {variant === "component" && `${componentName || "Component"} error`}
           </h2>
 
-          <p className={cn("text-daintree-text/80", sizes.message)}>
+          <p className={cn("text-text-primary", sizes.message)}>
             {import.meta.env.DEV
               ? error.message
               : variant === "fullscreen"
@@ -124,14 +124,14 @@ export function ErrorFallback({
           </p>
 
           {!import.meta.env.DEV && incidentId && variant !== "component" && (
-            <p className={cn("text-daintree-text/50 font-mono break-all", sizes.message)}>
+            <p className={cn("text-text-secondary font-mono break-all", sizes.message)}>
               Error ID:{" "}
               <button
                 type="button"
                 onClick={handleCopyIncidentId}
                 aria-label="Copy error ID"
                 data-testid="error-fallback-copy-id"
-                className="cursor-copy hover:text-daintree-text/80 transition-colors text-left break-all"
+                className="cursor-copy hover:text-text-primary transition-colors text-left break-all"
               >
                 {incidentIdCopied ? "Copied" : incidentId}
               </button>
@@ -190,7 +190,7 @@ export function ErrorFallback({
 
         {(error.stack || errorInfo?.componentStack) && variant !== "component" && (
           <details className="w-full mt-4">
-            <summary className="cursor-pointer text-xs text-daintree-text/60 hover:text-daintree-text/80">
+            <summary className="cursor-pointer text-xs text-text-secondary hover:text-text-primary">
               Technical details
             </summary>
             {/* Production stacks are scrubbed before display so crash reporters

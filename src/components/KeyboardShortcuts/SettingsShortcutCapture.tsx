@@ -365,14 +365,14 @@ export function SettingsShortcutCapture({
             )}
           >
             <span>{keybindingService.formatComboForDisplay(capturedCombo)}</span>
-            {isChord && <span className="ml-2 text-xs text-daintree-text/50">(chord)</span>}
+            {isChord && <span className="ml-2 text-xs text-text-secondary">(chord)</span>}
           </div>
         ) : (
           <button
             onClick={handleStartRecording}
             className={cn(
               captureClass,
-              "border-border-default bg-surface-canvas text-daintree-text/60 hover:text-text-primary hover:border-accent-primary"
+              "border-border-default bg-surface-canvas text-text-secondary hover:text-text-primary hover:border-accent-primary"
             )}
           >
             Click to record shortcut
@@ -400,7 +400,7 @@ export function SettingsShortcutCapture({
           <div className="space-y-1 pl-6">
             {conflicts.map((conflict) => (
               <div key={conflict.actionId} className="flex items-center gap-2 text-sm">
-                <span className="text-daintree-text/80">
+                <span className="text-text-primary">
                   {conflict.description || conflict.actionId}
                 </span>
                 {conflict.kind === "shadowed" ? (
@@ -408,7 +408,7 @@ export function SettingsShortcutCapture({
                   // (the conflicting binding's combo doesn't equal the captured one),
                   // so surface the relationship and leave resolution to the user.
                   // Direction by chord length: shorter prefix shadows the longer chord.
-                  <span className="text-xs text-daintree-text/50">
+                  <span className="text-xs text-text-secondary">
                     {(conflict.combo?.split(" ").length ?? 0) >
                     (capturedCombo?.split(" ").length ?? 0)
                       ? "is shadowed by this chord"
@@ -434,7 +434,7 @@ export function SettingsShortcutCapture({
         <button
           onClick={handleCancel}
           className={cn(
-            "text-daintree-text/60 hover:text-text-primary transition-colors",
+            "text-text-secondary hover:text-text-primary transition-colors",
             compact ? "text-xs" : "px-3 py-1.5 text-sm"
           )}
         >
@@ -443,7 +443,7 @@ export function SettingsShortcutCapture({
         <button
           onClick={handleClear}
           className={cn(
-            "text-daintree-text/60 hover:text-text-primary transition-colors",
+            "text-text-secondary hover:text-text-primary transition-colors",
             compact ? "text-xs" : "px-3 py-1.5 text-sm"
           )}
         >

@@ -39,9 +39,9 @@ function WorktreeListItem({ worktree, isActive, isSelected, onClick }: WorktreeL
           {/* Both sides truncate: branch names have no length worth trusting,
               so no tier is wide enough to make this unnecessary. */}
           <span className="font-medium text-text-primary truncate">{worktree.name}</span>
-          <div className="flex items-center gap-2 min-w-0 text-xs text-daintree-text/60">
+          <div className="flex items-center gap-2 min-w-0 text-xs text-text-secondary">
             {worktree.branch && (
-              <span className="font-mono text-daintree-text/70 truncate">{worktree.branch}</span>
+              <span className="font-mono text-text-secondary truncate">{worktree.branch}</span>
             )}
             {isActive && (
               <span className="px-1.5 py-0.5 rounded-[var(--radius-md)] bg-[var(--color-state-active)]/15 text-[var(--color-state-active)] text-2xs font-semibold">
@@ -52,7 +52,7 @@ function WorktreeListItem({ worktree, isActive, isSelected, onClick }: WorktreeL
         </div>
         <div
           ref={ref}
-          className="text-2xs text-daintree-text/50 truncate transition-colors group-aria-selected:text-daintree-text/60"
+          className="text-2xs text-text-secondary truncate transition-colors group-aria-selected:text-text-primary"
         >
           {worktree.path}
         </div>

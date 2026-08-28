@@ -165,7 +165,7 @@ export function ProjectPulseStrip({ worktreeId }: ProjectPulseStripProps) {
               {pulse.activeDays} active day{pulse.activeDays !== 1 ? "s" : ""}
             </span>
             {hasStreak && (
-              <span className="flex items-center gap-1 font-mono text-xs text-daintree-text/70">
+              <span className="flex items-center gap-1 font-mono text-xs text-text-secondary">
                 <StreakFlame streakDays={pulse.currentStreakDays!} size={12} />
                 {pulse.currentStreakDays}
               </span>

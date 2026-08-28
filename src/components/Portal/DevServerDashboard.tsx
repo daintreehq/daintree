@@ -79,14 +79,12 @@ function DevServerRow({
         <div className="flex items-center gap-2">
           <span className="truncate text-xs font-medium text-text-primary">{worktreeName}</span>
           {port && (
-            <span className="flex-shrink-0 text-xs tabular-nums text-daintree-text/50">
-              :{port}
-            </span>
+            <span className="flex-shrink-0 text-xs tabular-nums text-text-secondary">:{port}</span>
           )}
           <span className="flex-shrink-0 text-xs text-text-secondary">{presentation.label}</span>
         </div>
         {session.lastOutput && (
-          <span className="truncate text-xs text-daintree-text/45">{session.lastOutput}</span>
+          <span className="truncate text-xs text-text-secondary">{session.lastOutput}</span>
         )}
       </div>
       <div className="flex items-center gap-0.5 flex-shrink-0">
@@ -142,11 +140,11 @@ export function DevServerDashboard() {
       aria-label="Dev servers"
       className="flex-shrink-0 border-t border-border-default bg-surface-canvas"
     >
-      <header className="px-3 pt-2 pb-1 text-xs font-medium uppercase tracking-wide text-daintree-text/55">
+      <header className="px-3 pt-2 pb-1 text-xs font-medium uppercase tracking-wide text-text-secondary">
         Dev servers
       </header>
       {!hydrated ? null : visibleSessions.length === 0 ? (
-        <p className="px-3 pb-3 text-xs text-daintree-text/50">
+        <p className="px-3 pb-3 text-xs text-text-secondary">
           {fetchError ? "Couldn't load dev servers" : "No active dev servers"}
         </p>
       ) : (

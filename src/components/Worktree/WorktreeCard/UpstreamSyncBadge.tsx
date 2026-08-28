@@ -169,7 +169,7 @@ export function UpstreamSyncBadge({
         </TooltipTrigger>
         <TooltipContent side="right" className="text-xs">
           <div>Forge authentication failed</div>
-          <div className="text-daintree-text/70 mt-0.5">Click to reconnect your code forge</div>
+          <div className="text-text-secondary mt-0.5">Click to reconnect your code forge</div>
           {lastFetchedAt != null && (
             <div className="text-text-muted">Last fetched {formatRelativeTime(lastFetchedAt)}</div>
           )}

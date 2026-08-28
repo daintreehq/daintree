@@ -47,7 +47,7 @@ const OUTCOME_LABEL: Record<ConflictResolution, string> = {
 const PREVIEW_FRAME = "rounded border border-tint/[0.08] bg-tint/[0.04] text-xs";
 const PREVIEW_STRIP =
   "px-3 py-2 border-b border-tint/[0.08] flex items-center justify-between gap-2";
-const PREVIEW_CAPTION = "text-2xs font-semibold uppercase tracking-wider text-daintree-text/60";
+const PREVIEW_CAPTION = "text-2xs font-semibold uppercase tracking-wider text-text-secondary";
 const PREVIEW_COUNT =
   "ml-1.5 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-3xs font-medium normal-case tracking-normal";
 

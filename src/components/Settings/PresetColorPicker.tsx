@@ -172,7 +172,7 @@ export function PresetColorPicker({
           <div className="flex-1" />
           <button
             type="button"
-            className="flex items-center gap-1 text-2xs text-daintree-text/60 hover:text-text-primary transition-colors"
+            className="flex items-center gap-1 text-2xs text-text-secondary hover:text-text-primary transition-colors"
             onClick={handleClear}
             data-testid="preset-color-clear"
           >

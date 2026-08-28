@@ -38,7 +38,7 @@ import { PLUGIN_CATEGORIES } from "@shared/config/pluginCategoryRegistry";
 import type { LoadedPluginInfo, PluginDeepLinkIntent } from "@shared/types/plugin";
 
 const ROW_BADGE_CLASS =
-  "inline-flex items-center px-1.5 py-0.5 rounded-sm text-3xs font-medium bg-overlay-subtle border border-daintree-border/50 text-daintree-text/60 uppercase tracking-wide";
+  "inline-flex items-center px-1.5 py-0.5 rounded-sm text-3xs font-medium bg-overlay-subtle border border-daintree-border/50 text-text-secondary uppercase tracking-wide";
 
 // Disabled-option separator class for section headers inside the listbox.
 // role="group" inside role="listbox" is broken under Chromium 146 + VoiceOver
@@ -136,7 +136,7 @@ function PluginRow({
           <span
             className={cn(
               "text-sm font-medium flex items-center gap-1.5 flex-wrap",
-              !enabled && "text-daintree-text/50"
+              !enabled && "text-text-secondary"
             )}
           >
             <span className="truncate">{label}</span>
@@ -148,7 +148,7 @@ function PluginRow({
             <span
               className={cn(
                 "mt-0.5 block text-2xs truncate",
-                enabled ? "text-daintree-text/50" : "text-daintree-text/35"
+                enabled ? "text-text-secondary" : "text-text-placeholder"
               )}
             >
               {tagline}
@@ -173,7 +173,7 @@ function PluginRow({
               {!plugin.isBuiltin && <span className={ROW_BADGE_CLASS}>{sourceLabel}</span>}
               {plugin.devMode && <span className={ROW_BADGE_CLASS}>Dev</span>}
               {restartRequired && (
-                <span className={`${ROW_BADGE_CLASS} text-daintree-text/50`}>Restart required</span>
+                <span className={`${ROW_BADGE_CLASS} text-text-secondary`}>Restart required</span>
               )}
               {plugin.loadError && (
                 <span className="inline-flex items-center gap-0.5 text-3xs font-medium text-status-danger uppercase tracking-wide">
@@ -550,7 +550,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
           <div className="p-4 border-b border-border-default shrink-0 space-y-3">
             <div>
               <h3 className="text-sm font-medium text-text-primary">Installed plugins</h3>
-              <p className="text-xs text-daintree-text/50 mt-1 select-text">
+              <p className="text-xs text-text-secondary mt-1 select-text">
                 Extend Daintree with panels, commands, and integrations. Turn one off to keep its
                 settings without loading it.
               </p>
@@ -616,7 +616,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
             {pm.notice && (
               <div className="flex items-start gap-2 p-2 rounded-[var(--radius-md)] bg-overlay-subtle border border-border-default">
                 <Info className="w-3.5 h-3.5 text-daintree-text/50 shrink-0 mt-0.5" />
-                <p className="text-2xs text-daintree-text/70">{pm.notice}</p>
+                <p className="text-2xs text-text-secondary">{pm.notice}</p>
               </div>
             )}
             {pm.error && (
@@ -655,7 +655,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                   <button
                     type="button"
                     onClick={() => setQuery("")}
-                    className="text-xs text-daintree-text/60 hover:text-text-primary underline underline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary rounded-sm"
+                    className="text-xs text-text-secondary hover:text-text-primary underline underline-offset-2 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary rounded-sm"
                   >
                     Clear search
                   </button>
@@ -710,7 +710,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                           aria-label={label}
                         >
                           {label}
-                          <span className="ml-1.5 normal-case tracking-normal text-daintree-text/30">
+                          <span className="ml-1.5 normal-case tracking-normal text-text-placeholder">
                             {groupPlugins.length}
                           </span>
                         </div>
@@ -786,8 +786,8 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
             // catalog shell; the master column owns the install CTAs.
             <div className="h-full flex flex-col items-center justify-center gap-3 px-6 text-center">
               <Package className="w-8 h-8 text-daintree-text/30" aria-hidden="true" />
-              <p className="text-base font-medium text-daintree-text/80">No plugin selected</p>
-              <p className="text-sm text-daintree-text/50 max-w-sm">
+              <p className="text-base font-medium text-text-primary">No plugin selected</p>
+              <p className="text-sm text-text-secondary max-w-sm">
                 Install a plugin to view its details and settings here.
               </p>
             </div>
@@ -807,7 +807,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
         variant="destructive"
         zIndex="nested"
       >
-        <label className="flex items-center gap-2 text-xs text-daintree-text/70 select-none cursor-pointer">
+        <label className="flex items-center gap-2 text-xs text-text-secondary select-none cursor-pointer">
           <input
             type="checkbox"
             checked={pm.deleteSettings}
@@ -832,15 +832,15 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
         zIndex="nested"
       >
         {pm.pendingUpdate && (
-          <div className="mt-3 space-y-1.5 text-xs text-daintree-text/70">
+          <div className="mt-3 space-y-1.5 text-xs text-text-secondary">
             <div>
-              <span className="text-daintree-text/50">New version</span>{" "}
+              <span className="text-text-secondary">New version</span>{" "}
               <span className="font-medium text-text-primary">
                 v{pm.pendingUpdate.result.version}
               </span>
               {pm.pendingUpdate.result.displayName &&
                 pm.pendingUpdate.result.displayName !== pluginLabel(pm.pendingUpdate.plugin) && (
-                  <span className="text-daintree-text/50">
+                  <span className="text-text-secondary">
                     {" "}
                     · now named {pm.pendingUpdate.result.displayName}
                   </span>
@@ -848,7 +848,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
             </div>
             {pm.pendingUpdate.result.capabilities.length > 0 && (
               <div className="space-y-1.5">
-                <span className="text-daintree-text/50">Capabilities</span>
+                <span className="text-text-secondary">Capabilities</span>
                 {/* Human labels, not raw manifest tokens: this dialog is where
                     a user decides whether an update's privilege change is
                     acceptable, and `fs:project-write` does not say what it

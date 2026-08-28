@@ -10,11 +10,11 @@ export function HelpIntroBanner({ onDismiss }: HelpIntroBannerProps) {
     <div
       className={cn(
         "flex items-center gap-2 px-3 py-1.5 shrink-0",
-        "bg-overlay-subtle border-b border-border-default text-2xs text-daintree-text/50"
+        "bg-overlay-subtle border-b border-border-default text-2xs text-text-secondary"
       )}
     >
       <span className="flex-1 min-w-0 truncate">
-        Tip: Press <kbd className="text-daintree-text/70">Shift+Enter</kbd> to add a newline without
+        Tip: Press <kbd className="text-text-secondary">Shift+Enter</kbd> to add a newline without
         sending.
       </span>
       <button

@@ -4,7 +4,7 @@ import { isMac } from "@/lib/platform";
 import { parseChord } from "@/lib/kbdShortcut";
 
 export const KBD_CLASS =
-  "px-1.5 py-0.5 rounded-sm text-xs font-mono tabular-nums leading-none bg-overlay-subtle text-daintree-text/70 border border-border-subtle";
+  "px-1.5 py-0.5 rounded-sm text-xs font-mono tabular-nums leading-none bg-overlay-subtle text-text-secondary border border-border-subtle";
 
 /**
  * The same chip, tightened for a dense one-line list row.
@@ -17,7 +17,7 @@ export const KBD_CLASS =
  * loudest on the light themes.
  */
 export const KBD_COMPACT_CLASS =
-  "px-1 py-px rounded-sm text-3xs font-mono tabular-nums leading-none bg-overlay-subtle text-daintree-text/70 border border-border-subtle";
+  "px-1 py-px rounded-sm text-3xs font-mono tabular-nums leading-none bg-overlay-subtle text-text-secondary border border-border-subtle";
 
 export interface KbdProps {
   children: React.ReactNode;

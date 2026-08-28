@@ -281,7 +281,7 @@ export function NotificationCenterEntry({
                 data-notification-count="true"
                 style={{ animationDuration: `${DURATION_150}ms` }}
                 className={cn(
-                  "shrink-0 rounded-full bg-tint/15 px-1.5 py-0.5 text-3xs font-medium leading-none text-daintree-text/60 tabular-nums min-w-[2.5ch] text-center",
+                  "shrink-0 rounded-full bg-tint/15 px-1.5 py-0.5 text-3xs font-medium leading-none text-text-secondary tabular-nums min-w-[2.5ch] text-center",
                   bumpKey > 0 && "animate-badge-bump"
                 )}
               >
@@ -300,7 +300,7 @@ export function NotificationCenterEntry({
             wrapping at 312px. */}
         <p
           className={cn(
-            "text-xs text-daintree-text/70 leading-snug break-words",
+            "text-xs text-text-secondary leading-snug break-words",
             entry.title ? "col-span-2 row-start-2" : "col-start-1 row-start-1 min-w-0"
           )}
         >
@@ -313,7 +313,7 @@ export function NotificationCenterEntry({
             data-notification-count="true"
             style={{ animationDuration: `${DURATION_150}ms` }}
             className={cn(
-              "col-span-2 row-start-2 mt-0.5 justify-self-start rounded-full bg-tint/15 px-1.5 py-0.5 text-3xs font-medium leading-none text-daintree-text/60 tabular-nums min-w-[2.5ch] text-center",
+              "col-span-2 row-start-2 mt-0.5 justify-self-start rounded-full bg-tint/15 px-1.5 py-0.5 text-3xs font-medium leading-none text-text-secondary tabular-nums min-w-[2.5ch] text-center",
               bumpKey > 0 && "animate-badge-bump"
             )}
           >

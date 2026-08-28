@@ -209,7 +209,7 @@ export function TerminalAppearanceTab({
                   aria-invalid={fontSizeError != null || undefined}
                   aria-describedby={fontSizeError ? fontSizeErrorId : undefined}
                 />
-                <span className="text-sm text-daintree-text/50">px</span>
+                <span className="text-sm text-text-secondary">px</span>
                 <span className="text-xs text-text-secondary ml-auto">
                   Current: <span className="font-mono">{fontSize}px</span>
                 </span>

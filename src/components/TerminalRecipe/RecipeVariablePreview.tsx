@@ -40,7 +40,7 @@ export function RecipeVariablePreview({ initialPrompt, worktreeId }: RecipeVaria
   return (
     <div className="mt-2 border-l-2 border-border-subtle pl-2.5 transition-colors">
       <div className="text-xs font-medium text-text-primary mb-1">Resolved prompt</div>
-      <div className="text-xs leading-relaxed text-daintree-text/80 break-all whitespace-pre-wrap font-mono">
+      <div className="text-xs leading-relaxed text-text-primary break-all whitespace-pre-wrap font-mono">
         {hasContext && resolvedText !== null
           ? resolvedText
           : splitByRecipeVariables(initialPrompt).map((part, i) =>

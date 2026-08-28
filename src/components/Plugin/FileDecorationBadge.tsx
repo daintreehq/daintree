@@ -37,7 +37,7 @@ export function FileDecorationBadge({ decoration, className }: FileDecorationBad
   const shared = cn(
     "shrink-0 inline-flex items-center justify-center min-w-[18px] h-[18px] px-1 rounded-full",
     "text-3xs font-semibold tabular-nums",
-    "bg-overlay-subtle text-daintree-text/80",
+    "bg-overlay-subtle text-text-primary",
     decoration?.color,
     className
   );

@@ -8,7 +8,7 @@ export function WorktreeCardErrorFallback({ error, resetError }: ErrorFallbackPr
     <div className="flex items-center gap-2 px-4 py-3 border-b border-divider bg-[color-mix(in_oklab,var(--color-status-error)_6%,transparent)]">
       <TriangleAlert className="size-4 shrink-0 text-status-error" />
       <TruncatedTooltip content={message}>
-        <span className="text-xs text-daintree-text/70 truncate flex-1">{message}</span>
+        <span className="text-xs text-text-secondary truncate flex-1">{message}</span>
       </TruncatedTooltip>
       <button
         type="button"

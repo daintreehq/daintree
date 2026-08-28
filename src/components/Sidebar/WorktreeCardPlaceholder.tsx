@@ -23,7 +23,7 @@ export function WorktreeCardPlaceholder({
           <AlertCircle className="w-4 h-4 text-status-error mt-0.5 shrink-0" aria-hidden="true" />
           <div className="flex-1 min-w-0 space-y-1">
             <div className="text-sm font-medium text-text-primary">Couldn't create worktree</div>
-            <div className="text-xs text-daintree-text/70 truncate" title={pendingCreation.branch}>
+            <div className="text-xs text-text-secondary truncate" title={pendingCreation.branch}>
               {pendingCreation.branch}
             </div>
             {pendingCreation.error && (
@@ -35,14 +35,14 @@ export function WorktreeCardPlaceholder({
               <button
                 type="button"
                 onClick={() => onRetry(pendingCreation)}
-                className="text-xs font-medium text-text-primary underline underline-offset-2 hover:text-daintree-text/80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary rounded-sm"
+                className="text-xs font-medium text-text-primary underline underline-offset-2 hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary rounded-sm"
               >
                 Retry
               </button>
               <button
                 type="button"
                 onClick={() => onDismiss(pendingCreation.path)}
-                className="text-xs text-daintree-text/60 hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary rounded-sm"
+                className="text-xs text-text-secondary hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary rounded-sm"
               >
                 Dismiss
               </button>

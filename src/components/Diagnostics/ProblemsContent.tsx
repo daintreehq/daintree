@@ -116,7 +116,7 @@ function ErrorRow({
           isExpanded && "bg-daintree-border/30"
         )}
       >
-        <td className="px-3 py-2 text-xs text-daintree-text/60 whitespace-nowrap">
+        <td className="px-3 py-2 text-xs text-text-secondary whitespace-nowrap">
           {formatTimestamp(error.timestamp)}
         </td>
         <td className={cn("px-3 py-2 text-xs whitespace-nowrap font-medium", typeColor)}>
@@ -131,14 +131,14 @@ function ErrorRow({
           >
             <span className="truncate block">{error.message}</span>
             {error.recoveryHint && (
-              <span className="flex items-center gap-1 mt-0.5 text-xs text-daintree-text/60">
+              <span className="flex items-center gap-1 mt-0.5 text-xs text-text-secondary">
                 <Lightbulb className="w-3 h-3 shrink-0" />
                 {error.recoveryHint}
               </span>
             )}
           </button>
         </td>
-        <td className="px-3 py-2 text-xs text-daintree-text/60 whitespace-nowrap">
+        <td className="px-3 py-2 text-xs text-text-secondary whitespace-nowrap">
           {error.source || "-"}
         </td>
         <td className="px-3 py-2 whitespace-nowrap">
@@ -187,7 +187,7 @@ function ErrorRow({
         <tr className="bg-daintree-sidebar/50" id={`error-details-${error.id}`}>
           <td colSpan={5} className="px-3 py-2">
             <div className="flex items-start justify-between gap-2">
-              <pre className="text-xs text-daintree-text/60 whitespace-pre-wrap break-all font-mono max-h-40 overflow-y-auto flex-1 select-text">
+              <pre className="text-xs text-text-secondary whitespace-pre-wrap break-all font-mono max-h-40 overflow-y-auto flex-1 select-text">
                 {error.details}
               </pre>
               <Tooltip>
@@ -211,7 +211,7 @@ function ErrorRow({
               </Tooltip>
             </div>
             {error.context && Object.keys(error.context).length > 0 && (
-              <div className="mt-2 text-xs text-daintree-text/60">
+              <div className="mt-2 text-xs text-text-secondary">
                 <span className="font-medium">Context: </span>
                 {Object.entries(error.context)
                   .filter(([, v]) => v !== undefined)
@@ -268,19 +268,19 @@ export function ProblemsContent({ onRetry, onCancelRetry, className }: ProblemsC
         <table className="w-full">
           <thead className="sticky top-0 bg-surface-sidebar border-b border-border-default">
             <tr>
-              <th className="px-3 py-2 text-left text-xs font-medium text-daintree-text/60 w-24">
+              <th className="px-3 py-2 text-left text-xs font-medium text-text-secondary w-24">
                 Time
               </th>
-              <th className="px-3 py-2 text-left text-xs font-medium text-daintree-text/60 w-20">
+              <th className="px-3 py-2 text-left text-xs font-medium text-text-secondary w-20">
                 Type
               </th>
-              <th className="px-3 py-2 text-left text-xs font-medium text-daintree-text/60">
+              <th className="px-3 py-2 text-left text-xs font-medium text-text-secondary">
                 Message
               </th>
-              <th className="px-3 py-2 text-left text-xs font-medium text-daintree-text/60 w-28">
+              <th className="px-3 py-2 text-left text-xs font-medium text-text-secondary w-28">
                 Source
               </th>
-              <th className="px-3 py-2 text-left text-xs font-medium text-daintree-text/60 w-24">
+              <th className="px-3 py-2 text-left text-xs font-medium text-text-secondary w-24">
                 Actions
               </th>
             </tr>

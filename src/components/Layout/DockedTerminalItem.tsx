@@ -342,7 +342,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
                 data-dock-item=""
                 className={cn(
                   "flex items-center gap-1.5 px-3 h-[var(--dock-item-height)] rounded-[var(--radius-md)] text-xs border transition duration-150 max-w-[280px]",
-                  "bg-[var(--dock-item-bg)] border-[var(--dock-item-border)] text-daintree-text/70",
+                  "bg-[var(--dock-item-bg)] border-[var(--dock-item-border)] text-text-secondary",
                   "hover:text-text-primary hover:bg-[var(--dock-item-bg-hover)]",
                   "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]",
                   "cursor-grab active:cursor-grabbing",
@@ -384,7 +384,7 @@ export function DockedTerminalItem({ terminal }: DockedTerminalItemProps) {
                     <div className="h-3 w-px bg-border-subtle shrink-0" aria-hidden="true" />
                     <Tooltip open={commandTip.open} onOpenChange={commandTip.onOpenChange}>
                       <TooltipTrigger asChild onPointerEnter={commandTip.onPointerEnter}>
-                        <span className="truncate flex-1 min-w-0 text-2xs text-daintree-text/50 font-mono">
+                        <span className="truncate flex-1 min-w-0 text-2xs text-text-secondary font-mono">
                           {commandText}
                         </span>
                       </TooltipTrigger>

@@ -299,7 +299,7 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
         >
           <div className="flex flex-col">
             <div className="px-3 py-2 border-b border-divider bg-daintree-bg/50 flex justify-between items-center">
-              <span className="text-xs font-medium text-daintree-text/70">Recently closed</span>
+              <span className="text-xs font-medium text-text-secondary">Recently closed</span>
               {trashedTerminals.length > 0 ? (
                 <Button
                   variant="ghost-danger"
@@ -373,7 +373,7 @@ export function TrashContainer({ trashedTerminals, compact = false }: TrashConta
           }}
         >
           <div className="max-h-40 overflow-y-auto">
-            <ul className="space-y-0.5 text-xs text-daintree-text/70">
+            <ul className="space-y-0.5 text-xs text-text-secondary">
               {trashPreviewTitles.map((title, i) => (
                 <li key={i} className="truncate">
                   {title}

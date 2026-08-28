@@ -294,7 +294,7 @@ function MoveOrRenameProjectDialogInner({
             <div className="space-y-1.5">
               <span className={FIELD_LABEL_CLASS}>Original location</span>
               <p
-                className="text-xs font-mono text-daintree-text/50 break-all"
+                className="text-xs font-mono text-text-secondary break-all"
                 title={pending.oldPath}
               >
                 {pending.oldPath}
@@ -423,7 +423,7 @@ function RelocationPreviewSection({
   if (preview === null) {
     return showLoading ? (
       <div
-        className="flex items-center gap-2 text-xs text-daintree-text/60"
+        className="flex items-center gap-2 text-xs text-text-secondary"
         data-testid="relocate-preview-loading"
       >
         <Spinner className="h-3.5 w-3.5" />
@@ -438,8 +438,8 @@ function RelocationPreviewSection({
       data-testid="relocate-preview"
     >
       <div className="space-y-1">
-        <span className="text-xs font-medium text-daintree-text/60">Folder</span>
-        <p className="text-xs font-mono text-daintree-text/50 break-all">{oldPath}</p>
+        <span className="text-xs font-medium text-text-secondary">Folder</span>
+        <p className="text-xs font-mono text-text-secondary break-all">{oldPath}</p>
         <p className="text-xs font-mono text-text-primary break-all">→ {preview.newPath}</p>
       </div>
 
@@ -456,10 +456,10 @@ function RelocationPreviewSection({
           ))}
         </div>
       ) : (
-        <ul className="space-y-1 text-xs text-daintree-text/70">
+        <ul className="space-y-1 text-xs text-text-secondary">
           {preview.runningTerminalCount > 0 && (
             <li>
-              <span className="font-medium text-daintree-text/85">
+              <span className="font-medium text-text-primary">
                 {preview.runningTerminalCount === 1
                   ? "1 terminal will be gracefully stopped"
                   : `${preview.runningTerminalCount} terminals will be gracefully stopped`}
@@ -469,7 +469,7 @@ function RelocationPreviewSection({
           )}
           {preview.agentContinuity.length > 0 && (
             <li data-testid="relocate-continuity">
-              <span className="text-daintree-text/70">Agent conversations</span>
+              <span className="text-text-secondary">Agent conversations</span>
               <ul className="mt-1 space-y-1.5 pl-3">
                 {preview.agentContinuity.map((agent) => {
                   // Defense in depth: no plugin or user-registry agent can carry
@@ -491,7 +491,7 @@ function RelocationPreviewSection({
                       />
                       <div className="space-y-0.5">
                         <div>
-                          <span className="font-medium text-daintree-text/85">
+                          <span className="font-medium text-text-primary">
                             {agent.count === 1
                               ? agent.agentName
                               : `${agent.agentName} (${agent.count})`}
@@ -517,7 +517,7 @@ function RelocationPreviewSection({
               </span>
               <ul className="mt-1 space-y-0.5 pl-3">
                 {preview.linkedWorktrees.map((wt) => (
-                  <li key={wt} className="font-mono text-daintree-text/50 break-all">
+                  <li key={wt} className="font-mono text-text-secondary break-all">
                     {wt}
                   </li>
                 ))}

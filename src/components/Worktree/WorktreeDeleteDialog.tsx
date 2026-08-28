@@ -434,15 +434,15 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
           <dl className="rounded-[var(--radius-md)] border border-border-strong bg-surface-canvas px-3 py-2.5 text-xs">
             {worktree.branch && (
               <div className="flex gap-2">
-                <dt className="w-14 shrink-0 text-daintree-text/50">Branch</dt>
+                <dt className="w-14 shrink-0 text-text-secondary">Branch</dt>
                 <dd className="font-mono text-text-primary [overflow-wrap:anywhere]">
                   {worktree.branch}
                 </dd>
               </div>
             )}
             <div className={cn("flex gap-2", worktree.branch && "mt-1.5")}>
-              <dt className="w-14 shrink-0 text-daintree-text/50">Path</dt>
-              <dd className="font-mono text-daintree-text/70 [overflow-wrap:anywhere]">
+              <dt className="w-14 shrink-0 text-text-secondary">Path</dt>
+              <dd className="font-mono text-text-secondary [overflow-wrap:anywhere]">
                 {worktree.path}
               </dd>
             </div>
@@ -461,11 +461,11 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                   id={changesHeadingId}
                   role="heading"
                   aria-level={3}
-                  className="text-2xs font-semibold uppercase tracking-wider text-daintree-text/60"
+                  className="text-2xs font-semibold uppercase tracking-wider text-text-secondary"
                 >
                   Uncommitted work
                 </span>
-                <span className="text-2xs tabular-nums text-daintree-text/50">
+                <span className="text-2xs tabular-nums text-text-secondary">
                   {changeSummaryLabel}
                 </span>
               </div>
@@ -479,16 +479,16 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                 data-testid="delete-worktree-file-list"
                 aria-labelledby={changesHeadingId}
                 tabIndex={0}
-                className="mt-2 max-h-32 overflow-auto text-xs text-daintree-text/70 bg-surface-canvas p-3 rounded-[var(--radius-md)] border border-border-strong font-mono space-y-0.5"
+                className="mt-2 max-h-32 overflow-auto text-xs text-text-secondary bg-surface-canvas p-3 rounded-[var(--radius-md)] border border-border-strong font-mono space-y-0.5"
               >
                 {previewChangeRows.map((row) => (
                   <li
                     key={row.isOverflow ? "__overflow" : `${row.glyph}:${row.label}`}
-                    className={cn("flex gap-2", row.isOverflow && "text-daintree-text/50 italic")}
+                    className={cn("flex gap-2", row.isOverflow && "text-text-secondary italic")}
                   >
                     {!row.isOverflow && (
                       <>
-                        <span aria-hidden="true" className="w-3 shrink-0 text-daintree-text/50">
+                        <span aria-hidden="true" className="w-3 shrink-0 text-text-secondary">
                           {row.glyph}
                         </span>
                         {/* The glyph column is right for scanning and useless
@@ -515,7 +515,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
               would then dispatch the values the user had BEFORE they changed
               their mind. Cancel and Escape stay live throughout. */}
           <fieldset className="space-y-3">
-            <legend className="text-2xs font-semibold uppercase tracking-wider text-daintree-text/60">
+            <legend className="text-2xs font-semibold uppercase tracking-wider text-text-secondary">
               Options
             </legend>
 
@@ -537,7 +537,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                     "What will happen" list. */}
                 Force delete
                 {hasChanges && (
-                  <span className="block text-xs text-daintree-text/60 mt-0.5">
+                  <span className="block text-xs text-text-secondary mt-0.5">
                     {verifyFailed
                       ? "Required because this worktree's status couldn't be verified"
                       : `Required to delete this worktree — ${changeSummaryLabel} present`}
@@ -557,7 +557,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
                 />
                 <span className="text-sm text-text-primary">
                   Close all terminals
-                  <span className="ml-1 tabular-nums text-daintree-text/60">
+                  <span className="ml-1 tabular-nums text-text-secondary">
                     ({terminalCounts.total})
                   </span>
                 </span>
@@ -592,7 +592,7 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
               id={consequencesHeadingId}
               role="heading"
               aria-level={3}
-              className="text-2xs font-semibold uppercase tracking-wider text-daintree-text/60"
+              className="text-2xs font-semibold uppercase tracking-wider text-text-secondary"
             >
               What will happen
             </span>

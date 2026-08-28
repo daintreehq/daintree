@@ -239,7 +239,7 @@ function RendererCpuProfileSection() {
           </Button>
         )}
         {phase === "recording" && (
-          <span className="text-xs text-daintree-text/60">
+          <span className="text-xs text-text-secondary">
             Reproduce the slow interaction — auto-stops in {secondsLeft}s
           </span>
         )}
@@ -579,7 +579,7 @@ export function TroubleshootingTab() {
           <h5 className="text-xs font-medium text-text-primary mb-2">
             Advanced: Persistent Verbose Logging
           </h5>
-          <p className="text-xs text-daintree-text/60 mb-2 select-text">
+          <p className="text-xs text-text-secondary mb-2 select-text">
             Use the toggle above for quick debugging. For persistent verbose logs across restarts,
             launch the app with environment variables:
           </p>
@@ -619,7 +619,7 @@ export function TroubleshootingTab() {
 
         {Object.keys(logOverrides).length > 0 && (
           <div className="space-y-1 mt-3">
-            <h5 className="text-xs font-medium text-daintree-text/80 mb-1">Active overrides</h5>
+            <h5 className="text-xs font-medium text-text-primary mb-1">Active overrides</h5>
             {Object.entries(logOverrides)
               .sort(([a], [b]) => a.localeCompare(b))
               .map(([name, level]) => (
@@ -628,7 +628,7 @@ export function TroubleshootingTab() {
                   className="flex items-center justify-between px-3 py-1.5 rounded-[var(--radius-md)] border border-border-default bg-daintree-bg/30"
                 >
                   <span className="text-xs font-mono text-text-primary truncate">{name}</span>
-                  <span className="text-3xs uppercase tracking-wider px-1.5 py-0.5 rounded bg-daintree-border/60 text-daintree-text/80">
+                  <span className="text-3xs uppercase tracking-wider px-1.5 py-0.5 rounded bg-daintree-border/60 text-text-primary">
                     {level}
                   </span>
                 </div>
@@ -646,7 +646,7 @@ export function TroubleshootingTab() {
           key that now does something else entirely is worse than one that does
           not mention a key at all.
         */}
-        <p className="text-xs text-daintree-text/50 select-text">
+        <p className="text-xs text-text-secondary select-text">
           In development builds, open DevTools from View → Toggle Developer Tools, or run the Toggle
           DevTools command from the command palette.
         </p>

@@ -160,7 +160,7 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
             <h1 className="text-2xl font-semibold text-text-primary tracking-tight mb-2">
               Welcome to Daintree
             </h1>
-            <p className="text-sm text-daintree-text/60 leading-relaxed font-medium">
+            <p className="text-sm text-text-secondary leading-relaxed font-medium">
               A habitat for your AI agents.
             </p>
           </div>
@@ -180,7 +180,7 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
           {hasProjects && (
             <h3
               id="quick-actions-heading"
-              className="text-xs font-medium text-daintree-text/50 uppercase tracking-wider mb-3"
+              className="text-xs font-medium text-text-secondary uppercase tracking-wider mb-3"
             >
               Quick actions
             </h3>
@@ -231,7 +231,7 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
                   </span>
                   <span
                     id={`qa-desc-${id}`}
-                    className="text-xs text-daintree-text/50 leading-relaxed"
+                    className="text-xs text-text-secondary leading-relaxed"
                   >
                     {description}
                   </span>
@@ -244,7 +244,7 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
         {/* Keyboard Shortcuts */}
         {visibleShortcutTips.length > 0 && (
           <div className="w-full">
-            <h3 className="text-xs font-medium text-daintree-text/50 uppercase tracking-wider mb-3">
+            <h3 className="text-xs font-medium text-text-secondary uppercase tracking-wider mb-3">
               Keyboard shortcuts
             </h3>
             <div className="grid grid-cols-2 gap-x-8 gap-y-2">
@@ -252,8 +252,8 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
                 const combo = keybindingService.getDisplayCombo(actionId);
                 return (
                   <div key={actionId} className="flex items-center justify-between gap-3">
-                    <span className="text-sm text-daintree-text/70">{label}</span>
-                    <kbd className="shrink-0 bg-surface-canvas border border-border-default rounded px-1.5 py-0.5 text-xs font-mono text-daintree-text/80 shadow-sm">
+                    <span className="text-sm text-text-secondary">{label}</span>
+                    <kbd className="shrink-0 bg-surface-canvas border border-border-default rounded px-1.5 py-0.5 text-xs font-mono text-text-primary shadow-sm">
                       {combo}
                     </kbd>
                   </div>
@@ -275,7 +275,7 @@ export function WelcomeScreen({ gettingStarted }: WelcomeScreenProps) {
                 safeFireAndForget(promise, { context: "Opening newsletter link" });
               }
             }}
-            className="flex items-center gap-1.5 hover:text-daintree-text/60 transition-colors"
+            className="flex items-center gap-1.5 hover:text-text-secondary transition-colors"
           >
             <Newspaper className="h-3 w-3" />
             Newsletter
@@ -370,7 +370,7 @@ function TopProjects({
     <div className="w-full">
       {/* "Your projects", not "Recent projects": the order follows the switcher's
           Other-band sort mode, so no fixed order-word belongs in the heading. */}
-      <h3 className="text-xs font-medium text-daintree-text/50 uppercase tracking-wider mb-3">
+      <h3 className="text-xs font-medium text-text-secondary uppercase tracking-wider mb-3">
         Your projects
       </h3>
       <div className="space-y-1">
@@ -399,7 +399,7 @@ function TopProjects({
               </span>
             </div>
             <div className="flex-1 min-w-0">
-              <span className="text-sm font-semibold text-daintree-text/85 truncate block">
+              <span className="text-sm font-semibold text-text-primary truncate block">
                 {project.name}
               </span>
               <span className="text-xs text-text-secondary truncate block" title={project.path}>
@@ -454,8 +454,8 @@ function AgentSetupBannerCard() {
         <div className="flex items-start gap-3 pr-6">
           <Sparkles className="h-4 w-4 text-daintree-text/50 mt-0.5 shrink-0" aria-hidden="true" />
           <div className="flex-1 min-w-0">
-            <h3 className="text-sm font-semibold text-daintree-text/90">Set up your AI agents</h3>
-            <p className="text-xs text-daintree-text/60 mt-1 leading-relaxed">
+            <h3 className="text-sm font-semibold text-text-primary">Set up your AI agents</h3>
+            <p className="text-xs text-text-secondary mt-1 leading-relaxed">
               Pick a theme, opt into telemetry, and choose which agents to install. You can skip
               this and come back anytime.
             </p>
@@ -467,7 +467,7 @@ function AgentSetupBannerCard() {
               <button
                 type="button"
                 onClick={handleDismiss}
-                className="text-xs text-daintree-text/50 hover:text-daintree-text/80 transition-colors"
+                className="text-xs text-text-secondary hover:text-text-primary transition-colors"
               >
                 Not now
               </button>
@@ -545,8 +545,8 @@ function AgentWelcomeCard() {
         <div className="flex items-start gap-3 pr-6">
           <Plug className="h-4 w-4 text-daintree-text/50 mt-0.5 shrink-0" aria-hidden="true" />
           <div className="flex-1 min-w-0">
-            <h3 className="text-sm font-semibold text-daintree-text/90">Installed agents found</h3>
-            <p className="text-xs text-daintree-text/60 mt-1 leading-relaxed">
+            <h3 className="text-sm font-semibold text-text-primary">Installed agents found</h3>
+            <p className="text-xs text-text-secondary mt-1 leading-relaxed">
               Pin them to your toolbar for one-click launching.
             </p>
             <ul className="mt-3 flex flex-wrap gap-2">
@@ -557,7 +557,7 @@ function AgentWelcomeCard() {
                 return (
                   <li
                     key={id}
-                    className="inline-flex items-center gap-1.5 rounded-[var(--radius-xs)] border border-daintree-border/60 bg-daintree-bg/40 px-2 py-1 text-xs text-daintree-text/80"
+                    className="inline-flex items-center gap-1.5 rounded-[var(--radius-xs)] border border-daintree-border/60 bg-daintree-bg/40 px-2 py-1 text-xs text-text-primary"
                   >
                     <span className="inline-flex h-3.5 w-3.5 items-center justify-center">
                       <BrandMark brandColor={getBrandColorHex(id)} className="h-3.5 w-3.5">
@@ -582,7 +582,7 @@ function AgentWelcomeCard() {
               <button
                 type="button"
                 onClick={handleDismiss}
-                className="text-xs text-daintree-text/50 hover:text-daintree-text/80 transition-colors"
+                className="text-xs text-text-secondary hover:text-text-primary transition-colors"
               >
                 Not now
               </button>
@@ -615,7 +615,7 @@ function InlineChecklist({
   return (
     <div className="w-full">
       <div className="flex items-center gap-3 mb-3">
-        <h3 className="text-xs font-medium text-daintree-text/50 uppercase tracking-wider">
+        <h3 className="text-xs font-medium text-text-secondary uppercase tracking-wider">
           Getting started
         </h3>
         <span className="text-3xs text-text-secondary font-mono">

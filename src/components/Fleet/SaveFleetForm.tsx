@@ -45,7 +45,7 @@ export function SaveFleetForm({ armedCount }: SaveFleetFormProps): ReactElement 
       className="flex flex-col items-stretch gap-1.5 py-2"
       data-testid="fleet-save-form"
     >
-      <div className="flex items-center gap-1 text-3xs font-medium uppercase tracking-wide text-daintree-text/50">
+      <div className="flex items-center gap-1 text-3xs font-medium uppercase tracking-wide text-text-secondary">
         <Save className="h-3 w-3" />
         <span>Save current as…</span>
       </div>
@@ -63,7 +63,7 @@ export function SaveFleetForm({ armedCount }: SaveFleetFormProps): ReactElement 
             "flex-1 rounded px-2 py-1 transition-colors",
             kind === "snapshot"
               ? "bg-tint/[0.14] text-text-primary"
-              : "bg-tint/[0.04] text-daintree-text/70 hover:bg-tint/[0.08]"
+              : "bg-tint/[0.04] text-text-secondary hover:bg-tint/[0.08]"
           )}
         >
           Snapshot
@@ -81,7 +81,7 @@ export function SaveFleetForm({ armedCount }: SaveFleetFormProps): ReactElement 
             "flex-1 rounded px-2 py-1 transition-colors",
             kind === "predicate"
               ? "bg-tint/[0.14] text-text-primary"
-              : "bg-tint/[0.04] text-daintree-text/70 hover:bg-tint/[0.08]"
+              : "bg-tint/[0.04] text-text-secondary hover:bg-tint/[0.08]"
           )}
         >
           Live rule

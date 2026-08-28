@@ -79,14 +79,14 @@ function renderInner(
   // intentionally unchanged.
   const isCanvas = props.scale === "canvas";
   const iconClass = isCanvas
-    ? "text-daintree-text/30 [&_svg]:h-10 [&_svg]:w-10 @max-[280px]/empty-state:[&_svg]:h-6 @max-[280px]/empty-state:[&_svg]:w-6"
-    : "text-daintree-text/30 [&_svg]:h-6 [&_svg]:w-6 @max-[280px]/empty-state:[&_svg]:h-4 @max-[280px]/empty-state:[&_svg]:w-4";
+    ? "text-text-placeholder [&_svg]:h-10 [&_svg]:w-10 @max-[280px]/empty-state:[&_svg]:h-6 @max-[280px]/empty-state:[&_svg]:w-6"
+    : "text-text-placeholder [&_svg]:h-6 [&_svg]:w-6 @max-[280px]/empty-state:[&_svg]:h-4 @max-[280px]/empty-state:[&_svg]:w-4";
   const titleClass = isCanvas
-    ? "text-lg font-semibold text-daintree-text/70 @max-[280px]/empty-state:text-sm @max-[280px]/empty-state:font-medium"
-    : "text-sm font-medium text-daintree-text/70";
+    ? "text-lg font-semibold text-text-secondary @max-[280px]/empty-state:text-sm @max-[280px]/empty-state:font-medium"
+    : "text-sm font-medium text-text-secondary";
   const descriptionClass = isCanvas
-    ? "text-sm text-daintree-text/50 max-w-xs @max-[280px]/empty-state:text-xs"
-    : "text-xs text-daintree-text/50 max-w-xs";
+    ? "text-sm text-text-secondary max-w-xs @max-[280px]/empty-state:text-xs"
+    : "text-xs text-text-secondary max-w-xs";
   return (
     <>
       {icon ? (

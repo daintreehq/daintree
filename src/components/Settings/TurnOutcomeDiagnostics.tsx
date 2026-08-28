@@ -42,7 +42,7 @@ const OUTCOME_ORDER: TurnOutcomeClass[] = [
 const RATE_THRESHOLD = { low: 5, medium: 20 } as const;
 
 function rateColor(rate: number): string {
-  if (rate <= RATE_THRESHOLD.low) return "text-daintree-text/60";
+  if (rate <= RATE_THRESHOLD.low) return "text-text-secondary";
   if (rate <= RATE_THRESHOLD.medium) return "text-status-warning";
   return "text-status-danger";
 }
@@ -280,21 +280,21 @@ export function TurnOutcomeDiagnostics({
                 />
                 Turn outcomes by class
                 {totalRecords > 0 && (
-                  <span className="text-daintree-text/50">({totalRecords} turns)</span>
+                  <span className="text-text-secondary">({totalRecords} turns)</span>
                 )}
               </span>
             </button>
             {outcomeSectionOpen && (
               <div className="px-3 pb-3 pt-1">
                 {totalRecords === 0 ? (
-                  <p className="text-xs text-daintree-text/50">
+                  <p className="text-xs text-text-secondary">
                     No turn outcome records yet. Turn outcomes are recorded when an agent completes
                     a turn in a help session.
                   </p>
                 ) : (
                   <table className="w-full table-fixed text-xs font-mono tabular-nums">
                     <thead>
-                      <tr className="text-daintree-text/50">
+                      <tr className="text-text-secondary">
                         <th className="text-left font-medium py-1 pr-2">Outcome</th>
                         <th className="text-right font-medium py-1 pl-2 w-16">Count</th>
                         <th className="text-right font-medium py-1 pl-2 w-16">Rate</th>
@@ -305,9 +305,9 @@ export function TurnOutcomeDiagnostics({
                         const count = outcomeCounts.get(cls) ?? 0;
                         const rate = totalRecords > 0 ? (count / totalRecords) * 100 : 0;
                         return (
-                          <tr key={cls} className="text-daintree-text/80">
+                          <tr key={cls} className="text-text-primary">
                             <td className="py-1 pr-2 truncate">{OUTCOME_LABEL[cls]}</td>
-                            <td className="py-1 pl-2 text-right text-daintree-text/60">{count}</td>
+                            <td className="py-1 pl-2 text-right text-text-secondary">{count}</td>
                             <td className={cn("py-1 pl-2 text-right", rateColor(rate))}>
                               {rate.toFixed(1)}%
                             </td>
@@ -346,16 +346,16 @@ export function TurnOutcomeDiagnostics({
             {toolErrorOpen && (
               <div className="px-3 pb-3 pt-1">
                 {!auditRecords || auditRecords.length === 0 ? (
-                  <p className="text-xs text-daintree-text/50">
+                  <p className="text-xs text-text-secondary">
                     No audit data available. Enable MCP audit logging to populate per-tool
                     diagnostics.
                   </p>
                 ) : toolErrorRollups.length === 0 ? (
-                  <p className="text-xs text-daintree-text/50">No tool-error outcomes recorded.</p>
+                  <p className="text-xs text-text-secondary">No tool-error outcomes recorded.</p>
                 ) : (
                   <table className="w-full table-fixed text-xs font-mono tabular-nums">
                     <thead>
-                      <tr className="text-daintree-text/50">
+                      <tr className="text-text-secondary">
                         <th className="text-left font-medium py-1 pr-2">Tool</th>
                         <th className="text-right font-medium py-1 px-2 w-16">Errors</th>
                         <th className="text-right font-medium py-1 px-2 w-16">Turns</th>
@@ -365,18 +365,14 @@ export function TurnOutcomeDiagnostics({
                     </thead>
                     <tbody className="divide-y divide-border-default">
                       {toolErrorRollups.map((row) => (
-                        <tr key={row.toolId} className="text-daintree-text/80">
+                        <tr key={row.toolId} className="text-text-primary">
                           <td className="py-1 pr-2 truncate">{row.toolId}</td>
-                          <td className="py-1 px-2 text-right text-daintree-text/60">
-                            {row.count}
-                          </td>
-                          <td className="py-1 px-2 text-right text-daintree-text/60">
-                            {row.total}
-                          </td>
+                          <td className="py-1 px-2 text-right text-text-secondary">{row.count}</td>
+                          <td className="py-1 px-2 text-right text-text-secondary">{row.total}</td>
                           <td className={cn("py-1 px-2 text-right", rateColor(row.rate))}>
                             {row.rate.toFixed(1)}%
                           </td>
-                          <td className="py-1 pl-2 text-right text-daintree-text/50">
+                          <td className="py-1 pl-2 text-right text-text-secondary">
                             Review tool configuration
                           </td>
                         </tr>
@@ -413,18 +409,16 @@ export function TurnOutcomeDiagnostics({
             {tierRejectedOpen && (
               <div className="px-3 pb-3 pt-1">
                 {!auditRecords || auditRecords.length === 0 ? (
-                  <p className="text-xs text-daintree-text/50">
+                  <p className="text-xs text-text-secondary">
                     No audit data available. Enable MCP audit logging to populate per-tool
                     diagnostics.
                   </p>
                 ) : tierRejectedRollups.length === 0 ? (
-                  <p className="text-xs text-daintree-text/50">
-                    No tier-rejected outcomes recorded.
-                  </p>
+                  <p className="text-xs text-text-secondary">No tier-rejected outcomes recorded.</p>
                 ) : (
                   <table className="w-full table-fixed text-xs font-mono tabular-nums">
                     <thead>
-                      <tr className="text-daintree-text/50">
+                      <tr className="text-text-secondary">
                         <th className="text-left font-medium py-1 pr-2">Tool</th>
                         <th className="text-right font-medium py-1 px-2 w-16">Rejected</th>
                         <th className="text-right font-medium py-1 px-2 w-16">Turns</th>
@@ -434,18 +428,14 @@ export function TurnOutcomeDiagnostics({
                     </thead>
                     <tbody className="divide-y divide-border-default">
                       {tierRejectedRollups.map((row) => (
-                        <tr key={row.toolId} className="text-daintree-text/80">
+                        <tr key={row.toolId} className="text-text-primary">
                           <td className="py-1 pr-2 truncate">{row.toolId}</td>
-                          <td className="py-1 px-2 text-right text-daintree-text/60">
-                            {row.count}
-                          </td>
-                          <td className="py-1 px-2 text-right text-daintree-text/60">
-                            {row.total}
-                          </td>
+                          <td className="py-1 px-2 text-right text-text-secondary">{row.count}</td>
+                          <td className="py-1 px-2 text-right text-text-secondary">{row.total}</td>
                           <td className={cn("py-1 px-2 text-right", rateColor(row.rate))}>
                             {row.rate.toFixed(1)}%
                           </td>
-                          <td className="py-1 pl-2 text-right text-daintree-text/50">
+                          <td className="py-1 pl-2 text-right text-text-secondary">
                             Audit tier policy
                           </td>
                         </tr>
@@ -482,16 +472,16 @@ export function TurnOutcomeDiagnostics({
             {agentStuckOpen && (
               <div className="px-3 pb-3 pt-1">
                 {!auditRecords || auditRecords.length === 0 ? (
-                  <p className="text-xs text-daintree-text/50">
+                  <p className="text-xs text-text-secondary">
                     No audit data available. Enable MCP audit logging to populate per-tool
                     diagnostics.
                   </p>
                 ) : agentStuckRollups.length === 0 ? (
-                  <p className="text-xs text-daintree-text/50">No agent-stuck outcomes recorded.</p>
+                  <p className="text-xs text-text-secondary">No agent-stuck outcomes recorded.</p>
                 ) : (
                   <table className="w-full table-fixed text-xs font-mono tabular-nums">
                     <thead>
-                      <tr className="text-daintree-text/50">
+                      <tr className="text-text-secondary">
                         <th className="text-left font-medium py-1 pr-2">Tool</th>
                         <th className="text-right font-medium py-1 px-2 w-16">Stuck</th>
                         <th className="text-right font-medium py-1 px-2 w-16">Turns</th>
@@ -501,18 +491,14 @@ export function TurnOutcomeDiagnostics({
                     </thead>
                     <tbody className="divide-y divide-border-default">
                       {agentStuckRollups.map((row) => (
-                        <tr key={row.toolId} className="text-daintree-text/80">
+                        <tr key={row.toolId} className="text-text-primary">
                           <td className="py-1 pr-2 truncate">{row.toolId}</td>
-                          <td className="py-1 px-2 text-right text-daintree-text/60">
-                            {row.count}
-                          </td>
-                          <td className="py-1 px-2 text-right text-daintree-text/60">
-                            {row.total}
-                          </td>
+                          <td className="py-1 px-2 text-right text-text-secondary">{row.count}</td>
+                          <td className="py-1 px-2 text-right text-text-secondary">{row.total}</td>
                           <td className={cn("py-1 px-2 text-right", rateColor(row.rate))}>
                             {row.rate.toFixed(1)}%
                           </td>
-                          <td className="py-1 pl-2 text-right text-daintree-text/50">
+                          <td className="py-1 pl-2 text-right text-text-secondary">
                             Investigate agent loop detection
                           </td>
                         </tr>
@@ -529,7 +515,7 @@ export function TurnOutcomeDiagnostics({
               type="button"
               onClick={handleRefresh}
               disabled={loading}
-              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-[var(--radius-md)] border border-border-default text-daintree-text/70 hover:text-text-primary hover:bg-overlay-soft transition-colors"
+              className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-[var(--radius-md)] border border-border-default text-text-secondary hover:text-text-primary hover:bg-overlay-soft transition-colors"
             >
               <RefreshCw className="w-3.5 h-3.5" />
               Refresh

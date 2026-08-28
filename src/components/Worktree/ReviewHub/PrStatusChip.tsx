@@ -59,7 +59,7 @@ export function PrStatusChip({ hasRemote, worktreePR, onOpenExternal }: PrStatus
             #{worktreePR.prNumber}
           </span>
           <span className="text-daintree-text/40">·</span>
-          <span className="text-daintree-text/60">{prStateLabel}</span>
+          <span className="text-text-secondary">{prStateLabel}</span>
           {ciVisual && (
             <>
               <span className="text-daintree-text/40">·</span>

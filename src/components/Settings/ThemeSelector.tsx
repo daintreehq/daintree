@@ -163,9 +163,7 @@ export function ThemeSelector<T extends { id: string }>({
       </div>
 
       {isEmpty ? (
-        <p className="text-xs text-daintree-text/50 text-center py-4">
-          No themes match your search.
-        </p>
+        <p className="text-xs text-text-secondary text-center py-4">No themes match your search.</p>
       ) : filteredGroups ? (
         <div role="listbox" id={id} aria-label="Theme list" className="space-y-2">
           {filteredGroups.map((group) => (

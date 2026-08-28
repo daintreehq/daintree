@@ -207,7 +207,7 @@ function FolderListingRowView({ row, context }: FolderListingRowViewProps) {
         // Neutral hover, no selected state: clicking a row always replaces what
         // this listing is showing, so no row is ever the standing selection —
         // a highlight would only ever paint for the frame before it unmounts.
-        "text-daintree-text/70 transition-colors duration-150 ease-out hover:bg-tint/5",
+        "text-text-secondary transition-colors duration-150 ease-out hover:bg-tint/5",
         "data-[state=open]:bg-overlay-raised data-[state=open]:text-text-primary"
       )}
     >
@@ -221,10 +221,10 @@ function FolderListingRowView({ row, context }: FolderListingRowViewProps) {
         </span>
         {symlinkDescription && <span className="sr-only">{symlinkDescription}</span>}
       </span>
-      <span className="w-20 shrink-0 text-right tabular-nums text-daintree-text/50">
+      <span className="w-20 shrink-0 text-right tabular-nums text-text-secondary">
         {formatSize(row)}
       </span>
-      <span className="w-24 shrink-0 truncate text-right text-daintree-text/50">
+      <span className="w-24 shrink-0 truncate text-right text-text-secondary">
         {row.mtimeMs == null ? UNKNOWN : formatRelativeTime(row.mtimeMs)}
       </span>
     </div>

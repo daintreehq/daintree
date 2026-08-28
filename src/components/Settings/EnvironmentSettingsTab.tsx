@@ -248,7 +248,7 @@ export function EnvironmentSettingsTab() {
       <div className="contents">
         <div className="space-y-2">
           {envRows.length === 0 ? (
-            <div className="text-sm text-daintree-text/60 text-center py-8 border border-dashed border-border-default rounded-[var(--radius-md)]">
+            <div className="text-sm text-text-secondary text-center py-8 border border-dashed border-border-default rounded-[var(--radius-md)]">
               No environment variables configured yet
             </div>
           ) : (

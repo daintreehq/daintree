@@ -806,7 +806,7 @@ function PanelHeaderComponent({
                   <span
                     className={cn(
                       "text-xs font-medium font-sans select-none transition-colors block truncate min-w-0 min-h-6 leading-6",
-                      isFocused || isSelected ? "text-text-primary" : "text-daintree-text/70",
+                      isFocused || isSelected ? "text-text-primary" : "text-text-secondary",
                       onTitleChange && "cursor-text hover:text-text-primary",
                       isPinged &&
                         !isMaximized &&
@@ -1200,7 +1200,7 @@ function PanelHeaderComponent({
                   onToggleMaximize();
                 }}
                 onPointerDown={(e) => e.stopPropagation()}
-                className="flex items-center gap-1.5 px-2 py-1 rounded-sm hover:bg-daintree-text/10 focus-visible:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2 text-daintree-text/60 hover:text-text-primary transition-colors"
+                className="flex items-center gap-1.5 px-2 py-1 rounded-sm hover:bg-daintree-text/10 focus-visible:bg-daintree-text/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2 text-text-secondary hover:text-text-primary transition-colors"
                 aria-label="Restore grid view"
                 aria-keyshortcuts={maximizeAriaShortcut}
               >
@@ -1273,7 +1273,7 @@ function PanelHeaderComponent({
               {location === "dock"
                 ? createTooltipContent("Dismiss preview")
                 : createTooltipContent("Close Session", closeShortcut)}
-              <span className="text-daintree-text/50 text-2xs">
+              <span className="text-text-secondary text-2xs">
                 {formatShortcutForTooltip("Alt+Click to force close")}
               </span>
             </div>

@@ -127,7 +127,7 @@ export function DockedNonPtyPanelItem({ panel, displayTitle }: DockedNonPtyPanel
                 data-dock-item=""
                 className={cn(
                   "flex items-center gap-1.5 px-3 h-[var(--dock-item-height)] rounded-[var(--radius-md)] text-xs border transition duration-150 max-w-[280px]",
-                  "bg-[var(--dock-item-bg)] border-[var(--dock-item-border)] text-daintree-text/70",
+                  "bg-[var(--dock-item-bg)] border-[var(--dock-item-border)] text-text-secondary",
                   "hover:text-text-primary hover:bg-[var(--dock-item-bg-hover)]",
                   "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]",
                   "cursor-grab active:cursor-grabbing",

@@ -8,7 +8,7 @@ interface ScopeBannerProps {
 export function ScopeBanner({ scopeKind, scopeLabel }: ScopeBannerProps) {
   return (
     <div className="flex items-center gap-2 text-xs">
-      <span className="text-daintree-text/50">Editing:</span>
+      <span className="text-text-secondary">Editing:</span>
       <span className="text-text-primary font-medium" data-testid="scope-banner-label">
         {scopeLabel}
       </span>

@@ -45,12 +45,12 @@ function FilterSection({
           onClick={() => setIsOpen(!isOpen)}
           aria-expanded={isOpen}
           aria-controls={contentId}
-          className="flex flex-1 items-center justify-between px-3 py-1.5 text-xs font-medium text-daintree-text/70 transition-colors hover:bg-overlay-soft"
+          className="flex flex-1 items-center justify-between px-3 py-1.5 text-xs font-medium text-text-secondary transition-colors hover:bg-overlay-soft"
         >
           <span className="flex items-center gap-1.5">
             {title}
             {hasActive && (
-              <span className="rounded-full bg-tint/10 px-1.5 py-0.5 text-3xs font-medium leading-none tabular-nums text-daintree-text/60">
+              <span className="rounded-full bg-tint/10 px-1.5 py-0.5 text-3xs font-medium leading-none tabular-nums text-text-secondary">
                 {activeCount}
               </span>
             )}
@@ -119,7 +119,7 @@ function FilterChip({ label, isActive, onClick, count }: FilterChipProps) {
         isActive
           ? "bg-filter-selected-bg-soft border-border-default text-text-primary"
           : isDimmed
-            ? "bg-surface-canvas border-border-default text-daintree-text/45 hover:bg-overlay-soft hover:text-daintree-text/70"
+            ? "bg-surface-canvas border-border-default text-text-secondary hover:bg-overlay-soft hover:text-text-primary"
             : "bg-surface-canvas border-border-default text-daintree-text/75 hover:bg-overlay-medium hover:text-text-primary"
       )}
     >
@@ -401,8 +401,8 @@ export function WorktreeFilterPopover({
                 ? "bg-overlay-soft text-text-primary"
                 : "bg-tint/[0.08] text-text-primary"
               : isField
-                ? "bg-[var(--worktree-search-input-bg,var(--color-surface-canvas))] text-daintree-text/60 hover:bg-overlay-soft hover:text-text-primary"
-                : "text-daintree-text/60 hover:bg-tint/[0.06] hover:text-text-primary"
+                ? "bg-[var(--worktree-search-input-bg,var(--color-surface-canvas))] text-text-secondary hover:bg-overlay-soft hover:text-text-primary"
+                : "text-text-secondary hover:bg-tint/[0.06] hover:text-text-primary"
           )}
           aria-label="Filter and sort worktrees"
           aria-haspopup="dialog"
@@ -489,7 +489,7 @@ export function WorktreeFilterPopover({
                     "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
                     orderBy === option.value
                       ? "bg-overlay-raised text-text-primary"
-                      : "text-daintree-text/70 hover:bg-overlay-medium"
+                      : "text-text-secondary hover:bg-overlay-medium"
                   )}
                 >
                   <div
@@ -521,7 +521,7 @@ export function WorktreeFilterPopover({
                 onChange={(e) => setGroupByType(e.target.checked)}
                 className="w-3.5 h-3.5 rounded border-border-default text-accent-primary focus:ring-daintree-accent/30 focus:ring-offset-0 bg-surface-canvas"
               />
-              <span className="text-xs text-daintree-text/70">Group by type</span>
+              <span className="text-xs text-text-secondary">Group by type</span>
             </label>
           </div>
 

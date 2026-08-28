@@ -1008,7 +1008,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
               <button
                 type="button"
                 onClick={handleMarkAllRead}
-                className="toolbar-icon-button inline-flex items-center gap-1 px-1.5 py-1 rounded-[var(--radius-sm)] text-2xs text-daintree-text/70 whitespace-nowrap"
+                className="toolbar-icon-button inline-flex items-center gap-1 px-1.5 py-1 rounded-[var(--radius-sm)] text-2xs text-text-secondary whitespace-nowrap"
               >
                 <CheckCheck className="w-3 h-3" aria-hidden="true" />
                 Mark all read
@@ -1136,11 +1136,11 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
       {showMutedPill && (
         <div
           data-testid="notification-muted-pill"
-          className="flex shrink-0 items-start gap-2 pl-4 pr-3 py-1.5 bg-overlay-raised text-2xs text-daintree-text/70"
+          className="flex shrink-0 items-start gap-2 pl-4 pr-3 py-1.5 bg-overlay-raised text-2xs text-text-secondary"
         >
           <div className="min-w-0 flex-1 flex flex-col gap-0.5">
             <span className="font-medium text-text-primary">{quietCause}</span>
-            {quietDetail && <span className="text-daintree-text/70">{quietDetail}</span>}
+            {quietDetail && <span className="text-text-secondary">{quietDetail}</span>}
           </div>
           {isSessionMuted && (
             <button
@@ -1153,7 +1153,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
               // `forced-colors: active`, where the UA supplies the border this
               // was missing — which is the tell that it was missing. Matches the
               // secondary row action, so the panel has one button shape.
-              className="inline-flex shrink-0 items-center justify-center rounded-[var(--radius-sm)] border border-daintree-text/20 px-1.5 py-0.5 text-2xs font-medium text-daintree-text/70 hover:bg-overlay-medium hover:text-text-primary transition-colors"
+              className="inline-flex shrink-0 items-center justify-center rounded-[var(--radius-sm)] border border-daintree-text/20 px-1.5 py-0.5 text-2xs font-medium text-text-secondary hover:bg-overlay-medium hover:text-text-primary transition-colors"
             >
               Resume
             </button>
@@ -1374,7 +1374,7 @@ function FilterChip({
         "inline-flex items-center px-2 py-0.5 text-2xs rounded-full transition-colors",
         selected
           ? "bg-filter-selected-bg-strong text-text-primary font-medium"
-          : "text-daintree-text/60 hover:text-text-primary hover:bg-tint/[0.04]"
+          : "text-text-secondary hover:text-text-primary hover:bg-tint/[0.04]"
       )}
     >
       {label}
@@ -1421,7 +1421,7 @@ function NeedsAttentionSection({
 } & RovingSectionProps) {
   return (
     <div data-testid="needs-attention-section" className="border-b border-divider">
-      <div className="pl-4 pr-3 pt-2 pb-1 text-3xs font-semibold uppercase tracking-wide text-daintree-text/70">
+      <div className="pl-4 pr-3 pt-2 pb-1 text-3xs font-semibold uppercase tracking-wide text-text-secondary">
         Needs attention
       </div>
       <div role="group" aria-label="Needs attention">
@@ -1697,7 +1697,7 @@ function ContextSectionHeader({
   return (
     <div
       data-testid="context-section-header"
-      className="group/section flex items-center justify-between pl-4 pr-3 py-1 bg-overlay-raised text-3xs font-medium uppercase tracking-wide text-daintree-text/60"
+      className="group/section flex items-center justify-between pl-4 pr-3 py-1 bg-overlay-raised text-3xs font-medium uppercase tracking-wide text-text-secondary"
     >
       <span className="truncate">{label}</span>
       <div className="ml-2 shrink-0 flex items-center gap-2">
@@ -1732,14 +1732,14 @@ function NewSinceLastLookedDivider({
       ref={ref}
       tabIndex={-1}
       data-testid="new-since-last-looked"
-      className="flex items-center gap-2 pl-4 pr-3 py-1 bg-overlay-raised text-3xs font-medium uppercase tracking-wide text-daintree-text/70 outline-hidden"
+      className="flex items-center gap-2 pl-4 pr-3 py-1 bg-overlay-raised text-3xs font-medium uppercase tracking-wide text-text-secondary outline-hidden"
     >
       <span>New since you last looked</span>
       {unreadCount > 0 && (
         <button
           type="button"
           onClick={onMarkRead}
-          className="inline-flex items-center rounded-[var(--radius-sm)] px-1.5 py-0.5 normal-case tracking-normal text-daintree-text/60 hover:bg-overlay-raised hover:text-text-primary transition-colors"
+          className="inline-flex items-center rounded-[var(--radius-sm)] px-1.5 py-0.5 normal-case tracking-normal text-text-secondary hover:bg-overlay-raised hover:text-text-primary transition-colors"
         >
           {unreadCount === 1 ? "Mark this read" : `Mark these ${unreadCount} read`}
         </button>

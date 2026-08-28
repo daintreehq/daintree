@@ -35,7 +35,7 @@ function getCategoryStyle(category: EventCategory): CategoryStyle {
   if (!style) {
     return {
       label: "???",
-      color: "bg-daintree-border/20 text-daintree-text/60 border-daintree-border/30",
+      color: "bg-daintree-border/20 text-text-secondary border-daintree-border/30",
     };
   }
   return { label: style.shortLabel, color: style.color };

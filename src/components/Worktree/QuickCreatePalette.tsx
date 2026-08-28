@@ -57,7 +57,7 @@ function RecipeListItem({
         role="option"
       >
         <Settings2 className="w-4 h-4 text-daintree-text/50" />
-        <span className="text-sm text-daintree-text/70">Customize…</span>
+        <span className="text-sm text-text-secondary">Customize…</span>
       </button>
     );
   }
@@ -88,14 +88,14 @@ function RecipeListItem({
           {uniqueTypes.map((type) => (
             <span
               key={type}
-              className="px-1.5 py-0.5 rounded-[var(--radius-md)] bg-overlay-medium text-daintree-text/70 text-2xs"
+              className="px-1.5 py-0.5 rounded-[var(--radius-md)] bg-overlay-medium text-text-secondary text-2xs"
             >
               {type}
             </span>
           ))}
         </div>
       </div>
-      <div className="flex items-center gap-2 text-2xs text-daintree-text/50">
+      <div className="flex items-center gap-2 text-2xs text-text-secondary">
         <span className="truncate">{getRecipeScope(recipe, () => worktreeName).label}</span>
         {recipe.shadowedBy && <span className="shrink-0">Overridden by Team</span>}
         <span className="ml-auto shrink-0">
@@ -177,7 +177,7 @@ export function QuickCreatePalette({ palette }: QuickCreatePaletteProps) {
       afterList={
         showAssignToggle ? (
           <div className="px-3 py-2 border-t border-daintree-border/40">
-            <label className="flex items-center gap-2 cursor-pointer text-sm text-daintree-text/70">
+            <label className="flex items-center gap-2 cursor-pointer text-sm text-text-secondary">
               <input
                 type="checkbox"
                 checked={palette.assignToSelf}

@@ -323,7 +323,7 @@ export function AgentCliStep({
 
               {hasMultipleMethods && !isInstalled && (
                 <div className="flex items-center gap-1 pl-14 pt-1 pb-0.5">
-                  <span className="text-3xs text-daintree-text/30 mr-1">via</span>
+                  <span className="text-3xs text-text-placeholder mr-1">via</span>
                   {blocks.map((block, idx) => (
                     <button
                       key={idx}
@@ -359,7 +359,7 @@ export function AgentCliStep({
                         onClick={() => toggleErrorExpanded(agentId)}
                         aria-expanded={isErrorExpanded ?? false}
                         aria-controls={`error-log-${agentId}`}
-                        className="inline-flex items-center gap-1 text-2xs text-daintree-text/50 hover:text-daintree-text/80 transition-colors"
+                        className="inline-flex items-center gap-1 text-2xs text-text-secondary hover:text-text-primary transition-colors"
                       >
                         {isErrorExpanded ? (
                           <ChevronDown className="w-3 h-3" />
@@ -419,7 +419,7 @@ export function AgentCliStep({
 
       {!isFirstRun && agentsWithDangerousToggle.length > 0 && (
         <div className="border-t border-border-default pt-3 space-y-2">
-          <div className="text-xs font-medium text-daintree-text/60">Skip permissions</div>
+          <div className="text-xs font-medium text-text-secondary">Skip permissions</div>
           <div className="space-y-1.5">
             {agentsWithDangerousToggle.map((agentId) => {
               const config = AGENT_REGISTRY[agentId];
@@ -444,7 +444,7 @@ export function AgentCliStep({
                       });
                     }}
                   />
-                  <span className="text-xs text-daintree-text/70">{config.name}</span>
+                  <span className="text-xs text-text-secondary">{config.name}</span>
                   {isEnabled && (
                     <code className="text-3xs text-status-error font-mono ml-auto">
                       {dangerousArg}
@@ -454,7 +454,7 @@ export function AgentCliStep({
               );
             })}
           </div>
-          <p className="text-2xs text-daintree-text/30">
+          <p className="text-2xs text-text-placeholder">
             Auto-approve all actions. Use with caution.
           </p>
         </div>

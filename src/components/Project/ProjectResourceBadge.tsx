@@ -68,7 +68,7 @@ function HeapBar({ heapStats }: { heapStats: HeapStats }) {
   return (
     <div className="space-y-1">
       <div className="flex items-center justify-between text-3xs">
-        <span className="text-daintree-text/50">V8 Heap</span>
+        <span className="text-text-secondary">V8 Heap</span>
         <span className="font-mono text-text-secondary">
           {heapStats.usedMB.toFixed(0)} / {heapStats.limitMB}MB ({heapStats.percent.toFixed(0)}%)
         </span>
@@ -80,7 +80,7 @@ function HeapBar({ heapStats }: { heapStats: HeapStats }) {
         />
       </div>
       {heapStats.externalMB > 50 && (
-        <div className="text-4xs text-daintree-text/30 font-mono">
+        <div className="text-4xs text-text-placeholder font-mono">
           External: {heapStats.externalMB.toFixed(0)}MB
         </div>
       )}
@@ -91,7 +91,7 @@ function HeapBar({ heapStats }: { heapStats: HeapStats }) {
 function MemoryRow({ label, value }: { label: string; value: string }) {
   return (
     <div className="flex items-center justify-between gap-2 text-3xs">
-      <span className="text-daintree-text/50 leading-tight">{label}</span>
+      <span className="text-text-secondary leading-tight">{label}</span>
       <span className="font-mono tabular-nums text-text-secondary shrink-0">{value}</span>
     </div>
   );
@@ -150,7 +150,7 @@ function MemorySummary({
         <MemoryRow label="System available" value={formatMemory(systemAvailableMB)} />
       )}
       {shown !== null && (
-        <div className="text-4xs text-daintree-text/25 leading-tight">
+        <div className="text-4xs text-text-placeholder leading-tight">
           Workloads = dev servers, agents, and tools your terminals launched
         </div>
       )}
@@ -161,7 +161,7 @@ function MemorySummary({
 function ProcessTable({ metrics }: { metrics: ProcessMetricEntry[] }) {
   return (
     <div className="space-y-1">
-      <div className="text-3xs text-daintree-text/50 font-medium">Daintree processes</div>
+      <div className="text-3xs text-text-secondary font-medium">Daintree processes</div>
       <div className="space-y-px">
         {metrics.map((proc) => {
           const label = formatProcessLabel(proc);
@@ -171,10 +171,10 @@ function ProcessTable({ metrics }: { metrics: ProcessMetricEntry[] }) {
               className="flex items-center justify-between text-3xs font-mono py-0.5"
             >
               <span
-                className="text-daintree-text/60 truncate max-w-[140px]"
+                className="text-text-secondary truncate max-w-[140px]"
                 title={`${label} (${proc.pid})`}
               >
-                {label} <span className="text-daintree-text/25">({proc.pid})</span>
+                {label} <span className="text-text-placeholder">({proc.pid})</span>
               </span>
               <div className="flex gap-2 text-text-secondary shrink-0">
                 <span>{proc.memoryMB}MB</span>
@@ -203,7 +203,7 @@ function ProjectBreakdown({
 
   return (
     <div className="space-y-1">
-      <div className="text-3xs text-daintree-text/50 font-medium">Projects</div>
+      <div className="text-3xs text-text-secondary font-medium">Projects</div>
       <div className="space-y-px">
         {entries.map((entry) => {
           const s = entry.stats!;
@@ -218,10 +218,10 @@ function ProjectBreakdown({
               key={entry.id}
               className="flex items-center justify-between text-3xs font-mono py-0.5 gap-2"
             >
-              <span className="text-daintree-text/60 truncate min-w-0">
+              <span className="text-text-secondary truncate min-w-0">
                 {entry.name}
                 {s.topProcess && (
-                  <span className="text-daintree-text/25"> · {s.topProcess.name}</span>
+                  <span className="text-text-placeholder"> · {s.topProcess.name}</span>
                 )}
               </span>
               <div className="flex gap-2 text-text-secondary shrink-0">
@@ -233,7 +233,7 @@ function ProjectBreakdown({
         })}
       </div>
       {hasEstimates && (
-        <div className="text-4xs text-daintree-text/25 leading-tight">
+        <div className="text-4xs text-text-placeholder leading-tight">
           ~ estimated from terminal count, not measured
         </div>
       )}
@@ -264,7 +264,7 @@ function DiagnosticsSection({
   return (
     <div className="space-y-1">
       <button
-        className="text-3xs text-daintree-text/50 font-medium hover:text-daintree-text/70 transition-colors flex items-center gap-1"
+        className="text-3xs text-text-secondary font-medium hover:text-text-primary transition-colors flex items-center gap-1"
         onClick={() => setExpanded(!expanded)}
       >
         <span className="text-[8px]">{expanded ? "\u25BC" : "\u25B6"}</span>
@@ -579,8 +579,8 @@ export function ProjectResourceBadge() {
                 trendSamples={samples}
               />
               <div className="pt-1 border-t border-divider space-y-0.5">
-                {ageLabel && <div className="text-4xs text-daintree-text/30">{ageLabel}</div>}
-                <div className="text-4xs text-daintree-text/25 leading-tight">
+                {ageLabel && <div className="text-4xs text-text-placeholder">{ageLabel}</div>}
+                <div className="text-4xs text-text-placeholder leading-tight">
                   Figures sum working-set memory and count shared pages once per process
                 </div>
               </div>

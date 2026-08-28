@@ -206,7 +206,7 @@ export function ProjectIdentityEditor({ project }: ProjectIdentityEditorProps) {
           <div className="flex flex-col gap-1.5 border-b border-border-default p-3">
             <label
               htmlFor="project-identity-name"
-              className="text-xs font-medium text-daintree-text/60"
+              className="text-xs font-medium text-text-secondary"
             >
               Project name
             </label>
@@ -237,7 +237,7 @@ export function ProjectIdentityEditor({ project }: ProjectIdentityEditorProps) {
               <button
                 type="button"
                 onClick={() => handleEmojiSelect(suggestion)}
-                className="flex items-center gap-2 self-start rounded-[var(--radius-md)] px-2 py-1 text-xs text-daintree-text/70 transition-colors hover:bg-overlay-subtle"
+                className="flex items-center gap-2 self-start rounded-[var(--radius-md)] px-2 py-1 text-xs text-text-secondary transition-colors hover:bg-overlay-subtle"
               >
                 <span className="text-base leading-none">{suggestion}</span>
                 <span>Use suggested</span>

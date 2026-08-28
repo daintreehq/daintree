@@ -1415,7 +1415,7 @@ export function HelpPanel({
                   "flex items-start gap-2 px-3 py-2.5 mx-3 mt-3 mb-1",
                   "rounded-[var(--radius-md)]",
                   "bg-status-warning/10 border border-status-warning/20",
-                  "text-xs text-daintree-text/85"
+                  "text-xs text-text-primary"
                 )}
                 data-testid="help-dropped-agent-banner"
               >
@@ -1428,13 +1428,13 @@ export function HelpPanel({
                     {getAgentConfig(droppedPreferredAgentId)?.name ?? droppedPreferredAgentId} is no
                     longer available
                   </p>
-                  <p className="mt-0.5 text-daintree-text/70">
+                  <p className="mt-0.5 text-text-secondary">
                     The agent was removed or is no longer supported as an assistant backend
                   </p>
                   <button
                     type="button"
                     onClick={handleOpenSettings}
-                    className="mt-1 text-daintree-text/70 hover:text-text-primary underline underline-offset-2 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+                    className="mt-1 text-text-secondary hover:text-text-primary underline underline-offset-2 transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                   >
                     Open assistant settings
                   </button>
@@ -1450,7 +1450,7 @@ export function HelpPanel({
               </div>
             )}
             <div className="flex-1 flex flex-col items-center justify-center gap-6 p-8 text-center">
-              <p className="text-sm text-daintree-text/70 max-w-[30ch]">
+              <p className="text-sm text-text-secondary max-w-[30ch]">
                 {resumableAgentId
                   ? "Your last assistant session is paused"
                   : "Use Daintree Assistant to configure and navigate Daintree."}
@@ -1486,7 +1486,7 @@ export function HelpPanel({
                   </Button>
                   {!hasEverLaunchedAgent && (
                     <div className="flex flex-col gap-1.5 w-full">
-                      <p className="text-2xs text-daintree-text/60">Or start with a question</p>
+                      <p className="text-2xs text-text-secondary">Or start with a question</p>
                       {STARTER_PROMPTS.map((prompt) => (
                         <button
                           key={prompt}
@@ -1502,7 +1502,7 @@ export function HelpPanel({
                   )}
                 </div>
               ) : (
-                <p className="text-xs text-daintree-text/70 max-w-[32ch]">
+                <p className="text-xs text-text-secondary max-w-[32ch]">
                   Configure an assistant agent in settings to get started.
                 </p>
               )}
@@ -1510,7 +1510,7 @@ export function HelpPanel({
                 <button
                   type="button"
                   onClick={handleOpenSettings}
-                  className="flex items-center gap-1 text-2xs text-daintree-text/70 hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+                  className="flex items-center gap-1 text-2xs text-text-secondary hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                 >
                   <Settings2 className="w-3.5 h-3.5" />
                   Assistant settings
@@ -1518,7 +1518,7 @@ export function HelpPanel({
                 <button
                   type="button"
                   onClick={handleOpenAssistantDocs}
-                  className="flex items-center gap-1 text-2xs text-daintree-text/70 hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+                  className="flex items-center gap-1 text-2xs text-text-secondary hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                 >
                   <ExternalLink className="w-3.5 h-3.5" />
                   Daintree Assistant guide
@@ -1607,7 +1607,7 @@ export function HelpPanel({
                 <DaintreeIcon className="w-3.5 h-3.5" />
                 Assistant
                 {launchedModelLabel && (
-                  <span className="text-daintree-text/50">· {launchedModelLabel}</span>
+                  <span className="text-text-secondary">· {launchedModelLabel}</span>
                 )}
               </span>
             ) : (
@@ -1622,7 +1622,7 @@ export function HelpPanel({
                 <agentConfig.icon className="w-3.5 h-3.5" />
                 {agentConfig.name}
                 {launchedModelLabel && (
-                  <span className="text-daintree-text/50">· {launchedModelLabel}</span>
+                  <span className="text-text-secondary">· {launchedModelLabel}</span>
                 )}
               </span>
             )}

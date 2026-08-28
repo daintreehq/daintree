@@ -226,7 +226,7 @@ export function NotificationSettingsTab() {
 
   if (loadState === "error") {
     return (
-      <div className="text-sm text-daintree-text/60">
+      <div className="text-sm text-text-secondary">
         Could not load notification settings. Restart Daintree and try again.
       </div>
     );
@@ -234,7 +234,7 @@ export function NotificationSettingsTab() {
 
   return (
     <div className="space-y-6">
-      {showInlineLoading && <p className="text-xs text-daintree-text/50">Loading…</p>}
+      {showInlineLoading && <p className="text-xs text-text-secondary">Loading…</p>}
       <SettingsSwitchCard
         variant="compact"
         title="Enable notifications"
@@ -389,7 +389,7 @@ export function NotificationSettingsTab() {
                   onChange={(value) => update({ quietHoursEndMin: value })}
                 />
                 {settings.quietHoursStartMin === settings.quietHoursEndMin && (
-                  <div className="text-xs text-daintree-text/60">
+                  <div className="text-xs text-text-secondary">
                     Start and end match — the schedule is effectively disabled until the times
                     differ.
                   </div>
@@ -398,7 +398,7 @@ export function NotificationSettingsTab() {
                   <span id={activeDaysId} className="text-sm font-medium text-text-primary block">
                     Active days
                   </span>
-                  <div className="text-xs text-daintree-text/60 mb-2">
+                  <div className="text-xs text-text-secondary mb-2">
                     Leave all boxes checked to apply every day.
                   </div>
                   <div role="group" aria-labelledby={activeDaysId} className="flex flex-wrap gap-2">

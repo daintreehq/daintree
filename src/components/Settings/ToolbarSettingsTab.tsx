@@ -222,7 +222,7 @@ function TrayButtonRow({ buttonId, isVisible, onToggle, metadata }: TrayButtonRo
         </div>
         <div className="flex-1 min-w-0">
           <div className="text-sm font-medium text-text-primary truncate">{metadata.label}</div>
-          <div className="text-xs text-daintree-text/50 select-text truncate">
+          <div className="text-xs text-text-secondary select-text truncate">
             {metadata.description}
           </div>
         </div>
@@ -263,7 +263,7 @@ function ToolbarSideColumn({
   return (
     <div className="flex-1 min-w-0">
       <div className="mb-2 flex items-baseline justify-between gap-2">
-        <span className="text-xs font-medium uppercase tracking-wide text-daintree-text/60">
+        <span className="text-xs font-medium uppercase tracking-wide text-text-secondary">
           {label}
         </span>
         <span className="text-xs text-text-secondary tabular-nums">
@@ -279,7 +279,7 @@ function ToolbarSideColumn({
           )}
         >
           {buttonIds.length === 0 ? (
-            <div className="flex w-full items-center justify-center py-3 text-xs text-daintree-text/30">
+            <div className="flex w-full items-center justify-center py-3 text-xs text-text-placeholder">
               Drop a button here
             </div>
           ) : (
@@ -771,7 +771,7 @@ export function ToolbarSettingsTab() {
           onClick={reset}
           className={cn(
             "flex items-center gap-1.5 px-3 py-1.5 text-sm rounded-[var(--radius-md)] border border-border-default",
-            "text-daintree-text/60 hover:text-text-primary hover:bg-tint/5 transition-colors"
+            "text-text-secondary hover:text-text-primary hover:bg-tint/5 transition-colors"
           )}
         >
           <RotateCcw className="w-3.5 h-3.5" />

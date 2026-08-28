@@ -257,7 +257,7 @@ export function TerminalStartupPlaceholder({
         {showSpinner && (
           <>
             <Spinner size="xl" className="text-daintree-text/45" />
-            <p aria-hidden="true" className="text-sm text-daintree-text/60 break-words">
+            <p aria-hidden="true" className="text-sm text-text-secondary break-words">
               {label}
             </p>
           </>
@@ -1507,7 +1507,7 @@ function TerminalPaneComponent({
           <TerminalStartupPlaceholder agentId={agentId} onCancel={() => onClose()} />
         ) : spawnStatus === "failed" ? (
           <div className="flex-1 min-h-0 bg-surface-canvas flex items-center justify-center">
-            <p className="text-sm text-daintree-text/50">Terminal failed to start</p>
+            <p className="text-sm text-text-secondary">Terminal failed to start</p>
           </div>
         ) : (
           <>

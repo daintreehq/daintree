@@ -282,7 +282,7 @@ const TabButtonComponent = forwardRef<HTMLDivElement, TabButtonProps>(function T
             "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]",
             isActive
               ? "bg-tint/[0.04] text-text-primary"
-              : "text-daintree-text/60 hover:text-text-primary hover:bg-overlay-subtle"
+              : "text-text-secondary hover:text-text-primary hover:bg-overlay-subtle"
           )}
           data-tab-id={id}
           {...mergedAttributes}

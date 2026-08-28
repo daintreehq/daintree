@@ -192,7 +192,7 @@ export function CommandPicker({
                 "relative w-full flex flex-col gap-0.5 px-3 py-2 rounded-[var(--radius-md)] text-left transition-colors border",
                 isSelected
                   ? "bg-overlay-soft border-overlay text-text-primary before:absolute before:left-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-r before:bg-accent-primary before:content-['']"
-                  : "border-transparent text-daintree-text/70 hover:bg-overlay-subtle hover:text-text-primary",
+                  : "border-transparent text-text-secondary hover:bg-overlay-subtle hover:text-text-primary",
                 !cmd.enabled && "opacity-50 cursor-not-allowed"
               )}
               onClick={() => {
@@ -201,14 +201,14 @@ export function CommandPicker({
               }}
             >
               <div className="flex items-center justify-between">
-                <span className="font-mono text-sm text-daintree-text/90">/{cmd.id}</span>
+                <span className="font-mono text-sm text-text-primary">/{cmd.id}</span>
                 {cmd.hasBuilder && (
-                  <span className="text-3xs px-1.5 py-0.5 rounded bg-overlay-medium text-daintree-text/70">
+                  <span className="text-3xs px-1.5 py-0.5 rounded bg-overlay-medium text-text-secondary">
                     Builder
                   </span>
                 )}
               </div>
-              <div className="text-xs text-daintree-text/50 line-clamp-1">{cmd.description}</div>
+              <div className="text-xs text-text-secondary line-clamp-1">{cmd.description}</div>
               {!cmd.enabled && cmd.disabledReason && (
                 <div className="text-3xs text-daintree-text/40 italic">{cmd.disabledReason}</div>
               )}

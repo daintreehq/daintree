@@ -191,14 +191,12 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
                     "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
                     row.worstType === "error" || row.worstType === "warning"
                       ? "text-text-primary"
-                      : "text-daintree-text/70"
+                      : "text-text-secondary"
                   )}
                 >
                   <Icon className={cn("h-3.5 w-3.5 shrink-0", SEVERITY_CLASS[row.worstType])} />
                   <span className="font-medium truncate min-w-0">{row.worktreeName}</span>
-                  <span className="text-daintree-text/50 truncate min-w-0">
-                    {row.highlightTitle}
-                  </span>
+                  <span className="text-text-secondary truncate min-w-0">{row.highlightTitle}</span>
                 </button>
               </li>
             );
@@ -209,7 +207,7 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
                 type="button"
                 onClick={handleOpenNotifications}
                 className={cn(
-                  "text-xs text-daintree-text/50 hover:text-daintree-text/70",
+                  "text-xs text-text-secondary hover:text-text-primary",
                   "px-0.5 py-0.5 transition-colors duration-150"
                 )}
               >

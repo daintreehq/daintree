@@ -335,11 +335,11 @@ export function RecipeManager({
         <AppDialog.Body>
           {/* Global Recipes Section */}
           <div className="mb-6">
-            <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
+            <h3 className="text-sm font-semibold text-text-primary mb-2 flex items-center gap-2">
               <Globe className="h-4 w-4" />
               Global Recipes
             </h3>
-            <p className="text-xs text-daintree-text/60 mb-3">Available across all projects</p>
+            <p className="text-xs text-text-secondary mb-3">Available across all projects</p>
             {globalRecipes.length === 0 ? (
               <div className="border border-dashed border-border-default rounded-[var(--radius-md)]">
                 <EmptyState
@@ -374,11 +374,11 @@ export function RecipeManager({
           {/* Plugin Recipes Section (#11860) */}
           {pluginRecipes.length > 0 && (
             <div className="mb-6">
-              <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
+              <h3 className="text-sm font-semibold text-text-primary mb-2 flex items-center gap-2">
                 <Plug className="h-4 w-4" />
                 Plugin Recipes
               </h3>
-              <p className="text-xs text-daintree-text/60 mb-3">
+              <p className="text-xs text-text-secondary mb-3">
                 Provided by installed plugins and available in every project
               </p>
               <div className="border border-border-default rounded-[var(--radius-md)] divide-y divide-border-default">
@@ -390,11 +390,11 @@ export function RecipeManager({
           {/* Team Recipes Section (in-repo) */}
           {inRepoRecipes.length > 0 && (
             <div className="mb-6">
-              <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
+              <h3 className="text-sm font-semibold text-text-primary mb-2 flex items-center gap-2">
                 <GitBranch className="h-4 w-4" />
                 Team Recipes
               </h3>
-              <p className="text-xs text-daintree-text/60 mb-3">
+              <p className="text-xs text-text-secondary mb-3">
                 Shared via .daintree/recipes/ in the repository
               </p>
               <div className="border border-border-default rounded-[var(--radius-md)] divide-y divide-border-default">
@@ -405,16 +405,16 @@ export function RecipeManager({
 
           {/* Project Recipes Section */}
           <div className="mb-4">
-            <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
+            <h3 className="text-sm font-semibold text-text-primary mb-2 flex items-center gap-2">
               <FolderOpen className="h-4 w-4" />
               Project Recipes
               {currentProject && (
-                <span className="text-xs font-normal text-daintree-text/50">
+                <span className="text-xs font-normal text-text-secondary">
                   {currentProject.emoji} {currentProject.name}
                 </span>
               )}
             </h3>
-            <p className="text-xs text-daintree-text/60 mb-3">Specific to the current project</p>
+            <p className="text-xs text-text-secondary mb-3">Specific to the current project</p>
             {projectRecipes.length === 0 ? (
               <div className="border border-dashed border-border-default rounded-[var(--radius-md)]">
                 <EmptyState

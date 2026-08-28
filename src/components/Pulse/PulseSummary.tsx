@@ -39,7 +39,7 @@ function Stat({ icon, value, label, highlight, className, dim = true }: StatProp
     >
       <span className={cn("shrink-0", dim && "opacity-70")}>{icon}</span>
       <span className="font-mono font-medium">{value}</span>
-      <span className="hidden sm:inline text-daintree-text/55">{label}</span>
+      <span className="hidden sm:inline text-text-secondary">{label}</span>
     </div>
   );
 }
@@ -52,7 +52,7 @@ export function PulseSummary({ pulse, compact = false }: PulseSummaryProps) {
 
   if (compact) {
     return (
-      <div className="flex items-center gap-3 text-xs text-daintree-text/75">
+      <div className="flex items-center gap-3 text-xs text-text-primary">
         <Stat
           icon={<GitCommit className="w-3 h-3" />}
           value={pulse.commitsInRange}
@@ -117,9 +117,9 @@ export function PulseSummary({ pulse, compact = false }: PulseSummaryProps) {
 
       {hasDelta && (
         <div className="flex items-center gap-3 text-xs">
-          <div className="flex items-center gap-1 text-daintree-text/70">
+          <div className="flex items-center gap-1 text-text-secondary">
             <GitBranch className="w-3 h-3" />
-            <span className="font-mono text-daintree-text/55">
+            <span className="font-mono text-text-secondary">
               vs {pulse.deltaToMain!.baseBranch}
             </span>
           </div>
@@ -139,10 +139,10 @@ export function PulseSummary({ pulse, compact = false }: PulseSummaryProps) {
           )}
 
           {pulse.deltaToMain!.filesChanged !== undefined && pulse.deltaToMain!.filesChanged > 0 && (
-            <div className="flex items-center gap-0.5 text-daintree-text/70">
+            <div className="flex items-center gap-0.5 text-text-secondary">
               <FileCode className="w-3 h-3" />
               <span className="font-mono">{pulse.deltaToMain!.filesChanged}</span>
-              <span className="text-daintree-text/55">files</span>
+              <span className="text-text-secondary">files</span>
             </div>
           )}
 

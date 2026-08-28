@@ -1135,10 +1135,10 @@ function FileDiff({
       {relPath && (
         <div className="sticky top-0 z-10 flex items-center justify-between px-3 py-1.5 bg-surface-sidebar border-b border-border-default text-xs font-mono">
           <TruncatedTooltip content={relPath}>
-            <span className="truncate text-daintree-text/80">
+            <span className="truncate text-text-primary">
               {relPath.includes("/") ? (
                 <>
-                  <span className="text-daintree-text/45">
+                  <span className="text-text-secondary">
                     {relPath.slice(0, relPath.lastIndexOf("/") + 1)}
                   </span>
                   <span className="text-text-primary">
@@ -1164,7 +1164,7 @@ function FileDiff({
               {fullFile ? "Highlighting off for large file" : "Highlighting off for large diff"}
             </span>
           )}
-          <div className="flex items-center gap-2 shrink-0 text-daintree-text/60">
+          <div className="flex items-center gap-2 shrink-0 text-text-secondary">
             {(additions > 0 || deletions > 0) && (
               <span className="flex items-center gap-1">
                 {additions > 0 && <span className="text-status-success">+{additions}</span>}
@@ -1209,7 +1209,7 @@ function FileDiff({
               ? "Generated file collapsed"
               : `Large diff (${formatBytes(fileBytes)})`}
           </span>
-          <span className="ml-auto text-daintree-text/50 font-mono text-xs">
+          <span className="ml-auto text-text-secondary font-mono text-xs">
             {isCollapsed ? "Show diff" : "Hide diff"}
           </span>
         </button>

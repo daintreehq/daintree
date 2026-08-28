@@ -18,10 +18,10 @@ export function EmojiPicker({ className, onEmojiSelect }: EmojiPickerProps) {
         placeholder="Search emojis..."
       />
       <EmojiPickerPrimitive.Viewport className="relative flex-1 outline-hidden">
-        <EmojiPickerPrimitive.Loading className="absolute inset-0 flex items-center justify-center text-daintree-text/60 text-sm">
+        <EmojiPickerPrimitive.Loading className="absolute inset-0 flex items-center justify-center text-text-secondary text-sm">
           Loading…
         </EmojiPickerPrimitive.Loading>
-        <EmojiPickerPrimitive.Empty className="absolute inset-0 flex items-center justify-center text-daintree-text/60 text-sm">
+        <EmojiPickerPrimitive.Empty className="absolute inset-0 flex items-center justify-center text-text-secondary text-sm">
           No emoji found.
         </EmojiPickerPrimitive.Empty>
         <EmojiPickerPrimitive.List
@@ -29,7 +29,7 @@ export function EmojiPicker({ className, onEmojiSelect }: EmojiPickerProps) {
           components={{
             CategoryHeader: ({ category, ...props }) => (
               <div
-                className="bg-surface-sidebar px-3 pt-3 pb-1.5 font-medium text-daintree-text/60 text-xs"
+                className="bg-surface-sidebar px-3 pt-3 pb-1.5 font-medium text-text-secondary text-xs"
                 {...props}
               >
                 {category.label}
@@ -54,7 +54,7 @@ export function EmojiPicker({ className, onEmojiSelect }: EmojiPickerProps) {
       </EmojiPickerPrimitive.Viewport>
       <EmojiPickerPrimitive.ActiveEmoji>
         {({ emoji }) => (
-          <div className="flex items-center gap-2 px-3 py-2 border-t border-border-default text-sm text-daintree-text/60 min-h-[40px]">
+          <div className="flex items-center gap-2 px-3 py-2 border-t border-border-default text-sm text-text-secondary min-h-[40px]">
             {emoji ? (
               <>
                 <span className="text-xl">{emoji.emoji}</span>

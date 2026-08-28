@@ -359,9 +359,9 @@ function EnvVarKeyCell({
                 )}
                 data-testid="env-editor-key-suggestion"
               >
-                <span className="font-mono text-xs text-daintree-text/80 shrink-0">{s.key}</span>
+                <span className="font-mono text-xs text-text-primary shrink-0">{s.key}</span>
                 {s.hint && (
-                  <span className="text-2xs text-daintree-text/50 leading-snug">{s.hint}</span>
+                  <span className="text-2xs text-text-secondary leading-snug">{s.hint}</span>
                 )}
               </div>
             ))}
@@ -694,7 +694,7 @@ export function EnvVarEditor({
       data-testid={dataTestId}
     >
       {/* Header */}
-      <div className="grid grid-cols-[2fr_3fr_auto] text-3xs uppercase tracking-wide text-daintree-text/50 bg-daintree-bg/40 border-b border-border-default">
+      <div className="grid grid-cols-[2fr_3fr_auto] text-3xs uppercase tracking-wide text-text-secondary bg-daintree-bg/40 border-b border-border-default">
         <div className="px-2.5 py-1.5">Key</div>
         <div className="px-2.5 py-1.5 border-l border-daintree-border/60">Value</div>
         <div className="px-2.5 py-1.5 w-9" aria-hidden="true" />
@@ -705,7 +705,7 @@ export function EnvVarEditor({
           <button
             type="button"
             onClick={handleAdd}
-            className="w-full flex items-center justify-center gap-1.5 py-4 text-xs leading-[inherit] text-daintree-text/50 hover:text-text-primary hover:bg-daintree-bg/50 transition-colors border border-dashed border-daintree-border/60 rounded-[var(--radius-sm)]"
+            className="w-full flex items-center justify-center gap-1.5 py-4 text-xs leading-[inherit] text-text-secondary hover:text-text-primary hover:bg-daintree-bg/50 transition-colors border border-dashed border-daintree-border/60 rounded-[var(--radius-sm)]"
             data-testid="env-editor-add"
           >
             <Plus size={12} aria-hidden="true" />
@@ -714,7 +714,7 @@ export function EnvVarEditor({
           <button
             type="button"
             onClick={() => setIsImportOpen(true)}
-            className="w-full flex items-center justify-center gap-1.5 py-2 text-2xs text-daintree-text/50 hover:text-text-primary hover:bg-daintree-bg/50 transition-colors rounded-[var(--radius-sm)]"
+            className="w-full flex items-center justify-center gap-1.5 py-2 text-2xs text-text-secondary hover:text-text-primary hover:bg-daintree-bg/50 transition-colors rounded-[var(--radius-sm)]"
             data-testid="env-editor-import"
           >
             <Upload size={12} aria-hidden="true" />
@@ -903,7 +903,7 @@ export function EnvVarEditor({
           <button
             type="button"
             onClick={handleAdd}
-            className="flex items-center justify-center gap-1.5 py-2 text-2xs text-daintree-text/50 hover:text-text-primary hover:bg-daintree-bg/50 transition-colors"
+            className="flex items-center justify-center gap-1.5 py-2 text-2xs text-text-secondary hover:text-text-primary hover:bg-daintree-bg/50 transition-colors"
             data-testid="env-editor-add"
           >
             <Plus size={12} aria-hidden="true" />
@@ -912,7 +912,7 @@ export function EnvVarEditor({
           <button
             type="button"
             onClick={() => setIsImportOpen(true)}
-            className="flex items-center justify-center gap-1.5 py-2 text-2xs text-daintree-text/50 hover:text-text-primary hover:bg-daintree-bg/50 transition-colors"
+            className="flex items-center justify-center gap-1.5 py-2 text-2xs text-text-secondary hover:text-text-primary hover:bg-daintree-bg/50 transition-colors"
             data-testid="env-editor-import"
           >
             <Upload size={12} aria-hidden="true" />

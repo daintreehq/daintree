@@ -102,17 +102,17 @@ export function AutomationTab({
   return (
     <>
       <div id="project-run-commands" className="mb-6 pb-6 border-b border-border-default">
-        <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
+        <h3 className="text-sm font-semibold text-text-primary mb-2 flex items-center gap-2">
           <SquareTerminal className="h-4 w-4" />
           Run Commands
         </h3>
-        <p className="text-xs text-daintree-text/60 mb-4">
+        <p className="text-xs text-text-secondary mb-4">
           Quick access to common project tasks (build, test, deploy).
         </p>
 
         <div className="space-y-3">
           {runCommands.length === 0 ? (
-            <div className="text-sm text-daintree-text/60 text-center py-8 border border-dashed border-border-default rounded-[var(--radius-md)]">
+            <div className="text-sm text-text-secondary text-center py-8 border border-dashed border-border-default rounded-[var(--radius-md)]">
               No run commands configured yet
             </div>
           ) : (
@@ -151,7 +151,7 @@ export function AutomationTab({
                       aria-label="Run command"
                     />
                     {cmd.description && (
-                      <p className="text-xs text-daintree-text/60 mt-1">{cmd.description}</p>
+                      <p className="text-xs text-text-secondary mt-1">{cmd.description}</p>
                     )}
                     <div className="flex items-center gap-3 mt-2">
                       <button
@@ -169,7 +169,7 @@ export function AutomationTab({
                           "flex items-center gap-1.5 px-2 py-1 rounded text-xs transition-colors",
                           cmd.preferredLocation === "dock"
                             ? "bg-tint/[0.12] text-text-primary"
-                            : "text-daintree-text/60 hover:text-text-primary hover:bg-daintree-border/30"
+                            : "text-text-secondary hover:text-text-primary hover:bg-daintree-border/30"
                         )}
                       >
                         {cmd.preferredLocation === "dock" ? (
@@ -193,7 +193,7 @@ export function AutomationTab({
                           "flex items-center gap-1.5 px-2 py-1 rounded text-xs transition-colors",
                           cmd.preferredAutoRestart
                             ? "bg-tint/[0.12] text-text-primary"
-                            : "text-daintree-text/60 hover:text-text-primary hover:bg-daintree-border/30"
+                            : "text-text-secondary hover:text-text-primary hover:bg-daintree-border/30"
                         )}
                       >
                         <RefreshCw className="h-3 w-3" />
@@ -274,11 +274,11 @@ export function AutomationTab({
       </div>
 
       <div id="project-branch-prefix" className="pt-2">
-        <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
+        <h3 className="text-sm font-semibold text-text-primary mb-2 flex items-center gap-2">
           <GitBranch className="h-4 w-4" />
           Branch Prefix
         </h3>
-        <p className="text-xs text-daintree-text/60 mb-4">
+        <p className="text-xs text-text-secondary mb-4">
           Automatically prefix new branch names when creating worktrees.
         </p>
 
@@ -353,7 +353,7 @@ export function AutomationTab({
 
         {branchPrefixMode !== "none" && (
           <div className="mt-3 p-3 rounded-[var(--radius-md)] bg-daintree-bg/50 border border-border-default">
-            <span className="block text-xs font-medium text-daintree-text/70 mb-1">Preview:</span>
+            <span className="block text-xs font-medium text-text-secondary mb-1">Preview:</span>
             <code className="text-xs text-text-primary">
               {branchPrefixMode === "username"
                 ? "alice/fix-bug"
@@ -371,11 +371,11 @@ export function AutomationTab({
       </div>
 
       <div className="pt-2">
-        <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
+        <h3 className="text-sm font-semibold text-text-primary mb-2 flex items-center gap-2">
           <Folders className="h-4 w-4" />
           Worktree Path Pattern
         </h3>
-        <p className="text-xs text-daintree-text/60 mb-4">
+        <p className="text-xs text-text-secondary mb-4">
           Override the global worktree path pattern for this project. Leave empty to use the global
           default.
         </p>
@@ -398,9 +398,7 @@ export function AutomationTab({
             const preview = previewPathPattern(worktreePathPattern.trim(), rootPath);
             return (
               <div className="mt-2 p-3 rounded-[var(--radius-md)] bg-daintree-bg/50 border border-border-default">
-                <span className="block text-xs font-medium text-daintree-text/70 mb-1">
-                  Preview:
-                </span>
+                <span className="block text-xs font-medium text-text-secondary mb-1">Preview:</span>
                 <code className="text-xs text-text-primary break-all">{preview}</code>
               </div>
             );
@@ -418,18 +416,18 @@ export function AutomationTab({
               className="text-xs p-2 rounded-[var(--radius-md)] bg-daintree-bg/30 border border-border-default"
             >
               <code className="text-text-secondary">{v}</code>
-              <span className="text-daintree-text/50 ml-1">{desc}</span>
+              <span className="text-text-secondary ml-1">{desc}</span>
             </div>
           ))}
         </div>
       </div>
 
       <div id="project-terminal-settings" className="mt-6 pt-6 border-t border-border-default">
-        <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
+        <h3 className="text-sm font-semibold text-text-primary mb-2 flex items-center gap-2">
           <SquareTerminal className="h-4 w-4" />
           Terminal Defaults
         </h3>
-        <p className="text-xs text-daintree-text/60 mb-4">
+        <p className="text-xs text-text-secondary mb-4">
           Fields without an override inherit the app default. Type to override; click "Reset to
           global" to clear. Applies to new terminals only.
         </p>

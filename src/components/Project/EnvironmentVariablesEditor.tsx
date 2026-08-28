@@ -162,7 +162,7 @@ export function EnvironmentVariablesEditor({
     <div id="project-env-vars" className="mb-6">
       {hasGlobals && (
         <>
-          <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
+          <h3 className="text-sm font-semibold text-text-primary mb-2 flex items-center gap-2">
             <Globe className="h-4 w-4" />
             Inherited (Global)
           </h3>
@@ -205,7 +205,7 @@ export function EnvironmentVariablesEditor({
       )}
 
       <div className="mb-2 flex items-center justify-between gap-2">
-        <h3 className="text-sm font-semibold text-daintree-text/80 flex items-center gap-2">
+        <h3 className="text-sm font-semibold text-text-primary flex items-center gap-2">
           <Key className="h-4 w-4" />
           Environment Variables
         </h3>
@@ -224,7 +224,7 @@ export function EnvironmentVariablesEditor({
             </button>
           )}
       </div>
-      <p className="text-xs text-daintree-text/60 mb-4">
+      <p className="text-xs text-text-secondary mb-4">
         Project-specific variables injected into new terminals. Names containing KEY, SECRET, TOKEN,
         or PASSWORD are kept out of the shared settings file{" "}
         <Lock className="inline h-3 w-3" aria-hidden="true" />.
@@ -232,7 +232,7 @@ export function EnvironmentVariablesEditor({
 
       <div className="space-y-2">
         {rows.length === 0 ? (
-          <div className="text-sm text-daintree-text/60 text-center py-8 border border-dashed border-border-default rounded-[var(--radius-md)]">
+          <div className="text-sm text-text-secondary text-center py-8 border border-dashed border-border-default rounded-[var(--radius-md)]">
             No environment variables configured yet
           </div>
         ) : (
@@ -326,7 +326,7 @@ export function EnvironmentVariablesEditor({
         </Button>
       </div>
 
-      <p className="text-xs text-daintree-text/60 mt-2">{helperText}</p>
+      <p className="text-xs text-text-secondary mt-2">{helperText}</p>
 
       {saveError && <p className="text-xs text-status-error mt-2">{saveError}</p>}
 

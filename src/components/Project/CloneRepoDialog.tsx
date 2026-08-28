@@ -468,14 +468,14 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
     destinationPath !== null ? (
       <div className="space-y-2.5 rounded-[var(--radius-md)] border border-border-default bg-surface-canvas px-3 py-3">
         <div className="space-y-1">
-          <span className="text-xs font-medium text-daintree-text/60">Source</span>
-          <p className="truncate text-xs font-mono text-daintree-text/80" title={normalizedUrl}>
+          <span className="text-xs font-medium text-text-secondary">Source</span>
+          <p className="truncate text-xs font-mono text-text-primary" title={normalizedUrl}>
             {normalizedUrl}
           </p>
         </div>
         <div className="space-y-1">
-          <span className="text-xs font-medium text-daintree-text/60">Destination</span>
-          <PathCaption path={destinationPath} className="text-daintree-text/80" />
+          <span className="text-xs font-medium text-text-secondary">Destination</span>
+          <PathCaption path={destinationPath} className="text-text-primary" />
         </div>
       </div>
     ) : null;
@@ -541,7 +541,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
               <h3 className="text-base font-semibold text-text-primary">Repository cloned</h3>
               {/* Says what is about to happen, not merely what is possible:
                   this mode opens the project on its own two seconds later. */}
-              <p className="text-sm text-daintree-text/60">
+              <p className="text-sm text-text-secondary">
                 Opening <span aria-hidden="true">{effectiveEmoji} </span>
                 {trimmedFolderName}…
               </p>
@@ -576,7 +576,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
                 {currentStage && (
                   <span
                     aria-hidden="true"
-                    className="ml-auto text-xs tabular-nums text-daintree-text/60"
+                    className="ml-auto text-xs tabular-nums text-text-secondary"
                   >
                     {stagePercent(currentStage)}%
                   </span>
@@ -620,7 +620,7 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
                 {completedStages.map((event) => (
                   <li
                     key={event.stage}
-                    className="flex items-center gap-2 text-xs text-daintree-text/45"
+                    className="flex items-center gap-2 text-xs text-text-secondary"
                   >
                     <Check className="h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                     <span>{stageLabel(event)}</span>
@@ -775,9 +775,9 @@ export function CloneRepoDialog({ isOpen, onSuccess, onCancel }: CloneRepoDialog
                   disabled={isCloning}
                   className={FIELD_CHECKBOX_CLASS}
                 />
-                <span className="text-sm text-daintree-text/80">Shallow clone</span>
+                <span className="text-sm text-text-primary">Shallow clone</span>
               </label>
-              <p className="ml-6 text-xs text-daintree-text/50">
+              <p className="ml-6 text-xs text-text-secondary">
                 Fetches only the latest commit (<code>--depth 1</code>) — faster for large repos,
                 but limits history and some push paths.
               </p>

@@ -66,7 +66,7 @@ function IssueOptionRow({ issue, isSelected, isCurrentlyAttached, onClick }: Iss
               </span>
             )}
           </div>
-          <span className="text-xs text-daintree-text/50 font-mono">#{issue.number}</span>
+          <span className="text-xs text-text-secondary font-mono">#{issue.number}</span>
         </div>
       </button>
     </TruncatedTooltip>
@@ -261,7 +261,7 @@ export function IssuePickerDialog({
                 <button
                   type="button"
                   onClick={() => setSearch("")}
-                  className="text-xs px-3 py-1.5 text-daintree-text/60 hover:text-text-primary hover:bg-overlay-soft rounded transition-colors"
+                  className="text-xs px-3 py-1.5 text-text-secondary hover:text-text-primary hover:bg-overlay-soft rounded transition-colors"
                 >
                   Clear search
                 </button>
@@ -293,7 +293,7 @@ export function IssuePickerDialog({
 
       {currentIssueNumber && (
         <AppDialog.Footer plainBody>
-          <Button variant="ghost" onClick={handleDetach} className="text-daintree-text/70 mr-auto">
+          <Button variant="ghost" onClick={handleDetach} className="text-text-secondary mr-auto">
             <Unlink className="w-4 h-4 mr-2" />
             Detach Issue
           </Button>

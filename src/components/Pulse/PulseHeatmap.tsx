@@ -157,7 +157,7 @@ function PulseHeatmapCell({
       </TooltipTrigger>
       <TooltipContent side="top" className="text-xs">
         <span className="font-medium">{formatted}</span>
-        <span className="ml-1 text-daintree-text/60">{getTooltipText(cell)}</span>
+        <span className="ml-1 text-text-secondary">{getTooltipText(cell)}</span>
       </TooltipContent>
     </Tooltip>
   );

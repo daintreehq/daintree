@@ -62,7 +62,7 @@ export function WorkspaceRootSidebar({
           >
             Initialize repository
           </Button>
-          <span className="text-xs text-daintree-text/50">
+          <span className="text-xs text-text-secondary">
             Terminals, agents, and recipes work without one
           </span>
         </div>

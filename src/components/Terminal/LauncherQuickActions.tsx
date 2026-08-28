@@ -97,7 +97,7 @@ function PaletteSearchButton() {
       type="button"
       onClick={handleClick}
       aria-keyshortcuts={ariaKeyshortcuts}
-      className="launcher-press flex w-full items-center gap-2.5 rounded-[var(--radius-md)] border border-border-default bg-overlay-medium px-3 py-3 text-sm text-daintree-text/70 transition-colors active:scale-[0.98] active:duration-[1ms] hover:bg-overlay-strong hover:text-text-primary focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
+      className="launcher-press flex w-full items-center gap-2.5 rounded-[var(--radius-md)] border border-border-default bg-overlay-medium px-3 py-3 text-sm text-text-secondary transition-colors active:scale-[0.98] active:duration-[1ms] hover:bg-overlay-strong hover:text-text-primary focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
     >
       <Search className="h-4 w-4 shrink-0 text-daintree-text/55" aria-hidden="true" />
       <span className="min-w-0 flex-1 truncate text-left">Search agents &amp; panels…</span>

@@ -233,7 +233,7 @@ function GitPushConfirmDialogInner() {
               <span className="flex flex-wrap items-baseline gap-1.5">
                 <RefChip value={destinationLabel} emphasis />
                 {isCreatingBranch && (
-                  <span className="text-3xs text-daintree-text/55">creates this branch</span>
+                  <span className="text-3xs text-text-secondary">creates this branch</span>
                 )}
                 {isUnverified && <span className="text-3xs text-status-error">unverified</span>}
               </span>
@@ -251,7 +251,7 @@ function GitPushConfirmDialogInner() {
           <span
             role="heading"
             aria-level={3}
-            className="text-2xs font-semibold uppercase tracking-wider text-daintree-text/60"
+            className="text-2xs font-semibold uppercase tracking-wider text-text-secondary"
           >
             Commits to push
             {isSettled && total > 0 && (
@@ -284,7 +284,7 @@ function GitPushConfirmDialogInner() {
             <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
             <div className="flex-1 min-w-0">
               <div className="font-medium">Couldn&apos;t read what this would publish</div>
-              <div className="mt-0.5 text-daintree-text/70 break-words">{loadError}</div>
+              <div className="mt-0.5 text-text-secondary break-words">{loadError}</div>
               <Button
                 variant="ghost-danger"
                 size="sm"
@@ -304,7 +304,7 @@ function GitPushConfirmDialogInner() {
             <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
             <div className="flex-1 min-w-0" data-testid="git-push-detached-head">
               <div className="font-medium">No branch checked out</div>
-              <div className="mt-0.5 text-daintree-text/70">
+              <div className="mt-0.5 text-text-secondary">
                 This worktree is on a detached HEAD, so there is no branch to publish. Check one out
                 and try again.
               </div>
@@ -317,14 +317,14 @@ function GitPushConfirmDialogInner() {
             <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
             <div className="flex-1 min-w-0" data-testid="git-push-no-destination">
               <div className="font-medium">No destination git can name</div>
-              <div className="mt-0.5 text-daintree-text/70">
+              <div className="mt-0.5 text-text-secondary">
                 This branch has no push destination, or more than one remote could be meant. Setting
                 an upstream resolves both:
                 {/* `git config branch.<n>.pushRemote <remote>` alone is NOT
                     reliable here: under the default push.default it leaves the
                     push ref empty, the resolver still refuses, and the user
                     lands back on this screen having followed the instruction. */}
-                <span className="mt-1 block font-mono text-daintree-text/80 whitespace-nowrap overflow-x-auto">
+                <span className="mt-1 block font-mono text-text-primary whitespace-nowrap overflow-x-auto">
                   git push -u &lt;remote&gt; {branch ?? "<branch>"}
                 </span>
               </div>
@@ -333,13 +333,13 @@ function GitPushConfirmDialogInner() {
         )}
 
         {isInSync && (
-          <div className="px-3 py-3 text-daintree-text/60" data-testid="git-push-in-sync">
+          <div className="px-3 py-3 text-text-secondary" data-testid="git-push-in-sync">
             Nothing to publish &mdash; {destinationLabel} already has everything on this branch.
           </div>
         )}
 
         {isEmptyUnverified && (
-          <div className="px-3 py-3 text-daintree-text/60" data-testid="git-push-empty-unverified">
+          <div className="px-3 py-3 text-text-secondary" data-testid="git-push-empty-unverified">
             Nothing found to publish, but {destination?.remote} couldn&apos;t be reached to check{" "}
             {destinationLabel} &mdash; so this isn&apos;t confirmed.
           </div>
@@ -365,16 +365,16 @@ function GitPushConfirmDialogInner() {
                   className="flex items-baseline gap-2"
                   data-testid="git-push-commit-row"
                 >
-                  <span className="font-mono text-2xs text-daintree-text/55 shrink-0 tabular-nums">
+                  <span className="font-mono text-2xs text-text-secondary shrink-0 tabular-nums">
                     {commit.hash.slice(0, SHORT_HASH_LEN)}
                   </span>
-                  <span className="flex-1 min-w-0 truncate text-daintree-text/90">
+                  <span className="flex-1 min-w-0 truncate text-text-primary">
                     {commit.message}
                   </span>
                   {/* Bounded, unlike the rest of the row: an author is the least
                     important column here, and left unbounded a long name took
                     40% of the width and truncated the subject to nothing. */}
-                  <span className="text-2xs text-daintree-text/55 shrink-0 max-w-[7rem] truncate">
+                  <span className="text-2xs text-text-secondary shrink-0 max-w-[7rem] truncate">
                     {commit.author}
                   </span>
                 </li>
@@ -386,7 +386,7 @@ function GitPushConfirmDialogInner() {
                 </li>
               )}
               {hiddenCount > 0 && (
-                <li className="text-2xs text-daintree-text/55 italic pt-0.5">
+                <li className="text-2xs text-text-secondary italic pt-0.5">
                   &hellip;and {hiddenCount} more
                 </li>
               )}
@@ -397,7 +397,7 @@ function GitPushConfirmDialogInner() {
       {/* The quietest tier on the surface, and last: this is the least specific
           thing the dialog has to say, but it is the one question a push raises
           that nothing else here answers. */}
-      <p className="text-2xs text-daintree-text/55">
+      <p className="text-2xs text-text-secondary">
         If the remote has moved on, Git refuses the push rather than overwriting it.
       </p>
     </ConfirmDialog>
@@ -407,7 +407,7 @@ function GitPushConfirmDialogInner() {
 function SummaryRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex items-baseline gap-2">
-      <dt className="text-3xs uppercase tracking-wider text-daintree-text/55 shrink-0 w-10">
+      <dt className="text-3xs uppercase tracking-wider text-text-secondary shrink-0 w-10">
         {label}
       </dt>
       <dd className="flex-1 min-w-0">{children}</dd>
@@ -428,7 +428,7 @@ function RefChip({ value, emphasis }: { value: string; emphasis?: boolean }) {
     <span
       className={cn(
         "inline-flex items-baseline px-1.5 py-0.5 rounded bg-tint/[0.07] border border-tint/[0.08] text-2xs font-mono break-words",
-        emphasis ? "text-text-primary" : "text-daintree-text/70"
+        emphasis ? "text-text-primary" : "text-text-secondary"
       )}
     >
       {value}
@@ -443,7 +443,7 @@ function Unresolved() {
 
 /** Git did not answer at all. The failure is stated once, below, not per row. */
 function Unknown() {
-  return <span className="text-daintree-text/55 text-2xs">&mdash;</span>;
+  return <span className="text-text-secondary text-2xs">&mdash;</span>;
 }
 
 /**

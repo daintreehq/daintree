@@ -553,11 +553,11 @@ export function RecipeEditor({
                             className="text-xs text-text-muted mt-1 select-text"
                           >
                             Variables:{" "}
-                            <code className="text-daintree-text/70">{"{{issue_number}}"}</code>,{" "}
-                            <code className="text-daintree-text/70">{"{{pr_number}}"}</code>,{" "}
-                            <code className="text-daintree-text/70">{"{{number}}"}</code>,{" "}
-                            <code className="text-daintree-text/70">{"{{worktree_path}}"}</code>,{" "}
-                            <code className="text-daintree-text/70">{"{{branch_name}}"}</code>
+                            <code className="text-text-secondary">{"{{issue_number}}"}</code>,{" "}
+                            <code className="text-text-secondary">{"{{pr_number}}"}</code>,{" "}
+                            <code className="text-text-secondary">{"{{number}}"}</code>,{" "}
+                            <code className="text-text-secondary">{"{{worktree_path}}"}</code>,{" "}
+                            <code className="text-text-secondary">{"{{branch_name}}"}</code>
                           </p>
                         </div>
                         <div className="mt-2">

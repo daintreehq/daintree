@@ -143,7 +143,7 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
               {title}
             </span>
             {keyHint && (
-              <span aria-hidden="true" className="shrink-0 text-3xs text-daintree-text/30">
+              <span aria-hidden="true" className="shrink-0 text-3xs text-text-placeholder">
                 {keyHint}
               </span>
             )}
@@ -192,7 +192,7 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
                         "flex w-full items-center gap-2 rounded-sm px-2 py-1.5 text-left transition-[color,background-color,opacity] duration-150 ease-out",
                         idx === selectedIndex
                           ? "bg-overlay-soft text-text-primary"
-                          : "text-daintree-text/70 hover:bg-tint/[0.05] hover:text-text-primary",
+                          : "text-text-secondary hover:bg-tint/[0.05] hover:text-text-primary",
                         isRowStale && "opacity-50"
                       )}
                       onMouseDown={(e) => e.preventDefault()}
@@ -208,7 +208,7 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
                         <>
                           <span
                             aria-hidden="true"
-                            className="shrink-0 rounded-sm border border-tint/10 bg-overlay-subtle px-1 text-4xs font-medium uppercase leading-4 tracking-wide text-daintree-text/50"
+                            className="shrink-0 rounded-sm border border-tint/10 bg-overlay-subtle px-1 text-4xs font-medium uppercase leading-4 tracking-wide text-text-secondary"
                           >
                             {badge}
                           </span>
@@ -219,9 +219,7 @@ export const AutocompleteMenu = forwardRef<HTMLDivElement, AutocompleteMenuProps
                         <span
                           className={cn(
                             "min-w-0 truncate text-3xs leading-4",
-                            idx === selectedIndex
-                              ? "text-daintree-text/80"
-                              : "text-daintree-text/30"
+                            idx === selectedIndex ? "text-text-primary" : "text-text-placeholder"
                           )}
                         >
                           {descriptionSnippet}

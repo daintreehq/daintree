@@ -221,7 +221,7 @@ function TaskOverflow({
         aria-label={`Show ${tasks.length} more running ${tasks.length === 1 ? "task" : "tasks"}`}
         className={cn(
           "flex w-full items-center gap-0.5 px-2 py-0.5 rounded-[var(--radius-sm)] text-3xs font-sans transition-colors",
-          "text-daintree-text/40 hover:text-daintree-text/70 hover:bg-tint/[0.04]",
+          "text-text-secondary hover:text-text-primary hover:bg-tint/[0.04]",
           "outline-hidden focus-visible:outline focus-visible:outline-solid focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
         )}
       >
@@ -298,13 +298,13 @@ function TaskRow({ terminal, status, now, onStop, onFocus, onRestart, onDismiss 
       <StatusDot status={status} />
 
       {/* Command */}
-      <span className="flex-1 truncate text-daintree-text/70" title={command}>
+      <span className="flex-1 truncate text-text-secondary" title={command}>
         {truncatedCommand}
       </span>
 
       {/* Elapsed time */}
       {isActive && (
-        <span className="text-3xs text-daintree-text/30 tabular-nums shrink-0">
+        <span className="text-3xs text-text-placeholder tabular-nums shrink-0">
           {formatElapsed(elapsed)}
         </span>
       )}

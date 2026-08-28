@@ -110,7 +110,7 @@ function createFileTooltipContent(token: AtFileToken): HTMLElement {
   container.className = "max-w-[300px]";
 
   const pathEl = document.createElement("p");
-  pathEl.className = "text-2xs text-daintree-text/90 leading-snug font-mono break-all";
+  pathEl.className = "text-2xs text-text-primary leading-snug font-mono break-all";
   pathEl.textContent = token.path;
   container.appendChild(pathEl);
 

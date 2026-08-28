@@ -152,7 +152,7 @@ export function CapabilityRow({
       )}
       <div className="min-w-0">
         <div
-          className={`text-xs ${meta.severity === "neutral" ? "text-daintree-text/80" : SEVERITY_TEXT_CLASS[meta.severity]}`}
+          className={`text-xs ${meta.severity === "neutral" ? "text-text-primary" : SEVERITY_TEXT_CLASS[meta.severity]}`}
         >
           {meta.label}
         </div>
@@ -160,7 +160,7 @@ export function CapabilityRow({
         {scoped && (
           <ul className="mt-0.5 space-y-0.5">
             {scopeEntries.map((entry) => (
-              <li key={entry} className="text-2xs font-mono text-daintree-text/50 break-all">
+              <li key={entry} className="text-2xs font-mono text-text-secondary break-all">
                 {entry}
               </li>
             ))}

@@ -116,7 +116,7 @@ function SortableTab({
             "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
             isActive
               ? "bg-tint/[0.08] text-text-primary border-daintree-accent/40 ring-1 ring-inset ring-daintree-accent/30"
-              : "bg-overlay-subtle text-daintree-text/70 border-divider hover:bg-overlay-medium hover:text-text-primary",
+              : "bg-overlay-subtle text-text-secondary border-divider hover:bg-overlay-medium hover:text-text-primary",
             isDragging &&
               "opacity-80 scale-105 shadow-[var(--theme-shadow-floating)] cursor-grabbing"
           )}

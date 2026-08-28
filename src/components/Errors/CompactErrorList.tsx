@@ -87,7 +87,7 @@ function ErrorOverflow({ errors, ...handlers }: ErrorListHandlers & { errors: Er
         onClick={(e) => e.stopPropagation()}
         className={cn(
           "flex w-fit mx-auto items-center gap-0.5 px-1.5 py-0.5 rounded text-3xs transition-colors",
-          "text-daintree-text/60 hover:text-text-primary hover:bg-tint/[0.06]",
+          "text-text-secondary hover:text-text-primary hover:bg-tint/[0.06]",
           FOCUS_RING
         )}
       >

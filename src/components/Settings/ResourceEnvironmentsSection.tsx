@@ -144,7 +144,7 @@ function CommandList({
         <button
           type="button"
           onClick={addCommand}
-          className="flex items-center gap-1.5 text-xs text-daintree-text/60 hover:text-text-primary transition-colors px-1 py-1"
+          className="flex items-center gap-1.5 text-xs text-text-secondary hover:text-text-primary transition-colors px-1 py-1"
         >
           <Plus className="h-3.5 w-3.5" />
           Add command
@@ -354,7 +354,7 @@ export function ResourceEnvironmentsSection({
               setAddEnvironmentError(null);
             }}
             aria-label="Add environment"
-            className="col-span-2 flex w-fit items-center gap-1.5 text-xs text-daintree-text/60 hover:text-text-primary transition-colors px-1 py-1"
+            className="col-span-2 flex w-fit items-center gap-1.5 text-xs text-text-secondary hover:text-text-primary transition-colors px-1 py-1"
           >
             <Plus className="h-3.5 w-3.5" />
             Add environment
@@ -425,7 +425,7 @@ export function ResourceEnvironmentsSection({
         {/* Variables hint */}
         <div className="col-span-2 mt-3 px-3 py-2 rounded-[var(--radius-md)] bg-surface-inset border border-border-default text-xs text-text-muted space-y-1">
           <div>
-            <span className="font-medium text-daintree-text/70">Variables</span>{" "}
+            <span className="font-medium text-text-secondary">Variables</span>{" "}
             <span className="text-text-secondary">(replaced at runtime in all commands):</span>
           </div>
           {/* Weight and colour rank the token above its description — an em dash
@@ -436,35 +436,35 @@ export function ResourceEnvironmentsSection({
               tree, and `ml-1` is what opens the optical gap. */}
           <div className="grid grid-cols-2 gap-x-4 gap-y-0.5">
             <div>
-              <code className="font-medium text-daintree-text/85">{"{branch}"}</code>
+              <code className="font-medium text-text-primary">{"{branch}"}</code>
               <span className="ml-1 text-text-secondary"> branch name</span>
             </div>
             <div>
-              <code className="font-medium text-daintree-text/85">{"{branch-slug}"}</code>
+              <code className="font-medium text-text-primary">{"{branch-slug}"}</code>
               <span className="ml-1 text-text-secondary"> sanitized branch</span>
             </div>
             <div>
-              <code className="font-medium text-daintree-text/85">{"{repo-name}"}</code>
+              <code className="font-medium text-text-primary">{"{repo-name}"}</code>
               <span className="ml-1 text-text-secondary"> repository folder</span>
             </div>
             <div>
-              <code className="font-medium text-daintree-text/85">{"{base-folder}"}</code>
+              <code className="font-medium text-text-primary">{"{base-folder}"}</code>
               <span className="ml-1 text-text-secondary"> alias for repo-name</span>
             </div>
             <div>
-              <code className="font-medium text-daintree-text/85">{"{parent-dir}"}</code>
+              <code className="font-medium text-text-primary">{"{parent-dir}"}</code>
               <span className="ml-1 text-text-secondary"> parent directory</span>
             </div>
             <div>
-              <code className="font-medium text-daintree-text/85">{"{worktree_name}"}</code>
+              <code className="font-medium text-text-primary">{"{worktree_name}"}</code>
               <span className="ml-1 text-text-secondary"> worktree name</span>
             </div>
             <div>
-              <code className="font-medium text-daintree-text/85">{"{worktree_path}"}</code>
+              <code className="font-medium text-text-primary">{"{worktree_path}"}</code>
               <span className="ml-1 text-text-secondary"> full worktree path</span>
             </div>
             <div>
-              <code className="font-medium text-daintree-text/85">{"{project_root}"}</code>
+              <code className="font-medium text-text-primary">{"{project_root}"}</code>
               <span className="ml-1 text-text-secondary"> project root path</span>
             </div>
           </div>

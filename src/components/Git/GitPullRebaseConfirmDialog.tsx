@@ -283,7 +283,7 @@ function GitPullRebaseConfirmDialogInner() {
           <span
             role="heading"
             aria-level={3}
-            className="text-2xs font-semibold uppercase tracking-wider text-daintree-text/60"
+            className="text-2xs font-semibold uppercase tracking-wider text-text-secondary"
           >
             Commits to replay
             {isSettled && total > 0 && (
@@ -319,7 +319,7 @@ function GitPullRebaseConfirmDialogInner() {
             <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
             <div className="flex-1 min-w-0">
               <div className="font-medium">Couldn&apos;t read which commits this would replay</div>
-              <div className="mt-0.5 text-daintree-text/70 break-words">{loadError}</div>
+              <div className="mt-0.5 text-text-secondary break-words">{loadError}</div>
               <Button
                 variant="ghost-danger"
                 size="sm"
@@ -339,7 +339,7 @@ function GitPullRebaseConfirmDialogInner() {
             <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
             <div className="flex-1 min-w-0" data-testid="git-pull-rebase-detached-head">
               <div className="font-medium">No branch checked out</div>
-              <div className="mt-0.5 text-daintree-text/70">
+              <div className="mt-0.5 text-text-secondary">
                 This worktree is on a detached HEAD, so there is no branch history to replay. Check
                 one out and try again.
               </div>
@@ -352,7 +352,7 @@ function GitPullRebaseConfirmDialogInner() {
             <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
             <div className="flex-1 min-w-0" data-testid="git-pull-rebase-no-destination">
               <div className="font-medium">No upstream to rebase onto</div>
-              <div className="mt-0.5 text-daintree-text/70">
+              <div className="mt-0.5 text-text-secondary">
                 This branch doesn&apos;t track anything, so there is nothing to replay it onto.
                 Point it at a remote branch:
                 {/* Carries its argument, unlike the bare `git branch --set-upstream-to`
@@ -370,7 +370,7 @@ function GitPullRebaseConfirmDialogInner() {
                     the local name for it is a silent fallback default on a
                     destructive surface (#7880) that is simply wrong for every
                     branch whose upstream is named differently. */}
-                <span className="mt-1 block font-mono text-daintree-text/80 break-all">
+                <span className="mt-1 block font-mono text-text-primary break-all">
                   git branch --set-upstream-to=&lt;remote&gt;/&lt;branch&gt;
                 </span>
               </div>
@@ -379,14 +379,14 @@ function GitPullRebaseConfirmDialogInner() {
         )}
 
         {isInSync && (
-          <div className="px-3 py-3 text-daintree-text/60" data-testid="git-pull-rebase-in-sync">
+          <div className="px-3 py-3 text-text-secondary" data-testid="git-pull-rebase-in-sync">
             Nothing to replay &mdash; {branch} already matches {upstreamLabel}.
           </div>
         )}
 
         {isBehindWithNothingToReplay && (
           <div
-            className="px-3 py-3 text-daintree-text/60"
+            className="px-3 py-3 text-text-secondary"
             data-testid="git-pull-rebase-behind-nothing-to-replay"
           >
             Nothing to replay &mdash; {branch} is {rebaseRange?.behind} behind {upstreamLabel} and
@@ -402,10 +402,10 @@ function GitPullRebaseConfirmDialogInner() {
             <AlertTriangle className="w-3.5 h-3.5 mt-0.5 shrink-0" />
             <div className="flex-1 min-w-0" data-testid="git-pull-rebase-empty-unfetched">
               <div className="font-medium">Nothing to compare against yet</div>
-              <div className="mt-0.5 text-daintree-text/70">
+              <div className="mt-0.5 text-text-secondary">
                 {upstreamLabel} isn&apos;t available locally, so which of your commits would be
                 rewritten can&apos;t be worked out. Fetch it and try again:
-                <span className="mt-1 block font-mono text-daintree-text/80 break-all">
+                <span className="mt-1 block font-mono text-text-primary break-all">
                   git fetch {upstream?.remote}
                 </span>
               </div>
@@ -432,22 +432,22 @@ function GitPullRebaseConfirmDialogInner() {
                   className="flex items-baseline gap-2"
                   data-testid="git-pull-rebase-commit-row"
                 >
-                  <span className="font-mono text-2xs text-daintree-text/55 shrink-0 tabular-nums">
+                  <span className="font-mono text-2xs text-text-secondary shrink-0 tabular-nums">
                     {commit.hash.slice(0, SHORT_HASH_LEN)}
                   </span>
-                  <span className="flex-1 min-w-0 truncate text-daintree-text/90">
+                  <span className="flex-1 min-w-0 truncate text-text-primary">
                     {commit.message}
                   </span>
                   {/* Bounded, unlike the rest of the row: an author is the least
                       important column here, and left unbounded a long name took 45%
                       of the width and truncated the subject to twenty characters. */}
-                  <span className="text-2xs text-daintree-text/55 shrink-0 max-w-[7rem] truncate">
+                  <span className="text-2xs text-text-secondary shrink-0 max-w-[7rem] truncate">
                     {commit.author}
                   </span>
                 </li>
               ))}
               {hiddenCount > 0 && (
-                <li className="text-2xs text-daintree-text/55 italic pt-0.5">
+                <li className="text-2xs text-text-secondary italic pt-0.5">
                   &hellip;and {hiddenCount} more
                 </li>
               )}
@@ -465,7 +465,7 @@ function GitPullRebaseConfirmDialogInner() {
           directly above had just said would not happen — and it made the empty
           state taller than the one-commit state. */}
       {isLoaded && commits.length > 0 && (
-        <p className="text-2xs text-daintree-text/55">
+        <p className="text-2xs text-text-secondary">
           If a replay hits a conflict, Git stops mid-rebase and leaves the branch there to resolve.
         </p>
       )}
@@ -476,7 +476,7 @@ function GitPullRebaseConfirmDialogInner() {
 function SummaryRow({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex items-baseline gap-2">
-      <dt className="text-3xs uppercase tracking-wider text-daintree-text/55 shrink-0 w-14">
+      <dt className="text-3xs uppercase tracking-wider text-text-secondary shrink-0 w-14">
         {label}
       </dt>
       <dd className="flex-1 min-w-0">{children}</dd>
@@ -497,7 +497,7 @@ function RefChip({ value, emphasis }: { value: string; emphasis?: boolean }) {
     <span
       className={cn(
         "inline-flex items-baseline px-1.5 py-0.5 rounded bg-tint/[0.07] border border-tint/[0.08] text-2xs font-mono break-words",
-        emphasis ? "text-text-primary" : "text-daintree-text/70"
+        emphasis ? "text-text-primary" : "text-text-secondary"
       )}
     >
       {value}
@@ -512,7 +512,7 @@ function Unresolved() {
 
 /** Git did not answer at all. The failure is stated once, below, not per row. */
 function Unknown() {
-  return <span className="text-daintree-text/55 text-2xs">&mdash;</span>;
+  return <span className="text-text-secondary text-2xs">&mdash;</span>;
 }
 
 /**

@@ -37,7 +37,7 @@ const UNAVAILABLE = "Unavailable";
  * sentence, and at 11px it reads as structure instead of competing with the rows for
  * the same tab stop of the eye.
  */
-const MICRO_LABEL = "text-2xs font-semibold uppercase tracking-wider text-daintree-text/60";
+const MICRO_LABEL = "text-2xs font-semibold uppercase tracking-wider text-text-secondary";
 
 /**
  * The label rail.
@@ -128,7 +128,7 @@ function Row({ label, value, mono = false, pending = false, fallback = NONE }: R
 
   return (
     <>
-      <dt className="text-daintree-text/70 select-none min-w-0 break-words">{label}</dt>
+      <dt className="text-text-secondary select-none min-w-0 break-words">{label}</dt>
       <dd className="min-w-0 text-text-primary">
         {!hasValue && pending ? (
           <SkeletonBone className="h-4 w-32" data-testid="terminal-info-pending" />
@@ -144,7 +144,7 @@ function Row({ label, value, mono = false, pending = false, fallback = NONE }: R
               // can and mid-token only where it must, so the leaf directory — the
               // informative half — survives instead of being ellipsed away.
               mono ? "font-mono text-xs [overflow-wrap:anywhere] tabular-nums" : "break-words",
-              !hasValue && "text-daintree-text/70"
+              !hasValue && "text-text-secondary"
             )}
           >
             {display}
@@ -166,12 +166,12 @@ function ChipRow({ label, items, pending = false }: ChipRowProps) {
 
   return (
     <>
-      <dt className="text-daintree-text/70 select-none min-w-0 break-words">{label}</dt>
+      <dt className="text-text-secondary select-none min-w-0 break-words">{label}</dt>
       <dd className="min-w-0">
         {isEmpty && pending ? (
           <SkeletonBone className="h-4 w-40" data-testid="terminal-info-pending" />
         ) : isEmpty ? (
-          <span className="text-daintree-text/70">{NONE}</span>
+          <span className="text-text-secondary">{NONE}</span>
         ) : (
           <div className="flex flex-wrap gap-1">
             {items.map((item, i) => (
@@ -251,7 +251,7 @@ function DisclosureGroup({
          * five identical micro-labels, two of which happen to be buttons, is not an
          * affordance. Same treatment as the commit count in `GitPushConfirmDialog`.
          */}
-        <span className="ml-1.5 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-3xs font-medium normal-case tracking-normal text-daintree-text/70">
+        <span className="ml-1.5 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-3xs font-medium normal-case tracking-normal text-text-secondary">
           {count}
         </span>
       </button>
@@ -664,7 +664,7 @@ Performance:
               role="alert"
               data-testid="terminal-info-error"
             >
-              <p className="text-sm text-daintree-text/85">
+              <p className="text-sm text-text-primary">
                 <span className="font-semibold text-status-warning">
                   Couldn&apos;t reach the terminal host.
                 </span>{" "}
@@ -681,7 +681,7 @@ Performance:
                   aria-controls={errorDetailId}
                   onClick={() => setShowErrorDetail((value) => !value)}
                   className={cn(
-                    "flex items-center gap-1 rounded-[var(--radius-sm)] px-1.5 py-1 text-xs text-daintree-text/70",
+                    "flex items-center gap-1 rounded-[var(--radius-sm)] px-1.5 py-1 text-xs text-text-secondary",
                     "transition-colors duration-150 ease-out hover:bg-overlay-subtle hover:text-text-primary",
                     "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:-outline-offset-2"
                   )}
@@ -702,7 +702,7 @@ Performance:
                 // `anywhere` rather than `break-all`: the old rule split the terminal
                 // UUID mid-token so the wrapped line opened with a bare hyphen that read
                 // as a stray dash, and the id could not be selected as one string.
-                className="text-xs font-mono [overflow-wrap:anywhere] text-daintree-text/80 select-text"
+                className="text-xs font-mono [overflow-wrap:anywhere] text-text-primary select-text"
               >
                 {error}
               </p>

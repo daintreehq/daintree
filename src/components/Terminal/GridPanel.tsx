@@ -243,7 +243,7 @@ export const GridPanel = React.memo(function GridPanel({
           <div className="flex flex-1 items-center justify-center bg-surface-panel text-text-muted">
             <div className="text-center">
               <p className="text-sm font-medium">Unknown Panel Type</p>
-              <p className="text-xs mt-1 text-daintree-text/50">Kind: {kind}</p>
+              <p className="text-xs mt-1 text-text-secondary">Kind: {kind}</p>
               <p className="text-xs mt-2 text-text-secondary">
                 No component registered for this panel kind
               </p>

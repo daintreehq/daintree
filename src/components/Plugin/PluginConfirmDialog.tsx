@@ -14,7 +14,7 @@ import { usePluginConfirmStore, type PluginConfirmationDecision } from "@/store/
 const CONFIRM_COOLDOWN_MS = 1_200;
 
 /** Shared micro-label, matching the section-heading grammar used app-wide. */
-const MICRO_LABEL = "text-2xs font-semibold uppercase tracking-wider text-daintree-text/60";
+const MICRO_LABEL = "text-2xs font-semibold uppercase tracking-wider text-text-secondary";
 
 /**
  * Singleton dialog driven by the plugin-action confirmation queue. Mounted
@@ -144,7 +144,7 @@ function ArgumentsDisclosure({ argsSummary }: { argsSummary: string }) {
         <span className={MICRO_LABEL}>Arguments</span>
       </button>
       {expanded && (
-        <pre className="mt-1 max-h-40 overflow-y-auto rounded-[var(--radius-md)] bg-overlay-subtle px-2 py-1.5 font-mono text-xs break-words whitespace-pre-wrap text-daintree-text/80">
+        <pre className="mt-1 max-h-40 overflow-y-auto rounded-[var(--radius-md)] bg-overlay-subtle px-2 py-1.5 font-mono text-xs break-words whitespace-pre-wrap text-text-primary">
           {argsSummary}
         </pre>
       )}

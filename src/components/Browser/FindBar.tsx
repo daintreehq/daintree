@@ -80,7 +80,7 @@ export function FindBar({ find }: FindBarProps) {
         role="status"
         aria-atomic="true"
         className={`text-2xs tabular-nums whitespace-nowrap mr-0.5 ${
-          noResults ? "text-status-error" : "text-daintree-text/50"
+          noResults ? "text-status-error" : "text-text-secondary"
         }`}
       >
         {countText}
@@ -94,7 +94,7 @@ export function FindBar({ find }: FindBarProps) {
             className={`px-1 rounded text-xs font-medium transition-colors ${
               matchCase
                 ? "text-accent-primary bg-accent-primary/10"
-                : "text-daintree-text/50 hover:text-daintree-text/70 hover:bg-overlay-medium"
+                : "text-text-secondary hover:text-text-primary hover:bg-overlay-medium"
             }`}
             aria-label="Match case"
             aria-pressed={matchCase}
