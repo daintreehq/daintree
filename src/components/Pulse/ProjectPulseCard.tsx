@@ -579,7 +579,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
       </span>
       <div className="pulse-card-header px-4 py-3 border-b border-border-default flex items-center justify-between">
         <div className="flex items-center gap-2">
-          <Activity className="w-4 h-4 text-status-success" />
+          <Activity className="w-4 h-4 text-text-secondary" />
           <span className="text-sm font-medium text-daintree-text/90">{title}</span>
           {isLoading && <Spinner size="xs" className="text-daintree-text/55" />}
         </div>

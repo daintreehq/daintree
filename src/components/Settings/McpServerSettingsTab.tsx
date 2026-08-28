@@ -649,7 +649,7 @@ export function McpServerSettingsTab() {
             ) : (
               <div className="contents">
                 <div className="flex items-center gap-2">
-                  <div className="status-mark w-2 h-2 rounded-full bg-status-success shrink-0" />
+                  <div className="status-mark w-2 h-2 rounded-full bg-activity-working shrink-0" />
                   <span className="text-xs text-daintree-text/60">Running on port {boundPort}</span>
                 </div>
 

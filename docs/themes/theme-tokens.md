@@ -123,12 +123,12 @@ An optional second color lane for themes with two distinct interaction colors.
 
 Fixed hue families across all themes. Each theme tunes brightness/saturation.
 
-| Token                   | Hue family                         | Derived?                         |
-| ----------------------- | ---------------------------------- | -------------------------------- |
-| `status-success`        | Green — completed/ready states     | Required                         |
-| `status-warning`        | Amber — caution states             | Required                         |
-| `status-danger`         | Red — error/destructive states     | Required                         |
-| `status-info`           | Blue — neutral informational       | Required                         |
+| Token | Hue family | Derived? |
+| --- | --- | --- |
+| `status-success` | Green — transient confirmations, named outcomes, checklist marks, git notation. Never standing "all is well" chrome — see [status-success-policy.md](./status-success-policy.md) | Required |
+| `status-warning` | Amber — caution states | Required |
+| `status-danger` | Red — error/destructive states | Required |
+| `status-info` | Blue — neutral informational | Required |
 | `status-danger-surface` | Validation wash for invalid fields | Derived: `danger` at 8-10% alpha |
 
 ## Activity Tokens

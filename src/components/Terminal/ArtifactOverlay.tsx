@@ -67,8 +67,7 @@ interface ArtifactOverlayProps {
 
 const ARTIFACT_TYPE_COLORS: Record<string, string> = {
   code: "border-status-info bg-[color-mix(in_oklab,var(--color-status-info)_10%,transparent)] text-status-info",
-  patch:
-    "border-status-success bg-[color-mix(in_oklab,var(--color-status-success)_10%,transparent)] text-status-success",
+  patch: "border-border-default bg-overlay-subtle text-text-secondary",
   file: "border-state-working bg-[color-mix(in_oklab,var(--color-state-working)_10%,transparent)] text-state-working",
   summary:
     "border-status-warning bg-[color-mix(in_oklab,var(--color-status-warning)_10%,transparent)] text-status-warning",

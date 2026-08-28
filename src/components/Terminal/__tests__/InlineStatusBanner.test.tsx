@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { beforeAll, describe, expect, it, vi } from "vitest";
 import { act, fireEvent, render, screen } from "@testing-library/react";
 import { AlertTriangle, CheckCircle2, FileEdit, Info, XCircle } from "lucide-react";
-import { InlineStatusBanner } from "../InlineStatusBanner";
+import { InlineStatusBanner, type InlineStatusBannerSeverity } from "../InlineStatusBanner";
 import { WindowControlsInsetProvider } from "@/components/ui/WindowControlsInset";
 
 vi.mock("@/components/ui/tooltip", () => ({
@@ -75,7 +75,6 @@ describe("InlineStatusBanner", () => {
     ["error", XCircle, "--color-status-error"],
     ["warning", AlertTriangle, "--color-status-warning"],
     ["info", Info, "--color-status-info"],
-    ["success", CheckCircle2, "--color-status-success"],
   ] as const)("renders %s severity using its status token", (severity, icon, token) => {
     render(
       <InlineStatusBanner icon={icon} title={severity} severity={severity} animated={false} />
@@ -83,6 +82,104 @@ describe("InlineStatusBanner", () => {
     const region = screen.getByRole("alert");
     expect(region.style.backgroundColor).toContain(token);
     expect(region.style.borderBottom).toContain(token);
+  });
+
+  // Success sits outside the table above because it is the one severity whose
+  // props are not interchangeable with the others: it has to declare how it
+  // leaves, so it cannot be rendered from a shared row.
+  it("renders success severity using its status token", () => {
+    render(
+      <InlineStatusBanner
+        icon={CheckCircle2}
+        title="success"
+        severity="success"
+        animated={false}
+        onClose={() => {}}
+        autoDismissAfter={2000}
+      />
+    );
+    const region = screen.getByRole("alert");
+    expect(region.style.backgroundColor).toContain("--color-status-success");
+    expect(region.style.borderBottom).toContain("--color-status-success");
+  });
+
+  it("actually clears itself: success fires onClose when its timer runs out", () => {
+    vi.useFakeTimers();
+    try {
+      const onClose = vi.fn();
+      render(
+        <InlineStatusBanner
+          icon={CheckCircle2}
+          title="Signed in"
+          severity="success"
+          animated={false}
+          onClose={onClose}
+          autoDismissAfter={2000}
+        />
+      );
+      expect(onClose).not.toHaveBeenCalled();
+      act(() => {
+        vi.advanceTimersByTime(2000);
+      });
+      expect(onClose).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // The type can require a number; it cannot require a positive one. A success
+  // banner given 0 stands forever, which is the one thing it may not do — so
+  // dev builds say so out loud rather than letting it ship.
+  it("warns in development when a success banner is given a duration that never fires", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      render(
+        <InlineStatusBanner
+          icon={CheckCircle2}
+          title="Signed in"
+          severity="success"
+          animated={false}
+          onClose={() => {}}
+          autoDismissAfter={0}
+        />
+      );
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0]?.[0])).toContain("autoDismissAfter");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
+  it("pins success to a self-clearing confirmation at the type level", () => {
+    // Green is only allowed to say "this just happened" (#12002). A success
+    // banner that cannot dismiss itself is unrepresentable, so the compiler —
+    // not review — is what stops one being written.
+    const _rejectsSuccessWithoutDismissal = (
+      // @ts-expect-error success requires both autoDismissAfter and onClose.
+      <InlineStatusBanner icon={CheckCircle2} title="Saved" severity="success" />
+    );
+    const _rejectsSuccessWithoutTimer = (
+      // @ts-expect-error success requires autoDismissAfter alongside onClose.
+      <InlineStatusBanner icon={CheckCircle2} title="Saved" severity="success" onClose={() => {}} />
+    );
+    const _rejectsSuccessWithoutHandler = (
+      // @ts-expect-error success requires onClose alongside autoDismissAfter.
+      <InlineStatusBanner
+        icon={CheckCircle2}
+        title="Saved"
+        severity="success"
+        autoDismissAfter={2000}
+      />
+    );
+    void _rejectsSuccessWithoutDismissal;
+    void _rejectsSuccessWithoutTimer;
+    void _rejectsSuccessWithoutHandler;
+
+    // Persistent completion is still expressible — it just is not green.
+    const _allowsNeutralWithoutDismissal = (
+      <InlineStatusBanner icon={CheckCircle2} title="3 files changed" severity="neutral" />
+    );
+    void _allowsNeutralWithoutDismissal;
   });
 
   it("allows non-error banners to render multiple actions", () => {
@@ -545,10 +642,15 @@ describe("InlineStatusBanner", () => {
  * inside a terminal must never become a window drag handle.
  */
 describe("InlineStatusBanner as the window title-bar surface", () => {
-  function renderGlobal(
-    props: Partial<React.ComponentProps<typeof InlineStatusBanner>> = {},
-    onSeverityChange = vi.fn()
-  ) {
+  // Success is excluded on purpose: it is required to dismiss itself, so it
+  // cannot be the window's standing title-bar surface. Narrowing here keeps the
+  // helper's partial overrides from widening `severity` into that branch.
+  type GlobalBannerProps = Extract<
+    React.ComponentProps<typeof InlineStatusBanner>,
+    { severity: Exclude<InlineStatusBannerSeverity, "success"> }
+  >;
+
+  function renderGlobal(props: Partial<GlobalBannerProps> = {}, onSeverityChange = vi.fn()) {
     const result = render(
       <WindowControlsInsetProvider onSeverityChange={onSeverityChange}>
         <InlineStatusBanner

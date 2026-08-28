@@ -45,8 +45,9 @@ function IssueOptionRow({ issue, isSelected, isCurrentlyAttached, onClick }: Iss
           "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]",
           isSelected
             ? "bg-overlay-soft border border-border-strong"
-            : "hover:bg-tint/5 border border-transparent",
-          isCurrentlyAttached && "ring-1 ring-status-success/30"
+            : isCurrentlyAttached
+              ? "hover:bg-tint/5 border border-border-default"
+              : "hover:bg-tint/5 border border-transparent"
         )}
       >
         {issue.state === "open" ? (
@@ -60,7 +61,7 @@ function IssueOptionRow({ issue, isSelected, isCurrentlyAttached, onClick }: Iss
               {issue.title}
             </span>
             {isCurrentlyAttached && (
-              <span className="text-3xs px-1.5 py-0.5 rounded bg-status-success/10 text-status-success shrink-0">
+              <span className="text-3xs px-1.5 py-0.5 rounded border border-border-default bg-overlay-subtle text-text-secondary shrink-0">
                 attached
               </span>
             )}

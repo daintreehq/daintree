@@ -155,7 +155,7 @@ export function ProjectPulseStrip({ worktreeId }: ProjectPulseStripProps) {
       aria-label={activityLabel}
       className="group flex w-full items-center gap-3 rounded-[var(--radius-md)] border border-border-subtle px-3 py-2 text-left transition-colors hover:bg-overlay-subtle focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
     >
-      <Activity className="h-3.5 w-3.5 shrink-0 text-status-success/70" aria-hidden="true" />
+      <Activity className="h-3.5 w-3.5 shrink-0 text-text-secondary" aria-hidden="true" />
       <span className="shrink-0 text-xs font-medium text-text-secondary">Project pulse</span>
       {pulse && miniCells.length > 0 && <MiniRibbon cells={miniCells} />}
       <span className="ml-auto flex shrink-0 items-center gap-2.5">

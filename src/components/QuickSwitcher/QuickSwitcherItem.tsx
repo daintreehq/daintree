@@ -55,7 +55,7 @@ export function QuickSwitcherItem({
               "shrink-0 px-1.5 py-0.5 text-xs rounded-[var(--radius-sm)] border",
               item.type === "terminal"
                 ? "bg-overlay-medium text-daintree-text/70 border-border-strong"
-                : "bg-status-success/10 text-status-success border-status-success/30"
+                : "bg-overlay-subtle text-text-secondary border-border-default"
             )}
           >
             {item.type === "terminal"

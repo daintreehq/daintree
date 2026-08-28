@@ -147,7 +147,7 @@ export function DiffFileSidebar({
           {viewedCount > 0 && (
             <div className="mt-1 h-0.5 overflow-hidden rounded-full bg-tint/10">
               <div
-                className="h-full rounded-full bg-status-success/70 transition-[width] duration-150 ease-out"
+                className="h-full rounded-full bg-text-secondary transition-[width] duration-150 ease-out"
                 style={{ width: `${files.length ? (viewedCount / files.length) * 100 : 0}%` }}
               />
             </div>

@@ -274,11 +274,11 @@ export function WorktreeMenuItems({
             Open Terminal
           </C.Item>
           <C.Item onSelect={() => onLaunchAgent?.("browser")} disabled={!onLaunchAgent}>
-            <Globe className="w-3.5 h-3.5 mr-2 text-status-info" />
+            <Globe className="w-3.5 h-3.5 mr-2" />
             Open Browser
           </C.Item>
           <C.Item onSelect={() => onLaunchAgent?.("dev-preview")} disabled={!onLaunchAgent}>
-            <MonitorPlay className="w-3.5 h-3.5 mr-2 text-status-success" />
+            <MonitorPlay className="w-3.5 h-3.5 mr-2" />
             Open Dev Preview
           </C.Item>
         </C.SubContent>
@@ -410,7 +410,7 @@ export function WorktreeMenuItems({
                           disabled={!onSwitchEnvironment}
                         >
                           <CircleDot
-                            className={`w-3.5 h-3.5 mr-2 ${isLocalSelected ? "text-status-success" : "opacity-0"}`}
+                            className={`w-3.5 h-3.5 mr-2 ${isLocalSelected ? "text-text-primary" : "opacity-0"}`}
                           />
                           Local
                         </C.Item>
@@ -423,7 +423,7 @@ export function WorktreeMenuItems({
                         disabled={!onSwitchEnvironment}
                       >
                         <CircleDot
-                          className={`w-3.5 h-3.5 mr-2 ${worktreeMode === key ? "text-status-success" : "opacity-0"}`}
+                          className={`w-3.5 h-3.5 mr-2 ${worktreeMode === key ? "text-text-primary" : "opacity-0"}`}
                         />
                         {key}
                       </C.Item>
