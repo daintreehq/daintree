@@ -911,13 +911,15 @@ export const STATUS_SUCCESS_INVENTORY = {
     {
       category: "domain",
       signature: "text-status-success",
+      anchor: "+{worktree.worktreeChanges.insertions}",
       expectedOccurrences: 1,
       rationale: "Worktree diff insertion count",
     },
     {
       category: "affordance",
-      signature: "text-status-success/70 hover:text-status-success",
-      expectedOccurrences: 2,
+      signature: "text-status-success",
+      anchor: 'aria-label="Resume resource"',
+      expectedOccurrences: 1,
       rationale: "Go-colour on the resume-resource control",
     },
   ],
@@ -1040,4 +1042,4 @@ export const STATUS_SUCCESS_INVENTORY = {
  * where a whole file moves without either check firing.
  */
 export const EXPECTED_STATUS_SUCCESS_SITES = 125;
-export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 147;
+export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 146;

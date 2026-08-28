@@ -6,6 +6,7 @@ import {
   useWorktreeOverviewKeyboard,
   getWorktreeOverviewCellId,
   computeVerticalMove,
+  computeRowExtreme,
 } from "../useWorktreeOverviewKeyboard";
 
 // jsdom has no layout engine — patch getComputedStyle so the hook can sample
@@ -44,6 +45,7 @@ interface HarnessProps {
   onSelectAll?: () => void;
   onClearSelection?: () => void;
   onEscapeWithoutSelection?: () => void;
+  onReturnToSearch?: (char?: string) => void;
   initialAnchor?: string | null;
 }
 
@@ -57,6 +59,7 @@ function Harness({
   onSelectAll = () => {},
   onClearSelection = () => {},
   onEscapeWithoutSelection = () => {},
+  onReturnToSearch,
   initialAnchor = null,
 }: HarnessProps) {
   const gridRef = useRef<HTMLDivElement>(null);
@@ -72,6 +75,7 @@ function Harness({
     onSelectAll,
     onClearSelection,
     onEscapeWithoutSelection,
+    onReturnToSearch,
     hasSelection,
   });
   return (
@@ -142,19 +146,43 @@ describe("useWorktreeOverviewKeyboard — 2D arrow movement", () => {
     const { getByTestId } = render(<Harness worktreeIds={IDS} />);
     const grid = getByTestId("grid");
     fireEvent.focus(grid);
-    fireEvent.keyDown(grid, { key: "End" });
+    fireEvent.keyDown(grid, { key: "End", metaKey: true });
     expect(grid.getAttribute("aria-activedescendant")).toBe(getWorktreeOverviewCellId("h"));
     fireEvent.keyDown(grid, { key: "ArrowDown" });
     expect(grid.getAttribute("aria-activedescendant")).toBe(getWorktreeOverviewCellId("h"));
   });
 
-  it("Home and End jump to the first / last cells", () => {
+  // The APG grid contract: plain Home/End are row-local, and the whole grid
+  // belongs to Control/Cmd+Home / Control/Cmd+End. Three columns here, so the
+  // second row is d-e-f and the third is g-h.
+  it("Home and End move within the current row", () => {
     const { getByTestId } = render(<Harness worktreeIds={IDS} />);
     const grid = getByTestId("grid");
     fireEvent.focus(grid);
+    fireEvent.keyDown(grid, { key: "ArrowDown" }); // a → d, middle row
+    fireEvent.keyDown(grid, { key: "End" });
+    expect(grid.getAttribute("aria-activedescendant")).toBe(getWorktreeOverviewCellId("f"));
+    fireEvent.keyDown(grid, { key: "Home" });
+    expect(grid.getAttribute("aria-activedescendant")).toBe(getWorktreeOverviewCellId("d"));
+  });
+
+  it("End on a partial row stops at the last cell that exists", () => {
+    const { getByTestId } = render(<Harness worktreeIds={IDS} />);
+    const grid = getByTestId("grid");
+    fireEvent.focus(grid);
+    fireEvent.keyDown(grid, { key: "ArrowDown" });
+    fireEvent.keyDown(grid, { key: "ArrowDown" }); // → g, last row (g, h only)
     fireEvent.keyDown(grid, { key: "End" });
     expect(grid.getAttribute("aria-activedescendant")).toBe(getWorktreeOverviewCellId("h"));
-    fireEvent.keyDown(grid, { key: "Home" });
+  });
+
+  it("Cmd/Ctrl+Home and Cmd/Ctrl+End reach the grid's own extremes", () => {
+    const { getByTestId } = render(<Harness worktreeIds={IDS} />);
+    const grid = getByTestId("grid");
+    fireEvent.focus(grid);
+    fireEvent.keyDown(grid, { key: "End", metaKey: true });
+    expect(grid.getAttribute("aria-activedescendant")).toBe(getWorktreeOverviewCellId("h"));
+    fireEvent.keyDown(grid, { key: "Home", ctrlKey: true });
     expect(grid.getAttribute("aria-activedescendant")).toBe(getWorktreeOverviewCellId("a"));
   });
 });
@@ -268,7 +296,7 @@ describe("useWorktreeOverviewKeyboard — filter reconciliation", () => {
     const { getByTestId, rerender } = render(<Harness worktreeIds={IDS} />);
     const grid = getByTestId("grid");
     fireEvent.focus(grid);
-    fireEvent.keyDown(grid, { key: "End" }); // → h
+    fireEvent.keyDown(grid, { key: "End", metaKey: true }); // → h
     expect(grid.getAttribute("aria-activedescendant")).toBe(getWorktreeOverviewCellId("h"));
     rerender(<Harness worktreeIds={["a", "b", "c"]} />);
     // h dropped out — clamp to first visible
@@ -405,5 +433,181 @@ describe("useWorktreeOverviewKeyboard — section-aware behavior in harness", ()
     fireEvent.focus(grid);
     fireEvent.keyDown(grid, { key: "ArrowDown" });
     expect(grid.getAttribute("aria-activedescendant")).toBe(getWorktreeOverviewCellId("c"));
+  });
+});
+
+describe("computeRowExtreme", () => {
+  // The rule, not the values: whatever the geometry, Home must land on a cell
+  // that shares a row with where it started and has nothing to its left, and
+  // End must land on one that shares that row and has nothing to its right.
+  // Asserting "Home from index 6 gives 4" would need rewriting the moment the
+  // column count or the section split changes; this does not.
+  const geometries: { name: string; total: number; columns: number; sections?: number[] }[] = [
+    { name: "single section, exact rows", total: 12, columns: 4 },
+    { name: "single section, ragged last row", total: 13, columns: 4 },
+    { name: "single column", total: 5, columns: 1 },
+    { name: "wider than the list", total: 3, columns: 6 },
+    { name: "sections, one ending mid-row", total: 13, columns: 4, sections: [1, 4, 3, 5] },
+    { name: "sections of one", total: 4, columns: 3, sections: [1, 1, 1, 1] },
+  ];
+
+  /** The section `index` belongs to, as [start, size]. */
+  const sectionOf = (index: number, total: number, sections?: number[]): [number, number] => {
+    const sizes = sections && sections.length > 0 ? sections : [total];
+    let start = 0;
+    for (const size of sizes) {
+      if (index < start + size) return [start, size];
+      start += size;
+    }
+    return [0, total];
+  };
+
+  for (const { name, total, columns, sections } of geometries) {
+    it(`lands on the row's own edges — ${name}`, () => {
+      for (let i = 0; i < total; i++) {
+        const home = computeRowExtreme(i, -1, columns, total, sections);
+        const end = computeRowExtreme(i, 1, columns, total, sections);
+        const [start, size] = sectionOf(i, total, sections);
+        const rowOf = (idx: number) => Math.floor((idx - start) / columns);
+
+        // Both edges stay inside the list and inside the starting section.
+        for (const target of [home, end]) {
+          expect(target).toBeGreaterThanOrEqual(start);
+          expect(target).toBeLessThan(start + size);
+          expect(rowOf(target)).toBe(rowOf(i));
+        }
+
+        // Home is at or left of the origin; End is at or right of it.
+        expect(home).toBeLessThanOrEqual(i);
+        expect(end).toBeGreaterThanOrEqual(i);
+
+        // Nothing exists further out on the same row in either direction.
+        const beforeHome = home - 1;
+        expect(beforeHome < start || rowOf(beforeHome) !== rowOf(i)).toBe(true);
+        const afterEnd = end + 1;
+        expect(afterEnd >= start + size || rowOf(afterEnd) !== rowOf(i)).toBe(true);
+      }
+    });
+
+    it(`is idempotent and mutually reachable — ${name}`, () => {
+      for (let i = 0; i < total; i++) {
+        const home = computeRowExtreme(i, -1, columns, total, sections);
+        const end = computeRowExtreme(i, 1, columns, total, sections);
+        // Pressing Home twice does not keep travelling.
+        expect(computeRowExtreme(home, -1, columns, total, sections)).toBe(home);
+        expect(computeRowExtreme(end, 1, columns, total, sections)).toBe(end);
+        // The two edges of one row agree about which row that is.
+        expect(computeRowExtreme(end, -1, columns, total, sections)).toBe(home);
+        expect(computeRowExtreme(home, 1, columns, total, sections)).toBe(end);
+      }
+    });
+  }
+
+  it("returns the input for an out-of-range index rather than clamping silently", () => {
+    expect(computeRowExtreme(-1, -1, 4, 12, undefined)).toBe(-1);
+    expect(computeRowExtreme(99, 1, 4, 12, undefined)).toBe(99);
+    expect(computeRowExtreme(0, 1, 4, 0, undefined)).toBe(0);
+  });
+});
+
+describe("useWorktreeOverviewKeyboard — handing control back to the search field", () => {
+  // The surface's search field takes initial focus, so "type a query, arrow to
+  // the match, change your mind and keep typing" is the common path. Each of
+  // these keys is the way back out of the grid; what they must NOT do is be
+  // swallowed, which is what made the grid feel like it had no keyboard model.
+  function renderWithReturn(onReturnToSearch: (char?: string) => void) {
+    return render(<Harness worktreeIds={IDS} onReturnToSearch={onReturnToSearch} />);
+  }
+
+  it("ArrowUp from the top row returns to the search field instead of being absorbed", () => {
+    const onReturnToSearch = vi.fn();
+    const { getByTestId } = renderWithReturn(onReturnToSearch);
+    const grid = getByTestId("grid");
+    fireEvent.focus(grid); // cursor seeds at "a", the top-left cell
+    fireEvent.keyDown(grid, { key: "ArrowUp" });
+    expect(onReturnToSearch).toHaveBeenCalledTimes(1);
+    expect(onReturnToSearch).toHaveBeenCalledWith();
+    // The cursor stays where it was — leaving is not moving.
+    expect(grid.getAttribute("aria-activedescendant")).toBe(getWorktreeOverviewCellId("a"));
+  });
+
+  it("ArrowUp below the top row navigates and does not return to search", () => {
+    const onReturnToSearch = vi.fn();
+    const { getByTestId } = renderWithReturn(onReturnToSearch);
+    const grid = getByTestId("grid");
+    fireEvent.focus(grid);
+    fireEvent.keyDown(grid, { key: "ArrowDown" }); // a → d
+    fireEvent.keyDown(grid, { key: "ArrowUp" }); // d → a
+    expect(onReturnToSearch).not.toHaveBeenCalled();
+    expect(grid.getAttribute("aria-activedescendant")).toBe(getWorktreeOverviewCellId("a"));
+  });
+
+  it("Shift+ArrowUp on the top row extends selection rather than leaving the grid", () => {
+    // Leaving mid-range-selection would strand the user's range.
+    const onReturnToSearch = vi.fn();
+    const { getByTestId } = renderWithReturn(onReturnToSearch);
+    const grid = getByTestId("grid");
+    fireEvent.focus(grid);
+    fireEvent.keyDown(grid, { key: "ArrowUp", shiftKey: true });
+    expect(onReturnToSearch).not.toHaveBeenCalled();
+  });
+
+  it("a printable character goes to the search field, carrying the character", () => {
+    const onReturnToSearch = vi.fn();
+    const { getByTestId } = renderWithReturn(onReturnToSearch);
+    const grid = getByTestId("grid");
+    fireEvent.focus(grid);
+    fireEvent.keyDown(grid, { key: "k" });
+    expect(onReturnToSearch).toHaveBeenCalledWith("k");
+  });
+
+  it("`/` returns to the field without typing itself", () => {
+    const onReturnToSearch = vi.fn();
+    const { getByTestId } = renderWithReturn(onReturnToSearch);
+    const grid = getByTestId("grid");
+    fireEvent.focus(grid);
+    fireEvent.keyDown(grid, { key: "/" });
+    expect(onReturnToSearch).toHaveBeenCalledWith();
+  });
+
+  it("never hijacks the keys the grid itself owns", () => {
+    // The regression this guards: a printable-character rule written as
+    // `key.length === 1` also matches " ", which is the selection toggle.
+    const onReturnToSearch = vi.fn();
+    const onToggleSelection = vi.fn();
+    const onActivate = vi.fn();
+    const { getByTestId } = render(
+      <Harness
+        worktreeIds={IDS}
+        onReturnToSearch={onReturnToSearch}
+        onToggleSelection={onToggleSelection}
+        onActivate={onActivate}
+      />
+    );
+    const grid = getByTestId("grid");
+    fireEvent.focus(grid);
+
+    fireEvent.keyDown(grid, { key: " " });
+    expect(onToggleSelection).toHaveBeenCalledTimes(1);
+
+    fireEvent.keyDown(grid, { key: "Enter" });
+    expect(onActivate).toHaveBeenCalledTimes(1);
+
+    for (const key of ["ArrowRight", "ArrowLeft", "ArrowDown", "Home", "End", "Escape", "F2"]) {
+      fireEvent.keyDown(grid, { key });
+    }
+    fireEvent.keyDown(grid, { key: "a", metaKey: true });
+    expect(onReturnToSearch).not.toHaveBeenCalled();
+  });
+
+  it("does nothing on these keys when no search field is wired", () => {
+    // The hook is shared; a caller with no field below must not lose its keys.
+    const { getByTestId } = render(<Harness worktreeIds={IDS} />);
+    const grid = getByTestId("grid");
+    fireEvent.focus(grid);
+    fireEvent.keyDown(grid, { key: "ArrowUp" });
+    expect(grid.getAttribute("aria-activedescendant")).toBe(getWorktreeOverviewCellId("a"));
+    fireEvent.keyDown(grid, { key: "k" });
+    expect(grid.getAttribute("aria-activedescendant")).toBe(getWorktreeOverviewCellId("a"));
   });
 });

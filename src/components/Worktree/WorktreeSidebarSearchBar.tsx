@@ -7,6 +7,12 @@ import type { ChipCounts } from "@/lib/worktreeFilters";
 
 interface WorktreeSidebarSearchBarProps {
   inputRef?: React.Ref<HTMLInputElement>;
+  /**
+   * ArrowDown from the field hands keyboard control to the results this bar
+   * filters. Callers that have no navigable results below the field omit it
+   * and ArrowDown does nothing, as before.
+   */
+  onArrowIntoResults?: () => void;
   chipCounts?: ChipCounts;
   /**
    * Where the bar is mounted. The sidebar variant carries the optional
@@ -45,6 +51,7 @@ function assignForwardedRef<T>(ref: React.Ref<T> | undefined, value: T | null): 
 
 export function WorktreeSidebarSearchBar({
   inputRef,
+  onArrowIntoResults,
   chipCounts,
   variant = "sidebar",
   statusText,
@@ -150,6 +157,24 @@ export function WorktreeSidebarSearchBar({
 
   const handleKeyDown = useCallback(
     (e: React.KeyboardEvent) => {
+      // ArrowDown hands off to the results below. The field takes initial
+      // focus on this surface, so "type a query, arrow to the match" is the
+      // first thing anyone does — and without this it did nothing, because
+      // the arrow keys belong to the grid and the grid did not have focus.
+      //
+      // Focus MOVES rather than the field keeping it and driving the grid by
+      // `aria-activedescendant`. That is the combobox architecture, and it is
+      // wrong here twice over: this grid is permanently visible and
+      // multi-selectable, which is not what a combobox popup is, and Space
+      // would have to be either a space character or the selection toggle and
+      // cannot be both. GitHub, Gmail, Linear, VS Code's search view and
+      // Finder all move focus for exactly that reason.
+      if (e.key === "ArrowDown" && onArrowIntoResults && !isPopoverOpen) {
+        e.preventDefault();
+        e.stopPropagation();
+        onArrowIntoResults();
+        return;
+      }
       if (e.key !== "Escape") return;
       // ARIA APG combobox sequence: close popup → clear text → blur.
       if (isPopoverOpen) {
@@ -164,7 +189,7 @@ export function WorktreeSidebarSearchBar({
       }
       internalRef.current?.blur();
     },
-    [isPopoverOpen, liveQuery, handleClearSearch]
+    [isPopoverOpen, liveQuery, handleClearSearch, onArrowIntoResults]
   );
 
   const setRefs = useCallback(

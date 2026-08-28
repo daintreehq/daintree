@@ -145,7 +145,7 @@ function GitStatusFreshnessPill({
         <span
           className={cn(
             "text-xs tabular-nums shrink-0 transition-colors duration-150",
-            isWarning ? "text-text-muted" : "text-text-muted/60"
+            isWarning ? "text-text-secondary" : "text-text-muted"
           )}
         >
           {formatGitAge(age)}
@@ -259,7 +259,7 @@ export function WorktreeHeader({
         <div className="flex items-center gap-2 min-w-0 flex-1">
           {isMainWorktree && (
             <Sprout
-              className="w-3.5 h-3.5 text-daintree-text/60 shrink-0 pointer-events-none"
+              className="w-3.5 h-3.5 text-text-secondary shrink-0 pointer-events-none"
               aria-hidden="true"
             />
           )}
@@ -292,12 +292,17 @@ export function WorktreeHeader({
             <TruncatedTooltip content={worktree.name}>
               <span
                 className={cn(
-                  "truncate text-sm leading-[inherit] font-medium transition-colors duration-150",
+                  "truncate text-sm leading-[inherit] transition-colors duration-150",
                   isActive
-                    ? "text-text-primary/90"
+                    ? "text-text-primary font-medium"
                     : isMuted
-                      ? "text-text-muted"
-                      : "text-text-secondary"
+                      ? // Muted, not unreadable. This is the card's headline —
+                        // the only thing naming which worktree it is — and
+                        // `text-text-muted` has no dark contrast floor in this
+                        // cohort (2.22:1 on namib). The de-emphasis comes off
+                        // the weight instead, which costs nothing legible.
+                        "text-text-secondary font-normal"
+                      : "text-text-secondary font-medium"
                 )}
                 data-testid="primary-worktree-project-name"
               >
@@ -337,7 +342,7 @@ export function WorktreeHeader({
           <div className="flex items-center gap-2 shrink-0">
             {isPinned && !isMainWorktree && (
               <Pin
-                className="w-3.5 h-3.5 text-daintree-text/40 shrink-0 pointer-events-none"
+                className="w-3.5 h-3.5 text-text-muted shrink-0 pointer-events-none"
                 aria-label="Pinned"
               />
             )}
@@ -349,10 +354,7 @@ export function WorktreeHeader({
                     aria-label={`External worktree at ${worktree.path}`}
                     className="shrink-0 leading-none"
                   >
-                    <FolderOutput
-                      className="w-3.5 h-3.5 text-daintree-text/40"
-                      aria-hidden="true"
-                    />
+                    <FolderOutput className="w-3.5 h-3.5 text-text-muted" aria-hidden="true" />
                   </span>
                 </TooltipTrigger>
                 <TooltipContent side="bottom" className="max-w-xs">
@@ -363,7 +365,7 @@ export function WorktreeHeader({
             )}
             {isProjectNotificationsMuted && (
               <BellOff
-                className="w-3.5 h-3.5 text-daintree-text/40 shrink-0 pointer-events-none"
+                className="w-3.5 h-3.5 text-text-muted shrink-0 pointer-events-none"
                 aria-label="Notifications muted for this project"
               />
             )}
@@ -384,7 +386,7 @@ export function WorktreeHeader({
                 resourceEndpoint={resourceEndpoint}
                 resourceLastCheckedAt={resourceLastCheckedAt}
                 onCheckResourceStatus={onCheckResourceStatus}
-                className="w-3.5 h-3.5 text-daintree-text/40"
+                className="w-3.5 h-3.5 text-text-muted"
               />
             )}
             <DevServerIndicator session={devServerSession} />

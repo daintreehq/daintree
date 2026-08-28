@@ -184,15 +184,75 @@ function OverviewGridCell(props: OverviewWorktreeCardProps & { isCursor?: boolea
         // children too, and a 480px cap on a row spanning every track is not
         // what that rule means.
         "max-w-[480px]",
+        // `h-full` against a stretched grid row: every card in a row ends on
+        // the same y. Cards carry a variable number of status rows, so left to
+        // themselves their bottoms landed on three different lines per row and
+        // the gutter between rows read as broken — 57px under a short card,
+        // 13px under a tall one.
+        //
+        // What is equalised is the card's BOX, not its content: the content
+        // stays top-aligned and the slack falls below it. Pushing the status
+        // rows down to the bottom edge instead was tried and is worse — one
+        // card expanded to 460px opened a 250px hole in the middle of each of
+        // its three row-mates, which reads far more broken than a short card
+        // with space under it.
+        "h-full",
         "rounded-lg overflow-hidden",
         "border border-divider",
-        "bg-daintree-sidebar/50",
+        // This element is the card. The `WorktreeCard` inside it paints no
+        // plane of its own in the grid variant, so the border, fill, hover
+        // lift and shadow are declared once, here.
+        "bg-overlay-subtle",
         // Narrowest property set the states here actually animate — a bare
         // `transition` would also cover transform, filter and backdrop-filter.
         "transition-[background-color,box-shadow,outline-color] duration-150 ease-out",
-        "hover:bg-overlay-subtle hover:shadow-[var(--theme-shadow-ambient)]",
-        isSelected && "bg-overlay-subtle ring-1 ring-inset ring-border-default",
-        isCursor && "outline outline-2 -outline-offset-2 outline-accent-primary"
+        // The drag guard rides with the shadow. While a sort drag is active
+        // the pointer sweeps across every card it passes, and lighting each
+        // one in turn reads as the drag doing something to them.
+        "hover:bg-overlay-soft hover:shadow-[var(--theme-shadow-ambient)]",
+        "[html[data-dragging='true']_&]:hover:shadow-none",
+        // Membership: a raised fill plus a LEADING RAIL, which is what every
+        // other selectable surface in this app draws — nine of them, and the
+        // rail geometry is written down once in `.palette-row::before`.
+        //
+        // This was a four-sided `ring-1 ring-inset ring-selection-outline` for
+        // one round, which turned out to be the only four-sided ring on this
+        // token anywhere in the codebase. #11686 had already made that exact
+        // swap for the palette rows and `theme-tokens.md` names the ink
+        // "selected-row leading-rail" — so the ring was re-deciding a settled
+        // question and losing.
+        //
+        // `selection-outline` rather than a border token, either way: it is
+        // the one ink derived from `text-primary` instead of the border ramp,
+        // and `getThemeContrastWarnings` gates it at 3:1 on every theme. The
+        // fill cannot be the SC 1.4.11 indicator — `overlay-medium` over
+        // `overlay-subtle` is a 2% step, around 1.1:1 — so the mark has to
+        // carry the ratio on its own.
+        //
+        // The rail is inset 12px top and bottom rather than the palette's 6px:
+        // the card's own status mark is a 12x12 corner wedge at this edge, and
+        // 6px put the two in the same gutter. It is on the leading edge, where
+        // the trailing edge already carries the current-worktree stripe.
+        "relative",
+        isSelected && "bg-overlay-medium",
+        isSelected &&
+          "before:absolute before:inset-y-3 before:start-0 before:z-10 before:w-[3px] before:rounded-full before:bg-selection-outline before:content-['']",
+        // The cursor is painted only while the grid itself holds DOM focus.
+        // It is `aria-activedescendant`, so its id survives blur by design —
+        // but the accent mark should not: an overview whose search field is
+        // focused was showing an accent ring on the field AND an accent
+        // outline on a card, two load-bearing signals in one region with
+        // nothing saying which one the keys would move.
+        //
+        // Gating it here is also what gives the grid container a focus
+        // indicator at all. It carries `tabIndex={0}` and `focus:outline-hidden`
+        // (the container must not paint its own 1500px-wide ring), so before
+        // this the surface had a keyboard-focusable element with nothing
+        // marking it — the #8940 debt recorded in focusRingFallback's
+        // allowlist. The cursor cell IS the indicator, and it appears exactly
+        // when the container takes focus.
+        isCursor &&
+          "group-focus/overview-grid:outline group-focus/overview-grid:outline-2 group-focus/overview-grid:-outline-offset-2 group-focus/overview-grid:outline-accent-primary"
       )}
     >
       <OverviewWorktreeCard {...props} variant="grid" />
@@ -593,21 +653,6 @@ export function WorktreeOverviewModal({
     [onSelectWorktree, onClose]
   );
 
-  const handleCardToggleSelect = useCallback(
-    (worktreeId: string, event: React.MouseEvent) => {
-      // Shift+Click on a card extends from the anchor; Ctrl/Cmd+Click toggles
-      // the individual cell. A plain click without modifiers never reaches
-      // this handler (WorktreeCard routes those to onSelect).
-      if (event.shiftKey && selectionAnchorRef.current !== null) {
-        selectRangeBetween(selectionAnchorRef.current, worktreeId);
-        return;
-      }
-      selectionAnchorRef.current = worktreeId;
-      toggleSelection(worktreeId);
-    },
-    [selectRangeBetween, toggleSelection]
-  );
-
   const hasSelection = selectedIds.size > 0;
 
   // Build a lookup map so the bulk-remove hook can snapshot per-target
@@ -672,6 +717,33 @@ export function WorktreeOverviewModal({
   }, []);
 
   const gridRef = useRef<HTMLDivElement | null>(null);
+
+  /**
+   * ArrowDown out of the search field hands keyboard control to the grid.
+   * The cursor is seeded by `handleGridFocus` when there is none, so this
+   * does not have to name a cell.
+   */
+  const handleArrowIntoResults = useCallback(() => {
+    gridRef.current?.focus({ preventScroll: true });
+  }, []);
+
+  /**
+   * The way back: ArrowUp off the top row, `/`, or any printable character
+   * typed while the grid holds focus. The character is appended rather than
+   * dropped, so a user who arrows into the results and then decides to refine
+   * the query simply keeps typing.
+   */
+  const handleReturnToSearch = useCallback((char?: string) => {
+    const input = searchInputRef.current;
+    if (!input) return;
+    input.focus();
+    if (char === undefined) return;
+    // Through the prototype's native setter so React's onChange sees it —
+    // assigning `.value` directly on a controlled input is swallowed.
+    const setter = Object.getOwnPropertyDescriptor(window.HTMLInputElement.prototype, "value")?.set;
+    setter?.call(input, input.value + char);
+    input.dispatchEvent(new Event("input", { bubbles: true }));
+  }, []);
   const closeModal = useCallback(() => onClose(), [onClose]);
 
   const hasActivitySummary =
@@ -691,19 +763,51 @@ export function WorktreeOverviewModal({
     [groupedSections]
   );
 
-  const { activeDescendantId, handleGridKeyDown, handleGridFocus } = useWorktreeOverviewKeyboard({
-    worktreeIds: visibleIds,
-    sectionSizes,
-    gridRef,
-    selectionAnchorRef,
-    onActivate: activateWorktree,
-    onToggleSelection: toggleSelection,
-    onSelectRange: selectRangeBetween,
-    onSelectAll: selectAllVisible,
-    onClearSelection: clearSelection,
-    onEscapeWithoutSelection: closeModal,
-    hasSelection,
-  });
+  const { activeDescendantId, handleGridKeyDown, handleGridFocus, setActiveWorktreeId } =
+    useWorktreeOverviewKeyboard({
+      worktreeIds: visibleIds,
+      sectionSizes,
+      gridRef,
+      selectionAnchorRef,
+      onActivate: activateWorktree,
+      onToggleSelection: toggleSelection,
+      onSelectRange: selectRangeBetween,
+      onSelectAll: selectAllVisible,
+      onClearSelection: clearSelection,
+      onEscapeWithoutSelection: closeModal,
+      onReturnToSearch: handleReturnToSearch,
+      hasSelection,
+    });
+
+  const handleCardToggleSelect = useCallback(
+    (worktreeId: string, event: React.MouseEvent) => {
+      // The pointer-to-keyboard hand-off the APG's keyboard-interface practice
+      // requires of any composite driven by `aria-activedescendant`: a click
+      // inside the widget must move the cursor to what was clicked AND pull
+      // DOM focus onto the container. Neither happened, and the consequence is
+      // the one the practice names — the container's keydown listener never
+      // fires, so after Cmd-clicking a card every arrow key, Space and Enter
+      // did nothing until the user found their way back with Tab. From the
+      // outside that reads as "this grid has no keyboard navigation".
+      //
+      // Focus first, then the cursor: `handleGridFocus` seeds the cursor at
+      // the first cell when there is none, and it must not beat the cell the
+      // pointer actually named.
+      gridRef.current?.focus({ preventScroll: true });
+      setActiveWorktreeId(worktreeId);
+
+      // Shift+Click extends from the anchor; Ctrl/Cmd+Click toggles the
+      // individual cell. A plain click never reaches this handler
+      // (WorktreeCard routes those to onSelect).
+      if (event.shiftKey && selectionAnchorRef.current !== null) {
+        selectRangeBetween(selectionAnchorRef.current, worktreeId);
+        return;
+      }
+      selectionAnchorRef.current = worktreeId;
+      toggleSelection(worktreeId);
+    },
+    [selectRangeBetween, toggleSelection, setActiveWorktreeId]
+  );
 
   // Keep the keyboard cursor on screen. `aria-activedescendant` moves a cursor
   // that is not DOM focus, so the browser does no scrolling of its own — without
@@ -864,7 +968,7 @@ export function WorktreeOverviewModal({
             a selection starts: it is what tells the user which surface they are
             on and how much of it they are seeing. */}
         <AppDialog.Header>
-          <AppDialog.Title icon={<Layers className="w-5 h-5 text-daintree-text/60" />}>
+          <AppDialog.Title icon={<Layers className="w-5 h-5 text-text-secondary" />}>
             <span>Worktrees overview</span>
             <span className="text-text-secondary text-sm font-normal tabular-nums">
               ({filteredWorktrees.length}
@@ -882,6 +986,7 @@ export function WorktreeOverviewModal({
           <WorktreeSidebarSearchBar
             variant="modal"
             inputRef={searchInputRef}
+            onArrowIntoResults={handleArrowIntoResults}
             chipCounts={chipCounts}
             trailing={
               // Main-worktree visibility rides with the facets rather than in a
@@ -900,22 +1005,23 @@ export function WorktreeOverviewModal({
                       onClick={() => setHideMainWorktree(!hideMainWorktree)}
                       className={cn(
                         "flex shrink-0 items-center gap-1.5 px-2 rounded-full text-xs transition-colors",
-                        "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary",
+                        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]",
+                        // Both states stay on `text-text-secondary`: the
+                        // strike-through and the surface step already say
+                        // which one this is, and `text-text-muted` has no dark
+                        // contrast floor — a filter chip whose label is the
+                        // only thing naming what it filters has to stay
+                        // readable in the state where it is switched off.
                         hideMainWorktree
-                          ? "bg-tint/[0.06] text-daintree-text/40 hover:text-daintree-text/60"
-                          : "bg-tint/[0.10] text-text-secondary hover:text-text-primary"
+                          ? "bg-overlay-soft text-text-secondary hover:text-text-primary"
+                          : "bg-overlay-medium text-text-secondary hover:text-text-primary"
                       )}
                     >
-                      <Plug
-                        className={cn(
-                          "w-3 h-3 transition-colors",
-                          hideMainWorktree ? "text-daintree-text/30" : "text-daintree-text/50"
-                        )}
-                      />
+                      <Plug className={cn("w-3 h-3 transition-colors", "text-text-secondary")} />
                       <span
                         className={cn(
                           "transition-colors",
-                          hideMainWorktree && "line-through decoration-daintree-text/30"
+                          hideMainWorktree && "line-through decoration-text-muted"
                         )}
                       >
                         main
@@ -949,11 +1055,11 @@ export function WorktreeOverviewModal({
                 type="button"
                 onClick={clearSelection}
                 className={cn(
-                  "flex items-center gap-1.5 px-2 py-1 rounded text-xs",
+                  "flex items-center gap-1.5 px-2 py-1 rounded-[var(--radius-md)] text-xs",
                   "text-text-secondary hover:text-text-primary",
-                  "hover:bg-tint/[0.06]",
+                  "hover:bg-overlay-soft",
                   "transition-colors",
-                  "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
+                  "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]"
                 )}
                 aria-label="Clear selection"
               >
@@ -1009,10 +1115,10 @@ export function WorktreeOverviewModal({
                       }
                       className={cn(
                         "flex items-center gap-1 text-xs tabular-nums rounded-full px-2 py-1 transition-colors",
-                        "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary",
+                        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]",
                         quickStateFilter === "waiting"
                           ? "bg-overlay-subtle shadow-[inset_0_-2px_0_0_var(--color-text-secondary)]"
-                          : "hover:bg-tint/[0.04]"
+                          : "hover:bg-overlay-subtle"
                       )}
                     >
                       <span className="status-mark w-1.5 h-1.5 rounded-full bg-status-warning" />
@@ -1036,10 +1142,10 @@ export function WorktreeOverviewModal({
                       }
                       className={cn(
                         "flex items-center gap-1 text-xs tabular-nums rounded-full px-2 py-1 transition-colors",
-                        "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary",
+                        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]",
                         quickStateFilter === "working"
                           ? "bg-overlay-subtle shadow-[inset_0_-2px_0_0_var(--color-text-secondary)]"
-                          : "hover:bg-tint/[0.04]"
+                          : "hover:bg-overlay-subtle"
                       )}
                     >
                       <span className="status-mark w-1.5 h-1.5 rounded-full bg-[var(--color-state-working)] motion-safe:animate-pulse" />
@@ -1063,10 +1169,10 @@ export function WorktreeOverviewModal({
                       }
                       className={cn(
                         "flex items-center gap-1 text-xs tabular-nums rounded-full px-2 py-1 transition-colors",
-                        "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary",
+                        "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]",
                         quickStateFilter === "finished"
                           ? "bg-overlay-subtle shadow-[inset_0_-2px_0_0_var(--color-text-secondary)]"
-                          : "hover:bg-tint/[0.04]"
+                          : "hover:bg-overlay-subtle"
                       )}
                     >
                       <span className="status-mark w-1.5 h-1.5 rounded-full bg-category-blue" />
@@ -1092,11 +1198,11 @@ export function WorktreeOverviewModal({
                       <button
                         onClick={clearAllFilters}
                         className={cn(
-                          "flex items-center gap-1.5 px-2 py-1 rounded text-xs",
+                          "flex items-center gap-1.5 px-2 py-1 rounded-[var(--radius-md)] text-xs",
                           "text-text-secondary hover:text-text-primary",
-                          "hover:bg-tint/[0.06]",
+                          "hover:bg-overlay-soft",
                           "transition-colors",
-                          "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
+                          "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]"
                         )}
                         aria-label="Clear all filters"
                       >
@@ -1196,13 +1302,21 @@ export function WorktreeOverviewModal({
               onKeyDown={handleGridKeyDown}
               onFocus={handleGridFocus}
               className={cn(
-                "grid gap-3",
+                "group/overview-grid grid gap-3",
                 // `auto-fill`, not `auto-fit`: auto-fit collapses the empty
                 // tracks, so the track count followed the RESULT count and the
                 // whole grid slid sideways as the user typed. `1fr` with a
                 // per-cell max keeps cards from stretching on a wide display.
                 "grid-cols-[repeat(auto-fill,minmax(min(320px,100%),1fr))]",
-                "auto-rows-min items-start",
+                // `items-stretch`, not `items-start`: cards in one row share a
+                // bottom edge. `auto-rows-min` still sizes each row to its own
+                // tallest card, so a row of short cards does not inherit a tall
+                // row's height.
+                "auto-rows-min items-stretch",
+                // The container must not paint its own ring — it spans the
+                // whole grid. The cursor cell paints the indicator instead,
+                // gated on this element's `focus-visible` (see
+                // `OverviewGridCell`).
                 "focus:outline-hidden"
               )}
             >
@@ -1290,6 +1404,16 @@ export function WorktreeOverviewModal({
               <span className="hidden @3xl/overview-footer:inline">
                 <kbd className={KBD_CLASS}>Shift</kbd>+<kbd className={KBD_CLASS}>↑↓←→</kbd> extend
               </span>
+              {/* The way back to the field. It is the least guessable binding
+                  on the surface and the one a user reaches for most often —
+                  arrow into the results, not find it, want to retype — so it
+                  earns a slot even though it drops out first on a narrow
+                  window. Typing any character does the same thing; `/` is
+                  what gets advertised because it is the convention the
+                  neighbours (GitHub, Gmail, Linear) already teach. */}
+              <span className="hidden @4xl/overview-footer:inline">
+                <kbd className={KBD_CLASS}>/</kbd> search
+              </span>
               <span>
                 <kbd className={KBD_CLASS}>Esc</kbd>
                 {hasSelection ? " clear selection" : " close"}
@@ -1358,13 +1482,13 @@ export function WorktreeOverviewModal({
         isConfirmLoading={bulkRemove.isExecuting}
       >
         {bulkRemove.targets.length > 0 && (
-          <div className="border border-divider rounded max-h-64 overflow-y-auto divide-y divide-divider">
+          <div className="border border-divider rounded-[var(--radius-md)] max-h-64 overflow-y-auto divide-y divide-divider">
             {bulkRemove.targets.map((target) => {
               const risks = describeBulkRemoveRisks(target);
               return (
-                <div key={target.id} className="flex flex-col gap-1 px-3 py-2 bg-daintree-bg/40">
+                <div key={target.id} className="flex flex-col gap-1 px-3 py-2 bg-surface-canvas/40">
                   <div className="flex items-center gap-2 text-sm text-text-primary">
-                    <GitBranch className="w-3.5 h-3.5 shrink-0 text-daintree-text/50" />
+                    <GitBranch className="w-3.5 h-3.5 shrink-0 text-text-secondary" />
                     {/* The branch is what truncates, so the branch is what the
                         tooltip has to reveal — it used to show the path, which
                         is not the string being clipped. */}
@@ -1386,7 +1510,7 @@ export function WorktreeOverviewModal({
             })}
           </div>
         )}
-        <div className="flex items-start gap-2 p-3 bg-status-error/10 border border-status-error/20 rounded text-status-error text-xs">
+        <div className="flex items-start gap-2 p-3 bg-status-error/10 border border-status-error/20 rounded-[var(--radius-md)] text-status-error text-xs">
           <Trash2 className="w-3.5 h-3.5 shrink-0 mt-0.5" />
           <span>This is irreversible. Type the count to confirm.</span>
         </div>

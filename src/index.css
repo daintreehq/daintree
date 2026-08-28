@@ -2888,7 +2888,12 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     outline-offset: -2px;
   }
 
-  [data-worktree-overview-cell][data-overview-cursor="true"] {
+  /* Scoped to the focused grid, matching the normal-mode rule. The cursor is
+     `aria-activedescendant`, so its id is deliberately retained after the grid
+     loses focus — but the mark is not meant to survive with it. Unscoped, a
+     user who tabbed back to the search field kept a Highlight-bordered card on
+     screen while the field drew its own focus ring. */
+  [role="grid"]:focus-visible [data-worktree-overview-cell][data-overview-cursor="true"] {
     border-color: Highlight;
     border-width: 2px;
   }
@@ -3206,13 +3211,14 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
     outline-offset: -1px;
   }
 
-  /* Overview grid membership: the neutral inset ring is deliberately quiet at
-     normal contrast (accent restraint reserves the loud mark for the keyboard
-     cursor), which leaves it thin here. Widen the ring rather than recolour it
-     — the mark stays neutral, it just stops being a hairline. */
-  [role="gridcell"][aria-selected="true"][data-worktree-overview-cell] {
-    --tw-ring-offset-width: 0px;
-    box-shadow: inset 0 0 0 2px var(--color-border-strong);
+  /* Overview grid membership: the neutral leading rail is deliberately quiet
+     at normal contrast (accent restraint reserves the loud mark for the
+     keyboard cursor), which leaves it thin here. Widen the rail rather than
+     recolour it or add a second mark — the same ink, the same geometry, just
+     no longer a hairline, so membership does not change identity between the
+     two contrast modes. */
+  [role="gridcell"][aria-selected="true"][data-worktree-overview-cell]::before {
+    width: 5px;
   }
 
   /* Track the widened border so the cue's hairline stays inside it rather

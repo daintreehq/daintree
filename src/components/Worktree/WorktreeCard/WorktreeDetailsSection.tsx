@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 import { actionService } from "@/services/ActionService";
 import type { ComputedSubtitle, WorktreeReviewState } from "./hooks/useWorktreeStatus";
-import { SECTION_LABEL, SECTION_ROW, SECTION_ROW_BOX, DISCLOSURE_WELL } from "./sectionChrome";
+import { SECTION_LABEL, CARD_DENSITY } from "./sectionChrome";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import {
   ContextMenu,
@@ -38,12 +38,16 @@ export interface WorktreeDetailsSectionProps {
   worktree: WorktreeState;
   homeDir?: string;
   /**
-   * Sidebar cards flatten this section into the card surface; grid cards keep
-   * the bordered, filled well. The sidebar row is already a container, and a
-   * second bordered plane inside it (with a third for the note and a fourth
-   * for the file list) reads as a stack of nested cards and eats ~34px of a
-   * 240-360px column per level. The grid card sits on a wider, standalone
-   * surface where the well still earns its keep.
+   * Which density this card is drawn at — see `CARD_DENSITY` in
+   * `./sectionChrome`. Both variants are now the same construction: a flat
+   * summary row on the card surface, and one well when the section is opened.
+   *
+   * The grid used to keep a bordered, filled well in both states. That was
+   * defensible while the reasoning was "the sidebar row is already a
+   * container, the grid card is not" — but the grid card IS a container, and
+   * a second bordered plane inside it (with a third for the note and a fourth
+   * for the file list) is the card-in-card that Carbon and Material 3 both
+   * name as the failure mode for this component.
    */
   variant?: "sidebar" | "grid";
   isExpanded: boolean;
@@ -156,7 +160,6 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
   const isUnpushedClean = reviewState === "unpushed-clean" && !hasChanges;
   const showReviewHubButton = !!onOpenReviewHub && (hasChanges || isUnpushedClean);
   const reviewHubButtonLabel = isUnpushedClean ? "Review & push" : "Review & commit";
-  const rightButtonGroupShown = showReviewHubButton;
 
   const lifecycleState = worktree.lifecycleStatus?.state;
   const lifecycleFailed = lifecycleState === "failed" || lifecycleState === "timed-out";
@@ -194,62 +197,55 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
   const showResourceConnect = hasResourceConfig && !!onResourceConnect && rsLower === "running";
 
   const isSidebar = variant === "sidebar";
+  const density = CARD_DENSITY[isSidebar ? "sidebar" : "grid"];
 
   return (
     <>
       <div
         id={detailsId}
         className={cn(
-          isSidebar
-            ? // Expanded Details is a well, exactly like sessions below it:
-              // once it has a body of its own to hold, it needs the contour
-              // that says the body belongs to it. Collapsed it is a single
-              // row, and a well around one row is a box around nothing.
-              isExpanded
-              ? DISCLOSURE_WELL
-              : "mt-1"
-            : "mt-2 rounded-[var(--radius-lg)] border border-border-default bg-surface-inset p-3"
+          // Both variants now: expanded Details is a well, exactly like
+          // sessions below it — once it has a body of its own to hold, it
+          // needs the contour that says the body belongs to it. Collapsed it
+          // is a single row, and a well around one row is a box around
+          // nothing.
+          //
+          // The grid used to keep the well in BOTH states, plus a rule under
+          // its own trigger. Stacked against the sessions well directly below
+          // it, that gave the card two identical bordered boxes and nothing
+          // saying which was git state and which was running work. The card is
+          // already the container; one closed contour inside it is the budget.
+          isExpanded ? density.well : isSidebar ? "mt-1" : "mt-1.5"
         )}
       >
         {isExpanded ? (
-          <div className={cn(!isSidebar && "-m-3")}>
+          <div>
             <button
               onClick={onToggleExpand}
               aria-expanded={true}
               aria-controls={detailsPanelId}
               className={cn(
-                "worktree-section-button flex w-full items-center text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]",
-                isSidebar
-                  ? // Leading chevron, no fill, no rule under it: the trigger has
-                    // to stay attached to the body it just revealed. A divider
-                    // there cuts the two apart and they read as separate
-                    // components.
-                    cn(SECTION_ROW, "gap-1.5")
-                  : "justify-between rounded-t-[var(--radius-lg)] border-b border-border-default bg-surface-inset px-3 py-2.5"
+                // Leading chevron, no fill, no rule under it: the trigger has
+                // to stay attached to the body it just revealed. A divider
+                // there cuts the two apart and they read as separate
+                // components.
+                "transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]",
+                density.row,
+                "gap-1.5"
               )}
               id={`${detailsId}-button`}
             >
-              {isSidebar && <ChevronRight className="h-3 w-3 shrink-0 rotate-90 text-text-muted" />}
+              <ChevronRight className="h-3 w-3 shrink-0 rotate-90 text-text-secondary" />
               {isBeingDeleted && !deleteError ? (
-                <span
-                  className={cn(
-                    "flex items-center gap-1.5 text-xs font-medium text-text-secondary",
-                    isSidebar && SECTION_LABEL
-                  )}
-                  role="status"
-                  aria-live="polite"
-                >
-                  <Spinner size="xs" className="shrink-0" />
-                  <span>Deleting…</span>
+                <span className={SECTION_LABEL} role="status" aria-live="polite">
+                  <span className="flex items-center gap-1.5">
+                    <Spinner size="xs" className="shrink-0" />
+                    <span>Deleting…</span>
+                  </span>
                 </span>
               ) : (
-                <span
-                  className={cn(isSidebar ? SECTION_LABEL : "text-xs font-medium text-text-muted")}
-                >
-                  Details
-                </span>
+                <span className={SECTION_LABEL}>Details</span>
               )}
-              {!isSidebar && <ChevronRight className="h-3 w-3 rotate-90 text-text-muted" />}
             </button>
             <div
               id={detailsPanelId}
@@ -257,7 +253,25 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
               aria-labelledby={`${detailsId}-button`}
               // Inside the well now, so it owns the well's padding. The
               // trigger above it supplies the top inset.
-              className={cn(isSidebar ? "px-2.5 pb-2" : "p-3")}
+              className={cn(
+                isSidebar
+                  ? "px-2.5 pb-2"
+                  : // The grid caps the opened panel and scrolls inside it.
+                    // Grid rows share a height, so an unbounded panel is not
+                    // only this card's problem: one card expanded to 460px
+                    // took its three row-mates with it and left 250px of
+                    // nothing in each. Bounding it is the standard correction
+                    // for variable-height cards in a grid, and 208px still
+                    // shows the note plus the first several changed files.
+                    //
+                    // It does not fully solve the row: `items-stretch` still
+                    // propagates whatever height the open card ends up with,
+                    // so its row-mates grow with it. Moving Details out of
+                    // flow entirely — a side inspector or an anchored overlay
+                    // — is the only thing that would, and that is a change to
+                    // what the disclosure IS rather than to how it looks.
+                    "max-h-52 overflow-y-auto px-3 pb-2.5"
+              )}
             >
               <WorktreeDetails
                 variant={variant}
@@ -280,7 +294,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
             </div>
           </div>
         ) : (
-          <div className={cn("flex flex-col", !isSidebar && "-m-3")}>
+          <div className="flex flex-col">
             <div className="flex items-stretch">
               <div
                 onClick={onToggleExpand}
@@ -289,19 +303,17 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                   // Sidebar: a flat row on the card surface with a hover
                   // backplate, not a permanent bordered well. Same hit area,
                   // same content, one less container.
-                  isSidebar
-                    ? // Shares SECTION_ROW's box (it cannot use the class
-                      // itself — this row is a flex-1 sibling of the right
-                      // button group, not a full-width row). The old -ml-1.5
-                      // chip put this line's chevron 16px left of the session
-                      // row's directly beneath it.
-                      SECTION_ROW_BOX
-                    : cn(
-                        "px-3 py-2.5",
-                        rightButtonGroupShown
-                          ? "rounded-l-[var(--radius-lg)]"
-                          : "rounded-[var(--radius-lg)]"
-                      )
+                  // Shares the density's row box (it cannot use the row class
+                  // itself — this row is a flex-1 sibling of the right button
+                  // group, not a full-width row). The old -ml-1.5 chip put
+                  // this line's chevron 16px left of the session row's
+                  // directly beneath it.
+                  //
+                  // The grid used to spell this `px-3 py-2.5` inside a filled,
+                  // bordered well, which put its text 9px left of the card
+                  // title above it and gave a single line of metadata the
+                  // weight of a container.
+                  density.rowBox
                 )}
               >
                 <button
@@ -311,25 +323,18 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                   id={`${detailsId}-button`}
                   aria-label="Show details"
                   className={cn(
-                    "absolute inset-0",
-                    isSidebar
-                      ? "rounded-[var(--radius-lg)]"
-                      : rightButtonGroupShown
-                        ? "rounded-l-[var(--radius-lg)]"
-                        : "rounded-[var(--radius-lg)]",
+                    "absolute inset-0 rounded-[var(--radius-lg)]",
                     "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]"
                   )}
                 />
-                {isSidebar && (
-                  // The closed half of the same disclosure vocabulary the
-                  // expanded state uses. Flattening removed the well that used
-                  // to say "this is a thing you open", so without a chevron the
-                  // resting row is just a line of metadata.
-                  <ChevronRight
-                    className="pointer-events-none relative z-10 mr-1.5 h-3 w-3 shrink-0 text-text-muted"
-                    aria-hidden="true"
-                  />
-                )}
+                {/* The closed half of the same disclosure vocabulary the
+                    expanded state uses. Flattening removed the well that used
+                    to say "this is a thing you open", so without a chevron the
+                    resting row is just a line of metadata. */}
+                <ChevronRight
+                  className="pointer-events-none relative z-10 mr-1.5 h-3 w-3 shrink-0 text-text-secondary"
+                  aria-hidden="true"
+                />
                 <span className="relative z-10 text-xs truncate min-w-0 flex-1 pointer-events-none">
                   {isBeingDeleted && !deleteError ? (
                     <span
@@ -455,7 +460,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                                 e.stopPropagation();
                                 onResourceResume();
                               }}
-                              className="shrink-0 p-1 rounded transition-colors text-status-success/70 hover:text-status-success hover:bg-overlay-emphasis focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+                              className="flex min-h-6 min-w-6 shrink-0 items-center justify-center rounded-[var(--radius-md)] transition-colors text-status-success hover:bg-overlay-emphasis focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
                               aria-label="Resume resource"
                             >
                               <Play className="w-3 h-3" />
@@ -472,7 +477,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                                 e.stopPropagation();
                                 onResourcePause();
                               }}
-                              className="shrink-0 p-1 rounded transition-colors text-status-error/70 hover:text-status-error hover:bg-overlay-emphasis focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+                              className="flex min-h-6 min-w-6 shrink-0 items-center justify-center rounded-[var(--radius-md)] transition-colors text-status-error hover:bg-overlay-emphasis focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
                               aria-label="Pause resource"
                             >
                               <Square className="w-3 h-3" />
@@ -489,7 +494,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                                 e.stopPropagation();
                                 onResourceConnect!();
                               }}
-                              className="shrink-0 p-1 rounded transition-colors text-status-info/70 hover:text-status-info hover:bg-overlay-emphasis focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+                              className="flex min-h-6 min-w-6 shrink-0 items-center justify-center rounded-[var(--radius-md)] transition-colors text-status-info hover:bg-overlay-emphasis focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
                               aria-label="Connect to resource"
                             >
                               <Plug className="w-3 h-3" />
@@ -517,13 +522,17 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                       onClick={onOpenReviewHub}
                       className={cn(
                         "shrink-0 transition-colors",
-                        "text-[var(--color-state-active)]/70 hover:bg-[var(--color-state-active)]/10 hover:text-[var(--color-state-active)]",
-                        // Sidebar: a trailing icon button in the same row. The
-                        // fenced right segment made one summary read as a split
-                        // pill with an unlabelled second half.
-                        isSidebar
-                          ? "ml-0.5 rounded-[var(--radius-md)] px-1.5 py-1"
-                          : "rounded-r-[var(--radius-lg)] border-l border-border-default px-2 py-1",
+                        "text-[var(--color-state-active)] hover:bg-[var(--color-state-active)]/10",
+                        // Both variants: a trailing icon button in the same
+                        // row. The fenced right segment the grid used to draw
+                        // — a left border plus a right-rounded cap — made one
+                        // summary read as a split pill whose second half was
+                        // an unlabelled glyph nobody could name.
+                        //
+                        // `min-h-6 min-w-6` is the 24px target floor
+                        // (WCAG 2.2 SC 2.5.8): a 14px glyph in `px-1.5 py-1`
+                        // is 26x22, which fails on the short axis.
+                        "ml-0.5 flex min-h-6 min-w-6 items-center justify-center rounded-[var(--radius-md)] px-1.5",
                         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]"
                       )}
                       aria-label={`Open ${reviewHubButtonLabel}`}
@@ -539,8 +548,12 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
             {lifecycleFailed && (
               <div
                 className={cn(
-                  "flex flex-col gap-2",
-                  isSidebar ? "mt-1 py-1" : "border-t border-border-default px-3 py-2"
+                  // No rule above it in either variant: this block follows
+                  // the collapsed summary row on the card's own surface, and
+                  // a full-width hairline there reads as another section
+                  // boundary rather than as this row's own continuation.
+                  "flex flex-col gap-2 py-1",
+                  isSidebar ? "mt-1" : "mt-1 pl-1.5 pr-2.5"
                 )}
               >
                 <div className="flex items-center justify-between gap-2">
@@ -552,7 +565,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                     onClick={handleRetrySetup}
                     disabled={isRetryingSetup}
                     className={cn(
-                      "shrink-0 inline-flex items-center gap-1 rounded px-2 py-1 text-xs font-medium transition-colors",
+                      "shrink-0 inline-flex items-center gap-1 rounded-[var(--radius-md)] px-2 py-1 text-xs font-medium transition-colors",
                       "text-status-error hover:bg-status-error/10",
                       "disabled:opacity-50 disabled:cursor-not-allowed",
                       "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]"
@@ -569,7 +582,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                       <ChevronDown className="w-3 h-3" aria-hidden="true" />
                       Show details
                     </summary>
-                    <pre className="mt-1.5 max-h-32 overflow-auto rounded bg-status-error/5 p-2 font-mono text-2xs text-text-secondary whitespace-pre-wrap break-all select-text">
+                    <pre className="mt-1.5 max-h-32 overflow-auto rounded-[var(--radius-md)] bg-status-error/5 p-2 font-mono text-2xs text-text-secondary whitespace-pre-wrap break-all select-text">
                       {[lifecycleError, lifecycleOutput].filter(Boolean).join("\n\n")}
                     </pre>
                   </details>
@@ -619,7 +632,7 @@ export function WorktreeDeleteErrorBanner({
               type="button"
               onClick={onRetry}
               data-testid="worktree-delete-retry"
-              className="rounded border border-status-error/30 px-2 py-1 text-status-error transition-colors hover:bg-status-error/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+              className="rounded-[var(--radius-md)] border border-status-error/30 px-2 py-1 text-status-error transition-colors hover:bg-status-error/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
             >
               Retry
             </button>
@@ -629,7 +642,7 @@ export function WorktreeDeleteErrorBanner({
               type="button"
               onClick={onDismiss}
               data-testid="worktree-delete-dismiss"
-              className="rounded px-2 py-1 text-text-secondary transition-colors hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+              className="rounded-[var(--radius-md)] px-2 py-1 text-text-secondary transition-colors hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
             >
               Dismiss
             </button>
@@ -679,7 +692,7 @@ export function WorktreeIssueErrorBanner({
               type="button"
               onClick={onRetry}
               data-testid="worktree-issue-retry"
-              className="rounded border border-status-error/30 px-2 py-1 text-status-error transition-colors hover:bg-status-error/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+              className="rounded-[var(--radius-md)] border border-status-error/30 px-2 py-1 text-status-error transition-colors hover:bg-status-error/10 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
             >
               Retry
             </button>
@@ -689,7 +702,7 @@ export function WorktreeIssueErrorBanner({
               type="button"
               onClick={onDismiss}
               data-testid="worktree-issue-dismiss"
-              className="rounded px-2 py-1 text-text-secondary transition-colors hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+              className="rounded-[var(--radius-md)] px-2 py-1 text-text-secondary transition-colors hover:bg-overlay-soft focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
             >
               Dismiss
             </button>

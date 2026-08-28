@@ -457,7 +457,14 @@ describe("WorktreeHeader primary worktree standard branch layout", () => {
       branchLabel: "main",
     });
     const projectName = screen.getByTestId("primary-worktree-project-name");
-    expect(projectName.className).toContain("text-text-muted");
+    // De-emphasised, but still readable. This is the card's headline — the
+    // only thing naming which worktree it is — and `text-text-muted` has no
+    // dark-theme contrast floor in this cohort (2.22:1 on namib), so the
+    // muting comes off the weight rather than the tone.
+    const muted = projectName.className;
+    expect(muted).not.toContain("text-text-muted");
+    expect(muted).toContain("text-text-secondary");
+    expect(muted).toContain("font-normal");
   });
 
   it("falls back to BranchLabel when isMainOnStandardBranch is undefined", () => {
@@ -1215,8 +1222,12 @@ describe("WorktreeHeader token-missing badge behavior", () => {
     expect(prButton).toBeDefined();
     expect(prButton.className).not.toContain("opacity-60");
     const prIcon = prButton.querySelector("svg");
-    // Muted with a solid token, not the active PR-state color or opacity/grayscale.
-    expect(prIcon?.className.baseVal).toContain("text-text-muted");
+    // De-emphasised with a SOLID token, not the active PR-state colour and not
+    // opacity/grayscale. `text-text-secondary` rather than `text-text-muted`:
+    // muted has no dark contrast floor here, and this glyph is the only mark
+    // saying a token is missing.
+    expect(prIcon?.className.baseVal).toContain("text-text-secondary");
+    expect(prIcon?.className.baseVal).not.toContain("text-text-muted");
     expect(prIcon?.className.baseVal).not.toContain("text-pr-open");
     expect(prIcon?.className.baseVal).not.toContain("grayscale");
     expect(prIcon?.className.baseVal).not.toContain("opacity-50");

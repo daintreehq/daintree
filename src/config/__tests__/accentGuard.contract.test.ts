@@ -134,9 +134,6 @@ const DURABLE_ALLOWLIST = new Set([
   // Primary CTA (QuickRun button) + bg-accent-soft autocomplete + fill-daintree-accent Pin icon
   "src/components/Project/QuickRun.tsx",
 
-  // Current worktree card left-edge accent bar (single primary anchor per active focus region)
-  "src/components/Worktree/WorktreeCard.tsx",
-
   // PluginManagerView selected-row left-edge accent stripe in the master-detail
   // list, plus the detail subtab active-tab underline (single primary anchor per
   // active focus region)
