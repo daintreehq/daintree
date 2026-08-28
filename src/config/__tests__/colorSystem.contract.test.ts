@@ -271,7 +271,7 @@ describe("color system contract", () => {
     const inTree = new Map<string, string>();
     const walked = new Set<string>();
     for (const filePath of RENDERER_ROOTS.flatMap(collectSourceFiles)) {
-      const relative = path.relative(REPO_ROOT, filePath);
+      const relative = path.relative(REPO_ROOT, filePath).split(path.sep).join("/");
       walked.add(relative);
       const source = fs.readFileSync(filePath, "utf8");
       if (!source.includes("text-daintree-text/")) continue;

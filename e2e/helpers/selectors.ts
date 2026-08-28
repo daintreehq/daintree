@@ -114,7 +114,7 @@ export const SEL = {
     branchNameInput: '[data-testid="branch-name-input"]',
     createButton: '[data-testid="create-worktree-button"]',
     deleteDialog: '[data-testid="delete-worktree-dialog"]',
-    deleteConfirm: '[data-testid="delete-worktree-confirm"]',
+    deleteConfirm: '[role="dialog"] button:has-text("delete worktree")',
     deleteConfirmInput: '[data-testid="delete-worktree-confirm-input"]',
     searchInput: '[aria-label="Search worktrees"]',
     searchClear: '[aria-label="Clear search"]',
@@ -262,8 +262,7 @@ export const SEL = {
   firstRun: {
     welcomeTitle: 'h1:has-text("Welcome to Daintree")',
     agentTitle: 'text="Choose your AI agents"',
-    agentSetupDialog:
-      '[role="dialog"]:has-text("Agent Setup"), [role="dialog"]:has-text("Welcome to Daintree")',
+    agentSetupDialog: '[data-testid="agent-setup-wizard"]',
     agentSetupBanner: '[data-testid="agent-setup-banner"]',
     agentSetupBannerCta: '[data-testid="agent-setup-banner-cta"]',
     agentSetupBannerDismiss: '[data-testid="agent-setup-banner-dismiss"]',

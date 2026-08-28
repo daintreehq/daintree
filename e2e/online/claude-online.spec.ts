@@ -4,7 +4,12 @@ import { createFixtureRepo } from "../helpers/fixtures";
 import { dismissTelemetryConsent, openAndOnboardProject } from "../helpers/project";
 import { getTerminalText, writeTerminalInput } from "../helpers/terminal";
 import { SEL } from "../helpers/selectors";
-import { configureClaudeAuthEnv, hasClaudeApiKey } from "../helpers/claudeAuth";
+import {
+  configureClaudeAuthEnv,
+  hasClaudeApiKey,
+  isClaudeTrustRejectionSelected,
+  quitClaudeAgentSession,
+} from "../helpers/claudeAuth";
 
 let ctx: AppContext;
 let fixtureDir: string;
@@ -75,10 +80,11 @@ async function sendAgentInput(
 async function pressAgentKey(
   page: Page,
   agentPanel: Locator,
-  key: "Enter" | "ArrowUp"
+  key: "Enter" | "ArrowUp" | "ArrowDown"
 ): Promise<void> {
+  const terminalInput = key === "Enter" ? "\r" : key === "ArrowUp" ? "\x1b[A" : "\x1b[B";
   if (process.platform === "win32") {
-    await writeTerminalInput(page, agentPanel, key === "Enter" ? "\r" : "\x1b[A");
+    await writeTerminalInput(page, agentPanel, terminalInput);
     return;
   }
 
@@ -87,7 +93,7 @@ async function pressAgentKey(
     return;
   }
 
-  await writeTerminalInput(page, agentPanel, key === "Enter" ? "\r" : "\x1b[A");
+  await writeTerminalInput(page, agentPanel, terminalInput);
 }
 
 test.describe("Claude Online Flow", () => {
@@ -138,27 +144,30 @@ test.describe("Claude Online Flow", () => {
       claudeAgentPanel = window.locator(`[data-panel-id="${panelId}"]`);
     });
 
-    await test.step("handle prompts and wait for Welcome", async () => {
+    await test.step("handle prompts and wait for Claude", async () => {
       const { window } = ctx;
       const agentPanel = claudeAgentPanel;
 
-      // Claude Code may prompt for trust, API key, or skip straight to Welcome
+      // Claude Code may prompt for trust or an API key before reaching its input screen
       // depending on prior configuration. Poll and handle whatever appears.
       // Windows GitHub runners are dramatically slower at first-run Claude Code
       // startup (Node spawn + auth check + render) — give them 3x the budget.
       const deadline = Date.now() + (process.platform === "win32" ? 270_000 : 90_000);
-      let reachedWelcome = false;
+      let reachedReadyState = false;
 
-      while (Date.now() < deadline && !reachedWelcome) {
+      while (Date.now() < deadline && !reachedReadyState) {
         // Dismiss telemetry consent if it appeared after agent launch
         await dismissTelemetryConsent(window);
 
         const text = await getTerminalText(agentPanel);
         const lower = text.toLowerCase();
 
-        if (lower.includes("welcome")) {
-          reachedWelcome = true;
+        if (lower.includes("welcome") || lower.includes("manual mode on")) {
+          reachedReadyState = true;
         } else if (lower.includes("trust")) {
+          if (isClaudeTrustRejectionSelected(text)) {
+            await pressAgentKey(window, agentPanel, "ArrowUp");
+          }
           await pressAgentKey(window, agentPanel, "Enter");
           await window.waitForTimeout(2_000);
         } else if (lower.includes("api key")) {
@@ -170,7 +179,7 @@ test.describe("Claude Online Flow", () => {
         }
       }
 
-      expect(reachedWelcome).toBe(true);
+      expect(reachedReadyState).toBe(true);
     });
 
     await test.step("send hello world command", async () => {
@@ -194,6 +203,19 @@ test.describe("Claude Online Flow", () => {
           { timeout: 60_000, intervals: [1_000] }
         )
         .toBeGreaterThanOrEqual(1);
+    });
+
+    await test.step("quit Claude agent", async () => {
+      const { window } = ctx;
+      const panelId = (await claudeAgentPanel.getAttribute("data-panel-id")) ?? "";
+      expect(panelId).toBeTruthy();
+      await quitClaudeAgentSession(window, panelId);
+      await expect
+        .poll(() => claudeAgentPanel.getAttribute("data-detected-agent-id"), {
+          timeout: 30_000,
+          intervals: [500],
+        })
+        .toBeNull();
     });
   });
 });

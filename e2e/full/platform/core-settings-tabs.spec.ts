@@ -786,7 +786,9 @@ test.describe.serial("Core: Settings Tabs Coverage", () => {
 
     // Two filled rows make the form dirty, so the Save button must render.
     // Clicking it runs validate(), which flags the duplicate key.
-    const saveButton = window.locator("button", { hasText: "Save" }).first();
+    const saveButton = window
+      .getByRole("tabpanel", { name: "Variables" })
+      .getByRole("button", { name: "Save", exact: true });
     await expect(saveButton).toBeVisible({ timeout: T_SHORT });
     await saveButton.click();
 

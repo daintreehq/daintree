@@ -212,8 +212,16 @@ describe("runCodexAppServerSession", () => {
 
     await startSession(async () => "done");
 
-    // Negative pid = whole group, so a grandchild holding the pipe goes too.
-    expect(killSpy).toHaveBeenCalledWith(-child.pid, "SIGKILL");
+    if (process.platform === "win32") {
+      expect(spawnSyncMock).toHaveBeenCalledWith(
+        "taskkill",
+        ["/T", "/F", "/PID", String(child.pid)],
+        expect.objectContaining({ windowsHide: true })
+      );
+    } else {
+      // Negative pid = whole group, so a grandchild holding the pipe goes too.
+      expect(killSpy).toHaveBeenCalledWith(-child.pid, "SIGKILL");
+    }
     expect(child.stdin.ended).toBe(true);
     expect(child.stdout.destroyed).toBe(true);
   });
@@ -372,6 +380,14 @@ describe("runCodexAppServerSession", () => {
 
     expect(error).toBeInstanceOf(CodexAppServerError);
     expect((error as CodexAppServerError).reason).toBe("timeout");
-    expect(killSpy).toHaveBeenCalledWith(-child.pid, "SIGKILL");
+    if (process.platform === "win32") {
+      expect(spawnSyncMock).toHaveBeenCalledWith(
+        "taskkill",
+        ["/T", "/F", "/PID", String(child.pid)],
+        expect.objectContaining({ windowsHide: true })
+      );
+    } else {
+      expect(killSpy).toHaveBeenCalledWith(-child.pid, "SIGKILL");
+    }
   });
 });

@@ -353,29 +353,28 @@ test.describe.serial("Full: New Worktree Dialog", () => {
     // makes room for it once it overflows resizes every control in the form the
     // moment a hint row or a validation banner tips it over the fold.
     //
-    // Asserted as the mechanism rather than by forcing an overflow: the window
-    // has a 600px minimum, and at that height this form still fits, so a
-    // shrink-until-it-scrolls test would pass without ever scrolling. Reserved
-    // space is directly observable — the content box is already narrower than
-    // the border box while nothing is scrolling, which is the whole point.
     const body = window.locator(`${SEL.worktree.newDialog} .overflow-y-auto`).first();
-    const { reserved, scrolling } = await body.evaluate((el) => ({
-      reserved: el.getBoundingClientRect().width - el.clientWidth,
-      scrolling: el.scrollHeight > el.clientHeight + 1,
-    }));
+    const trigger = window.locator(SEL.worktree.baseBranchTrigger);
+    expect(await body.evaluate((el) => el.scrollHeight > el.clientHeight + 1)).toBe(false);
+    const widthBeforeOverflow = await trigger.evaluate((el) => (el as HTMLElement).offsetWidth);
 
-    expect(scrolling).toBe(false);
-    // Both edges, so the padding stays symmetric — hence two gutters, not one.
-    expect(reserved).toBeGreaterThan(0);
+    // The window cannot shrink below 600px, so add temporary content to make
+    // this otherwise short form overflow without changing its horizontal
+    // layout. A stable gutter keeps the field width identical when the
+    // scrollbar appears; without it the field loses the scrollbar width.
+    await body.evaluate((el) => {
+      const spacer = document.createElement("div");
+      spacer.style.height = "1000px";
+      spacer.style.flexShrink = "0";
+      el.append(spacer);
+    });
+    await expect
+      .poll(() => body.evaluate((el) => el.scrollHeight > el.clientHeight + 1))
+      .toBe(true);
 
-    // And the fields actually live inside that reserved box.
-    const fieldWidth = Math.round(
-      (await window.locator(SEL.worktree.baseBranchTrigger).boundingBox())?.width ?? 0
+    expect(await trigger.evaluate((el) => (el as HTMLElement).offsetWidth)).toBe(
+      widthBeforeOverflow
     );
-    const contentWidth = await body.evaluate(
-      (el) => el.clientWidth - parseFloat(getComputedStyle(el).paddingLeft) * 2
-    );
-    expect(fieldWidth).toBeLessThanOrEqual(Math.round(contentWidth));
   });
 
   test("a long branch name crops in the footer instead of pushing the actions out", async () => {

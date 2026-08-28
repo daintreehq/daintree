@@ -241,9 +241,9 @@ test.describe.serial("Core: Cross-Worktree Terminal Isolation", () => {
 
     // Ensure main worktree is visible (it may be hidden by a toggle)
     const showMainBtn = modal.locator('[aria-label="Show main worktree"]');
-    if (await showMainBtn.isVisible({ timeout: 1000 }).catch(() => false)) {
+    if ((await showMainBtn.getAttribute("aria-checked")) === "false") {
       await showMainBtn.click();
-      await window.waitForTimeout(T_SETTLE);
+      await expect(showMainBtn).toHaveAttribute("aria-checked", "true", { timeout: T_SHORT });
     }
     // Clear any active filters
     const clearBtn = modal.locator('[aria-label="Clear all filters"]');

@@ -3,7 +3,7 @@ import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
 import { getGridPanelCount, openTerminal } from "../../helpers/panels";
-import { expectPaletteFocused } from "../../helpers/focus";
+import { ensureWindowFocused, expectPaletteFocused } from "../../helpers/focus";
 import { SEL } from "../../helpers/selectors";
 import { T_SHORT, T_MEDIUM, T_LONG, T_SETTLE } from "../../helpers/timeouts";
 
@@ -157,6 +157,7 @@ test.describe.serial("Core: Action Palette, Command Picker & Quick Switcher", ()
 
     test("opens via keyboard shortcut", async () => {
       const { window } = ctx;
+      await ensureWindowFocused(ctx.app);
       await window.locator(SEL.toolbar.projectSwitcherTrigger).focus();
       await window.keyboard.press(`${mod}+P`);
 

@@ -12,7 +12,12 @@ import { dismissTelemetryConsent, openAndOnboardProject } from "../helpers/proje
 import { getTerminalText, runTerminalCommand } from "../helpers/terminal";
 import { getGridPanelIds, openTerminal } from "../helpers/panels";
 import { SEL } from "../helpers/selectors";
-import { configureClaudeAuthEnv, hasClaudeApiKey } from "../helpers/claudeAuth";
+import {
+  configureClaudeAuthEnv,
+  hasClaudeApiKey,
+  isClaudeTrustRejectionSelected,
+  quitClaudeAgentSession,
+} from "../helpers/claudeAuth";
 import { T_LONG } from "../helpers/timeouts";
 
 const MAX_DIAGNOSTIC_LINES = 1_500;
@@ -93,30 +98,13 @@ async function sendTerminalKey(page: Page, terminalId: string, key: string): Pro
   );
 }
 
-async function writeTerminal(page: Page, terminalId: string, data: string): Promise<void> {
-  await page.evaluate(
-    ({ id, payload }) => {
-      window.electron.terminal.write(id, payload);
-    },
-    { id: terminalId, payload: data }
-  );
-}
-
-async function quitClaudeAgentSession(page: Page, terminalId: string): Promise<void> {
-  // Match the production Claude graceful-shutdown path: clear any partial
-  // prompt input, then submit /quit and Enter in one PTY write so Claude's
-  // slash-command parser handles it reliably on Windows.
-  await writeTerminal(page, terminalId, "\x05\x15");
-  await page.waitForTimeout(150);
-  await writeTerminal(page, terminalId, "/quit\r");
-}
-
 function hasClaudeReadyPrompt(text: string): boolean {
   return text.includes("welcome") || text.includes("try ") || /(?:^|\n)\s*>\s*(?:$|\n)/.test(text);
 }
 
 async function answerClaudeStartupPrompt(
   page: Page,
+  panel: Locator,
   terminalId: string,
   text: string
 ): Promise<boolean> {
@@ -125,6 +113,17 @@ async function answerClaudeStartupPrompt(
     text.includes("trust this folder") ||
     text.includes("do you trust")
   ) {
+    if (isClaudeTrustRejectionSelected(text)) {
+      let rejectionStillSelected = true;
+      for (let attempt = 0; attempt < 3 && rejectionStillSelected; attempt++) {
+        await sendTerminalKey(page, terminalId, "up");
+        await page.waitForTimeout(250);
+        rejectionStillSelected = isClaudeTrustRejectionSelected(await getTerminalText(panel));
+      }
+      if (rejectionStillSelected) {
+        throw new Error("Claude trust prompt did not move away from the rejection option");
+      }
+    }
     await sendTerminalKey(page, terminalId, "enter");
     return true;
   }
@@ -153,7 +152,7 @@ async function waitForClaudeInteractivePrompt(
     lastText = text;
 
     if (hasClaudeReadyPrompt(text)) return;
-    if (await answerClaudeStartupPrompt(page, terminalId, text)) {
+    if (await answerClaudeStartupPrompt(page, panel, terminalId, text)) {
       await page.waitForTimeout(1_000);
       continue;
     }

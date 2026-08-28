@@ -1,5 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import type { Stats } from "node:fs";
+import * as path from "node:path";
 import { FileTreeService, _resetBaseRealpathCacheForTests } from "../FileTreeService.js";
 
 const shared = vi.hoisted(() => ({
@@ -133,7 +134,7 @@ describe("FileTreeService adversarial", () => {
         name: "link",
         path: "link",
         size: 11,
-        symlink: { target: "/repo/target", targetKind: "file" },
+        symlink: { target: path.resolve("/repo", "target"), targetKind: "file" },
       },
     ]);
   });
@@ -156,14 +157,19 @@ describe("FileTreeService adversarial", () => {
         name: "outward",
         path: "outward",
         // No size: a link's own `lstat.size` is its target string's length.
-        symlink: { target: "/elsewhere/secret", targetKind: "external" },
+        symlink: { target: path.resolve("/elsewhere/secret"), targetKind: "external" },
       },
     ]);
-    expect(shared.readlink).toHaveBeenCalledWith("/repo/outward");
+    expect(shared.readlink).toHaveBeenCalledWith(path.resolve("/repo", "outward"));
     // Only the entry's own `lstat` — never one aimed at the target.
-    expect(shared.lstat.mock.calls.map(([target]) => target)).toEqual(["/repo/outward"]);
+    expect(shared.lstat.mock.calls.map(([target]) => target)).toEqual([
+      path.resolve("/repo", "outward"),
+    ]);
     // The two directory-level realpaths only; none for the link.
-    expect(shared.realpath.mock.calls.map(([target]) => target)).toEqual(["/repo", "/repo"]);
+    expect(shared.realpath.mock.calls.map(([target]) => target)).toEqual([
+      path.resolve("/repo"),
+      path.resolve("/repo"),
+    ]);
   });
 
   it("LINK_READ_FAILURE_DROPS_ONE_ENTRY_NOT_THE_LISTING", async () => {

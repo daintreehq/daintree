@@ -44,10 +44,7 @@ test.describe.serial("Presets: Onboarding/Wizard Integration (83–88)", () => {
       window.dispatchEvent(new CustomEvent("daintree:open-agent-setup-wizard"))
     );
 
-    const wizardDialog = ctx.window
-      .locator('[role="dialog"]')
-      .filter({ hasText: /^Agent Setup/ })
-      .first();
+    const wizardDialog = ctx.window.locator(SEL.firstRun.agentSetupDialog);
     await expect(wizardDialog).toBeVisible({ timeout: T_MEDIUM });
 
     // The agent cards (and their preset-count badges) only render on the
@@ -67,10 +64,7 @@ test.describe.serial("Presets: Onboarding/Wizard Integration (83–88)", () => {
   });
 
   test("84. In the wizard Complete step, verify preset badges appear next to agent names", async () => {
-    const wizardDialog = ctx.window
-      .locator('[role="dialog"]')
-      .filter({ hasText: /^Agent Setup/ })
-      .first();
+    const wizardDialog = ctx.window.locator(SEL.firstRun.agentSetupDialog);
 
     const nextButton = wizardDialog.locator('button:has-text("Next")');
     if (await nextButton.isVisible().catch(() => false)) {
@@ -101,10 +95,7 @@ test.describe.serial("Presets: Onboarding/Wizard Integration (83–88)", () => {
       window.dispatchEvent(new CustomEvent("daintree:open-agent-setup-wizard"))
     );
 
-    const wizardDialog = ctx.window
-      .locator('[role="dialog"]')
-      .filter({ hasText: /^Agent Setup/ })
-      .first();
+    const wizardDialog = ctx.window.locator(SEL.firstRun.agentSetupDialog);
     await expect(wizardDialog).toBeVisible({ timeout: T_MEDIUM });
 
     // agent-card-claude renders on the Complete step which requires a
@@ -134,10 +125,7 @@ test.describe.serial("Presets: Onboarding/Wizard Integration (83–88)", () => {
       window.dispatchEvent(new CustomEvent("daintree:open-agent-setup-wizard"))
     );
 
-    const wizardDialog = ctx.window
-      .locator('[role="dialog"]')
-      .filter({ hasText: /^Agent Setup/ })
-      .first();
+    const wizardDialog = ctx.window.locator(SEL.firstRun.agentSetupDialog);
     await expect(wizardDialog).toBeVisible({ timeout: T_MEDIUM });
 
     // The negative (Gemini shows no badge) is only meaningful once the
@@ -167,10 +155,7 @@ test.describe.serial("Presets: Onboarding/Wizard Integration (83–88)", () => {
       window.dispatchEvent(new CustomEvent("daintree:open-agent-setup-wizard"))
     );
 
-    const wizardDialog = ctx.window
-      .locator('[role="dialog"]')
-      .filter({ hasText: /^Agent Setup/ })
-      .first();
+    const wizardDialog = ctx.window.locator(SEL.firstRun.agentSetupDialog);
     await expect(wizardDialog).toBeVisible({ timeout: T_MEDIUM });
 
     const claudeCard = wizardDialog.locator('[data-testid="agent-card-claude"]');
@@ -228,10 +213,7 @@ test.describe.serial("Presets: Onboarding/Wizard Integration (83–88)", () => {
       window.dispatchEvent(new CustomEvent("daintree:open-agent-setup-wizard"))
     );
 
-    const wizardDialog = ctx.window
-      .locator('[role="dialog"]')
-      .filter({ hasText: /^Agent Setup/ })
-      .first();
+    const wizardDialog = ctx.window.locator(SEL.firstRun.agentSetupDialog);
     await expect(wizardDialog).toBeVisible({ timeout: T_MEDIUM });
 
     // agent-card-* only renders on the Complete step, which requires a

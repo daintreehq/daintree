@@ -365,7 +365,7 @@ test.describe.serial("Core: Shell & Settings", () => {
         const palette = window.locator(SEL.projectSwitcher.palette);
         await expect(palette).toBeVisible({ timeout: T_MEDIUM });
 
-        const settingsBtn = palette.locator("button", { hasText: /Project Settings/ });
+        const settingsBtn = palette.getByRole("button", { name: /Project settings/ });
         await expect(settingsBtn).toBeVisible({ timeout: T_SHORT });
         await settingsBtn.click();
       });

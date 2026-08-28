@@ -75,7 +75,7 @@ test.describe.serial("AppDialog body spacing", () => {
     const nonGitDialog = window.getByRole("dialog", { name: /^Open ‘/ });
     await nonGitDialog.getByRole("button", { name: "Initialize repository" }).click();
 
-    const setup = window.getByRole("dialog", { name: "Set up project" });
+    const setup = window.getByRole("dialog", { name: "Set up repository" });
     await expect(setup).toBeVisible({ timeout: T_MEDIUM });
 
     // The reported symptom: the checkbox sat flush against the select above it.
@@ -92,7 +92,7 @@ test.describe.serial("AppDialog body spacing", () => {
 
   test("keeps every setup field group separated", async () => {
     const { window } = ctx;
-    const setup = window.getByRole("dialog", { name: "Set up project" });
+    const setup = window.getByRole("dialog", { name: "Set up repository" });
 
     // Walk the body's own children rather than naming fields: this holds as the
     // dialog gains or loses groups, and catches a partial regression where only

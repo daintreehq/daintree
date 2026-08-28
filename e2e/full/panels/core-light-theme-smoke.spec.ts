@@ -49,6 +49,13 @@ test.describe.serial("Core: Light Theme Smoke", () => {
         .locator('[data-worktree-is-main="true"] [id$="-details"]')
         .waitFor({ state: "visible", timeout: T_LONG });
 
+      const showDetails = window
+        .locator(SEL.worktree.mainCard)
+        .getByRole("button", { name: "Show details" });
+      if (await showDetails.isVisible()) {
+        await showDetails.click();
+      }
+
       const metrics = await getThemeChromeMetrics(window, { projectName: PROJECT_NAME });
 
       await expect(
@@ -69,10 +76,10 @@ test.describe.serial("Core: Light Theme Smoke", () => {
         .toBeGreaterThanOrEqual(1.02);
       expect
         .soft(
-          metrics.worktreeSectionContrast,
-          `${schemeId}: worktree sections should remain visually separated`
+          metrics.worktreeSectionLabelContrast,
+          `${schemeId}: worktree section labels should remain readable`
         )
-        .toBeGreaterThanOrEqual(1.03);
+        .toBeGreaterThanOrEqual(4.5);
       expect
         .soft(
           metrics.sidebarVsCanvasContrast,
