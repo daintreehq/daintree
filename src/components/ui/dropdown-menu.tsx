@@ -323,6 +323,10 @@ type DropdownMenuItemProps = React.ComponentPropsWithoutRef<
   destructive?: boolean;
 };
 
+/* Leading icons: mark the icon `data-menu-icon` and the text-only items in the
+ * same menu pick up a matching gutter from the `[role="menu"]:has(...)` rule in
+ * index.css — and lose it again when the icon-bearing items are filtered out.
+ * `inset` is the static alternative for a menu whose shape never changes. */
 const DropdownMenuItem = React.forwardRef<
   React.ElementRef<typeof DropdownMenuPrimitiveType.Item>,
   DropdownMenuItemProps

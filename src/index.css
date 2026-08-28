@@ -2021,6 +2021,22 @@ label:focus-within .brand-mark,
   color: var(--brand-mark-active);
 }
 
+/* Menu icon gutter, allocated only when an item in the SAME menu actually has
+   an icon. Items opt in by marking their icon `data-menu-icon`; a text-only
+   item in a mixed menu then aligns with them, and a menu whose icon-bearing
+   items are all filtered out at runtime collapses the gutter instead of
+   leaving its survivors indented against nothing. That is the NSMenu / WinUI
+   MenuFlyout / GtkPopoverMenu rule, and it is why this cannot be a static
+   class on the text-only item — the item cannot see its siblings.
+   2rem = the item's own px-2.5 plus a 3.5 icon and its mr-2. Submenus portal
+   into their own [role="menu"], so they are scored separately, which is what
+   we want: a submenu of plain durations keeps no gutter. Unlayered and (0,4,0),
+   so it outranks a caller's own `pl-*` utility — an item that needs to opt out
+   has to do it with an inline style. */
+[role="menu"]:has([data-menu-icon]) [role="menuitem"]:not(:has([data-menu-icon])) {
+  padding-left: 2rem;
+}
+
 /* Panel Agent State Borders — grid panel container state-driven styling */
 .panel-state-waiting {
   border-color: color-mix(in oklab, var(--color-activity-waiting) 75%, transparent);
@@ -3005,6 +3021,13 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
      row can be both unread and focused. */
   [data-notification-unread="true"] {
     background-color: CanvasText !important;
+    /* The dot badges the status icon now instead of sitting off in the row's
+       left gutter, and this block paints the icon CanvasText too — so the two
+       fuse into one malformed glyph without a cut-out between them. The ring
+       that separates them in the normal cascade is a box-shadow, and box
+       shadows are not painted here, so the cut-out has to be an outline.
+       Outlines follow border-radius, so it stays round. */
+    outline: 1.5px solid Canvas;
   }
 
   /* Inbox thread-count chip. The tint fill is forced to Canvas, which strips the
@@ -3295,6 +3318,20 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
   .light .surface-overlay {
     --scroll-shadow-color: var(--color-surface-panel-elevated);
     background-color: var(--color-surface-panel-elevated);
+  }
+
+  /* Solid stand-in for the frosted overlay background, for marks that have to
+     punch a hole in their own backdrop — the inbox unread badge sitting on the
+     corner of a status icon. The surface is 94% + backdrop-blur on dark and no
+     flat colour reproduces that, but at ring width the missing 6% is invisible,
+     whereas mixing in transparency would tint the ring with whatever the
+     popover happens to be floating over. */
+  .surface-overlay {
+    --overlay-surface-solid: var(--color-surface-sidebar);
+  }
+
+  .light .surface-overlay {
+    --overlay-surface-solid: var(--color-surface-panel-elevated);
   }
 
   /* Cmd+K command HUD — a distinct dark-glass "spotlight" surface. Deeper and

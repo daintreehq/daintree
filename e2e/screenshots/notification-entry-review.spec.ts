@@ -3,10 +3,12 @@
  *
  * One inbox row carries severity, unread state, title, message, thread count,
  * contextual actions, timestamp, snooze state, an overflow menu and dismissal —
- * inside a 360px popover. The trailing rail is the contested space: at rest it
- * shows snooze state and time, and on hover/focus/open-menu an absolutely
- * positioned action layer fades in *over* it. Whether that reads as a stable
- * row or a temporary patch is a pixel question, so it gets captured.
+ * inside a 360px popover. The trailing rail is the contested space: snooze
+ * state, time and the two management controls now hold one grid cell at every
+ * state, quiet at rest and stronger under the pointer — the build this harness
+ * was written against instead faded an absolutely positioned action layer in
+ * *over* the metadata. Whether the rail reads as a stable row or a temporary
+ * patch is a pixel question, so it gets captured.
  *
  * Seeds the full history through `seedHistory` on the E2E notification backdoor
  * (`src/lib/e2eNotificationBackdoor.ts`) — the store's own setState, with real
@@ -175,6 +177,23 @@ function buildFixture(now: number): SeedHistoryEntry[] {
       message: "Switched to Fiordland.",
       timestamp: now - 5 * DAY,
       seenAsToast: true,
+    },
+    // The lone-menu-item case. An eventKind with no correlationId and no
+    // projectId leaves exactly one item in the overflow menu — every
+    // icon-bearing one is filtered out — which is what the conditional icon
+    // gutter has to notice. It is also the shape that shipped indented against
+    // nothing, so it gets a capture of its own in the `menu` step.
+    {
+      id: "warn-connectivity-bare",
+      type: "warning" as const,
+      title: "GitHub token expired",
+      message: "GitHub token expired — reconnect to restore GitHub features.",
+      // Older than `info-bare` above it: `seedHistory` preserves input order and
+      // the chronological list does not re-sort, so a newer entry here would
+      // render an impossible 5-day -> 3-day sequence in every other capture.
+      timestamp: now - 6 * DAY,
+      seenAsToast: true,
+      context: { eventKind: "connectivity" as const },
     },
     // The density case: long title, long message, prior-year timestamp, a big
     // thread count, and three actions all at once.
@@ -430,8 +449,10 @@ test("notification entry review — trailing rail, actions, and time", async () 
     await reopenCenter(page);
     await assertSeeded(page, 4);
 
-    // 1. Rest — what the row looks like when nobody is touching it. This is the
-    //    only state that shows the timestamp today.
+    // 1. Rest — what the row looks like when nobody is touching it. The rail no
+    //    longer hides the timestamp under hover, so this is the baseline the
+    //    hover and focus captures are compared against rather than the only
+    //    state that carries time.
     await step(page, "rest", async () => {
       await assertSeeded(page, 4);
       await snap(page, "10-rest-popover", POPOVER);
@@ -465,6 +486,49 @@ test("notification entry review — trailing rail, actions, and time", async () 
       await page.locator('button[aria-label="Notification options"]').first().click();
       await settle(page, 500);
       await snap(page, "40-menu-open-window");
+
+      // The same menu reduced to its single text-only item. The gutter the
+      // shot above allocates has to be gone here, not left as dead indent.
+      // Re-seeded on its own for the same reason the dense step is: the row
+      // sits far enough down the full fixture that it is never mounted, and
+      // this harness has already established that scrolling the inbox to a
+      // given row does not work. Restored before the next step.
+      await page.keyboard.press("Escape");
+      await settle(page, 250);
+      try {
+        await seedNotificationHistory(
+          page,
+          buildFixture(now).filter((e) => e.id === "warn-connectivity-bare")
+        );
+        await reopenCenter(page);
+        const bareRow = page
+          .locator(SEL.notifications.centerList)
+          .locator(SEL.notifications.centerRow)
+          .first();
+        await bareRow.hover();
+        await settle(page, 250);
+        await bareRow.locator('button[aria-label="Notification options"]').click();
+        await settle(page, 500);
+        // The capture is only evidence if the menu really did reduce to one
+        // item — otherwise a fixture drift that restores Snooze would leave a
+        // correctly-guttered menu in the file under a name claiming otherwise.
+        const itemCount = await page.locator('[role="menu"] [role="menuitem"]').count();
+        if (itemCount !== 1) {
+          throw new Error(`expected a single-item overflow menu, found ${itemCount}`);
+        }
+        await snap(page, "41-menu-lone-item-window");
+      } finally {
+        // In a finally, and carrying the snooze map the opening seed set: this
+        // step is the only one that narrows the fixture without restoring it
+        // through `dense`, and `contrast`, `forced` and `snoozed` all read the
+        // full list. Dropping the map silently un-snoozes "Update available".
+        await page.keyboard.press("Escape");
+        await settle(page, 250);
+        await seedNotificationHistory(page, buildFixture(now), {
+          [SNOOZED_THREAD]: now + 8 * HOUR,
+        });
+        await reopenCenter(page);
+      }
     });
 
     // 5. Coarse pointer has no capture of its own, deliberately. Chromium's
