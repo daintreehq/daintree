@@ -929,6 +929,15 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale: "Copy-path confirmation; resets when the copy flash times out",
     },
   ],
+  "src/components/Worktree/WorktreeMenuItems.tsx": [
+    {
+      category: "affordance",
+      signature: "text-status-success",
+      expectedOccurrences: 1,
+      rationale:
+        "Go-colour on the resume-resource command — the same control the worktree card paints green, reached from the context menu instead of the card's icon rail",
+    },
+  ],
   "src/components/ui/ReEntrySummary.tsx": [
     {
       category: "outcome",
@@ -1030,5 +1039,5 @@ export const STATUS_SUCCESS_INVENTORY = {
  * another added) still trips the per-site checks, and these catch the case
  * where a whole file moves without either check firing.
  */
-export const EXPECTED_STATUS_SUCCESS_SITES = 124;
-export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 146;
+export const EXPECTED_STATUS_SUCCESS_SITES = 125;
+export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 147;

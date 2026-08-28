@@ -47,9 +47,14 @@ export interface ToolbarButtonContribution {
 }
 
 /**
- * Semantic color for a {@link PluginPanelBadge}. Maps to the app's status
- * palette in the renderer — plugins pick intent, not a raw hex value, so badges
- * stay theme-consistent. `"default"` is the neutral accent-free tint.
+ * Semantic color for a {@link PluginPanelBadge}. Plugins pick intent, not a raw
+ * hex value, so badges stay theme-consistent. `"warning"` and `"error"` map to
+ * the app's status palette; `"default"` is the neutral accent-free tint.
+ *
+ * `"success"` does NOT render green. A badge stands for as long as the plugin
+ * leaves it there, and the host cannot know what a given plugin means by
+ * success, so it renders as emphasis on the neutral ramp instead of a health
+ * hue (#12002) — still visually distinct from `"default"`, just not green.
  */
 export type PluginPanelBadgeColor = "default" | "success" | "warning" | "error";
 

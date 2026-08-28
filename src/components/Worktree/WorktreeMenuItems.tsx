@@ -274,7 +274,7 @@ export function WorktreeMenuItems({
             Open Terminal
           </C.Item>
           <C.Item onSelect={() => onLaunchAgent?.("browser")} disabled={!onLaunchAgent}>
-            <Globe className="w-3.5 h-3.5 mr-2 text-status-info" />
+            <Globe className="w-3.5 h-3.5 mr-2" />
             Open Browser
           </C.Item>
           <C.Item onSelect={() => onLaunchAgent?.("dev-preview")} disabled={!onLaunchAgent}>
@@ -451,7 +451,7 @@ export function WorktreeMenuItems({
                   </C.Item>
                   <C.Separator />
                   <C.Item onSelect={onResourceResume} disabled={isLocal || !onResourceResume}>
-                    <Play className="w-3.5 h-3.5 mr-2" />
+                    <Play className="w-3.5 h-3.5 mr-2 text-status-success" />
                     Resume
                   </C.Item>
                   <C.Item onSelect={onResourcePause} disabled={isLocal || !onResourcePause}>
