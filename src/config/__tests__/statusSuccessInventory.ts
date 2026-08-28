@@ -59,6 +59,12 @@ export interface ApprovedStatusSuccessSite {
    * Only needed when a signature repeats inside one file. Any substring of an
    * enclosing node that tells the twins apart — a predicate, a label, an
    * `aria-label`. Never an ordinal or a line number.
+   *
+   * Pick the shortest thing that separates them. A whole JSX element makes a
+   * precise anchor and a brittle one: #12099 rewrote the conditional around
+   * `UpstreamSyncBadge`'s ahead arrow without touching its colour, and an
+   * element-shaped anchor failed on a change the guard had no business
+   * noticing. `↑{aheadCount}` survives that and still names the site.
    */
   anchor?: string;
   /** How many `status-success` utilities this one site paints. */
@@ -745,14 +751,14 @@ export const STATUS_SUCCESS_INVENTORY = {
     {
       category: "domain",
       signature: "text-status-success/80",
-      anchor: '<span className="text-status-success/80">+{insertions}</span>',
+      anchor: "+{insertions}",
       expectedOccurrences: 1,
       rationale: "Per-file diff insertion count",
     },
     {
       category: "domain",
       signature: "text-status-success/80",
-      anchor: '<span className="text-status-success/80">+{totalInsertions}</span>',
+      anchor: "+{totalInsertions}",
       expectedOccurrences: 1,
       rationale: "Total diff insertion count",
     },
@@ -889,7 +895,7 @@ export const STATUS_SUCCESS_INVENTORY = {
     {
       category: "domain",
       signature: "text-status-success",
-      anchor: '{hasAhead && <span className="text-status-success">↑{aheadCount}</span>}',
+      anchor: "↑{aheadCount}",
       expectedOccurrences: 1,
       rationale: "Ahead-arrow count against the upstream",
     },
