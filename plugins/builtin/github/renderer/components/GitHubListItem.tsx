@@ -3,9 +3,6 @@ import {
   CircleDot,
   CheckCircle2,
   GitPullRequest,
-  GitPullRequestDraft,
-  GitMerge,
-  GitPullRequestClosed,
   MoreHorizontal,
   ExternalLink,
   Check,
@@ -18,6 +15,7 @@ import {
 import { FolderGit2 } from "@/components/icons";
 import { Avatar } from "@/components/ui/Avatar";
 import { cn } from "@/lib/utils";
+import { getPrStateColor, getPrStateGlyph } from "@/lib/prStateGlyph";
 import { formatTimeAgo } from "@/utils/timeAgo";
 import { actionService } from "@/services/ActionService";
 import type { ForgeLabel, Issue, PR } from "@shared/types/forge";
@@ -73,19 +71,12 @@ function getStateIcon(state: string, type: "issue" | "pr", isDraft?: boolean) {
   if (type === "issue") {
     return state === "open" ? CircleDot : CheckCircle2;
   }
-  if (state === "merged") return GitMerge;
-  // A draft reads as "open but not ready" — its own glyph, not the open one
-  // recoloured. Colour alone can't carry the distinction on a 16px mark.
-  if (state === "open") return isDraft ? GitPullRequestDraft : GitPullRequest;
-  return GitPullRequestClosed;
+  // The PR half of this map now lives in `@/lib/prStateGlyph`, because the two
+  // PR badges in `src/` were each carrying their own colour-only version of it.
+  return getPrStateGlyph(state, isDraft);
 }
 
-function getStateColor(state: string, isDraft?: boolean): string {
-  if (isDraft) return "text-pr-draft";
-  if (state === "open") return "text-pr-open";
-  if (state === "merged") return "text-pr-merged";
-  return "text-pr-closed";
-}
+const getStateColor = getPrStateColor;
 
 /**
  * The state glyph's name. It carried none, so a draft PR — whose whole
