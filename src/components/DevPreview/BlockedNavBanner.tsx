@@ -62,8 +62,10 @@ function blockedNavReducer(
   switch (action.type) {
     case "BLOCKED": {
       const isOAuth = looksLikeOAuthUrl(action.url);
-      // Coalesce: if OAuth is in-flight, update URL data but preserve the in-flight phase
-      if (state && state.phase !== "blocked") {
+      // Coalesce: if OAuth is in-flight, update URL data but preserve the
+      // in-flight phase. Only those two — a terminal phase carried forward
+      // would let its dismiss timer close a navigation blocked after it.
+      if (state && (state.phase === "oauth-started" || state.phase === "oauth-intercepting")) {
         return {
           ...state,
           url: action.url,

@@ -1279,7 +1279,7 @@ export function CompleteStep({ installedAgents }: { installedAgents: string[] })
               <div
                 key={id}
                 data-testid={`agent-card-${id}`}
-                className="flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] border border-status-success/20 bg-status-success/5"
+                className="flex items-center gap-3 px-3 py-2.5 rounded-[var(--radius-md)] border border-border-default bg-overlay-subtle"
               >
                 <BrandMark brandColor={agent.color}>
                   <Icon size={18} />

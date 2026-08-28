@@ -1,6 +1,6 @@
 /**
- * Every `status-success` paint site left in the renderer, with the reason it is
- * allowed to be green (#12002).
+ * Every `status-success` paint site left in the renderer — `src/` and the
+ * builtin plugin renderers — with the reason it is allowed to be green (#12002).
  *
  * Green may only say a confirmation is clearing, a required item is checked, a
  * named operation produced this result, or the colour is notation the app
@@ -28,8 +28,20 @@ export const STATUS_SUCCESS_CATEGORIES = [
   "verification",
   /** The recorded result of a named execution or check, not inferred health. */
   "outcome",
-  /** Notation the app inherited: git status letters, diff counts, ahead arrows, go-controls. */
+  /** Notation the app inherited rather than invented: git status letters, diff counts, ahead arrows. */
   "domain",
+  /**
+   * The affirmative half of a control pair — run, apply, stage, resume, save.
+   * Green here means "go", not "good": it is not reporting state at all.
+   *
+   * NOT one of the four categories the #12002 ruling named, and deliberately
+   * separate rather than folded into `domain`, which would have quietly
+   * restated what the ruling meant by it. These controls were never in the
+   * ruling's demote list, so this PR left them alone and named the gap instead
+   * of laundering it. If the maintainer wants them neutral, deleting this
+   * category is the change — and the guard will then list every site to fix.
+   */
+  "affordance",
 ] as const;
 
 export type StatusSuccessCategory = (typeof STATUS_SUCCESS_CATEGORIES)[number];
@@ -58,6 +70,78 @@ export interface ApprovedStatusSuccessSite {
 export type StatusSuccessInventory = Readonly<Record<string, readonly ApprovedStatusSuccessSite[]>>;
 
 export const STATUS_SUCCESS_INVENTORY = {
+  "plugins/builtin/github/renderer/components/BulkCreateWorktreeDialog.tsx": [
+    {
+      category: "outcome",
+      signature: "text-status-success",
+      anchor: "w-5 h-5 text-status-success",
+      expectedOccurrences: 1,
+      rationale: "Recorded result of the bulk create the user just ran; leaves with the dialog",
+    },
+    {
+      category: "outcome",
+      signature: "text-status-success",
+      anchor: "w-4 h-4 text-status-success",
+      expectedOccurrences: 1,
+      rationale: "Recorded per-item result of the bulk create the user just ran",
+    },
+  ],
+  "plugins/builtin/github/renderer/components/CommitListItem.tsx": [
+    {
+      category: "transient",
+      signature: "text-status-success",
+      anchor: 'copied && "text-status-success"',
+      expectedOccurrences: 1,
+      rationale: "Copy-hash confirmation on the row; resets when the copy flash times out",
+    },
+    {
+      category: "transient",
+      signature: "text-status-success",
+      anchor: "<span>#</span>",
+      expectedOccurrences: 1,
+      rationale: "Copy-hash confirmation glyph; resets when the copy flash times out",
+    },
+  ],
+  "plugins/builtin/github/renderer/components/GitHubListItem.tsx": [
+    {
+      category: "transient",
+      signature: "text-status-success",
+      anchor: 'copied && "text-status-success"',
+      expectedOccurrences: 1,
+      rationale: "Copy confirmation on the row; resets when the copy flash times out",
+    },
+    {
+      category: "transient",
+      signature: "text-status-success",
+      anchor: "me-0.5",
+      expectedOccurrences: 1,
+      rationale: "Copy confirmation glyph; resets when the copy flash times out",
+    },
+  ],
+  "plugins/builtin/github/renderer/components/GitHubSettingsTab.tsx": [
+    {
+      category: "transient",
+      signature: "text-status-success",
+      anchor: 'validationResult === "success"',
+      expectedOccurrences: 1,
+      rationale: "Token-saved confirmation; resets on the next edit of the token field",
+    },
+    {
+      category: "transient",
+      signature: "text-status-success",
+      anchor: 'validationResult === "test-success"',
+      expectedOccurrences: 1,
+      rationale: "Token-valid confirmation; resets on the next edit of the token field",
+    },
+  ],
+  "plugins/builtin/github/renderer/utils/prCIStatus.ts": [
+    {
+      category: "outcome",
+      signature: "text-status-success",
+      expectedOccurrences: 1,
+      rationale: "Recorded result of the last CI run on the pull request",
+    },
+  ],
   "src/components/AllClearOverlay/AllClearOverlay.tsx": [
     {
       category: "transient",
@@ -108,7 +192,7 @@ export const STATUS_SUCCESS_INVENTORY = {
   ],
   "src/components/Diagnostics/ProblemsContent.tsx": [
     {
-      category: "domain",
+      category: "affordance",
       signature:
         "text-status-success hover:text-status-success/70 border-status-success/50 hover:bg-status-success/10",
       expectedOccurrences: 4,
@@ -143,12 +227,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       signature: "text-status-success",
       expectedOccurrences: 1,
       rationale: "Diff insertion count for the whole change set",
-    },
-    {
-      category: "verification",
-      signature: "bg-status-success/70",
-      expectedOccurrences: 1,
-      rationale: "Progress through the finite set of files this review has to cover",
     },
     {
       category: "verification",
@@ -444,7 +522,7 @@ export const STATUS_SUCCESS_INVENTORY = {
   ],
   "src/components/Settings/PortalSettingsTab.tsx": [
     {
-      category: "domain",
+      category: "affordance",
       signature: "text-status-success",
       expectedOccurrences: 1,
       rationale: "Go-colour on the confirm half of a confirm/cancel edit pair",
@@ -503,12 +581,6 @@ export const STATUS_SUCCESS_INVENTORY = {
       expectedOccurrences: 1,
       rationale: "Wizard completion step; leaves with the wizard",
     },
-    {
-      category: "transient",
-      signature: "border-status-success/20 bg-status-success/5",
-      expectedOccurrences: 2,
-      rationale: "Ready-agent cards on the completion step; leave with the wizard",
-    },
   ],
   "src/components/Setup/CopyableCommand.tsx": [
     {
@@ -542,14 +614,7 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale: "Added line in a unified patch",
     },
     {
-      category: "domain",
-      signature:
-        "border-status-success bg-[color-mix(in_oklab,var(--color-status-success)_10%,transparent)] text-status-success",
-      expectedOccurrences: 3,
-      rationale: "Patch artifact type, coloured to match the patch body it labels",
-    },
-    {
-      category: "domain",
+      category: "affordance",
       signature: "bg-status-success",
       anchor: "onClick={handleApplyPatch}",
       expectedOccurrences: 1,
@@ -563,7 +628,7 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale: "Apply feedback; replaced on the next action",
     },
     {
-      category: "domain",
+      category: "affordance",
       signature: "bg-status-success",
       anchor: "onClick={handleApplyAllPatches}",
       expectedOccurrences: 1,
@@ -623,13 +688,13 @@ export const STATUS_SUCCESS_INVENTORY = {
   ],
   "src/components/Terminal/RecipeRunner/RecipeRunnerEmpty.tsx": [
     {
-      category: "domain",
+      category: "affordance",
       signature: "text-status-success/50",
       expectedOccurrences: 1,
       rationale: "Go-colour on the run-suggestion control",
     },
     {
-      category: "domain",
+      category: "affordance",
       signature: "group-hover:text-status-success",
       expectedOccurrences: 1,
       rationale: "Go-colour on the run-suggestion control at hover",
@@ -637,19 +702,19 @@ export const STATUS_SUCCESS_INVENTORY = {
   ],
   "src/components/Terminal/RecipeRunner/RecipeRunnerItem.tsx": [
     {
-      category: "domain",
+      category: "affordance",
       signature: "text-status-success",
       expectedOccurrences: 1,
       rationale: "Go-colour on the run-recipe control",
     },
     {
-      category: "domain",
+      category: "affordance",
       signature: "group-hover:text-status-success",
       expectedOccurrences: 1,
       rationale: "Go-colour on the run-recipe control at hover",
     },
     {
-      category: "domain",
+      category: "affordance",
       signature: "text-status-success/50 group-hover:text-status-success",
       expectedOccurrences: 2,
       rationale: "Go-colour on the run-recipe control in the collapsed row",
@@ -837,7 +902,7 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale: "Worktree diff insertion count",
     },
     {
-      category: "domain",
+      category: "affordance",
       signature: "text-status-success/70 hover:text-status-success",
       expectedOccurrences: 2,
       rationale: "Go-colour on the resume-resource control",
@@ -851,26 +916,12 @@ export const STATUS_SUCCESS_INVENTORY = {
       rationale: "Copy-path confirmation; resets when the copy flash times out",
     },
   ],
-  "src/components/agents/AgentCard.tsx": [
-    {
-      category: "verification",
-      signature: "text-status-success",
-      expectedOccurrences: 1,
-      rationale: "One installed mark per agent row, against the not-installed branch",
-    },
-  ],
   "src/components/ui/ReEntrySummary.tsx": [
     {
       category: "outcome",
       signature: "text-status-success",
       expectedOccurrences: 1,
       rationale: "Recorded result carried by a success entry in the re-entry summary",
-    },
-    {
-      category: "outcome",
-      signature: "border-l-status-success",
-      expectedOccurrences: 1,
-      rationale: "Left rule reporting that nothing in the summary is an error or warning",
     },
   ],
   "src/components/ui/badge.tsx": [
@@ -883,7 +934,7 @@ export const STATUS_SUCCESS_INVENTORY = {
   ],
   "src/components/ui/button.tsx": [
     {
-      category: "domain",
+      category: "affordance",
       signature: "text-status-success hover:bg-status-success/10",
       expectedOccurrences: 2,
       rationale: "Go-colour variant of the shared button primitive",
@@ -891,16 +942,16 @@ export const STATUS_SUCCESS_INVENTORY = {
   ],
   "src/components/ui/toaster.tsx": [
     {
-      category: "transient",
+      category: "outcome",
       signature: "border-l-status-success",
       expectedOccurrences: 1,
-      rationale: "Toast left rule; toasts dismiss themselves",
+      rationale: "Left rule of a success toast, which reports the result of a named operation",
     },
     {
-      category: "transient",
+      category: "outcome",
       signature: "text-status-success",
       expectedOccurrences: 1,
-      rationale: "Toast icon; toasts dismiss themselves",
+      rationale: "Icon of a success toast, which reports the result of a named operation",
     },
   ],
   "src/lib/gitStatusPresentation.ts": [
@@ -966,5 +1017,5 @@ export const STATUS_SUCCESS_INVENTORY = {
  * another added) still trips the per-site checks, and these catch the case
  * where a whole file moves without either check firing.
  */
-export const EXPECTED_STATUS_SUCCESS_SITES = 119;
-export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 144;
+export const EXPECTED_STATUS_SUCCESS_SITES = 123;
+export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 145;

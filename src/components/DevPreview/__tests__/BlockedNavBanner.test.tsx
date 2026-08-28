@@ -21,7 +21,7 @@ vi.mock("@/components/ui/popover", () => ({
   ),
 }));
 
-import { BlockedNavBanner } from "../BlockedNavBanner";
+import { BlockedNavBanner, blockedNavReducer } from "../BlockedNavBanner";
 
 type Phase =
   | "blocked"
@@ -99,5 +99,52 @@ describe("BlockedNavBanner action selection", () => {
     // The recovery action is the inline primary; Copy URL is demoted.
     expect(overflow.contains(tryAgain)).toBe(false);
     expect(overflow.contains(screen.getByRole("button", { name: /copy url/i }))).toBe(true);
+  });
+});
+
+describe("blockedNavReducer phase coalescing", () => {
+  const blocked = (url: string) =>
+    ({
+      type: "BLOCKED",
+      url,
+      canOpenExternal: true,
+      sessionStorageSnapshot: [],
+    }) as const;
+
+  function phaseAfterSecondBlock(phase: Parameters<typeof reachPhase>[0]) {
+    const state = reachPhase(phase);
+    return blockedNavReducer(state, blocked("https://example.com/second"))?.phase;
+  }
+
+  function reachPhase(phase: Phase) {
+    let state = blockedNavReducer(null, blocked("https://accounts.example.com/authorize"));
+    if (phase === "blocked") return state;
+    state = blockedNavReducer(state, { type: "OAUTH_STARTED" });
+    if (phase === "oauth-started") return state;
+    if (phase === "oauth-intercepting")
+      return blockedNavReducer(state, { type: "OAUTH_TOKEN_INTERCEPTED" });
+    if (phase === "oauth-completed") return blockedNavReducer(state, { type: "OAUTH_COMPLETED" });
+    if (phase === "oauth-timed-out") return blockedNavReducer(state, { type: "OAUTH_TIMED_OUT" });
+    return blockedNavReducer(state, { type: "OAUTH_ERROR", message: "boom" });
+  }
+
+  it("keeps a sign-in that is still in flight", () => {
+    expect(phaseAfterSecondBlock("oauth-started")).toBe("oauth-started");
+    expect(phaseAfterSecondBlock("oauth-intercepting")).toBe("oauth-intercepting");
+  });
+
+  // The completed phase carries a dismiss timer (#12002). Inheriting it would
+  // let the previous banner's timer tear down a navigation blocked after it.
+  it("resets a terminal phase so its dismiss timer cannot close the next block", () => {
+    expect(phaseAfterSecondBlock("oauth-completed")).toBe("blocked");
+    expect(phaseAfterSecondBlock("oauth-timed-out")).toBe("blocked");
+    expect(phaseAfterSecondBlock("oauth-error")).toBe("blocked");
+  });
+
+  it("adopts the new URL either way", () => {
+    const state = reachPhase("oauth-started");
+    expect(blockedNavReducer(state, blocked("https://example.com/second"))?.url).toBe(
+      "https://example.com/second"
+    );
   });
 });

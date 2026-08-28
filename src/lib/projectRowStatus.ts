@@ -98,9 +98,13 @@ export const ROW_DOT_CLASS: Record<ProjectRowTone, string> = {
   working: "bg-activity-working animate-activity-pulse",
   // Same hue as `working` and for the same reason: this is a run in flight, not
   // a run that succeeded. It sat on `status-success` until #12002, which reads
-  // as "finished well" in every palette that separates the two. The pulse is
-  // what still tells the tones apart — `running` is the liveness fallback, so
-  // it draws steady while `working` advertises demand.
+  // as "finished well" in every palette that separates the two.
+  //
+  // That makes it identical to `working` wherever the pulse is off — reduced
+  // motion and performance mode both kill `animate-activity-pulse`. Deliberate:
+  // the legend above draws one filled green for "something is executing here",
+  // and these are its two spellings. Which one is executing is the row's line's
+  // job ("2 running" against "1 process running"), not the mark's.
   running: "bg-activity-working",
   // Dashed rather than solid, because "snoozed" and "settled" are different
   // facts and the switcher's greys already carry the settled ones. Colour alone

@@ -103,6 +103,53 @@ describe("InlineStatusBanner", () => {
     expect(region.style.borderBottom).toContain("--color-status-success");
   });
 
+  it("actually clears itself: success fires onClose when its timer runs out", () => {
+    vi.useFakeTimers();
+    try {
+      const onClose = vi.fn();
+      render(
+        <InlineStatusBanner
+          icon={CheckCircle2}
+          title="Signed in"
+          severity="success"
+          animated={false}
+          onClose={onClose}
+          autoDismissAfter={2000}
+        />
+      );
+      expect(onClose).not.toHaveBeenCalled();
+      act(() => {
+        vi.advanceTimersByTime(2000);
+      });
+      expect(onClose).toHaveBeenCalledTimes(1);
+    } finally {
+      vi.useRealTimers();
+    }
+  });
+
+  // The type can require a number; it cannot require a positive one. A success
+  // banner given 0 stands forever, which is the one thing it may not do — so
+  // dev builds say so out loud rather than letting it ship.
+  it("warns in development when a success banner is given a duration that never fires", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    try {
+      render(
+        <InlineStatusBanner
+          icon={CheckCircle2}
+          title="Signed in"
+          severity="success"
+          animated={false}
+          onClose={() => {}}
+          autoDismissAfter={0}
+        />
+      );
+      expect(warn).toHaveBeenCalledTimes(1);
+      expect(String(warn.mock.calls[0]?.[0])).toContain("autoDismissAfter");
+    } finally {
+      warn.mockRestore();
+    }
+  });
+
   it("pins success to a self-clearing confirmation at the type level", () => {
     // Green is only allowed to say "this just happened" (#12002). A success
     // banner that cannot dismiss itself is unrepresentable, so the compiler —

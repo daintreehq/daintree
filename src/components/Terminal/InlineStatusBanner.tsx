@@ -67,8 +67,9 @@ interface OptionalDismissProps {
   onClose?: () => void;
   /**
    * Fire `onClose` automatically after this many milliseconds. The timer
-   * clears on unmount and resets if the value or `onClose` changes. Pass
-   * `undefined` to disable (callers gate their own conditions this way).
+   * clears on unmount and restarts when this value changes; a new `onClose`
+   * is picked up through a ref without restarting it. Pass `undefined` to
+   * disable (callers gate their own conditions this way).
    */
   autoDismissAfter?: number;
 }
@@ -225,10 +226,17 @@ export function InlineStatusBanner({
   }, [onClose]);
 
   useEffect(() => {
-    if (!autoDismissAfter || !onCloseRef.current) return;
+    if (import.meta.env.DEV && severity === "success" && !(autoDismissAfter! > 0)) {
+      console.warn(
+        'InlineStatusBanner: severity="success" needs a positive autoDismissAfter. ' +
+          `Got ${String(autoDismissAfter)}, so this banner will stand — which is the one ` +
+          'thing a success banner may not do. Use severity="neutral" for persistent completion.'
+      );
+    }
+    if (!(autoDismissAfter! > 0) || !onCloseRef.current) return;
     const timer = setTimeout(() => onCloseRef.current?.(), autoDismissAfter);
     return () => clearTimeout(timer);
-  }, [autoDismissAfter]);
+  }, [autoDismissAfter, severity]);
 
   useEffect(() => {
     if (!shouldAnimate) return;

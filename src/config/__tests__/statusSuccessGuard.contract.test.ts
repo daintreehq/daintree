@@ -13,20 +13,78 @@ import {
 
 const TEST_DIR = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(TEST_DIR, "../../..");
-const SRC_ROOT = path.join(REPO_ROOT, "src");
+// The builtin plugin renderers ship in the app and paint the same tokens, so
+// they are production surfaces, not third-party code. `accentGuard` already
+// scans this root for the same reason.
+const SCAN_ROOTS = [
+  path.join(REPO_ROOT, "src"),
+  path.join(REPO_ROOT, "plugins/builtin/github/renderer"),
+];
 const POLICY_DOC = "docs/themes/status-success-policy.md";
 
 // ── What counts as a paint site ────────────────────────────────────────
 
 /**
- * A Tailwind utility that paints with the success token, variants and opacity
- * modifiers included: `bg-status-success`, `hover:text-status-success/70`,
- * `data-[state=on]:border-status-success/30`. Anchored to the end so
- * `forge-status-success` — an unrelated animation class that merely contains
- * the substring — does not match.
+ * Every Tailwind v4 utility that can take a colour. Enumerated rather than
+ * matched loosely, because two real classes in this repo end in the same
+ * substring without painting the token: `forge-status-success` (an animation)
+ * and `bg-status-success-surface` (a different token). A loose rule would flag
+ * both, and a guard that cries wolf gets deleted.
  */
-const PAINT_UTILITY =
-  /(?:^|:)(?:bg|text|border|border-[trblxy]|ring|outline|fill|stroke|accent|caret|decoration|divide|shadow|from|via|to)-status-success(?:\/(?:\[[\d.]+\]|\d+))?$/;
+const COLOUR_UTILITY_ROOTS = [
+  "bg",
+  "text",
+  "border",
+  "border-(?:[trblxyse]|bs|be)",
+  "outline",
+  "ring",
+  "ring-offset",
+  "inset-ring",
+  "divide",
+  "fill",
+  "stroke",
+  "accent",
+  "caret",
+  "decoration",
+  "placeholder",
+  "selection",
+  "marker",
+  "shadow",
+  "inset-shadow",
+  "text-shadow",
+  "drop-shadow",
+  "from",
+  "via",
+  "to",
+  "mask-from",
+  "mask-via",
+  "mask-to",
+].join("|");
+
+/**
+ * Everything Tailwind v4 accepts after the slash: a bare number (fractional
+ * included), a bracketed value, or the shorthand variable form.
+ */
+const ALPHA_MODIFIER = "(?:\\/(?:\\d+(?:\\.\\d+)?|\\[[^\\]]*\\]|\\([^)]*\\)))?";
+
+/**
+ * A utility painting with the success token — variants, opacity modifier and
+ * the important marker included, since none of them changes what it paints:
+ * `bg-status-success`, `hover:text-status-success/70`,
+ * `data-[state=on]:border-status-success/30`, `bg-status-success!`.
+ * Anchored both ends so the two lookalike classes above stay out.
+ */
+const PAINT_UTILITY = new RegExp(
+  `(?:^|:)!?(?:${COLOUR_UTILITY_ROOTS})-status-success${ALPHA_MODIFIER}!?$`
+);
+
+/**
+ * The variable shorthand — `bg-(--color-status-success)` — reaches the token
+ * without ever spelling the utility suffix, so it needs its own shape.
+ */
+const PAINT_VAR_SHORTHAND = new RegExp(
+  `(?:^|:)!?(?:${COLOUR_UTILITY_ROOTS})-\\(--color-status-success\\)${ALPHA_MODIFIER}!?$`
+);
 
 /** The same colour reached through the variable, as arbitrary values do. */
 const PAINT_VAR = "var(--color-status-success)";
@@ -39,7 +97,9 @@ const PAINT_VAR = "var(--color-status-success)";
  * outside this guard by construction.
  */
 function isPaintLexeme(lexeme: string): boolean {
-  return PAINT_UTILITY.test(lexeme) || lexeme.includes(PAINT_VAR);
+  return (
+    PAINT_UTILITY.test(lexeme) || PAINT_VAR_SHORTHAND.test(lexeme) || lexeme.includes(PAINT_VAR)
+  );
 }
 
 function normalise(value: string): string {
@@ -161,7 +221,9 @@ function matches(
 
 // ── The scan ───────────────────────────────────────────────────────────
 
-const discovered: PaintSite[] = collectSourceFiles(SRC_ROOT).flatMap((absolute) => {
+const discovered: PaintSite[] = SCAN_ROOTS.flatMap((root) =>
+  fs.existsSync(root) ? collectSourceFiles(root) : []
+).flatMap((absolute) => {
   const source = fs.readFileSync(absolute, "utf8");
   if (!source.includes("status-success")) return [];
   const relative = path.relative(REPO_ROOT, absolute).replace(/\\/g, "/");
@@ -214,13 +276,27 @@ describe("status-success guard", () => {
           "bg-[color-mix(in_oklab,var(--color-status-success)_10%,transparent)]",
           "bg-[color-mix(in_oklab,var(--color-status-success)_10%,transparent)]",
         ],
+        // Variants, the important marker and the opacity modifier all change
+        // nothing about what gets painted.
+        ["!bg-status-success", "!bg-status-success"],
+        ["bg-status-success!", "bg-status-success!"],
+        ["[&>svg]:text-status-success", "[&>svg]:text-status-success"],
+        ["supports-[display:grid]:bg-status-success", "supports-[display:grid]:bg-status-success"],
+        // Colour utilities that are easy to leave off an enumerated list.
+        ["ring-offset-status-success", "ring-offset-status-success"],
+        ["inset-ring-status-success", "inset-ring-status-success"],
+        ["placeholder-status-success", "placeholder-status-success"],
+        ["text-shadow-status-success", "text-shadow-status-success"],
+        ["border-s-status-success", "border-s-status-success"],
+        ["from-status-success via-status-success", "from-status-success via-status-success"],
         // An unrelated animation class that merely contains the substring.
         ["forge-status-success", ""],
         // The theme layer naming the token rather than painting with it.
         ["status-success", ""],
         ["--theme-status-success", ""],
-        // A different token that shares the prefix.
+        // A different token that shares the prefix, and a non-colour utility.
         ["bg-status-success-surface", ""],
+        ["my-status-success", ""],
       ];
       for (const [input, expected] of cases) {
         expect(statusSuccessSignature(input), input).toBe(expected);
@@ -270,6 +346,27 @@ describe("status-success guard", () => {
     expect(
       unclassified.map((site) => `${site.file}:${site.line}`),
       `Found ${unclassified.length} status-success paint site(s) with no inventory entry:\n${report}\n\n${FIX_INSTRUCTIONS}`
+    ).toEqual([]);
+  });
+
+  it("maps every site to exactly one approval", () => {
+    // Two approvals matching one site would let a real occurrence disappear
+    // while its twin's entry silently covered the survivor.
+    const ambiguous = discovered
+      .map((site) => {
+        const inFile = sitesByFile.get(site.file) ?? [];
+        const twins = inFile.filter((other) => other.signature === site.signature);
+        const hits = (inventoryByFile.get(site.file) ?? []).filter((entry) =>
+          matches(site, entry, twins)
+        );
+        return { site, hits: hits.length };
+      })
+      .filter(({ hits }) => hits > 1)
+      .map(({ site, hits }) => `  ${site.file}:${site.line} matched by ${hits} entries`);
+
+    expect(
+      ambiguous,
+      `Entries overlap — give each a narrower anchor:\n${ambiguous.join("\n")}`
     ).toEqual([]);
   });
 

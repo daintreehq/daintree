@@ -182,7 +182,7 @@ export function GitHubSettingsTab() {
         description="Used for repository statistics, issue/PR detection, and linking worktrees to GitHub. Eliminates the need for the gh CLI."
       >
         {githubConfig?.hasToken && (
-          <div className="flex items-center gap-1 text-xs text-status-success">
+          <div className="flex items-center gap-1 text-xs text-text-secondary">
             <Check className="w-3 h-3" />
             GitHub connected
           </div>

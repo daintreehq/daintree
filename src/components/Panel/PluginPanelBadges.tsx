@@ -15,14 +15,14 @@ import { usePanelBadges, usePluginPanelBadgeStore } from "@/store/pluginPanelBad
  */
 const DOT_COLOR: Record<PluginPanelBadgeColor, string> = {
   default: "bg-text-muted",
-  success: "bg-text-muted",
+  success: "bg-text-secondary",
   warning: "bg-status-warning",
   error: "bg-status-error",
 };
 
 const LABEL_COLOR: Record<PluginPanelBadgeColor, string> = {
   default: "bg-overlay-subtle text-text-secondary",
-  success: "bg-overlay-subtle text-text-secondary",
+  success: "bg-overlay-medium text-text-primary",
   warning: "bg-status-warning/15 text-status-warning",
   error: "bg-status-error/15 text-status-error",
 };

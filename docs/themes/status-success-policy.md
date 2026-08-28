@@ -56,7 +56,15 @@ Green here reports what happened when something ran: CI passed, the clone finish
 
 ### Domain notation
 
-Some green the app inherited rather than invented, and repainting it would make the app wrong rather than restrained. Git status letters (`A`, `?`), diff insertion counts, ahead arrows, added lines in a patch. Alongside these sit the affirmative halves of paired controls — the `Plus` against the `Minus` on a stage row, the run and apply affordances — where green means "go", not "good". None of them is claiming anything is healthy.
+Some green the app inherited rather than invented, and repainting it would make the app wrong rather than restrained. Git status letters (`A`, `?`), diff insertion counts, ahead arrows, added lines in a patch. This is the ruling's exemption and it is narrow: it covers notation, not anything that merely feels conventional.
+
+### Affordances — an open question, not a ruled category
+
+`affordance` is a fifth category, and the ruling did not name it. It covers the affirmative half of a control pair — run, apply, stage, resume, save, retry — where green means "go" rather than "good". These controls are not reporting state at all, so the review question ("can this green be named as a result, a checked item, or a live operation?") has no honest answer for them: they are not any of the three, and they are not health either.
+
+They are also not in the #12002 ruling's demote list, so this series left them alone rather than widening its scope. Naming them separately is the point: folding them into `domain` would have quietly restated what the ruling meant by that word, and the sites would have stopped being visible as a decision anyone made.
+
+If they should go neutral, delete the category — the guard will then list every site that needs fixing. If they should stay, this section is where the reasoning lives.
 
 ### Live operations
 
@@ -89,7 +97,7 @@ Use the semantic spelling, not the legacy `daintree-*` aliases — `border-borde
 
 Enforcement is a contract test, at occurrence level: `src/config/__tests__/statusSuccessGuard.contract.test.ts`, with its data in `statusSuccessInventory.ts`.
 
-It parses every production `.ts`/`.tsx` under `src/` and collects **paint sites** — string literals and template quasis containing a `status-success` Tailwind utility or a `var(--color-status-success)` read. Every site must appear in the inventory with a category and a rationale. Sites are keyed by a **signature** (the success-bearing lexemes of the literal, whitespace collapsed) plus an optional **anchor** (any substring of an enclosing node) when a signature repeats inside one file. Reformatting a component does not churn the inventory; changing which success utility it paints does.
+It parses every production `.ts`/`.tsx` under `src/` and under the builtin plugin renderers (which ship in the app and paint the same tokens) and collects **paint sites** — string literals and template quasis containing a `status-success` Tailwind utility or a `var(--color-status-success)` read. Every site must appear in the inventory with a category and a rationale. Sites are keyed by a **signature** (the success-bearing lexemes of the literal, whitespace collapsed) plus an optional **anchor** (any substring of an enclosing node) when a signature repeats inside one file. Reformatting a component does not churn the inventory; changing which success utility it paints does.
 
 Deliberate boundaries:
 
@@ -99,7 +107,14 @@ Deliberate boundaries:
 - **Not ESLint.** A lint rule cannot infer a timer, a modal's lifetime, or checklist structure out of a `cn()` call. The rationale field is where that judgement lives, and it is reviewed by people.
 - **TS/TSX only.** CSS files are outside the scan: `src/index.css` defines the token and `DiffViewer.css` is diff notation.
 
-What it catches: a new green anywhere in `src/`, a second green in a file that already has approved ones, a removed green whose entry lingers, and a wholesale move that keeps every per-site check passing. What it cannot catch: a rationale that is not true. The count ratchets exist so that even an equal-count swap has to be explained.
+What it catches: a new green in any scanned root, a second green in a file that already has approved ones, a removed green whose entry lingers, a site claimed by two entries at once, and a wholesale move that keeps every per-site check passing.
+
+What it does not catch, stated plainly because a guard trusted past its reach is worse than no guard:
+
+- **A rationale that is not true.** Nothing mechanical can check whether the timer a `transient` entry claims actually exists. That is what review is for.
+- **Activations of an approved definition.** `badge.tsx`'s `tone="success"` and `button.tsx`'s `ghost-success` are each one inventoried site; every `<Badge tone="success">` that follows is invisible to the scanner. `InlineStatusBanner`'s `severity="success"` is the exception, and only because the type now forces it to dismiss itself.
+- **The token reached indirectly.** A class name assembled from a variable, an interpolated `var(${token})`, a theme object read like `t["status-success"]`, or a value pulled through CSSOM all paint the colour without ever writing a utility a parser can see.
+- **A one-for-one swap inside one anchor.** Deleting an approved site and adding the same signature under the same anchor in the same file holds every count. The anchors make this narrow, not impossible.
 
 ## Review checklist
 

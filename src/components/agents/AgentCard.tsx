@@ -109,7 +109,7 @@ function OnboardingCard({
           </span>
         )}
         {installed ? (
-          <span className="text-2xs text-status-success font-medium">Installed</span>
+          <span className="text-2xs text-text-secondary font-medium">Installed</span>
         ) : (
           <span className="text-2xs text-daintree-text/30">Not installed</span>
         )}

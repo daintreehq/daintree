@@ -82,7 +82,9 @@ export function ReEntrySummary({ state }: { state: ReEntrySummaryState }) {
 
   const { rows: displayRows, overflowCount: displayOverflowCount } = content;
   const hasUrgent = displayRows.some((r) => r.worstType === "error" || r.worstType === "warning");
-  const accentClass = hasUrgent ? "border-l-status-warning" : "border-l-status-success";
+  // Only the excursion gets a hue. A green rule here would just be saying no
+  // entry was urgent, which is the good case already implied by the rows (#12002).
+  const accentClass = hasUrgent ? "border-l-status-warning" : "border-l-border-default";
 
   const handleOpenNotifications = () => {
     useUIStore.getState().openNotificationCenter();
