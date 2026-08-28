@@ -129,9 +129,9 @@ describe("NotificationCenterEntry unread signal", () => {
     const dot = container.querySelector(".bg-status-info.rounded-full");
     expect(dot).not.toBeNull();
     if (iconWrapper instanceof HTMLElement && dot instanceof HTMLElement) {
-      // The dot lives in the gutter via absolute positioning — it must not
-      // participate in the row's flex flow, or read/unread toggles would
-      // shift the icon column.
+      // The dot badges the icon's top-right corner via absolute positioning —
+      // it must not participate in the row's flex flow, or read/unread toggles
+      // would shift the icon column.
       expect(iconWrapper.contains(dot)).toBe(true);
       expect(dot.className).toMatch(/\babsolute\b/);
     }
@@ -646,6 +646,33 @@ describe("NotificationCenterEntry roving focus props", () => {
     const dot = container.querySelector('[data-notification-unread="true"]');
     expect(dot).not.toBeNull();
     expect(container.querySelectorAll('[data-notification-unread="true"]')).toHaveLength(1);
+  });
+
+  it("announces unread state ahead of the row's content, and drops it once read", () => {
+    // The dot is aria-hidden and the weight change on the title is invisible to
+    // a screen reader, so this text is the whole assistive signal. Asserting the
+    // announcement's presence and its position relative to the title tests
+    // `isNew -> assistive output`, which is behaviour, not a copied literal.
+    const { container: unread } = render(
+      <NotificationCenterEntry entry={makeEntry({ title: "Push rejected" })} isNew />
+    );
+    const spoken = unread.textContent ?? "";
+    expect(spoken).toMatch(/unread/i);
+    expect(spoken.search(/unread/i)).toBeLessThan(spoken.indexOf("Push rejected"));
+    // `textContent` reaches into aria-hidden subtrees, so the assertions above
+    // would stay green if the announcement were hidden from the very API it
+    // exists to serve — the dot two elements away is aria-hidden for exactly
+    // that reason. Prove this one is not.
+    const announcement = Array.from(unread.querySelectorAll("span")).find((el) =>
+      /unread/i.test(el.textContent ?? "")
+    );
+    expect(announcement).toBeDefined();
+    expect(announcement?.closest('[aria-hidden="true"]')).toBeNull();
+
+    const { container: read } = render(
+      <NotificationCenterEntry entry={makeEntry({ title: "Push rejected" })} />
+    );
+    expect(read.textContent ?? "").not.toMatch(/unread/i);
   });
 
   it("carries the forced-colors repaint handle on the thread-count chip", () => {

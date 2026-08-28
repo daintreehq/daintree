@@ -204,13 +204,38 @@ export function NotificationCenterEntry({
         tabIndex !== undefined && PALETTE_ROW_FOCUS_CLASS
       )}
     >
-      <div className={cn("relative shrink-0", config.className)}>
-        {/* The unread dot floats in the row's left gutter (absolute, anchored to
-            the icon) so read rows don't carry a phantom spacer column. The
-            gutter is 16px rather than 12px so this 6px dot sits inside the
-            panel's margin instead of hanging off the edge next to the thread
-            rail — the icon still shares that gutter with the header, the chip
-            row and the section labels. */}
+      <div
+        className={cn(
+          "relative flex w-4 shrink-0 items-center justify-center",
+          // Grid row 1 is 24px tall on a titled row — the trailing rail's
+          // controls set that height and the title centres inside it. The icon
+          // is a flex sibling of that grid rather than a cell in it, so
+          // `items-start` parked it at the top of a 16px box and left it 4px
+          // above the title it labels. Matching the height and centring in it
+          // puts the two on the same optical line. An untitled row has no such
+          // cell: its message starts at the top of the track, which is where a
+          // top-aligned icon already sits, so that case keeps its natural box.
+          entry.title ? "h-6" : "h-4",
+          config.className
+        )}
+      >
+        {/* The dot is aria-hidden, so unread was carried by nothing but colour
+            and a heavier title weight — neither of which reaches a screen
+            reader. First in the row's DOM order, which is where it reads. */}
+        {isNew && <span className="sr-only">Unread. </span>}
+        <Icon className="h-4 w-4" />
+        {/* The unread dot badges the status icon's top-right corner rather than
+            floating in the row's left gutter, where it sat 3px off the icon and
+            7px off the panel edge — closer to the chrome than to the thing it
+            marked, and on the icon's own centre line, so it read as part of the
+            glyph. Straddling the corner it belongs to the icon unambiguously
+            and costs no horizontal space, so read rows still carry no spacer.
+
+            The ring is not decoration: the corner of a 16px Lucide circle
+            (CheckCircle2, XCircle, Info) passes under this dot, so without a
+            cut-out in the row's own backdrop the two silhouettes merge. It has
+            to be a flat colour — `.surface-overlay` is 94% + backdrop-blur, and
+            a translucent ring would show the desktop through it. */}
         {isNew && (
           <span
             aria-hidden="true"
@@ -219,12 +244,21 @@ export function NotificationCenterEntry({
             // ActivityLight's dot is handled. Without it the UA forces this
             // background to Canvas and the dot disappears, and an unread row
             // carries no border or tint by design, so an untitled one was left
-            // with no unread signal at all.
+            // with no unread signal at all. The ring below needs a counterpart
+            // in that block: it is a box-shadow, forced colors does not paint
+            // box-shadows, and the icon this dot now overlaps is flattened to
+            // the same CanvasText — so the cut-out is re-declared there as an
+            // outline.
             data-notification-unread="true"
-            className="absolute right-full mr-[3px] top-1/2 -translate-y-1/2 h-1.5 w-1.5 rounded-full bg-status-info"
+            className={cn(
+              "absolute right-0 h-1.5 w-1.5 translate-x-1/3 -translate-y-1/3 rounded-full",
+              "bg-status-info ring-[1.5px] ring-[var(--overlay-surface-solid)]",
+              // Anchored to the icon box, not the wrapper: on a titled row the
+              // wrapper is 4px taller than the glyph at each end.
+              entry.title ? "top-1" : "top-0"
+            )}
           />
         )}
-        <Icon className="h-4 w-4" />
       </div>
       <div className="grid flex-1 min-w-0 grid-cols-[minmax(0,1fr)_auto] gap-x-2">
         {entry.title && (
@@ -367,7 +401,11 @@ export function NotificationCenterEntry({
             grid placement gets both: this rail is last in the DOM and reads
             last, but paints in row 1's trailing column, and the message and
             actions below it span the full width. */}
-        <div className="col-start-2 row-start-1 flex items-center gap-1.5">
+        {/* `min-h-6` and `self-start` pin the first line to 24px and hold the
+            rail on it: the icon opposite is centred against that height, and an
+            untitled row whose message wraps must not drag the controls down to
+            the middle of the block they act on. */}
+        <div className="col-start-2 row-start-1 flex min-h-6 items-center self-start gap-1.5">
           {isSnoozed && snoozedUntil !== undefined && (
             <>
               <span
@@ -645,7 +683,7 @@ function RowOptionsMenu({
                 onUnsnooze?.();
               }}
             >
-              <Clock className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+              <Clock data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
               {snoozedUntil !== undefined
                 ? `Snoozed until ${formatSnoozedUntil(snoozedUntil)} · Unsnooze`
                 : "Unsnooze"}
@@ -653,7 +691,7 @@ function RowOptionsMenu({
           ) : (
             <DropdownMenuSub>
               <DropdownMenuSubTrigger>
-                <Clock className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+                <Clock data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
                 Snooze
               </DropdownMenuSubTrigger>
               <DropdownMenuSubContent>
@@ -673,13 +711,13 @@ function RowOptionsMenu({
         {supportsSnooze && hasDiagnosticsActions && <DropdownMenuSeparator />}
         {supportsCopyCorrelationId && (
           <DropdownMenuItem onSelect={handleCopyCorrelationId}>
-            <Copy className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+            <Copy data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
             Copy correlation ID
           </DropdownMenuItem>
         )}
         {supportsGoToSource && (
           <DropdownMenuItem onSelect={handleGoToSource}>
-            <ArrowRight className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+            <ArrowRight data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
             Go to source
           </DropdownMenuItem>
         )}
@@ -690,7 +728,7 @@ function RowOptionsMenu({
               void handleReportOnGitHub();
             }}
           >
-            <Bug className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
+            <Bug data-menu-icon className="mr-2 h-3.5 w-3.5" aria-hidden="true" />
             Report on GitHub
           </DropdownMenuItem>
         )}
@@ -707,10 +745,13 @@ function RowOptionsMenu({
               });
             }}
           >
-            <span className="ml-[1.375rem]">
-              Silence {EVENT_KIND_LABEL[eventKind]}
-              {entry.context?.projectId && eventKind !== "uiFeedback" ? " from this project" : ""}
-            </span>
+            {/* No shim. The gutter these two need in a menu that also offers
+                Snooze / Copy / Report is allocated by the `:has([data-menu-icon])`
+                rule in index.css, and withdrawn when every icon-bearing item is
+                filtered out — an entry with no correlationId and no panelId
+                leaves only these, and with no projectId either, only this one. */}
+            Silence {EVENT_KIND_LABEL[eventKind]}
+            {entry.context?.projectId && eventKind !== "uiFeedback" ? " from this project" : ""}
           </DropdownMenuItem>
         )}
         {entry.context?.projectId && (
@@ -721,7 +762,7 @@ function RowOptionsMenu({
               void actionService.dispatch("project.muteNotifications", { projectId });
             }}
           >
-            <span className="ml-[1.375rem]">Mute project notifications</span>
+            Mute project notifications
           </DropdownMenuItem>
         )}
       </DropdownMenuContent>
