@@ -736,7 +736,7 @@ export function GitHubListItem({
                         ) : (
                           <span
                             className={cn(
-                              "block w-1.5 h-1.5 rounded-full ms-0.5",
+                              "status-mark block w-1.5 h-1.5 rounded-full ms-0.5",
                               linkedPRCIVisual.colorClass
                             )}
                             aria-hidden="true"
