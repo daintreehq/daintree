@@ -30,9 +30,9 @@ export function ReadOnlyDetail({ scopeKind, selectedPreset, onDuplicate }: ReadO
           <div className="space-y-1">
             {Object.entries(selectedPreset.env).map(([k, v]) => (
               <div key={k} className="flex items-center gap-2 font-mono text-2xs">
-                <span className="text-daintree-text/50 shrink-0">{k}</span>
+                <span className="text-text-secondary shrink-0">{k}</span>
                 <span className="text-daintree-text/30">=</span>
-                <span className="text-daintree-text/60 truncate">{v}</span>
+                <span className="text-text-secondary truncate">{v}</span>
               </div>
             ))}
           </div>

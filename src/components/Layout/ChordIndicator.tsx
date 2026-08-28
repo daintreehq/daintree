@@ -210,7 +210,7 @@ export function ChordIndicator() {
               <div key={group.category}>
                 {groupIdx > 0 && <div className="border-t border-[var(--border-overlay)] my-1.5" />}
                 <div
-                  className="text-3xs font-medium uppercase tracking-wider text-daintree-text/30 px-1 py-1"
+                  className="text-3xs font-medium uppercase tracking-wider text-text-placeholder px-1 py-1"
                   role="presentation"
                 >
                   {group.category}
@@ -233,11 +233,11 @@ export function ChordIndicator() {
                         isSelected && "bg-overlay-subtle"
                       )}
                     >
-                      <span className="min-w-0 flex-1 truncate text-daintree-text/80">
+                      <span className="min-w-0 flex-1 truncate text-text-primary">
                         {item.description}
                       </span>
                       {item.displayKey ? (
-                        <kbd className="shrink-0 font-medium text-daintree-text/50 tracking-wide">
+                        <kbd className="shrink-0 font-medium text-text-secondary tracking-wide">
                           {item.displayKey}
                         </kbd>
                       ) : null}

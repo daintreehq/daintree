@@ -284,11 +284,11 @@ export function PilotParkEditor({
                   "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary",
                   isActive
                     ? "bg-overlay-subtle text-text-primary"
-                    : "text-daintree-text/70 hover:bg-tint/[0.04]"
+                    : "text-text-secondary hover:bg-tint/[0.04]"
                 )}
               >
                 {candidate === null ? (
-                  <span className="text-daintree-text/70">I unpark it myself</span>
+                  <span className="text-text-secondary">I unpark it myself</span>
                 ) : (
                   <>
                     <span className="flex size-3.5 shrink-0 items-center justify-center">
@@ -355,7 +355,7 @@ export function PilotParkEditor({
             data-no-submit
             data-testid="pilot-park-unpark"
             className={cn(
-              "rounded-[var(--radius-sm)] px-3 py-1 text-sm text-daintree-text/70 transition-colors",
+              "rounded-[var(--radius-sm)] px-3 py-1 text-sm text-text-secondary transition-colors",
               "hover:bg-overlay-subtle hover:text-text-primary disabled:opacity-50",
               "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
             )}

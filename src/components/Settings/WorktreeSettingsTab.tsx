@@ -246,31 +246,31 @@ export function WorktreeSettingsTab() {
           </FormGrid>
 
           <div className="space-y-2">
-            <span className="block text-xs font-medium text-daintree-text/70">
+            <span className="block text-xs font-medium text-text-secondary">
               Available variables:
             </span>
             <div className="grid grid-cols-2 gap-2 text-xs">
               <div className="flex items-center gap-2 p-2 bg-daintree-bg/50 rounded-[var(--radius-md)] border border-border-default">
                 <code className="text-text-secondary">{"{base-folder}"}</code>
-                <span className="text-daintree-text/50">Repository folder name</span>
+                <span className="text-text-secondary">Repository folder name</span>
               </div>
               <div className="flex items-center gap-2 p-2 bg-daintree-bg/50 rounded-[var(--radius-md)] border border-border-default">
                 <code className="text-text-secondary">{"{branch-slug}"}</code>
-                <span className="text-daintree-text/50">Sanitized branch name</span>
+                <span className="text-text-secondary">Sanitized branch name</span>
               </div>
               <div className="flex items-center gap-2 p-2 bg-daintree-bg/50 rounded-[var(--radius-md)] border border-border-default">
                 <code className="text-text-secondary">{"{repo-name}"}</code>
-                <span className="text-daintree-text/50">Repository name</span>
+                <span className="text-text-secondary">Repository name</span>
               </div>
               <div className="flex items-center gap-2 p-2 bg-daintree-bg/50 rounded-[var(--radius-md)] border border-border-default">
                 <code className="text-text-secondary">{"{parent-dir}"}</code>
-                <span className="text-daintree-text/50">Parent directory path</span>
+                <span className="text-text-secondary">Parent directory path</span>
               </div>
             </div>
           </div>
 
           <div className="space-y-2">
-            <span className="block text-xs font-medium text-daintree-text/70">Presets:</span>
+            <span className="block text-xs font-medium text-text-secondary">Presets:</span>
             <div className="flex flex-wrap gap-2">
               {PATTERN_PRESETS.map((preset) => (
                 <Tooltip key={preset.label}>
@@ -282,7 +282,7 @@ export function WorktreeSettingsTab() {
                         "px-3 py-1.5 text-xs rounded-[var(--radius-md)] border transition-colors disabled:opacity-50",
                         pattern === preset.pattern
                           ? "bg-overlay-selected border-border-strong text-text-primary font-medium"
-                          : "border-border-default text-daintree-text/70 hover:bg-daintree-border/50"
+                          : "border-border-default text-text-secondary hover:bg-daintree-border/50"
                       )}
                     >
                       {preset.label}
@@ -296,18 +296,18 @@ export function WorktreeSettingsTab() {
 
           {validation.valid && preview && (
             <div className="space-y-2 p-3 bg-daintree-bg/50 rounded-[var(--radius-md)] border border-border-default">
-              <span className="block text-xs font-medium text-daintree-text/70">Preview:</span>
+              <span className="block text-xs font-medium text-text-secondary">Preview:</span>
               <div className="text-xs space-y-1">
                 <div className="flex items-center gap-2">
-                  <span className="text-daintree-text/50">Repository:</span>
+                  <span className="text-text-secondary">Repository:</span>
                   <code className="text-text-primary">{sampleRootPath}</code>
                 </div>
                 <div className="flex items-center gap-2">
-                  <span className="text-daintree-text/50">Branch:</span>
+                  <span className="text-text-secondary">Branch:</span>
                   <code className="text-text-primary">{SAMPLE_BRANCH}</code>
                 </div>
                 <div className="flex items-center gap-2 pt-1 border-t border-border-default mt-1">
-                  <span className="text-daintree-text/50">Result:</span>
+                  <span className="text-text-secondary">Result:</span>
                   <code className="text-text-primary break-all">{preview}</code>
                 </div>
               </div>

@@ -314,7 +314,7 @@ function renderSidebarFlatItem(
         <div
           role="rowheader"
           aria-colspan={1}
-          className="px-4 py-2 text-3xs font-medium text-daintree-text/50 uppercase tracking-wide"
+          className="px-4 py-2 text-3xs font-medium text-text-secondary uppercase tracking-wide"
         >
           {item.displayName} ({item.count})
         </div>
@@ -1578,7 +1578,7 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
               icon={<FolderOpen />}
               title="Open a Git repository"
               action={
-                <span className="text-xs text-daintree-text/50">
+                <span className="text-xs text-text-secondary">
                   Use{" "}
                   <kbd className="px-1.5 py-0.5 bg-tint/[0.06] rounded text-xs">
                     File → Open Directory
@@ -1876,14 +1876,14 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
                     <button
                       type="button"
                       onClick={() => setQuickStateFilter("all")}
-                      className="text-xs px-3 py-1.5 text-daintree-text/60 hover:text-text-primary hover:bg-overlay-soft rounded transition-colors"
+                      className="text-xs px-3 py-1.5 text-text-secondary hover:text-text-primary hover:bg-overlay-soft rounded transition-colors"
                     >
                       Show all worktrees
                     </button>
                     <button
                       type="button"
                       onClick={onOpenOverview}
-                      className="text-xs px-3 py-1.5 text-daintree-text/60 hover:text-text-primary hover:bg-overlay-soft rounded transition-colors ml-1"
+                      className="text-xs px-3 py-1.5 text-text-secondary hover:text-text-primary hover:bg-overlay-soft rounded transition-colors ml-1"
                       title={formatButtonTitle("Open overview", overviewShortcut)}
                       aria-keyshortcuts={overviewAriaShortcut}
                     >
@@ -1908,14 +1908,14 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
                   <button
                     type="button"
                     onClick={clearAllFilters}
-                    className="text-xs px-3 py-1.5 text-daintree-text/60 hover:text-text-primary hover:bg-overlay-soft rounded transition-colors"
+                    className="text-xs px-3 py-1.5 text-text-secondary hover:text-text-primary hover:bg-overlay-soft rounded transition-colors"
                   >
                     Show all worktrees
                   </button>
                   <button
                     type="button"
                     onClick={onOpenOverview}
-                    className="text-xs px-3 py-1.5 text-daintree-text/60 hover:text-text-primary hover:bg-overlay-soft rounded transition-colors ml-1"
+                    className="text-xs px-3 py-1.5 text-text-secondary hover:text-text-primary hover:bg-overlay-soft rounded transition-colors ml-1"
                     title={formatButtonTitle("Open overview", overviewShortcut)}
                     aria-keyshortcuts={overviewAriaShortcut}
                   >
@@ -1942,14 +1942,14 @@ function SidebarContent({ onOpenOverview }: SidebarContentProps) {
                   <button
                     type="button"
                     onClick={clearAllFilters}
-                    className="text-xs px-3 py-1.5 text-daintree-text/60 hover:text-text-primary hover:bg-overlay-soft rounded transition-colors"
+                    className="text-xs px-3 py-1.5 text-text-secondary hover:text-text-primary hover:bg-overlay-soft rounded transition-colors"
                   >
                     Show all worktrees
                   </button>
                   <button
                     type="button"
                     onClick={onOpenOverview}
-                    className="text-xs px-3 py-1.5 text-daintree-text/60 hover:text-text-primary hover:bg-overlay-soft rounded transition-colors ml-1"
+                    className="text-xs px-3 py-1.5 text-text-secondary hover:text-text-primary hover:bg-overlay-soft rounded transition-colors ml-1"
                     title={formatButtonTitle("Open overview", overviewShortcut)}
                     aria-keyshortcuts={overviewAriaShortcut}
                   >

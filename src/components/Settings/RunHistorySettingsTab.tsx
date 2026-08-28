@@ -17,7 +17,7 @@ function CountPill({ tone, label }: { tone: "success" | "danger" | "muted"; labe
         "inline-flex items-center rounded px-1.5 py-0.5 text-2xs font-medium",
         tone === "success" && "bg-status-success/15 text-status-success",
         tone === "danger" && "bg-status-error/15 text-status-error",
-        tone === "muted" && "bg-overlay-subtle text-daintree-text/70"
+        tone === "muted" && "bg-overlay-subtle text-text-secondary"
       )}
     >
       {label}
@@ -38,7 +38,7 @@ function RecipeRunRow({ record }: { record: Extract<RunHistoryRecord, { kind: "r
               {record.recipeName}
             </span>
             {record.worktreeName ? (
-              <span className="truncate text-xs text-daintree-text/50">{record.worktreeName}</span>
+              <span className="truncate text-xs text-text-secondary">{record.worktreeName}</span>
             ) : null}
           </div>
           <div className="mt-1 flex flex-wrap items-center gap-1.5">
@@ -49,7 +49,7 @@ function RecipeRunRow({ record }: { record: Extract<RunHistoryRecord, { kind: "r
             <CountPill tone="muted" label={`${record.totalTerminals} defined`} />
           </div>
         </div>
-        <time className="shrink-0 text-xs text-daintree-text/50">
+        <time className="shrink-0 text-xs text-text-secondary">
           {formatRelativeTime(record.timestamp)}
         </time>
       </div>
@@ -102,7 +102,7 @@ function FleetRunRow({ record }: { record: Extract<RunHistoryRecord, { kind: "fl
             ) : null}
           </div>
           {record.draftPreview ? (
-            <p className="mt-0.5 truncate text-xs text-daintree-text/50">{record.draftPreview}</p>
+            <p className="mt-0.5 truncate text-xs text-text-secondary">{record.draftPreview}</p>
           ) : null}
           <div className="mt-1 flex flex-wrap items-center gap-1.5">
             <CountPill tone="success" label={`${record.successCount} sent`} />
@@ -115,7 +115,7 @@ function FleetRunRow({ record }: { record: Extract<RunHistoryRecord, { kind: "fl
             <CountPill tone="muted" label={`${record.targetCount} targets`} />
           </div>
         </div>
-        <time className="shrink-0 text-xs text-daintree-text/50">
+        <time className="shrink-0 text-xs text-text-secondary">
           {formatRelativeTime(record.timestamp)}
         </time>
       </div>
@@ -158,7 +158,7 @@ export function RunHistorySettingsTab() {
                 variant="ghost"
                 size="sm"
                 onClick={() => setShowClearConfirm(true)}
-                className="text-daintree-text/70"
+                className="text-text-secondary"
               >
                 <Trash2 className="mr-1.5 h-3.5 w-3.5" aria-hidden="true" />
                 Clear history

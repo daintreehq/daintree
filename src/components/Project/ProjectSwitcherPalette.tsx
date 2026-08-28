@@ -635,7 +635,7 @@ function ProjectListItem({
               // brightness is what says the folder is gone, and restoring it
               // under the highlight would erase that.
               "text-daintree-text/50 hover:bg-overlay-subtle aria-selected:text-daintree-text/50"
-            : "text-daintree-text/70 hover:bg-overlay-subtle hover:text-text-primary"
+            : "text-text-secondary hover:bg-overlay-subtle hover:text-text-primary"
       )}
       // The current project is selectable too: picking where you already are is
       // a "never mind", and the handler closes the palette rather than sitting
@@ -667,7 +667,7 @@ function ProjectListItem({
             className={cn(
               "truncate text-sm font-semibold leading-tight",
               project.isMissing
-                ? "text-daintree-text/50"
+                ? "text-text-secondary"
                 : project.isActive || isSelected
                   ? "text-text-primary"
                   : "text-daintree-text/85"
@@ -851,7 +851,7 @@ function ScratchListItem({
         "group w-full flex items-center gap-2 px-2 py-1 rounded-[var(--radius-md)] text-left cursor-pointer",
         scratch.isActive
           ? "text-text-primary hover:bg-overlay-subtle"
-          : "text-daintree-text/70 hover:bg-overlay-subtle hover:text-text-primary"
+          : "text-text-secondary hover:bg-overlay-subtle hover:text-text-primary"
       )}
       onClick={() => onSelect(scratch)}
     >
@@ -876,7 +876,7 @@ function ScratchListItem({
           >
             {scratch.name}
           </span>
-          <span className="text-2xs leading-none text-daintree-text/50 shrink-0">· Scratch</span>
+          <span className="text-2xs leading-none text-text-secondary shrink-0">· Scratch</span>
           {scratch.isActive && <span className="sr-only">, current</span>}
           {showResumeDot && <ResumableAgentsLabel count={scratch.resumableAgentCount ?? 0} />}
         </div>
@@ -963,7 +963,7 @@ function BandCollapseToggle({
       onClick={onToggle}
       aria-expanded={!collapsed}
       aria-controls={controlsId}
-      className="flex items-center gap-1.5 min-w-0 hover:text-daintree-text/60 transition-colors"
+      className="flex items-center gap-1.5 min-w-0 hover:text-text-secondary transition-colors"
     >
       <Chevron className="w-3 h-3 shrink-0" aria-hidden="true" />
       <BandLabel label={label} labelId={labelId} />
@@ -1083,7 +1083,7 @@ function OtherProjectsHeader({
                   tabIndex={-1}
                   data-testid="other-projects-sort-trigger"
                   aria-label={`Sort other projects, currently ${active.label}`}
-                  className="flex shrink-0 items-center gap-1 text-daintree-text/40 hover:text-daintree-text/60 transition-colors"
+                  className="flex shrink-0 items-center gap-1 text-text-secondary hover:text-text-primary transition-colors"
                 >
                   <ActiveIcon className="w-3 h-3" aria-hidden="true" />
                   {active.label}
@@ -1413,7 +1413,7 @@ function ProjectListContent({
           scratchesStandAlone ? null : (
             <div className="px-1 py-1">
               <div
-                className="px-2 py-8 text-center text-daintree-text/50 text-sm"
+                className="px-2 py-8 text-center text-text-secondary text-sm"
                 data-testid="project-empty-state"
               >
                 {query.trim() ? (
@@ -1677,7 +1677,7 @@ function ScratchSection({
               // `px-2` like the project bands' labels: the wrapper no longer
               // carries the inset, so the label draws its own and lands on the
               // same rail as the rows below it (#11943).
-              "w-full flex items-center justify-between gap-2 px-2 py-1 hover:text-daintree-text/60 transition-colors",
+              "w-full flex items-center justify-between gap-2 px-2 py-1 hover:text-text-secondary transition-colors",
               PALETTE_ROW_FOCUS_CLASS
             )}
             aria-expanded={!collapsed}
@@ -1744,7 +1744,7 @@ function ScratchSection({
                           "w-full flex items-center gap-2 px-2 py-1 rounded-[var(--radius-md)] text-left transition-colors",
                           scratch.isActive
                             ? "text-text-primary"
-                            : "text-daintree-text/70 hover:text-text-primary",
+                            : "text-text-secondary hover:text-text-primary",
                           // Reserved like `PALETTE_ROW_CLASS` does, though this
                           // row never draws one: the ranked scratch rows carry a
                           // border, and without it here the same scratch shifted
@@ -1868,7 +1868,7 @@ function ScratchSection({
                 onClick={() => setEditor({ kind: "create" })}
                 className={cn(
                   "w-full flex items-center gap-2 px-2 py-1 mt-1 rounded-[var(--radius-md)] text-left transition-colors",
-                  "border border-transparent text-daintree-text/70 hover:bg-overlay-subtle hover:text-text-primary",
+                  "border border-transparent text-text-secondary hover:bg-overlay-subtle hover:text-text-primary",
                   PALETTE_ROW_FOCUS_CLASS
                 )}
                 data-testid="scratch-create-button"
@@ -1976,7 +1976,7 @@ function ProjectSwitcherFooter({
         <button
           type="button"
           onClick={onOpenPilot}
-          className="inline-flex items-center shrink-0 text-daintree-text/50 transition-colors duration-150 ease-out hover:text-text-primary"
+          className="inline-flex items-center shrink-0 text-text-secondary transition-colors duration-150 ease-out hover:text-text-primary"
           data-testid="project-switcher-open-pilot"
           {...(pilotShortcut ? { "aria-keyshortcuts": pilotShortcut } : {})}
         >
@@ -1984,7 +1984,7 @@ function ProjectSwitcherFooter({
           <span className={pilotShortcut ? "ml-1.5" : undefined}>All agents</span>
         </button>
         {hasSelection && !isScratchSelected && (
-          <span className="text-daintree-text/50 shrink-0 @max-[520px]/switcher-footer:hidden">
+          <span className="text-text-secondary shrink-0 @max-[520px]/switcher-footer:hidden">
             Right-click for more
           </span>
         )}
@@ -2089,7 +2089,7 @@ const PROJECT_ACTION_ROW_CLASS = cn(
   // vertical halves were 2px of pure height, pushing the block off the 48px
   // its tile and `py-2` add up to.
   "border-x border-transparent",
-  "text-daintree-text/70 hover:bg-overlay-subtle hover:text-text-primary",
+  "text-text-secondary hover:bg-overlay-subtle hover:text-text-primary",
   PALETTE_ROW_FOCUS_CLASS
 );
 
@@ -2670,10 +2670,10 @@ function DeleteScratchConfirmDialog({
       restoreFocusTo={restoreFocusTo}
     >
       <div className="space-y-3">
-        <div className="text-sm text-daintree-text/70">
+        <div className="text-sm text-text-secondary">
           Its terminals will be closed and its folder deleted from disk.
         </div>
-        <div className="text-xs text-daintree-text/50 font-mono break-all">{target.path}</div>
+        <div className="text-xs text-text-secondary font-mono break-all">{target.path}</div>
         {/*
          * Raw `isDeleting` decides whether the live region exists; the Doherty
          * gate only decides whether it has anything to say, so a scratch that
@@ -2684,7 +2684,7 @@ function DeleteScratchConfirmDialog({
         {isDeleting && (
           <div
             role="status"
-            className="min-h-4 text-xs text-daintree-text/60"
+            className="min-h-4 text-xs text-text-secondary"
             data-testid="delete-scratch-progress"
           >
             {progress.isVisible && (
@@ -2878,7 +2878,7 @@ export function ProjectSwitcherPalette({
           <div className="space-y-3">
             <div>
               <div className="font-medium text-sm">{removeConfirmProject.name}</div>
-              <div className="text-xs text-daintree-text/50 font-mono mt-1">
+              <div className="text-xs text-text-secondary font-mono mt-1">
                 {removeConfirmProject.path}
               </div>
             </div>
@@ -2917,7 +2917,7 @@ export function ProjectSwitcherPalette({
                     </div>
                   </div>
                 )}
-            <div className="text-xs text-daintree-text/60">
+            <div className="text-xs text-text-secondary">
               {removeConfirmProject.isActive
                 ? "The project will remain in your list and can be reopened at any time."
                 : "This project will be removed from your list. You can add it back later, but any running terminals or processes will need to be restarted."}
@@ -2940,7 +2940,7 @@ export function ProjectSwitcherPalette({
           <div className="space-y-3">
             <div>
               <div className="font-medium text-sm">{sleepConfirmProject.name}</div>
-              <div className="text-xs text-daintree-text/50 font-mono mt-1">
+              <div className="text-xs text-text-secondary font-mono mt-1">
                 {sleepConfirmProject.path}
               </div>
             </div>
@@ -2963,11 +2963,11 @@ export function ProjectSwitcherPalette({
               </div>
             )}
             {sleepConfirmProject.isActive && (
-              <div className="text-xs text-daintree-text/60">
+              <div className="text-xs text-text-secondary">
                 This window returns to the project picker
               </div>
             )}
-            <div className="text-xs text-daintree-text/60">
+            <div className="text-xs text-text-secondary">
               The layout, terminal scrollback, and agent sessions come back when you reopen the
               project.
             </div>
@@ -3016,7 +3016,7 @@ export function ProjectSwitcherPalette({
             restoreFocusTo={paletteInputRef}
           >
             <div className="space-y-3">
-              <div className="text-sm text-daintree-text/70">
+              <div className="text-sm text-text-secondary">
                 {deleteAllScratchesConfirm.length === 1
                   ? "Its terminals will be closed and its folder deleted from disk."
                   : "Their terminals will be closed and their folders deleted from disk."}
@@ -3031,7 +3031,7 @@ export function ProjectSwitcherPalette({
                */}
               <div className="max-h-40 overflow-y-auto" data-testid="scratch-delete-all-preview">
                 <ul
-                  className="space-y-0.5 text-xs text-daintree-text/70"
+                  className="space-y-0.5 text-xs text-text-secondary"
                   aria-label="Scratch workspaces to delete"
                 >
                   {/*
@@ -3068,7 +3068,7 @@ export function ProjectSwitcherPalette({
               Saved as <span className="font-medium">{saveAsProjectConfirm.project.name}</span>. The
               original scratch folder is no longer needed.
             </div>
-            <div className="text-xs text-daintree-text/50 font-mono break-all">
+            <div className="text-xs text-text-secondary font-mono break-all">
               {saveAsProjectConfirm.scratch.path}
             </div>
           </div>

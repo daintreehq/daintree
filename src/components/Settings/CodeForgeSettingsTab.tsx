@@ -238,7 +238,7 @@ export function CodeForgeSettingsTab({ activeSubtab, onSubtabChange }: CodeForge
       <div className="space-y-4">
         <div>
           <h4 className="text-sm font-medium mb-1">Code Forge</h4>
-          <p className="text-xs text-daintree-text/50 select-text">
+          <p className="text-xs text-text-secondary select-text">
             Configure forge providers and authentication
           </p>
         </div>
@@ -338,7 +338,7 @@ function ForgeProviderCard({ name, iconSlotId, children }: ForgeProviderCardProp
         <ProviderIcon slotId={iconSlotId} className="w-6 h-6 text-text-primary" />
         <div>
           <h4 className="text-sm font-medium text-text-primary">{name} settings</h4>
-          <p className="text-xs text-daintree-text/50 select-text">
+          <p className="text-xs text-text-secondary select-text">
             Configure {name} authentication and integrations
           </p>
         </div>
@@ -398,7 +398,7 @@ function ProviderSettingsBody({ providerId, pluginId, contribution }: ProviderSe
           fields={credentialFields}
         />
       ) : (
-        <p className="text-xs text-daintree-text/50">
+        <p className="text-xs text-text-secondary">
           {contribution.kind === "local"
             ? "Local provider — no authentication needed"
             : "No configuration needed"}
@@ -406,11 +406,11 @@ function ProviderSettingsBody({ providerId, pluginId, contribution }: ProviderSe
       )}
 
       <div className="space-y-2 pt-2 border-t border-border-default">
-        <p className="text-xs text-daintree-text/50 font-mono">{pluginId}</p>
+        <p className="text-xs text-text-secondary font-mono">{pluginId}</p>
         {capabilities && capabilities.length > 0 && (
           <div>
-            <p className="text-xs font-medium text-daintree-text/70 mb-1">Capabilities</p>
-            <ul className="text-xs text-daintree-text/50 space-y-0.5">
+            <p className="text-xs font-medium text-text-secondary mb-1">Capabilities</p>
+            <ul className="text-xs text-text-secondary space-y-0.5">
               {capabilities.map((cap) => (
                 <li key={cap} className="list-disc list-inside">
                   {cap}
@@ -550,13 +550,13 @@ function GenericCredentialForm({ providerId, providerName, fields }: GenericCred
           <Key className="w-4 h-4 text-daintree-text/70" aria-hidden="true" />
           Authentication
         </h5>
-        <p className="text-xs text-daintree-text/50 mt-0.5 select-text">
+        <p className="text-xs text-text-secondary mt-0.5 select-text">
           Credentials are validated against {providerName} before they're saved
         </p>
       </div>
 
       {hasCredential && (
-        <div className="flex items-center gap-1 text-xs text-daintree-text/60">
+        <div className="flex items-center gap-1 text-xs text-text-secondary">
           <Check className="w-3 h-3" />
           {providerName} connected
         </div>
@@ -567,7 +567,7 @@ function GenericCredentialForm({ providerId, providerName, fields }: GenericCred
           <div key={field.id} className="space-y-1">
             <label
               htmlFor={`forge-cred-${field.id}`}
-              className="text-xs font-medium text-daintree-text/70"
+              className="text-xs font-medium text-text-secondary"
             >
               {field.label}
             </label>
@@ -583,7 +583,7 @@ function GenericCredentialForm({ providerId, providerName, fields }: GenericCred
               disabled={isSaving}
             />
             {field.helpText && (
-              <p className="text-xs text-daintree-text/50 select-text">{field.helpText}</p>
+              <p className="text-xs text-text-secondary select-text">{field.helpText}</p>
             )}
           </div>
         ))}

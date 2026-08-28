@@ -994,7 +994,7 @@ export const HybridInputBar = forwardRef<HybridInputBarHandle, HybridInputBarPro
                 className="absolute inset-0 z-10 flex items-center justify-center gap-2 rounded-md bg-daintree-bg/80 pointer-events-none"
               >
                 <Loader2 className="h-4 w-4 animate-spin text-accent-primary" />
-                <span className="text-xs text-daintree-text/70">Finishing dictation…</span>
+                <span className="text-xs text-text-secondary">Finishing dictation…</span>
               </div>
             )}
             <button

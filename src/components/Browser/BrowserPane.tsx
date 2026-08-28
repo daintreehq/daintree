@@ -927,7 +927,7 @@ export function BrowserPane({
           <div
             aria-live="assertive"
             aria-atomic="true"
-            className="absolute top-0 left-0 right-0 z-20 flex items-center gap-2 px-3 py-1.5 text-xs bg-status-info/10 border-b border-status-info/30 text-daintree-text/90"
+            className="absolute top-0 left-0 right-0 z-20 flex items-center gap-2 px-3 py-1.5 text-xs bg-status-info/10 border-b border-status-info/30 text-text-primary"
           >
             <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-status-info" />
             <span className="truncate flex-1">
@@ -937,7 +937,7 @@ export function BrowserPane({
             <button
               type="button"
               onClick={() => void handleApproveHost()}
-              className="shrink-0 px-2 py-0.5 rounded text-xs bg-status-info/20 hover:bg-status-info/30 text-daintree-text/90 transition-colors focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-accent/50"
+              className="shrink-0 px-2 py-0.5 rounded text-xs bg-status-info/20 hover:bg-status-info/30 text-text-primary transition-colors focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-accent/50"
             >
               Allow
             </button>
@@ -954,8 +954,8 @@ export function BrowserPane({
         {!hasValidUrl ? (
           <div className="absolute inset-0 flex flex-col items-center justify-center bg-surface-canvas text-text-primary p-6">
             <div className="flex flex-col items-center text-center max-w-md">
-              <h3 className="text-sm font-medium text-daintree-text/70 mb-1">Browser</h3>
-              <p className="text-xs text-daintree-text/50 mb-4 leading-relaxed">
+              <h3 className="text-sm font-medium text-text-secondary mb-1">Browser</h3>
+              <p className="text-xs text-text-secondary mb-4 leading-relaxed">
                 Preview your local development server. Enter a URL in the address bar above —
                 localhost, LAN, Docker, and RFC-reserved TLDs (.local, .test, .internal) are all
                 supported.
@@ -966,7 +966,7 @@ export function BrowserPane({
                     key={example}
                     type="button"
                     onClick={() => handleNavigate(`http://${example}`)}
-                    className="px-3 py-1.5 text-xs font-mono text-daintree-text/50 bg-overlay-soft hover:bg-overlay-medium border border-overlay rounded-md transition-colors focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-accent/50"
+                    className="px-3 py-1.5 text-xs font-mono text-text-secondary bg-overlay-soft hover:bg-overlay-medium border border-overlay rounded-md transition-colors focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-accent/50"
                   >
                     {example}
                   </button>
@@ -976,13 +976,13 @@ export function BrowserPane({
           </div>
         ) : !hasBeenVisible ? (
           <div className="absolute inset-0 flex flex-col items-center justify-center bg-surface-canvas text-text-primary">
-            <p className="text-xs text-daintree-text/50">
+            <p className="text-xs text-text-secondary">
               Browser will load when this panel is first viewed
             </p>
           </div>
         ) : isEvicted ? (
           <div className="absolute inset-0 flex flex-col items-center justify-center bg-surface-canvas text-text-primary p-6">
-            <p className="text-xs text-daintree-text/50">Reclaimed for memory</p>
+            <p className="text-xs text-text-secondary">Reclaimed for memory</p>
           </div>
         ) : (
           <>
@@ -992,7 +992,7 @@ export function BrowserPane({
                 className="absolute inset-0 z-30 flex flex-col items-center justify-center bg-surface-canvas text-text-primary p-6"
               >
                 <AlertTriangle className="w-6 h-6 text-status-warning mb-3" />
-                <h3 className="text-sm font-medium text-daintree-text/70 mb-1">
+                <h3 className="text-sm font-medium text-text-secondary mb-1">
                   {loadError.kind === "timeout"
                     ? "Page load timed out"
                     : loadError.kind === "cancelled"
@@ -1003,7 +1003,7 @@ export function BrowserPane({
                           ? "Connection failed"
                           : "Unable to display page"}
                 </h3>
-                <p className="text-xs text-daintree-text/50 text-center mb-3 max-w-md">
+                <p className="text-xs text-text-secondary text-center mb-3 max-w-md">
                   {loadError.message}
                 </p>
                 <div className="flex items-center gap-1">
@@ -1022,7 +1022,7 @@ export function BrowserPane({
                     className="flex items-center gap-1.5 px-2.5 py-1.5 rounded-md hover:bg-overlay-soft transition-colors group focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-daintree-accent/50"
                   >
                     <ExternalLink className="h-3.5 w-3.5 text-daintree-text/50 group-hover:text-daintree-text/70 transition-colors" />
-                    <span className="text-xs text-daintree-text/50 group-hover:text-daintree-text/70 transition-colors">
+                    <span className="text-xs text-text-secondary group-hover:text-text-primary transition-colors">
                       Open in external browser
                     </span>
                   </button>
@@ -1099,7 +1099,7 @@ export function BrowserPane({
                 <div
                   aria-live="polite"
                   aria-atomic="true"
-                  className="flex items-center gap-2 px-3 py-1.5 text-xs bg-status-warning/10 border-b border-status-warning/20 text-daintree-text/80"
+                  className="flex items-center gap-2 px-3 py-1.5 text-xs bg-status-warning/10 border-b border-status-warning/20 text-text-primary"
                 >
                   <ExternalLink className="h-3.5 w-3.5 shrink-0 text-status-warning" />
                   <span className="truncate flex-1">
@@ -1113,7 +1113,7 @@ export function BrowserPane({
                       onClick={() =>
                         void handleOpenBlockedExternal(blockedNav.noticeId, blockedNav.url)
                       }
-                      className="shrink-0 px-2 py-0.5 rounded text-xs bg-status-warning/20 hover:bg-status-warning/30 text-daintree-text/90 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                      className="shrink-0 px-2 py-0.5 rounded text-xs bg-status-warning/20 hover:bg-status-warning/30 text-text-primary transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
                     >
                       {blockedNav.phase === "opening" ? "Opening…" : "Open in external browser"}
                     </button>
@@ -1146,14 +1146,14 @@ export function BrowserPane({
                   </span>
                   {isSlowLoad && (
                     <>
-                      <p aria-hidden="true" className="text-xs text-daintree-text/50">
+                      <p aria-hidden="true" className="text-xs text-text-secondary">
                         Taking longer than usual...
                       </p>
                       <Button
                         onClick={handleCancelLoad}
                         variant="ghost"
                         size="sm"
-                        className="gap-1.5 px-2.5 py-1.5 group text-daintree-text/50 hover:text-daintree-text/70"
+                        className="gap-1.5 px-2.5 py-1.5 group text-text-secondary hover:text-text-primary"
                       >
                         <Square className="h-3.5 w-3.5" />
                         <span className="text-xs">Cancel</span>

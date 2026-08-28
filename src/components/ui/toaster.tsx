@@ -431,7 +431,7 @@ function Toast({
                     data-testid="toast-coalesce-badge"
                     aria-label={formatNotificationCountAriaLabel(notification.count)}
                     className={cn(
-                      "shrink-0 rounded-full bg-tint/10 px-1.5 py-0.5 text-3xs font-medium leading-none text-daintree-text/60 tabular-nums min-w-[3.5ch] text-center",
+                      "shrink-0 rounded-full bg-tint/10 px-1.5 py-0.5 text-3xs font-medium leading-none text-text-secondary tabular-nums min-w-[3.5ch] text-center",
                       isCountBumping && "animate-badge-bump"
                     )}
                     style={{ animationDuration: `${DURATION_150}ms` }}
@@ -451,7 +451,7 @@ function Toast({
                 data-testid="toast-coalesce-badge"
                 aria-label={formatNotificationCountAriaLabel(notification.count)}
                 className={cn(
-                  "inline-block rounded-full bg-tint/10 px-1.5 py-0.5 text-3xs font-medium leading-none text-daintree-text/60 tabular-nums min-w-[3.5ch] text-center",
+                  "inline-block rounded-full bg-tint/10 px-1.5 py-0.5 text-3xs font-medium leading-none text-text-secondary tabular-nums min-w-[3.5ch] text-center",
                   isCountBumping && "animate-badge-bump"
                 )}
                 style={{ animationDuration: `${DURATION_150}ms` }}
@@ -468,13 +468,13 @@ function Toast({
               <span className="sr-only">{notification.inboxMessage}</span>
               <div
                 aria-hidden="true"
-                className="text-xs text-daintree-text/70 leading-snug break-words"
+                className="text-xs text-text-secondary leading-snug break-words"
               >
                 {notification.message}
               </div>
             </>
           ) : (
-            <div className="text-xs text-daintree-text/70 leading-snug break-words">
+            <div className="text-xs text-text-secondary leading-snug break-words">
               {notification.message}
             </div>
           )}
@@ -576,7 +576,7 @@ function Toast({
                         "px-2.5 py-1 rounded-[var(--radius-xs)]",
                         "text-xs font-medium transition-colors",
                         variant === "secondary"
-                          ? "text-daintree-text/70 hover:text-text-primary hover:bg-tint/10"
+                          ? "text-text-secondary hover:text-text-primary hover:bg-tint/10"
                           : "bg-status-info/10 text-status-info hover:bg-status-info/20",
                         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
                         isDimmed && "opacity-50 pointer-events-none"
@@ -701,7 +701,7 @@ function OverflowPill({ count }: { count: number }) {
         "bg-surface-panel/85 backdrop-blur-xl",
         "border border-tint/[0.08] ring-1 ring-inset ring-tint/[0.05]",
         "px-2.5 py-1 text-2xs font-medium leading-none tabular-nums",
-        "text-daintree-text/70 hover:text-text-primary",
+        "text-text-secondary hover:text-text-primary",
         "shadow-[var(--theme-shadow-floating)]",
         "transition-colors",
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"

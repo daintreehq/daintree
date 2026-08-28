@@ -70,13 +70,13 @@ function GrantActiveBanner({
       className={cn(
         "flex items-center gap-2 px-3 py-2 mx-3 mt-3 mb-1",
         "rounded-[var(--radius-md)] bg-overlay-subtle border border-border-default",
-        "text-xs text-daintree-text/80"
+        "text-xs text-text-primary"
       )}
       data-testid="help-grant-active-banner"
     >
       <ShieldCheck className="w-3.5 h-3.5 shrink-0 text-daintree-text/60" aria-hidden="true" />
       <span className="flex-1 min-w-0 select-text">
-        <span className="font-mono text-daintree-text/90">{grant.toolId}</span> approved ·{" "}
+        <span className="font-mono text-text-primary">{grant.toolId}</span> approved ·{" "}
         {/* The countdown re-derives every second; keep it out of the parent's
             polite live region (`aria-live="off"`) so screen readers announce
             the "<tool> approved" message once instead of the ticking time. */}
@@ -91,7 +91,7 @@ function GrantActiveBanner({
         disabled={isRevoking}
         className={cn(
           "px-2 py-1 rounded-[var(--radius-sm)] text-xs",
-          "text-daintree-text/65 hover:text-text-primary",
+          "text-text-secondary hover:text-text-primary",
           "disabled:opacity-50 disabled:cursor-not-allowed transition-colors",
           "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
         )}
@@ -122,13 +122,13 @@ function GrantEndedBanner({
       className={cn(
         "flex items-start gap-2 px-3 py-2 mx-3 mt-3 mb-1",
         "rounded-[var(--radius-md)] bg-overlay-subtle border border-border-default",
-        "text-xs text-daintree-text/80"
+        "text-xs text-text-primary"
       )}
       data-testid="help-grant-ended-banner"
     >
       <Clock className="w-3.5 h-3.5 shrink-0 mt-0.5 text-daintree-text/60" aria-hidden="true" />
       <span className="flex-1 min-w-0 select-text">
-        <span className="font-mono text-daintree-text/90">{grantEnded.toolId}</span>{" "}
+        <span className="font-mono text-text-primary">{grantEnded.toolId}</span>{" "}
         {GRANT_ENDED_BODY[grantEnded.reason]}
       </span>
       <button
@@ -249,7 +249,7 @@ export function HelpPanelBanners({
           className={cn(
             "flex items-start gap-2 px-3 py-2 mx-3 mt-3 mb-1",
             "rounded-[var(--radius-md)] bg-overlay-subtle border border-border-default",
-            "text-xs text-daintree-text/80"
+            "text-xs text-text-primary"
           )}
           data-testid="help-resume-banner"
         >
@@ -279,7 +279,7 @@ export function HelpPanelBanners({
             "flex flex-col gap-2 px-3 py-2.5 mx-3 mt-3 mb-1",
             "rounded-[var(--radius-md)]",
             "bg-status-warning/10 border border-status-warning/20",
-            "text-xs text-daintree-text/85"
+            "text-xs text-text-primary"
           )}
           data-testid="help-tier-mismatch-banner"
         >
@@ -290,7 +290,7 @@ export function HelpPanelBanners({
             />
             <div className="flex-1 select-text">
               <p className="font-medium text-text-primary">Tool not permitted</p>
-              <p className="mt-0.5 text-daintree-text/70">
+              <p className="mt-0.5 text-text-secondary">
                 {tierMismatch.targetTier
                   ? `${tierMismatch.toolId} needs ${tierMismatch.targetTier} tier access.`
                   : `${tierMismatch.toolId} isn't available at any project tier.`}
@@ -326,7 +326,7 @@ export function HelpPanelBanners({
                 disabled={isApprovingTier}
                 className={cn(
                   "px-2 py-1 rounded-[var(--radius-sm)] text-xs font-medium",
-                  "bg-daintree-text/5 hover:bg-daintree-text/10 text-daintree-text/85",
+                  "bg-daintree-text/5 hover:bg-daintree-text/10 text-text-primary",
                   "disabled:opacity-50 disabled:cursor-not-allowed transition-colors",
                   "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                 )}
@@ -339,7 +339,7 @@ export function HelpPanelBanners({
                 disabled={isApprovingTier}
                 className={cn(
                   "px-2 py-1 rounded-[var(--radius-sm)] text-xs",
-                  "text-daintree-text/65 hover:text-text-primary",
+                  "text-text-secondary hover:text-text-primary",
                   "disabled:opacity-50 disabled:cursor-not-allowed transition-colors",
                   "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                 )}
@@ -357,7 +357,7 @@ export function HelpPanelBanners({
             "flex flex-col gap-2 px-3 py-2.5 mx-3 mt-3 mb-1",
             "rounded-[var(--radius-md)]",
             "bg-status-error/10 border border-status-error/20",
-            "text-xs text-daintree-text/85"
+            "text-xs text-text-primary"
           )}
           data-testid="help-launch-error-banner"
         >
@@ -368,7 +368,7 @@ export function HelpPanelBanners({
             />
             <div className="flex-1 select-text">
               <p className="font-medium text-text-primary">Assistant couldn't start</p>
-              <p className="mt-0.5 text-daintree-text/70">{LAUNCH_ERROR_BODY[launchError.kind]}</p>
+              <p className="mt-0.5 text-text-secondary">{LAUNCH_ERROR_BODY[launchError.kind]}</p>
             </div>
             <button
               type="button"
@@ -398,7 +398,7 @@ export function HelpPanelBanners({
                     "px-2 py-1 rounded-[var(--radius-sm)] text-xs",
                     cta.variant === "primary"
                       ? "font-medium bg-daintree-text/10 hover:bg-daintree-text/15 text-text-primary"
-                      : "text-daintree-text/65 hover:text-text-primary",
+                      : "text-text-secondary hover:text-text-primary",
                     "transition-colors",
                     "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                   )}
@@ -417,7 +417,7 @@ export function HelpPanelBanners({
             "flex flex-col gap-2 px-3 py-2.5 mx-3 mt-3 mb-1",
             "rounded-[var(--radius-md)]",
             "bg-status-error/10 border border-status-error/20",
-            "text-xs text-daintree-text/85"
+            "text-xs text-text-primary"
           )}
           data-testid="help-session-revoked-banner"
         >
@@ -428,7 +428,7 @@ export function HelpPanelBanners({
             />
             <div className="flex-1 select-text">
               <p className="font-medium text-text-primary">Session ended</p>
-              <p className="mt-0.5 text-daintree-text/70">
+              <p className="mt-0.5 text-text-secondary">
                 This assistant session was stopped after too many blocked requests. Start a new
                 session to continue.
               </p>

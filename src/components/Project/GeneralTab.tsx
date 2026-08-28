@@ -328,8 +328,8 @@ export function GeneralTab({
     <>
       {currentProject && (
         <div id="project-name" className="mb-6 pb-6 border-b border-border-default">
-          <h3 className="text-sm font-semibold text-daintree-text/80 mb-2">Project Identity</h3>
-          <p className="text-xs text-daintree-text/60 mb-4">
+          <h3 className="text-sm font-semibold text-text-primary mb-2">Project Identity</h3>
+          <p className="text-xs text-text-secondary mb-4">
             Customize how your project appears in the sidebar and dashboard.
           </p>
 
@@ -362,7 +362,7 @@ export function GeneralTab({
             <div className="flex-1 min-w-0 flex flex-col justify-center h-14">
               <label
                 htmlFor="project-name-input"
-                className="text-xs font-medium text-daintree-text/60 mb-1.5 ml-1"
+                className="text-xs font-medium text-text-secondary mb-1.5 ml-1"
               >
                 Project Name
               </label>
@@ -399,11 +399,11 @@ export function GeneralTab({
 
       {currentProject && (
         <div className="mb-6 pb-6 border-b border-border-default">
-          <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
+          <h3 className="text-sm font-semibold text-text-primary mb-2 flex items-center gap-2">
             <Palette className="h-4 w-4" />
             Project Color
           </h3>
-          <p className="text-xs text-daintree-text/60 mb-4">
+          <p className="text-xs text-text-secondary mb-4">
             Choose a color for your project&apos;s gradient background in the sidebar and dashboard.
           </p>
 
@@ -465,7 +465,7 @@ export function GeneralTab({
               <button
                 type="button"
                 onClick={() => onColorChange(undefined)}
-                className="flex items-center gap-1 px-2 py-1.5 rounded text-xs text-daintree-text/60 hover:text-text-primary hover:bg-tint/5 transition-colors"
+                className="flex items-center gap-1 px-2 py-1.5 rounded text-xs text-text-secondary hover:text-text-primary hover:bg-tint/5 transition-colors"
                 aria-label="Clear project color"
               >
                 <X className="h-3.5 w-3.5" />
@@ -477,11 +477,11 @@ export function GeneralTab({
       )}
 
       <div id="project-dev-server" className="mb-6 pb-6 border-b border-border-default">
-        <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
+        <h3 className="text-sm font-semibold text-text-primary mb-2 flex items-center gap-2">
           <Rocket className="h-4 w-4" />
           Dev Server Command
         </h3>
-        <p className="text-xs text-daintree-text/60 mb-4">
+        <p className="text-xs text-text-secondary mb-4">
           Command to start the development server (e.g., npm run dev). When configured, a button
           will appear in the toolbar to start the dev server.
         </p>
@@ -493,9 +493,9 @@ export function GeneralTab({
               "bg-overlay-subtle border border-border-default"
             )}
           >
-            <span className="text-xs text-daintree-text/60">
+            <span className="text-xs text-text-secondary">
               Detected:{" "}
-              <code className="font-mono text-daintree-text/80">{detectedCandidate.command}</code>
+              <code className="font-mono text-text-primary">{detectedCandidate.command}</code>
             </span>
             <Button
               onClick={handleApplyDetected}
@@ -525,7 +525,7 @@ export function GeneralTab({
         <div className="mt-3">
           <label
             htmlFor="dev-server-load-timeout"
-            className="block text-xs text-daintree-text/60 mb-1"
+            className="block text-xs text-text-secondary mb-1"
           >
             Load timeout (seconds)
           </label>
@@ -561,7 +561,7 @@ export function GeneralTab({
           />
           <label
             htmlFor="turbopack-enabled"
-            className="text-xs text-daintree-text/60 cursor-pointer select-none"
+            className="text-xs text-text-secondary cursor-pointer select-none"
           >
             Auto-inject <code className="font-mono">--turbopack</code> for Next.js 15+ projects
           </label>
@@ -569,11 +569,11 @@ export function GeneralTab({
       </div>
 
       <div className="mb-6 pb-6 border-b border-border-default">
-        <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
+        <h3 className="text-sm font-semibold text-text-primary mb-2 flex items-center gap-2">
           <McpServerIcon className="h-4 w-4" />
           Agent integrations
         </h3>
-        <p className="text-xs text-daintree-text/60 mb-4">
+        <p className="text-xs text-text-secondary mb-4">
           Choose how much of Daintree the Claude Code agents launched in this project's worktrees
           can reach. Each tier expands what's available — newly launched agents pick up the change.
         </p>
@@ -594,7 +594,7 @@ export function GeneralTab({
               )}
             >
               <AlertTriangle className="w-4 h-4 text-status-warning shrink-0 mt-0.5" />
-              <div className="text-xs text-daintree-text/70 leading-relaxed select-text">
+              <div className="text-xs text-text-secondary leading-relaxed select-text">
                 System tier lets agents commit, push, delete worktrees, and send terminal commands —
                 some of these are irreversible or visible to teammates. Only enable it for projects
                 where you trust the agent to take that kind of action.
@@ -605,11 +605,11 @@ export function GeneralTab({
       </div>
 
       <div className="mb-6">
-        <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
+        <h3 className="text-sm font-semibold text-text-primary mb-2 flex items-center gap-2">
           <Image className="h-4 w-4" />
           Project Icon (SVG)
         </h3>
-        <p className="text-xs text-daintree-text/60 mb-4">
+        <p className="text-xs text-text-secondary mb-4">
           Shown in the grid empty state. SVG only, max 250KB.
         </p>
 
@@ -641,7 +641,7 @@ export function GeneralTab({
             </div>
             <div className="flex-1 min-w-0">
               <p className="text-sm text-text-primary mb-1">Custom icon configured</p>
-              <p className="text-xs text-daintree-text/60">
+              <p className="text-xs text-text-secondary">
                 {Math.round(new Blob([projectIconSvg]).size / 1024)}KB
               </p>
             </div>
@@ -669,7 +669,7 @@ export function GeneralTab({
             onClick={() => fileInputRef.current?.click()}
           >
             <Upload className="h-8 w-8 text-daintree-text/40 mb-3" />
-            <p className="text-sm text-daintree-text/60 text-center mb-1">
+            <p className="text-sm text-text-secondary text-center mb-1">
               Drag and drop an SVG file here
             </p>
             <p className="text-xs text-text-secondary">or click to browse</p>
@@ -685,22 +685,21 @@ export function GeneralTab({
 
       {/* In-Repository Settings */}
       <div id="project-in-repo-settings" className="mt-6">
-        <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
+        <h3 className="text-sm font-semibold text-text-primary mb-2 flex items-center gap-2">
           <FolderGit2 className="h-4 w-4" />
           In-Repository Settings
         </h3>
-        <p className="text-xs text-daintree-text/60 mb-4">
+        <p className="text-xs text-text-secondary mb-4">
           Store project name, emoji, and run commands in{" "}
-          <code className="font-mono text-daintree-text/80">.daintree/</code> so your team shares
-          the same configuration.
+          <code className="font-mono text-text-primary">.daintree/</code> so your team shares the
+          same configuration.
         </p>
 
         {currentProject?.daintreeConfigPresent && (
-          <div className="flex items-center gap-2 mb-3 text-xs text-daintree-text/60">
+          <div className="flex items-center gap-2 mb-3 text-xs text-text-secondary">
             <FolderOpen className="h-3.5 w-3.5 text-daintree-text/60 shrink-0" />
             <span>
-              Settings loaded from{" "}
-              <code className="font-mono text-daintree-text/80">.daintree/</code>
+              Settings loaded from <code className="font-mono text-text-primary">.daintree/</code>
             </span>
           </div>
         )}
@@ -727,18 +726,18 @@ export function GeneralTab({
         {!currentProject?.inRepoSettings && inRepoExpanded && (
           <div className="mt-3 rounded-[var(--radius-lg)] border border-border-default bg-surface-canvas p-4 space-y-4">
             <div>
-              <p className="text-xs font-medium text-daintree-text/80 mb-2">
+              <p className="text-xs font-medium text-text-primary mb-2">
                 The following files will be created:
               </p>
-              <ul className="space-y-1 text-xs text-daintree-text/60">
+              <ul className="space-y-1 text-xs text-text-secondary">
                 <li className="flex items-center gap-2">
-                  <span className="font-mono font-medium text-daintree-text/85">
+                  <span className="font-mono font-medium text-text-primary">
                     .daintree/project.json
                   </span>
                   <span className="text-text-secondary"> project name, emoji, color</span>
                 </li>
                 <li className="flex items-center gap-2">
-                  <span className="font-mono font-medium text-daintree-text/85">
+                  <span className="font-mono font-medium text-text-primary">
                     .daintree/settings.json
                   </span>
                   <span className="text-text-secondary">
@@ -747,7 +746,7 @@ export function GeneralTab({
                   </span>
                 </li>
               </ul>
-              <p className="mt-2 text-xs text-daintree-text/50">
+              <p className="mt-2 text-xs text-text-secondary">
                 Machine-local settings (environment variables, secrets) are never written to these
                 files.
               </p>
@@ -755,13 +754,13 @@ export function GeneralTab({
 
             <div>
               <div className="flex items-center justify-between mb-1.5">
-                <p className="text-xs font-medium text-daintree-text/80">
+                <p className="text-xs font-medium text-text-primary">
                   Recommended <code className="font-mono">.gitignore</code> guidance
                 </p>
                 <button
                   type="button"
                   onClick={() => void handleCopyGitignore()}
-                  className="flex items-center gap-1 px-2 py-1 rounded text-xs text-daintree-text/60 hover:text-text-primary hover:bg-tint/5 transition-colors"
+                  className="flex items-center gap-1 px-2 py-1 rounded text-xs text-text-secondary hover:text-text-primary hover:bg-tint/5 transition-colors"
                   aria-label="Copy .gitignore snippet"
                 >
                   {gitignoreCopied ? (
@@ -772,7 +771,7 @@ export function GeneralTab({
                   {gitignoreCopied ? "Copied!" : "Copy"}
                 </button>
               </div>
-              <pre className="rounded-[var(--radius-md)] border border-border-default bg-surface-sidebar p-3 text-xs font-mono text-daintree-text/70 overflow-x-auto whitespace-pre select-text">
+              <pre className="rounded-[var(--radius-md)] border border-border-default bg-surface-sidebar p-3 text-xs font-mono text-text-secondary overflow-x-auto whitespace-pre select-text">
                 {GITIGNORE_SNIPPET}
               </pre>
             </div>

@@ -249,7 +249,7 @@ export function WaitingContainer({ compact = false }: WaitingContainerProps) {
         >
           <div className="flex flex-col">
             <div className="px-3 py-2 border-b border-divider bg-daintree-bg/50 flex justify-between items-center">
-              <span className="text-xs font-medium text-daintree-text/70">Waiting for input</span>
+              <span className="text-xs font-medium text-text-secondary">Waiting for input</span>
               <span className="text-3xs font-medium text-state-waiting tabular-nums">
                 {count} {count === 1 ? "agent" : "agents"}
               </span>
@@ -370,7 +370,7 @@ function WaitingSingleItem({
           {title}
         </span>
         {(worktreeName || terminal.activityHeadline) && (
-          <span className="flex items-center gap-1 min-w-0 truncate text-3xs text-daintree-text/45">
+          <span className="flex items-center gap-1 min-w-0 truncate text-3xs text-text-secondary">
             {worktreeName && <span className="truncate">{worktreeName}</span>}
             {worktreeName && terminal.activityHeadline && (
               <span className="text-daintree-text/30">·</span>
@@ -472,7 +472,7 @@ function WaitingGroupItem({
         </div>
 
         <div className="flex-1 min-w-0">
-          <div className="text-xs font-medium text-daintree-text/70 group-hover:text-text-primary truncate transition-colors">
+          <div className="text-xs font-medium text-text-secondary group-hover:text-text-primary truncate transition-colors">
             {groupName}
           </div>
         </div>

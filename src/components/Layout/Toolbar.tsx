@@ -1310,7 +1310,7 @@ export function Toolbar({
                     {copyTreeNotice ? (
                       <span className="flex flex-col gap-0.5">
                         <span>{copyTreeNotice.title}</span>
-                        <span className="font-normal text-daintree-text/60">
+                        <span className="font-normal text-text-secondary">
                           {copyTreeNotice.message}
                         </span>
                       </span>

@@ -363,7 +363,7 @@ export function CommitPanel({
 
   const blockerTooltip = (
     <div>
-      <div className="text-2xs font-semibold text-daintree-text/60 mb-2">Cannot commit</div>
+      <div className="text-2xs font-semibold text-text-secondary mb-2">Cannot commit</div>
       <ul className="flex flex-col gap-1.5 text-xs">
         {blockers.map((b) => (
           <li key={b.key} className="flex items-center gap-2">
@@ -438,15 +438,15 @@ export function CommitPanel({
       </div>
 
       {isPushing && pushTargetBranch && (
-        <div className="text-3xs text-daintree-text/50 truncate">
-          Pushing to <span className="text-daintree-text/70 font-mono">{pushTargetBranch}</span>
+        <div className="text-3xs text-text-secondary truncate">
+          Pushing to <span className="text-text-secondary font-mono">{pushTargetBranch}</span>
         </div>
       )}
 
       {isPushing && hasProgress && (
         <div className="space-y-1">
           {progressEntries.map((e) => (
-            <div key={e.stage} className="flex items-center gap-2 text-3xs text-daintree-text/70">
+            <div key={e.stage} className="flex items-center gap-2 text-3xs text-text-secondary">
               <span className="w-20 truncate capitalize">{e.stage}</span>
               <div className="flex-1 h-1 bg-surface-canvas rounded-full overflow-hidden">
                 <div
@@ -514,7 +514,7 @@ export function CommitPanel({
           >
             {commitMessage}
           </pre>
-          <label className="flex items-center gap-2 text-xs text-daintree-text/60 select-none">
+          <label className="flex items-center gap-2 text-xs text-text-secondary select-none">
             <input
               type="checkbox"
               data-testid="commit-panel-push-confirm-dont-ask"

@@ -40,7 +40,7 @@ export const ROW_TONE_CLASS: Record<ProjectRowTone, string> = {
   // able to ship without an answer here — and because a surface with room for a
   // "running" sentence should draw it in this hue rather than inventing one.
   working: "text-activity-working",
-  running: "text-daintree-text/65",
+  running: "text-text-secondary",
   // Muted like the other settled states, and deliberately NOT the accent: a
   // snooze is the user telling this row to stop asking for them, so it must not
   // be the loudest thing in the list on the way out.
@@ -49,12 +49,12 @@ export const ROW_TONE_CLASS: Record<ProjectRowTone, string> = {
   // text on the row and the age is quieter still — at the same weight, "until
   // 3:45 PM" read as the headline and "1 snoozed" as its footnote, which is the
   // hierarchy upside down.
-  snoozed: "text-daintree-text/65",
-  muted: "text-daintree-text/65",
+  snoozed: "text-text-secondary",
+  muted: "text-text-secondary",
   // Machine-initiated work the user didn't launch, so it reads at the same
   // weight as the settled states rather than competing with the runs they
   // started (#11806).
-  assistant: "text-daintree-text/65",
+  assistant: "text-text-secondary",
   // An assistant that failed says so in the danger hue — the severity is real
   // — while its dot stays hollow, so it never reads as a worker run.
   "assistant-blocked": "text-status-danger/80",

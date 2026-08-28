@@ -892,7 +892,7 @@ export function GeneralTab({
                           "px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium transition-colors capitalize",
                           updateChannel === ch
                             ? "bg-overlay-selected border border-border-strong text-text-primary font-medium"
-                            : "border border-border-default hover:bg-tint/5 text-daintree-text/70"
+                            : "border border-border-default hover:bg-tint/5 text-text-secondary"
                         )}
                       >
                         {ch}
@@ -925,7 +925,7 @@ export function GeneralTab({
               onClick={() => setIsShortcutsOpen(!isShortcutsOpen)}
               aria-expanded={isShortcutsOpen}
               aria-controls="keyboard-shortcuts-content"
-              className="flex items-center gap-2 text-sm text-daintree-text/60 hover:text-text-primary transition-colors"
+              className="flex items-center gap-2 text-sm text-text-secondary hover:text-text-primary transition-colors"
             >
               <ChevronRight
                 data-animated-chevron
@@ -941,7 +941,7 @@ export function GeneralTab({
               <div id="keyboard-shortcuts-content" className="space-y-4">
                 {shortcuts.map((category) => (
                   <div key={category.category} className="space-y-2">
-                    <h5 className="text-xs font-semibold text-daintree-text/60 uppercase tracking-wider">
+                    <h5 className="text-xs font-semibold text-text-secondary uppercase tracking-wider">
                       {category.category}
                     </h5>
                     <dl className="space-y-1">
@@ -987,7 +987,7 @@ export function GeneralTab({
 
               {idleNotifyConfig.enabled && (
                 <div id="general-idle-terminal-threshold" className="space-y-2 scroll-mt-12">
-                  <label className="text-sm text-daintree-text/70">Idle Threshold</label>
+                  <label className="text-sm text-text-secondary">Idle Threshold</label>
                   <div className="flex gap-2">
                     {IDLE_TERMINAL_THRESHOLD_PRESETS.map(({ value, label }) => (
                       <button
@@ -997,7 +997,7 @@ export function GeneralTab({
                           "px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium transition-colors",
                           idleNotifyConfig.thresholdMinutes === value
                             ? "bg-overlay-selected border border-border-strong text-text-primary font-medium"
-                            : "border border-border-default hover:bg-tint/5 text-daintree-text/70"
+                            : "border border-border-default hover:bg-tint/5 text-text-secondary"
                         )}
                       >
                         {label}
@@ -1030,7 +1030,7 @@ export function GeneralTab({
 
               {idleAutoCloseConfig.enabled && (
                 <div id="general-idle-background-threshold" className="space-y-2 scroll-mt-12">
-                  <label className="text-sm text-daintree-text/70">Idle Threshold</label>
+                  <label className="text-sm text-text-secondary">Idle Threshold</label>
                   <div className="flex gap-2">
                     {IDLE_BACKGROUND_THRESHOLD_PRESETS.map(({ value, label }) => (
                       <button
@@ -1040,7 +1040,7 @@ export function GeneralTab({
                           "px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium transition-colors",
                           idleAutoCloseConfig.thresholdMinutes === value
                             ? "bg-overlay-selected border border-border-strong text-text-primary font-medium"
-                            : "border border-border-default hover:bg-tint/5 text-daintree-text/70"
+                            : "border border-border-default hover:bg-tint/5 text-text-secondary"
                         )}
                       >
                         {label}
@@ -1079,7 +1079,7 @@ export function GeneralTab({
 
               {hibernationConfig.enabled && (
                 <div id="general-hibernation-threshold" className="space-y-2 scroll-mt-12">
-                  <label className="text-sm text-daintree-text/70">Inactivity Threshold</label>
+                  <label className="text-sm text-text-secondary">Inactivity Threshold</label>
                   <div className="flex gap-2">
                     {THRESHOLD_PRESETS.map(({ value, label }) => (
                       <button
@@ -1089,7 +1089,7 @@ export function GeneralTab({
                           "px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium transition-colors",
                           hibernationConfig.inactiveThresholdHours === value
                             ? "bg-overlay-selected border border-border-strong text-text-primary font-medium"
-                            : "border border-border-default hover:bg-tint/5 text-daintree-text/70"
+                            : "border border-border-default hover:bg-tint/5 text-text-secondary"
                         )}
                       >
                         {label}

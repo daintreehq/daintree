@@ -94,13 +94,13 @@ function FigureThumbnail({ figure, isNewest, onClick }: FigureThumbnailProps) {
       data-testid="figure-thumbnail"
     >
       {status === "failed" ? (
-        <div className="flex h-full w-full flex-col items-center justify-center gap-1 text-daintree-text/50">
+        <div className="flex h-full w-full flex-col items-center justify-center gap-1 text-text-secondary">
           <ImageOff className="w-4 h-4" aria-hidden="true" />
           <button
             type="button"
             onClick={handleRetry}
             aria-label={`Retry figure ${figure.figureNumber}`}
-            className="flex items-center gap-1 text-3xs text-daintree-text/60 hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary rounded"
+            className="flex items-center gap-1 text-3xs text-text-secondary hover:text-text-primary transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary rounded"
           >
             <RotateCw className="w-2.5 h-2.5" aria-hidden="true" />
             Retry
@@ -152,7 +152,7 @@ function FigureThumbnail({ figure, isNewest, onClick }: FigureThumbnailProps) {
       )}
 
       {status === "loaded" && (
-        <span className="pointer-events-none absolute bottom-0 left-0 right-0 bg-scrim-medium px-1.5 py-0.5 text-3xs font-medium text-daintree-text/90">
+        <span className="pointer-events-none absolute bottom-0 left-0 right-0 bg-scrim-medium px-1.5 py-0.5 text-3xs font-medium text-text-primary">
           {figure.figureLabel}
         </span>
       )}

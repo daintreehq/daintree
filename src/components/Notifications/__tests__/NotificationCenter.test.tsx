@@ -1384,23 +1384,32 @@ describe("NotificationCenter — Group by context toggle", () => {
   });
 });
 
+/** The unprefixed text-colour utility on an element, which is what "reads dimmer" means. */
+function textRole(className: string): string | undefined {
+  return className.split(/\s+/).find((token) => /^text-text-[a-z]+$/.test(token));
+}
+
 describe("NotificationCenter — Filter inactive contrast", () => {
-  it("uses /60 on inactive pills, matching the QuickStateFilterBar pattern", () => {
+  it("recedes the inactive segment and brightens it on hover, whichever is selected", () => {
     setEntries([makeEntry({ message: "msg-1" })]);
     render(<NotificationCenter open onClose={vi.fn()} />);
 
-    // Filter starts on "All" → "Unread" is the inactive segment.
+    // Filter starts on "All" → "Unread" is the inactive segment. Which colour
+    // each segment paints is the design's business; that their FOREGROUNDS
+    // differ, and that the inactive one offers a hover lift, is this test's.
+    // Comparing whole class strings would not do: these chips also differ by
+    // background and weight, so that comparison passes even if both foregrounds
+    // collapse to the same role.
     const unread = screen.getByText("Unread");
-    expect(unread.className).toContain("text-daintree-text/60");
-    expect(unread.className).not.toContain("text-daintree-text/40");
+    expect(textRole(unread.className)).toBeDefined();
+    expect(textRole(unread.className)).not.toBe(textRole(screen.getByText("All").className));
     expect(unread.className).toContain("hover:text-text-primary");
 
     fireEvent.click(unread);
 
-    // After flipping, "All" is the inactive segment.
+    // After flipping, the roles swap and the invariant has to hold either way.
     const all = screen.getByText("All");
-    expect(all.className).toContain("text-daintree-text/60");
-    expect(all.className).not.toContain("text-daintree-text/40");
+    expect(textRole(all.className)).not.toBe(textRole(screen.getByText("Unread").className));
     expect(all.className).toContain("hover:text-text-primary");
   });
 

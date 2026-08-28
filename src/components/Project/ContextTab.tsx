@@ -194,18 +194,18 @@ export function ContextTab({
   return (
     <>
       <div id="project-excluded-paths" className="mb-6 pb-6 border-b border-border-default">
-        <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
+        <h3 className="text-sm font-semibold text-text-primary mb-2 flex items-center gap-2">
           <FolderX className="h-4 w-4" />
           Excluded paths
         </h3>
-        <p className="text-xs text-daintree-text/60 mb-4">
+        <p className="text-xs text-text-secondary mb-4">
           Glob patterns to exclude from monitoring and context injection (e.g., node_modules/**,
           dist/**, .git/**)
         </p>
 
         <div className="space-y-2">
           {excludedPaths.length === 0 ? (
-            <div className="text-sm text-daintree-text/60 text-center py-8 border border-dashed border-border-default rounded-[var(--radius-md)]">
+            <div className="text-sm text-text-secondary text-center py-8 border border-dashed border-border-default rounded-[var(--radius-md)]">
               No excluded paths configured yet
             </div>
           ) : (
@@ -257,11 +257,11 @@ export function ContextTab({
 
       {/* CopyTree Settings */}
       <div id="project-copy-tree" className="mb-6 pb-6 border-b border-border-default">
-        <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
+        <h3 className="text-sm font-semibold text-text-primary mb-2 flex items-center gap-2">
           <FileCode className="h-4 w-4" />
           Context generation settings
         </h3>
-        <p className="text-xs text-daintree-text/60 mb-4">
+        <p className="text-xs text-text-secondary mb-4">
           Configure how CopyTree generates context for AI agents. These settings apply when
           injecting context into terminals or copying to clipboard.
         </p>
@@ -270,7 +270,7 @@ export function ContextTab({
           {/* Size Limits */}
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs text-daintree-text/60 mb-1">
+              <label className="block text-xs text-text-secondary mb-1">
                 Max context size (bytes)
               </label>
               <input
@@ -288,7 +288,7 @@ export function ContextTab({
               <p className="text-xs text-text-secondary mt-1">Total size limit for all files</p>
             </div>
             <div>
-              <label className="block text-xs text-daintree-text/60 mb-1">
+              <label className="block text-xs text-text-secondary mb-1">
                 Max file size (bytes)
               </label>
               <input
@@ -310,7 +310,7 @@ export function ContextTab({
           {/* Truncation Strategy */}
           <div className="grid grid-cols-2 gap-4">
             <div>
-              <label className="block text-xs text-daintree-text/60 mb-1">Character budget</label>
+              <label className="block text-xs text-text-secondary mb-1">Character budget</label>
               <input
                 type="number"
                 value={copyTreeSettings.charLimit ?? ""}
@@ -326,7 +326,7 @@ export function ContextTab({
               <p className="text-xs text-text-secondary mt-1">Total characters across all files</p>
             </div>
             <div>
-              <label className="block text-xs text-daintree-text/60 mb-1">
+              <label className="block text-xs text-text-secondary mb-1">
                 File priority strategy
               </label>
               <select
@@ -350,7 +350,7 @@ export function ContextTab({
 
           {/* Always Include Patterns */}
           <div>
-            <label className="block text-xs text-daintree-text/60 mb-1">
+            <label className="block text-xs text-text-secondary mb-1">
               Always include (glob patterns)
             </label>
             <p className="text-xs text-text-secondary mb-2">
@@ -413,7 +413,7 @@ export function ContextTab({
 
           {/* Always Exclude Patterns */}
           <div>
-            <label className="block text-xs text-daintree-text/60 mb-1">
+            <label className="block text-xs text-text-secondary mb-1">
               Always exclude (glob patterns)
             </label>
             <p className="text-xs text-text-secondary mb-2">
@@ -477,7 +477,7 @@ export function ContextTab({
           <div className="mt-6 pt-4 border-t border-border-default">
             <div className="flex items-center justify-between">
               <div>
-                <h4 className="text-sm font-medium text-daintree-text/80">Test configuration</h4>
+                <h4 className="text-sm font-medium text-text-primary">Test configuration</h4>
                 <p className="text-xs text-text-secondary">
                   Preview what files would be included with current settings
                 </p>
@@ -535,18 +535,18 @@ export function ContextTab({
                         <span className="text-sm font-medium text-text-primary">
                           {testConfigResult.includedFiles} files would be included
                         </span>
-                        <span className="text-xs text-daintree-text/60">
+                        <span className="text-xs text-text-secondary">
                           ({formatBytes(testConfigResult.includedSize)})
                         </span>
                         {testConfigResult.estimatedTokens !== undefined && (
-                          <span className="text-xs text-daintree-text/60">
+                          <span className="text-xs text-text-secondary">
                             ~{formatTokenEstimate(testConfigResult.estimatedTokens)} tokens
                           </span>
                         )}
                       </div>
                     )}
                     {testConfigResult.excluded && testConfigResult.excluded.total > 0 && (
-                      <p className="text-xs text-daintree-text/60">
+                      <p className="text-xs text-text-secondary">
                         {testConfigResult.excluded.total} excluded
                         {describeTopExclusions(testConfigResult.excluded.byReason)}
                       </p>
@@ -561,7 +561,7 @@ export function ContextTab({
                     {testConfigResult.truncated && (
                       <div className="flex items-start gap-2">
                         <AlertTriangle className="h-4 w-4 text-status-warning mt-0.5 shrink-0" />
-                        <p className="text-xs text-daintree-text/80">
+                        <p className="text-xs text-text-primary">
                           {formatTruncationNotice(
                             testConfigResult.truncatedCount,
                             testConfigResult.truncatedBy
@@ -572,7 +572,7 @@ export function ContextTab({
                     {testConfigResult.budgetExceeded && !testConfigResult.truncated && (
                       <div className="flex items-start gap-2">
                         <AlertTriangle className="h-4 w-4 text-status-warning mt-0.5 shrink-0" />
-                        <p className="text-xs text-daintree-text/80">
+                        <p className="text-xs text-text-primary">
                           The first file alone is over the total size limit, so it was kept anyway
                         </p>
                       </div>
@@ -589,7 +589,7 @@ export function ContextTab({
                               className="flex items-center justify-between gap-2 text-xs"
                             >
                               <span
-                                className="font-mono text-daintree-text/80 truncate"
+                                className="font-mono text-text-primary truncate"
                                 title={file.path}
                               >
                                 {file.path}
@@ -604,7 +604,7 @@ export function ContextTab({
                           <button
                             type="button"
                             onClick={() => setShowAllFiles((value) => !value)}
-                            className="text-xs text-daintree-text/60 hover:text-text-primary transition-colors"
+                            className="text-xs text-text-secondary hover:text-text-primary transition-colors"
                           >
                             {showAllFiles
                               ? "Show fewer"

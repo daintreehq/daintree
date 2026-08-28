@@ -111,7 +111,7 @@ function OnboardingCard({
         {installed ? (
           <span className="text-2xs text-text-secondary font-medium">Installed</span>
         ) : (
-          <span className="text-2xs text-daintree-text/30">Not installed</span>
+          <span className="text-2xs text-text-placeholder">Not installed</span>
         )}
       </div>
     </label>
@@ -134,7 +134,7 @@ function ManagementCard({
           </BrandMark>
           <div>
             <h4 className="text-sm font-medium text-text-primary">{name} settings</h4>
-            <p className="text-xs text-daintree-text/50 select-text">
+            <p className="text-xs text-text-secondary select-text">
               Configure how {name.toLowerCase()} runs in terminals
             </p>
           </div>
@@ -257,14 +257,14 @@ export function AgentInstallSection({
         <div className="flex items-center justify-between">
           <div>
             <h5 className="text-sm font-medium text-text-primary">{headerLabel}</h5>
-            <p className="text-xs text-daintree-text/50 select-text">{headerDescription}</p>
+            <p className="text-xs text-text-secondary select-text">{headerDescription}</p>
           </div>
           <Button
             size="sm"
             variant="ghost"
             onClick={onRefresh}
             disabled={isRefreshingCli}
-            className="text-daintree-text/50 hover:text-text-primary"
+            className="text-text-secondary hover:text-text-primary"
           >
             <SpinningIcon icon={RefreshCw} active={isRefreshingCli} size={14} className="mr-1.5" />
             Re-check
@@ -290,7 +290,7 @@ export function AgentInstallSection({
           )}
         >
           {detail.resolvedPath && (
-            <div className="text-xs font-mono break-all text-daintree-text/70 select-text">
+            <div className="text-xs font-mono break-all text-text-secondary select-text">
               {detail.via === "wsl"
                 ? `Available via WSL (${detail.wslDistro ?? "distro"})`
                 : detail.via === "npm-global"
@@ -314,7 +314,7 @@ export function AgentInstallSection({
             agentConfig.install.troubleshooting.length > 0 && (
               <div className="px-3 py-2 rounded-[var(--radius-md)] bg-status-warning/10 border border-status-warning/20">
                 <div className="text-xs font-medium text-status-warning mb-1">Troubleshooting</div>
-                <ul className="space-y-0.5 text-xs text-daintree-text/60">
+                <ul className="space-y-0.5 text-xs text-text-secondary">
                   {agentConfig.install.troubleshooting.map((tip, tipIndex) => (
                     <li key={tipIndex}>
                       {"• "}
@@ -333,7 +333,7 @@ export function AgentInstallSection({
         </div>
       ) : hasInstallConfig?.docsUrl ? (
         <div className="px-4 py-6 rounded-[var(--radius-md)] border border-border-default bg-surface text-center">
-          <p className="text-xs text-daintree-text/60 mb-3">
+          <p className="text-xs text-text-secondary mb-3">
             No OS-specific install instructions available
           </p>
           <Button
@@ -354,7 +354,7 @@ export function AgentInstallSection({
         </div>
       ) : (
         <div className="px-4 py-6 rounded-[var(--radius-md)] border border-border-default bg-surface text-center">
-          <p className="text-xs text-daintree-text/60">
+          <p className="text-xs text-text-secondary">
             No installation instructions configured for this agent
           </p>
         </div>
@@ -372,7 +372,7 @@ export function AgentInstallSection({
               });
             }
           }}
-          className="w-full text-daintree-text/50 hover:text-text-primary"
+          className="w-full text-text-secondary hover:text-text-primary"
         >
           <ExternalLink size={14} />
           View official documentation

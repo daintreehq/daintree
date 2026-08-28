@@ -76,7 +76,7 @@ export function RecentCallsPopover({ records, loading, error }: RecentCallsPopov
 
   return (
     <div className="flex flex-col text-2xs text-text-primary">
-      <div className="px-3 pt-2.5 pb-1.5 text-daintree-text/50 font-medium">Recent tool calls</div>
+      <div className="px-3 pt-2.5 pb-1.5 text-text-secondary font-medium">Recent tool calls</div>
 
       <div className="max-h-[min(360px,var(--radix-popover-content-available-height,360px))] overflow-y-auto px-1 pb-1">
         {loading ? (
@@ -86,9 +86,9 @@ export function RecentCallsPopover({ records, loading, error }: RecentCallsPopov
             <SkeletonBone className="h-3 w-3/4" />
           </Skeleton>
         ) : error ? (
-          <p className="px-2 py-3 text-daintree-text/50">Couldn't load recent calls</p>
+          <p className="px-2 py-3 text-text-secondary">Couldn't load recent calls</p>
         ) : records.length === 0 ? (
-          <p className="px-2 py-3 text-daintree-text/50">No calls yet this session</p>
+          <p className="px-2 py-3 text-text-secondary">No calls yet this session</p>
         ) : (
           <ul className="divide-y divide-daintree-border/60">
             {groups.map((group, index) => (
@@ -140,7 +140,7 @@ function RecentCallRow({ record }: { record: McpAuditRecord }) {
           label={RESULT_LABEL[record.result]}
           className="h-3 w-3"
         />
-        <span className="min-w-0 font-mono text-daintree-text/80 truncate">{record.toolId}</span>
+        <span className="min-w-0 font-mono text-text-primary truncate">{record.toolId}</span>
         {/* Recency, not duration — calls are almost always sub-100ms, so
             "when did this run" is the metric worth a column. */}
         <span className="text-text-secondary whitespace-nowrap tabular-nums">
@@ -149,7 +149,7 @@ function RecentCallRow({ record }: { record: McpAuditRecord }) {
       </button>
       {expanded && (
         <div className="mx-2 mb-1.5 flex flex-col gap-1.5 rounded-[var(--radius-md)] bg-overlay-subtle px-2 py-1.5 select-text">
-          <div className="flex items-center gap-2 text-daintree-text/50">
+          <div className="flex items-center gap-2 text-text-secondary">
             <span
               className={cn(
                 record.result === "error" || record.result === "unauthorized"
@@ -164,7 +164,7 @@ function RecentCallRow({ record }: { record: McpAuditRecord }) {
           {hasArgs && (
             <div>
               <div className="text-daintree-text/40">Arguments</div>
-              <pre className="mt-0.5 max-h-32 overflow-y-auto whitespace-pre-wrap break-all font-mono text-daintree-text/70">
+              <pre className="mt-0.5 max-h-32 overflow-y-auto whitespace-pre-wrap break-all font-mono text-text-secondary">
                 {record.argsSummary}
               </pre>
             </div>
@@ -172,15 +172,13 @@ function RecentCallRow({ record }: { record: McpAuditRecord }) {
           <div>
             <div className="text-daintree-text/40">Result</div>
             {record.result === "rate_limited" && record.resultMeta?.retryAfter !== undefined ? (
-              <p className="mt-0.5 text-daintree-text/45">
-                Retry in {record.resultMeta.retryAfter}s
-              </p>
+              <p className="mt-0.5 text-text-secondary">Retry in {record.resultMeta.retryAfter}s</p>
             ) : record.resultSummary ? (
-              <pre className="mt-0.5 max-h-48 overflow-y-auto whitespace-pre-wrap break-all font-mono text-daintree-text/70">
+              <pre className="mt-0.5 max-h-48 overflow-y-auto whitespace-pre-wrap break-all font-mono text-text-secondary">
                 {record.resultSummary}
               </pre>
             ) : (
-              <p className="mt-0.5 text-daintree-text/45">No output recorded for this call</p>
+              <p className="mt-0.5 text-text-secondary">No output recorded for this call</p>
             )}
           </div>
         </div>

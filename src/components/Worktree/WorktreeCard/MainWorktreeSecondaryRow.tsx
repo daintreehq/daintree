@@ -74,7 +74,7 @@ export function MainWorktreeSecondaryRow({
           <Tooltip>
             <TooltipTrigger asChild>
               <span
-                className="flex items-center gap-1.5 text-3xs text-daintree-text/50"
+                className="flex items-center gap-1.5 text-3xs text-text-secondary"
                 data-testid="aggregate-worktree-row"
               >
                 <span className="flex items-center gap-0.5">

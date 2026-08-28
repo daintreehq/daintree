@@ -15,7 +15,7 @@ interface LogFiltersProps {
 }
 
 const LOG_LEVELS: { level: LogLevel; label: string; color: string }[] = [
-  { level: "debug", label: "Debug", color: "text-daintree-text/60 hover:bg-border-default" },
+  { level: "debug", label: "Debug", color: "text-text-secondary hover:bg-border-default" },
   { level: "info", label: "Info", color: "text-status-info hover:bg-status-info/15" },
   {
     level: "warn",
@@ -132,7 +132,7 @@ export function LogFilters({
       </div>
 
       <div className="flex items-center gap-1">
-        <span className="text-daintree-text/60 text-xs mr-1">Level:</span>
+        <span className="text-text-secondary text-xs mr-1">Level:</span>
         {LOG_LEVELS.map(({ level, label, color }) => {
           const isActive = filters.levels?.includes(level) ?? false;
           const count = levelCounts?.[level] ?? 0;

@@ -337,7 +337,7 @@ export function BackgroundContainer({ compact = false }: BackgroundContainerProp
         >
           <div className="flex flex-col">
             <div className="px-3 py-2 border-b border-divider bg-daintree-bg/50 flex justify-between items-center">
-              <span className="text-xs font-medium text-daintree-text/70">Background panels</span>
+              <span className="text-xs font-medium text-text-secondary">Background panels</span>
               {waitingCount > 0 && (
                 <span className="text-3xs font-medium text-state-waiting tabular-nums">
                   {waitingCount} waiting
@@ -456,7 +456,7 @@ function BackgroundSingleItem({
             />
           )}
         </div>
-        <div className="flex items-center gap-1.5 mt-0.5 text-2xs text-daintree-text/55">
+        <div className="flex items-center gap-1.5 mt-0.5 text-2xs text-text-secondary">
           {worktreeName && <span className="truncate">{worktreeName}</span>}
           {worktreeName && (stateLabel || terminal.activityHeadline) && (
             <span className="text-daintree-text/30">·</span>
@@ -470,7 +470,7 @@ function BackgroundSingleItem({
           {terminal.activityHeadline && (
             <>
               {(worktreeName || stateLabel) && <span className="text-daintree-text/30">·</span>}
-              <span className="truncate italic text-daintree-text/50">
+              <span className="truncate italic text-text-secondary">
                 {terminal.activityHeadline}
               </span>
             </>
@@ -593,7 +593,7 @@ function BackgroundGroupItem({
         </div>
 
         <div className="flex-1 min-w-0">
-          <div className="text-xs font-medium text-daintree-text/70 group-hover:text-text-primary truncate transition-colors">
+          <div className="text-xs font-medium text-text-secondary group-hover:text-text-primary truncate transition-colors">
             {groupName}
             {groupWaiting > 0 && (
               <span className="ml-1.5 text-3xs text-state-waiting font-normal tabular-nums">

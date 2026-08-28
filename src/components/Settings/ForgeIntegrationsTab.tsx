@@ -378,9 +378,7 @@ function ProjectRoutingPanel({
   error,
 }: ProjectRoutingPanelProps) {
   if (!activeProjectId) {
-    return (
-      <p className="text-xs text-daintree-text/50">Open a project to view its forge routing.</p>
-    );
+    return <p className="text-xs text-text-secondary">Open a project to view its forge routing.</p>;
   }
 
   // Sub-400ms in-flight window: a load is running but the Doherty gate hasn't
@@ -401,7 +399,7 @@ function ProjectRoutingPanel({
 
   if (remotes.length === 0) {
     return (
-      <p className="text-xs text-daintree-text/50">
+      <p className="text-xs text-text-secondary">
         {activeProjectName ?? "This project"} has no git remotes configured.
       </p>
     );
@@ -412,7 +410,7 @@ function ProjectRoutingPanel({
   return (
     <div className="space-y-2">
       {providersInstalled === 0 && !providersLoading && (
-        <p className="text-xs text-daintree-text/50">
+        <p className="text-xs text-text-secondary">
           No forge plugins are installed. Each remote shows as unmatched until a provider plugin is
           installed.
         </p>
@@ -430,7 +428,7 @@ function ProjectRoutingPanel({
                   <Tooltip>
                     <TooltipTrigger asChild>
                       <span
-                        className="inline-flex items-center px-1.5 py-0.5 rounded-sm text-3xs font-medium border border-daintree-border/60 text-daintree-text/70 cursor-default"
+                        className="inline-flex items-center px-1.5 py-0.5 rounded-sm text-3xs font-medium border border-daintree-border/60 text-text-secondary cursor-default"
                         tabIndex={0}
                       >
                         Active
@@ -444,10 +442,7 @@ function ProjectRoutingPanel({
                   </Tooltip>
                 )}
               </div>
-              <p
-                className="text-xs text-daintree-text/50 font-mono truncate"
-                title={remote.fetchUrl}
-              >
+              <p className="text-xs text-text-secondary font-mono truncate" title={remote.fetchUrl}>
                 {remote.fetchUrl}
               </p>
             </div>
@@ -465,7 +460,7 @@ function RoutingBadge({ resolved }: { resolved: ResolvedForgeProvider }) {
       <Tooltip>
         <TooltipTrigger asChild>
           <span
-            className="inline-flex items-center px-2 py-0.5 rounded-sm text-3xs font-medium border border-daintree-border/60 text-daintree-text/50 cursor-default"
+            className="inline-flex items-center px-2 py-0.5 rounded-sm text-3xs font-medium border border-daintree-border/60 text-text-secondary cursor-default"
             tabIndex={0}
           >
             No match
@@ -484,11 +479,11 @@ function RoutingBadge({ resolved }: { resolved: ResolvedForgeProvider }) {
     <Tooltip>
       <TooltipTrigger asChild>
         <span
-          className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-sm text-3xs font-medium border border-daintree-border/60 bg-status-info/10 text-daintree-text/80 cursor-default"
+          className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-sm text-3xs font-medium border border-daintree-border/60 bg-status-info/10 text-text-primary cursor-default"
           tabIndex={0}
         >
           <span>{providerName}</span>
-          <span className="text-daintree-text/50 uppercase tracking-wide">{BADGE_LABEL[via]}</span>
+          <span className="text-text-secondary uppercase tracking-wide">{BADGE_LABEL[via]}</span>
         </span>
       </TooltipTrigger>
       <TooltipContent side="left">{TOOLTIP_COPY[via]}</TooltipContent>

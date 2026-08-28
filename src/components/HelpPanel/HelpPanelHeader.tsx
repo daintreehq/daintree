@@ -101,7 +101,7 @@ export function HelpPanelHeader({
     >
       <div className="flex items-center min-w-0 flex-1">
         <DaintreeIcon className="w-4 h-4 text-daintree-text/50 shrink-0" />
-        <span className="ml-1.5 text-xs font-medium text-daintree-text/70 truncate">
+        <span className="ml-1.5 text-xs font-medium text-text-secondary truncate">
           Daintree Assistant
         </span>
         <AssistantHeaderStateIndicator agentState={agentState} />

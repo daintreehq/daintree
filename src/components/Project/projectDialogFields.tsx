@@ -13,7 +13,7 @@ import { cn } from "@/lib/utils";
  * box.
  */
 
-export const FIELD_LABEL_CLASS = "text-sm font-medium text-daintree-text/80";
+export const FIELD_LABEL_CLASS = "text-sm font-medium text-text-primary";
 
 /**
  * The invalid-focused case needs the error ring, not the accent one. Left to the
@@ -26,7 +26,7 @@ export const FIELD_INPUT_CLASS =
 
 /** Picker-backed fields: muted fill signals "typing here does nothing". */
 export const FIELD_READONLY_INPUT_CLASS =
-  "min-h-9 flex-1 truncate rounded-md border border-border-default bg-muted/50 px-3 py-1.5 text-sm font-mono text-daintree-text/70";
+  "min-h-9 flex-1 truncate rounded-md border border-border-default bg-muted/50 px-3 py-1.5 text-sm font-mono text-text-secondary";
 
 export const FIELD_CHECKBOX_CLASS =
   "h-4 w-4 shrink-0 rounded border-border-default accent-accent-primary";
@@ -61,10 +61,7 @@ export function PathCaption({ path, className }: { path: string; className?: str
   const ancestors = displayPath.slice(0, displayPath.length - leaf.length - separator.length);
 
   return (
-    <p
-      className={cn("flex text-xs font-mono text-daintree-text/50", className)}
-      title={displayPath}
-    >
+    <p className={cn("flex text-xs font-mono text-text-secondary", className)} title={displayPath}>
       <span className="min-w-0 truncate">{ancestors}</span>
       {/* Pinned against the ancestors, but still capped: a leaf wider than the
           dialog would otherwise overflow into a horizontal scroll. */}

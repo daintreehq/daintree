@@ -45,7 +45,7 @@ export function GridPlaceholder({ className }: GridPlaceholderProps) {
         <span className="shrink-0 flex items-center justify-center text-daintree-text/50">
           <TerminalIcon kind={kind} chrome={chrome} className="w-3.5 h-3.5" />
         </span>
-        <span className="font-medium text-daintree-text/60 truncate">{title}</span>
+        <span className="font-medium text-text-secondary truncate">{title}</span>
       </div>
 
       {/* Panel-specific placeholder body */}

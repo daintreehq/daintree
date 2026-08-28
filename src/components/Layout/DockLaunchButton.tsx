@@ -894,7 +894,7 @@ export function DockLaunchButton({
             // rather than letting the list read as an empty agent inventory.
             <div
               data-testid="dock-launcher-loading"
-              className="px-2.5 py-1.5 text-xs text-daintree-text/60"
+              className="px-2.5 py-1.5 text-xs text-text-secondary"
             >
               Checking agents…
             </div>
@@ -1020,7 +1020,7 @@ function DockLaunchCaptureRow({ row, onDone }: { row: DockLaunchRow; onDone: () 
       className="px-2.5 py-2 space-y-2"
       onKeyDown={(event) => event.stopPropagation()}
     >
-      <div className="flex items-center gap-2 text-xs text-daintree-text/70">
+      <div className="flex items-center gap-2 text-xs text-text-secondary">
         <span className="inline-flex h-4 w-4 items-center justify-center shrink-0">
           {agent.icon ? (
             <BrandMark brandColor={agent.brandColor}>
@@ -1292,7 +1292,7 @@ function DockLaunchOption({
           // not do the ordinary thing — ended up the faintest text on the row,
           // which is exactly backwards. The name and icon recede instead; the
           // reason keeps the metadata token every other row uses.
-          isDimmed && "text-daintree-text/60"
+          isDimmed && "text-text-secondary"
         )}
       >
         {/* Leading disclosure, reserved on every row so the icon column holds
@@ -1394,7 +1394,7 @@ function DockLaunchOption({
             data-launcher-qualifier=""
             className={cn(
               "ml-2 min-w-0 max-w-[40%] shrink truncate text-2xs text-text-secondary",
-              "transition-colors group-aria-selected:text-daintree-text/80"
+              "transition-colors group-aria-selected:text-text-primary"
             )}
           >
             {visualQualifier}

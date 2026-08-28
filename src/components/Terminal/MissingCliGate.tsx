@@ -30,7 +30,7 @@ function StateBanner({ state, detail }: { state: AgentAvailabilityState; detail:
         <Check className="w-5 h-5 text-status-success shrink-0 mt-px" />
         <div>
           <p className="text-sm font-medium">CLI is now available</p>
-          <p className="text-xs text-daintree-text/60 mt-1">
+          <p className="text-xs text-text-secondary mt-1">
             The agent binary was detected. Re-check to continue the launch.
           </p>
         </div>
@@ -48,7 +48,7 @@ function StateBanner({ state, detail }: { state: AgentAvailabilityState; detail:
         <KeyRound className="w-5 h-5 text-daintree-text/60 shrink-0 mt-px" />
         <div>
           <p className="text-sm font-medium">Sign-in not detected</p>
-          <p className="text-xs text-daintree-text/60 mt-1">
+          <p className="text-xs text-text-secondary mt-1">
             The CLI is available but no signed-in session was found. Re-check to continue — the CLI
             prompts for sign-in on its first run.
           </p>
@@ -63,7 +63,7 @@ function StateBanner({ state, detail }: { state: AgentAvailabilityState; detail:
         <AlertTriangle className="w-5 h-5 text-status-warning shrink-0 mt-px" />
         <div>
           <p className="text-sm font-medium">CLI binary not found</p>
-          <p className="text-xs text-daintree-text/60 mt-1">
+          <p className="text-xs text-text-secondary mt-1">
             {detail.message ?? "The agent executable was not detected on your system."}
           </p>
           {detail.resolvedPath && (
@@ -85,7 +85,7 @@ function StateBanner({ state, detail }: { state: AgentAvailabilityState; detail:
           <p className="text-sm font-medium">
             {isWsl ? "Detected in WSL" : "CLI installed but not directly launchable"}
           </p>
-          <p className="text-xs text-daintree-text/60 mt-1">
+          <p className="text-xs text-text-secondary mt-1">
             {isWsl
               ? `Found in WSL (${detail.wslDistro ?? "unknown distro"}) — only host binaries can be launched directly. Install a native binary or use "Run anyway" if you have a wrapper.`
               : (detail.message ?? "The binary is installed but can't be launched directly.")}
@@ -101,7 +101,7 @@ function StateBanner({ state, detail }: { state: AgentAvailabilityState; detail:
       <AlertTriangle className="w-5 h-5 text-status-error shrink-0 mt-px" />
       <div>
         <p className="text-sm font-medium">Blocked by security software</p>
-        <p className="text-xs text-daintree-text/60 mt-1">
+        <p className="text-xs text-text-secondary mt-1">
           {detail.message ?? "The binary exists but execution was denied."}
         </p>
         <p className="text-xs text-text-secondary mt-1">
@@ -118,12 +118,12 @@ function InstallCommands({ blocks }: { blocks: AgentInstallBlock[] }) {
       {blocks.map((block, i) => (
         <div key={i}>
           {block.label && (
-            <p className="text-xs font-medium text-daintree-text/50 mb-1.5">{block.label}</p>
+            <p className="text-xs font-medium text-text-secondary mb-1.5">{block.label}</p>
           )}
           {block.steps && (
             <ol className="list-decimal list-inside space-y-1 mb-2">
               {block.steps.map((step, j) => (
-                <li key={j} className="text-xs text-daintree-text/60">
+                <li key={j} className="text-xs text-text-secondary">
                   {step}
                 </li>
               ))}
@@ -253,14 +253,14 @@ export function MissingCliGate({
 
         {state === "missing" && installBlocks && installBlocks.length > 0 && (
           <div className="space-y-2">
-            <p className="text-xs font-medium text-daintree-text/50">Install on {getOsLabel()}</p>
+            <p className="text-xs font-medium text-text-secondary">Install on {getOsLabel()}</p>
             <InstallCommands blocks={installBlocks} />
           </div>
         )}
 
         {state === "missing" && troubleshooting && troubleshooting.length > 0 && (
           <div className="space-y-1.5">
-            <p className="text-xs font-medium text-daintree-text/50">Troubleshooting</p>
+            <p className="text-xs font-medium text-text-secondary">Troubleshooting</p>
             <ul className="list-disc list-inside space-y-0.5">
               {troubleshooting.map((tip, i) => (
                 <li key={i} className="text-xs text-text-secondary">

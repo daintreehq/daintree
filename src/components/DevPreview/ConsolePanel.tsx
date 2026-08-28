@@ -25,8 +25,8 @@ type LevelFilter = ConsoleLevel | "all";
 
 const LEVEL_STYLES: Record<ConsoleLevel, { row: string; badge: string; label: string }> = {
   log: {
-    row: "text-daintree-text/80",
-    badge: "text-daintree-text/50 bg-daintree-text/10",
+    row: "text-text-primary",
+    badge: "text-text-secondary bg-daintree-text/10",
     label: "LOG",
   },
   info: {
@@ -111,7 +111,7 @@ const ConsoleRow = memo(function ConsoleRow({
       )}
       style={indentPx > 0 ? { paddingLeft: `${8 + indentPx}px` } : undefined}
     >
-      <span className="shrink-0 text-daintree-text/30 select-none tabular-nums">
+      <span className="shrink-0 text-text-placeholder select-none tabular-nums">
         {msg.timeLabel}
       </span>
       <span
@@ -130,7 +130,7 @@ const ConsoleRow = memo(function ConsoleRow({
               onClick={handleToggle}
               aria-expanded={!isGroupCollapsed}
               aria-label="Toggle console group"
-              className="text-daintree-text/40 mr-1 select-none hover:text-daintree-text/60"
+              className="text-text-secondary mr-1 select-none hover:text-text-primary"
             >
               <span aria-hidden="true">{isGroupCollapsed ? "▶" : "▼"}</span>
             </button>
@@ -143,7 +143,7 @@ const ConsoleRow = memo(function ConsoleRow({
               </span>
             ))
           ) : (
-            <span className="text-daintree-text/50">{msg.summaryText}</span>
+            <span className="text-text-secondary">{msg.summaryText}</span>
           )}
         </div>
         {msg.stackTrace && <StackTrace stackTrace={msg.stackTrace} />}
@@ -328,7 +328,7 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
     <div className="flex h-full flex-col bg-surface-canvas">
       {/* Toolbar */}
       <div className="flex items-center gap-1.5 px-2 py-1 border-b border-overlay bg-surface shrink-0">
-        <span className="text-3xs font-semibold uppercase tracking-wide text-daintree-text/50 mr-1">
+        <span className="text-3xs font-semibold uppercase tracking-wide text-text-secondary mr-1">
           Console
         </span>
 
@@ -344,7 +344,7 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
                 buttonClass,
                 levelFilter === filter
                   ? "bg-overlay-emphasis text-text-primary"
-                  : "text-daintree-text/50 hover:bg-overlay-soft hover:text-daintree-text/70"
+                  : "text-text-secondary hover:bg-overlay-soft hover:text-text-primary"
               )}
             >
               {label}
@@ -426,7 +426,7 @@ export function ConsolePanel({ paneId, webContentsId }: ConsolePanelProps) {
       {/* Message list */}
       {filtered.length === 0 ? (
         <div className="flex-1 overflow-y-auto font-mono text-2xs leading-relaxed">
-          <div className="flex items-center justify-center h-full text-daintree-text/30 text-xs select-none">
+          <div className="flex items-center justify-center h-full text-text-placeholder text-xs select-none">
             {allMessages.length === 0 ? "No console output" : "No messages match filter"}
           </div>
         </div>

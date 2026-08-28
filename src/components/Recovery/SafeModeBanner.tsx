@@ -56,7 +56,7 @@ function QuarantinedPanelRow({ panel }: QuarantinedPanelRowProps) {
           {displayTitle}
         </p>
         {subtitle && (
-          <p className="truncate text-3xs text-daintree-text/50" title={subtitle}>
+          <p className="truncate text-3xs text-text-secondary" title={subtitle}>
             {subtitle}
           </p>
         )}
@@ -71,10 +71,10 @@ function QuarantinedPanelRow({ panel }: QuarantinedPanelRowProps) {
         </button>
       )}
       {state === "clearing" && (
-        <span className="shrink-0 text-3xs text-daintree-text/60">Clearing…</span>
+        <span className="shrink-0 text-3xs text-text-secondary">Clearing…</span>
       )}
       {state === "cleared" && (
-        <span className="shrink-0 text-3xs text-daintree-text/60">Restoring on next launch</span>
+        <span className="shrink-0 text-3xs text-text-secondary">Restoring on next launch</span>
       )}
       {state === "failed" && (
         <button
@@ -154,7 +154,7 @@ export function SafeModeBanner() {
         {crashMetaText && <p className="font-medium">{crashMetaText}</p>}
         {hasQuarantineList ? (
           <>
-            <p className="text-daintree-text/70">
+            <p className="text-text-secondary">
               {quarantined.length === 1
                 ? "1 panel was quarantined because it appeared to trigger repeated crashes."
                 : `${quarantined.length} panels were quarantined because they appeared to trigger repeated crashes.`}
@@ -170,7 +170,7 @@ export function SafeModeBanner() {
           </>
         ) : (
           skipped > 0 && (
-            <p className="text-daintree-text/70">
+            <p className="text-text-secondary">
               {skipped} {skipped === 1 ? "panel was" : "panels were"} skipped so you can recover the
               app. Restart normally to reload them.
             </p>
@@ -215,7 +215,7 @@ export function SafeModeBanner() {
           onClick={() => {
             void actionService.dispatch("logs.openFile", undefined, { source: "user" });
           }}
-          className="text-xs text-daintree-text/60 hover:text-text-primary transition-colors underline decoration-daintree-text/30 underline-offset-2"
+          className="text-xs text-text-secondary hover:text-text-primary transition-colors underline decoration-daintree-text/30 underline-offset-2"
         >
           View logs
         </button>

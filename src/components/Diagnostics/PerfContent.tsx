@@ -46,7 +46,7 @@ function MetricTile({ label, value, unit, tone = "default" }: MetricTileProps) {
         tone === "alert" && "border-status-error/40 bg-status-error/5"
       )}
     >
-      <span className="text-3xs uppercase tracking-wide text-daintree-text/55 font-medium">
+      <span className="text-3xs uppercase tracking-wide text-text-secondary font-medium">
         {label}
       </span>
       <div className="flex items-baseline gap-1">
@@ -59,7 +59,7 @@ function MetricTile({ label, value, unit, tone = "default" }: MetricTileProps) {
         >
           {value}
         </span>
-        {unit ? <span className="text-xs text-daintree-text/55 font-mono">{unit}</span> : null}
+        {unit ? <span className="text-xs text-text-secondary font-mono">{unit}</span> : null}
       </div>
     </div>
   );
@@ -85,12 +85,10 @@ function LiveMetricsBar() {
   return (
     <div className="px-3 py-2 border-b border-daintree-border/40 bg-daintree-sidebar/20">
       <div className="flex items-center justify-between mb-1.5">
-        <span className="text-3xs uppercase tracking-wide text-daintree-text/55 font-medium">
+        <span className="text-3xs uppercase tracking-wide text-text-secondary font-medium">
           Live renderer
         </span>
-        {isBackgrounded ? (
-          <span className="text-3xs text-daintree-text/45">Backgrounded</span>
-        ) : null}
+        {isBackgrounded ? <span className="text-3xs text-text-secondary">Backgrounded</span> : null}
       </div>
       <div className="grid grid-cols-3 gap-2">
         <MetricTile label="FPS" value={formatNumber(fps)} unit="hz" tone={fpsTone} />
@@ -117,7 +115,7 @@ function BudgetRow({ row }: { row: PerfSummaryRow }) {
       )}
     >
       <td className="px-3 py-1.5 text-xs font-mono text-text-primary truncate">{row.name}</td>
-      <td className="px-3 py-1.5 text-3xs text-daintree-text/55 font-mono uppercase tracking-wide">
+      <td className="px-3 py-1.5 text-3xs text-text-secondary font-mono uppercase tracking-wide">
         {MODE_LABEL[row.mode] ?? row.mode}
       </td>
       <td className="px-3 py-1.5 text-xs font-mono tabular-nums text-text-primary text-right">
@@ -129,12 +127,12 @@ function BudgetRow({ row }: { row: PerfSummaryRow }) {
             Over budget
           </span>
         ) : (
-          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-3xs font-medium uppercase tracking-wide border border-border-default bg-overlay-subtle text-daintree-text/60">
+          <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded text-3xs font-medium uppercase tracking-wide border border-border-default bg-overlay-subtle text-text-secondary">
             Within budget
           </span>
         )}
       </td>
-      <td className="px-3 py-1.5 text-2xs text-daintree-text/55 truncate">
+      <td className="px-3 py-1.5 text-2xs text-text-secondary truncate">
         {row.budgetReason ?? ""}
       </td>
     </tr>
@@ -147,19 +145,19 @@ function BudgetTable({ rows }: { rows: PerfSummaryRow[] }) {
       <table className="w-full border-collapse">
         <thead className="sticky top-0 bg-daintree-sidebar/80 backdrop-blur-sm">
           <tr className="border-b border-daintree-border/60">
-            <th className="px-3 py-1.5 text-3xs uppercase tracking-wide text-daintree-text/55 font-medium text-left">
+            <th className="px-3 py-1.5 text-3xs uppercase tracking-wide text-text-secondary font-medium text-left">
               Scenario
             </th>
-            <th className="px-3 py-1.5 text-3xs uppercase tracking-wide text-daintree-text/55 font-medium text-left">
+            <th className="px-3 py-1.5 text-3xs uppercase tracking-wide text-text-secondary font-medium text-left">
               Mode
             </th>
-            <th className="px-3 py-1.5 text-3xs uppercase tracking-wide text-daintree-text/55 font-medium text-right">
+            <th className="px-3 py-1.5 text-3xs uppercase tracking-wide text-text-secondary font-medium text-right">
               p95 (ms)
             </th>
-            <th className="px-3 py-1.5 text-3xs uppercase tracking-wide text-daintree-text/55 font-medium text-left">
+            <th className="px-3 py-1.5 text-3xs uppercase tracking-wide text-text-secondary font-medium text-left">
               Budget
             </th>
-            <th className="px-3 py-1.5 text-3xs uppercase tracking-wide text-daintree-text/55 font-medium text-left">
+            <th className="px-3 py-1.5 text-3xs uppercase tracking-wide text-text-secondary font-medium text-left">
               Reason
             </th>
           </tr>
@@ -239,11 +237,11 @@ export function PerfContent({ className }: PerfContentProps) {
     <div className={cn("flex flex-col h-full min-h-0", className)}>
       <LiveMetricsBar />
       <div className="flex items-center justify-between px-3 py-1.5 border-b border-daintree-border/30 bg-daintree-sidebar/10">
-        <span className="text-3xs uppercase tracking-wide text-daintree-text/55 font-medium">
+        <span className="text-3xs uppercase tracking-wide text-text-secondary font-medium">
           CI budgets
         </span>
         {lastLoadedAt !== null && !isLoadingSummaries ? (
-          <span className="text-3xs text-daintree-text/45 font-mono">
+          <span className="text-3xs text-text-secondary font-mono">
             Updated {formatRelative(lastLoadedAt)}
           </span>
         ) : null}

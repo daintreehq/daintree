@@ -866,7 +866,7 @@ export function WorktreeOverviewModal({
         <AppDialog.Header>
           <AppDialog.Title icon={<Layers className="w-5 h-5 text-daintree-text/60" />}>
             <span>Worktrees overview</span>
-            <span className="text-daintree-text/50 text-sm font-normal tabular-nums">
+            <span className="text-text-secondary text-sm font-normal tabular-nums">
               ({filteredWorktrees.length}
               {filteredWorktrees.length !== worktrees.length && ` of ${worktrees.length}`})
             </span>
@@ -903,7 +903,7 @@ export function WorktreeOverviewModal({
                         "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary",
                         hideMainWorktree
                           ? "bg-tint/[0.06] text-daintree-text/40 hover:text-daintree-text/60"
-                          : "bg-tint/[0.10] text-daintree-text/70 hover:text-daintree-text/90"
+                          : "bg-tint/[0.10] text-text-secondary hover:text-text-primary"
                       )}
                     >
                       <Plug
@@ -950,7 +950,7 @@ export function WorktreeOverviewModal({
                 onClick={clearSelection}
                 className={cn(
                   "flex items-center gap-1.5 px-2 py-1 rounded text-xs",
-                  "text-daintree-text/60 hover:text-text-primary",
+                  "text-text-secondary hover:text-text-primary",
                   "hover:bg-tint/[0.06]",
                   "transition-colors",
                   "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
@@ -1020,7 +1020,7 @@ export function WorktreeOverviewModal({
                         className={
                           quickStateFilter === "waiting"
                             ? "text-text-primary"
-                            : "text-daintree-text/60"
+                            : "text-text-secondary"
                         }
                       >
                         {aggregateStats.waitingCount} waiting
@@ -1047,7 +1047,7 @@ export function WorktreeOverviewModal({
                         className={
                           quickStateFilter === "working"
                             ? "text-text-primary"
-                            : "text-daintree-text/60"
+                            : "text-text-secondary"
                         }
                       >
                         {aggregateStats.workingCount} working
@@ -1074,7 +1074,7 @@ export function WorktreeOverviewModal({
                         className={
                           quickStateFilter === "finished"
                             ? "text-text-primary"
-                            : "text-daintree-text/60"
+                            : "text-text-secondary"
                         }
                       >
                         {aggregateStats.finishedCount} finished
@@ -1093,7 +1093,7 @@ export function WorktreeOverviewModal({
                         onClick={clearAllFilters}
                         className={cn(
                           "flex items-center gap-1.5 px-2 py-1 rounded text-xs",
-                          "text-daintree-text/60 hover:text-text-primary",
+                          "text-text-secondary hover:text-text-primary",
                           "hover:bg-tint/[0.06]",
                           "transition-colors",
                           "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary"
@@ -1213,7 +1213,7 @@ export function WorktreeOverviewModal({
                       role="presentation"
                       className="col-[1/-1] flex items-center gap-2 mt-2 first:mt-0"
                     >
-                      <h3 className="text-xs font-medium text-daintree-text/60 uppercase tracking-wider">
+                      <h3 className="text-xs font-medium text-text-secondary uppercase tracking-wider">
                         {section.displayName}
                       </h3>
                       <span className="text-xs text-text-secondary">
@@ -1274,7 +1274,7 @@ export function WorktreeOverviewModal({
           // narrow window instead of wrapping the row onto a second line.
           className="justify-center @container/overview-footer"
           hint={
-            <div className="flex items-center justify-center gap-x-4 gap-y-1 flex-wrap text-daintree-text/50">
+            <div className="flex items-center justify-center gap-x-4 gap-y-1 flex-wrap text-text-secondary">
               <span>
                 <kbd className={KBD_CLASS}>↑↓←→</kbd> navigate
               </span>

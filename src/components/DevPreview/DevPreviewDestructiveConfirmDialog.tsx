@@ -176,7 +176,7 @@ function CacheDirsPreview({ meta, sizes, sizesPending }: CacheDirsPreviewProps) 
       data-testid="dev-preview-destructive-cache-preview"
     >
       <div className="px-3 py-2 border-b border-tint/[0.08] flex items-center justify-between">
-        <span className="text-2xs font-semibold uppercase tracking-wider text-daintree-text/60">
+        <span className="text-2xs font-semibold uppercase tracking-wider text-text-secondary">
           Directories to delete
           {cacheDirs && (
             <span className="ml-1.5 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-3xs font-medium normal-case tracking-normal">
@@ -208,7 +208,7 @@ function CacheDirsPreview({ meta, sizes, sizesPending }: CacheDirsPreviewProps) 
                   <span
                     className={cn(
                       "font-mono shrink-0",
-                      dir.exists ? "text-daintree-text/80" : "text-daintree-text/35 line-through"
+                      dir.exists ? "text-text-primary" : "text-text-placeholder line-through"
                     )}
                   >
                     {dir.relPath}
@@ -218,7 +218,7 @@ function CacheDirsPreview({ meta, sizes, sizesPending }: CacheDirsPreviewProps) 
                       <span className="text-3xs text-text-secondary shrink-0">
                         {dir.mtimeMs ? formatRelativeTime(dir.mtimeMs) : null}
                       </span>
-                      <span className="ml-auto tabular-nums text-daintree-text/60 shrink-0">
+                      <span className="ml-auto tabular-nums text-text-secondary shrink-0">
                         {size !== undefined && size !== null ? (
                           formatBytes(size)
                         ) : sizesPending ? (
@@ -232,7 +232,7 @@ function CacheDirsPreview({ meta, sizes, sizesPending }: CacheDirsPreviewProps) 
                       </span>
                     </>
                   ) : (
-                    <span className="ml-auto text-3xs text-daintree-text/35 italic shrink-0">
+                    <span className="ml-auto text-3xs text-text-placeholder italic shrink-0">
                       not present
                     </span>
                   )}
@@ -262,7 +262,7 @@ function NodeModulesPreview({ meta, sizes, sizesPending }: NodeModulesPreviewPro
       data-testid="dev-preview-destructive-reinstall-preview"
     >
       <div className="px-3 py-2 border-b border-tint/[0.08]">
-        <span className="text-2xs font-semibold uppercase tracking-wider text-daintree-text/60">
+        <span className="text-2xs font-semibold uppercase tracking-wider text-text-secondary">
           What will happen
         </span>
       </div>
@@ -272,7 +272,7 @@ function NodeModulesPreview({ meta, sizes, sizesPending }: NodeModulesPreviewPro
             <span
               className={cn(
                 "font-mono break-all",
-                nodeModules?.exists ? "text-daintree-text/80" : "text-daintree-text/35 line-through"
+                nodeModules?.exists ? "text-text-primary" : "text-text-placeholder line-through"
               )}
               data-testid="dev-preview-destructive-node-modules-path"
             >
@@ -284,12 +284,12 @@ function NodeModulesPreview({ meta, sizes, sizesPending }: NodeModulesPreviewPro
         </Row>
         <Row label="Size">
           {nodeModules?.exists === false ? (
-            <span className="text-3xs text-daintree-text/35 italic">not present</span>
+            <span className="text-3xs text-text-placeholder italic">not present</span>
           ) : sizeBytes !== null ? (
-            <span className="tabular-nums text-daintree-text/80">
+            <span className="tabular-nums text-text-primary">
               {formatBytes(sizeBytes)}
               {isPnpm && (
-                <span className="ml-1.5 text-3xs text-daintree-text/45 italic">
+                <span className="ml-1.5 text-3xs text-text-secondary italic">
                   apparent — pnpm store files remain
                 </span>
               )}
@@ -302,7 +302,7 @@ function NodeModulesPreview({ meta, sizes, sizesPending }: NodeModulesPreviewPro
         </Row>
         <Row label="Last modified">
           {nodeModules?.mtimeMs ? (
-            <span className="text-daintree-text/70">{formatRelativeTime(nodeModules.mtimeMs)}</span>
+            <span className="text-text-secondary">{formatRelativeTime(nodeModules.mtimeMs)}</span>
           ) : meta ? (
             <span className="text-daintree-text/35">—</span>
           ) : (
@@ -312,7 +312,7 @@ function NodeModulesPreview({ meta, sizes, sizesPending }: NodeModulesPreviewPro
         <Row label="Install command">
           {pmLabel ? (
             <span
-              className="font-mono text-daintree-text/80"
+              className="font-mono text-text-primary"
               data-testid="dev-preview-destructive-install-cmd"
             >
               {meta?.packageManager} install
@@ -324,9 +324,9 @@ function NodeModulesPreview({ meta, sizes, sizesPending }: NodeModulesPreviewPro
         <Row label="Lockfile">
           {meta ? (
             meta.lockfileName ? (
-              <span className="font-mono text-daintree-text/80">{meta.lockfileName}</span>
+              <span className="font-mono text-text-primary">{meta.lockfileName}</span>
             ) : (
-              <span className="text-3xs text-daintree-text/45 italic">none — npm fallback</span>
+              <span className="text-3xs text-text-secondary italic">none — npm fallback</span>
             )
           ) : (
             <RowSkeleton width="w-32" />
@@ -340,7 +340,7 @@ function NodeModulesPreview({ meta, sizes, sizesPending }: NodeModulesPreviewPro
 function Row({ label, children }: { label: string; children: React.ReactNode }) {
   return (
     <div className="flex items-baseline gap-2">
-      <dt className="text-3xs uppercase tracking-wider text-daintree-text/50 shrink-0 w-28">
+      <dt className="text-3xs uppercase tracking-wider text-text-secondary shrink-0 w-28">
         {label}
       </dt>
       <dd className="flex-1 min-w-0">{children}</dd>

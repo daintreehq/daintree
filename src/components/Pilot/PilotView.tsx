@@ -198,7 +198,7 @@ function quietPhrase(count: number): string {
 }
 
 /** The resting tone. Selected is the shared row class's to own, off the attribute. */
-const ROW_TONE = "text-daintree-text/70 hover:bg-overlay-subtle hover:text-text-primary";
+const ROW_TONE = "text-text-secondary hover:bg-overlay-subtle hover:text-text-primary";
 
 /**
  * 16px, down from the switcher's 32px.
@@ -696,7 +696,7 @@ function PilotFooter({
             // button role already says it is actionable; the sentence says
             // what it is about.
             className={cn(
-              "truncate rounded-[var(--radius-sm)] px-1.5 py-0.5 text-daintree-text/70 transition-colors",
+              "truncate rounded-[var(--radius-sm)] px-1.5 py-0.5 text-text-secondary transition-colors",
               "hover:bg-overlay-subtle hover:text-text-primary",
               "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
             )}
@@ -1751,10 +1751,7 @@ export function PilotView() {
                 <span aria-hidden="true" className="shrink-0 text-daintree-text/25">
                   /
                 </span>
-                <span
-                  data-testid="pilot-scope-name"
-                  className="min-w-0 truncate text-daintree-text/85"
-                >
+                <span data-testid="pilot-scope-name" className="min-w-0 truncate text-text-primary">
                   {scopedName}
                 </span>
               </div>
@@ -1780,7 +1777,7 @@ export function PilotView() {
               <p
                 role="status"
                 data-testid="pilot-fallback-note"
-                className="mb-1.5 min-w-0 text-2xs leading-snug text-daintree-text/60"
+                className="mb-1.5 min-w-0 text-2xs leading-snug text-text-secondary"
               >
                 {fallbackName} has nothing to group by worktree, so this is every agent
               </p>
@@ -1868,7 +1865,7 @@ export function PilotView() {
 
         {!parkEditing && status.kind === "unavailable" && (
           <div className="px-3 py-8 text-center" role="status" data-testid="pilot-unavailable">
-            <p className="text-sm text-daintree-text/70">Can&apos;t reach the agent host</p>
+            <p className="text-sm text-text-secondary">Can&apos;t reach the agent host</p>
             {/*
               No retry button: the service already re-reads every few seconds,
               so a control that does what the app is doing anyway would be a
@@ -1935,7 +1932,7 @@ export function PilotView() {
                     searchRef.current?.focus();
                   }}
                   className={cn(
-                    "rounded-[var(--radius-sm)] px-2 py-1 text-xs text-daintree-text/70 transition-colors",
+                    "rounded-[var(--radius-sm)] px-2 py-1 text-xs text-text-secondary transition-colors",
                     "hover:bg-overlay-subtle hover:text-text-primary",
                     "focus-visible:outline focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-accent-primary"
                   )}

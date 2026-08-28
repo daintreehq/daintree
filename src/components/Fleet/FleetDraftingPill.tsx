@@ -94,7 +94,7 @@ export function FleetDraftingPill(): ReactElement | null {
           data-testid="fleet-resolution-popover"
           className="max-h-[400px] w-[400px] overflow-y-auto p-1"
         >
-          <div className="px-2 py-1 text-3xs font-medium uppercase tracking-wide text-daintree-text/50">
+          <div className="px-2 py-1 text-3xs font-medium uppercase tracking-wide text-text-secondary">
             Fleet broadcast preview
           </div>
           {previews.length === 0 ? (
@@ -193,7 +193,7 @@ function FleetResolutionRow({ preview }: FleetResolutionRowProps): ReactElement 
         isSkipped && !excluded && "opacity-50"
       )}
     >
-      <div className="flex items-center gap-1.5 text-2xs font-medium text-daintree-text/70">
+      <div className="flex items-center gap-1.5 text-2xs font-medium text-text-secondary">
         {!excluded && (
           <label className="inline-flex shrink-0 items-center">
             <input
@@ -214,7 +214,7 @@ function FleetResolutionRow({ preview }: FleetResolutionRowProps): ReactElement 
           </span>
         )}
         {isSkipped && !excluded && (
-          <span className="ml-auto shrink-0 text-3xs text-daintree-text/50">Skipped</span>
+          <span className="ml-auto shrink-0 text-3xs text-text-secondary">Skipped</span>
         )}
         {showsOverride && (
           <span
@@ -225,7 +225,7 @@ function FleetResolutionRow({ preview }: FleetResolutionRowProps): ReactElement 
           </span>
         )}
       </div>
-      <div className="mt-0.5 text-2xs leading-relaxed text-daintree-text/60 break-all">
+      <div className="mt-0.5 text-2xs leading-relaxed text-text-secondary break-all">
         {parts.map((part, i) =>
           part.isVar ? (
             <span

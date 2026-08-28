@@ -29,7 +29,7 @@ const MAX_TOOL_NAME_IN_TITLE = 32;
 const DESCRIPTION_MAX_HEIGHT = "max-h-[9rem]";
 
 /** Shared micro-label, matching the section-heading grammar used app-wide. */
-const MICRO_LABEL = "text-2xs font-semibold uppercase tracking-wider text-daintree-text/60";
+const MICRO_LABEL = "text-2xs font-semibold uppercase tracking-wider text-text-secondary";
 
 /**
  * The redacted payload's own treatment, shared by both tier paths. The same
@@ -37,7 +37,7 @@ const MICRO_LABEL = "text-2xs font-semibold uppercase tracking-wider text-daintr
  * they are shown outright or offered behind a disclosure does.
  */
 const ARGS_PRE =
-  "text-xs font-mono whitespace-pre-wrap break-words bg-overlay-subtle border border-tint/[0.08] rounded max-h-40 overflow-y-auto px-2 py-1.5 text-daintree-text/80";
+  "text-xs font-mono whitespace-pre-wrap break-words bg-overlay-subtle border border-tint/[0.08] rounded max-h-40 overflow-y-auto px-2 py-1.5 text-text-primary";
 
 /**
  * Singleton dialog driven by the plugin-MCP consent queue. Mounted once near
@@ -160,7 +160,7 @@ export function PluginMcpConfirmDialog() {
             <div className={cn(MICRO_LABEL, "mb-1")}>What the plugin says this does</div>
             <p
               className={cn(
-                "text-sm text-daintree-text/80 whitespace-pre-wrap break-words overflow-y-auto",
+                "text-sm text-text-primary whitespace-pre-wrap break-words overflow-y-auto",
                 DESCRIPTION_MAX_HEIGHT
               )}
             >
@@ -235,7 +235,7 @@ function IdentityRow({
       <span className={cn(MICRO_LABEL, "shrink-0 w-[5.5rem]")}>{label}</span>
       <span className="flex min-w-0 flex-1 items-baseline gap-2">
         <span
-          className={cn("min-w-0 break-all text-daintree-text/85", mono && "font-mono text-2xs")}
+          className={cn("min-w-0 break-all text-text-primary", mono && "font-mono text-2xs")}
           title={value}
         >
           {value}
@@ -293,9 +293,7 @@ function ChangeNotice({ reason, tier }: { reason: string; tier: PluginMcpDangerT
         >
           {heading}
         </div>
-        <div className="text-xs text-daintree-text/80 break-words">
-          {changeBodyFor(reason, tier)}
-        </div>
+        <div className="text-xs text-text-primary break-words">{changeBodyFor(reason, tier)}</div>
       </div>
     </div>
   );
@@ -599,7 +597,7 @@ export function tierLabelFor(tier: PluginMcpDangerTier): string {
  */
 function DangerTierBadge({ tier }: { tier: PluginMcpDangerTier }) {
   return (
-    <span className="shrink-0 rounded border border-tint/[0.08] bg-overlay-subtle px-1.5 py-0.5 font-mono text-3xs text-daintree-text/70">
+    <span className="shrink-0 rounded border border-tint/[0.08] bg-overlay-subtle px-1.5 py-0.5 font-mono text-3xs text-text-secondary">
       {tier} · {tierLabelFor(tier)}
     </span>
   );

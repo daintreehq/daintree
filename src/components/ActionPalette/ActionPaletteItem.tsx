@@ -137,7 +137,7 @@ function ActionPaletteItemInner({
       className={cn(
         PALETTE_ROW_CLASS,
         "group w-full flex items-start gap-3 px-3 py-2 rounded-[var(--radius-md)]",
-        "text-daintree-text/70",
+        "text-text-secondary",
         "hover:bg-overlay-subtle hover:text-text-primary",
         !item.enabled && "opacity-50"
       )}
@@ -197,19 +197,19 @@ function ActionPaletteItemInner({
         <div className="flex-1 min-w-0">
           <div className="text-sm font-medium truncate">{displayTitle}</div>
           {item.description && (
-            <div className="text-xs leading-snug text-daintree-text/50 truncate">
+            <div className="text-xs leading-snug text-text-secondary truncate">
               {item.description}
             </div>
           )}
           {!item.enabled && item.disabledReason && (
-            <div className="text-3xs leading-snug text-daintree-text/50 italic truncate">
+            <div className="text-3xs leading-snug text-text-secondary italic truncate">
               {item.disabledReason}
             </div>
           )}
           {hasRationale && (
             <div
               id={rationaleId}
-              className="hidden group-aria-selected:block text-xs leading-snug text-daintree-text/50 italic truncate"
+              className="hidden group-aria-selected:block text-xs leading-snug text-text-secondary italic truncate"
             >
               {item.dangerRationale}
             </div>
@@ -276,7 +276,7 @@ function ActionPaletteItemInner({
         )}
 
         {item.keybinding && (
-          <span className="text-2xs font-mono text-daintree-text/50 transition-colors group-aria-selected:text-daintree-text/70">
+          <span className="text-2xs font-mono text-text-secondary transition-colors group-aria-selected:text-text-primary">
             {item.keybinding}
           </span>
         )}

@@ -216,7 +216,7 @@ export function useWorktreeActions({
       createElement(
         "span",
         {
-          className: "text-2xs font-semibold uppercase tracking-wider text-daintree-text/60",
+          className: "text-2xs font-semibold uppercase tracking-wider text-text-secondary",
         },
         hasCommands ? "Commands that will run" : "Teardown commands"
       ),
@@ -224,7 +224,7 @@ export function useWorktreeActions({
         "pre",
         {
           className:
-            "text-xs text-daintree-text/80 bg-daintree-bg/50 p-3 rounded border border-border-default font-mono whitespace-pre-wrap break-all",
+            "text-xs text-text-primary bg-daintree-bg/50 p-3 rounded border border-border-default font-mono whitespace-pre-wrap break-all",
         },
         hasCommands ? teardownCommands.join("\n") : "No teardown commands found."
       )

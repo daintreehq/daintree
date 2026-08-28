@@ -334,7 +334,7 @@ export function VoiceRecordingToolbarButton({
           </TooltipTrigger>
           <TooltipContent side="bottom" className="text-center">
             <div className="font-medium">{tooltipTitle}</div>
-            {tooltipExtra && <div className="text-2xs text-daintree-text/60">{tooltipExtra}</div>}
+            {tooltipExtra && <div className="text-2xs text-text-secondary">{tooltipExtra}</div>}
           </TooltipContent>
         </Tooltip>
       </ContextMenuTrigger>

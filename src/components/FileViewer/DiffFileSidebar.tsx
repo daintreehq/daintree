@@ -188,7 +188,7 @@ export function DiffFileSidebar({
               <button
                 type="button"
                 onClick={() => setFilter("")}
-                className="text-xs text-daintree-text/60 hover:text-text-primary transition-colors underline underline-offset-2"
+                className="text-xs text-text-secondary hover:text-text-primary transition-colors underline underline-offset-2"
               >
                 Clear filter
               </button>
@@ -247,7 +247,7 @@ export function DiffFileSidebar({
                       <span
                         className={cn(
                           "truncate font-medium",
-                          viewed ? "text-daintree-text/50" : "text-text-primary"
+                          viewed ? "text-text-secondary" : "text-text-primary"
                         )}
                       >
                         {basename(file.path)}

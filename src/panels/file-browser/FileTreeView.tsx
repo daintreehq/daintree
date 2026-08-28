@@ -611,7 +611,7 @@ function FileTreeRow({ row, isSelected, isOpen, context }: FileTreeRowProps) {
             // glance without reading as a second selection.
             isOpen
             ? "text-text-primary"
-            : "text-daintree-text/70",
+            : "text-text-secondary",
         !isSelected && "hover:bg-tint/5",
         // The row whose context menu is open lifts to a distinct neutral tier
         // (raised, not the selection's subtle) so it reads as "the menu targets

@@ -116,7 +116,7 @@ export function BranchPickerPanel({
                 <button
                   type="button"
                   onClick={() => setQuery("")}
-                  className="text-xs px-3 py-1.5 text-daintree-text/60 hover:text-text-primary hover:bg-overlay-soft rounded transition-colors"
+                  className="text-xs px-3 py-1.5 text-text-secondary hover:text-text-primary hover:bg-overlay-soft rounded transition-colors"
                 >
                   Clear search
                 </button>
@@ -162,7 +162,7 @@ export function BranchPickerPanel({
       {isTruncated && (
         // Counted off the rows actually rendered rather than restating the cap, so
         // the footnote can't claim a number the list doesn't show.
-        <div className="border-t border-border-default px-3 py-2 text-xs text-daintree-text/60">
+        <div className="border-t border-border-default px-3 py-2 text-xs text-text-secondary">
           Showing {selectableRows.length} of {matchedTotal}{" "}
           {trimmedQuery ? "matches — keep typing to narrow" : "branches — search to narrow"}
         </div>
@@ -223,7 +223,7 @@ function BranchPickerRowItem({
           anywhere in the row — `origin/main`'s NAME contains "origin" too. */}
       <span
         data-branch-meta
-        className="flex items-center gap-2 shrink-0 text-xs text-daintree-text/60"
+        className="flex items-center gap-2 shrink-0 text-xs text-text-secondary"
       >
         {showCurrentBadge && row.isCurrent && <span>current</span>}
         {row.isRemote && row.remoteName && <span>{row.remoteName}</span>}

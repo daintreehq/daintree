@@ -129,7 +129,7 @@ export function PanelPalette({
         className={cn(
           PALETTE_ROW_CLASS,
           "w-full flex items-center gap-3 px-3 py-2 rounded-[var(--radius-md)] text-left",
-          "text-daintree-text/70 hover:bg-overlay-subtle hover:text-text-primary",
+          "text-text-secondary hover:bg-overlay-subtle hover:text-text-primary",
           isUnavailable && "opacity-50"
         )}
         onClick={() => onSelect(kind)}
@@ -145,7 +145,7 @@ export function PanelPalette({
             />
           </div>
           {kind.description && (
-            <div className="text-xs text-daintree-text/50 truncate">{kind.description}</div>
+            <div className="text-xs text-text-secondary truncate">{kind.description}</div>
           )}
         </div>
         {badgeLabel && (

@@ -16,7 +16,7 @@ export function SettingsSection({
   icon: Icon,
   title,
   description,
-  iconColor = "text-daintree-text/70",
+  iconColor = "text-text-secondary",
   children,
   id,
   badge,
@@ -45,7 +45,7 @@ export function SettingsSection({
             </span>
           )}
         </h4>
-        <p className="text-xs text-daintree-text/50 select-text">{description}</p>
+        <p className="text-xs text-text-secondary select-text">{description}</p>
       </div>
       {children}
     </div>

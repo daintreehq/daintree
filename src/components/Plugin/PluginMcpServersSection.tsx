@@ -268,7 +268,7 @@ export function PluginMcpServersSection({ pluginId, declared }: PluginMcpServers
 
   return (
     <div className="space-y-3">
-      <p className="text-xs text-daintree-text/50">
+      <p className="text-xs text-text-secondary">
         Servers this plugin runs to provide tools. Restart one if it crashes.
       </p>
       <ul className="space-y-2">
@@ -334,7 +334,7 @@ export function PluginMcpServersSection({ pluginId, declared }: PluginMcpServers
                     type="button"
                     onClick={() => void toggleStderr(row, isOpen)}
                     aria-expanded={isOpen}
-                    className="flex items-center gap-1.5 w-full px-3 py-2 text-2xs text-daintree-text/50 hover:text-daintree-text/80 transition-[color] duration-150"
+                    className="flex items-center gap-1.5 w-full px-3 py-2 text-2xs text-text-secondary hover:text-text-primary transition-[color] duration-150"
                   >
                     {isOpen ? (
                       <ChevronDown className="w-3.5 h-3.5 shrink-0" />
@@ -378,7 +378,7 @@ function StderrView({ state }: { state: StderrState | undefined }) {
           Showing the most recent {result.lines.length} of {result.totalLines} lines.
         </p>
       )}
-      <pre className="max-h-48 overflow-auto rounded-[var(--radius-md)] bg-surface-canvas border border-border-default p-2 font-mono text-2xs leading-relaxed text-daintree-text/80 whitespace-pre-wrap break-words select-text">
+      <pre className="max-h-48 overflow-auto rounded-[var(--radius-md)] bg-surface-canvas border border-border-default p-2 font-mono text-2xs leading-relaxed text-text-primary whitespace-pre-wrap break-words select-text">
         {result.lines.join("\n")}
       </pre>
     </div>

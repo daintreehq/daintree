@@ -191,11 +191,11 @@ export function RecipesTab({
   return (
     <>
       <div className="mb-6">
-        <h3 className="text-sm font-semibold text-daintree-text/80 mb-2 flex items-center gap-2">
+        <h3 className="text-sm font-semibold text-text-primary mb-2 flex items-center gap-2">
           <Workflow className="h-4 w-4" />
           Terminal Recipes
         </h3>
-        <p className="text-xs text-daintree-text/60 mb-4">
+        <p className="text-xs text-text-secondary mb-4">
           Manage saved terminal configurations. Recipes can spawn multiple terminals with predefined
           commands and settings.
         </p>
@@ -213,7 +213,7 @@ export function RecipesTab({
                 <AlertTriangle className="h-4 w-4 text-status-warning mt-0.5 shrink-0" />
                 <div>
                   <p className="text-sm text-status-warning">Default recipe unavailable</p>
-                  <p className="text-xs text-daintree-text/60 mt-1">
+                  <p className="text-xs text-text-secondary mt-1">
                     The previously pinned recipe was deleted or is no longer eligible. Pin another
                     recipe or clear the default below.
                   </p>
@@ -483,7 +483,7 @@ export function RecipesTab({
         </AppDialog.Header>
 
         <AppDialog.Body>
-          <p className="text-sm text-daintree-text/60 mb-4">
+          <p className="text-sm text-text-secondary mb-4">
             Paste the JSON configuration for the recipe you want to import.
           </p>
           <textarea

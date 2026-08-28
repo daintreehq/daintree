@@ -76,7 +76,7 @@ export function PluginCapabilityConfirmDialog() {
       >
         <div className="space-y-3">
           <div>
-            <div className="text-2xs font-semibold uppercase tracking-wider text-daintree-text/60 mb-1">
+            <div className="text-2xs font-semibold uppercase tracking-wider text-text-secondary mb-1">
               Capability
             </div>
             <ul>
@@ -86,7 +86,7 @@ export function PluginCapabilityConfirmDialog() {
 
           {current.declaredCapabilities.length > 0 && (
             <div>
-              <div className="text-2xs font-semibold uppercase tracking-wider text-daintree-text/60 mb-1">
+              <div className="text-2xs font-semibold uppercase tracking-wider text-text-secondary mb-1">
                 All declared capabilities
               </div>
               <ul className="space-y-1.5">

@@ -1236,7 +1236,7 @@ export function BulkCreateWorktreeDialog({
                   >
                     <div className="flex-1 min-w-0">
                       <div className="flex items-center gap-2 min-w-0">
-                        <span className="text-daintree-text/50 text-xs font-mono shrink-0">
+                        <span className="text-text-secondary text-xs font-mono shrink-0">
                           #{item.item.number}
                         </span>
                         <span className="text-text-primary truncate">{item.item.title}</span>
@@ -1244,7 +1244,7 @@ export function BulkCreateWorktreeDialog({
                       {!item.skipped && (
                         <div className="flex items-center gap-1.5 mt-0.5">
                           <FolderGit2 className="w-3 h-3 text-daintree-text/40 shrink-0" />
-                          <span className="text-xs text-daintree-text/50 font-mono truncate">
+                          <span className="text-xs text-text-secondary font-mono truncate">
                             {item.branchName}
                           </span>
                         </div>
@@ -1292,7 +1292,7 @@ export function BulkCreateWorktreeDialog({
                       </div>
                       <div className="flex-1 min-w-0">
                         <div className="flex items-center gap-2 min-w-0">
-                          <span className="text-daintree-text/50 text-xs font-mono shrink-0">
+                          <span className="text-text-secondary text-xs font-mono shrink-0">
                             #{item.item.number}
                           </span>
                           <span className="text-text-primary truncate">{item.item.title}</span>
@@ -1303,7 +1303,7 @@ export function BulkCreateWorktreeDialog({
                           )}
                         </div>
                         {stageLabel && (
-                          <p className="text-xs text-daintree-text/50 mt-0.5">{stageLabel}</p>
+                          <p className="text-xs text-text-secondary mt-0.5">{stageLabel}</p>
                         )}
                         {itemStatus?.stage === "failed" && itemStatus.error && (
                           <p className="text-xs text-status-warning mt-0.5 break-words">
@@ -1326,7 +1326,7 @@ export function BulkCreateWorktreeDialog({
                   }}
                 />
               </div>
-              <div className="flex items-center justify-center gap-1.5 text-sm tabular-nums text-daintree-text/70">
+              <div className="flex items-center justify-center gap-1.5 text-sm tabular-nums text-text-secondary">
                 <span>
                   {succeededCount} of {progress.items.size} created
                 </span>

@@ -180,7 +180,7 @@ export function CopyTreeRecentsPanel({
                   >
                     <span className="min-w-0 flex-1 flex flex-col gap-0.5">
                       <span className="truncate text-sm">{record.name}</span>
-                      <span className="truncate text-2xs text-daintree-text/50">
+                      <span className="truncate text-2xs text-text-secondary">
                         {formatRecentMeta(record)}
                       </span>
                     </span>

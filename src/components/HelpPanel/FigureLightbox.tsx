@@ -84,7 +84,7 @@ export function FigureLightbox({
       <AppDialog.BodyScroll className="flex flex-col gap-4">
         <div className="relative flex items-center justify-center bg-overlay-subtle rounded-[var(--radius-md)] min-h-[200px] overflow-hidden">
           {status === "failed" ? (
-            <div className="flex flex-col items-center gap-2 py-12 text-daintree-text/50">
+            <div className="flex flex-col items-center gap-2 py-12 text-text-secondary">
               <ImageOff className="w-8 h-8" aria-hidden="true" />
               <p className="text-sm">Couldn't load figure {figure.figureNumber}</p>
             </div>
@@ -131,12 +131,12 @@ export function FigureLightbox({
         <div className="flex flex-col gap-1 border-t border-border-default pt-3">
           <div className="flex items-baseline justify-between gap-2">
             <p className="text-sm font-medium text-text-primary">Figure {figure.figureNumber}</p>
-            <p className="text-2xs text-daintree-text/45 shrink-0">
+            <p className="text-2xs text-text-secondary shrink-0">
               {figure.figureLabel} · Daintree docs
             </p>
           </div>
           {figure.caption && (
-            <p className="text-xs text-daintree-text/70 select-text">{figure.caption}</p>
+            <p className="text-xs text-text-secondary select-text">{figure.caption}</p>
           )}
         </div>
 

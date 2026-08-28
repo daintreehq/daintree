@@ -218,8 +218,8 @@ function FileStageRowComponent({
               className={cn(
                 "shrink truncate font-mono text-2xs transition-colors",
                 generated
-                  ? "text-daintree-text/30"
-                  : "text-daintree-text/50 group-hover/stagerow:text-daintree-text/70"
+                  ? "text-text-placeholder"
+                  : "text-text-secondary group-hover/stagerow:text-text-primary"
               )}
             >
               {dir}/
@@ -260,9 +260,7 @@ function FileStageRowComponent({
               className={cn(
                 "flex items-center gap-1 ml-2 shrink-0 cursor-pointer select-none rounded px-1.5 py-0.5",
                 "text-3xs font-medium uppercase tracking-wider transition-colors",
-                viewed
-                  ? "text-daintree-text/60"
-                  : "text-daintree-text/30 hover:text-daintree-text/60"
+                viewed ? "text-text-secondary" : "text-text-placeholder hover:text-text-secondary"
               )}
             >
               <input

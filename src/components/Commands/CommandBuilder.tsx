@@ -451,7 +451,7 @@ export function CommandBuilder({
         <div className="flex items-center gap-3">
           <AppDialog.Title>{command.label}</AppDialog.Title>
           {hasMultipleSteps && (
-            <span className="text-sm tabular-nums text-daintree-text/50">
+            <span className="text-sm tabular-nums text-text-secondary">
               Step {currentStepIndex + 1} of {steps.length}
             </span>
           )}
@@ -465,7 +465,7 @@ export function CommandBuilder({
             <CheckCircle className="h-12 w-12 text-status-success" />
             <div className="text-center">
               <h3 className="text-lg font-medium text-text-primary">Command Executed</h3>
-              <p className="text-sm text-daintree-text/70 mt-1">
+              <p className="text-sm text-text-secondary mt-1">
                 {executionResult.message ?? "Command completed."}
               </p>
             </div>
@@ -475,7 +475,7 @@ export function CommandBuilder({
             <AlertCircle className="h-12 w-12 text-status-error" />
             <div className="text-center">
               <h3 className="text-lg font-medium text-text-primary">Configuration Error</h3>
-              <p className="text-sm text-daintree-text/70 mt-1">
+              <p className="text-sm text-text-secondary mt-1">
                 This command has no builder steps configured.
               </p>
             </div>
@@ -488,7 +488,7 @@ export function CommandBuilder({
                   <h3 className="text-base font-semibold text-text-primary">{currentStep.title}</h3>
                 )}
                 {currentStep.description && (
-                  <p className="text-sm text-daintree-text/70">{currentStep.description}</p>
+                  <p className="text-sm text-text-secondary">{currentStep.description}</p>
                 )}
 
                 <FormGrid>
@@ -532,7 +532,7 @@ export function CommandBuilder({
                   variant="ghost"
                   onClick={handleBack}
                   disabled={isExecuting}
-                  className="text-daintree-text/70"
+                  className="text-text-secondary"
                 >
                   <ChevronLeft className="h-4 w-4" />
                   Back
@@ -544,7 +544,7 @@ export function CommandBuilder({
                 variant="ghost"
                 onClick={onCancel}
                 disabled={isExecuting}
-                className="text-daintree-text/70"
+                className="text-text-secondary"
               >
                 Cancel
               </Button>

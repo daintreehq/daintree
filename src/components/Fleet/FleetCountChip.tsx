@@ -178,7 +178,7 @@ export function FleetCountChip({
             label={String(armedCount)}
             textClassName="font-semibold tabular-nums text-text-primary"
           />
-          <span className="text-daintree-text/70">
+          <span className="text-text-secondary">
             in fleet
             {scope.worktreeCount > 1 ? ` · ${scope.worktreeCount} worktrees` : ""}
           </span>
@@ -201,12 +201,12 @@ export function FleetCountChip({
       >
         {popoverMode === "list" ? (
           <>
-            <div className="px-2 py-1 text-3xs font-medium uppercase tracking-wide text-daintree-text/50">
+            <div className="px-2 py-1 text-3xs font-medium uppercase tracking-wide text-text-secondary">
               Fleet terminals
             </div>
             <ul className="flex flex-col overflow-y-auto">
               {armOrder.length === 0 ? (
-                <li className="px-2 py-1 text-xs leading-[inherit] text-daintree-text/60">None</li>
+                <li className="px-2 py-1 text-xs leading-[inherit] text-text-secondary">None</li>
               ) : (
                 armOrder.map((id) => {
                   const title = titlesByPane[id] ?? id;
@@ -269,7 +269,7 @@ export function FleetCountChip({
                 aria-label="Back to fleet list"
                 data-testid="fleet-picker-back"
                 className={cn(
-                  "inline-flex items-center gap-1 rounded px-1.5 py-1 text-xs leading-[inherit] text-daintree-text/70",
+                  "inline-flex items-center gap-1 rounded px-1.5 py-1 text-xs leading-[inherit] text-text-secondary",
                   "hover:bg-tint/[0.08] hover:text-text-primary",
                   "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
                 )}
@@ -277,13 +277,13 @@ export function FleetCountChip({
                 <ArrowLeft className="h-3.5 w-3.5" aria-hidden="true" />
                 <span>Back</span>
               </button>
-              <span className="text-2xs font-medium uppercase tracking-wide text-daintree-text/50">
+              <span className="text-2xs font-medium uppercase tracking-wide text-text-secondary">
                 Add panes
               </span>
             </div>
             <FleetPickerContent picker={picker} testIdPrefix="fleet-picker-add" autoFocusSearch />
             <div className="mt-1 flex items-center justify-between gap-2 border-t border-daintree-border/50 px-1 pt-2">
-              <span className="text-2xs tabular-nums text-daintree-text/55">
+              <span className="text-2xs tabular-nums text-text-secondary">
                 {picker.confirmedIds.length === 0
                   ? "Select panes to add"
                   : `${picker.confirmedIds.length} selected`}
@@ -293,7 +293,7 @@ export function FleetCountChip({
                   type="button"
                   onClick={() => setPopoverMode("list")}
                   className={cn(
-                    "rounded px-2 py-1 text-2xs text-daintree-text/70",
+                    "rounded px-2 py-1 text-2xs text-text-secondary",
                     "hover:bg-tint/[0.08] hover:text-text-primary",
                     "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
                   )}

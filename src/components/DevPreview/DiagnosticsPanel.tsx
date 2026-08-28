@@ -145,8 +145,8 @@ const ERROR_EVENT_TYPES: ReadonlySet<DevPreviewDiagnosticEvent["type"]> = new Se
 function SummaryRow({ label, value }: { label: string; value: string }) {
   return (
     <>
-      <dt className="text-daintree-text/45">{label}</dt>
-      <dd className="min-w-0 truncate text-daintree-text/75" title={value}>
+      <dt className="text-text-secondary">{label}</dt>
+      <dd className="min-w-0 truncate text-text-primary" title={value}>
         {value}
       </dd>
     </>
@@ -207,7 +207,7 @@ export function DiagnosticsPanel({ paneId, projectId, status }: DiagnosticsPanel
   return (
     <div className="flex h-full flex-col overflow-hidden bg-surface-canvas text-xs">
       <div className="flex shrink-0 items-center justify-between border-b border-overlay/50 px-3 py-1.5">
-        <span className="font-semibold text-daintree-text/70">Session diagnostics</span>
+        <span className="font-semibold text-text-secondary">Session diagnostics</span>
         <Tooltip>
           <TooltipTrigger asChild>
             <button
@@ -226,11 +226,11 @@ export function DiagnosticsPanel({ paneId, projectId, status }: DiagnosticsPanel
       <div className="min-h-0 flex-1 overflow-y-auto">
         {loadFailed ? (
           <div className="flex flex-col items-start gap-2 p-3">
-            <p className="text-daintree-text/60">Couldn't load diagnostics for this preview.</p>
+            <p className="text-text-secondary">Couldn't load diagnostics for this preview.</p>
             <button
               type="button"
               onClick={fetchDiagnostics}
-              className="rounded border border-overlay/50 px-2 py-1 text-daintree-text/70 transition-colors hover:bg-overlay-medium"
+              className="rounded border border-overlay/50 px-2 py-1 text-text-secondary transition-colors hover:bg-overlay-medium"
             >
               Retry
             </button>
@@ -269,7 +269,7 @@ export function DiagnosticsPanel({ paneId, projectId, status }: DiagnosticsPanel
             )}
 
             {events.length === 0 ? (
-              <p className="px-3 py-4 text-daintree-text/50">
+              <p className="px-3 py-4 text-text-secondary">
                 No lifecycle events yet. Start the dev server to record its timeline.
               </p>
             ) : (
@@ -288,18 +288,18 @@ export function DiagnosticsPanel({ paneId, projectId, status }: DiagnosticsPanel
                       <span
                         className={cn(
                           "whitespace-nowrap font-medium",
-                          isError ? "text-status-error" : "text-daintree-text/75"
+                          isError ? "text-status-error" : "text-text-primary"
                         )}
                       >
                         {label}
                         {event.count !== undefined && event.count > 1 && (
-                          <span className="ml-1 rounded-full bg-overlay-medium px-1.5 text-3xs tabular-nums text-daintree-text/60">
+                          <span className="ml-1 rounded-full bg-overlay-medium px-1.5 text-3xs tabular-nums text-text-secondary">
                             ×{event.count}
                           </span>
                         )}
                       </span>
                       <span
-                        className="min-w-0 truncate font-mono text-daintree-text/55"
+                        className="min-w-0 truncate font-mono text-text-secondary"
                         title={detail}
                       >
                         {detail}

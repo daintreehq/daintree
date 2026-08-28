@@ -71,7 +71,7 @@ export function ProjectNotificationsTab({ overrides, onChange }: ProjectNotifica
   };
 
   if (!window.electron?.notification) {
-    return <div className="text-sm text-daintree-text/50">Notification API not available</div>;
+    return <div className="text-sm text-text-secondary">Notification API not available</div>;
   }
 
   if (globalError) {
@@ -99,7 +99,7 @@ export function ProjectNotificationsTab({ overrides, onChange }: ProjectNotifica
   }
 
   if (!globalSettings) {
-    return <div className="text-sm text-daintree-text/50">Loading global settings…</div>;
+    return <div className="text-sm text-text-secondary">Loading global settings…</div>;
   }
 
   const effective = (key: keyof NotificationSettings) =>
@@ -110,7 +110,7 @@ export function ProjectNotificationsTab({ overrides, onChange }: ProjectNotifica
 
   return (
     <div className="space-y-6">
-      <div className="text-sm text-daintree-text/60 mb-4">
+      <div className="text-sm text-text-secondary mb-4">
         Override global notification settings for this project. Unchecked overrides inherit the
         global default.
       </div>
@@ -338,7 +338,7 @@ function OverrideRow({
         )}
       </label>
       {description && !isOverridden && (
-        <p className="text-xs text-daintree-text/50 ml-6">{description}</p>
+        <p className="text-xs text-text-secondary ml-6">{description}</p>
       )}
       {isOverridden && <div className="ml-6">{children}</div>}
     </div>

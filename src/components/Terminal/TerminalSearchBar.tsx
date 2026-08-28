@@ -361,7 +361,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
               "px-1.5 py-1 text-xs rounded transition-colors",
               caseSensitive
                 ? "bg-status-info text-surface-canvas"
-                : "text-daintree-text/60 hover:text-text-primary hover:bg-overlay-medium"
+                : "text-text-secondary hover:text-text-primary hover:bg-overlay-medium"
             )}
             aria-label="Toggle case sensitivity"
             aria-pressed={caseSensitive}
@@ -380,7 +380,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
               "px-1.5 py-1 text-xs font-mono rounded transition-colors",
               regexEnabled
                 ? "bg-status-info text-surface-canvas"
-                : "text-daintree-text/60 hover:text-text-primary hover:bg-overlay-medium"
+                : "text-text-secondary hover:text-text-primary hover:bg-overlay-medium"
             )}
             aria-label="Toggle regex mode"
             aria-pressed={regexEnabled}
@@ -399,7 +399,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
               "px-1.5 py-1 text-xs rounded transition-colors",
               wholeWord
                 ? "bg-status-info text-surface-canvas"
-                : "text-daintree-text/60 hover:text-text-primary hover:bg-overlay-medium"
+                : "text-text-secondary hover:text-text-primary hover:bg-overlay-medium"
             )}
             aria-label="Toggle whole word"
             aria-pressed={wholeWord}
@@ -418,7 +418,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
                 data-terminal-search-status
                 className={cn(
                   "text-xs px-1.5 cursor-help underline decoration-dotted underline-offset-2",
-                  searchStatus === "found" ? "text-daintree-text/60" : "text-status-error"
+                  searchStatus === "found" ? "text-text-secondary" : "text-status-error"
                 )}
               >
                 {statusText}
@@ -433,7 +433,7 @@ export function TerminalSearchBar({ terminalId, onClose, className }: TerminalSe
             data-terminal-search-status
             className={cn(
               "text-xs px-1.5",
-              searchStatus === "found" ? "text-daintree-text/60" : "text-status-error"
+              searchStatus === "found" ? "text-text-secondary" : "text-status-error"
             )}
           >
             {statusText}

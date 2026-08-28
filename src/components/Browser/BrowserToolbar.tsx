@@ -775,7 +775,7 @@ export function BrowserToolbar({
                     onBlur={() => setChipFocusedIndex(-1)}
                     className={cn(
                       "toolbar-icon-button px-1.5 py-1 rounded text-xs font-medium",
-                      isSelected ? "text-text-primary" : "text-daintree-text/50"
+                      isSelected ? "text-text-primary" : "text-text-secondary"
                     )}
                   >
                     {preset.label}
@@ -829,7 +829,7 @@ export function BrowserToolbar({
                           }}
                           className={cn(
                             "toolbar-icon-button px-1.5 py-1 rounded text-xs font-medium",
-                            isSelected ? "text-text-primary" : "text-daintree-text/50"
+                            isSelected ? "text-text-primary" : "text-text-secondary"
                           )}
                         >
                           {dpr}×
@@ -970,7 +970,7 @@ export function BrowserToolbar({
                   {entry.title && (
                     <span className="text-xs text-text-primary truncate">{entry.title}</span>
                   )}
-                  <span className="text-xs text-daintree-text/50 truncate">{entry.url}</span>
+                  <span className="text-xs text-text-secondary truncate">{entry.url}</span>
                 </div>
                 {projectId && (
                   <button

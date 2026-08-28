@@ -145,7 +145,7 @@ export function ForcePushConfirmDialog({
       isConfirmLoading={isPushing}
       confirmDisabled={isLoading || !!loadError || preview === null || isPreviewStale}
     >
-      <div className="space-y-3 text-xs text-daintree-text/80">
+      <div className="space-y-3 text-xs text-text-primary">
         <p>
           This rewrites <span className="font-mono">{destinationLabel ?? branchName}</span> to match
           your local branch <span className="font-mono">{branchName}</span>. Any commits on the
@@ -154,7 +154,7 @@ export function ForcePushConfirmDialog({
 
         <div className="rounded border border-tint/[0.08] bg-tint/[0.04]">
           <div className="px-3 py-2 border-b border-tint/[0.08] flex items-center justify-between">
-            <span className="text-2xs font-semibold uppercase tracking-wider text-daintree-text/60">
+            <span className="text-2xs font-semibold uppercase tracking-wider text-text-secondary">
               Remote commits to discard
               {totalRemote > 0 && (
                 <span className="ml-1.5 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-3xs font-medium normal-case tracking-normal">
@@ -195,7 +195,7 @@ export function ForcePushConfirmDialog({
           )}
 
           {!isLoading && !blockingMessage && commits && commits.length === 0 && (
-            <div className="px-3 py-3 text-daintree-text/50">
+            <div className="px-3 py-3 text-text-secondary">
               No remote commits to discard. The remote may already match your local branch.
             </div>
           )}
@@ -226,7 +226,7 @@ export function ForcePushConfirmDialog({
                     >
                       {commit.hash.slice(0, SHORT_HASH_LEN)}
                     </span>
-                    <span className="text-daintree-text/80 truncate min-w-0">{commit.message}</span>
+                    <span className="text-text-primary truncate min-w-0">{commit.message}</span>
                     <span className="text-3xs text-text-secondary shrink-0 ml-auto">
                       {commit.author}
                     </span>

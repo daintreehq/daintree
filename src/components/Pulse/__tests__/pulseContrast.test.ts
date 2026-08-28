@@ -29,6 +29,33 @@ function mediaBlockSlice(content: string, mediaSelector: string): string {
 }
 
 describe("ProjectPulseCard — visual contrast (issue #2645)", () => {
+  // #2645's floors, restated for the vocabulary that replaced them. The old
+  // tests spelled a contrast minimum as an opacity step ("at least /90", "no
+  // text at /50 or /60"), and #12065 retired the mechanism those numbers were
+  // written in. Naming the tokens that replaced them would only copy the source
+  // back, so what stays is the part that was always the point: Pulse text may
+  // not sit on a role without an AA floor.
+  //
+  // `text-primary` and `text-secondary` both carry a 4.5:1 minimum against every
+  // display surface in `CONTRAST_PAIRS`, enforced for all 15 built-in themes.
+  // `text-muted` is guarded on light themes only and bottoms out at 2.2:1 on
+  // namib; `text-placeholder` has no floor at all. Either would put a Pulse
+  // label under AA on some theme without failing anything else, which is exactly
+  // the regression #2645 was filed about.
+  const SUB_AA_ROLES = ["text-text-muted", "text-text-placeholder"];
+
+  it.each([
+    ["ProjectPulseCard", CARD_PATH],
+    ["PulseSummary", SUMMARY_PATH],
+  ])("keeps %s text on a role that carries an AA floor", async (_name, filePath) => {
+    const content = await readFile(filePath, "utf-8");
+    const used = SUB_AA_ROLES.filter((role) => new RegExp(`\\b${role}\\b`).test(content));
+    expect(
+      used,
+      `these roles have no AA floor on every theme — see CONTRAST_PAIRS in shared/theme/contrast.ts`
+    ).toEqual([]);
+  });
+
   it("card shell uses pulse component vars for per-theme shell styling", async () => {
     const content = await readFile(CARD_PATH, "utf-8");
     expect(content).toContain('"pulse-card');
@@ -43,22 +70,6 @@ describe("ProjectPulseCard — visual contrast (issue #2645)", () => {
     const content = await readFile(CARD_PATH, "utf-8");
     expect(content).not.toContain("text-status-error/70");
     expect(content).not.toContain("text-status-info/70");
-  });
-
-  it("primary title text uses at least /90 opacity", async () => {
-    const content = await readFile(CARD_PATH, "utf-8");
-    expect(content).toContain("text-daintree-text/90");
-  });
-
-  it("no card text uses /50 or /60 opacity (below secondary floor)", async () => {
-    const content = await readFile(CARD_PATH, "utf-8");
-    expect(content).not.toContain("text-daintree-text/50");
-    expect(content).not.toContain("text-daintree-text/60");
-  });
-
-  it("coaching line uses at least /80 opacity", async () => {
-    const content = await readFile(CARD_PATH, "utf-8");
-    expect(content).toContain("text-daintree-text/80");
   });
 
   it("coaching line does not use italic styling", async () => {
@@ -92,24 +103,10 @@ describe("ProjectPulseCard — visual contrast (issue #2645)", () => {
 });
 
 describe("PulseSummary — visual contrast (issue #2645)", () => {
-  it("Stat non-highlight text uses /75 opacity (not /60)", async () => {
-    const content = await readFile(SUMMARY_PATH, "utf-8");
-    expect(content).toContain("text-daintree-text/75");
-    expect(content).not.toContain("text-daintree-text/60");
-  });
-
-  it("Stat label uses /55 opacity floor (not /40)", async () => {
-    const content = await readFile(SUMMARY_PATH, "utf-8");
-    expect(content).toContain("text-daintree-text/55");
-    expect(content).not.toContain("text-daintree-text/40");
-  });
-
-  it("delta row does not use opacity below the /55 tertiary floor", async () => {
-    const content = await readFile(SUMMARY_PATH, "utf-8");
-    expect(content).not.toContain("text-daintree-text/30");
-    expect(content).not.toContain("text-daintree-text/40");
-    expect(content).not.toContain("text-daintree-text/50");
-  });
+  // Stat's NON-highlight arm stays on the ramp deliberately: it sits beside
+  // `text-text-primary` in the same ternary, and lifting it to its band role
+  // would erase the highlight it exists to contrast with. The manifest records
+  // it as a semantic-state-pair carve-out.
 
   it("delta insertions/deletions use at least /80 semantic colour", async () => {
     const content = await readFile(SUMMARY_PATH, "utf-8");

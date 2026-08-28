@@ -183,7 +183,7 @@ export function SystemRequirementsSection({
             type="button"
             onClick={() => void runCheck()}
             disabled={isChecking}
-            className="inline-flex items-center gap-1.5 text-xs text-daintree-text/50 hover:text-text-primary disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none transition-colors"
+            className="inline-flex items-center gap-1.5 text-xs text-text-secondary hover:text-text-primary disabled:opacity-40 disabled:cursor-not-allowed disabled:pointer-events-none transition-colors"
           >
             <RotateCw className={`w-3 h-3 ${isChecking ? "animate-spin" : ""}`} />
             {isChecking ? "Checking..." : "Re-check"}

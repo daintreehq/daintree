@@ -44,13 +44,13 @@ function TranscriptBody({
   if (transcript.status === "unavailable") {
     return (
       <div className="flex flex-col items-start gap-1">
-        <p className="text-xs text-daintree-text/50">
+        <p className="text-xs text-text-secondary">
           {subagentUnavailableMessage(transcript.reason, SUBAGENT_PROVIDERS[provider].label)}
         </p>
         <button
           type="button"
           onClick={onRetry}
-          className="text-xs text-daintree-text/70 hover:text-text-primary underline underline-offset-2 transition-colors"
+          className="text-xs text-text-secondary hover:text-text-primary underline underline-offset-2 transition-colors"
         >
           Retry
         </button>
@@ -58,19 +58,19 @@ function TranscriptBody({
     );
   }
   if (transcript.messages.length === 0) {
-    return <p className="text-xs text-daintree-text/50">No messages recorded yet</p>;
+    return <p className="text-xs text-text-secondary">No messages recorded yet</p>;
   }
   return (
     <div className="flex flex-col gap-2">
       {transcript.truncated && (
-        <p className="text-3xs text-daintree-text/35">Showing the latest messages</p>
+        <p className="text-3xs text-text-placeholder">Showing the latest messages</p>
       )}
       {transcript.messages.map((message, index) => (
         <div key={`${transcript.subagentId}-${index}`} className="flex flex-col gap-0.5">
           <span className="text-3xs uppercase tracking-wider text-text-secondary">
             {message.role === "task" ? "Task" : "Reply"}
           </span>
-          <p className="text-xs text-daintree-text/80 whitespace-pre-wrap break-words">
+          <p className="text-xs text-text-primary whitespace-pre-wrap break-words">
             {message.text}
           </p>
         </div>
@@ -152,10 +152,10 @@ function SubagentRow({
               {subagentStatusLabel(subagent.status)}
             </span>
           </span>
-          {subtitle && <span className="text-2xs text-daintree-text/50 truncate">{subtitle}</span>}
+          {subtitle && <span className="text-2xs text-text-secondary truncate">{subtitle}</span>}
         </span>
         {subagent.updatedAt > 0 && (
-          <span className="text-3xs text-daintree-text/35 shrink-0 mt-0.5 tabular-nums">
+          <span className="text-3xs text-text-placeholder shrink-0 mt-0.5 tabular-nums">
             {formatTimeAgo(subagent.updatedAt)}
           </span>
         )}
@@ -170,7 +170,7 @@ function SubagentRow({
         {isOpen &&
           (transcript === null ? (
             showSpinner ? (
-              <span className="flex items-center gap-2 text-xs text-daintree-text/50" role="status">
+              <span className="flex items-center gap-2 text-xs text-text-secondary" role="status">
                 <Spinner size="sm" />
                 Loading transcript
               </span>
@@ -234,7 +234,7 @@ export function SubagentChip({ terminalId }: { terminalId: string }) {
       <PopoverTrigger asChild>
         <button
           type="button"
-          className="inline-flex items-center gap-1 text-xs font-sans bg-overlay-soft text-daintree-text/60 px-1.5 py-0.5 rounded border border-divider hover:text-text-primary transition-colors"
+          className="inline-flex items-center gap-1 text-xs font-sans bg-overlay-soft text-text-secondary px-1.5 py-0.5 rounded border border-divider hover:text-text-primary transition-colors"
           aria-label={`${subagents.length} ${label} subagent${subagents.length === 1 ? "" : "s"}`}
         >
           <Network className="w-3 h-3" aria-hidden="true" />

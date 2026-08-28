@@ -32,7 +32,7 @@ Three vocabularies are live in the codebase. **The semantic tokens are the curre
 | Vocabulary | Shape | Uses | Status |
 | --- | --- | --- | --- |
 | Semantic tokens | `text-text-secondary`, `bg-surface-panel`, `border-border-default`, `text-status-error` | ~4,900 | **Current.** The validated contract is 155 tokens; the full list is in [theme-tokens.md](./theme-tokens.md). |
-| Legacy `daintree-*` aliases | `text-daintree-text/70`, `bg-daintree-accent/10` | ~2,300 | Legacy. Five aliases over tokens that already have semantic names. Every solid use is gone; what remains is alpha forms, which is the only reason the alias layer still has to generate. |
+| Legacy `daintree-*` aliases | `bg-daintree-accent/10`, `text-daintree-text/40` | ~1,000 | Legacy. Five aliases over tokens that already have semantic names. Every solid use is gone (#12056), and #12065 took the text opacity ramp with it; what remains is the non-text alpha composites and a reviewed set of dim text carve-outs, which is the only reason the alias layer still has to generate. |
 | shadcn defaults | `text-muted-foreground`, `bg-muted`, `bg-popover` | ~250 | Legacy. Arrived with the vendored shadcn primitives. Nearly all are theme-backed (`--muted` resolves to `--theme-surface-panel`), so they render correctly — they are simply a third name for tokens that already have one. |
 
 Counts are utilities in production `src/**`, measured with the same extraction the rules use.
@@ -51,7 +51,7 @@ Migrate on the utility, keeping the prefix:
 
 Two further aliases, `--color-daintree-accent-rgb` and `--color-daintree-focus`, were deleted once their last call sites went. The rule still maps them, deliberately: a utility naming an alias that no longer exists generates no CSS at all, which is a worse failure than the vocabulary mixing and worth catching by name rather than falling through to the generic message.
 
-An alpha modifier carries across unchanged on surfaces and edges — `bg-daintree-accent/10` becomes `bg-accent-primary/10`. On a **text** colour it does not: `text-daintree-text/70` becomes `text-text-secondary` or `text-text-muted`, per the next section. Both rules fire on that token, and both fixes are needed.
+An alpha modifier carries across unchanged on surfaces and edges — `bg-daintree-accent/10` becomes `bg-accent-primary/10`. On a **text** colour it does not: the alpha has to go, and the step picks a solid role, per the next section. Both rules fire on that token, and both fixes are needed.
 
 Enforced by `component-contract/no-legacy-daintree-utilities`. Reads of `var(--color-daintree-*)` inside an arbitrary value are deliberately not flagged — they are far rarer, and folding them in would double-count the same migration.
 
@@ -60,6 +60,22 @@ Enforced by `component-contract/no-legacy-daintree-utilities`. Reads of `var(--c
 Never fade a text colour with slash-alpha. `text-text-secondary/70` compiles in Tailwind v4 to a solid declaration followed by a `@supports` block that replaces it with `color-mix(in oklab, var(--theme-text-secondary) 70%, transparent)` — the alpha lands on the `color` property itself, so the label is composited against whatever sits behind it and the contrast loss is baked in. An `opacity: 1` further down the tree cannot recover it. De-emphasise with a solid token one step down the hierarchy: `text-text-secondary`, then `text-text-muted`.
 
 This has already cost real legibility. `src/index.css` carries a `[class*="text-daintree-text/"]` override inside the `prefers-contrast: more` block, forcing the solid token back, added to claw back what the pattern costs under macOS Increase Contrast. The rule exists so that override's surface area stops growing.
+
+### The retired ramp
+
+`text-daintree-text/NN` was that mistake at scale — 1,906 sites expressing a text hierarchy through fifteen opacity steps. #12065 retired it against measured numbers rather than taste. `npm run theme:text-contrast` composites every step against every surface on all 15 themes; taking floor non-regression as the rule (a step may only adopt a role whose weakest measurement is no worse than the step's own) leaves three bands:
+
+| Step        | Role                    | Step floor | Role floor |
+| ----------- | ----------------------- | ---------- | ---------- |
+| `/20`–`/35` | `text-text-placeholder` | 1.4–2.0:1  | 1.9:1      |
+| `/45`–`/70` | `text-text-secondary`   | 2.5–4.6:1  | 5.0:1      |
+| `/75`–`/90` | `text-text-primary`     | 5.3–7.1:1  | 8.4:1      |
+
+Roughly 80% of the ramp collapses onto `text-text-secondary`. That is the finding, not a defect in the mapping: four text roles cannot carry fifteen steps, and the fine-grained hierarchy those sites looked like they were expressing was never perceptible — it already did not survive Increase Contrast.
+
+**`text-muted` receives nothing.** Its floor is Lc 16.0 / 2.2:1 on namib's elevated panel, below the `/50` step it looks like it should absorb, and `getThemeContrastWarnings()` guards it on light themes only. Giving it a dark-mode floor is the prerequisite for putting it back in the vocabulary.
+
+445 painted sites stay dim on purpose — icon affordances (312), decorative glyphs, deliberate disabled states the bands would have brightened, text already composited by an ancestor's `opacity-*`, and controls whose resting colour sits beside a state colour its band role would erase. Each is recorded with its category and a stated reason in `scripts/baselines/text-ramp-manifest.json`, generated by `npm run theme:text-ramp`. A contract test fails on any ramp site the manifest does not name, and `npm run theme:text-ramp -- --check` re-runs the classifier to catch a carve-out that has stopped qualifying for the category it claims.
 
 Alpha on surfaces and edges is fine and is not flagged — `bg-status-error/10` composites against a known background, and that ladder is the `overlay-*` design rather than debt.
 

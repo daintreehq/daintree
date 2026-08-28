@@ -130,14 +130,14 @@ export function ObjectInspector({
 
   if (isStale) {
     return (
-      <span className="text-daintree-text/30 italic" title="Value unavailable after navigation">
+      <span className="text-text-placeholder italic" title="Value unavailable after navigation">
         {displayText}
       </span>
     );
   }
 
   if (!canExpand) {
-    return <span className="text-daintree-text/70">{displayText}</span>;
+    return <span className="text-text-secondary">{displayText}</span>;
   }
 
   return (
@@ -147,7 +147,7 @@ export function ObjectInspector({
         onClick={() => void handleExpand()}
         className={cn(
           "inline text-left hover:bg-tint/5 rounded px-0.5 -mx-0.5 transition-colors",
-          isExpanded ? "text-daintree-text/90" : "text-daintree-text/70"
+          isExpanded ? "text-text-primary" : "text-text-secondary"
         )}
       >
         <span className="text-daintree-text/40 mr-0.5 select-none">

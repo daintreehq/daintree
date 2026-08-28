@@ -924,7 +924,7 @@ export function AgentSetupWizard({
               <Button
                 variant="ghost"
                 onClick={handleBack}
-                className="text-daintree-text/70 hover:text-text-primary"
+                className="text-text-secondary hover:text-text-primary"
                 disabled={isSaving || isInstalling}
               >
                 <ChevronLeft className="w-4 h-4" />
@@ -941,7 +941,7 @@ export function AgentSetupWizard({
                 onClick={handleSkip}
                 disabled={isSaving}
                 data-testid="agent-setup-exit"
-                className="text-daintree-text/70 hover:text-text-primary"
+                className="text-text-secondary hover:text-text-primary"
               >
                 {isFirstRun ? "Not now" : "Cancel"}
               </Button>
@@ -1055,7 +1055,7 @@ function AppearanceStep({
                     <Sun className="w-3 h-3 text-daintree-text/50" />
                   )}
                   <span className="text-sm font-medium text-text-primary">{scheme.name}</span>
-                  <span className="text-xs text-daintree-text/50">{isDark ? "Dark" : "Light"}</span>
+                  <span className="text-xs text-text-secondary">{isDark ? "Dark" : "Light"}</span>
                 </div>
                 {isSelected && <Check className="w-3.5 h-3.5 text-text-primary shrink-0" />}
               </div>
@@ -1063,7 +1063,7 @@ function AppearanceStep({
           );
         })}
       </div>
-      <p className="text-xs text-daintree-text/50 text-center mt-3">
+      <p className="text-xs text-text-secondary text-center mt-3">
         More themes available in Settings → Appearance
       </p>
     </section>

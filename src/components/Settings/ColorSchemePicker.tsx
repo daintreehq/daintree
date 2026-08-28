@@ -194,7 +194,7 @@ export function ColorSchemePicker() {
                 "px-2.5 py-0.5 text-2xs font-medium transition-colors",
                 typeFilter === "dark"
                   ? "bg-overlay-selected text-text-primary"
-                  : "text-daintree-text/50 hover:text-daintree-text/70"
+                  : "text-text-secondary hover:text-text-primary"
               )}
             >
               Dark
@@ -206,7 +206,7 @@ export function ColorSchemePicker() {
                 "px-2.5 py-0.5 text-2xs font-medium transition-colors border-l border-border-default",
                 typeFilter === "light"
                   ? "bg-overlay-selected text-text-primary"
-                  : "text-daintree-text/50 hover:text-daintree-text/70"
+                  : "text-text-secondary hover:text-text-primary"
               )}
             >
               Light
@@ -220,7 +220,7 @@ export function ColorSchemePicker() {
           aria-label="Color scheme list"
         >
           {isEmpty ? (
-            <p className="text-xs text-daintree-text/50 text-center py-4">
+            <p className="text-xs text-text-secondary text-center py-4">
               No schemes match your search.
             </p>
           ) : (

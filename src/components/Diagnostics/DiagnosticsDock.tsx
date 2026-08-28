@@ -52,7 +52,7 @@ function TabButton({ tab, label, isActive, onClick, badge }: TabButtonProps) {
         "px-3 py-1.5 text-sm font-medium transition-colors relative rounded",
         "hover:text-text-primary hover:bg-overlay-soft",
         "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary focus-visible:ring-offset-2 focus-visible:ring-offset-surface-sidebar",
-        isActive ? "text-text-primary" : "text-daintree-text/65"
+        isActive ? "text-text-primary" : "text-text-secondary"
       )}
       role="tab"
       aria-selected={isActive}

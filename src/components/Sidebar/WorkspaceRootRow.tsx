@@ -121,7 +121,7 @@ export function WorkspaceRootRow({
             {/* Kind rides the secondary line rather than a pill: origin has to
                 be unambiguous, but it isn't the row's headline, and a badge
                 would be a second emphasis signal on a one-row list. */}
-            <div className="flex items-center gap-1.5 text-xs text-daintree-text/50 min-w-0">
+            <div className="flex items-center gap-1.5 text-xs text-text-secondary min-w-0">
               <span className="shrink-0">{kindLabel(workspace)}</span>
               <span aria-hidden="true">·</span>
               <TruncatedTooltip content={displayPath}>

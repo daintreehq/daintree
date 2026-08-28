@@ -128,10 +128,10 @@ export function TrashGroupItem({
         </div>
 
         <div className="flex-1 min-w-0">
-          <div className="text-xs font-medium text-daintree-text/70 group-hover:text-text-primary truncate transition-colors">
+          <div className="text-xs font-medium text-text-secondary group-hover:text-text-primary truncate transition-colors">
             {groupName}
             {worktreeName ? (
-              <span className="text-daintree-text/50 ml-1 font-normal">({worktreeName})</span>
+              <span className="text-text-secondary ml-1 font-normal">({worktreeName})</span>
             ) : isOrphan ? (
               <span className="text-status-warning/70 ml-1 font-normal text-2xs">
                 (deleted tree)
@@ -227,7 +227,7 @@ export function TrashGroupItem({
                     className="w-2.5 h-2.5 text-text-muted"
                   />
                   <span
-                    className={`truncate flex-1 ${isActiveTab ? "text-daintree-text/70 font-medium" : "text-daintree-text/50"}`}
+                    className={`truncate flex-1 ${isActiveTab ? "text-text-secondary font-medium" : "text-daintree-text/50"}`}
                   >
                     {terminalName}
                     {isActiveTab && <span className="ml-1 text-text-secondary">(active)</span>}

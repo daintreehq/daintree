@@ -373,7 +373,7 @@ export function QuickRun({ projectId }: QuickRunProps) {
             <span
               className={cn(
                 "truncate",
-                isWorktreeValid ? "text-text-primary" : "text-daintree-text/50"
+                isWorktreeValid ? "text-text-primary" : "text-text-secondary"
               )}
             >
               {activeWorktreeName}

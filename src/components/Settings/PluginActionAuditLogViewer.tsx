@@ -206,7 +206,7 @@ export function PluginActionAuditLogViewer({
               "flex items-center gap-1.5 px-2 py-1 text-xs font-medium rounded-[var(--radius-md)] border transition-colors",
               showSuccessful
                 ? "bg-overlay-subtle border-border-default text-text-primary"
-                : "border-border-default text-daintree-text/70 hover:text-text-primary hover:bg-overlay-soft"
+                : "border-border-default text-text-secondary hover:text-text-primary hover:bg-overlay-soft"
             )}
             aria-pressed={showSuccessful}
           >
@@ -258,20 +258,18 @@ export function PluginActionAuditLogViewer({
                 />
                 <div className="min-w-0">
                   <div className="flex items-center gap-2">
-                    <span className="font-mono text-daintree-text/90 truncate">
-                      {record.actionId}
-                    </span>
+                    <span className="font-mono text-text-primary truncate">{record.actionId}</span>
                     {record.source ? (
-                      <span className="text-3xs uppercase tracking-wide text-daintree-text/50">
+                      <span className="text-3xs uppercase tracking-wide text-text-secondary">
                         {record.source}
                       </span>
                     ) : record.recordType && RECORD_TYPE_LABEL[record.recordType] ? (
-                      <span className="text-3xs uppercase tracking-wide text-daintree-text/50">
+                      <span className="text-3xs uppercase tracking-wide text-text-secondary">
                         {RECORD_TYPE_LABEL[record.recordType]}
                       </span>
                     ) : null}
                   </div>
-                  <div className="mt-0.5 font-mono text-daintree-text/50 truncate">
+                  <div className="mt-0.5 font-mono text-text-secondary truncate">
                     {record.pluginId}
                   </div>
                   {record.errorMessage ? (
@@ -306,7 +304,7 @@ export function PluginActionAuditLogViewer({
         <button
           type="button"
           onClick={() => void onRefresh()}
-          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-[var(--radius-md)] border border-border-default text-daintree-text/70 hover:text-text-primary hover:bg-overlay-soft transition-colors"
+          className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-[var(--radius-md)] border border-border-default text-text-secondary hover:text-text-primary hover:bg-overlay-soft transition-colors"
           aria-label="Refresh audit log"
         >
           <RefreshCw className="w-3.5 h-3.5" />
@@ -319,10 +317,10 @@ export function PluginActionAuditLogViewer({
           className={cn(
             "flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-[var(--radius-md)] border transition-colors",
             filteredRecords.length === 0
-              ? "border-border-default text-daintree-text/30 cursor-not-allowed"
+              ? "border-border-default text-text-placeholder cursor-not-allowed"
               : copyFlashActive
                 ? "text-status-success border-status-success/30"
-                : "border-border-default text-daintree-text/70 hover:text-text-primary hover:bg-overlay-soft"
+                : "border-border-default text-text-secondary hover:text-text-primary hover:bg-overlay-soft"
           )}
         >
           {copyFlashActive ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
@@ -335,10 +333,10 @@ export function PluginActionAuditLogViewer({
           className={cn(
             "flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-[var(--radius-md)] border transition-colors",
             filteredRecords.length === 0
-              ? "border-border-default text-daintree-text/30 cursor-not-allowed"
+              ? "border-border-default text-text-placeholder cursor-not-allowed"
               : exportFlashActive
                 ? "text-status-success border-status-success/30"
-                : "border-border-default text-daintree-text/70 hover:text-text-primary hover:bg-overlay-soft"
+                : "border-border-default text-text-secondary hover:text-text-primary hover:bg-overlay-soft"
           )}
         >
           {exportFlashActive ? (
@@ -355,7 +353,7 @@ export function PluginActionAuditLogViewer({
           className={cn(
             "px-3 py-1.5 text-xs font-medium rounded-[var(--radius-md)] border transition-colors",
             records.length === 0
-              ? "border-border-default text-daintree-text/30 cursor-not-allowed"
+              ? "border-border-default text-text-placeholder cursor-not-allowed"
               : "border-border-default text-status-danger hover:text-status-danger hover:bg-status-danger/10 hover:border-status-danger/20"
           )}
         >

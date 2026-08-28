@@ -166,7 +166,7 @@ export function ShortcutReferenceDialog({ isOpen, onClose }: ShortcutReferenceDi
             id={resultsId}
             role="status"
             aria-live="polite"
-            className="text-center text-daintree-text/60 py-8"
+            className="text-center text-text-secondary py-8"
           >
             No shortcuts found matching "{searchQuery}"
           </div>
@@ -195,7 +195,7 @@ export function ShortcutReferenceDialog({ isOpen, onClose }: ShortcutReferenceDi
                         <div className="flex-1">
                           <div className="text-text-primary font-medium">{binding.description}</div>
                           {binding.scope !== "global" && (
-                            <div className="text-xs text-daintree-text/60 mt-1">
+                            <div className="text-xs text-text-secondary mt-1">
                               Scope: {binding.scope}
                             </div>
                           )}
@@ -207,7 +207,7 @@ export function ShortcutReferenceDialog({ isOpen, onClose }: ShortcutReferenceDi
                               aria-label={binding.displayCombo}
                             />
                           ) : (
-                            <span className="text-xs text-daintree-text/60 italic">unbound</span>
+                            <span className="text-xs text-text-secondary italic">unbound</span>
                           )}
                         </div>
                       </div>
@@ -221,7 +221,7 @@ export function ShortcutReferenceDialog({ isOpen, onClose }: ShortcutReferenceDi
       </AppDialog.Body>
 
       <AppDialog.Footer className="justify-center">
-        <div className="text-sm text-daintree-text/60">
+        <div className="text-sm text-text-secondary">
           Press <Kbd>Esc</Kbd> to close
         </div>
       </AppDialog.Footer>

@@ -258,7 +258,7 @@ export function PortalSettingsTab() {
             {!allowDelete && (
               <Tooltip>
                 <TooltipTrigger asChild>
-                  <span className="text-2xs font-mono text-daintree-text/50 truncate min-w-0">
+                  <span className="text-2xs font-mono text-text-secondary truncate min-w-0">
                     {link.url}
                   </span>
                 </TooltipTrigger>
@@ -271,7 +271,7 @@ export function PortalSettingsTab() {
         <div className="flex items-center gap-2">
           <button
             onClick={() => handleStartEdit(link.id, link.title, link.url)}
-            className="text-xs text-daintree-text/50 hover:text-text-primary px-2 py-1 rounded hover:bg-daintree-border/50"
+            className="text-xs text-text-secondary hover:text-text-primary px-2 py-1 rounded hover:bg-daintree-border/50"
           >
             Edit
           </button>
@@ -395,7 +395,7 @@ export function PortalSettingsTab() {
           )}
 
           {isCustomUrl && !showCustomUrlInput && defaultNewTabUrl && (
-            <div className="text-xs text-daintree-text/50 flex items-center gap-2">
+            <div className="text-xs text-text-secondary flex items-center gap-2">
               <Globe className="w-3 h-3" />
               <span className="truncate">{defaultNewTabUrl}</span>
             </div>

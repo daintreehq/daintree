@@ -97,7 +97,7 @@ export function CustomPresetChrome({
       <div className="space-y-1">
         <label
           htmlFor="preset-display-title-input"
-          className="text-xs font-medium text-daintree-text/60"
+          className="text-xs font-medium text-text-secondary"
         >
           Display title
         </label>

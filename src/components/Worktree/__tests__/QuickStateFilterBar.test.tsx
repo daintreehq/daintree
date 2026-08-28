@@ -247,7 +247,7 @@ describe("QuickStateFilterBar", () => {
     }
   });
 
-  it("renders the active count at full text opacity and inactive counts at /60 — issue #7971", () => {
+  it("distinguishes the active count from the inactive ones — issue #7971", () => {
     // The count digit is the load-bearing signal in icon-only segments — the
     // active segment must read at full neutral text opacity (no /N suffix);
     // inactive segments stay muted at /60 to preserve the active hierarchy.
@@ -264,9 +264,12 @@ describe("QuickStateFilterBar", () => {
     const inactiveCount = within(waiting).getByText("1");
     const activeClass = activeCount.getAttribute("class") ?? "";
     const inactiveClass = inactiveCount.getAttribute("class") ?? "";
-    expect(activeClass).toContain("text-text-primary");
+    // The selected bucket's count leads and the rest recede. Naming either
+    // colour would just copy the component; that they differ is the claim, and
+    // neither may fall back to the retired alpha ramp (#12065).
+    expect(activeClass).not.toBe(inactiveClass);
     expect(activeClass).not.toContain("text-daintree-text/");
-    expect(inactiveClass).toContain("text-daintree-text/60");
+    expect(inactiveClass).not.toContain("text-daintree-text/");
   });
 
   it("fades each empty bucket's icon with its own state color — issue #10353", () => {

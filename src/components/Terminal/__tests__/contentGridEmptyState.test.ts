@@ -124,15 +124,16 @@ describe("ContentGrid EmptyState — initialization gate (issue #8645)", () => {
   // The cold-start flash guard (silent until initialized, then the right copy
   // variant) is asserted by rendering in ContentGridEmptyState.workspace.test.tsx.
 
-  it("does not render bare <p> with text-daintree-text/60 in the no-worktree branch", async () => {
+  it("does not hand-roll the no-worktree body copy as a bare <p>", async () => {
     const content = await readFile(EMPTY_STATE_PATH, "utf-8");
-    // The old bare <p> with diluted text color is gone — replaced by EmptyState.
+    // The old shape was a bare `<p className="max-w-md …">` carrying its own
+    // colour. `EmptyState` owns that copy now. This used to key off the diluted
+    // `text-daintree-text/60` the old paragraph wore, but #12065 retired the
+    // ramp, so a class that can no longer exist would have made the guard pass
+    // for the wrong reason. The measure is the hand-rolled prose block itself.
     const hasOldPattern = content
       .split("\n")
-      .some(
-        (line) =>
-          line.includes("<p") && line.includes("text-daintree-text/60") && line.includes("max-w-md")
-      );
+      .some((line) => line.includes("<p") && line.includes("max-w-md"));
     expect(hasOldPattern).toBe(false);
   });
 });

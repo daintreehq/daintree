@@ -400,15 +400,15 @@ export function GitInitDialog({
   const summary = (
     <div className="space-y-2.5 rounded-[var(--radius-md)] border border-border-default bg-surface-canvas px-3 py-3">
       <div className="space-y-1">
-        <span className="text-xs font-medium text-daintree-text/60">Repository</span>
-        <p className="truncate text-xs text-daintree-text/80">
+        <span className="text-xs font-medium text-text-secondary">Repository</span>
+        <p className="truncate text-xs text-text-primary">
           <span aria-hidden="true">{emoji} </span>
           {trimmedProjectName}
         </p>
       </div>
       <div className="space-y-1">
-        <span className="text-xs font-medium text-daintree-text/60">Folder</span>
-        <PathCaption path={directoryPath} className="text-daintree-text/80" />
+        <span className="text-xs font-medium text-text-secondary">Folder</span>
+        <PathCaption path={directoryPath} className="text-text-primary" />
       </div>
     </div>
   );
@@ -477,7 +477,7 @@ export function GitInitDialog({
                 {/* Says what is about to happen, not merely what is possible:
                     this mode opens the project on its own two seconds later, and
                     "is ready to open" read as though it were waiting. */}
-                <p className="text-sm text-daintree-text/60">
+                <p className="text-sm text-text-secondary">
                   Opening <span aria-hidden="true">{emoji} </span>
                   {trimmedProjectName}…
                 </p>
@@ -519,7 +519,7 @@ export function GitInitDialog({
                   // about the same fact.
                   <span
                     aria-hidden="true"
-                    className="ml-auto text-xs tabular-nums text-daintree-text/60"
+                    className="ml-auto text-xs tabular-nums text-text-secondary"
                   >
                     {completedCount} of {plannedSteps.length} done
                   </span>
@@ -565,7 +565,7 @@ export function GitInitDialog({
                   <li
                     key={phase.step}
                     data-testid="git-init-step"
-                    className="flex items-start gap-2 text-xs text-daintree-text/45"
+                    className="flex items-start gap-2 text-xs text-text-secondary"
                   >
                     <Check className="mt-0.5 h-3.5 w-3.5 shrink-0" aria-hidden="true" />
                     <span>{phase.done}</span>
@@ -687,7 +687,7 @@ export function GitInitDialog({
                   aria-controls={commitOptionsId}
                   className={FIELD_CHECKBOX_CLASS}
                 />
-                <span className="text-sm text-daintree-text/80">Create initial commit</span>
+                <span className="text-sm text-text-primary">Create initial commit</span>
               </label>
 
               {/* Indented behind a rule, the way every other dependent field in
@@ -731,7 +731,7 @@ export function GitInitDialog({
             {/* The one thing the path alone does not say: this writes into a
                 folder the app does not own yet, and exactly what it writes
                 depends on the two controls above. */}
-            <p className="text-xs text-daintree-text/50" data-testid="git-init-consequence">
+            <p className="text-xs text-text-secondary" data-testid="git-init-consequence">
               {consequence.join(", ")}.
             </p>
           </>

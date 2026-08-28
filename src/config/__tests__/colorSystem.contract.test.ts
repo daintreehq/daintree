@@ -160,7 +160,8 @@ describe("color system contract", () => {
 
   // The two aliases #12031 deleted had no consumers. Removing a live one would
   // silently stop Tailwind generating the alpha-modified utilities still in the
-  // tree (`text-daintree-text/60`, `ring-daintree-accent/30`).
+  // tree — the non-text composites left to #12029 (`ring-daintree-accent/30`),
+  // and the ramp carve-outs #12065 kept dim on purpose.
   it("keeps a daintree-* alias declared for every alpha-modified use still in the tree", () => {
     const alphaUse =
       /(?<=[a-z0-9\]])-daintree-(sidebar|border|accent|text|bg)\/(?:\[[\d.]+\]|\d+)/g;
@@ -204,9 +205,116 @@ describe("color system contract", () => {
       `Solid legacy colour utilities are retired — use the semantic token the alias ` +
         `points at (daintree-bg -> surface-canvas, daintree-sidebar -> surface-sidebar, ` +
         `daintree-border -> border-default, daintree-text -> text-primary, ` +
-        `daintree-accent -> accent-primary). Alpha-modified forms are still allowed ` +
-        `until the opacity ramp lands.`
+        `daintree-accent -> accent-primary). Alpha-modified forms are still allowed: ` +
+        `the non-text composites are #12029's, and #12065 kept a reviewed set of ` +
+        `text carve-outs dim on purpose.`
     ).toEqual({});
+  });
+
+  /**
+   * #12065's accounting, made permanent. The ramp is retired for prose, but a
+   * reviewed set of sites stays dim — icon affordances, decorative glyphs,
+   * deliberate disabled states, text already composited by ancestor opacity —
+   * and the point of that issue was that no site gets to be dim by accident.
+   *
+   * Not a count. A count would pass if someone deleted one carve-out and added a
+   * dilute label somewhere else, which is the same swap the lint ratchet's
+   * per-rule totals cannot see either. This checks membership in both
+   * directions, so a manifest entry whose site has gone fails as loudly as a
+   * site the manifest never named.
+   *
+   * The deeper check — that each site still *qualifies* for the category it
+   * claims — needs the classifier and lives in `npm run theme:text-ramp -- --check`.
+   * This test is the cheap always-on half: no parser, no ts-morph, and it runs
+   * with the rest of the colour contract.
+   *
+   * Regenerate with `npm run theme:text-ramp -- --plan` after a deliberate change.
+   */
+  it("accounts for every surviving text-daintree-text/NN site in the ramp manifest", () => {
+    type ManifestEntry = {
+      file: string;
+      ordinal: number;
+      line: number;
+      token: string;
+      category: string;
+      evidence: string;
+    };
+    const manifest: { occurrences: ManifestEntry[] } = JSON.parse(
+      fs.readFileSync(path.join(REPO_ROOT, "scripts/baselines/text-ramp-manifest.json"), "utf8")
+    );
+
+    // Every category the manifest is allowed to use. An entry outside this set
+    // is not a carve-out, it is a typo that would otherwise pass.
+    const NAMED_CARVE_OUTS = new Set([
+      "icon-affordance",
+      "decorative-glyph",
+      "disabled-state",
+      "placeholder-variant",
+      "opacity-composite",
+      "semantic-state-pair",
+      "sibling-branch-pair",
+      "prior-ruling-40",
+      "comment-reference",
+      "test-assertion",
+    ]);
+
+    // Deliberately the WIDE grammar from `scripts/theme-text-ramp.ts`, not the
+    // narrow one the migration understands: arbitrary (`/[calc(1/2)]`) and
+    // custom-property (`/(--x)`) alphas count, and so does a step outside the
+    // fifteen. Two reasons. It has to see a shape the tool cannot classify, or
+    // that shape is simply invisible here. And the manifest numbers occurrences
+    // per file in this order — enumerate a narrower set and one unrecognised
+    // token shifts every ordinal after it, turning one clear failure into a
+    // cascade of confusing ones.
+    const rampToken =
+      /(?<![\w-])(?:[\w@&[\]./-]+:)*!?text-daintree-text\/(?:\[[^\]\s]*\]|\([^)\s]*\)|\d[\w.]*)!?/g;
+    const inTree = new Map<string, string>();
+    const walked = new Set<string>();
+    for (const filePath of RENDERER_ROOTS.flatMap(collectSourceFiles)) {
+      const relative = path.relative(REPO_ROOT, filePath);
+      walked.add(relative);
+      const source = fs.readFileSync(filePath, "utf8");
+      if (!source.includes("text-daintree-text/")) continue;
+      // Keyed by position within the file, not byte offset: prettier and any
+      // edit above a carve-out move offsets, and a contract that fails on a
+      // reflow teaches people to regenerate it without reading it.
+      let ordinal = 0;
+      for (const match of source.matchAll(rampToken)) {
+        inTree.set(`${relative}#${ordinal++}`, match[0]);
+      }
+    }
+
+    // Scope both directions to the files this walk actually visits. The manifest
+    // is wider — it also covers `__tests__`, which `collectSourceFiles` skips —
+    // and holding it to entries nothing here reads would fail for a reason that
+    // has nothing to do with the tree. Comment references stay in: they sit in
+    // files that ARE walked, and a text scan cannot tell prose from code.
+    const painted = manifest.occurrences.filter((entry) => walked.has(entry.file));
+
+    const problems: string[] = [];
+    const named = new Map(painted.map((entry) => [`${entry.file}#${entry.ordinal}`, entry]));
+
+    for (const [key, token] of inTree) {
+      const entry = named.get(key);
+      if (!entry) problems.push(`${key} ${token} — no manifest entry`);
+      else if (entry.token !== token) {
+        problems.push(`${key} — manifest says ${entry.token}, source has ${token}`);
+      } else if (!NAMED_CARVE_OUTS.has(entry.category)) {
+        problems.push(`${key} ${token} — "${entry.category}" is not a named carve-out`);
+      } else if (entry.evidence.trim() === "") {
+        problems.push(`${key} ${token} — carve-out with no stated reason`);
+      }
+    }
+    for (const [key, entry] of named) {
+      if (!inTree.has(key)) problems.push(`${key} ${entry.token} — manifest entry not in the tree`);
+    }
+
+    expect(
+      problems,
+      `Every remaining opacity-ramp site must be a reviewed carve-out, and every ` +
+        `carve-out must still be there. Either move these onto a solid text token, ` +
+        `or run \`npm run theme:text-ramp -- --plan\` to re-record why they stay dim.`
+    ).toEqual([]);
   });
 
   it("defines --dock-shadow with alpha-pinned relative color (visible on light themes)", () => {

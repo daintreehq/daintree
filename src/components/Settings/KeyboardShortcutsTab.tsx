@@ -128,11 +128,11 @@ function ShortcutRow({
               {keybindingService.formatComboForDisplay(binding.effectiveCombo)}
             </span>
           ) : (
-            <span className="text-xs text-daintree-text/60 italic">unbound</span>
+            <span className="text-xs text-text-secondary italic">unbound</span>
           )}
           <button
             onClick={onEdit}
-            className="px-2 py-0.5 text-xs text-daintree-text/60 hover:text-text-primary opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100 focus-visible:opacity-100 transition-opacity"
+            className="px-2 py-0.5 text-xs text-text-secondary hover:text-text-primary opacity-0 group-hover/row:opacity-100 group-focus-within/row:opacity-100 focus-visible:opacity-100 transition-opacity"
           >
             Edit
           </button>
@@ -387,7 +387,7 @@ export function KeyboardShortcutsTab() {
             isResetting
               ? "opacity-50 cursor-not-allowed text-daintree-text/40"
               : hasOverrides
-                ? "text-daintree-text/60 hover:text-text-primary hover:border-accent-primary"
+                ? "text-text-secondary hover:text-text-primary hover:border-accent-primary"
                 : "text-daintree-text/40 hover:text-daintree-text/60 hover:border-border-default"
           )}
         >
@@ -399,7 +399,7 @@ export function KeyboardShortcutsTab() {
       <div className="space-y-4">
         {Array.from(groupedBindings.entries()).map(([category, categoryBindings]) => (
           <div key={category}>
-            <h4 className="text-xs font-semibold text-daintree-text/60 uppercase tracking-wider mb-2">
+            <h4 className="text-xs font-semibold text-text-secondary uppercase tracking-wider mb-2">
               {category}
             </h4>
             <div className="space-y-0">
@@ -433,7 +433,7 @@ export function KeyboardShortcutsTab() {
         ))}
 
         {filteredBindings.length === 0 && (
-          <div className="text-center py-8 text-daintree-text/60">
+          <div className="text-center py-8 text-text-secondary">
             No shortcuts found matching "{searchQuery}"
           </div>
         )}
@@ -443,25 +443,25 @@ export function KeyboardShortcutsTab() {
             honestly as fixed instead of advertising rebindable rows that
             never fire. */}
         <div data-testid="worktree-list-keys-help">
-          <h4 className="text-xs font-semibold text-daintree-text/60 uppercase tracking-wider mb-2">
+          <h4 className="text-xs font-semibold text-text-secondary uppercase tracking-wider mb-2">
             Worktree list
           </h4>
           <div className="space-y-0">
             <div className="flex items-center justify-between gap-4 py-2 border-b border-daintree-border/50">
               <span className="text-sm text-text-primary shrink-0">Move selection</span>
-              <span className="text-xs text-daintree-text/60 text-right">
+              <span className="text-xs text-text-secondary text-right">
                 Arrow keys or j / k; PageUp / PageDown and Home / End jump further
               </span>
             </div>
             <div className="flex items-center justify-between gap-4 py-2 border-b border-daintree-border/50">
               <span className="text-sm text-text-primary shrink-0">Open worktree</span>
-              <span className="text-xs text-daintree-text/60 text-right">
+              <span className="text-xs text-text-secondary text-right">
                 Space or Enter; Enter or ArrowRight moves into the row's actions
               </span>
             </div>
             <div className="flex items-center justify-between gap-4 py-2 border-b border-daintree-border/50">
               <span className="text-sm text-text-primary shrink-0">Reorder worktree</span>
-              <span className="text-xs text-daintree-text/60 text-right">Alt+Up / Alt+Down</span>
+              <span className="text-xs text-text-secondary text-right">Alt+Up / Alt+Down</span>
             </div>
           </div>
           <p className="text-xs text-text-secondary mt-2">
@@ -473,26 +473,26 @@ export function KeyboardShortcutsTab() {
             screen-reader ARIA hints; surface it for sighted keyboard users.
             Static — dnd-kit sensor interactions, not rebindable actions. */}
         <div data-testid="list-reordering-help">
-          <h4 className="text-xs font-semibold text-daintree-text/60 uppercase tracking-wider mb-2">
+          <h4 className="text-xs font-semibold text-text-secondary uppercase tracking-wider mb-2">
             List reordering
           </h4>
           <div className="space-y-0">
             <div className="flex items-center justify-between gap-4 py-2 border-b border-daintree-border/50">
               <span className="text-sm text-text-primary shrink-0">Reorder panel</span>
-              <span className="text-xs text-daintree-text/60 text-right">
+              <span className="text-xs text-text-secondary text-right">
                 Focus the panel header, then Space to pick up, arrows to move, Space to drop, Esc to
                 cancel
               </span>
             </div>
             <div className="flex items-center justify-between gap-4 py-2 border-b border-daintree-border/50">
               <span className="text-sm text-text-primary shrink-0">Reorder tab</span>
-              <span className="text-xs text-daintree-text/60 text-right">
+              <span className="text-xs text-text-secondary text-right">
                 Focus the active tab, then Space to pick up, arrows to move, Space to drop
               </span>
             </div>
             <div className="flex items-center justify-between gap-4 py-2 border-b border-daintree-border/50">
               <span className="text-sm text-text-primary shrink-0">Reorder worktree</span>
-              <span className="text-xs text-daintree-text/60 text-right">
+              <span className="text-xs text-text-secondary text-right">
                 {formatShortcutForTooltip("Alt+Up")} / {formatShortcutForTooltip("Alt+Down")} in the
                 sidebar
               </span>

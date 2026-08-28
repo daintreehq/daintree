@@ -229,7 +229,7 @@ export function BranchSummary({ base, branch, icon }: BranchSummaryProps) {
           <ArrowRight className="w-3 h-3 shrink-0" aria-hidden="true" />
         </>
       )}
-      <BranchName value={branch} display={fitted.branch} className="text-daintree-text/80" />
+      <BranchName value={branch} display={fitted.branch} className="text-text-primary" />
     </span>
   );
 }

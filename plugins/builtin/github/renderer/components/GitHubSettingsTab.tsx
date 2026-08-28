@@ -36,7 +36,7 @@ function ForgeSettingBlock({
           <Icon className="w-4 h-4 text-daintree-text/70" aria-hidden="true" />
           {title}
         </h5>
-        <p className="text-xs text-daintree-text/50 mt-0.5 select-text">{description}</p>
+        <p className="text-xs text-text-secondary mt-0.5 select-text">{description}</p>
       </div>
       {children}
     </div>
@@ -277,15 +277,15 @@ export function GitHubSettingsTab() {
           Create token on GitHub
         </Button>
         <div className="space-y-1">
-          <p className="text-xs text-daintree-text/50">Required scopes:</p>
-          <ul className="text-xs text-daintree-text/50 list-disc list-inside space-y-0.5">
+          <p className="text-xs text-text-secondary">Required scopes:</p>
+          <ul className="text-xs text-text-secondary list-disc list-inside space-y-0.5">
             <li>
-              <code className="text-daintree-text/70 bg-surface-canvas px-1 rounded">repo</code> —
+              <code className="text-text-secondary bg-surface-canvas px-1 rounded">repo</code> —
               Access repository data
             </li>
             <li>
-              <code className="text-daintree-text/70 bg-surface-canvas px-1 rounded">read:org</code>{" "}
-              — Read organization membership (for private repos)
+              <code className="text-text-secondary bg-surface-canvas px-1 rounded">read:org</code> —
+              Read organization membership (for private repos)
             </li>
           </ul>
         </div>

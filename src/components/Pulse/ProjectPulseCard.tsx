@@ -285,7 +285,7 @@ function HealthSectionSkeleton() {
 
 function NoRemoteHint() {
   return (
-    <div className="flex items-center gap-2 text-xs text-daintree-text/75">
+    <div className="flex items-center gap-2 text-xs text-text-primary">
       <GitBranch className="w-3.5 h-3.5" />
       <span>Connect a git remote for CI status, issues, and PRs</span>
     </div>
@@ -294,7 +294,7 @@ function NoRemoteHint() {
 
 function OfflineHint() {
   return (
-    <div className="flex items-center gap-2 text-xs text-daintree-text/75">
+    <div className="flex items-center gap-2 text-xs text-text-primary">
       <WifiOff className="w-3.5 h-3.5" />
       <span>Offline — repository status unavailable</span>
     </div>
@@ -325,7 +325,7 @@ function PulseHeatmapLegend({
       <div
         aria-hidden="true"
         data-testid="pulse-heatmap-legend"
-        className="flex items-center justify-end text-3xs text-daintree-text/55 select-none"
+        className="flex items-center justify-end text-3xs text-text-secondary select-none"
         style={{ width: `${rowWidth}px`, gap: `${HEATMAP_LEGEND_GAP_PX}px` }}
       >
         <span>Less</span>
@@ -493,7 +493,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
           className
         )}
       >
-        <div className="flex items-center gap-2 text-daintree-text/75">
+        <div className="flex items-center gap-2 text-text-primary">
           <GitBranch className="w-4 h-4 text-status-info" aria-hidden="true" />
           <span className="text-xs">
             New repository — make your first commit to start tracking activity
@@ -517,7 +517,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
         )}
       >
         <div className="flex flex-col gap-2 w-full">
-          <div className="flex items-center gap-2 text-daintree-text/75" role="alert">
+          <div className="flex items-center gap-2 text-text-primary" role="alert">
             <AlertCircle className="w-4 h-4 text-status-error" aria-hidden="true" />
             <span className="text-xs">{error}</span>
             <button
@@ -530,7 +530,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
           </div>
           {isRetrying && (
             <div
-              className="flex items-center gap-2 text-daintree-text/55"
+              className="flex items-center gap-2 text-text-secondary"
               role="status"
               aria-live="polite"
             >
@@ -580,7 +580,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
       <div className="pulse-card-header px-4 py-3 border-b border-border-default flex items-center justify-between">
         <div className="flex items-center gap-2">
           <Activity className="w-4 h-4 text-text-secondary" />
-          <span className="text-sm font-medium text-daintree-text/90">{title}</span>
+          <span className="text-sm font-medium text-text-primary">{title}</span>
           {isLoading && <Spinner size="xs" className="text-daintree-text/55" />}
         </div>
 
@@ -606,7 +606,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
                     "rounded-md border px-2 py-1 transition-colors",
                     isActive
                       ? "bg-overlay-selected border-border-strong text-text-primary"
-                      : "pulse-control border-transparent text-daintree-text/55 hover:text-daintree-text/80"
+                      : "pulse-control border-transparent text-text-secondary hover:text-text-primary"
                   )}
                   aria-checked={isActive}
                   tabIndex={isActive ? 0 : -1}
@@ -648,7 +648,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
           />
         </div>
 
-        <p className="text-xs text-daintree-text/80">{getCoachLine(pulse, usableHealth)}</p>
+        <p className="text-xs text-text-primary">{getCoachLine(pulse, usableHealth)}</p>
 
         {/* Health section: the wrapper reserves `min-h-9` (h-5 chip + pt-3) so
             the four sub-variants — signals, skeleton, no-remote hint, offline
@@ -673,7 +673,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
             type="button"
             onClick={handleRefresh}
             disabled={isLoading}
-            className="pulse-control mt-2 inline-flex items-center text-2xs text-daintree-text/55 transition-colors hover:text-daintree-text/80 disabled:opacity-50 disabled:pointer-events-none"
+            className="pulse-control mt-2 inline-flex items-center text-2xs text-text-secondary transition-colors hover:text-text-primary disabled:opacity-50 disabled:pointer-events-none"
             aria-label={`Refresh — last updated ${updatedLabel}`}
             data-testid="pulse-last-updated"
           >

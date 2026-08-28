@@ -71,7 +71,7 @@ function PrefixDiscoverabilityRow() {
       // Spacing does the separating, not interpuncts. The row wraps at the
       // palette's width, and a per-item separator ends a wrapped line with a
       // dangling dot pointing at nothing.
-      className="@max-[420px]/palette-footer:hidden flex items-center gap-x-3 gap-y-1 flex-wrap text-2xs text-daintree-text/45"
+      className="@max-[420px]/palette-footer:hidden flex items-center gap-x-3 gap-y-1 flex-wrap text-2xs text-text-secondary"
       aria-label="Prefix shortcuts"
     >
       <span className="text-daintree-text/40">Type</span>
@@ -99,7 +99,7 @@ function ModeChip({ label, isVisible, id }: ModeChipProps) {
       aria-live="polite"
       className={cn(
         "inline-flex items-center gap-1 px-1.5 py-0.5 rounded-[var(--radius-sm)]",
-        "bg-overlay-subtle text-xs text-daintree-text/70 select-none shrink-0 origin-left",
+        "bg-overlay-subtle text-xs text-text-secondary select-none shrink-0 origin-left",
         "transition-[opacity,scale] motion-reduce:transition-opacity motion-reduce:scale-100",
         isVisible ? "opacity-100 scale-100" : "opacity-0 scale-95"
       )}

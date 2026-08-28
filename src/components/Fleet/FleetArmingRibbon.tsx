@@ -333,7 +333,7 @@ export function FleetArmingRibbon(): ReactElement | null {
           data-pending-action={pending.kind}
         >
           <span className="font-medium text-accent-primary">{message}</span>
-          <div className="ml-auto flex items-center gap-2 text-2xs text-daintree-text/70">
+          <div className="ml-auto flex items-center gap-2 text-2xs text-text-secondary">
             <span>
               <kbd className="rounded border border-daintree-text/20 bg-tint/[0.08] px-1 py-0.5 font-mono text-3xs">
                 Enter
@@ -376,7 +376,7 @@ export function FleetArmingRibbon(): ReactElement | null {
         {...previewItemHandlers(() => computePreviewByState("waiting", "current"))}
       >
         All waiting — this worktree
-        <span className="ml-auto text-2xs tabular-nums text-daintree-text/50">
+        <span className="ml-auto text-2xs tabular-nums text-text-secondary">
           {presetCounts.waitingCurrent}
         </span>
       </DropdownMenuItem>
@@ -387,7 +387,7 @@ export function FleetArmingRibbon(): ReactElement | null {
         {...previewItemHandlers(() => computePreviewByState("waiting", "all"))}
       >
         All waiting — all worktrees
-        <span className="ml-auto text-2xs tabular-nums text-daintree-text/50">
+        <span className="ml-auto text-2xs tabular-nums text-text-secondary">
           {presetCounts.waitingAll}
         </span>
       </DropdownMenuItem>
@@ -398,7 +398,7 @@ export function FleetArmingRibbon(): ReactElement | null {
         {...previewItemHandlers(() => computePreviewByState("working", "current"))}
       >
         All working — this worktree
-        <span className="ml-auto text-2xs tabular-nums text-daintree-text/50">
+        <span className="ml-auto text-2xs tabular-nums text-text-secondary">
           {presetCounts.workingCurrent}
         </span>
       </DropdownMenuItem>
@@ -409,7 +409,7 @@ export function FleetArmingRibbon(): ReactElement | null {
         {...previewItemHandlers(() => computePreviewByState("working", "all"))}
       >
         All working — all worktrees
-        <span className="ml-auto text-2xs tabular-nums text-daintree-text/50">
+        <span className="ml-auto text-2xs tabular-nums text-text-secondary">
           {presetCounts.workingAll}
         </span>
       </DropdownMenuItem>
@@ -421,7 +421,7 @@ export function FleetArmingRibbon(): ReactElement | null {
         {...previewItemHandlers(() => computePreviewAll("current"))}
       >
         All in this worktree
-        <span className="ml-auto text-2xs tabular-nums text-daintree-text/50">
+        <span className="ml-auto text-2xs tabular-nums text-text-secondary">
           {presetCounts.eligibleCurrent}
         </span>
       </DropdownMenuItem>
@@ -530,12 +530,12 @@ export function FleetArmingRibbon(): ReactElement | null {
           />
           {showProgress && (
             <span
-              className="text-2xs tabular-nums text-daintree-text/70"
+              className="text-2xs tabular-nums text-text-secondary"
               data-testid="fleet-broadcast-progress"
             >
               {progressCompleted}/{progressTotal}
               {progressFailed > 0 && (
-                <span className="text-daintree-text/50"> · {progressFailed} failed</span>
+                <span className="text-text-secondary"> · {progressFailed} failed</span>
               )}
             </span>
           )}
@@ -550,14 +550,14 @@ export function FleetArmingRibbon(): ReactElement | null {
               onClick={cancelActiveBroadcast}
               aria-label="Cancel broadcast"
               data-testid="fleet-broadcast-cancel"
-              className="rounded px-1.5 py-0.5 text-2xs text-daintree-text/70 transition-colors hover:bg-tint/[0.08] hover:text-text-primary"
+              className="rounded px-1.5 py-0.5 text-2xs text-text-secondary transition-colors hover:bg-tint/[0.08] hover:text-text-primary"
             >
               Cancel
             </button>
           )}
           {runStatus !== null && (
             <span
-              className="flex items-center gap-1 text-2xs tabular-nums text-daintree-text/70"
+              className="flex items-center gap-1 text-2xs tabular-nums text-text-secondary"
               data-testid="fleet-run-status"
             >
               <span>{runStatus.label}</span>

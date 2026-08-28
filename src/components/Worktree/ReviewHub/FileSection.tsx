@@ -160,7 +160,7 @@ export function FileSection({
           while a long changeset scrolls. */}
       <div className={cn("@container/file-section", REVIEW_HUB_STICKY_BAND)}>
         <div className="flex items-center justify-between px-4 py-2 bg-overlay-subtle gap-2">
-          <span className="text-2xs font-semibold uppercase tracking-wider text-daintree-text/60 shrink-0 flex items-center">
+          <span className="text-2xs font-semibold uppercase tracking-wider text-text-secondary shrink-0 flex items-center">
             {title}
             <span
               data-testid={countTestId}
@@ -190,7 +190,7 @@ export function FileSection({
                 role="status"
                 data-testid={`${section}-section-shown-chip`}
                 aria-label={`${shownCount} of ${totalCount} files shown`}
-                className="ml-1 tabular-nums rounded px-1 py-0.5 text-3xs font-medium normal-case tracking-normal text-daintree-text/50 bg-overlay-medium"
+                className="ml-1 tabular-nums rounded px-1 py-0.5 text-3xs font-medium normal-case tracking-normal text-text-secondary bg-overlay-medium"
               >
                 {shownCount} shown
               </span>
@@ -400,7 +400,7 @@ export function FileSection({
             <button
               type="button"
               onClick={() => setView((prev) => ({ ...prev, showGenerated: true }))}
-              className="text-xs text-daintree-text/60 hover:text-text-primary transition-colors underline underline-offset-2"
+              className="text-xs text-text-secondary hover:text-text-primary transition-colors underline underline-offset-2"
             >
               Show generated files
             </button>
@@ -415,7 +415,7 @@ export function FileSection({
             <button
               type="button"
               onClick={clearFilter}
-              className="text-xs text-daintree-text/60 hover:text-text-primary transition-colors underline underline-offset-2"
+              className="text-xs text-text-secondary hover:text-text-primary transition-colors underline underline-offset-2"
             >
               Clear filter
             </button>
@@ -430,7 +430,7 @@ export function FileSection({
             <button
               type="button"
               onClick={() => setView((prev) => ({ ...prev, showGenerated: true }))}
-              className="text-xs text-daintree-text/60 hover:text-text-primary transition-colors underline underline-offset-2"
+              className="text-xs text-text-secondary hover:text-text-primary transition-colors underline underline-offset-2"
             >
               Show generated files
             </button>

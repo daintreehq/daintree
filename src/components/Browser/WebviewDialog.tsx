@@ -217,7 +217,7 @@ export function WebviewDialog({ dialog, onRespond }: WebviewDialogProps) {
               // /80 is the app's weight for third-party prose (see PluginMcpConfirmDialog).
               // At full strength the page outranked Daintree's own dialog copy, which sits
               // at /70.
-              className="text-sm text-daintree-text/80 whitespace-pre-wrap break-words"
+              className="text-sm text-text-primary whitespace-pre-wrap break-words"
             >
               {dialog.message}
             </p>
@@ -250,7 +250,7 @@ export function WebviewDialog({ dialog, onRespond }: WebviewDialogProps) {
             <Button
               variant="ghost"
               onClick={handleCancel}
-              className="text-daintree-text/70 hover:text-text-primary"
+              className="text-text-secondary hover:text-text-primary"
               data-confirm-role="cancel"
             >
               Cancel

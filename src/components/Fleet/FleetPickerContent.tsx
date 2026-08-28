@@ -193,7 +193,7 @@ export function FleetPickerFooterHint({
   // dynamic copy left in the hint row.
   const driftNotice =
     driftCount > 0 ? (
-      <span role="status" className="text-daintree-text/45 tabular-nums">
+      <span role="status" className="text-text-secondary tabular-nums">
         {driftCount} became ineligible
       </span>
     ) : null;
@@ -244,7 +244,7 @@ function ShortcutsPopover(): ReactElement {
         className="w-auto p-3"
         onOpenAutoFocus={(e) => e.preventDefault()}
       >
-        <div className="flex flex-col gap-1.5 text-xs leading-[inherit] text-daintree-text/60">
+        <div className="flex flex-col gap-1.5 text-xs leading-[inherit] text-text-secondary">
           <span className="inline-flex items-center gap-1">
             <Kbd>{isMac() ? "⌘A" : "Ctrl+A"}</Kbd>
             <span>Select all</span>
@@ -329,7 +329,7 @@ function WorktreeGroupSection({
             className="flex flex-1 items-center justify-between gap-2 text-left text-xs leading-[inherit] font-medium text-daintree-text/80 hover:text-text-primary"
           >
             <span className="truncate">{group.worktreeName}</span>
-            <span className="shrink-0 tabular-nums text-2xs text-daintree-text/55">
+            <span className="shrink-0 tabular-nums text-2xs text-text-secondary">
               {selectedInGroup} / {group.terminals.length}
             </span>
           </button>
@@ -440,7 +440,7 @@ function SnippetLine({
       data-testid={`${testIdPrefix}-snippet`}
     >
       {before}
-      <mark className="bg-transparent text-daintree-text/85 font-medium">{match}</mark>
+      <mark className="bg-transparent text-text-primary font-medium">{match}</mark>
       {after}
     </p>
   );
@@ -453,7 +453,7 @@ function renderStateBadge(agentState: AgentState | undefined): ReactElement | nu
     <span
       className={cn(
         "shrink-0 rounded-full px-1.5 py-0.5 text-3xs font-medium tabular-nums",
-        "bg-tint/[0.08] text-daintree-text/70"
+        "bg-tint/[0.08] text-text-secondary"
       )}
     >
       {label}

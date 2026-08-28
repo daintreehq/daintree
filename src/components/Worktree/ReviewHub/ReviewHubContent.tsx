@@ -1604,7 +1604,7 @@ export function ReviewHubContent({
             )}
             {status?.currentBranch && (
               <TruncatedTooltip content={status.currentBranch}>
-                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-tint/[0.07] border border-tint/[0.08] text-2xs text-daintree-text/60 font-mono truncate max-w-[200px]">
+                <span className="inline-flex items-center gap-1 px-1.5 py-0.5 rounded bg-tint/[0.07] border border-tint/[0.08] text-2xs text-text-secondary font-mono truncate max-w-[200px]">
                   <GitBranch className="w-3 h-3 shrink-0" />
                   <span className="truncate">{status.currentBranch}</span>
                 </span>
@@ -1640,7 +1640,7 @@ export function ReviewHubContent({
                   "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary",
                   diffMode === "working-tree"
                     ? "bg-filter-selected-bg-strong text-text-primary"
-                    : "text-daintree-text/50 hover:text-text-primary hover:bg-tint/[0.06]"
+                    : "text-text-secondary hover:text-text-primary hover:bg-tint/[0.06]"
                 )}
                 aria-pressed={diffMode === "working-tree"}
               >
@@ -1655,7 +1655,7 @@ export function ReviewHubContent({
                   "disabled:opacity-40 disabled:cursor-not-allowed",
                   diffMode === "base-branch"
                     ? "bg-filter-selected-bg-strong text-text-primary"
-                    : "text-daintree-text/50 hover:text-text-primary hover:bg-tint/[0.06]"
+                    : "text-text-secondary hover:text-text-primary hover:bg-tint/[0.06]"
                 )}
                 aria-pressed={diffMode === "base-branch"}
               >
@@ -1862,7 +1862,7 @@ export function ReviewHubContent({
                 <div>
                   <div className={REVIEW_HUB_STICKY_BAND}>
                     <div className="flex items-center justify-between px-4 py-2 bg-overlay-subtle border-b border-divider">
-                      <span className="text-2xs font-semibold uppercase tracking-wider text-daintree-text/60">
+                      <span className="text-2xs font-semibold uppercase tracking-wider text-text-secondary">
                         Changed vs {mainBranch}
                         <span className="ml-1.5 tabular-nums bg-tint/10 rounded px-1 py-0.5 text-3xs font-medium normal-case tracking-normal">
                           {sortedBaseBranchFiles.length} file
@@ -2051,7 +2051,7 @@ export function ReviewHubContent({
                         aria-controls={`review-hub-files-${worktreePath}`}
                         data-testid="review-hub-file-list-toggle"
                         className={cn(
-                          "inline-flex items-center gap-1 text-2xs font-medium text-daintree-text/70 hover:text-text-primary transition-colors",
+                          "inline-flex items-center gap-1 text-2xs font-medium text-text-secondary hover:text-text-primary transition-colors",
                           "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-accent-primary rounded"
                         )}
                       >

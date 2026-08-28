@@ -221,6 +221,11 @@ describe("GettingStartedChecklist", () => {
     });
   });
 
+  /** The unprefixed text-colour utility on an element, which is what "reads dimmer" means. */
+  function textRole(className: string): string | undefined {
+    return className.split(/\s+/).find((token) => /^text-text-[a-z]+$/.test(token));
+  }
+
   describe("completed-state surface", () => {
     it("uses neutral elevated surface tokens and drops the accent tint when allComplete is true", () => {
       render(<GettingStartedChecklist {...defaultProps} checklist={allComplete} />);
@@ -241,14 +246,19 @@ describe("GettingStartedChecklist", () => {
       const { rerender } = render(
         <GettingStartedChecklist {...defaultProps} checklist={mixedState} />
       );
+      // The incomplete counter carries a neutral text role and no accent; the
+      // complete one carries the accent and drops the neutral. Naming which
+      // neutral would only copy the component, but the counter must have one —
+      // deleting it entirely would let the label inherit primary and still
+      // satisfy a bare "not accented" check.
       const muted = screen.getByText("2/5");
-      expect(muted.className).toContain("text-daintree-text/50");
+      expect(textRole(muted.className)).toBeDefined();
       expect(muted.className).not.toContain("text-accent-primary");
 
       rerender(<GettingStartedChecklist {...defaultProps} checklist={allComplete} />);
       const accented = screen.getByText("All set");
       expect(accented.className).toContain("text-accent-primary");
-      expect(accented.className).not.toContain("text-daintree-text/50");
+      expect(textRole(accented.className)).toBeUndefined();
     });
   });
 

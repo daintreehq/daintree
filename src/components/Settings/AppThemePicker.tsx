@@ -104,7 +104,7 @@ function PreferredSchemePicker({
               "flex items-center gap-1.5 px-2 py-1 rounded-[var(--radius-md)] border text-xs transition-colors",
               selectedId === scheme.id
                 ? "border-border-strong bg-overlay-medium text-text-primary"
-                : "border-border-default text-daintree-text/70 hover:bg-surface-hover"
+                : "border-border-default text-text-secondary hover:bg-surface-hover"
             )}
           >
             <div
@@ -557,10 +557,10 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
               {importWarnings.length > 0 && (
                 <ul className="mt-1 space-y-1.5">
                   {groupWarningsByKind(importWarnings).map(({ kind, messages }) => (
-                    <li key={kind} className="text-2xs text-daintree-text/60">
+                    <li key={kind} className="text-2xs text-text-secondary">
                       {WARNING_KIND_COPY[kind] ?? "Some theme values may need attention"}
                       <details className="mt-0.5">
-                        <summary className="cursor-pointer text-daintree-text/40 transition-colors hover:text-daintree-text/70">
+                        <summary className="cursor-pointer text-text-secondary transition-colors hover:text-text-primary">
                           Technical details
                         </summary>
                         <ul className="mt-1 space-y-0.5 pl-3">
@@ -616,7 +616,7 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
         </div>
 
         <div className="flex items-center justify-between gap-2 px-3 py-2 border-t border-border-default bg-surface-canvas">
-          <span className="min-w-0 truncate text-xs text-daintree-text/60">Current theme</span>
+          <span className="min-w-0 truncate text-xs text-text-secondary">Current theme</span>
           {onClose && (
             <Button variant="contrast" size="sm" onClick={handleChangeTheme} className="shrink-0">
               Change theme…
@@ -652,7 +652,7 @@ export function AppThemePicker({ onClose }: AppThemePickerProps = {}) {
         </label>
         <div className="min-w-0 flex-1">
           <div className="text-sm font-medium text-text-primary">Accent color</div>
-          <div className="text-xs text-daintree-text/60">
+          <div className="text-xs text-text-secondary">
             {accentColorOverride
               ? `Overriding theme accent (${effectiveAccent})`
               : "Click the swatch to override the theme accent"}

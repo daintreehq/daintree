@@ -229,7 +229,7 @@ export function TerminalHeaderContent({
         <Tooltip>
           <TooltipTrigger asChild>
             <span
-              className="inline-flex items-center gap-1 shrink-0 px-2 py-0.5 rounded-full text-2xs bg-overlay-soft border border-divider text-daintree-text/60"
+              className="inline-flex items-center gap-1 shrink-0 px-2 py-0.5 rounded-full text-2xs bg-overlay-soft border border-divider text-text-secondary"
               role="status"
               aria-label="Agent finished with no file changes"
             >
@@ -309,7 +309,7 @@ export function TerminalHeaderContent({
             </div>
             {(agentState === "completed" || agentState === "exited") && sessionCost != null && (
               <span
-                className="text-2xs text-daintree-text/50 font-mono shrink-0"
+                className="text-2xs text-text-secondary font-mono shrink-0"
                 style={{ fontVariantNumeric: "tabular-nums" }}
               >
                 ${sessionCost.toFixed(2)}
@@ -342,10 +342,10 @@ export function TerminalHeaderContent({
               {showConfidence && <> ({Math.round(stateChangeConfidence * 100)}%)</>}
             </span>
             {lastStateChange != null && lastStateChange > 0 && (
-              <span className="text-daintree-text/60">Since: {formatTimeAgo(lastStateChange)}</span>
+              <span className="text-text-secondary">Since: {formatTimeAgo(lastStateChange)}</span>
             )}
             {sessionCost != null && (
-              <span className="text-daintree-text/60 tabular-nums">
+              <span className="text-text-secondary tabular-nums">
                 Cost: ${sessionCost.toFixed(2)}
                 {sessionTokens != null && ` · ${formatTokenCount(sessionTokens)} tokens`}
               </span>
@@ -387,7 +387,7 @@ export function TerminalHeaderContent({
         <Tooltip>
           <TooltipTrigger asChild>
             <div
-              className="inline-flex items-center gap-1 text-xs font-sans bg-overlay-soft text-daintree-text/60 px-1.5 py-0.5 rounded border border-divider"
+              className="inline-flex items-center gap-1 text-xs font-sans bg-overlay-soft text-text-secondary px-1.5 py-0.5 rounded border border-divider"
               role="status"
               aria-live="off"
             >
@@ -411,7 +411,7 @@ export function TerminalHeaderContent({
         <Tooltip>
           <TooltipTrigger asChild>
             <div
-              className="inline-flex items-center gap-1 text-xs font-sans bg-overlay-soft text-daintree-text/60 px-1.5 py-0.5 rounded border border-divider"
+              className="inline-flex items-center gap-1 text-xs font-sans bg-overlay-soft text-text-secondary px-1.5 py-0.5 rounded border border-divider"
               role="status"
               aria-live="off"
             >
@@ -424,7 +424,7 @@ export function TerminalHeaderContent({
               <span className="font-medium">Buffer overflow</span>
               <span>Output paused to prevent data loss.</span>
               {heldDurationMs != null && heldDurationMs > 0 && (
-                <span className="text-daintree-text/60 tabular-nums">
+                <span className="text-text-secondary tabular-nums">
                   Paused for {formatElapsedDuration(heldDurationMs)}
                 </span>
               )}
@@ -439,7 +439,7 @@ export function TerminalHeaderContent({
         <Tooltip>
           <TooltipTrigger asChild>
             <div
-              className="inline-flex items-center gap-1 text-xs font-sans bg-overlay-soft text-daintree-text/60 px-1.5 py-0.5 rounded border border-divider"
+              className="inline-flex items-center gap-1 text-xs font-sans bg-overlay-soft text-text-secondary px-1.5 py-0.5 rounded border border-divider"
               role="status"
               aria-live="off"
             >
@@ -477,7 +477,7 @@ export function TerminalHeaderContent({
         <Tooltip>
           <TooltipTrigger asChild>
             <div
-              className="inline-flex items-center gap-1 text-xs font-sans bg-overlay-soft text-daintree-text/60 px-1.5 py-0.5 rounded border border-divider"
+              className="inline-flex items-center gap-1 text-xs font-sans bg-overlay-soft text-text-secondary px-1.5 py-0.5 rounded border border-divider"
               role="status"
               aria-live="off"
             >
@@ -490,7 +490,7 @@ export function TerminalHeaderContent({
               <span className="font-medium">Output suspended</span>
               <span>Streaming stalled. Recovers automatically on focus.</span>
               {heldDurationMs != null && heldDurationMs > 0 && (
-                <span className="text-daintree-text/60 tabular-nums">
+                <span className="text-text-secondary tabular-nums">
                   Paused for {formatElapsedDuration(heldDurationMs)}
                 </span>
               )}
@@ -509,7 +509,7 @@ export function TerminalHeaderContent({
         <Tooltip>
           <TooltipTrigger asChild>
             <div
-              className="inline-flex items-center gap-1 text-xs font-sans bg-overlay-soft text-daintree-text/60 px-1.5 py-0.5 rounded-full border border-dashed border-divider"
+              className="inline-flex items-center gap-1 text-xs font-sans bg-overlay-soft text-text-secondary px-1.5 py-0.5 rounded-full border border-dashed border-divider"
               role="status"
               aria-live="off"
               data-testid="terminal-hibernated-badge"
@@ -532,7 +532,7 @@ export function TerminalHeaderContent({
       {showCommandPill && (
         <Tooltip autoDismiss={false}>
           <TooltipTrigger asChild>
-            <span className="px-2 py-0.5 rounded-full text-2xs font-mono bg-overlay-soft text-daintree-text/60 border border-divider truncate max-w-[20rem]">
+            <span className="px-2 py-0.5 rounded-full text-2xs font-mono bg-overlay-soft text-text-secondary border border-divider truncate max-w-[20rem]">
               {lastCommand}
             </span>
           </TooltipTrigger>
@@ -592,7 +592,7 @@ export function TerminalHeaderContent({
               {resourceState.breakdown.length > 0 && (
                 <table className="text-xs" style={{ fontVariantNumeric: "tabular-nums" }}>
                   <thead>
-                    <tr className="text-daintree-text/60">
+                    <tr className="text-text-secondary">
                       <th className="text-left pr-2">PID</th>
                       <th className="text-left pr-2">Name</th>
                       <th className="text-right pr-2">CPU</th>
@@ -602,7 +602,7 @@ export function TerminalHeaderContent({
                   <tbody>
                     {resourceState.breakdown.map((p) => (
                       <tr key={p.pid}>
-                        <td className="pr-2 text-daintree-text/60">{p.pid}</td>
+                        <td className="pr-2 text-text-secondary">{p.pid}</td>
                         <td className="pr-2 truncate max-w-[8rem]">{p.comm}</td>
                         <td className="text-right pr-2">{p.cpuPercent.toFixed(1)}%</td>
                         <td className="text-right">{formatMemory(p.memoryKb)}</td>

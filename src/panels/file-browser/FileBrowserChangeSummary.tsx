@@ -34,7 +34,7 @@ export function FileBrowserChangeSummary({ changes, onSelect }: FileBrowserChang
     <div className="flex min-h-0 flex-1 flex-col overflow-hidden">
       <div className="shrink-0 px-4 pb-2 pt-4">
         <h2 className="text-sm font-medium text-text-primary">Changed files</h2>
-        <p className="mt-0.5 text-xs text-daintree-text/60">Pick a file to read it here</p>
+        <p className="mt-0.5 text-xs text-text-secondary">Pick a file to read it here</p>
       </div>
       <ul className="min-h-0 flex-1 overflow-y-auto px-2 pb-3">
         {changes.map((change) => {
@@ -84,7 +84,7 @@ export function FileBrowserChangeSummary({ changes, onSelect }: FileBrowserChang
                   {presentation.marker}
                 </span>
                 <span className="flex min-w-0 flex-1 items-center">
-                  {dir !== "" && <span className="truncate text-daintree-text/50">{dir}/</span>}
+                  {dir !== "" && <span className="truncate text-text-secondary">{dir}/</span>}
                   <span className="truncate font-medium">{base}</span>
                 </span>
                 <span

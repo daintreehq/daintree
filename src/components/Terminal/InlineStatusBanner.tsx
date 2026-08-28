@@ -136,7 +136,7 @@ function getButtonClasses(variant: ButtonVariant): string {
     case "accent":
       return "bg-status-info/10 text-status-info hover:bg-status-info/20";
     case "dismiss":
-      return "text-daintree-text/60 hover:text-text-primary hover:bg-daintree-border/50";
+      return "text-text-secondary hover:text-text-primary hover:bg-daintree-border/50";
     case "danger":
     case "dangerFilled":
       return "rounded transition-colors";
@@ -333,7 +333,7 @@ export function InlineStatusBanner({
             </div>
             {description && (
               <p
-                className={cn("text-xs mt-0.5 break-words", isNeutral && "text-daintree-text/70")}
+                className={cn("text-xs mt-0.5 break-words", isNeutral && "text-text-secondary")}
                 style={
                   isNeutral
                     ? undefined
@@ -347,7 +347,7 @@ export function InlineStatusBanner({
               <p
                 className={cn(
                   "text-xs font-mono mt-1 truncate",
-                  isNeutral && "text-daintree-text/60"
+                  isNeutral && "text-text-secondary"
                 )}
                 style={
                   isNeutral

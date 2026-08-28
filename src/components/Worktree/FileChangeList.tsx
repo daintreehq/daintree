@@ -461,7 +461,7 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
               </div>
             ))}
             {remainingCount > 0 && (
-              <div className="text-2xs text-daintree-text/60 pl-4 pt-1">
+              <div className="text-2xs text-text-secondary pl-4 pt-1">
                 ...and {remainingCount} more
                 {remainingFiles.length > 0 && (
                   <span className="ml-1 opacity-75">
@@ -507,7 +507,7 @@ export const FileChangeList = forwardRef<FileChangeListHandle, FileChangeListPro
           })}
 
           {remainingCount > 0 && (
-            <div className="text-2xs text-daintree-text/60 pl-5 pt-1">
+            <div className="text-2xs text-text-secondary pl-5 pt-1">
               ...and {remainingCount} more
               {remainingFiles.length > 0 && (
                 <span className="ml-1 opacity-75">

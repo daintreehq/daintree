@@ -104,7 +104,7 @@ export function DevPreviewWebviewOverlays({
   return (
     <>
       {reconnectAttempt > 0 && !webviewLoadError && (
-        <div className="absolute bottom-0 left-0 right-0 z-20 flex items-center justify-center gap-2 px-3 py-1.5 text-xs bg-status-info/10 border-t border-status-info/20 text-daintree-text/70">
+        <div className="absolute bottom-0 left-0 right-0 z-20 flex items-center justify-center gap-2 px-3 py-1.5 text-xs bg-status-info/10 border-t border-status-info/20 text-text-secondary">
           <Spinner size="xs" />
           <span>Reconnecting (attempt {reconnectAttempt} of 5)...</span>
         </div>
@@ -112,10 +112,10 @@ export function DevPreviewWebviewOverlays({
       {webviewLoadError && (
         <div className="absolute inset-0 z-20 flex flex-col items-center justify-center bg-surface-canvas text-text-primary p-6">
           <AlertTriangle className="w-6 h-6 text-status-warning mb-3" />
-          <h3 className="text-sm font-medium text-daintree-text/70 mb-1">
+          <h3 className="text-sm font-medium text-text-secondary mb-1">
             {webviewLoadErrorHeading(webviewLoadError.code)}
           </h3>
-          <p className="text-xs text-daintree-text/50 text-center mb-3 max-w-md">
+          <p className="text-xs text-text-secondary text-center mb-3 max-w-md">
             {webviewLoadError.message}
           </p>
           <div className="flex items-center gap-1">
@@ -124,7 +124,7 @@ export function DevPreviewWebviewOverlays({
                 onClick={onCopyMkcert}
                 variant="ghost"
                 size="sm"
-                className="gap-1.5 px-2.5 py-1.5 group text-daintree-text/50 hover:text-daintree-text/70"
+                className="gap-1.5 px-2.5 py-1.5 group text-text-secondary hover:text-text-primary"
               >
                 {certCopied ? <Check className="h-3.5 w-3.5" /> : <Copy className="h-3.5 w-3.5" />}
                 <span className="text-xs">{certCopied ? "Copied" : "Copy `mkcert -install`"}</span>
@@ -200,7 +200,7 @@ export function DevPreviewWebviewOverlays({
                 onClick={onOpenExternal}
                 variant="ghost"
                 size="sm"
-                className="gap-1.5 px-2.5 py-1.5 group text-daintree-text/50 hover:text-daintree-text/70"
+                className="gap-1.5 px-2.5 py-1.5 group text-text-secondary hover:text-text-primary"
               >
                 <ExternalLink className="h-3.5 w-3.5" />
                 <span className="text-xs">Open external</span>

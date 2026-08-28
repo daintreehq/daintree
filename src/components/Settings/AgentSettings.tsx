@@ -104,7 +104,7 @@ function AgentShortcutRow({ agentId, agentName }: { agentId: BuiltInAgentId; age
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <div className="text-sm font-medium text-text-primary">Keyboard shortcut</div>
-          <div className="text-xs text-daintree-text/50 mt-0.5 select-text">
+          <div className="text-xs text-text-secondary mt-0.5 select-text">
             Launch {agentName} from anywhere with a key combination
           </div>
         </div>
@@ -118,13 +118,13 @@ function AgentShortcutRow({ agentId, agentName }: { agentId: BuiltInAgentId; age
                 {displayCombo}
               </span>
             ) : (
-              <span className="text-xs text-daintree-text/60 italic">Unbound</span>
+              <span className="text-xs text-text-secondary italic">Unbound</span>
             )}
             <button
               type="button"
               onClick={() => setIsEditing(true)}
               data-testid={`agent-shortcut-edit-${agentId}`}
-              className="px-2 py-0.5 text-xs text-daintree-text/60 hover:text-text-primary transition-colors"
+              className="px-2 py-0.5 text-xs text-text-secondary hover:text-text-primary transition-colors"
             >
               {displayCombo ? "Change" : "Assign"}
             </button>
@@ -349,7 +349,7 @@ export function AgentSettings({
 
   if (agentOptions.length === 0) {
     return (
-      <div className="text-sm text-daintree-text/60">
+      <div className="text-sm text-text-secondary">
         No agents registered. Add agents to the registry to configure them here.
       </div>
     );
@@ -363,7 +363,7 @@ export function AgentSettings({
         <div className="flex items-center justify-between">
           <div>
             <h4 className="text-sm font-medium mb-1">CLI agents</h4>
-            <p className="text-xs text-daintree-text/50 select-text">
+            <p className="text-xs text-text-secondary select-text">
               Configure global agent preferences and per-agent settings
             </p>
           </div>
@@ -373,7 +373,7 @@ export function AgentSettings({
             onClick={() => {
               window.dispatchEvent(new CustomEvent("daintree:open-agent-setup-wizard"));
             }}
-            className="text-daintree-text/60 hover:text-text-primary shrink-0"
+            className="text-text-secondary hover:text-text-primary shrink-0"
           >
             <Plug className="w-3.5 h-3.5" />
             Run setup wizard
@@ -390,7 +390,7 @@ export function AgentSettings({
           <Card id="agents-general" className="space-y-4">
             <div className="pb-3 border-b border-border-default">
               <h4 className="text-sm font-medium text-text-primary">Global agent settings</h4>
-              <p className="text-xs text-daintree-text/50 mt-0.5 select-text">
+              <p className="text-xs text-text-secondary mt-0.5 select-text">
                 Settings that apply across all agents
               </p>
             </div>
@@ -459,7 +459,7 @@ export function AgentSettings({
                   <Button
                     size="sm"
                     variant="ghost"
-                    className="text-daintree-text/50 hover:text-text-primary"
+                    className="text-text-secondary hover:text-text-primary"
                     onClick={async () => {
                       const url = activeAgent.usageUrl?.trim();
                       if (!url) return;
@@ -482,7 +482,7 @@ export function AgentSettings({
                 <Button
                   size="sm"
                   variant="ghost"
-                  className="text-daintree-text/50 hover:text-text-primary"
+                  className="text-text-secondary hover:text-text-primary"
                   onClick={async () => {
                     await reset(activeAgent.id);
                     onSettingsChange?.();

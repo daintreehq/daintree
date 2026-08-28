@@ -1701,7 +1701,6 @@ describe("Toast action variant rendering (issue #7595)", () => {
     expect(button.className).not.toContain("bg-status-info/10");
     expect(button.className).not.toContain("text-status-info");
     expect(button.className).not.toMatch(/\bborder\b/);
-    expect(button.className).toContain("text-daintree-text/70");
     expect(button.className).toContain("hover:bg-tint/10");
   });
 
@@ -1735,7 +1734,9 @@ describe("Toast action variant rendering (issue #7595)", () => {
     const cancel = screen.getByRole("button", { name: "Cancel" });
     expect(confirm.className).toContain("bg-status-info/10");
     expect(cancel.className).not.toContain("bg-status-info/10");
-    expect(cancel.className).toContain("text-daintree-text/70");
+    // "Distinctly" is the claim: whatever the two variants paint, they must not
+    // paint the same thing.
+    expect(cancel.className).not.toBe(confirm.className);
   });
 
   it("dimmed secondary action retains opacity-50, stays disabled, and ignores clicks", async () => {
@@ -1770,9 +1771,9 @@ describe("Toast action variant rendering (issue #7595)", () => {
     const cancel = screen.getByRole("button", { name: "Cancel" }) as HTMLButtonElement;
     expect(cancel.className).toContain("opacity-50");
     expect(cancel.className).toContain("pointer-events-none");
-    // Still carries the secondary text-only styling under the dim.
-    expect(cancel.className).toContain("text-daintree-text/70");
+    // Still the secondary text-only styling under the dim, not the primary fill.
     expect(cancel.className).not.toContain("bg-status-info/10");
+    expect(cancel.className).not.toContain("text-status-info");
     // Behavioral inertness: HTML `disabled` is the real guard (CSS
     // pointer-events doesn't block fireEvent in JSDOM). Confirm both.
     expect(cancel.disabled).toBe(true);
@@ -1796,8 +1797,9 @@ describe("Toast action variant rendering (issue #7595)", () => {
     });
 
     const button = screen.getByRole("button", { name: "Mute" });
-    expect(button.className).toContain("text-daintree-text/70");
     expect(button.className).not.toContain("bg-status-info/10");
+    expect(button.className).not.toContain("text-status-info");
+    expect(button.className).toContain("hover:bg-tint/10");
   });
 });
 

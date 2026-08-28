@@ -386,7 +386,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                   </div>
                   <div>
                     <div className="text-sm font-medium text-text-primary">{option.title}</div>
-                    <div className="text-xs text-daintree-text/50 mt-0.5 select-text">
+                    <div className="text-xs text-text-secondary mt-0.5 select-text">
                       {option.description}
                     </div>
                   </div>
@@ -402,7 +402,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
             <Eye className="w-4 h-4 mt-0.5 text-daintree-accent/80 shrink-0" aria-hidden />
             <div className="min-w-0 flex-1">
               <p className="text-xs font-medium text-text-primary">Preview outbound telemetry</p>
-              <p className="text-xs text-daintree-text/60 mt-0.5 select-text">
+              <p className="text-xs text-text-secondary mt-0.5 select-text">
                 Inspect every sanitised payload Daintree would send — live, for this session only,
                 with no transmission to any server.
               </p>
@@ -418,11 +418,11 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
           >
             <h3
               id="telemetry-disclosure-heading"
-              className="text-xs font-medium text-daintree-text/70 uppercase tracking-wide"
+              className="text-xs font-medium text-text-secondary uppercase tracking-wide"
             >
               What's collected at each level
             </h3>
-            <p className="text-xs text-daintree-text/50 mt-1 select-text">
+            <p className="text-xs text-text-secondary mt-1 select-text">
               This disclosure describes the data transmitted externally. File contents, prompts, API
               keys, and other credentials are never collected.
             </p>
@@ -433,7 +433,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                   className="rounded-[var(--radius-md)] border border-daintree-border/60 bg-daintree-bg/40 p-3"
                 >
                   <dt className="text-xs font-medium text-text-primary">{entry.title}</dt>
-                  <dd className="mt-1 space-y-2 text-xs text-daintree-text/60 select-text">
+                  <dd className="mt-1 space-y-2 text-xs text-text-secondary select-text">
                     <p>{entry.summary}</p>
                     {entry.fields.length > 0 && (
                       <ul className="list-disc pl-4 space-y-0.5">
@@ -447,7 +447,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                         {entry.events.map((name) => (
                           <li
                             key={name}
-                            className="font-mono text-2xs text-daintree-text/70 bg-surface-canvas px-1.5 py-0.5 rounded border border-daintree-border/60"
+                            className="font-mono text-2xs text-text-secondary bg-surface-canvas px-1.5 py-0.5 rounded border border-daintree-border/60"
                           >
                             {name}
                           </li>
@@ -470,7 +470,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
             description="Location where Daintree stores settings, logs, and session data."
           >
             <div className="flex items-center gap-3">
-              <code className="flex-1 text-xs bg-surface-canvas p-2.5 rounded-[var(--radius-md)] border border-border-default font-mono text-daintree-text/70 truncate">
+              <code className="flex-1 text-xs bg-surface-canvas p-2.5 rounded-[var(--radius-md)] border border-border-default font-mono text-text-secondary truncate">
                 {dataFolderPath}
               </code>
               <Button
@@ -501,7 +501,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                     "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
                     logRetentionDays === option.value
                       ? "bg-overlay-selected text-text-primary font-medium border border-border-strong"
-                      : "text-daintree-text/60 border border-border-default hover:bg-tint/5 hover:text-text-primary"
+                      : "text-text-secondary border border-border-default hover:bg-tint/5 hover:text-text-primary"
                   )}
                 >
                   {option.label}
@@ -546,7 +546,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
                     "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2",
                     sessionRetentionDays === option.value
                       ? "bg-overlay-selected text-text-primary font-medium border border-border-strong"
-                      : "text-daintree-text/60 border border-border-default hover:bg-tint/5 hover:text-text-primary"
+                      : "text-text-secondary border border-border-default hover:bg-tint/5 hover:text-text-primary"
                   )}
                 >
                   {option.label}
@@ -608,7 +608,7 @@ export function PrivacyDataTab({ activeSubtab, onSubtabChange }: PrivacyDataTabP
               <div className="contents">
                 <div className="p-3 rounded-[var(--radius-md)] border border-status-error/20 bg-status-error/5">
                   <p className="text-sm text-text-primary font-medium mb-1">Reset all app data?</p>
-                  <p className="text-xs text-daintree-text/60">
+                  <p className="text-xs text-text-secondary">
                     This will permanently delete all settings, API keys, session data, and logs. The
                     app will restart with factory defaults. This cannot be undone.
                   </p>

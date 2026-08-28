@@ -12,7 +12,7 @@ vi.mock("@/config/categoryColors", () => ({
   ACTION_CATEGORY_COLORS: {
     terminal: "bg-category-blue-subtle text-category-blue-text border border-category-blue-border",
   },
-  ACTION_CATEGORY_DEFAULT_COLOR: "bg-tint/[0.06] text-daintree-text/50",
+  ACTION_CATEGORY_DEFAULT_COLOR: "bg-tint/[0.06] text-text-secondary",
 }));
 
 function makeItem(overrides: Partial<ActionPaletteItemType> = {}): ActionPaletteItemType {

@@ -40,7 +40,7 @@ export function pluginLabel(plugin: LoadedPluginInfo): string {
 }
 
 const BADGE_CLASS =
-  "inline-flex items-center px-1.5 py-0.5 rounded-sm text-3xs font-medium bg-overlay-subtle border border-daintree-border/50 text-daintree-text/60 uppercase tracking-wide";
+  "inline-flex items-center px-1.5 py-0.5 rounded-sm text-3xs font-medium bg-overlay-subtle border border-daintree-border/50 text-text-secondary uppercase tracking-wide";
 
 /**
  * Declared capabilities in the order {@link BUILT_IN_PLUGIN_CAPABILITIES} defines
@@ -119,9 +119,9 @@ function PluginContributedCommands({ commands }: { commands: PluginActionContrib
       <ul className="space-y-2">
         {commands.map((command) => (
           <li key={command.id} className="text-xs">
-            <div className="text-daintree-text/80">{command.title}</div>
+            <div className="text-text-primary">{command.title}</div>
             {command.description && (
-              <div className="text-2xs text-daintree-text/50 mt-0.5 break-words">
+              <div className="text-2xs text-text-secondary mt-0.5 break-words">
                 {command.description}
               </div>
             )}
@@ -150,7 +150,7 @@ function PluginContributedPanels({ panels }: { panels: PanelContribution[] }) {
       <ul className="space-y-2">
         {panels.map((panel) => (
           <li key={panel.id} className="text-xs">
-            <div className="text-daintree-text/80">{panel.name}</div>
+            <div className="text-text-primary">{panel.name}</div>
             <div className="text-2xs text-text-secondary mt-0.5">
               {panel.showInPalette === false
                 ? "Opened by the plugin"
@@ -183,7 +183,7 @@ function PluginContributors({ authors }: { authors: PluginAuthor[] }) {
           const { name, url, email, role } = author;
           return (
             <li key={`${name}-${index}`} className="text-xs">
-              <div className="text-daintree-text/80">
+              <div className="text-text-primary">
                 {name}
                 {role && <span className="text-2xs text-text-secondary"> · {role}</span>}
               </div>
@@ -193,7 +193,7 @@ function PluginContributors({ authors }: { authors: PluginAuthor[] }) {
                     <button
                       type="button"
                       onClick={() => void systemClient.openExternal(url)}
-                      className="text-2xs text-daintree-text/50 hover:text-daintree-text/80 hover:underline break-all"
+                      className="text-2xs text-text-secondary hover:text-text-primary hover:underline break-all"
                     >
                       {url}
                     </button>
@@ -202,7 +202,7 @@ function PluginContributors({ authors }: { authors: PluginAuthor[] }) {
                     <button
                       type="button"
                       onClick={() => void systemClient.openExternal(`mailto:${email}`)}
-                      className="text-2xs text-daintree-text/50 hover:text-daintree-text/80 hover:underline break-all"
+                      className="text-2xs text-text-secondary hover:text-text-primary hover:underline break-all"
                     >
                       {email}
                     </button>
@@ -334,11 +334,11 @@ export function PluginDetailPane({
               )}
               {plugin.devMode && <span className={BADGE_CLASS}>Dev</span>}
               {restartRequired && (
-                <span className={`${BADGE_CLASS} text-daintree-text/50`}>Restart required</span>
+                <span className={`${BADGE_CLASS} text-text-secondary`}>Restart required</span>
               )}
             </div>
             {plugin.manifest.tagline && (
-              <p className="text-sm text-daintree-text/60 mt-1">{plugin.manifest.tagline}</p>
+              <p className="text-sm text-text-secondary mt-1">{plugin.manifest.tagline}</p>
             )}
             {!plugin.isBuiltin && plugin.installedAt > 0 && (
               <div className="text-2xs text-daintree-text/40 mt-1">
@@ -348,7 +348,7 @@ export function PluginDetailPane({
               </div>
             )}
             {upToDate && (
-              <div className="text-2xs text-daintree-text/50 mt-1" role="status">
+              <div className="text-2xs text-text-secondary mt-1" role="status">
                 Already up to date
               </div>
             )}
@@ -424,9 +424,7 @@ export function PluginDetailPane({
       {currentTab === "overview" && (
         <div className="space-y-4">
           {plugin.manifest.description ? (
-            <p className="text-xs text-daintree-text/70 select-text">
-              {plugin.manifest.description}
-            </p>
+            <p className="text-xs text-text-secondary select-text">{plugin.manifest.description}</p>
           ) : (
             <p className="text-xs text-text-secondary">No description provided.</p>
           )}

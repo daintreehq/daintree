@@ -49,7 +49,7 @@ const STATUS_LABEL: Record<
 > = {
   stopped: {
     label: "Stopped",
-    textClass: "text-daintree-text/50",
+    textClass: "text-text-secondary",
     dotClass: "bg-daintree-text/40",
   },
   starting: {
@@ -79,7 +79,7 @@ const STATUS_LABEL: Record<
   },
   "restored-stopped": {
     label: "Stopped",
-    textClass: "text-daintree-text/50",
+    textClass: "text-text-secondary",
     dotClass: "bg-daintree-text/40",
   },
 };
@@ -117,7 +117,7 @@ function DrawerTabButton({
         "relative px-3 py-1.5 text-xs font-medium rounded transition-colors",
         "hover:text-text-primary hover:bg-overlay-soft",
         "focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-status-info",
-        isActive ? "text-text-primary" : "text-daintree-text/65"
+        isActive ? "text-text-primary" : "text-text-secondary"
       )}
     >
       {label}
@@ -261,7 +261,7 @@ export function ConsoleDrawer({
         <button
           type="button"
           onClick={toggleDrawer}
-          className="flex min-h-8 min-w-0 flex-1 items-center gap-2 border-r border-overlay/70 px-3 py-1.5 text-xs font-semibold text-daintree-text/80 transition-colors hover:bg-overlay-medium focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-status-info"
+          className="flex min-h-8 min-w-0 flex-1 items-center gap-2 border-r border-overlay/70 px-3 py-1.5 text-xs font-semibold text-text-primary transition-colors hover:bg-overlay-medium focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-status-info"
           aria-expanded={isOpen}
           aria-controls={drawerRegionId}
           aria-label="Toggle output drawer"

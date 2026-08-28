@@ -1101,7 +1101,7 @@ export function FileBrowserPane({
                         "min-w-0 flex-1 cursor-pointer truncate text-left font-mono text-2xs transition-colors duration-150 ease-out",
                         showRootPathCopied
                           ? "text-status-success"
-                          : "text-daintree-text/40 hover:text-daintree-text/70"
+                          : "text-text-secondary hover:text-text-primary"
                       )}
                     >
                       {rootPath}
@@ -1401,7 +1401,7 @@ export function FileBrowserPane({
             <button
               type="button"
               onClick={revealSelection}
-              className="shrink-0 truncate border-t border-border-default px-3 py-1 text-left font-mono text-2xs text-daintree-text/60 transition-colors duration-150 ease-out hover:bg-tint/5 hover:text-text-primary"
+              className="shrink-0 truncate border-t border-border-default px-3 py-1 text-left font-mono text-2xs text-text-secondary transition-colors duration-150 ease-out hover:bg-tint/5 hover:text-text-primary"
             >
               Reveal {selectedFileName}
             </button>

@@ -43,7 +43,7 @@ export function OverrideField({
   return (
     <div className={cn("group", className)}>
       <div className="flex items-center gap-2 mb-1 min-h-[1.25rem]">
-        <label htmlFor={id} className="block text-xs font-medium text-daintree-text/60">
+        <label htmlFor={id} className="block text-xs font-medium text-text-secondary">
           {label}
           {hint && <span className="ml-1 text-daintree-text/40">{hint}</span>}
         </label>

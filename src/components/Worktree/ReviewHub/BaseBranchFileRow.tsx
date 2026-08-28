@@ -67,7 +67,7 @@ export function BaseBranchFileRow({
               data-testid="base-branch-file-row-dir"
               className={cn(
                 "shrink truncate font-mono text-2xs transition-colors",
-                "text-daintree-text/50 group-hover/baserow:text-daintree-text/70"
+                "text-text-secondary group-hover/baserow:text-text-primary"
               )}
             >
               {dir}/

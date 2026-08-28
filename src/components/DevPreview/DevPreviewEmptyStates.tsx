@@ -105,7 +105,7 @@ export function DevPreviewEmptyStates({
     return (
       <div className="absolute inset-0 flex flex-col items-center justify-center bg-surface-canvas text-text-primary p-6">
         <AlertTriangle className="w-6 h-6 text-status-warning mb-3" />
-        <h3 className="text-sm font-medium text-daintree-text/70 mb-1">
+        <h3 className="text-sm font-medium text-text-secondary mb-1">
           {error.type === "port-conflict"
             ? "Port conflict"
             : error.type === "missing-dependencies"
@@ -114,7 +114,7 @@ export function DevPreviewEmptyStates({
                 ? "Permission denied"
                 : "Dev server error"}
         </h3>
-        <p className="text-xs text-daintree-text/50 text-center mb-3 max-w-md">{error.message}</p>
+        <p className="text-xs text-text-secondary text-center mb-3 max-w-md">{error.message}</p>
         <div className="flex items-center gap-1">
           <Button
             onClick={handleRetry}
@@ -132,7 +132,7 @@ export function DevPreviewEmptyStates({
               onClick={() => setDevPreviewConsoleOpen(id, true)}
               variant="ghost"
               size="sm"
-              className="gap-1.5 px-2.5 py-1.5 group text-daintree-text/50 hover:text-daintree-text/70"
+              className="gap-1.5 px-2.5 py-1.5 group text-text-secondary hover:text-text-primary"
             >
               <ExternalLink className="h-3.5 w-3.5" />
               <span className="text-xs">View terminal</span>
@@ -142,7 +142,7 @@ export function DevPreviewEmptyStates({
               onClick={handleOpenExternal}
               variant="ghost"
               size="sm"
-              className="gap-1.5 px-2.5 py-1.5 group text-daintree-text/50 hover:text-daintree-text/70"
+              className="gap-1.5 px-2.5 py-1.5 group text-text-secondary hover:text-text-primary"
             >
               <ExternalLink className="h-3.5 w-3.5" />
               <span className="text-xs">Open external</span>
@@ -160,15 +160,15 @@ export function DevPreviewEmptyStates({
           <div className="flex flex-col items-center text-center max-w-md">
             {primaryCandidate ? (
               <>
-                <h3 className="text-sm font-medium text-daintree-text/70 mb-1">
+                <h3 className="text-sm font-medium text-text-secondary mb-1">
                   Start the dev server
                 </h3>
-                <p className="text-xs text-daintree-text/50 mb-4 leading-relaxed">
+                <p className="text-xs text-text-secondary mb-4 leading-relaxed">
                   We found a script in your package.json that looks like a dev server.
                 </p>
                 <div className="mb-3 px-3 py-1.5 rounded bg-overlay-subtle border border-overlay/30 inline-flex items-center gap-2">
                   <span className="text-2xs text-daintree-text/40">Auto-detected</span>
-                  <code className="text-xs text-daintree-text/70 font-mono">
+                  <code className="text-xs text-text-secondary font-mono">
                     {primaryCandidate.command}
                   </code>
                 </div>
@@ -209,7 +209,7 @@ export function DevPreviewEmptyStates({
                       <PopoverTrigger asChild>
                         <button
                           type="button"
-                          className="inline-flex items-center gap-1 text-xs text-daintree-text/50 hover:text-daintree-text/70 transition-colors"
+                          className="inline-flex items-center gap-1 text-xs text-text-secondary hover:text-text-primary transition-colors"
                         >
                           Use a different script...
                           <ChevronDown className="h-3 w-3" />
@@ -227,7 +227,7 @@ export function DevPreviewEmptyStates({
                               }}
                               className="flex items-center gap-2 px-2 py-1.5 rounded text-xs hover:bg-overlay-subtle transition-colors text-left"
                             >
-                              <code className="text-daintree-text/70 font-mono text-2xs flex-1 truncate">
+                              <code className="text-text-secondary font-mono text-2xs flex-1 truncate">
                                 {c.command}
                               </code>
                               <span className="text-text-secondary shrink-0">{c.name}</span>
@@ -241,7 +241,7 @@ export function DevPreviewEmptyStates({
                     onClick={handleOpenSettings}
                     variant="ghost"
                     size="sm"
-                    className="gap-1.5 px-2.5 py-1.5 group text-daintree-text/50 hover:text-daintree-text/70"
+                    className="gap-1.5 px-2.5 py-1.5 group text-text-secondary hover:text-text-primary"
                   >
                     <Settings className="h-3.5 w-3.5" />
                     <span className="text-xs">Open project settings</span>
@@ -250,10 +250,8 @@ export function DevPreviewEmptyStates({
               </>
             ) : (
               <>
-                <h3 className="text-sm font-medium text-daintree-text/70 mb-1">
-                  Set a dev command
-                </h3>
-                <p className="text-xs text-daintree-text/50 mb-4 leading-relaxed">
+                <h3 className="text-sm font-medium text-text-secondary mb-1">Set a dev command</h3>
+                <p className="text-xs text-text-secondary mb-4 leading-relaxed">
                   Configure a command to start a local development server.
                 </p>
                 <div className="flex flex-col items-center gap-2 w-full max-w-xs">
@@ -267,7 +265,7 @@ export function DevPreviewEmptyStates({
                       }
                     }}
                     placeholder="npm run dev"
-                    className="w-full px-2.5 py-1.5 text-xs font-mono bg-overlay-subtle border border-overlay/30 rounded text-daintree-text/70 placeholder:text-text-placeholder focus:outline-hidden focus:border-overlay/50 transition-[border-color,box-shadow]"
+                    className="w-full px-2.5 py-1.5 text-xs font-mono bg-overlay-subtle border border-overlay/30 rounded text-text-secondary placeholder:text-text-placeholder focus:outline-hidden focus:border-overlay/50 transition-[border-color,box-shadow]"
                   />
                   <Button
                     onClick={() => void handleSaveCommand()}
@@ -287,7 +285,7 @@ export function DevPreviewEmptyStates({
                   onClick={handleOpenSettings}
                   variant="ghost"
                   size="sm"
-                  className="gap-1.5 px-2.5 py-1.5 group text-daintree-text/50 hover:text-daintree-text/70 mt-3"
+                  className="gap-1.5 px-2.5 py-1.5 group text-text-secondary hover:text-text-primary mt-3"
                 >
                   <Settings className="h-3.5 w-3.5" />
                   <span className="text-xs">Open project settings</span>
@@ -297,16 +295,14 @@ export function DevPreviewEmptyStates({
           </div>
         ) : status === "restored-stopped" ? (
           <div className="flex flex-col items-center text-center max-w-md">
-            <h3 className="text-sm font-medium text-daintree-text/70 mb-1">
-              Dev server was running
-            </h3>
-            <p className="text-xs text-daintree-text/50 mb-3 leading-relaxed">
+            <h3 className="text-sm font-medium text-text-secondary mb-1">Dev server was running</h3>
+            <p className="text-xs text-text-secondary mb-3 leading-relaxed">
               Daintree closed while this dev server was active. It wasn't reattached — restart to
               run it again.
             </p>
             {devCommand && (
               <div className="mb-3 px-3 py-1.5 rounded bg-overlay-subtle border border-overlay/30 inline-flex items-center gap-2">
-                <code className="text-xs text-daintree-text/70 font-mono">{devCommand}</code>
+                <code className="text-xs text-text-secondary font-mono">{devCommand}</code>
               </div>
             )}
             <Button
@@ -321,10 +317,8 @@ export function DevPreviewEmptyStates({
           </div>
         ) : (
           <div className="flex flex-col items-center text-center max-w-md">
-            <h3 className="text-sm font-medium text-daintree-text/70 mb-1">
-              Waiting for dev server
-            </h3>
-            <p className="text-xs text-daintree-text/50 mb-4 leading-relaxed">
+            <h3 className="text-sm font-medium text-text-secondary mb-1">Waiting for dev server</h3>
+            <p className="text-xs text-text-secondary mb-4 leading-relaxed">
               The development server will appear here once it starts and a URL is detected.
             </p>
           </div>
@@ -336,7 +330,7 @@ export function DevPreviewEmptyStates({
   if (!hasBeenVisible) {
     return (
       <div className="absolute inset-0 flex flex-col items-center justify-center bg-surface-canvas text-text-primary">
-        <p className="text-xs text-daintree-text/50">
+        <p className="text-xs text-text-secondary">
           Preview will load when this panel is first viewed
         </p>
       </div>
@@ -346,7 +340,7 @@ export function DevPreviewEmptyStates({
   if (isEvicted) {
     return (
       <div className="absolute inset-0 flex flex-col items-center justify-center bg-surface-canvas text-text-primary p-6">
-        <p className="text-xs text-daintree-text/50">
+        <p className="text-xs text-text-secondary">
           Preview paused to save memory — will reload when opened
         </p>
       </div>

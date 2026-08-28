@@ -273,7 +273,7 @@ export function DiagnosticsReviewDialog({
                   "flex items-center gap-2 px-2.5 py-1.5 rounded border text-xs cursor-pointer transition-colors",
                   prebuiltIds.has(preset.id)
                     ? "border-border-default bg-daintree-bg/50 text-text-primary"
-                    : "border-daintree-border/40 bg-transparent text-daintree-text/60"
+                    : "border-daintree-border/40 bg-transparent text-text-secondary"
                 )}
               >
                 <CheckboxPrimitive.Root
@@ -358,7 +358,7 @@ export function DiagnosticsReviewDialog({
             {showPreview ? "Hide Preview" : "Show Preview"}
           </Button>
           {showPreview && (
-            <pre className="text-3xs leading-relaxed font-mono bg-surface-canvas border border-border-default rounded p-3 max-h-64 overflow-auto text-daintree-text/80 whitespace-pre-wrap break-all">
+            <pre className="text-3xs leading-relaxed font-mono bg-surface-canvas border border-border-default rounded p-3 max-h-64 overflow-auto text-text-primary whitespace-pre-wrap break-all">
               {previewJson}
             </pre>
           )}

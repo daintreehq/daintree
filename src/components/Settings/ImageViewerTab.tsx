@@ -126,7 +126,7 @@ export function ImageViewerTab() {
 
   if (!activeProjectId) {
     return (
-      <div className="p-4 text-sm text-daintree-text/50">
+      <div className="p-4 text-sm text-text-secondary">
         Open a project to configure its image viewer preference.
       </div>
     );

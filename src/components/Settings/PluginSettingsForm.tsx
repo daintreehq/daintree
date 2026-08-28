@@ -480,7 +480,7 @@ function SettingField({
       {type === "boolean" ? (
         <div className="flex items-center justify-between gap-3">
           {def.description ? (
-            <p id={`${fieldId}-desc`} className="text-2xs text-daintree-text/50">
+            <p id={`${fieldId}-desc`} className="text-2xs text-text-secondary">
               {def.description}
             </p>
           ) : (
@@ -492,7 +492,7 @@ function SettingField({
         <>
           {renderControl()}
           {isSecret && scopeReady && (
-            <p className="text-2xs text-daintree-text/50">
+            <p className="text-2xs text-text-secondary">
               {secretTier === "plaintext"
                 ? "Stored as plaintext — keychain unavailable"
                 : hasStored && secretIsPlaintext && !migratedToKeychain
@@ -501,7 +501,7 @@ function SettingField({
             </p>
           )}
           {def.description && (
-            <p id={`${fieldId}-desc`} className="text-2xs text-daintree-text/50">
+            <p id={`${fieldId}-desc`} className="text-2xs text-text-secondary">
               {def.description}
             </p>
           )}
@@ -606,7 +606,7 @@ export function PluginSettingsForm({ plugin }: PluginSettingsFormProps) {
 
   return (
     <div className="mt-4 pt-4 border-t border-border-default space-y-4">
-      <h4 className="text-xs font-medium text-daintree-text/70">Settings</h4>
+      <h4 className="text-xs font-medium text-text-secondary">Settings</h4>
       {settings.map((def) => {
         const scope = settingScope(def);
         const loaded = scope === "user" ? userValues !== null : projectValues !== null;

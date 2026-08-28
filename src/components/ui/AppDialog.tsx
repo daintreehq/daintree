@@ -695,7 +695,7 @@ AppDialog.Footer = function AppDialogFooter({
           lets a hint measure its own box and crop to it. */}
       {hint && (
         <div
-          className="text-xs leading-[inherit] text-daintree-text/55 flex min-w-0 flex-1 items-center gap-1"
+          className="text-xs leading-[inherit] text-text-secondary flex min-w-0 flex-1 items-center gap-1"
           data-testid="app-dialog-hint"
         >
           {hint}
@@ -717,7 +717,7 @@ AppDialog.Footer = function AppDialogFooter({
               }}
               aria-disabled={secondaryAction.disabled || undefined}
               className={cn(
-                "text-daintree-text/70 hover:text-text-primary",
+                "text-text-secondary hover:text-text-primary",
                 secondaryAction.disabled && DISABLED_ACTION_CLASSES
               )}
               data-confirm-role="cancel"
@@ -761,7 +761,7 @@ AppDialog.Description = function AppDialogDescription({
 }: AppDialogDescriptionProps) {
   const context = useContext(AppDialogContext);
   return (
-    <p id={context?.descriptionId} className={cn("text-sm text-daintree-text/70", className)}>
+    <p id={context?.descriptionId} className={cn("text-sm text-text-secondary", className)}>
       {children}
     </p>
   );

@@ -173,7 +173,7 @@ interface TokenMissingTooltipProps {
 
 export function TokenMissingTooltip({ type }: TokenMissingTooltipProps) {
   return (
-    <div className="flex items-center gap-2 text-daintree-text/60 py-1">
+    <div className="flex items-center gap-2 text-text-secondary py-1">
       <KeyRound className="w-3.5 h-3.5 shrink-0 text-daintree-text/50" aria-hidden="true" />
       <span className="text-xs">Add a forge access token to see {type} details</span>
     </div>
@@ -259,14 +259,14 @@ export function IssueTooltipContent({ data, freshness }: IssueTooltipContentProp
     <div className="space-y-2 max-w-[280px]">
       <div className="flex items-start gap-2">
         <span className={cn("text-xs font-medium shrink-0", stateColor)}>#{data.number}</span>
-        <span className="text-xs text-daintree-text/90 line-clamp-2">{data.title}</span>
+        <span className="text-xs text-text-primary line-clamp-2">{data.title}</span>
       </div>
 
       {data.bodyExcerpt && (
-        <p className="text-2xs text-daintree-text/60 line-clamp-3">{data.bodyExcerpt}</p>
+        <p className="text-2xs text-text-secondary line-clamp-3">{data.bodyExcerpt}</p>
       )}
 
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-2xs text-daintree-text/50">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-2xs text-text-secondary">
         {data.author && (
           <span className="flex items-center gap-1">
             <PenLine className="w-3 h-3 shrink-0" aria-hidden="true" />
@@ -310,7 +310,7 @@ export function PRTooltipContent({ data, freshness }: PRTooltipContentProps) {
     <div className="space-y-2 max-w-[280px]">
       <div className="flex items-start gap-2">
         <span className={cn("text-xs font-medium shrink-0", stateColor)}>#{data.number}</span>
-        <span className="text-xs text-daintree-text/90 line-clamp-2">{data.title}</span>
+        <span className="text-xs text-text-primary line-clamp-2">{data.title}</span>
         <span
           className={cn(
             "text-3xs px-1.5 py-0.5 rounded-full shrink-0 capitalize",
@@ -326,10 +326,10 @@ export function PRTooltipContent({ data, freshness }: PRTooltipContentProps) {
       </div>
 
       {data.bodyExcerpt && (
-        <p className="text-2xs text-daintree-text/60 line-clamp-3">{data.bodyExcerpt}</p>
+        <p className="text-2xs text-text-secondary line-clamp-3">{data.bodyExcerpt}</p>
       )}
 
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-2xs text-daintree-text/50">
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-2xs text-text-secondary">
         {data.author && (
           <span className="flex items-center gap-1">
             <PenLine className="w-3 h-3 shrink-0" aria-hidden="true" />
