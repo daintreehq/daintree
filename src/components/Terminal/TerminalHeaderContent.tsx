@@ -257,11 +257,14 @@ export function TerminalHeaderContent({
         ? "bg-[color-mix(in_oklab,var(--color-state-working)_15%,transparent)] border-state-working/40"
         : agentState === "directing"
           ? "bg-[color-mix(in_oklab,var(--color-category-blue)_15%,transparent)] border-category-blue/40"
-          : agentState === "completed"
-            ? "bg-[color-mix(in_oklab,var(--color-status-success)_15%,transparent)] border-status-success/40"
-            : agentState === "exited"
-              ? "bg-overlay-soft border-divider"
-              : "bg-[color-mix(in_oklab,var(--color-state-waiting)_15%,transparent)] border-state-waiting/40";
+          : // Settled: finished and exited share one neutral chip. Completion is
+            // not asking for anything, so it does not get a hue of its own
+            // (#12002) — and the two stay apart on the channels that survive
+            // without one, `CheckCircle2` against `ExitedCircle` in slate
+            // against secondary.
+            agentState === "completed" || agentState === "exited"
+            ? "bg-overlay-soft border-divider"
+            : "bg-[color-mix(in_oklab,var(--color-state-waiting)_15%,transparent)] border-state-waiting/40";
 
     const headline = activity?.headline?.trim() || `Agent ${agentState}`;
     const showConfidence = stateChangeConfidence != null && stateChangeConfidence < 1;

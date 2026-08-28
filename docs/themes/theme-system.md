@@ -140,6 +140,8 @@ Scenes cover the workbench, a multi-pane fleet, terminal with seeded ANSI, sideb
 
 The full authoring-and-review process — including the Codex review loop, the tier model for contrast budgets, and the traps that pass every test in the repo — lives in `.claude/skills/daintree-theme-creator/resources/theme-review-workflow.md`.
 
+Green has its own rule on top of these, because it is the token most often spent on saying nothing: see [status-success-policy.md](./status-success-policy.md).
+
 ## Design review checklist
 
 Before adding a file to `DURABLE_ALLOWLIST` in `src/config/__tests__/accentGuard.contract.test.ts`, answer all four questions:

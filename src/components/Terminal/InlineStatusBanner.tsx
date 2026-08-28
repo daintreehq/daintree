@@ -39,7 +39,6 @@ interface BaseInlineStatusBannerProps {
   className?: string;
   role?: "alert" | "status";
   ariaLive?: "off" | "polite" | "assertive";
-  onClose?: () => void;
   /** Accessible label for the dismiss button. Defaults to "Dismiss". */
   closeAriaLabel?: string;
   /**
@@ -57,12 +56,35 @@ interface BaseInlineStatusBannerProps {
    * this forces the multi-line layout even without a `description`.
    */
   descriptionExtras?: React.ReactNode;
+}
+
+/**
+ * The dismissal surface, in the shape every severity but `success` gets:
+ * both halves optional, because a persistent banner is a legitimate thing
+ * for an error or a warning to be.
+ */
+interface OptionalDismissProps {
+  onClose?: () => void;
   /**
    * Fire `onClose` automatically after this many milliseconds. The timer
    * clears on unmount and resets if the value or `onClose` changes. Pass
    * `undefined` to disable (callers gate their own conditions this way).
    */
   autoDismissAfter?: number;
+}
+
+/**
+ * `severity="success"` is pinned to transient confirmation by construction
+ * (#12002): green is only allowed to say "this just happened", never "things
+ * are fine", so a success banner has to state how it leaves. Requiring the
+ * timer and the handler it fires makes that structural rather than advisory
+ * — there is no way to spell a success banner that stands. Completion that
+ * genuinely needs to persist is `severity="neutral"`, which is what
+ * `AgentCompletionBanner` already uses.
+ */
+interface RequiredDismissProps {
+  onClose: () => void;
+  autoDismissAfter: number;
 }
 
 /**
@@ -91,8 +113,12 @@ interface NonErrorActionProps {
 
 export type InlineStatusBannerProps = BaseInlineStatusBannerProps &
   (
-    | ({ severity: "error" } & ErrorActionProps)
-    | ({ severity: Exclude<InlineStatusBannerSeverity, "error"> } & NonErrorActionProps)
+    | ({ severity: "error" } & ErrorActionProps & OptionalDismissProps)
+    | ({ severity: "success" } & NonErrorActionProps & RequiredDismissProps)
+    | ({
+        severity: Exclude<InlineStatusBannerSeverity, "error" | "success">;
+      } & NonErrorActionProps &
+        OptionalDismissProps)
   );
 
 const SEVERITY_VAR: Record<Exclude<InlineStatusBannerSeverity, "neutral">, string> = {

@@ -39,6 +39,11 @@ type BlockedNavAction =
 
 // How long the "Copied" confirmation label lingers before reverting to "Copy URL".
 const COPY_FEEDBACK_MS = 2000;
+// "Sign in completed" is a confirmation, not a state: the banner says the round
+// trip through the browser landed and then gets out of the way. Longer than the
+// copy flash because the user is coming back from another app and has to catch
+// it, short enough that it never becomes standing chrome (#12002).
+const SIGN_IN_COMPLETED_DISMISS_MS = 6000;
 
 function computeRegistrableDomain(url: string): string {
   try {
@@ -340,6 +345,24 @@ export function BlockedNavBanner({
         action={primary}
         trailingSlot={overflow.length > 0 ? <BannerOverflowMenu actions={overflow} /> : undefined}
         onClose={handleDismiss}
+        role={role}
+      />
+    );
+  }
+
+  // `success` is the one severity that has to declare how it leaves, so it
+  // cannot ride the shared computed-severity return.
+  if (severity === "success") {
+    return (
+      <InlineStatusBanner
+        icon={icon}
+        title={title}
+        description={description}
+        contextLine={url}
+        severity="success"
+        actions={actions}
+        onClose={handleDismiss}
+        autoDismissAfter={SIGN_IN_COMPLETED_DISMISS_MS}
         role={role}
       />
     );

@@ -60,7 +60,7 @@ export function EnvironmentPopover({
     isLifecycleRunning
       ? "animate-pulse text-activity-working"
       : resourceStatusColor === "green"
-        ? "text-terminal-bright-green"
+        ? "text-text-secondary"
         : resourceStatusColor === "yellow"
           ? "text-status-warning"
           : resourceStatusColor === "red"
@@ -106,7 +106,7 @@ export function EnvironmentPopover({
             <span
               className={cn(
                 "font-medium",
-                resourceStatusColor === "green" && "text-status-success",
+                resourceStatusColor === "green" && "text-text-secondary",
                 resourceStatusColor === "yellow" && "text-status-warning",
                 resourceStatusColor === "red" && "text-status-error",
                 (!resourceStatusColor || resourceStatusColor === "neutral") && "text-text-muted"

@@ -29,7 +29,7 @@ type RowStatus = PluginMcpServerStatus | "not-started";
 
 const STATUS_DOT: Record<RowStatus, string> = {
   spawning: "bg-status-warning",
-  ready: "bg-status-success",
+  ready: "bg-activity-working",
   crashed: "bg-status-danger",
   stopped: "bg-daintree-text/30",
   "not-started": "bg-daintree-text/30",

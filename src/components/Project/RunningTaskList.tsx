@@ -378,7 +378,7 @@ function StatusDot({ status }: { status: TaskStatus }) {
       aria-label={TASK_STATUS_LABEL[status]}
       className={cn(
         "status-mark h-1.5 w-1.5 rounded-full shrink-0",
-        status === "running" && "bg-status-success animate-activity-pulse",
+        status === "running" && "bg-activity-working animate-activity-pulse",
         status === "restarting" && "bg-status-warning animate-activity-pulse",
         status === "success" && "bg-status-success",
         status === "failed" && "bg-status-error"

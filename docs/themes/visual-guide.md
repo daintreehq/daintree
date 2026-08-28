@@ -764,12 +764,12 @@ Some themes have a **secondary accent** — a second color lane:
 
 Four fixed hue families, each theme tunes brightness/saturation:
 
-| Token            | Hue   | Usage                                                |
-| ---------------- | ----- | ---------------------------------------------------- |
-| `status-success` | Green | Completed states, positive outcomes, git additions   |
-| `status-warning` | Amber | Caution states, pending items                        |
-| `status-danger`  | Red   | Errors, failures, destructive actions, git deletions |
-| `status-info`    | Blue  | Neutral information, help text                       |
+| Token | Hue | Usage |
+| --- | --- | --- |
+| `status-success` | Green | Transient confirmations, named outcomes, finite checklist marks, git additions. Live processes use `activity-working`; standing health chrome uses neither — see [status-success-policy.md](./status-success-policy.md) |
+| `status-warning` | Amber | Caution states, pending items |
+| `status-danger` | Red | Errors, failures, destructive actions, git deletions |
+| `status-info` | Blue | Neutral information, help text |
 
 These are used in badges, toast notifications, diff viewer gutters, and terminal ANSI color fallbacks.
 

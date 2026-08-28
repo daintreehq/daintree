@@ -7,19 +7,22 @@ import { usePanelBadges, usePluginPanelBadgeStore } from "@/store/pluginPanelBad
  * Live badges a plugin set on this panel via `host.setPanelBadge` (#10585),
  * rendered inline in the panel header's indicator cluster. A `dot` is a small
  * status circle; a `label` is a short pill. Color maps to the app's status
- * palette — never the accent (these are secondary, possibly-multiple markers).
+ * palette — never the accent (these are secondary, possibly-multiple markers),
+ * and never green: a plugin badge stands for as long as the plugin leaves it
+ * there, and the host cannot name what its `success` means, so it renders
+ * neutral alongside `default` (#12002).
  * Multiple plugins on one panel render in plugin-id order for stability.
  */
 const DOT_COLOR: Record<PluginPanelBadgeColor, string> = {
   default: "bg-text-muted",
-  success: "bg-status-success",
+  success: "bg-text-muted",
   warning: "bg-status-warning",
   error: "bg-status-error",
 };
 
 const LABEL_COLOR: Record<PluginPanelBadgeColor, string> = {
   default: "bg-overlay-subtle text-text-secondary",
-  success: "bg-status-success/15 text-status-success",
+  success: "bg-overlay-subtle text-text-secondary",
   warning: "bg-status-warning/15 text-status-warning",
   error: "bg-status-error/15 text-status-error",
 };

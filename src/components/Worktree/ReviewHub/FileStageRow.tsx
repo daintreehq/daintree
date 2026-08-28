@@ -162,7 +162,7 @@ function FileStageRowComponent({
       className={cn(
         "relative group/stagerow flex items-center text-xs rounded px-1.5 transition-colors",
         density === "compact" ? "py-0.5" : "py-1.5",
-        isStaged ? "bg-status-success/[0.06] hover:bg-status-success/[0.10]" : "hover:bg-tint/5",
+        isStaged ? "bg-overlay-subtle hover:bg-overlay-medium" : "hover:bg-tint/5",
         // The row whose menu is open lifts to a neutral raised tier — a
         // distinct level from the selection's subtle fill, so it reads as
         // "the menu targets this row" rather than as a second selection.

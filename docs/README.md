@@ -68,6 +68,7 @@ The plugin sub-index links onward to getting-started, manifest reference, contri
 | [themes/visual-guide.md](./themes/visual-guide.md) | Maps tokens to what the user sees, surface by surface — evaluate themes without running the app. |
 | [themes/interaction-state-recipes.md](./themes/interaction-state-recipes.md) | Canonical Tailwind class strings per interactive component role. |
 | [themes/component-contract.md](./themes/component-contract.md) | Which primitive, which colour vocabulary, which scale — and the rules enforcing each. |
+| [themes/status-success-policy.md](./themes/status-success-policy.md) | When green is allowed to stand, when it goes neutral, and the occurrence-level guard holding the line. |
 
 ## Distribution
 
