@@ -28,7 +28,7 @@ export interface AssistantOperationsDeckProps {
 function Section({ title, children }: { title: string; children: React.ReactNode }) {
   return (
     <section className="mb-3">
-      <h3 className="mb-1 text-[0.92em] font-medium tracking-wide text-[var(--assistant-fg-secondary)]">
+      <h3 className="mb-1 assistant-text-sm font-medium tracking-wide text-[var(--assistant-fg-secondary)]">
         {title}
       </h3>
       <div className="space-y-1">{children}</div>
@@ -40,7 +40,7 @@ function Row({ children, tone }: { children: React.ReactNode; tone?: "warning" |
   return (
     <div
       className={cn(
-        "rounded-sm px-1.5 py-1 text-[1em]",
+        "rounded-sm px-1.5 py-1 assistant-text-base",
         tone === "danger"
           ? "text-[var(--assistant-danger)]"
           : tone === "warning"
@@ -76,18 +76,18 @@ export function AssistantOperationsDeck({
   return (
     <div className="flex h-full min-h-0 flex-col">
       <div className="flex shrink-0 items-center gap-2 border-b border-[var(--assistant-border)] px-3 py-1.5">
-        <span className="text-[1em] font-medium">Operations</span>
+        <span className="assistant-text-base font-medium">Operations</span>
         <button
           type="button"
           onClick={onRefresh}
-          className="rounded-sm px-1.5 py-0.5 text-[0.92em] text-[var(--assistant-fg-secondary)] transition-colors duration-150 ease-out hover:bg-[var(--assistant-hover)] hover:text-[var(--assistant-fg)]"
+          className="rounded-sm px-1.5 py-0.5 assistant-text-sm text-[var(--assistant-fg-secondary)] transition-colors duration-150 ease-out hover:bg-[var(--assistant-hover)] hover:text-[var(--assistant-fg)]"
         >
           Refresh
         </button>
         <button
           type="button"
           onClick={onClose}
-          className="ml-auto rounded-sm px-1.5 py-0.5 text-[0.92em] text-[var(--assistant-fg-secondary)] transition-colors duration-150 ease-out hover:bg-[var(--assistant-hover)] hover:text-[var(--assistant-fg)]"
+          className="ml-auto rounded-sm px-1.5 py-0.5 assistant-text-sm text-[var(--assistant-fg-secondary)] transition-colors duration-150 ease-out hover:bg-[var(--assistant-hover)] hover:text-[var(--assistant-fg)]"
         >
           Close
         </button>
@@ -95,7 +95,7 @@ export function AssistantOperationsDeck({
 
       <div className="min-h-0 flex-1 overflow-y-auto px-3 py-2">
         {!ops ? (
-          <p className="text-[1em] text-[var(--assistant-fg-secondary)]">Reading…</p>
+          <p className="assistant-text-base text-[var(--assistant-fg-secondary)]">Reading…</p>
         ) : (
           <>
             {/* NOW: the one-line rollup the cockpit led with, so the deck answers
@@ -167,7 +167,7 @@ export function AssistantOperationsDeck({
                     {/* The terminal tail, so a supervisor can see it working rather than
                         take the state label's word for it. */}
                     {row.preview ? (
-                      <div className="mt-0.5 truncate text-[0.92em] text-[var(--assistant-fg-secondary)]">
+                      <div className="mt-0.5 truncate assistant-text-sm text-[var(--assistant-fg-secondary)]">
                         {row.preview}
                       </div>
                     ) : null}
