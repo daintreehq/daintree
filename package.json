@@ -114,6 +114,7 @@
     "test:freeze-harness": "node scripts/run-freeze-harness.mjs",
     "test:smoke:packaged": "node scripts/run-packaged-smoke.mjs",
     "theme:text-contrast": "tsx scripts/theme-text-contrast.ts",
+    "theme:text-ramp": "tsx scripts/theme-text-ramp.ts",
     "theme:tour": "cross-env DAINTREE_TOUR=1 npx playwright test --project=screenshots theme-tour --workers=1 --reporter=list",
     "theme:tour:shots": "cross-env DAINTREE_TOUR=1 DAINTREE_TOUR_AUTO=1 npx playwright test --project=screenshots theme-tour --workers=1 --reporter=list",
     "test:e2e": "npx playwright test",
