@@ -605,11 +605,11 @@ async function assertScrollportIsBounded(page: Page, label: string): Promise<voi
 
 /** Scroll the inbox scrollport to its very bottom and report where it landed. */
 async function scrollListToBottom(page: Page): Promise<void> {
-  // Scroll in steps rather than one jump. With `content-visibility: auto` the
-  // scrollHeight grows as rows are rendered for the first time, so a single
-  // assignment to a stale scrollHeight lands short of the real bottom — which
-  // is itself the defect under review, and would silently produce a shot of
-  // the middle of the list captioned "the bottom".
+  // Assign repeatedly until scrollTop stops moving, rather than once. The
+  // panel's max-height resolves from FixedDropdown's positioning pass, so the
+  // scrollport can still be resizing on the first frame and an assignment made
+  // against a pre-settle scrollHeight lands short — which would silently
+  // produce a shot of the middle of the list captioned "the bottom".
   await page.evaluate(
     async ({ listSel }) => {
       const list = document.querySelector(listSel) as HTMLElement | null;

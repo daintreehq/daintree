@@ -976,7 +976,11 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
           buttons carry their own internal touch padding, so a smaller container
           inset lands their glyphs at roughly the same optical distance from the
           edge as the title text on the 16px left margin. */}
-      <div className="flex flex-col border-b border-divider">
+      {/* `shrink-0`: the list wrapper below carries `flex-1`, so its scaled
+          shrink factor is 0 and negative free space lands entirely on the
+          chrome. With the new `availableHeight` floor a short window can reach
+          that, and the header would be clipped instead of the list. */}
+      <div className="flex flex-col shrink-0 border-b border-divider">
         <div className="flex items-center justify-between pl-4 pr-2.5 py-2 gap-2">
           {/* Full strength, semibold. At /80 the panel's own heading measured
               dimmer than the row titles underneath it — the label naming the
@@ -1132,7 +1136,7 @@ export function NotificationCenter({ open, onClose }: NotificationCenterProps) {
       {showMutedPill && (
         <div
           data-testid="notification-muted-pill"
-          className="flex items-start gap-2 pl-4 pr-3 py-1.5 bg-overlay-raised text-2xs text-daintree-text/70"
+          className="flex shrink-0 items-start gap-2 pl-4 pr-3 py-1.5 bg-overlay-raised text-2xs text-daintree-text/70"
         >
           <div className="min-w-0 flex-1 flex flex-col gap-0.5">
             <span className="font-medium text-text-primary">{quietCause}</span>
@@ -1452,7 +1456,7 @@ function NeedsAttentionSection({
       {overflowCount > 0 && (
         <div
           data-testid="needs-attention-overflow"
-          className="pl-4 pr-3 pb-2 text-3xs text-daintree-text/45"
+          className="pl-4 pr-3 pb-2 text-3xs text-text-secondary"
         >
           +{overflowCount} more below
         </div>
@@ -1701,7 +1705,7 @@ function ContextSectionHeader({
           <button
             type="button"
             onClick={onMarkRead}
-            className="inline-flex items-center rounded-[var(--radius-sm)] px-1.5 py-0.5 normal-case tracking-normal text-daintree-text/50 hover:text-daintree-text/80 hover:bg-overlay-raised focus-visible:text-daintree-text/80 focus-visible:bg-overlay-raised transition-colors"
+            className="inline-flex items-center rounded-[var(--radius-sm)] px-1.5 py-0.5 normal-case tracking-normal text-text-secondary hover:text-text-primary hover:bg-overlay-raised focus-visible:text-text-primary focus-visible:bg-overlay-raised transition-colors"
           >
             Mark read
           </button>
