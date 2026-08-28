@@ -340,10 +340,11 @@ describe("ReviewHub", () => {
     capturedUpdateCallback = null;
     debounceCancelSpy.mockReset();
 
-    // The Review Hub's file-list disclosure defaults to collapsed (issue
-    // #7886). Existing tests assume rows are visible — expand the disclosure
-    // for the canonical worktree path so suite-wide assertions keep working.
-    useUIStore.getState().setReviewHubFileListExpanded(WORKTREE_PATH, true);
+    // Clear the file-list disclosure map rather than force-expanding it: the
+    // disclosure now defaults to expanded, so an unset entry is what production
+    // renders, and clearing also stops a test that collapses it from leaking
+    // into the next one.
+    useUIStore.setState({ reviewHubFileListExpanded: {} });
 
     // #8025: reset the per-worktree push-confirm opt-out so a previous test
     // that pre-set it can't leak into the next one.
@@ -475,6 +476,34 @@ describe("ReviewHub", () => {
         await Promise.resolve();
       });
       expect(stageAllMock).toHaveBeenCalledTimes(1);
+    });
+
+    it("shows the files it just staged without the user opening anything", async () => {
+      // The whole point of the auto-stage entry path is that the user sees WHAT
+      // was staged on their behalf, so assert the staged row, not the call.
+      const unstagedOnly = makeStatus({
+        staged: [],
+        unstaged: [{ path: "src/a.ts", status: "modified", insertions: 1, deletions: 0 }],
+      });
+      const afterStaging = makeStatus({
+        staged: [{ path: "src/a.ts", status: "modified", insertions: 1, deletions: 0 }],
+        unstaged: [],
+      });
+      getStagingStatusMock.mockResolvedValueOnce(unstagedOnly).mockResolvedValue(afterStaging);
+
+      render(
+        <ReviewHubContent
+          isOpen={true}
+          worktreePath={WORKTREE_PATH}
+          onClose={vi.fn()}
+          autoStageOnOpen={true}
+        />
+      );
+
+      await waitFor(() => expect(stageAllMock).toHaveBeenCalledWith(WORKTREE_PATH));
+      await waitFor(() =>
+        expect(screen.getByRole("button", { name: /^Unstage src\/a\.ts/i })).toBeTruthy()
+      );
     });
 
     it("does not stage when files are already staged", async () => {
@@ -712,8 +741,8 @@ describe("ReviewHub", () => {
     });
 
     it("does nothing when the file list is collapsed", async () => {
-      // The disclosure defaults to collapsed; rows (and the listbox) aren't
-      // rendered, so keys must not mutate the index or fire git side effects.
+      // Collapsed on purpose here: rows (and the listbox) aren't rendered, so
+      // keys must not mutate the index or fire git side effects.
       useUIStore.getState().setReviewHubFileListExpanded(WORKTREE_PATH, false);
       render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
       await waitFor(() => expect(getStagingStatusMock).toHaveBeenCalledTimes(1));
@@ -758,6 +787,47 @@ describe("ReviewHub", () => {
       expect(
         screen.getByRole("listbox", { name: "Changed files" }).getAttribute("aria-activedescendant")
       ).toBeNull();
+    });
+  });
+
+  describe("file-list disclosure default", () => {
+    it("shows the changed files without interaction, and hides them only on an explicit collapse", async () => {
+      render(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      await waitFor(() => screen.getByText("index.ts"));
+
+      const toggle = screen.getByTestId("review-hub-file-list-toggle");
+      expect(toggle.getAttribute("aria-expanded")).toBe("true");
+      expect(screen.getByRole("listbox", { name: "Changed files" })).toBeTruthy();
+
+      act(() => void fireEvent.click(toggle));
+      await waitFor(() =>
+        expect(screen.queryByRole("listbox", { name: "Changed files" })).toBeNull()
+      );
+      expect(useUIStore.getState().reviewHubFileListExpanded[WORKTREE_PATH]).toBe(false);
+    });
+
+    it("keeps a collapse across a close and reopen, and scopes it to that worktree", async () => {
+      const { rerender } = render(
+        <ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
+      );
+      await waitFor(() => screen.getByText("index.ts"));
+
+      act(() => void fireEvent.click(screen.getByTestId("review-hub-file-list-toggle")));
+      await waitFor(() => expect(screen.queryByText("index.ts")).toBeNull());
+
+      // The collapse is a session preference, so it has to outlive the state
+      // reset the isOpen effect runs on close.
+      rerender(<ReviewHubContent isOpen={false} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      rerender(<ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />);
+      await waitFor(() => screen.getByTestId("review-hub-file-list-toggle"));
+      expect(screen.queryByText("index.ts")).toBeNull();
+
+      // The default is a per-worktree fallback, not a global flag, so the next
+      // worktree still opens on the files.
+      rerender(
+        <ReviewHubContent isOpen={true} worktreePath="/home/user/other" onClose={vi.fn()} />
+      );
+      await waitFor(() => screen.getByText("index.ts"));
     });
   });
 

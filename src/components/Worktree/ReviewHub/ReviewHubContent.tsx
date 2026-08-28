@@ -109,6 +109,9 @@ import { isGeneratedFile } from "../generatedFileClassifier";
  */
 const DIALOG_MIN_BODY_HEIGHT = "min-h-[22rem]";
 
+/** Ragged widths so the loading rows read as file paths, not as a table. */
+const SKELETON_FILE_ROW_WIDTHS = ["w-64", "w-48", "w-56"] as const;
+
 export interface ReviewHubContentProps {
   /**
    * Drives the open/close lifecycle: starts the staging-status fetch and
@@ -297,7 +300,7 @@ export function ReviewHubContent({
   // branch of the isOpen effect so reopening re-arms the check.
   const hasAutoStagedRef = useRef(false);
 
-  const fileListExpanded = useUIStore((s) => s.reviewHubFileListExpanded[worktreePath] ?? false);
+  const fileListExpanded = useUIStore((s) => s.reviewHubFileListExpanded[worktreePath] ?? true);
   const setFileListExpanded = useUIStore((s) => s.setReviewHubFileListExpanded);
 
   const skipPushConfirm = usePreferencesStore(
@@ -1906,13 +1909,30 @@ export function ReviewHubContent({
                 {loading && !status ? (
                   showWorkingTreeSkeleton ? (
                     <>
-                      {/* File-list disclosure header — mirrors the collapsed-by-
-                        default list bar. The commit-panel skeleton lives outside
-                        this scroll container (below), matching the real layout. */}
+                      {/* File-list disclosure header, plus the section header
+                        and rows that land under it when the list is expanded —
+                        which is the default, but not if this worktree carries a
+                        collapse, so the bones follow `fileListExpanded` rather
+                        than the default or the list would snap shut on resolve.
+                        The commit-panel skeleton lives outside this scroll
+                        container (below), matching the real layout. */}
                       <Skeleton label="Loading review changes">
                         <div className="px-4 py-2 bg-overlay-subtle border-b border-divider">
                           <SkeletonBone immediate className="h-3.5 w-28" />
                         </div>
+                        {fileListExpanded && (
+                          <>
+                            <div className="px-4 py-2 flex items-center justify-between">
+                              <SkeletonBone immediate className="h-3.5 w-20" />
+                              <SkeletonBone immediate className="h-5 w-32" />
+                            </div>
+                            <div className="px-4 pb-2 flex flex-col gap-2">
+                              {SKELETON_FILE_ROW_WIDTHS.map((w) => (
+                                <SkeletonBone key={w} immediate className={cn("h-3.5", w)} />
+                              ))}
+                            </div>
+                          </>
+                        )}
                       </Skeleton>
                       <SkeletonHint className="px-4 py-2" onRetry={() => void refresh()} />
                     </>
@@ -2016,9 +2036,13 @@ export function ReviewHubContent({
                   )
                 ) : status ? (
                   <div>
-                    {/* File-list disclosure — default collapsed so the commit
-                      textarea is the focal point on open. State lives per
-                      worktree in uiStore (session-scoped, in-memory only). */}
+                    {/* File-list disclosure — default EXPANDED. The files are
+                      what Commit & Push acts on, so they are this surface's D2
+                      preview; "Show files (n)" alone was the bare count the
+                      safeguards rubric calls insufficient. Collapsing reclaims
+                      no space either (fixed-height dialog, commit box pinned
+                      below). Still collapsible — state lives per worktree in
+                      uiStore (session-scoped, in-memory only). */}
                     <div className="px-4 py-2 bg-overlay-subtle border-b border-divider flex items-center justify-between">
                       <button
                         type="button"

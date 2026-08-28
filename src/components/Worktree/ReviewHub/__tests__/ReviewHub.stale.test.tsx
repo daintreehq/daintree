@@ -143,9 +143,11 @@ describe("ReviewHub stale visual", () => {
     capturedUpdateCallback = null;
     debounceCancelSpy.mockReset();
 
-    // Default disclosure to expanded for tests (defaults to collapsed in
-    // production per issue #7886).
-    useUIStore.getState().setReviewHubFileListExpanded(WORKTREE_PATH, true);
+    // Clear the file-list disclosure map rather than force-expanding it: the
+    // disclosure now defaults to expanded, so an unset entry is what production
+    // renders, and clearing also stops a test that collapses it from leaking
+    // into the next one.
+    useUIStore.setState({ reviewHubFileListExpanded: {} });
 
     worktreeStoreData.current = new Map([
       [
