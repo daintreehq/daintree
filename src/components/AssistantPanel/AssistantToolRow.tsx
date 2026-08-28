@@ -118,6 +118,24 @@ function formatDuration(ms: number | undefined): string | null {
   return `${(ms / 1000).toFixed(ms < 10_000 ? 1 : 0)}s`;
 }
 
+/**
+ * The in-progress verb in effect for a call, if any.
+ *
+ * `activeVerb` is the present-participle form the engine supplies for the handful of
+ * tools that visibly block for many seconds ("Waiting", "Extracting"), and it holds only
+ * until the call settles — after which the past tense is the true one. Everything else
+ * settles fast enough that the settled label never reads wrong, so its absence means
+ * "keep the settled one".
+ *
+ * Exported because the collapsed group header names the SAME calls. Reading `verb` there
+ * while the rows read `activeVerb` printed "Waited on terminals · 1 still running" — one
+ * header disagreeing with itself about whether the call had finished.
+ */
+export function inProgressVerb(call: AssistantToolCall): string | undefined {
+  const inProgress = call.state === "queued" || call.state === "active" || call.state === "waiting";
+  return inProgress ? call.activeVerb : undefined;
+}
+
 export interface AssistantToolRowProps {
   call: AssistantToolCall;
 }
@@ -133,12 +151,19 @@ export const AssistantToolRow = memo(function AssistantToolRow({ call }: Assista
   // an arbitrary slice of time that means nothing, the second for none at all.
   const duration = settled ? formatDuration(call.durationMs) : null;
 
-  // The in-progress verb while the call has not finished: a past tense on a running row
-  // reads as already done. `activeVerb` is populated only for the tools that visibly
-  // block for many seconds — everything else settles fast enough that the settled label
-  // never reads wrong, so its absence means "keep the settled one".
-  const inProgress = call.state === "queued" || call.state === "active" || call.state === "waiting";
-  const verb = inProgress && call.activeVerb ? call.activeVerb : call.verb;
+  // A past tense on a row that has not finished reads as already done, so an
+  // in-progress verb wins while there is one.
+  const activeVerb = inProgressVerb(call);
+  const verb = activeVerb ?? call.verb;
+
+  // A running row whose verb the engine wrote for exactly this state does not also need
+  // "Running" in the status slot: "Waiting on 3 terminals · Running" is one call
+  // described twice, in two words that disagree about what it is doing. The spinner
+  // already carries liveness. Only `active` — "Queued", "Needs your approval" and the
+  // handed-off label each say something no verb does, and a settled row shows its
+  // duration here instead.
+  const statusRestatesVerb = call.state === "active" && !call.asyncId && activeVerb !== undefined;
+  const status = duration ?? (statusRestatesVerb ? null : label);
 
   return (
     <li
@@ -189,14 +214,16 @@ export const AssistantToolRow = memo(function AssistantToolRow({ call }: Assista
               its treatment has to follow the content. A state label in the muted slot
               measured ~4.1:1 in the dark theme — too faint for the thing telling you
               the assistant is blocked on your approval. */}
-          <span
-            className={cn(
-              "ml-auto shrink-0 tabular-nums assistant-text-sm",
-              duration ? "text-[var(--assistant-fg-secondary)]" : cn(ink, "font-medium")
-            )}
-          >
-            {duration ?? label}
-          </span>
+          {status && (
+            <span
+              className={cn(
+                "ml-auto shrink-0 tabular-nums assistant-text-sm",
+                duration ? "text-[var(--assistant-fg-secondary)]" : cn(ink, "font-medium")
+              )}
+            >
+              {status}
+            </span>
+          )}
         </div>
 
         {/* The in-tool substep, when there is one — so a long call never looks frozen. */}
@@ -390,7 +417,20 @@ export function AssistantToolGroupHeader({
     duration ? ` in ${duration} of tool time` : "",
     failedCount > 0 ? `, ${failedCount} failed` : "",
     awaitingApprovalCount > 0 ? `, ${awaitingApprovalCount} needs approval` : "",
+    // Every live state, not just the two that used to be here. An `aria-label`
+    // REPLACES the descendant text, so a group visibly itemised as one waiting, one
+    // running and one queued announced itself as "Waiting for approval on 3 tool
+    // calls, 1 needs approval" — a name that drops two thirds of the breakdown and
+    // implies the leading state describes all three.
+    runningCount > 0 ? `, ${runningCount} still running` : "",
+    queuedCount > 0 ? `, ${queuedCount} queued` : "",
   ].join("");
+
+  // The live counts are an AGGREGATE, and an aggregate over one row is that row's own
+  // label read back to it — which is what put two spinners and two "running"s on screen
+  // for a single call. Over several they say something no row does: how many of the
+  // group are still going, when the rows that are may be below the fold.
+  const showLiveCounts = !open || count > 1;
 
   return (
     <button
@@ -409,9 +449,14 @@ export function AssistantToolGroupHeader({
         "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--assistant-focus)]"
       )}
     >
+      {/* The glyph SHAPE always renders — it is the group's outcome, which the rows
+          cannot state for themselves. The ANIMATION does not, once the group is open:
+          every live row below carries its own spinner, so a spinning header put two
+          spinners on screen for a single running call. Whichever of the two is on
+          screen owns liveness; open, that is the rows. */}
       <Icon
         aria-hidden="true"
-        className={cn("size-3.5 shrink-0", glyph, spin && "animate-spin-slow")}
+        className={cn("size-3.5 shrink-0", glyph, spin && !open && "animate-spin-slow")}
       />
 
       {/* The verbs lead, at full ink, because they are what happened. Falling back to a
@@ -439,9 +484,14 @@ export function AssistantToolGroupHeader({
           · {failedCount} failed
         </span>
       )}
-      {/* Blocked on the reader, in the warning tier, and FIRST: of the three live
-          states this is the only one that will not resolve without them. */}
-      {awaitingApprovalCount > 0 && (
+      {/* The three LIVE counts. Suppressed only where they duplicate: one open call,
+          whose row sits directly beneath saying that exact state in more words than a
+          count can carry. Failures, above, are not suppressed at all — that is the
+          outcome a reader must never have to expand a group to find.
+
+          Approval leads: of the three, it is the only one that will not resolve
+          without the reader. */}
+      {showLiveCounts && awaitingApprovalCount > 0 && (
         <span className="shrink-0 font-medium text-[var(--assistant-warning)]">
           · {awaitingApprovalCount} needs approval
         </span>
@@ -449,12 +499,12 @@ export function AssistantToolGroupHeader({
       {/* An accepted async call keeps running after the turn ends, so "the turn
           finished" is not "the work finished". Saying so in the collapsed header is
           what stops a background agent from vanishing off the transcript. */}
-      {runningCount > 0 && (
+      {showLiveCounts && runningCount > 0 && (
         <span className="shrink-0 font-medium text-[var(--assistant-fg-secondary)]">
           · {runningCount} still running
         </span>
       )}
-      {queuedCount > 0 && (
+      {showLiveCounts && queuedCount > 0 && (
         <span className="shrink-0 text-[var(--assistant-fg-secondary)]">
           · {queuedCount} queued
         </span>
