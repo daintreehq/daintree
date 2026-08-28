@@ -91,3 +91,109 @@ describe("UpstreamSyncBadge — base compare ref (#11747)", () => {
     expect(warning.textContent).not.toContain("origin");
   });
 });
+
+describe("UpstreamSyncBadge — a branch tracking its own base", () => {
+  /**
+   * `git worktree add -b topic --track origin/develop` leaves `@{u}` pointing
+   * at the base, so `git status` and the base-divergence pass measure the same
+   * distance. Both pairs then carry the same number and only one of them says
+   * what it is counted against.
+   */
+  const mistracked: Partial<Props> = {
+    aheadCount: 0,
+    behindCount: 4,
+    baseBranchName: "develop",
+    baseAheadCount: 0,
+    baseBehindCount: 4,
+    baseMatchesUpstream: true,
+    baseCompareRef: "origin/develop",
+  };
+
+  it("shows the count once, and shows it labelled", () => {
+    renderBadge(mistracked);
+
+    const pill = screen.getByTestId("upstream-sync-indicator");
+    expect(pill.textContent).toContain("Δ develop");
+    expect(pill.textContent?.match(/↓4/g)).toHaveLength(1);
+  });
+
+  it("renders identically whether or not the branch happens to track its base", () => {
+    // The bug this fixes: two worktrees on the same commit off the same base
+    // read as different measurements purely on how their tracking config was
+    // written.
+    renderBadge(mistracked);
+    const tracked = screen.getByTestId("upstream-sync-indicator").textContent;
+    cleanup();
+
+    renderBadge({
+      ...mistracked,
+      aheadCount: undefined,
+      behindCount: undefined,
+      baseMatchesUpstream: false,
+    });
+    const untracked = screen.getByTestId("upstream-sync-indicator").textContent;
+
+    expect(tracked).toBe(untracked);
+  });
+
+  it("keeps the unlabelled pair when the base counts have not caught up", () => {
+    // Inter-pass race: base divergence reports zero while upstream already
+    // sees drift. Suppressing the only non-zero pair would render nothing.
+    renderBadge({
+      ...mistracked,
+      baseAheadCount: 0,
+      baseBehindCount: 0,
+    });
+
+    const pill = screen.getByTestId("upstream-sync-indicator");
+    expect(pill.textContent).toContain("↓4");
+    expect(pill.textContent).not.toContain("Δ");
+  });
+
+  it("names the compare ref in the tooltip while the pill stays on the branch", () => {
+    renderBadge(mistracked);
+
+    expect(screen.getByTestId("upstream-sync-indicator").textContent).not.toContain("origin/");
+    expect(document.body.textContent).toContain("4 behind origin/develop");
+  });
+
+  it("drops the upstream tooltip line rather than leaving a bare 'upstream'", () => {
+    renderBadge(mistracked);
+
+    // The line is built as counts followed by the word; with the counts gone
+    // the word must go too, not survive on its own. `origin/develop` in the
+    // base line is the only occurrence the tooltip should have left.
+    const occurrences = document.body.textContent?.match(/upstream/g) ?? [];
+    expect(occurrences).toHaveLength(0);
+  });
+
+  it("still renders both pairs when they measure different things", () => {
+    // Pushed branch, 2 ahead of its own remote, 4 behind the base: two real
+    // numbers, and neither is redundant.
+    renderBadge({
+      aheadCount: 2,
+      behindCount: 0,
+      baseBranchName: "develop",
+      baseAheadCount: 0,
+      baseBehindCount: 4,
+      baseMatchesUpstream: false,
+    });
+
+    const pill = screen.getByTestId("upstream-sync-indicator");
+    expect(pill.textContent).toContain("↑2");
+    expect(pill.textContent).toContain("Δ develop");
+    expect(pill.textContent).toContain("↓4");
+  });
+
+  it("labels the counts on the auth-failed pill too", () => {
+    renderBadge({
+      ...mistracked,
+      fetchAuthFailed: true,
+      hasAuthFailedSignIn: true,
+    });
+
+    const pill = screen.getByTestId("upstream-sync-indicator");
+    expect(pill.textContent).toContain("Δ develop");
+    expect(pill.textContent?.match(/↓4/g)).toHaveLength(1);
+  });
+});

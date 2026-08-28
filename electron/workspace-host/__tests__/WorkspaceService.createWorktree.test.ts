@@ -8,6 +8,9 @@ const mockSimpleGit = {
   checkIsRepo: vi.fn().mockResolvedValue(true),
   branch: vi.fn().mockResolvedValue({ current: "main" }),
   branchLocal: vi.fn().mockResolvedValue({ all: [], current: "", branches: {}, detached: false }),
+  // The tracking decision needs the real remote names to know where
+  // `origin/main` splits; a repo with one remote is the ordinary case.
+  getRemotes: vi.fn().mockResolvedValue([{ name: "origin", refs: { fetch: "url", push: "url" } }]),
 };
 
 vi.mock("simple-git", () => ({
@@ -375,7 +378,11 @@ describe("WorkspaceService.createWorktree", () => {
     );
   });
 
-  it("preserves --track (not --no-track) for fromRemote so @{u} resolves for ahead/behind counts", async () => {
+  it("tracks a remote base only when the new branch is its counterpart", async () => {
+    // `-b feature/remote --track origin/main` would write
+    // `branch.feature/remote.merge = refs/heads/main`, pointing a brand new
+    // topic branch at the BASE. Everything downstream then reads that as the
+    // branch's own remote counterpart.
     const requestId = "test-request-789";
     const options = {
       baseBranch: "origin/main",
@@ -391,7 +398,7 @@ describe("WorkspaceService.createWorktree", () => {
       "add",
       "-b",
       "feature/remote",
-      "--track",
+      "--no-track",
       "--end-of-options",
       "/test/worktree3",
       "origin/main",
@@ -769,6 +776,92 @@ describe("WorkspaceService.createWorktree", () => {
     ]);
   });
 
+  it("keeps --track when the new branch IS the remote base's counterpart", async () => {
+    // The PR-mode shape, and the only one where tracking states a truth:
+    // `topic` tracking `origin/topic` is what ahead/behind counts are for.
+    await service.createWorktree("req-track-counterpart", "/test/root", {
+      baseBranch: "origin/feature/login",
+      newBranch: "feature/login",
+      path: "/test/worktree-track",
+      fromRemote: true,
+    });
+
+    expect(lastWorktreeAddCall(mockSimpleGit.raw)).toEqual([
+      "worktree",
+      "add",
+      "-b",
+      "feature/login",
+      "--track",
+      "--end-of-options",
+      "/test/worktree-track",
+      "origin/feature/login",
+    ]);
+  });
+
+  it("splits the base at a slash-bearing remote's real boundary", async () => {
+    // `team/fork/topic` is `topic` on the remote `team/fork`. Splitting at the
+    // first slash would read it as `fork/topic` and refuse to track a branch
+    // that genuinely is its counterpart.
+    mockSimpleGit.getRemotes.mockResolvedValueOnce([
+      { name: "team/fork", refs: { fetch: "url", push: "url" } },
+    ]);
+
+    await service.createWorktree("req-slash-remote", "/test/root", {
+      baseBranch: "team/fork/topic",
+      newBranch: "topic",
+      path: "/test/worktree-slash",
+      fromRemote: true,
+    });
+
+    expect(lastWorktreeAddCall(mockSimpleGit.raw)![4]).toBe("--track");
+  });
+
+  it("does not track a local base branch even when fromRemote is set", async () => {
+    // `fromRemote` is the caller's claim, not a fact. A base that no remote
+    // prefixes is a local ref, and `--track` against a local ref is exactly
+    // what `--no-track` exists to prevent under branch.autoSetupMerge=always.
+    await service.createWorktree("req-local-base-fromremote", "/test/root", {
+      baseBranch: "main",
+      newBranch: "topic",
+      path: "/test/worktree-localbase",
+      fromRemote: true,
+    });
+
+    expect(lastWorktreeAddCall(mockSimpleGit.raw)![4]).toBe("--no-track");
+  });
+
+  it("does not track when the repository has no remotes at all", async () => {
+    // With no remote table, `origin/topic` cannot be a remote ref — so the
+    // base is a local branch literally named `origin/topic`.
+    mockSimpleGit.getRemotes.mockResolvedValueOnce([]);
+
+    await service.createWorktree("req-no-remotes", "/test/root", {
+      baseBranch: "origin/topic",
+      newBranch: "topic",
+      path: "/test/worktree-noremotes-repo",
+      fromRemote: true,
+    });
+
+    expect(lastWorktreeAddCall(mockSimpleGit.raw)![4]).toBe("--no-track");
+  });
+
+  it("degrades to --no-track when the remote table cannot be read", async () => {
+    // Without remote names the ref cannot be split at a boundary git agrees
+    // with, so the counterpart question has no answer. Not tracking is the
+    // recoverable direction — `git push -u` sets the right upstream later,
+    // whereas a wrong one has to be noticed first.
+    mockSimpleGit.getRemotes.mockRejectedValueOnce(new Error("git remote failed"));
+
+    await service.createWorktree("req-remotes-unreadable", "/test/root", {
+      baseBranch: "origin/feature/login",
+      newBranch: "feature/login",
+      path: "/test/worktree-noremotes",
+      fromRemote: true,
+    });
+
+    expect(lastWorktreeAddCall(mockSimpleGit.raw)![4]).toBe("--no-track");
+  });
+
   it("suffixes (not reuses) when fromRemote=true and the local branch already exists", async () => {
     // PR-mode creates need --track to give @{u} for ahead/behind badges
     // (WorktreeMonitor.ts:1092). Reusing a stale local branch would drop the
@@ -796,18 +889,22 @@ describe("WorkspaceService.createWorktree", () => {
       fromRemote: true,
     });
 
-    // Failure-driven: the optimistic --track add for the original name runs
-    // first; the suffixed retry keeps --track.
+    // Failure-driven: the optimistic add for the original name runs first and
+    // tracks, because `pr-9999-feature` IS `origin/pr-9999-feature`'s local
+    // counterpart. The suffixed retry is not — `pr-9999-feature-2` tracking
+    // `origin/pr-9999-feature` is the same mis-tracking by another route — so
+    // the decision is recomputed against the name actually being created.
     const addCalls = mockSimpleGit.raw.mock.calls.filter(
       (call) => call[0][0] === "worktree" && call[0][1] === "add"
     );
     expect(addCalls[0]![0][3]).toBe("pr-9999-feature");
+    expect(addCalls[0]![0][4]).toBe("--track");
     expect(lastWorktreeAddCall(mockSimpleGit.raw)).toEqual([
       "worktree",
       "add",
       "-b",
       "pr-9999-feature-2",
-      "--track",
+      "--no-track",
       "--end-of-options",
       "/test/worktree-pr",
       "origin/pr-9999-feature",

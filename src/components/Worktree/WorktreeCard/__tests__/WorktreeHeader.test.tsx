@@ -1414,6 +1414,78 @@ describe("WorktreeHeader upstream sync indicator", () => {
     expect(indicator.getAttribute("data-fetch-in-flight")).toBeNull();
   });
 
+  it("mounts the badge for base-only drift and labels the branch it drifted from", () => {
+    // A worktree branch created without tracking reports no upstream counts at
+    // all; if the mount gate ignored base drift the whole line would vanish.
+    renderHeader({
+      worktree: {
+        ...baseWorktree,
+        aheadCount: undefined,
+        behindCount: undefined,
+        baseBranchName: "develop",
+        baseAheadCount: 0,
+        baseBehindCount: 4,
+        baseMatchesUpstream: false,
+      },
+    });
+    const indicator = screen.getByTestId("upstream-sync-indicator");
+    expect(indicator.textContent).toContain("Δ develop");
+    expect(indicator.textContent).toContain("↓4");
+  });
+
+  it("mounts the badge when the branch tracks its own base, and shows the count once", () => {
+    // `baseMatchesUpstream` used to suppress the base line AND was subtracted
+    // from the mount gate, so this pair rendered a bare unlabelled number.
+    renderHeader({
+      worktree: {
+        ...baseWorktree,
+        aheadCount: 0,
+        behindCount: 4,
+        baseBranchName: "develop",
+        baseAheadCount: 0,
+        baseBehindCount: 4,
+        baseMatchesUpstream: true,
+      },
+    });
+    const indicator = screen.getByTestId("upstream-sync-indicator");
+    expect(indicator.textContent).toContain("Δ develop");
+    expect(indicator.textContent?.match(/↓4/g)).toHaveLength(1);
+  });
+
+  it("keeps the unlabelled pair when base counts have not caught up", () => {
+    renderHeader({
+      worktree: {
+        ...baseWorktree,
+        aheadCount: 0,
+        behindCount: 4,
+        baseBranchName: "develop",
+        baseAheadCount: 0,
+        baseBehindCount: 0,
+        baseMatchesUpstream: true,
+      },
+    });
+    const indicator = screen.getByTestId("upstream-sync-indicator");
+    expect(indicator.textContent).toContain("↓4");
+    expect(indicator.textContent).not.toContain("Δ");
+  });
+
+  it("does not mount a row for base counts the badge would decline to draw", () => {
+    // The badge needs a base branch name to render base counts. Mounting on
+    // the counts alone would leave an empty secondary row behind.
+    renderHeader({
+      worktree: {
+        ...baseWorktree,
+        aheadCount: undefined,
+        behindCount: undefined,
+        baseBranchName: undefined,
+        baseAheadCount: 0,
+        baseBehindCount: 4,
+        baseMatchesUpstream: false,
+      },
+    });
+    expect(screen.queryByTestId("upstream-sync-indicator")).toBeNull();
+  });
+
   it("hides the indicator entirely when there are no counts and no auth failure", () => {
     renderHeader({
       worktree: { ...baseWorktree, aheadCount: 0, behindCount: 0 },

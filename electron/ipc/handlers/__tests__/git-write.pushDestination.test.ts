@@ -78,8 +78,12 @@ const FOR_EACH_REF_UPSTREAM = `refs/heads/${LOCAL_BRANCH}\u0000${UPSTREAM_REMOTE
 function rawResponder(forEachRef: string, forEachRefUpstream: string) {
   return async (args: string[]): Promise<string> => {
     if (args[0] === "for-each-ref") {
+      // Discriminate on `push:remotename`, the field only the push resolver
+      // asks for. Testing for "upstream" alone misreads the push resolver the
+      // moment its format mentions `%(upstream)` at all — which it does, to
+      // tell a differently-named upstream from no upstream.
       const format = args[1] ?? "";
-      return `${format.includes("upstream") ? forEachRefUpstream : forEachRef}\n`;
+      return `${format.includes("push:remotename") ? forEachRef : forEachRefUpstream}\n`;
     }
     if (args[0] === "rev-list") return "7\n";
     return "";
@@ -168,6 +172,28 @@ describe("git push — resolved destination", () => {
     ]);
   });
 
+  it("repairs the tracking config in the same push when the upstream names another branch", async () => {
+    // `worktree add -b topic --track origin/develop` state: git reports a push
+    // remote with no push ref, so a plain push fails on the name mismatch —
+    // and fails with a message the "no upstream branch" recovery below does
+    // not match. The explicit form both lands the push and rewrites the config.
+    const mistracked = `refs/heads/${LOCAL_BRANCH}\u0000origin\u0000\u0000refs/remotes/origin/develop`;
+    const git = makeGit(
+      { getRemotes: vi.fn(async () => [{ name: "origin", refs: { fetch: "", push: "" } }]) },
+      mistracked
+    );
+    createAuthenticatedGitMock.mockResolvedValue(git);
+
+    await getHandler("git:push")(FAKE_EVENT, { cwd: CWD });
+
+    expect(git.push).not.toHaveBeenCalledWith();
+    expect(git.push).toHaveBeenCalledWith([
+      "--set-upstream",
+      "origin",
+      `${LOCAL_BRANCH}:${LOCAL_BRANCH}`,
+    ]);
+  });
+
   it("propagates a non-upstream push failure without retrying", async () => {
     const push = vi.fn(async () => {
       throw new Error("fatal: Authentication failed");
@@ -224,6 +250,51 @@ describe("git force-push-with-lease — resolved destination", () => {
       `--force-with-lease=${REMOTE_BRANCH}:${LEASE}`,
       "--force-if-includes",
     ]);
+  });
+});
+
+describe("git force-push-with-lease — upstream repair", () => {
+  it("repairs the tracking config on the force-push too", async () => {
+    // The reachable path: the repair-form push is rejected as non-fast-forward,
+    // the lease is captured, the user force-pushes. Without --set-upstream the
+    // push lands and the broken tracking survives its own recovery.
+    const mistracked = `refs/heads/${LOCAL_BRANCH}\u0000origin\u0000\u0000refs/remotes/origin/develop`;
+    const git = makeGit(
+      { getRemotes: vi.fn(async () => [{ name: "origin", refs: { fetch: "", push: "" } }]) },
+      mistracked
+    );
+    createAuthenticatedGitMock.mockResolvedValue(git);
+
+    await getHandler("git:force-push-with-lease")(FAKE_EVENT, {
+      cwd: CWD,
+      branchName: LOCAL_BRANCH,
+      leaseSha: LEASE,
+    });
+
+    expect(git.push).toHaveBeenCalledWith("origin", `${LOCAL_BRANCH}:${LOCAL_BRANCH}`, [
+      `--force-with-lease=${LOCAL_BRANCH}:${LEASE}`,
+      "--force-if-includes",
+      "--set-upstream",
+    ]);
+  });
+
+  it("leaves an ordinarily-resolved force-push argv untouched", async () => {
+    // The flag must not leak into the common path: a force-push that never
+    // needed repair must not silently rewrite tracking config.
+    const git = makeGit();
+    createAuthenticatedGitMock.mockResolvedValue(git);
+
+    await getHandler("git:force-push-with-lease")(FAKE_EVENT, {
+      cwd: CWD,
+      branchName: LOCAL_BRANCH,
+      leaseSha: LEASE,
+    });
+
+    expect(git.push).toHaveBeenCalledWith(
+      REMOTE,
+      `${LOCAL_BRANCH}:${REMOTE_BRANCH}`,
+      expect.not.arrayContaining(["--set-upstream"]) as unknown as string[]
+    );
   });
 });
 

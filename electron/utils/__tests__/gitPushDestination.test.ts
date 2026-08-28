@@ -52,8 +52,55 @@ function makeRepo(): string {
   return dir;
 }
 
+/**
+ * A simple-git client in the same hermetic environment the fixture commands
+ * get. The resolver reads `push.default`, so without this a developer's own
+ * global config decides these results.
+ *
+ * Built from scratch rather than by filtering `process.env`: simple-git
+ * rejects a client environment carrying `GIT_EDITOR` or `PAGER` outright, and
+ * subtracting whatever its blocklist happens to hold today is a worse contract
+ * than naming the four variables git actually needs here. `PATH` is one of
+ * them — the executable is resolved by name.
+ */
+function hermeticClient(repo: string) {
+  // simple-git blocks `GIT_CONFIG_*` on a client environment by default, which
+  // is right for the app and exactly backwards for a fixture whose whole point
+  // is to be isolated from the developer's config. Opted out here only.
+  return simpleGit(repo, { unsafe: { allowUnsafeConfigPaths: true } }).env({
+    PATH: process.env.PATH ?? "",
+    GIT_CONFIG_GLOBAL: "/dev/null",
+    GIT_CONFIG_SYSTEM: "/dev/null",
+    GIT_TERMINAL_PROMPT: "0",
+  });
+}
+
 function resolve(repo: string, branch = "topic") {
-  return resolveGitPushDestination(simpleGit(repo), branch);
+  return resolveGitPushDestination(hermeticClient(repo), branch);
+}
+
+/**
+ * A git double for the guards git itself cannot be made to produce — a
+ * same-name upstream that still yields no push ref, and a config read that
+ * fails rather than reporting an empty config.
+ */
+function stubGit(fields: { record: string; remotes: readonly string[]; config: string | Error }) {
+  return {
+    raw: async (args: readonly string[]): Promise<string> => {
+      if (args[0] === "for-each-ref") return `${fields.record}\n`;
+      if (args[0] === "config") {
+        if (fields.config instanceof Error) throw fields.config;
+        return fields.config;
+      }
+      return "";
+    },
+    getRemotes: async () => fields.remotes.map((name) => ({ name, refs: { fetch: "", push: "" } })),
+  } as unknown as Parameters<typeof resolveGitPushDestination>[0];
+}
+
+/** `%(refname)`, `%(push:remotename)`, `%(push)`, `%(upstream)`, NUL-joined. */
+function refRecord(remote: string, pushRef: string, upstreamRef: string, branch = "topic") {
+  return [`refs/heads/${branch}`, remote, pushRef, upstreamRef].join("\u0000");
 }
 
 beforeAll(() => {
@@ -414,6 +461,117 @@ describe("resolveGitPushDestination — argv hardening", () => {
   });
 });
 
+describe("resolveGitPushDestination — upstream name mismatch", () => {
+  /** A repo whose `topic` branch tracks a differently-named branch on its only remote. */
+  function makeMistrackedRepo(): string {
+    const repo = makeRepo();
+    git(repo, ["remote", "add", "origin", makeBare()]);
+    git(repo, ["config", "branch.topic.remote", "origin"]);
+    git(repo, ["config", "branch.topic.merge", "refs/heads/develop"]);
+    return repo;
+  }
+
+  it("recovers the same-name destination git's simple rule refuses to name", async () => {
+    // `worktree add -b topic --track origin/develop` leaves this config. git
+    // reports a push remote with an empty push ref, which used to be refused —
+    // while the same branch with NO tracking at all pushed fine.
+    const repo = makeMistrackedRepo();
+
+    const result = await resolve(repo);
+
+    expect(result.status === "resolved" && result.destination).toEqual({
+      remote: "origin",
+      branch: "topic",
+      remoteTrackingRef: "refs/remotes/origin/topic",
+      requiresUpstreamRepair: true,
+    });
+  });
+
+  it("does not mark an ordinarily-resolved destination as needing repair", async () => {
+    // The flag drives an argv change, so it must never ride along on a branch
+    // git could already place on its own.
+    const repo = makeRepo();
+    git(repo, ["remote", "add", "origin", makeBare()]);
+    git(repo, ["config", "branch.topic.remote", "origin"]);
+    git(repo, ["config", "branch.topic.merge", "refs/heads/topic"]);
+
+    const result = await resolve(repo);
+
+    expect(
+      result.status === "resolved" && result.destination.requiresUpstreamRepair
+    ).toBeUndefined();
+  });
+
+  it("leaves an untracked branch to the single-remote fallback, unmarked", async () => {
+    const repo = makeRepo();
+    git(repo, ["remote", "add", "origin", makeBare()]);
+
+    const result = await resolve(repo);
+
+    expect(
+      result.status === "resolved" && result.destination.requiresUpstreamRepair
+    ).toBeUndefined();
+  });
+
+  it("refuses when several remotes exist, because the mismatch names no winner", async () => {
+    const repo = makeMistrackedRepo();
+    git(repo, ["remote", "add", "fork", makeBare()]);
+
+    const result = await resolve(repo);
+
+    expect(result).toEqual({ status: "unresolved", reason: "not-configured" });
+  });
+
+  it("refuses under push.default=nothing, which sanctions no destination at all", async () => {
+    const repo = makeMistrackedRepo();
+    git(repo, ["config", "push.default", "nothing"]);
+
+    const result = await resolve(repo);
+
+    expect(result).toEqual({ status: "unresolved", reason: "not-configured" });
+  });
+
+  it("refuses when a push refspec exists that does not cover this branch", async () => {
+    // The refspec is the user saying what gets pushed where; a branch it omits
+    // is one they chose not to push, not one to invent a destination for.
+    const repo = makeMistrackedRepo();
+    git(repo, ["config", "remote.origin.push", "refs/heads/main:refs/heads/main"]);
+
+    const result = await resolve(repo);
+
+    expect(result).toEqual({ status: "unresolved", reason: "not-configured" });
+  });
+
+  it("recovers under an explicitly configured push.default=simple", async () => {
+    // The unset default and an explicit `simple` are the same rule; only the
+    // explicit form exercises the value comparison.
+    const repo = makeMistrackedRepo();
+    git(repo, ["config", "push.default", "simple"]);
+
+    const result = await resolve(repo);
+
+    expect(result.status === "resolved" && result.destination.requiresUpstreamRepair).toBe(true);
+  });
+
+  it("splits the upstream at a slash-bearing remote's real boundary", async () => {
+    // `team/fork/develop` must read as develop on `team/fork`, so the mismatch
+    // against `topic` is detected rather than missed by a first-slash split.
+    const repo = makeRepo();
+    git(repo, ["remote", "add", "team/fork", makeBare()]);
+    git(repo, ["config", "branch.topic.remote", "team/fork"]);
+    git(repo, ["config", "branch.topic.merge", "refs/heads/develop"]);
+
+    const result = await resolve(repo);
+
+    expect(result.status === "resolved" && result.destination).toEqual({
+      remote: "team/fork",
+      branch: "topic",
+      remoteTrackingRef: "refs/remotes/team/fork/topic",
+      requiresUpstreamRepair: true,
+    });
+  });
+});
+
 describe("formatGitPushDestination", () => {
   it("joins remote and branch, preserving slashes on both sides", () => {
     expect(formatGitPushDestination({ remote: "team/fork", branch: "release/topic" })).toBe(
@@ -448,5 +606,94 @@ describe("describeUnresolvedUpstream", () => {
         "config-missing"
       );
     }
+  });
+});
+
+describe("resolveGitPushDestination — guards git cannot be made to produce", () => {
+  const MISMATCHED = refRecord("origin", "", "refs/remotes/origin/develop");
+
+  it("refuses a same-name upstream that still yields no push ref", async () => {
+    // Names agree, so whatever emptied the push ref is a different fault and
+    // the same-name inference is not the answer to it. Nothing else in this
+    // fixture refuses, so dropping the name comparison would resolve it.
+    const result = await resolveGitPushDestination(
+      stubGit({
+        record: refRecord("origin", "", "refs/remotes/origin/topic"),
+        remotes: ["origin"],
+        config: "",
+      }),
+      "topic"
+    );
+
+    expect(result).toEqual({ status: "unresolved", reason: "not-configured" });
+  });
+
+  it("resolves the same fixture once the upstream names a different branch", async () => {
+    // The control for the test above: same shape, only the upstream name
+    // differs, so the refusal there is attributable to that comparison alone.
+    const result = await resolveGitPushDestination(
+      stubGit({ record: MISMATCHED, remotes: ["origin"], config: "" }),
+      "topic"
+    );
+
+    expect(result.status === "resolved" && result.destination.requiresUpstreamRepair).toBe(true);
+  });
+
+  it("fails closed when the config read errors rather than reporting an empty config", async () => {
+    // A push destination inferred from config we could not read is a push to
+    // wherever an unread override pointed.
+    const result = await resolveGitPushDestination(
+      stubGit({
+        record: MISMATCHED,
+        remotes: ["origin"],
+        config: new Error("fatal: unable to read config file"),
+      }),
+      "topic"
+    );
+
+    expect(result).toEqual({ status: "unresolved", reason: "not-configured" });
+  });
+
+  it("lets a local push.default override an inherited one, as git does", async () => {
+    // git resolves later entries over earlier ones; deciding on the first
+    // `push.default` seen would refuse a repo that explicitly opted back in.
+    const result = await resolveGitPushDestination(
+      stubGit({
+        record: MISMATCHED,
+        remotes: ["origin"],
+        config: "push.default\ncurrent\u0000push.default\nsimple\u0000",
+      }),
+      "topic"
+    );
+
+    expect(result.status === "resolved" && result.destination.requiresUpstreamRepair).toBe(true);
+  });
+
+  it("refuses when the effective push.default is not simple", async () => {
+    const result = await resolveGitPushDestination(
+      stubGit({
+        record: MISMATCHED,
+        remotes: ["origin"],
+        config: "push.default\nsimple\u0000push.default\nmatching\u0000",
+      }),
+      "topic"
+    );
+
+    expect(result).toEqual({ status: "unresolved", reason: "not-configured" });
+  });
+
+  it("reads a push refspec whose value contains a newline", async () => {
+    // Multi-valued refspecs are why the scan is NUL-delimited rather than
+    // line-delimited; a line scan would see the second refspec as a key.
+    const result = await resolveGitPushDestination(
+      stubGit({
+        record: MISMATCHED,
+        remotes: ["origin"],
+        config: "remote.origin.push\nrefs/heads/main:refs/heads/main\u0000",
+      }),
+      "topic"
+    );
+
+    expect(result).toEqual({ status: "unresolved", reason: "not-configured" });
   });
 });

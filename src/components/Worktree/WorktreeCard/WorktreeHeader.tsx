@@ -207,15 +207,18 @@ export function WorktreeHeader({
   const hasFreshnessPill = !!(lastGitStatusCheckedAt && lastGitStatusCheckedAt > 0);
   const hasDevServerSignal = !!devServerSession && isLiveDevServerStatus(devServerSession.status);
   const underlineOnHover = variant !== "sidebar" || isActive;
+  // Two rules, both load-bearing. No `!baseMatchesUpstream` term: when the two
+  // agree the badge now renders the labelled base form rather than nothing, so
+  // gating the mount on the disagreement would hide the very line that names
+  // what the counts mean. And the base terms require `baseBranchName`, because
+  // that is what the badge itself requires to draw them — mounting the row for
+  // counts the badge will decline to render leaves an empty secondary row.
+  const hasBaseName = worktree.baseBranchName != null;
   const hasUpstreamDelta =
-    (worktree.aheadCount !== undefined && worktree.aheadCount > 0) ||
-    (worktree.behindCount !== undefined && worktree.behindCount > 0) ||
-    (worktree.baseAheadCount != null &&
-      worktree.baseAheadCount > 0 &&
-      !worktree.baseMatchesUpstream) ||
-    (worktree.baseBehindCount != null &&
-      worktree.baseBehindCount > 0 &&
-      !worktree.baseMatchesUpstream);
+    (worktree.aheadCount ?? 0) > 0 ||
+    (worktree.behindCount ?? 0) > 0 ||
+    (hasBaseName && (worktree.baseAheadCount ?? 0) > 0) ||
+    (hasBaseName && (worktree.baseBehindCount ?? 0) > 0);
   const hasAuthFailedSignIn = Boolean(
     worktree.fetchAuthFailed &&
     (worktree.matchedForgeProviderId != null || worktree.linked?.providerId != null)
@@ -232,8 +235,9 @@ export function WorktreeHeader({
         ciState,
         authFailed: hasAuthFailedSignIn,
         behindCount: worktree.behindCount,
+        baseBehindCount: worktree.baseBehindCount,
       }),
-    [ciState, hasAuthFailedSignIn, worktree.behindCount]
+    [ciState, hasAuthFailedSignIn, worktree.behindCount, worktree.baseBehindCount]
   );
 
   const { visibleStates, sessionAriaLabel } = useMemo(() => {

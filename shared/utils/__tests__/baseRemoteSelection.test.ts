@@ -1,5 +1,9 @@
 import { describe, it, expect } from "vitest";
-import { resolveBaseCompareRef, planFetchRemotes } from "../baseRemoteSelection.js";
+import {
+  resolveBaseCompareRef,
+  planFetchRemotes,
+  parseKnownRemoteBranch,
+} from "../baseRemoteSelection.js";
 
 describe("resolveBaseCompareRef", () => {
   it("resolves nothing when the repo has no remotes", () => {
@@ -190,5 +194,46 @@ describe("planFetchRemotes", () => {
       availableRemotes: ["origin", "heroku", "dokku"],
     });
     expect(plan.remotes).toEqual(["origin"]);
+  });
+});
+
+describe("parseKnownRemoteBranch", () => {
+  it("splits at the remote boundary rather than the first slash", () => {
+    expect(parseKnownRemoteBranch("origin/release/1.x", ["origin"])).toEqual({
+      remote: "origin",
+      branch: "release/1.x",
+    });
+  });
+
+  it("prefers the longer remote when one name prefixes another", () => {
+    // `team` and `team/fork` both prefix this ref; only the longer one leaves a
+    // branch the remote actually carries.
+    expect(parseKnownRemoteBranch("team/fork/topic", ["team", "team/fork"])).toEqual({
+      remote: "team/fork",
+      branch: "topic",
+    });
+  });
+
+  it("returns null for a local branch that merely looks remote-shaped", () => {
+    // `origin/develop` is a legal local branch name in a repo with no `origin`.
+    expect(parseKnownRemoteBranch("origin/develop", ["upstream"])).toBeNull();
+  });
+
+  it("returns null for a bare remote name with no branch after it", () => {
+    expect(parseKnownRemoteBranch("origin/", ["origin"])).toBeNull();
+    expect(parseKnownRemoteBranch("origin", ["origin"])).toBeNull();
+  });
+
+  it("ignores the local pseudo-remote", () => {
+    // `branch.<n>.remote = .` tracks a local branch; there is no remote ref.
+    expect(parseKnownRemoteBranch("./develop", ["."])).toBeNull();
+  });
+
+  it("matches case-sensitively, as git ref names are", () => {
+    expect(parseKnownRemoteBranch("Origin/develop", ["origin"])).toBeNull();
+  });
+
+  it("returns null when the repository has no remotes at all", () => {
+    expect(parseKnownRemoteBranch("origin/develop", [])).toBeNull();
   });
 });

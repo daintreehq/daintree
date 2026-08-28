@@ -127,6 +127,45 @@ export function planFetchRemotes(inputs: FetchRemotePlanInputs): FetchRemotePlan
 /** git's conventional default remote, and the pre-#11747 hardcoded one. */
 const DEFAULT_REMOTE = "origin";
 
+/** A short remote ref (`origin/develop`) split at a remote boundary git agrees with. */
+export interface KnownRemoteBranch {
+  /** Remote name, which may itself contain slashes. */
+  remote: string;
+  /** Branch name on the remote side — everything after the remote's own name. */
+  branch: string;
+}
+
+/**
+ * Split a short ref like `origin/develop` into its remote and branch parts,
+ * using only remote names the repository actually has.
+ *
+ * Positional splitting cannot do this: `team/fork/topic` is `topic` on the
+ * remote `team/fork` in one repo and `fork/topic` on `team` in another, and
+ * only the remote table says which. Candidates are tested longest-name-first
+ * so the more specific remote wins, and matching is case-sensitive because git
+ * ref names are.
+ *
+ * Returns `null` when no known remote prefixes the ref — which is the correct
+ * answer for a local branch that merely looks remote-shaped (`origin/develop`
+ * is a legal local branch name in a repo with no `origin`).
+ */
+export function parseKnownRemoteBranch(
+  shortRef: string | null | undefined,
+  availableRemotes: readonly string[]
+): KnownRemoteBranch | null {
+  if (!shortRef) return null;
+
+  const byLongestName = [...availableRemotes].sort((a, b) => b.length - a.length);
+  for (const remote of byLongestName) {
+    if (remote === LOCAL_PSEUDO_REMOTE) continue;
+    const prefix = `${remote}/`;
+    if (shortRef.startsWith(prefix) && shortRef.length > prefix.length) {
+      return { remote, branch: shortRef.slice(prefix.length) };
+    }
+  }
+  return null;
+}
+
 /**
  * Split `refs/remotes/<remote>/<branch>` into its remote and short-ref parts.
  *
@@ -140,17 +179,9 @@ function parseRemoteRef(
   availableRemotes: readonly string[]
 ): BaseCompareRefSelection | null {
   if (!fullRef || !fullRef.startsWith(REMOTE_REF_PREFIX)) return null;
-  const shortRef = fullRef.slice(REMOTE_REF_PREFIX.length);
-  if (!shortRef) return null;
-
-  const byLongestName = [...availableRemotes].sort((a, b) => b.length - a.length);
-  for (const remote of byLongestName) {
-    if (remote === LOCAL_PSEUDO_REMOTE) continue;
-    if (shortRef.startsWith(`${remote}/`) && shortRef.length > remote.length + 1) {
-      return { compareRef: shortRef, remote };
-    }
-  }
-  return null;
+  const parsed = parseKnownRemoteBranch(fullRef.slice(REMOTE_REF_PREFIX.length), availableRemotes);
+  if (!parsed) return null;
+  return { compareRef: `${parsed.remote}/${parsed.branch}`, remote: parsed.remote };
 }
 
 /**
