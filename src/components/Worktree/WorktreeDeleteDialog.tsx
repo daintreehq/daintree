@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 import { AppDialog } from "@/components/ui/AppDialog";
 import { TypedNameConfirmInput } from "@/components/ui/TypedNameConfirmInput";
+import { TitleEntity } from "@/components/ui/TitleEntity";
 import { AlertTriangle, Trash2 } from "lucide-react";
 import { FolderGit2 } from "@/components/icons";
 import { useWorktreeTerminals } from "@/hooks/useWorktreeTerminals";
@@ -413,8 +414,8 @@ export function WorktreeDeleteDialog({ isOpen, onClose, worktree }: WorktreeDele
       data-testid="delete-worktree-dialog"
     >
       <AppDialog.Header>
-        <AppDialog.Title icon={<Trash2 className="w-4 h-4 text-status-error" />}>
-          Delete '{confirmTarget}'?
+        <AppDialog.Title icon={<Trash2 className="w-4 h-4 shrink-0 text-status-error" />}>
+          <TitleEntity action="Delete" name={confirmTarget} />
         </AppDialog.Title>
         <AppDialog.CloseButton />
       </AppDialog.Header>

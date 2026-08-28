@@ -93,7 +93,7 @@ const SurfaceHeaderCloseButton = React.forwardRef<HTMLButtonElement, SurfaceHead
     <button
       ref={ref}
       className={cn(
-        "text-daintree-text/60 hover:text-text-primary hover:bg-overlay-raised transition-colors p-1 rounded",
+        "shrink-0 text-daintree-text/60 hover:text-text-primary hover:bg-overlay-raised transition-colors p-1 rounded",
         "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
         className
       )}
