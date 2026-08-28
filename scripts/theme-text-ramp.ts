@@ -13,6 +13,7 @@
 //   npm run theme:text-ramp             report the current split
 //   npm run theme:text-ramp -- --plan   write the manifest
 //   npm run theme:text-ramp -- --pairs  every state pair, before and after
+//   npm run theme:text-ramp -- --themes per-theme before/after for each band
 //   npm run theme:text-ramp -- --apply  rewrite sources from the manifest
 //   npm run theme:text-ramp -- --check  fail if the tree and manifest disagree
 //
@@ -24,6 +25,13 @@
 import fs from "fs";
 import path from "path";
 import { fileURLToPath } from "url";
+import {
+  BUILT_IN_APP_SCHEMES,
+  DISPLAY_SURFACES,
+  blendOverBackground,
+  contrastRatio,
+} from "../shared/theme/index.js";
+import { resolveOnSurface } from "./theme-text-contrast.js";
 import { Node, Project, SyntaxKind, ts } from "ts-morph";
 import type { JsxOpeningElement, JsxSelfClosingElement, SourceFile } from "ts-morph";
 
@@ -1064,6 +1072,144 @@ function pairs(manifest: Manifest): number {
   return inverted === 0 ? 0 : 1;
 }
 
+/**
+ * Every band on every theme and display surface, before and after.
+ *
+ * #12065 asks for a tour across all 15 themes because this is a real visual
+ * change. This is the measurable half of it — the half that can say whether the
+ * bands held everywhere rather than only in aggregate.
+ *
+ * Two different questions, reported separately because they have two different
+ * answers:
+ *
+ * 1. The band rule, as the issue states it: "a step may only adopt a role whose
+ *    weakest measurement across the whole matrix is no worse than the step's
+ *    own". That is a floor rule over the *global* worst case, and it is the one
+ *    the bands were derived against.
+ *
+ * 2. Per cell, does anything cross an accessibility threshold downward? Some
+ *    individual theme x surface cells necessarily lose ratio — collapsing
+ *    fifteen steps onto three roles cannot be monotonic in every cell, because a
+ *    bright step on a theme where the role happens to sit dim will always drop.
+ *    A raw delta is therefore not a defect. Crossing 4.5:1 or 3.0:1 downward is,
+ *    and that is what this counts.
+ *
+ * What neither half can do is judge whether the result looks right. That is
+ * `npm run theme:tour`.
+ */
+function themes(): number {
+  const ROLE_TOKEN = {
+    placeholder: "text-placeholder",
+    secondary: "text-secondary",
+    primary: "text-primary",
+  } as const;
+  /** WCAG AA for normal text, and the large-text / graphical-object floor. */
+  const THRESHOLDS = [4.5, 3];
+
+  /**
+   * The one floor dip #12065 published and took anyway. `/35` measures 2.0:1 at
+   * its weakest and `text-placeholder` 1.9:1, so the top of the placeholder band
+   * gives up a tenth of a point — at the very bottom of the contrast range,
+   * where the band holds decorative glyphs and disabled states rather than
+   * anything anyone reads. The alternative is sending `/35` to `text-secondary`,
+   * which would brighten sites that are dim on purpose by 3 full points.
+   */
+  const ACCEPTED_DIPS = new Map([[35, 0.15]]);
+
+  type Cell = {
+    theme: string;
+    surface: string;
+    step: number;
+    role: TextRole;
+    before: number;
+    after: number;
+  };
+  const cells: Cell[] = [];
+  const unresolved: string[] = [];
+
+  for (const scheme of [...BUILT_IN_APP_SCHEMES].sort((a, b) => a.id.localeCompare(b.id))) {
+    for (const surface of DISPLAY_SURFACES) {
+      const bg = scheme.tokens[surface]?.trim();
+      if (!bg || !/^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(bg)) continue;
+      // Composite before measuring. `text-placeholder` is alpha-derived on most
+      // themes, and the contrast helpers drop alpha bytes — an 8-digit token
+      // measured raw reads as fully opaque and far stronger than it paints.
+      const textPrimary = resolveOnSurface(scheme.tokens["text-primary"] ?? "", bg);
+      if (!textPrimary) continue;
+      for (const band of BANDS) {
+        const roleValue = resolveOnSurface(scheme.tokens[ROLE_TOKEN[band.role]] ?? "", bg);
+        if (!roleValue) {
+          unresolved.push(`${scheme.id}/${surface} ${ROLE_TOKEN[band.role]}`);
+          continue;
+        }
+        const after = contrastRatio(roleValue, bg);
+        for (const step of band.steps) {
+          cells.push({
+            theme: scheme.id,
+            surface: surface.replace("surface-", ""),
+            step,
+            role: band.role,
+            before: contrastRatio(blendOverBackground(textPrimary, bg, step / 100), bg),
+            after,
+          });
+        }
+      }
+    }
+  }
+
+  console.log("\nBand rule — global floor across the whole matrix\n");
+  let floorBreaks = 0;
+  for (const band of BANDS) {
+    const inBand = cells.filter((cell) => cell.role === band.role);
+    const roleFloor = Math.min(...inBand.map((cell) => cell.after));
+    for (const step of band.steps) {
+      const stepFloor = Math.min(
+        ...inBand.filter((cell) => cell.step === step).map((c) => c.before)
+      );
+      const dip = stepFloor - roleFloor;
+      const accepted = ACCEPTED_DIPS.get(step);
+      const ok = dip <= 0;
+      if (!ok && !(accepted !== undefined && dip <= accepted)) floorBreaks++;
+      console.log(
+        `  /${String(step).padEnd(3)} → ${`text-text-${band.role}`.padEnd(22)}` +
+          `step floor ${stepFloor.toFixed(1)}:1   role floor ${roleFloor.toFixed(1)}:1   ` +
+          (ok
+            ? "holds"
+            : accepted !== undefined && dip <= accepted
+              ? `gives up ${dip.toFixed(2)} — the dip #12065 published and accepted`
+              : `LOWERS THE WORST CASE by ${dip.toFixed(2)}`)
+      );
+    }
+  }
+
+  console.log("\nPer cell — thresholds crossed downward\n");
+  let crossings = 0;
+  for (const threshold of THRESHOLDS) {
+    const broken = cells.filter((cell) => cell.before >= threshold && cell.after < threshold);
+    crossings += broken.length;
+    console.log(`  ${threshold}:1  ${broken.length} of ${cells.length} cells`);
+    for (const cell of broken.slice(0, 8)) {
+      console.log(
+        `      ${cell.theme}/${cell.surface} /${cell.step}→${cell.role}  ` +
+          `${cell.before.toFixed(2)}:1 → ${cell.after.toFixed(2)}:1`
+      );
+    }
+    if (broken.length > 8) console.log(`      … and ${broken.length - 8} more`);
+  }
+
+  const worst = cells.reduce((a, b) => (a.after - a.before <= b.after - b.before ? a : b));
+  console.log(
+    `\n${BUILT_IN_APP_SCHEMES.length} themes x ${DISPLAY_SURFACES.length} surfaces x ` +
+      `${cells.length / (BUILT_IN_APP_SCHEMES.length * DISPLAY_SURFACES.length)} steps = ${cells.length} cells\n` +
+      `largest single-cell drop: ${worst.theme}/${worst.surface} /${worst.step}→${worst.role} ` +
+      `${worst.before.toFixed(2)}:1 → ${worst.after.toFixed(2)}:1\n` +
+      `${unresolved.length > 0 ? `unresolved: ${[...new Set(unresolved)].join(", ")}\n` : ""}` +
+      `${floorBreaks} unaccepted floor break(s), ${crossings} threshold crossing(s) — ` +
+      `${floorBreaks === 0 && crossings === 0 ? "the bands hold on every theme" : "REVIEW REQUIRED"}`
+  );
+  return floorBreaks === 0 && crossings === 0 ? 0 : 1;
+}
+
 function apply(manifest: Manifest): void {
   const byFile = new Map<string, Occurrence[]>();
   for (const occurrence of manifest.occurrences) {
@@ -1149,6 +1295,10 @@ function main(): void {
   }
   if (argv.includes("--pairs")) {
     process.exitCode = pairs(buildManifest());
+    return;
+  }
+  if (argv.includes("--themes")) {
+    process.exitCode = themes();
     return;
   }
   if (argv.includes("--apply")) {
