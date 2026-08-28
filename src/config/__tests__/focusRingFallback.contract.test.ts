@@ -533,9 +533,9 @@ const ALLOWLIST: FocusRingAllowlistEntry[] = [
   },
   {
     file: "src/components/Notifications/NotificationCenter.tsx",
-    fragment: "text-daintree-text/70 outline-hidden",
+    fragment: "text-text-secondary outline-hidden",
     reason:
-      "'New since last looked' chip — non-interactive label; mark-read button inside has its own focus styling. Was /50 until #12061 raised it: at /50 this measured 4.4:1, under the 4.5:1 floor for normal text",
+      "'New since last looked' chip — non-interactive label; mark-read button inside has its own focus styling. Was /50 until #12061 raised it to /70 (at /50 this measured 4.4:1, under the 4.5:1 floor for normal text), and #12065 retired the ramp underneath it",
   },
   {
     file: "src/components/Fleet/FleetPickerContent.tsx",

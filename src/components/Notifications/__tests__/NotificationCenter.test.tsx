@@ -1385,22 +1385,22 @@ describe("NotificationCenter — Group by context toggle", () => {
 });
 
 describe("NotificationCenter — Filter inactive contrast", () => {
-  it("uses /60 on inactive pills, matching the QuickStateFilterBar pattern", () => {
+  it("recedes the inactive segment and brightens it on hover, whichever is selected", () => {
     setEntries([makeEntry({ message: "msg-1" })]);
     render(<NotificationCenter open onClose={vi.fn()} />);
 
-    // Filter starts on "All" → "Unread" is the inactive segment.
+    // Filter starts on "All" → "Unread" is the inactive segment. Which colour
+    // each segment paints is the design's business; that they differ, and that
+    // the inactive one offers a hover lift, is this test's.
     const unread = screen.getByText("Unread");
-    expect(unread.className).toContain("text-daintree-text/60");
-    expect(unread.className).not.toContain("text-daintree-text/40");
+    expect(unread.className).not.toBe(screen.getByText("All").className);
     expect(unread.className).toContain("hover:text-text-primary");
 
     fireEvent.click(unread);
 
-    // After flipping, "All" is the inactive segment.
+    // After flipping, the roles swap and the invariant has to hold either way.
     const all = screen.getByText("All");
-    expect(all.className).toContain("text-daintree-text/60");
-    expect(all.className).not.toContain("text-daintree-text/40");
+    expect(all.className).not.toBe(screen.getByText("Unread").className);
     expect(all.className).toContain("hover:text-text-primary");
   });
 

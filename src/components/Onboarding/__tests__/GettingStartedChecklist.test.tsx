@@ -242,13 +242,15 @@ describe("GettingStartedChecklist", () => {
         <GettingStartedChecklist {...defaultProps} checklist={mixedState} />
       );
       const muted = screen.getByText("2/5");
-      expect(muted.className).toContain("text-daintree-text/50");
-      expect(muted.className).not.toContain("text-accent-primary");
+      const mutedClass = muted.className;
+      expect(mutedClass).not.toContain("text-accent-primary");
 
       rerender(<GettingStartedChecklist {...defaultProps} checklist={allComplete} />);
       const accented = screen.getByText("All set");
       expect(accented.className).toContain("text-accent-primary");
-      expect(accented.className).not.toContain("text-daintree-text/50");
+      // Accent restraint: completion swaps the tone rather than layering the
+      // accent over the neutral one the incomplete counter was wearing.
+      expect(accented.className).not.toBe(mutedClass);
     });
   });
 

@@ -45,21 +45,13 @@ describe("ProjectPulseCard — visual contrast (issue #2645)", () => {
     expect(content).not.toContain("text-status-info/70");
   });
 
-  it("primary title text uses at least /90 opacity", async () => {
-    const content = await readFile(CARD_PATH, "utf-8");
-    expect(content).toContain("text-daintree-text/90");
-  });
-
-  it("no card text uses /50 or /60 opacity (below secondary floor)", async () => {
-    const content = await readFile(CARD_PATH, "utf-8");
-    expect(content).not.toContain("text-daintree-text/50");
-    expect(content).not.toContain("text-daintree-text/60");
-  });
-
-  it("coaching line uses at least /80 opacity", async () => {
-    const content = await readFile(CARD_PATH, "utf-8");
-    expect(content).toContain("text-daintree-text/80");
-  });
+  // The three opacity-floor guards this block used to carry (title at least /90,
+  // no text at /50 or /60, coaching line at least /80) are gone with the ramp
+  // they policed. #12065 moved every one of those sites onto a solid text token
+  // whose floor is measured across all 15 themes, so the floor is now a property
+  // of the token rather than of a step someone has to remember not to lower.
+  // Re-asserting the token name here would only restate the source. The global
+  // guard is the ramp manifest contract in colorSystem.contract.test.ts.
 
   it("coaching line does not use italic styling", async () => {
     const content = await readFile(CARD_PATH, "utf-8");
@@ -92,24 +84,11 @@ describe("ProjectPulseCard — visual contrast (issue #2645)", () => {
 });
 
 describe("PulseSummary — visual contrast (issue #2645)", () => {
-  it("Stat non-highlight text uses /75 opacity (not /60)", async () => {
-    const content = await readFile(SUMMARY_PATH, "utf-8");
-    expect(content).toContain("text-daintree-text/75");
-    expect(content).not.toContain("text-daintree-text/60");
-  });
-
-  it("Stat label uses /55 opacity floor (not /40)", async () => {
-    const content = await readFile(SUMMARY_PATH, "utf-8");
-    expect(content).toContain("text-daintree-text/55");
-    expect(content).not.toContain("text-daintree-text/40");
-  });
-
-  it("delta row does not use opacity below the /55 tertiary floor", async () => {
-    const content = await readFile(SUMMARY_PATH, "utf-8");
-    expect(content).not.toContain("text-daintree-text/30");
-    expect(content).not.toContain("text-daintree-text/40");
-    expect(content).not.toContain("text-daintree-text/50");
-  });
+  // Same as the card block above: the /75, /55 and "nothing below /55" floors
+  // were the ramp's way of spelling a contrast minimum, and #12065 replaced the
+  // mechanism rather than the numbers. Stat's highlight arm stays on the ramp
+  // deliberately — its resting colour sits beside `text-text-primary`, and
+  // lifting it would erase the highlight — which the manifest records.
 
   it("delta insertions/deletions use at least /80 semantic colour", async () => {
     const content = await readFile(SUMMARY_PATH, "utf-8");
