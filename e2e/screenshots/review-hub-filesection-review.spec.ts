@@ -410,7 +410,9 @@ test("review hub file-section review — header density across states", async ()
     await settle(page, 1500);
     await dismissBlockingPalette(page);
 
-    // Open Review & Commit and expand the file list (#7890 collapses it on open).
+    // Open Review & Commit; the file list is expanded on open, but gate on the
+    // toggle rather than assume it, so a collapse carried over from an earlier
+    // step can't leave the capture empty.
     const reviewBtn = page.locator(SEL.worktree.reviewHubButton).first();
     await reviewBtn.waitFor({ state: "visible", timeout: T_LONG });
     await reviewBtn.click();

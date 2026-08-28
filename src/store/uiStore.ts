@@ -25,9 +25,9 @@ interface UIState {
   lastNotificationCenterClosedAt: number;
   resetNotificationCenterLastClosedAt: () => void;
   // Per-worktree disclosure state for the Review Hub file list. Default
-  // (unset) is collapsed so the commit textarea is the focal point on open.
-  // Session-scoped (in-memory only — resets on app restart, no persist
-  // middleware).
+  // (unset) is EXPANDED — only an explicit collapse writes `false` here (see
+  // the disclosure comment in ReviewHubContent). Session-scoped (in-memory
+  // only, no persist middleware), so a collapse never survives a restart.
   reviewHubFileListExpanded: Record<string, boolean>;
   setReviewHubFileListExpanded: (worktreePath: string, expanded: boolean) => void;
 }

@@ -81,13 +81,13 @@ test.describe.serial("Core: List Mount Perf Budget", () => {
     const lastFileName = `bulk-unstaged/file-${FILE_COUNT}.txt`;
     const midFileName = `bulk-unstaged/file-0500.txt`;
 
-    // PR #7890 collapsed the file list by default and auto-stages all unstaged
-    // files when the hub is launched from a worktree card. To preserve the
+    // PR #7890 auto-stages all unstaged files when the hub is launched from a
+    // worktree card, and the file list is expanded on open. To preserve the
     // original "mount the unstaged list" measurement, we run a setup phase
-    // (open hub, reset the git index, settle) BEFORE installing the observer or
-    // snapshotting the baseline DOM. The actual measurement then times the
-    // toggle-to-expanded path — this is the closest analogue to the pre-#7890
-    // first-mount cost.
+    // (open hub, reset the git index, collapse, settle) BEFORE installing the
+    // observer or snapshotting the baseline DOM. The actual measurement then
+    // times the toggle-to-expanded path from a known-collapsed start — this is
+    // the closest analogue to the pre-#7890 first-mount cost.
     await test.step("Open ReviewHub, unstage, and let the list settle", async () => {
       const reviewBtn = window.locator(SEL.worktree.reviewHubButton);
       await reviewBtn.first().click();
@@ -96,16 +96,16 @@ test.describe.serial("Core: List Mount Perf Budget", () => {
       await expect(hub).toBeVisible({ timeout: T_LONG });
       await expect(hub.locator(SEL.reviewHub.cleanState)).not.toBeVisible({ timeout: T_SHORT });
 
+      // Expanded on open, so setup inherits an already-mounted list and only
+      // has to unstage. Both waits get T_LIST_MOUNT, not T_LONG/T_MEDIUM: the
+      // toggle does not paint until React has committed the open-time mount of
+      // FILE_COUNT non-virtualized rows, so the FIRST wait is the slow one.
       const fileListToggle = hub.locator(SEL.reviewHub.fileListToggle);
-      await expect(fileListToggle).toBeVisible({ timeout: T_LONG });
-      await expect(fileListToggle).toHaveAttribute("aria-expanded", "false", {
-        timeout: T_MEDIUM,
+      await expect(fileListToggle).toBeVisible({ timeout: T_LIST_MOUNT });
+      await expect(fileListToggle).toHaveAttribute("aria-expanded", "true", {
+        timeout: T_LIST_MOUNT,
       });
 
-      await clickReviewHubSetupButton(fileListToggle);
-      await expect(fileListToggle).toHaveAttribute("aria-expanded", "true", {
-        timeout: T_MEDIUM,
-      });
       const unstageAllButton = hub.locator(SEL.reviewHub.unstageAllButton);
       await expect(unstageAllButton).toBeVisible({ timeout: T_LIST_MOUNT });
       // Same reason the toggles go through clickReviewHubSetupButton: the list

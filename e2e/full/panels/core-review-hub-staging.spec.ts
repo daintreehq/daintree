@@ -43,11 +43,11 @@ test.describe.serial("Core: Review Hub Staging Edge Cases", () => {
       const hub = ctx.window.locator(SEL.reviewHub.container);
       await expect(hub).toBeVisible({ timeout: T_MEDIUM });
 
-      // PR #7890 collapses the file list by default (commit textarea is the
-      // focal point on open) and auto-stages all unstaged files for the
-      // card-launched flow. Expand the list so the staging selectors below
-      // are mountable, then unstage everything to restore the pre-#7890
-      // baseline the rest of this describe block exercises.
+      // PR #7890 auto-stages all unstaged files for the card-launched flow.
+      // The file list is expanded on open, but gate on the toggle rather than
+      // assume it, so the staging selectors below are mountable; then unstage
+      // everything to restore the pre-#7890 baseline the rest of this describe
+      // block exercises.
       const fileListToggle = hub.locator(SEL.reviewHub.fileListToggle);
       await expect(fileListToggle).toBeVisible({ timeout: T_MEDIUM });
       if ((await fileListToggle.getAttribute("aria-expanded")) !== "true") {
@@ -228,11 +228,11 @@ test.describe.serial("Core: Review Hub Staging Edge Cases", () => {
       const hub = ctx.window.locator(SEL.reviewHub.container);
       await expect(hub).toBeVisible({ timeout: T_MEDIUM });
 
-      // PR #7890 collapses the file list by default (commit textarea is the
-      // focal point on open) and auto-stages all unstaged files for the
-      // card-launched flow. Expand the list so the staging selectors below
-      // are mountable, then unstage everything to restore the pre-#7890
-      // baseline the rest of this describe block exercises.
+      // PR #7890 auto-stages all unstaged files for the card-launched flow.
+      // The file list is expanded on open, but gate on the toggle rather than
+      // assume it, so the staging selectors below are mountable; then unstage
+      // everything to restore the pre-#7890 baseline the rest of this describe
+      // block exercises.
       const fileListToggle = hub.locator(SEL.reviewHub.fileListToggle);
       await expect(fileListToggle).toBeVisible({ timeout: T_MEDIUM });
       if ((await fileListToggle.getAttribute("aria-expanded")) !== "true") {
