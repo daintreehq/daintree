@@ -9,10 +9,7 @@ import { resolve } from "path";
 // absolute overlay div, and suppresses hover background while a drag is active.
 
 const cardSource = readFileSync(resolve(__dirname, "../../WorktreeCard.tsx"), "utf-8");
-const overviewSource = readFileSync(
-  resolve(__dirname, "../../WorktreeOverviewModal.tsx"),
-  "utf-8"
-);
+const overviewSource = readFileSync(resolve(__dirname, "../../WorktreeOverviewModal.tsx"), "utf-8");
 const sidebarCss = readFileSync(
   resolve(__dirname, "../../../../styles/components/sidebar.css"),
   "utf-8"
@@ -158,8 +155,18 @@ describe("WorktreeCard row affordances polish (issue #8099)", () => {
   });
 
   it("terminal sub-row drag handle stays visible-but-dimmed (no opacity-0 at rest)", () => {
-    expect(terminalSectionSource).toContain("text-text-primary/25");
-    expect(terminalSectionSource).toContain("group-hover/termrow:text-text-primary/40");
+    // Dimmed by stepping DOWN the text hierarchy, not by fading a brighter
+    // token: Tailwind v4 bakes slash-alpha into `color-mix()` on the `color`
+    // property itself, so the contrast it loses cannot be recovered anywhere
+    // downstream. The rule is "solid token at rest, solid token on hover, and
+    // the hover one is the brighter of the two".
+    const handle = terminalSectionSource.slice(
+      terminalSectionSource.indexOf("cursor-grab"),
+      terminalSectionSource.indexOf("cursor-grab") + 400
+    );
+    expect(handle).toMatch(/(^|\s)text-text-(muted|secondary)\b/);
+    expect(handle).toMatch(/group-hover\/termrow:text-text-(secondary|primary)\b/);
+    expect(handle).not.toMatch(/text-text-\w+\/\d/);
     expect(terminalSectionSource).not.toMatch(/data-drag-handle[\s\S]{0,400}opacity-0/);
   });
 

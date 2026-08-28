@@ -292,12 +292,17 @@ export function WorktreeHeader({
             <TruncatedTooltip content={worktree.name}>
               <span
                 className={cn(
-                  "truncate text-sm leading-[inherit] font-medium transition-colors duration-150",
+                  "truncate text-sm leading-[inherit] transition-colors duration-150",
                   isActive
-                    ? "text-text-primary"
+                    ? "text-text-primary font-medium"
                     : isMuted
-                      ? "text-text-muted"
-                      : "text-text-secondary"
+                      ? // Muted, not unreadable. This is the card's headline —
+                        // the only thing naming which worktree it is — and
+                        // `text-text-muted` has no dark contrast floor in this
+                        // cohort (2.22:1 on namib). The de-emphasis comes off
+                        // the weight instead, which costs nothing legible.
+                        "text-text-secondary font-normal"
+                      : "text-text-secondary font-medium"
                 )}
                 data-testid="primary-worktree-project-name"
               >
@@ -349,10 +354,7 @@ export function WorktreeHeader({
                     aria-label={`External worktree at ${worktree.path}`}
                     className="shrink-0 leading-none"
                   >
-                    <FolderOutput
-                      className="w-3.5 h-3.5 text-text-muted"
-                      aria-hidden="true"
-                    />
+                    <FolderOutput className="w-3.5 h-3.5 text-text-muted" aria-hidden="true" />
                   </span>
                 </TooltipTrigger>
                 <TooltipContent side="bottom" className="max-w-xs">

@@ -45,6 +45,7 @@ interface HarnessProps {
   onSelectAll?: () => void;
   onClearSelection?: () => void;
   onEscapeWithoutSelection?: () => void;
+  onReturnToSearch?: (char?: string) => void;
   initialAnchor?: string | null;
 }
 
@@ -58,6 +59,7 @@ function Harness({
   onSelectAll = () => {},
   onClearSelection = () => {},
   onEscapeWithoutSelection = () => {},
+  onReturnToSearch,
   initialAnchor = null,
 }: HarnessProps) {
   const gridRef = useRef<HTMLDivElement>(null);
@@ -73,6 +75,7 @@ function Harness({
     onSelectAll,
     onClearSelection,
     onEscapeWithoutSelection,
+    onReturnToSearch,
     hasSelection,
   });
   return (
@@ -504,5 +507,107 @@ describe("computeRowExtreme", () => {
     expect(computeRowExtreme(-1, -1, 4, 12, undefined)).toBe(-1);
     expect(computeRowExtreme(99, 1, 4, 12, undefined)).toBe(99);
     expect(computeRowExtreme(0, 1, 4, 0, undefined)).toBe(0);
+  });
+});
+
+describe("useWorktreeOverviewKeyboard — handing control back to the search field", () => {
+  // The surface's search field takes initial focus, so "type a query, arrow to
+  // the match, change your mind and keep typing" is the common path. Each of
+  // these keys is the way back out of the grid; what they must NOT do is be
+  // swallowed, which is what made the grid feel like it had no keyboard model.
+  function renderWithReturn(onReturnToSearch: (char?: string) => void) {
+    return render(<Harness worktreeIds={IDS} onReturnToSearch={onReturnToSearch} />);
+  }
+
+  it("ArrowUp from the top row returns to the search field instead of being absorbed", () => {
+    const onReturnToSearch = vi.fn();
+    const { getByTestId } = renderWithReturn(onReturnToSearch);
+    const grid = getByTestId("grid");
+    fireEvent.focus(grid); // cursor seeds at "a", the top-left cell
+    fireEvent.keyDown(grid, { key: "ArrowUp" });
+    expect(onReturnToSearch).toHaveBeenCalledTimes(1);
+    expect(onReturnToSearch).toHaveBeenCalledWith();
+    // The cursor stays where it was — leaving is not moving.
+    expect(grid.getAttribute("aria-activedescendant")).toBe(getWorktreeOverviewCellId("a"));
+  });
+
+  it("ArrowUp below the top row navigates and does not return to search", () => {
+    const onReturnToSearch = vi.fn();
+    const { getByTestId } = renderWithReturn(onReturnToSearch);
+    const grid = getByTestId("grid");
+    fireEvent.focus(grid);
+    fireEvent.keyDown(grid, { key: "ArrowDown" }); // a → d
+    fireEvent.keyDown(grid, { key: "ArrowUp" }); // d → a
+    expect(onReturnToSearch).not.toHaveBeenCalled();
+    expect(grid.getAttribute("aria-activedescendant")).toBe(getWorktreeOverviewCellId("a"));
+  });
+
+  it("Shift+ArrowUp on the top row extends selection rather than leaving the grid", () => {
+    // Leaving mid-range-selection would strand the user's range.
+    const onReturnToSearch = vi.fn();
+    const { getByTestId } = renderWithReturn(onReturnToSearch);
+    const grid = getByTestId("grid");
+    fireEvent.focus(grid);
+    fireEvent.keyDown(grid, { key: "ArrowUp", shiftKey: true });
+    expect(onReturnToSearch).not.toHaveBeenCalled();
+  });
+
+  it("a printable character goes to the search field, carrying the character", () => {
+    const onReturnToSearch = vi.fn();
+    const { getByTestId } = renderWithReturn(onReturnToSearch);
+    const grid = getByTestId("grid");
+    fireEvent.focus(grid);
+    fireEvent.keyDown(grid, { key: "k" });
+    expect(onReturnToSearch).toHaveBeenCalledWith("k");
+  });
+
+  it("`/` returns to the field without typing itself", () => {
+    const onReturnToSearch = vi.fn();
+    const { getByTestId } = renderWithReturn(onReturnToSearch);
+    const grid = getByTestId("grid");
+    fireEvent.focus(grid);
+    fireEvent.keyDown(grid, { key: "/" });
+    expect(onReturnToSearch).toHaveBeenCalledWith();
+  });
+
+  it("never hijacks the keys the grid itself owns", () => {
+    // The regression this guards: a printable-character rule written as
+    // `key.length === 1` also matches " ", which is the selection toggle.
+    const onReturnToSearch = vi.fn();
+    const onToggleSelection = vi.fn();
+    const onActivate = vi.fn();
+    const { getByTestId } = render(
+      <Harness
+        worktreeIds={IDS}
+        onReturnToSearch={onReturnToSearch}
+        onToggleSelection={onToggleSelection}
+        onActivate={onActivate}
+      />
+    );
+    const grid = getByTestId("grid");
+    fireEvent.focus(grid);
+
+    fireEvent.keyDown(grid, { key: " " });
+    expect(onToggleSelection).toHaveBeenCalledTimes(1);
+
+    fireEvent.keyDown(grid, { key: "Enter" });
+    expect(onActivate).toHaveBeenCalledTimes(1);
+
+    for (const key of ["ArrowRight", "ArrowLeft", "ArrowDown", "Home", "End", "Escape", "F2"]) {
+      fireEvent.keyDown(grid, { key });
+    }
+    fireEvent.keyDown(grid, { key: "a", metaKey: true });
+    expect(onReturnToSearch).not.toHaveBeenCalled();
+  });
+
+  it("does nothing on these keys when no search field is wired", () => {
+    // The hook is shared; a caller with no field below must not lose its keys.
+    const { getByTestId } = render(<Harness worktreeIds={IDS} />);
+    const grid = getByTestId("grid");
+    fireEvent.focus(grid);
+    fireEvent.keyDown(grid, { key: "ArrowUp" });
+    expect(grid.getAttribute("aria-activedescendant")).toBe(getWorktreeOverviewCellId("a"));
+    fireEvent.keyDown(grid, { key: "k" });
+    expect(grid.getAttribute("aria-activedescendant")).toBe(getWorktreeOverviewCellId("a"));
   });
 });

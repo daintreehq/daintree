@@ -75,6 +75,37 @@ const CHIP_LABELS: Record<Exclude<ChipState, null>, string> = {
   complete: "Complete: in review",
 };
 
+/**
+ * The corner mark's silhouette, one per state.
+ *
+ * Colour cannot be the only difference between them (WCAG 1.4.1), and these
+ * three are the only place on the card where `cleanup` and `complete` are
+ * distinguished at all. All three are drawn in the same 12x12 top-left box, so
+ * what changes is how much of it is filled — which is also, deliberately, the
+ * order in which the states want attention:
+ *
+ *   waiting  — the full corner triangle. Solid, the most ink, the only state
+ *              that is blocking on the person reading it.
+ *   cleanup  — the triangle's outer band, hollow down the diagonal. Same
+ *              corner, same angle, visibly lighter: something to decide, not
+ *              something to answer.
+ *   complete — the same wedge at two thirds. Solid, so it still reads as
+ *              settled rather than pending, but the smallest of the three.
+ *
+ * Every shape stays a corner wedge because the grid card rounds this corner
+ * (`rounded-tl-lg`): anything hugging the top or left edge instead — a bar, a
+ * bevel — is eaten by the radius on that variant and survives only in the
+ * sidebar.
+ *
+ * Verified against `chipSilhouettes.test.ts`, which asserts the three are
+ * mutually distinct and that the set stays exhaustive if a state is added.
+ */
+const CHIP_CLIP_PATHS: Record<Exclude<ChipState, null>, string> = {
+  waiting: "polygon(0 0, 100% 0, 0 100%)",
+  cleanup: "polygon(100% 0, 0 100%, 0 55%, 55% 0)",
+  complete: "polygon(0 0, 65% 0, 0 65%)",
+};
+
 const HOVER_REVALIDATE_DELAY = 150;
 const REVALIDATE_FRESHNESS_GATE = 10_000;
 const MAX_CONCURRENT_REVALIDATES = 3;
@@ -942,7 +973,19 @@ export function WorktreeCard({
               doing alone.
 
               `computeChipState` returns one state or none, never a
-              combination, so one mark is the whole vocabulary. */}
+              combination, so one mark is the whole vocabulary.
+
+              Each state gets its own silhouette as well as its own hue, and
+              that is a requirement rather than a flourish: three marks that
+              differ only in fill carry their meaning by colour alone
+              (WCAG 1.4.1), and while `waiting` is corroborated elsewhere on
+              the card by the session glyphs, nothing else on the card
+              distinguishes `cleanup` from `complete`. The shapes are graded by
+              how much they ask of the reader — a solid corner for the one
+              that wants an answer, a hollow band for the one that wants a
+              decision, a thin edge for the one that wants nothing. All three
+              stay inside the same 12x12 top-left footprint, so the mark's
+              position and the thing it is told apart from do not change. */}
           {chipState !== null && (
             <Tooltip>
               <TooltipTrigger asChild>
@@ -957,7 +1000,7 @@ export function WorktreeCard({
                     chipState === "complete" && "bg-category-blue",
                     variant === "grid" && "rounded-tl-lg"
                   )}
-                  style={{ clipPath: "polygon(0 0, 100% 0, 0 100%)" }}
+                  style={{ clipPath: CHIP_CLIP_PATHS[chipState] }}
                   role="img"
                   aria-label={CHIP_LABELS[chipState]}
                 />
@@ -1027,12 +1070,12 @@ export function WorktreeCard({
                   "border transition-colors",
                   isSelected
                     ? "border-border-interactive bg-overlay-emphasis text-text-primary"
-                    // Unchecked, the box is an empty outline on the card's own
-                    // plane. It used to fill with `bg-daintree-bg/80` — the
-                    // app canvas, which on dark themes is several steps below
-                    // the card — so on hover it read as a hole punched in the
-                    // corner rather than as a checkbox waiting to be ticked.
-                    : "border-border-default bg-transparent text-transparent hover:bg-overlay-soft hover:border-border-interactive"
+                    : // Unchecked, the box is an empty outline on the card's own
+                      // plane. It used to fill with `bg-daintree-bg/80` — the
+                      // app canvas, which on dark themes is several steps below
+                      // the card — so on hover it read as a hole punched in the
+                      // corner rather than as a checkbox waiting to be ticked.
+                      "border-border-default bg-transparent text-transparent hover:bg-overlay-soft hover:border-border-interactive"
                 )}
               >
                 <Check className="h-3.5 w-3.5" aria-hidden="true" />
@@ -1197,10 +1240,7 @@ export function WorktreeCard({
                   it. At 4px the cluster was crowded against the body and the
                   whole card read as one undifferentiated mass. */}
               {!effectiveIsCollapsed && (
-                <div
-                  id={`worktree-body-${worktree.id}`}
-                  className="pb-2.5 pt-2"
-                >
+                <div id={`worktree-body-${worktree.id}`} className="pb-2.5 pt-2">
                   {worktree.isWslPath && !worktree.wslGitOptIn && !worktree.wslGitDismissed && (
                     <WslGitBanner
                       worktreeId={worktree.id}

@@ -261,9 +261,16 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                     // only this card's problem: one card expanded to 460px
                     // took its three row-mates with it and left 250px of
                     // nothing in each. Bounding it is the standard correction
-                    // for variable-height cards in a grid, and 256px still
+                    // for variable-height cards in a grid, and 208px still
                     // shows the note plus the first several changed files.
-                    "max-h-64 overflow-y-auto px-3 pb-2.5"
+                    //
+                    // It does not fully solve the row: `items-stretch` still
+                    // propagates whatever height the open card ends up with,
+                    // so its row-mates grow with it. Moving Details out of
+                    // flow entirely — a side inspector or an anchored overlay
+                    // — is the only thing that would, and that is a change to
+                    // what the disclosure IS rather than to how it looks.
+                    "max-h-52 overflow-y-auto px-3 pb-2.5"
               )}
             >
               <WorktreeDetails
@@ -453,7 +460,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                                 e.stopPropagation();
                                 onResourceResume();
                               }}
-                              className="shrink-0 p-1 rounded-[var(--radius-md)] transition-colors text-status-success/70 hover:text-status-success hover:bg-overlay-emphasis focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+                              className="flex min-h-6 min-w-6 shrink-0 items-center justify-center rounded-[var(--radius-md)] transition-colors text-status-success hover:bg-overlay-emphasis focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
                               aria-label="Resume resource"
                             >
                               <Play className="w-3 h-3" />
@@ -470,7 +477,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                                 e.stopPropagation();
                                 onResourcePause();
                               }}
-                              className="shrink-0 p-1 rounded-[var(--radius-md)] transition-colors text-status-error/70 hover:text-status-error hover:bg-overlay-emphasis focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+                              className="flex min-h-6 min-w-6 shrink-0 items-center justify-center rounded-[var(--radius-md)] transition-colors text-status-error hover:bg-overlay-emphasis focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
                               aria-label="Pause resource"
                             >
                               <Square className="w-3 h-3" />
@@ -487,7 +494,7 @@ export function WorktreeDetailsSection(props: WorktreeDetailsSectionProps) {
                                 e.stopPropagation();
                                 onResourceConnect!();
                               }}
-                              className="shrink-0 p-1 rounded-[var(--radius-md)] transition-colors text-status-info/70 hover:text-status-info hover:bg-overlay-emphasis focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+                              className="flex min-h-6 min-w-6 shrink-0 items-center justify-center rounded-[var(--radius-md)] transition-colors text-status-info hover:bg-overlay-emphasis focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
                               aria-label="Connect to resource"
                             >
                               <Plug className="w-3 h-3" />

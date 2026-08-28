@@ -97,16 +97,24 @@ export const DISCLOSURE_WELL =
 
 /**
  * The grid card's well — the same object as `DISCLOSURE_WELL`, one density step
- * looser.
+ * looser and with no border.
  *
  * It used to be a different object: `bg-surface-inset` where the sidebar had
  * `bg-overlay-soft`, and it was one of two wells on the card rather than the
  * only one. That was the visible half of the divergence. A grid card is wider,
  * not differently constructed, so what the width buys is 2px more air above the
  * well and inside its rows — not a second containment vocabulary.
+ *
+ * The dropped border is the one thing that is genuinely different, and it is
+ * the surface that earns it rather than the width. The sidebar's cards are
+ * full-bleed with no border of their own, so this perimeter is doing double
+ * duty there: it groups the section AND it is the only closed contour telling
+ * two adjacent cards apart. A grid card already has its own border and a 12px
+ * gutter, so a second stroke inside it is a bordered container inside a
+ * bordered container — the nesting Carbon and Material 3 both rule out — and
+ * the tint alone groups the rows perfectly well at that size.
  */
-export const GRID_DISCLOSURE_WELL =
-  "mt-2 rounded-[var(--radius-lg)] border border-border-default bg-overlay-soft";
+export const GRID_DISCLOSURE_WELL = "mt-2 rounded-[var(--radius-lg)] bg-overlay-soft";
 
 /**
  * The two densities the card is built at, and everything that changes between

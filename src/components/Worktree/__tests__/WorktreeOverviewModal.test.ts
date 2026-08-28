@@ -119,15 +119,29 @@ describe("WorktreeOverviewModal — clickable aggregate stats (#8385)", () => {
       expect(source).toContain("shadow-[inset_0_-2px_0_0_var(--color-text-secondary)]");
     });
 
-    it("applies hover background on inactive chips", () => {
-      expect(source).toContain("hover:bg-tint/[0.04]");
+    it("applies hover background on inactive chips, from the named overlay ladder", () => {
+      // The rule is that the hover fill is a NAMED step, not that it is a
+      // particular one. `bg-tint/[0.04]` was an arbitrary alpha on an unnamed
+      // tint: invisible to the theme system, so it could not follow a palette
+      // that retints its overlays, and unreviewable against the ladder every
+      // other hover in the app uses.
+      const stats = statsSlice(source);
+      expect(stats).toMatch(/hover:bg-overlay-(subtle|soft|medium)\b/);
+      expect(stats).not.toContain("bg-tint/");
     });
 
-    it("uses focus-visible:outline-hidden with ring for focus styling", () => {
+    it("paints keyboard focus with an outline, never a suppressed outline plus a ring", () => {
+      // This pairing was the exact thing the component contract bans, and for
+      // a reason that only shows up in one mode: a Tailwind `ring` is a
+      // box-shadow, forced-colors removes box-shadows outright, and
+      // `outline-hidden` drops the transparent outline that would otherwise
+      // have been repainted — so the chips had no focus indicator at all
+      // under Windows High Contrast.
       const stats = statsSlice(source);
-      expect(stats).toContain("focus-visible:outline-hidden");
-      expect(stats).toContain("focus-visible:ring-2");
-      expect(stats).toContain("focus-visible:ring-accent-primary");
+      expect(stats).toMatch(/focus-visible:outline\b/);
+      expect(stats).toContain("focus-visible:outline-accent-primary");
+      expect(stats).not.toContain("focus-visible:outline-hidden");
+      expect(stats).not.toMatch(/focus-visible:ring-/);
     });
 
     it("wrapper uses role='group' instead of role='status'", () => {
@@ -284,18 +298,24 @@ describe("WorktreeOverviewModal — clickable aggregate stats (#8385)", () => {
       expect(source).toMatch(/isSelected=\{selectedIds\.has\(worktree\.id\)\}/);
     });
 
-    it("marks membership with a neutral fill plus a contrast-gated neutral ring", () => {
-      // The rule, not the token: membership is NEUTRAL (accent belongs to the
-      // cursor alone in this arrow-key domain), and because the fill step
+    it("marks membership with a neutral fill plus a contrast-gated neutral edge", () => {
+      // The rule, not the geometry: membership is NEUTRAL (accent belongs to
+      // the cursor alone in this arrow-key domain), and because the fill step
       // between a selected and an unselected cell is a couple of percent —
-      // nowhere near SC 1.4.11's 3:1 — the ring has to be the actual non-text
-      // indicator. `selection-outline` is the one ink `getThemeContrastWarnings`
-      // gates at 3:1 on every theme, which is why it and not a border token.
-      const selection = source.match(/isSelected\s*&&\s*"([^"]+)"/)?.[1];
-      expect(selection, "no isSelected treatment found on the grid cell").toBeTruthy();
-      expect(selection).toMatch(/\bbg-overlay-\w+/);
-      expect(selection).toContain("ring-selection-outline");
-      expect(selection).not.toMatch(/accent/);
+      // nowhere near SC 1.4.11's 3:1 — the edge has to be the actual non-text
+      // indicator. `selection-outline` is the one ink
+      // `getThemeContrastWarnings` gates at 3:1 on every theme, which is why
+      // it and not a border token.
+      const treatments = Array.from(source.matchAll(/isSelected\s*&&\s*\n?\s*"([^"]+)"/g)).map(
+        (m) => m[1] ?? ""
+      );
+      expect(treatments.length, "no isSelected treatment found on the grid cell").toBeGreaterThan(
+        0
+      );
+      const all = treatments.join(" ");
+      expect(all).toMatch(/\bbg-overlay-\w+/);
+      expect(all).toContain("selection-outline");
+      expect(all).not.toMatch(/accent/);
     });
 
     it("does not introduce any forbidden accent token for selection treatment", () => {

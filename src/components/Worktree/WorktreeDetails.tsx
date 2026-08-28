@@ -254,7 +254,7 @@ export function WorktreeDetails({
                           e.stopPropagation();
                           fileChangeListRef.current?.openFirstFile(e.currentTarget);
                         }}
-                        className="shrink-0 rounded-[var(--radius-md)] p-1 text-text-muted transition-colors hover:bg-overlay-soft hover:text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+                        className="flex min-h-6 min-w-6 shrink-0 items-center justify-center rounded-[var(--radius-md)] text-text-secondary transition-colors hover:bg-overlay-soft hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
                         aria-label="Open changes"
                       >
                         <FileDiff className="w-3.5 h-3.5" aria-hidden="true" />
@@ -311,7 +311,7 @@ export function WorktreeDetails({
               <button
                 type="button"
                 onClick={handleCopyPath}
-                className="shrink-0 rounded-[var(--radius-md)] p-1 text-text-muted transition-colors hover:bg-overlay-soft hover:text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+                className="flex min-h-6 min-w-6 shrink-0 items-center justify-center rounded-[var(--radius-md)] text-text-secondary transition-colors hover:bg-overlay-soft hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
                 aria-label="Copy path to clipboard"
               >
                 {pathCopied ? (

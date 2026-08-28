@@ -141,11 +141,25 @@ function renderTerminals(
  * meant a well built from a different surface passed straight through, and the
  * assertions below silently stopped defending anything.
  */
-function isWell(el: Element): boolean {
+function hasStructuralBorder(el: Element): boolean {
   const cls = el.className.toString();
-  const hasBorder = /(^|\s|:)border(\s|$|-[trbl]\b)/.test(cls) || /\sborder\s/.test(` ${cls} `);
-  const hasFill = /\bbg-(surface|overlay)-[a-z-]+\b/.test(cls);
-  return hasBorder && hasFill;
+  return /(^|\s|:)border(\s|$|-[trbl]\b)/.test(cls) || /\sborder\s/.test(` ${cls} `);
+}
+
+/**
+ * A grouping surface — the card's one closed region per disclosure.
+ *
+ * A fill is what makes it one, not a border. The sidebar's well carries a
+ * perimeter as well, and has to: its cards are full-bleed with no border of
+ * their own, so that stroke is also the only thing telling two adjacent cards
+ * apart. The grid card already has its own border and a gutter, so its well is
+ * the tint alone — a second stroke inside a bordered card is a bordered
+ * container inside a bordered container.
+ */
+function isWell(el: Element): boolean {
+  // A RESTING fill. `hover:bg-overlay-soft` on an icon button is a state, not
+  // a container, and matching it counted every hoverable control as a well.
+  return /(^|\s)bg-(surface|overlay)-[a-z-]+(\s|$)/.test(` ${el.className.toString()} `);
 }
 
 function wellCount(container: HTMLElement): number {
@@ -322,6 +336,24 @@ describe("sidebar card containment", () => {
         terminals.unmount();
       }
     }
+  });
+
+  it("gives the sidebar well a perimeter and the grid well none", () => {
+    // Not a style preference — it is which job the stroke is doing. In the
+    // sidebar's full-bleed list it is the card boundary as well as the
+    // section's; in the grid the cell already draws that, so repeating it
+    // inside is the nesting this whole test file exists to prevent.
+    const sidebar = renderTerminals({ variant: "sidebar", isExpanded: false });
+    const sidebarWell = Array.from(sidebar.container.querySelectorAll("*")).find(isWell);
+    expect(sidebarWell, "no sidebar well found").toBeTruthy();
+    expect(hasStructuralBorder(sidebarWell!)).toBe(true);
+    sidebar.unmount();
+
+    const grid = renderTerminals({ variant: "grid", isExpanded: false });
+    const gridWell = Array.from(grid.container.querySelectorAll("*")).find(isWell);
+    expect(gridWell, "no grid well found").toBeTruthy();
+    expect(hasStructuralBorder(gridWell!)).toBe(false);
+    grid.unmount();
   });
 
   it("does not separate a sidebar disclosure trigger from the body it reveals", () => {

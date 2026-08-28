@@ -163,7 +163,7 @@ function TerminalRow({ term, onClick }: TerminalRowProps) {
             ref={dragHandle?.setActivatorNodeRef}
             type="button"
             data-drag-handle
-            className="cursor-grab rounded-[var(--radius-md)] text-text-primary/25 group-hover/termrow:text-text-primary/40 transition-colors hover:text-text-secondary focus-visible:text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-1 active:cursor-grabbing"
+            className="flex min-h-6 min-w-6 shrink-0 items-center justify-center cursor-grab rounded-[var(--radius-md)] text-text-muted group-hover/termrow:text-text-secondary transition-colors hover:text-text-secondary focus-visible:text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-1 active:cursor-grabbing"
             aria-label="Drag to move terminal"
             {...(dragHandle?.listeners as React.HTMLAttributes<HTMLElement> | undefined)}
           >
@@ -516,9 +516,7 @@ export function WorktreeTerminalSection({
               onPointerMove={handlePointerMove}
               onPointerUp={handlePointerUp}
               onPointerCancel={handlePointerCancel}
-              className={cn(
-                "relative max-h-[300px] cursor-crosshair overflow-y-auto"
-              )}
+              className={cn("relative max-h-[300px] cursor-crosshair overflow-y-auto")}
             >
               {orderedWorktreeTerminals.map((term, index) => (
                 <SortableWorktreeTerminal
