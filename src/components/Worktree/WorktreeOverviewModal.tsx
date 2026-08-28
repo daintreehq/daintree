@@ -184,15 +184,61 @@ function OverviewGridCell(props: OverviewWorktreeCardProps & { isCursor?: boolea
         // children too, and a 480px cap on a row spanning every track is not
         // what that rule means.
         "max-w-[480px]",
+        // `h-full` against a stretched grid row: every card in a row ends on
+        // the same y. Cards carry a variable number of status rows, so left to
+        // themselves their bottoms landed on three different lines per row and
+        // the gutter between rows read as broken — 57px under a short card,
+        // 13px under a tall one.
+        //
+        // What is equalised is the card's BOX, not its content: the content
+        // stays top-aligned and the slack falls below it. Pushing the status
+        // rows down to the bottom edge instead was tried and is worse — one
+        // card expanded to 460px opened a 250px hole in the middle of each of
+        // its three row-mates, which reads far more broken than a short card
+        // with space under it.
+        "h-full",
         "rounded-lg overflow-hidden",
         "border border-divider",
-        "bg-daintree-sidebar/50",
+        // This element is the card. The `WorktreeCard` inside it paints no
+        // plane of its own in the grid variant, so the border, fill, hover
+        // lift and shadow are declared once, here.
+        "bg-overlay-subtle",
         // Narrowest property set the states here actually animate — a bare
         // `transition` would also cover transform, filter and backdrop-filter.
         "transition-[background-color,box-shadow,outline-color] duration-150 ease-out",
-        "hover:bg-overlay-subtle hover:shadow-[var(--theme-shadow-ambient)]",
-        isSelected && "bg-overlay-subtle ring-1 ring-inset ring-border-default",
-        isCursor && "outline outline-2 -outline-offset-2 outline-accent-primary"
+        // The drag guard rides with the shadow. While a sort drag is active
+        // the pointer sweeps across every card it passes, and lighting each
+        // one in turn reads as the drag doing something to them.
+        "hover:bg-overlay-soft hover:shadow-[var(--theme-shadow-ambient)]",
+        "[html[data-dragging='true']_&]:hover:shadow-none",
+        // Membership. Neutral by rule — accent belongs to the cursor alone in
+        // this arrow-key domain (`accentGuard.contract.test.ts`).
+        //
+        // `selection-outline` rather than a border token: it is the one ink in
+        // the palette derived from `text-primary` instead of the border ramp,
+        // and `getThemeContrastWarnings` gates it at 3:1 on every theme. That
+        // matters because the fill it accompanies cannot be the indicator —
+        // `overlay-medium` over `overlay-subtle` is a 2% step, around 1.1:1,
+        // nowhere near SC 1.4.11 — so the ring IS the non-text mark and has to
+        // carry the ratio on its own. It is the same reasoning `.palette-row`
+        // records for its selection rail.
+        isSelected && "bg-overlay-medium ring-1 ring-inset ring-selection-outline",
+        // The cursor is painted only while the grid itself holds DOM focus.
+        // It is `aria-activedescendant`, so its id survives blur by design —
+        // but the accent mark should not: an overview whose search field is
+        // focused was showing an accent ring on the field AND an accent
+        // outline on a card, two load-bearing signals in one region with
+        // nothing saying which one the keys would move.
+        //
+        // Gating it here is also what gives the grid container a focus
+        // indicator at all. It carries `tabIndex={0}` and `focus:outline-hidden`
+        // (the container must not paint its own 1500px-wide ring), so before
+        // this the surface had a keyboard-focusable element with nothing
+        // marking it — the #8940 debt recorded in focusRingFallback's
+        // allowlist. The cursor cell IS the indicator, and it appears exactly
+        // when the container takes focus.
+        isCursor &&
+          "group-focus-visible/overview-grid:outline group-focus-visible/overview-grid:outline-2 group-focus-visible/overview-grid:-outline-offset-2 group-focus-visible/overview-grid:outline-accent-primary"
       )}
     >
       <OverviewWorktreeCard {...props} variant="grid" />
@@ -864,7 +910,7 @@ export function WorktreeOverviewModal({
             a selection starts: it is what tells the user which surface they are
             on and how much of it they are seeing. */}
         <AppDialog.Header>
-          <AppDialog.Title icon={<Layers className="w-5 h-5 text-daintree-text/60" />}>
+          <AppDialog.Title icon={<Layers className="w-5 h-5 text-text-secondary" />}>
             <span>Worktrees overview</span>
             <span className="text-text-secondary text-sm font-normal tabular-nums">
               ({filteredWorktrees.length}
@@ -902,20 +948,20 @@ export function WorktreeOverviewModal({
                         "flex shrink-0 items-center gap-1.5 px-2 rounded-full text-xs transition-colors",
                         "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary",
                         hideMainWorktree
-                          ? "bg-tint/[0.06] text-daintree-text/40 hover:text-daintree-text/60"
+                          ? "bg-tint/[0.06] text-text-muted hover:text-text-secondary"
                           : "bg-tint/[0.10] text-text-secondary hover:text-text-primary"
                       )}
                     >
                       <Plug
                         className={cn(
                           "w-3 h-3 transition-colors",
-                          hideMainWorktree ? "text-daintree-text/30" : "text-daintree-text/50"
+                          hideMainWorktree ? "text-text-muted" : "text-text-secondary"
                         )}
                       />
                       <span
                         className={cn(
                           "transition-colors",
-                          hideMainWorktree && "line-through decoration-daintree-text/30"
+                          hideMainWorktree && "line-through decoration-text-muted"
                         )}
                       >
                         main
@@ -949,7 +995,7 @@ export function WorktreeOverviewModal({
                 type="button"
                 onClick={clearSelection}
                 className={cn(
-                  "flex items-center gap-1.5 px-2 py-1 rounded text-xs",
+                  "flex items-center gap-1.5 px-2 py-1 rounded-[var(--radius-md)] text-xs",
                   "text-text-secondary hover:text-text-primary",
                   "hover:bg-tint/[0.06]",
                   "transition-colors",
@@ -1092,7 +1138,7 @@ export function WorktreeOverviewModal({
                       <button
                         onClick={clearAllFilters}
                         className={cn(
-                          "flex items-center gap-1.5 px-2 py-1 rounded text-xs",
+                          "flex items-center gap-1.5 px-2 py-1 rounded-[var(--radius-md)] text-xs",
                           "text-text-secondary hover:text-text-primary",
                           "hover:bg-tint/[0.06]",
                           "transition-colors",
@@ -1196,13 +1242,21 @@ export function WorktreeOverviewModal({
               onKeyDown={handleGridKeyDown}
               onFocus={handleGridFocus}
               className={cn(
-                "grid gap-3",
+                "group/overview-grid grid gap-3",
                 // `auto-fill`, not `auto-fit`: auto-fit collapses the empty
                 // tracks, so the track count followed the RESULT count and the
                 // whole grid slid sideways as the user typed. `1fr` with a
                 // per-cell max keeps cards from stretching on a wide display.
                 "grid-cols-[repeat(auto-fill,minmax(min(320px,100%),1fr))]",
-                "auto-rows-min items-start",
+                // `items-stretch`, not `items-start`: cards in one row share a
+                // bottom edge. `auto-rows-min` still sizes each row to its own
+                // tallest card, so a row of short cards does not inherit a tall
+                // row's height.
+                "auto-rows-min items-stretch",
+                // The container must not paint its own ring — it spans the
+                // whole grid. The cursor cell paints the indicator instead,
+                // gated on this element's `focus-visible` (see
+                // `OverviewGridCell`).
                 "focus:outline-hidden"
               )}
             >
@@ -1358,13 +1412,13 @@ export function WorktreeOverviewModal({
         isConfirmLoading={bulkRemove.isExecuting}
       >
         {bulkRemove.targets.length > 0 && (
-          <div className="border border-divider rounded max-h-64 overflow-y-auto divide-y divide-divider">
+          <div className="border border-divider rounded-[var(--radius-md)] max-h-64 overflow-y-auto divide-y divide-divider">
             {bulkRemove.targets.map((target) => {
               const risks = describeBulkRemoveRisks(target);
               return (
-                <div key={target.id} className="flex flex-col gap-1 px-3 py-2 bg-daintree-bg/40">
+                <div key={target.id} className="flex flex-col gap-1 px-3 py-2 bg-surface-canvas/40">
                   <div className="flex items-center gap-2 text-sm text-text-primary">
-                    <GitBranch className="w-3.5 h-3.5 shrink-0 text-daintree-text/50" />
+                    <GitBranch className="w-3.5 h-3.5 shrink-0 text-text-secondary" />
                     {/* The branch is what truncates, so the branch is what the
                         tooltip has to reveal — it used to show the path, which
                         is not the string being clipped. */}
@@ -1386,7 +1440,7 @@ export function WorktreeOverviewModal({
             })}
           </div>
         )}
-        <div className="flex items-start gap-2 p-3 bg-status-error/10 border border-status-error/20 rounded text-status-error text-xs">
+        <div className="flex items-start gap-2 p-3 bg-status-error/10 border border-status-error/20 rounded-[var(--radius-md)] text-status-error text-xs">
           <Trash2 className="w-3.5 h-3.5 shrink-0 mt-0.5" />
           <span>This is irreversible. Type the count to confirm.</span>
         </div>

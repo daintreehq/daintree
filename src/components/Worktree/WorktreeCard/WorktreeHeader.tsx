@@ -145,7 +145,7 @@ function GitStatusFreshnessPill({
         <span
           className={cn(
             "text-xs tabular-nums shrink-0 transition-colors duration-150",
-            isWarning ? "text-text-muted" : "text-text-muted/60"
+            isWarning ? "text-text-secondary" : "text-text-muted"
           )}
         >
           {formatGitAge(age)}
@@ -259,7 +259,7 @@ export function WorktreeHeader({
         <div className="flex items-center gap-2 min-w-0 flex-1">
           {isMainWorktree && (
             <Sprout
-              className="w-3.5 h-3.5 text-daintree-text/60 shrink-0 pointer-events-none"
+              className="w-3.5 h-3.5 text-text-secondary shrink-0 pointer-events-none"
               aria-hidden="true"
             />
           )}
@@ -294,7 +294,7 @@ export function WorktreeHeader({
                 className={cn(
                   "truncate text-sm leading-[inherit] font-medium transition-colors duration-150",
                   isActive
-                    ? "text-text-primary/90"
+                    ? "text-text-primary"
                     : isMuted
                       ? "text-text-muted"
                       : "text-text-secondary"
@@ -337,7 +337,7 @@ export function WorktreeHeader({
           <div className="flex items-center gap-2 shrink-0">
             {isPinned && !isMainWorktree && (
               <Pin
-                className="w-3.5 h-3.5 text-daintree-text/40 shrink-0 pointer-events-none"
+                className="w-3.5 h-3.5 text-text-muted shrink-0 pointer-events-none"
                 aria-label="Pinned"
               />
             )}
@@ -350,7 +350,7 @@ export function WorktreeHeader({
                     className="shrink-0 leading-none"
                   >
                     <FolderOutput
-                      className="w-3.5 h-3.5 text-daintree-text/40"
+                      className="w-3.5 h-3.5 text-text-muted"
                       aria-hidden="true"
                     />
                   </span>
@@ -363,7 +363,7 @@ export function WorktreeHeader({
             )}
             {isProjectNotificationsMuted && (
               <BellOff
-                className="w-3.5 h-3.5 text-daintree-text/40 shrink-0 pointer-events-none"
+                className="w-3.5 h-3.5 text-text-muted shrink-0 pointer-events-none"
                 aria-label="Notifications muted for this project"
               />
             )}
@@ -384,7 +384,7 @@ export function WorktreeHeader({
                 resourceEndpoint={resourceEndpoint}
                 resourceLastCheckedAt={resourceLastCheckedAt}
                 onCheckResourceStatus={onCheckResourceStatus}
-                className="w-3.5 h-3.5 text-daintree-text/40"
+                className="w-3.5 h-3.5 text-text-muted"
               />
             )}
             <DevServerIndicator session={devServerSession} />

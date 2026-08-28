@@ -14,7 +14,7 @@ import {
   type WorktreeDragData,
 } from "../DragDrop/DndProvider";
 import { getWorktreeSortDragId } from "../DragDrop/SortableWorktreeCard";
-import { GripVertical } from "lucide-react";
+import { Check, GripVertical } from "lucide-react";
 import { useErrorStore, usePanelStore, type RetryAction } from "../../store";
 import type { PtyPanelData } from "@shared/types/panel";
 import { useRecipeStore } from "../../store/recipeStore";
@@ -849,22 +849,39 @@ export function WorktreeCard({
             // that unlayered file's declarations override layered utilities on
             // the same element.
 
-            variant === "grid" && "rounded-lg border border-divider bg-overlay-subtle",
+            // The GRID card paints no plane of its own. `OverviewGridCell` is
+            // the rendered box — it owns the radius, the border, the fill, the
+            // hover lift and the ambient shadow — and this element used to
+            // paint a second set of all five inside it. Two concentric 1px
+            // `border-divider` strokes at the same radius, 1px apart, which is
+            // visible as a doubled edge in every capture and is the outer half
+            // of the card-in-card the standards for this component name as its
+            // characteristic failure.
+            variant === "grid" && "h-full rounded-lg",
             isActive && variant !== "sidebar" && "bg-surface-panel-elevated",
-            !isActive &&
-              variant === "grid" &&
-              "hover:bg-overlay-subtle hover:shadow-[var(--theme-shadow-ambient)] [html[data-dragging='true']_&]:hover:shadow-none",
             variant === "sidebar" && !isActive && "bg-transparent",
             isFocused && !isActive && variant === "grid" && "bg-overlay-soft",
-            // Sidebar selection carries the full-height right accent border in
-            // sidebar.css, so the cwd stripe is grid-only — stacking both on
-            // one right edge read as a broken double marker (#9711 round-3
-            // owner decision). Right edge: the side facing the panel grid the
-            // worktree controls, clear of the window edge where it vanished on
-            // light themes.
+            // The current worktree's edge mark. NEUTRAL in the grid, and that
+            // is a rule rather than a preference: the overview grid is one
+            // arrow-key domain, accent is its single load-bearing signal, and
+            // that budget is already spent on the `aria-activedescendant`
+            // cursor (`accentGuard.contract.test.ts`, the WorktreeOverviewModal
+            // entry). An accent stripe here put two green marks in one region
+            // with nothing saying which was the cursor.
+            //
+            // `border-interactive` is the top of the neutral edge ladder and
+            // clears 3:1 against the card fill on every built-in theme, so it
+            // still satisfies SC 1.4.11 as a non-text indicator.
+            //
+            // Right edge: the side facing the panel grid the worktree
+            // controls, clear of the window edge where it vanished on light
+            // themes. Sidebar selection carries its own full-height right
+            // border in sidebar.css, so this stripe stays grid-only —
+            // stacking both on one edge read as a broken double marker
+            // (#9711 round-3 owner decision).
             worktree.isCurrent &&
               variant !== "sidebar" &&
-              "before:absolute before:right-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-l before:bg-accent-primary before:content-['']",
+              "before:absolute before:right-0 before:top-2 before:bottom-2 before:w-[2px] before:rounded-l-[var(--radius-xs)] before:bg-border-interactive before:content-['']",
             isBeingDeleted && !deleteError && "opacity-50 pointer-events-none"
           )}
           // sidebar.css scopes the card's plane, gutter and hover states to
@@ -889,22 +906,30 @@ export function WorktreeCard({
           onPointerEnter={handlePointerEnter}
           onPointerLeave={handlePointerLeave}
         >
-          <button
-            type="button"
-            data-card-select-overlay=""
-            tabIndex={variant === "grid" ? -1 : undefined}
-            // Grid variant: suppress focus shift on click so the role="grid"
-            // container retains the keyboard tab stop after a modifier-click.
-            onMouseDown={
-              variant === "grid" ? (e: React.MouseEvent) => e.preventDefault() : undefined
-            }
-            className={cn(
-              "absolute inset-0 z-0 outline-hidden",
-              variant === "grid" && "rounded-lg",
-              (isDraggingSort || isWorktreeSortDragging) && "pointer-events-none"
-            )}
-            aria-label={`Select worktree: ${worktree.issueTitle ?? worktree.branchDerivedTitle ?? branchLabel}${(worktree.issueTitle ?? worktree.branchDerivedTitle) ? ` (${branchLabel})` : ""}`}
-          />
+          {/* Sidebar only. This is a real keyboard target there: it is
+              tabbable, sidebar.css paints its focus ring via
+              `.sidebar-worktree-card:has(> button:focus-visible)`, and
+              Enter/Space produce a click that bubbles to `handleCardClick`.
+
+              In the grid it was none of those things. It sat at `z-0` beneath
+              the `relative z-10` content column, so no pointer could ever
+              reach it, and `tabIndex={-1}` kept it off the tab ring — a
+              `<button>` announced to assistive tech that nothing on the
+              machine could activate. Selection there is the cell's job:
+              `role="gridcell"` carries `aria-selected`, the card root's
+              `onClick` handles the pointer, and Enter is handled by the
+              grid's own key handler. */}
+          {variant === "sidebar" && (
+            <button
+              type="button"
+              data-card-select-overlay=""
+              className={cn(
+                "absolute inset-0 z-0 outline-hidden",
+                (isDraggingSort || isWorktreeSortDragging) && "pointer-events-none"
+              )}
+              aria-label={`Select worktree: ${worktree.issueTitle ?? worktree.branchDerivedTitle ?? branchLabel}${(worktree.issueTitle ?? worktree.branchDerivedTitle) ? ` (${branchLabel})` : ""}`}
+            />
+          )}
           {/* Worktree-level state — waiting / ready-for-cleanup / complete — as
               a corner chip, not a dot in the title row.
 
@@ -972,10 +997,19 @@ export function WorktreeCard({
               data-testid="worktree-card-input-receipt"
             />
           )}
+          {/* The membership toggle sits in a slot the header reserves for it
+              (`pr-9` on the grid content column), not on top of the header's
+              trailing cluster. It used to be `absolute top-2 right-2` over a
+              row that ends in the "More actions" button, so the badge covered
+              the ellipsis's third dot and clipped the card's corner arc —
+              two controls on the same pixels, which is also an SC 2.5.8
+              spacing failure whichever of them the pointer was aiming for.
+
+              24x24 is the SC 2.5.8 target floor; the old box was 20x20. */}
           {isMultiSelectEnabled && (
             <div
               className={cn(
-                "absolute top-2 right-2 z-30 transition-opacity duration-150",
+                "absolute top-1.5 right-1.5 z-30 transition-opacity duration-150",
                 isSelected
                   ? "opacity-100"
                   : "opacity-0 group-hover/card:opacity-100 focus-within:opacity-100"
@@ -989,29 +1023,23 @@ export function WorktreeCard({
                 tabIndex={-1}
                 onClick={handleCheckboxClick}
                 className={cn(
-                  "flex items-center justify-center w-5 h-5 rounded",
-                  "border border-divider transition-colors",
+                  "flex h-6 w-6 items-center justify-center rounded-[var(--radius-sm)]",
+                  "border transition-colors",
                   isSelected
-                    ? "bg-overlay-emphasis text-text-primary"
-                    : "bg-daintree-bg/80 text-transparent hover:bg-overlay-subtle"
+                    ? "border-border-interactive bg-overlay-emphasis text-text-primary"
+                    // Unchecked, the box is an empty outline on the card's own
+                    // plane. It used to fill with `bg-daintree-bg/80` — the
+                    // app canvas, which on dark themes is several steps below
+                    // the card — so on hover it read as a hole punched in the
+                    // corner rather than as a checkbox waiting to be ticked.
+                    : "border-border-default bg-transparent text-transparent hover:bg-overlay-soft hover:border-border-interactive"
                 )}
               >
-                <svg
-                  className="w-3 h-3"
-                  viewBox="0 0 12 12"
-                  fill="none"
-                  stroke="currentColor"
-                  strokeWidth="2"
-                  strokeLinecap="round"
-                  strokeLinejoin="round"
-                  aria-hidden="true"
-                >
-                  <path d="M2.5 6.5l2.5 2.5 4.5-5" />
-                </svg>
+                <Check className="h-3.5 w-3.5" aria-hidden="true" />
               </button>
             </div>
           )}
-          <div className="relative z-10 flex">
+          <div className={cn("relative z-10 flex", variant === "grid" && "h-full")}>
             {hasRowDragHandle &&
               (isDragHandleDisabled ? (
                 <Tooltip>
@@ -1056,7 +1084,7 @@ export function WorktreeCard({
                         // that; painting it on card hover ran a lit bar down
                         // the whole card for a control most hovers never
                         // wanted.
-                        "opacity-0 text-text-primary/40 group-hover/card:opacity-100 hover:bg-overlay-soft hover:text-text-primary/70 hover:opacity-100"
+                        "opacity-0 text-text-muted group-hover/card:opacity-100 hover:bg-overlay-soft hover:text-text-secondary hover:opacity-100"
                   )}
                   // Pointer-only affordance: the grip is non-focusable (the row
                   // strips dnd-kit's role/tabIndex), so an aria-label here is
@@ -1092,7 +1120,21 @@ export function WorktreeCard({
                 and pl-4 stands in for it when it is not, so text starts on
                 the same x in every card and the grip column can run the card
                 top to bottom. */}
-            <div className={cn("flex-1 min-w-0 pr-4", hasRowDragHandle ? "pl-0" : "pl-4")}>
+            <div
+              className={cn(
+                "flex-1 min-w-0",
+                // Grid: a column, so the status block can be pushed to the
+                // card's bottom edge and every card in a row ends level.
+                variant === "grid" && "flex h-full flex-col",
+                hasRowDragHandle ? "pl-0" : "pl-4",
+                // The grid reserves the membership toggle's column so the
+                // toggle never lands on the header's trailing cluster. It is
+                // reserved unconditionally rather than on hover: a slot that
+                // appears when the pointer arrives shifts the whole header
+                // sideways under the cursor.
+                variant === "grid" ? "pr-9" : "pr-4"
+              )}
+            >
               {/* pt-2 only: the body below supplies the gap to the next row.
                   Both spending 8px put 16px between the branch line and the
                   commit row, which read as a break in the middle of one
@@ -1155,7 +1197,10 @@ export function WorktreeCard({
                   it. At 4px the cluster was crowded against the body and the
                   whole card read as one undifferentiated mass. */}
               {!effectiveIsCollapsed && (
-                <div id={`worktree-body-${worktree.id}`} className="pb-2.5 pt-2">
+                <div
+                  id={`worktree-body-${worktree.id}`}
+                  className="pb-2.5 pt-2"
+                >
                   {worktree.isWslPath && !worktree.wslGitOptIn && !worktree.wslGitDismissed && (
                     <WslGitBanner
                       worktreeId={worktree.id}

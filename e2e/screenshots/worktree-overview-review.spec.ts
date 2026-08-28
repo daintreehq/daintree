@@ -514,7 +514,12 @@ async function activateWorktree(page: Page, branch: string): Promise<void> {
   const leaf = branch.split("/").pop() ?? branch;
   const cell = page.locator(`${CELL}:has([data-worktree-branch$="${leaf}"])`).first();
   await cell.waitFor({ state: "visible", timeout: T_LONG });
-  await cell.locator(`[aria-label^="Select worktree:"]`).first().click();
+  // Click the cell, not its `aria-label="Select worktree:"` overlay. That
+  // overlay is `absolute inset-0 z-0` under a `relative z-10` content column,
+  // so a pointer sent at its centre always lands on the content instead and
+  // Playwright's hit-target check fails it forever. Selection is handled by
+  // the card root's own `onClick`, which any click inside the cell reaches.
+  await cell.click();
   await page
     .locator(MODAL)
     .waitFor({ state: "hidden", timeout: T_LONG })
@@ -1024,6 +1029,13 @@ test("worktree overview review — frame, header hierarchy and selection mode", 
     await settle(page, 500);
 
     if (WITH_SESSIONS && planned.some((s) => s.needsSessions)) {
+      // Seed at the widest size, so every cell is above the fold. The grid's
+      // cells carry `content-visibility: auto`, which skips rendering for a
+      // cell scrolled out of view — its subtree then has no layout, so the
+      // `:has([data-worktree-branch])` cell locator never resolves and the
+      // seed reports a timeout that reads like the app failed to load.
+      await setWindowSize(ctx.app, WIDE);
+      await settle(page, 450);
       await seedAgentActivity(page).catch((error) => {
         failures.push(`agent seeding: ${String(error).slice(0, 200)}`);
       });

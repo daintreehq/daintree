@@ -9,6 +9,10 @@ import { resolve } from "path";
 // absolute overlay div, and suppresses hover background while a drag is active.
 
 const cardSource = readFileSync(resolve(__dirname, "../../WorktreeCard.tsx"), "utf-8");
+const overviewSource = readFileSync(
+  resolve(__dirname, "../../WorktreeOverviewModal.tsx"),
+  "utf-8"
+);
 const sidebarCss = readFileSync(
   resolve(__dirname, "../../../../styles/components/sidebar.css"),
   "utf-8"
@@ -60,7 +64,23 @@ describe("WorktreeCard interaction-state axes (issue #6963)", () => {
   });
 
   it("suppresses the grid hover-shadow lift while a drag is active", () => {
-    expect(cardSource).toContain("[html[data-dragging='true']_&]:hover:shadow-none");
+    // The guard has to sit on whichever element paints the lift. That is
+    // `OverviewGridCell` now — the grid card shell stopped painting a plane
+    // of its own — so assert the pairing rather than a fixed file: any
+    // element with the ambient hover shadow also carries the drag guard.
+    for (const source of [cardSource, overviewSource]) {
+      const liftCount = (source.match(/hover:shadow-\[var\(--theme-shadow-ambient\)\]/g) ?? [])
+        .length;
+      const guardCount = (
+        source.match(/\[html\[data-dragging='true'\]_&\]:hover:shadow-none/g) ?? []
+      ).length;
+      expect(guardCount).toBe(liftCount);
+    }
+    // …and the pairing exists somewhere, so a variant that simply deleted the
+    // hover lift cannot satisfy the rule vacuously.
+    expect(cardSource + overviewSource).toContain(
+      "[html[data-dragging='true']_&]:hover:shadow-none"
+    );
   });
 
   it("suppresses sidebar hover background while a drag is active, except on the drop target", () => {
@@ -152,10 +172,21 @@ describe("WorktreeCard row affordances polish (issue #8099)", () => {
     );
   });
 
-  it("Review & Commit button uses inset outline (-2px offset) for its flush rounded-r edge", () => {
-    expect(detailsSource).toMatch(
-      /rounded-r-\[var\(--radius-lg\)\][\s\S]{0,200}focus-visible:outline-offset-\[-2px\][\s\S]{0,400}aria-label=\{`Open \$\{reviewHubButtonLabel\}`\}/
+  it("Review & Commit button keeps an inset focus ring and clears the 24px target floor", () => {
+    // It used to be a fenced right segment in the grid — a left border plus a
+    // right-rounded cap — which read as a split pill with an unlabelled second
+    // half. Both variants now draw it as a trailing icon button. What must
+    // survive that is the inset ring (it sits flush inside a row, so a
+    // positive offset would be clipped) and the SC 2.5.8 target size.
+    const button = detailsSource.slice(
+      Math.max(0, detailsSource.indexOf("aria-label={`Open ${reviewHubButtonLabel}`}") - 1200),
+      detailsSource.indexOf("aria-label={`Open ${reviewHubButtonLabel}`}")
     );
+    expect(button).toContain("focus-visible:outline-offset-[-2px]");
+    expect(button).toMatch(/min-h-6[\s\S]*min-w-6|min-w-6[\s\S]*min-h-6/);
+    // No fence: the grid's border-l + rounded-r pair is gone from this button.
+    expect(button).not.toContain("border-l");
+    expect(button).not.toContain("rounded-r-[var(--radius-lg)]");
   });
 
   it("sidebar row CSS reveal rules use :has(:focus-visible) so mousedown does not flash", () => {

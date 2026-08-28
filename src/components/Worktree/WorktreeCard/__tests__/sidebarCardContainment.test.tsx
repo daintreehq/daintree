@@ -200,10 +200,25 @@ describe("sidebar session well", () => {
     unmount();
   });
 
-  it("drops the section entirely in the grid variant, which needs no terminator", () => {
-    const { container, unmount } = renderTerminals({ variant: "grid", total: 0 });
-    expect(container.firstElementChild).toBeNull();
-    unmount();
+  it("gives the grid an empty tray too, but without a well around it", () => {
+    // The grid renders the tray so every card carries the same bottom slot —
+    // that is what lets a row of cards share a height without the shorter
+    // ones looking truncated, and it names the next action instead of the
+    // absence. It does NOT get a well: a well is a container, and with no
+    // sessions there is nothing to contain.
+    //
+    // The sidebar keeps its well in the same state, and that is the one place
+    // the rule bends: its cards are full-bleed with no border of their own,
+    // so the well doubles as what separates two adjacent cards.
+    const grid = renderTerminals({ variant: "grid", total: 0 });
+    expect(grid.container.firstElementChild, "grid empty tray did not render").not.toBeNull();
+    expect(wellCount(grid.container)).toBe(0);
+    expect(grid.container.textContent).toContain("Start a session");
+    grid.unmount();
+
+    const sidebar = renderTerminals({ variant: "sidebar", total: 0 });
+    expect(wellCount(sidebar.container)).toBeGreaterThan(0);
+    sidebar.unmount();
   });
 
   it("adds no full-width rule that could be mistaken for a card boundary", () => {
@@ -273,13 +288,40 @@ describe("sidebar card containment", () => {
     unmount();
   });
 
-  it("keeps the well in the grid variant, where the card is a standalone surface", () => {
-    const details = renderDetails({ variant: "grid", isExpanded: false });
-    expect(wellCount(details.container)).toBeGreaterThan(0);
-    details.unmount();
+  it("spends at most one well per disclosure, in either variant, and only when it holds a body", () => {
+    // The rule both variants now follow: the card is already a container, so
+    // one closed contour inside it is the budget — and a collapsed section is
+    // a single row, which a well would be a box around nothing.
+    //
+    // The grid used to keep a bordered, filled well in BOTH states for BOTH
+    // sections. Stacked, that gave the card two identical boxes with nothing
+    // saying which was git state and which was running work, on top of the
+    // card's own border and the grid cell's — the card-in-card that Carbon
+    // and Material 3 both name as this component's characteristic failure.
+    for (const variant of ["sidebar", "grid"] as const) {
+      const collapsedDetails = renderDetails({ variant, isExpanded: false });
+      expect(
+        wellCount(collapsedDetails.container),
+        `${variant}: collapsed Details must be a row, not a well`
+      ).toBe(0);
+      collapsedDetails.unmount();
 
-    const terminals = renderTerminals({ variant: "grid", isExpanded: false });
-    expect(wellCount(terminals.container)).toBeGreaterThan(0);
+      const expandedDetails = renderDetails({ variant, isExpanded: true });
+      expect(
+        wellCount(expandedDetails.container),
+        `${variant}: expanded Details must have exactly one well`
+      ).toBe(1);
+      expandedDetails.unmount();
+
+      for (const isExpanded of [false, true]) {
+        const terminals = renderTerminals({ variant, isExpanded });
+        expect(
+          wellCount(terminals.container),
+          `${variant}: sessions (expanded=${isExpanded}) must have exactly one well`
+        ).toBe(1);
+        terminals.unmount();
+      }
+    }
   });
 
   it("does not separate a sidebar disclosure trigger from the body it reveals", () => {

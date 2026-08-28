@@ -96,11 +96,58 @@ export const DISCLOSURE_WELL =
   "mt-1.5 rounded-[var(--radius-lg)] border border-border-default bg-overlay-soft";
 
 /**
- * The grid card's well. It sits on a wider standalone surface, so it keeps the
- * heavier containment that reads correctly at that size.
+ * The grid card's well — the same object as `DISCLOSURE_WELL`, one density step
+ * looser.
+ *
+ * It used to be a different object: `bg-surface-inset` where the sidebar had
+ * `bg-overlay-soft`, and it was one of two wells on the card rather than the
+ * only one. That was the visible half of the divergence. A grid card is wider,
+ * not differently constructed, so what the width buys is 2px more air above the
+ * well and inside its rows — not a second containment vocabulary.
  */
-export const GRID_SESSION_WELL =
-  "mt-3 rounded-[var(--radius-lg)] border border-border-default bg-surface-inset";
+export const GRID_DISCLOSURE_WELL =
+  "mt-2 rounded-[var(--radius-lg)] border border-border-default bg-overlay-soft";
+
+/**
+ * The two densities the card is built at, and everything that changes between
+ * them.
+ *
+ * This exists because the alternative — a `variant === "grid"` ternary at every
+ * site — is what let the two variants drift into different components. Every
+ * value here is either the sidebar's, or the sidebar's plus one step of air.
+ * Nothing in this table is a different *kind* of treatment, and that is the
+ * point: the overview is meant to read as the sidebar at grid width, not as a
+ * second design of the same card.
+ *
+ * The vertical step is 4px→6px. It is the smallest change that registers at a
+ * 320-480px card and the largest that does not restate the row as a different
+ * component. The horizontal insets do not move at all: they are optically tuned
+ * against a leading glyph (see `SECTION_ROW_BOX`), and that optics does not
+ * change with the card's width.
+ */
+export interface CardDensity {
+  /** The disclosure row's box — `SECTION_ROW_BOX` at this density. */
+  rowBox: string;
+  /** The full-width disclosure row — `SECTION_ROW` at this density. */
+  row: string;
+  /** The card's one closed contour. */
+  well: string;
+}
+
+const GRID_ROW_BOX = "rounded-[var(--radius-lg)] border border-transparent py-1.5 pl-1.5 pr-2.5";
+
+export const CARD_DENSITY: Record<"sidebar" | "grid", CardDensity> = {
+  sidebar: {
+    rowBox: SECTION_ROW_BOX,
+    row: SECTION_ROW,
+    well: DISCLOSURE_WELL,
+  },
+  grid: {
+    rowBox: GRID_ROW_BOX,
+    row: `worktree-section-button flex w-full items-center text-left ${GRID_ROW_BOX}`,
+    well: GRID_DISCLOSURE_WELL,
+  },
+};
 
 /**
  * The card's text column, expressed relative to the content column.

@@ -284,8 +284,18 @@ describe("WorktreeOverviewModal — clickable aggregate stats (#8385)", () => {
       expect(source).toMatch(/isSelected=\{selectedIds\.has\(worktree\.id\)\}/);
     });
 
-    it("uses bg-overlay-subtle (not accent) for the selected state", () => {
-      expect(source).toMatch(/isSelected\s*&&\s*"bg-overlay-subtle/);
+    it("marks membership with a neutral fill plus a contrast-gated neutral ring", () => {
+      // The rule, not the token: membership is NEUTRAL (accent belongs to the
+      // cursor alone in this arrow-key domain), and because the fill step
+      // between a selected and an unselected cell is a couple of percent —
+      // nowhere near SC 1.4.11's 3:1 — the ring has to be the actual non-text
+      // indicator. `selection-outline` is the one ink `getThemeContrastWarnings`
+      // gates at 3:1 on every theme, which is why it and not a border token.
+      const selection = source.match(/isSelected\s*&&\s*"([^"]+)"/)?.[1];
+      expect(selection, "no isSelected treatment found on the grid cell").toBeTruthy();
+      expect(selection).toMatch(/\bbg-overlay-\w+/);
+      expect(selection).toContain("ring-selection-outline");
+      expect(selection).not.toMatch(/accent/);
     });
 
     it("does not introduce any forbidden accent token for selection treatment", () => {

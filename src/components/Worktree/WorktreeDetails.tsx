@@ -189,7 +189,7 @@ export function WorktreeDetails({
                       // `break-all` rather than the inherited word wrap: a bare
                       // GitHub URL has no break opportunity and used to run
                       // straight out of the card and off the sidebar.
-                      className="rounded break-all text-text-link underline hover:brightness-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
+                      className="rounded-[var(--radius-md)] break-all text-text-link underline hover:brightness-110 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-2"
                       onClick={(e) => handleLinkClick(e, segment.content)}
                     >
                       {segment.content}
@@ -230,13 +230,14 @@ export function WorktreeDetails({
             <div className="text-xs text-text-muted">No AI summary yet</div>
           )}
 
-          {/* Block 3: Artifacts (grouped file changes + system path). In the
-              GRID variant the list sits in a well painted the
-              selected-worktree-card color (`.sidebar-active-well`,
-              sidebar.css), with a hairline to carry the shape on themes where
-              that fill lands close to the panel's. The sidebar drops both: the
-              row is already inside a card and a Details region, and the rows'
-              own hover backplates give it all the shape it needs. */}
+          {/* Block 3: Artifacts (grouped file changes + system path).
+
+              The list is flat in BOTH variants. The grid used to paint it in
+              a filled, hairlined well — which, once Details itself is a well
+              inside a card inside a grid cell, is the fourth closed contour
+              around one list of filenames. The rows carry their own hover
+              backplates, and that is all the shape a list nested this deep
+              can use. */}
           {hasChanges && worktree.worktreeChanges && (
             <div className="space-y-2.5">
               <div className="flex items-center justify-between gap-2 px-2">
@@ -253,7 +254,7 @@ export function WorktreeDetails({
                           e.stopPropagation();
                           fileChangeListRef.current?.openFirstFile(e.currentTarget);
                         }}
-                        className="shrink-0 rounded p-1 text-text-muted transition-colors hover:bg-overlay-soft hover:text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+                        className="shrink-0 rounded-[var(--radius-md)] p-1 text-text-muted transition-colors hover:bg-overlay-soft hover:text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
                         aria-label="Open changes"
                       >
                         <FileDiff className="w-3.5 h-3.5" aria-hidden="true" />
@@ -270,27 +271,19 @@ export function WorktreeDetails({
                 maxVisible={MAX_VISIBLE_FILES}
                 groupByFolder={worktree.worktreeChanges.changedFileCount > 5}
                 isStale={isStale}
-                className={cn(
-                  "rounded-[var(--radius-md)] p-2",
-                  // Sidebar: the list is already inside the card and the
-                  // Details region; a filled, hairlined well here is the
-                  // third containment level in a 240-360px column. The rows
-                  // carry their own hover backplate, which is enough shape.
-                  !isSidebar && "sidebar-active-well border border-border-subtle"
-                )}
+                className="rounded-[var(--radius-md)] p-2"
               />
             </div>
           )}
         </>
       )}
 
-      {/* Footer: system path, then the last-active line. Separated by an
-          asymmetric gap rather than a rule — a full-width hairline in a
-          300px column reads as another section boundary, and the tertiary
-          tone already terminates the block. */}
-      <div
-        className={cn("space-y-2.5", isSidebar ? "pt-1.5" : "border-t border-border-subtle pt-3")}
-      >
+      {/* Footer: system path, then the last-active line. Both variants
+          separate it by an asymmetric gap rather than a rule — a full-width
+          hairline inside a well that is already inside a card reads as another
+          section boundary, and the tertiary tone already terminates the
+          block. */}
+      <div className={cn("space-y-2.5", isSidebar ? "pt-1.5" : "pt-2.5")}>
         <div className="flex items-center gap-2">
           <Tooltip>
             <TooltipTrigger asChild>
@@ -301,7 +294,7 @@ export function WorktreeDetails({
                   onPathClick();
                 }}
                 className={cn(
-                  "flex min-w-0 flex-1 items-center gap-1.5 truncate rounded text-left font-mono text-xs text-text-muted hover:text-text-secondary",
+                  "flex min-w-0 flex-1 items-center gap-1.5 truncate rounded-[var(--radius-md)] text-left font-mono text-xs text-text-muted hover:text-text-secondary",
                   "focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary",
                   isFocused && "text-text-secondary"
                 )}
@@ -318,7 +311,7 @@ export function WorktreeDetails({
               <button
                 type="button"
                 onClick={handleCopyPath}
-                className="shrink-0 rounded p-1 text-text-muted transition-colors hover:bg-overlay-soft hover:text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
+                className="shrink-0 rounded-[var(--radius-md)] p-1 text-text-muted transition-colors hover:bg-overlay-soft hover:text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary"
                 aria-label="Copy path to clipboard"
               >
                 {pathCopied ? (

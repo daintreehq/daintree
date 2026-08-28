@@ -34,7 +34,7 @@ import {
 import { useDragHandle } from "@/components/DragDrop/DragHandleContext";
 import { useFleetArmingStore, isFleetArmEligible } from "@/store/fleetArmingStore";
 import { useKeybindingScope } from "@/hooks/useKeybinding";
-import { SECTION_LABEL, SECTION_ROW, DISCLOSURE_WELL, GRID_SESSION_WELL } from "./sectionChrome";
+import { SECTION_LABEL, CARD_DENSITY } from "./sectionChrome";
 
 interface MarqueeBox {
   x: number;
@@ -92,7 +92,7 @@ function TerminalRow({ term, onClick }: TerminalRowProps) {
               onClick(term);
             }}
             aria-selected={isArmed}
-            className="flex items-center gap-2 min-w-0 flex-1 text-left cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px] rounded"
+            className="flex items-center gap-2 min-w-0 flex-1 text-left cursor-pointer focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px] rounded-[var(--radius-md)]"
           >
             <div className="shrink-0 opacity-60 group-hover/termrow:opacity-100 transition-opacity">
               <TerminalIcon kind={term.kind} chrome={chrome} className="w-3 h-3" />
@@ -163,7 +163,7 @@ function TerminalRow({ term, onClick }: TerminalRowProps) {
             ref={dragHandle?.setActivatorNodeRef}
             type="button"
             data-drag-handle
-            className="cursor-grab rounded text-text-primary/25 group-hover/termrow:text-text-primary/40 transition-colors hover:text-text-secondary focus-visible:text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-1 active:cursor-grabbing"
+            className="cursor-grab rounded-[var(--radius-md)] text-text-primary/25 group-hover/termrow:text-text-primary/40 transition-colors hover:text-text-secondary focus-visible:text-text-secondary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-1 active:cursor-grabbing"
             aria-label="Drag to move terminal"
             {...(dragHandle?.listeners as React.HTMLAttributes<HTMLElement> | undefined)}
           >
@@ -210,6 +210,7 @@ export function WorktreeTerminalSection({
   useKeybindingScope("worktreeGrid", isExpanded);
 
   const isSidebar = variant === "sidebar";
+  const density = CARD_DENSITY[isSidebar ? "sidebar" : "grid"];
   const showMetaFooter = counts.total > 0;
 
   const terminalsId = `worktree-${worktreeId}-terminals`;
@@ -406,14 +407,36 @@ export function WorktreeTerminalSection({
      rest, so it reads as a footer and not as a call to action. */
   if (!showMetaFooter) {
     // No tray without somewhere for its row to go: see `onStartSession`.
-    if (!isSidebar || !onStartSession) return null;
+    //
+    // The grid gets it too. It used to render nothing here, which cost the
+    // overview twice: a card with no sessions had no bottom slot at all, so
+    // its neighbours' bottoms sat 30-50px lower and the row's baseline broke;
+    // and "no sessions" and "the sessions row did not render" looked the same.
+    // The tray answers both, and it names the next action rather than the
+    // absence.
+    if (!onStartSession) return null;
     return (
-      <div id={terminalsId} className={DISCLOSURE_WELL}>
+      <div
+        id={terminalsId}
+        className={
+          // The GRID drops the well here. A well is a container, and with no
+          // sessions there is nothing to contain — the same "a well around one
+          // row is a box around nothing" rule the Details section above
+          // already follows. Across 13 cards it was 13 boxes saying the same
+          // sentence.
+          //
+          // The SIDEBAR keeps it, and that is the one place the rule bends:
+          // its cards are full-bleed with no border of their own, so this well
+          // is also what stops two adjacent cards merging into one another. A
+          // grid card has its own border and a 12px gutter and needs no help.
+          isSidebar ? density.well : "mt-1.5"
+        }
+      >
         <button
           type="button"
           onClick={onStartSession}
           className={cn(
-            SECTION_ROW,
+            density.row,
             "gap-1.5 text-2xs text-text-secondary transition-colors hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]"
           )}
         >
@@ -425,7 +448,7 @@ export function WorktreeTerminalSection({
   }
 
   return (
-    <div id={terminalsId} className={isSidebar ? DISCLOSURE_WELL : GRID_SESSION_WELL}>
+    <div id={terminalsId} className={density.well}>
       {isExpanded ? (
         <>
           <button
@@ -433,40 +456,27 @@ export function WorktreeTerminalSection({
             aria-expanded={true}
             aria-controls={terminalsPanelId}
             className={cn(
-              "worktree-section-button flex w-full items-center text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]",
-              isSidebar
-                ? cn(SECTION_ROW, "gap-1.5")
-                : "justify-between rounded-t-[var(--radius-lg)] border-b border-border-default bg-surface-inset px-3 py-1.5"
+              // Leading chevron, no fill, no rule under it — the same shape
+              // Details uses directly above. The grid used to draw this as a
+              // filled header band with a bottom border, which made one
+              // disclosure look like a titled sub-panel and the other like a
+              // row.
+              "transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]",
+              density.row,
+              "gap-1.5"
             )}
             id={`${terminalsId}-button`}
           >
-            {isSidebar && (
-              <ChevronRight className="h-3 w-3 shrink-0 rotate-90 text-text-secondary" />
-            )}
-            <span
-              className={cn(
-                "flex items-center gap-1.5",
-                isSidebar ? SECTION_LABEL : "text-2xs font-medium text-text-muted"
-              )}
-            >
-              {/* The expanded sidebar trigger drops the summary glyph. It led
-                  a row whose only other leading mark is the chevron, so this
-                  section's label started ~20px right of Details' — two rows
-                  the card presents as siblings, sitting on two columns — and
-                  it spent that measure on agent identity the child rows
-                  directly below already carry, one glyph each, in a 240px
-                  column. The collapsed trigger keeps it (no children to read
-                  it off), and so does the grid, which has the width and treats
-                  this row as a header rather than a peer. */}
-              {!isSidebar &&
-                (SummaryIcon ? (
-                  <SummaryIcon className="w-3 h-3" />
-                ) : (
-                  <SquareTerminal className="w-3 h-3" />
-                ))}
-              <span>Active sessions ({counts.total})</span>
-            </span>
-            {!isSidebar && <ChevronRight className="h-3 w-3 rotate-90 text-text-muted" />}
+            <ChevronRight className="h-3 w-3 shrink-0 rotate-90 text-text-secondary" />
+            {/* The expanded trigger drops the summary glyph in both variants.
+                It led a row whose only other leading mark is the chevron, so
+                this section's label started ~20px right of Details' — two rows
+                the card presents as siblings, sitting on two columns — and it
+                spent that measure on agent identity the child rows directly
+                below already carry, one glyph each. The collapsed trigger
+                keeps it: there, it is the only thing on screen naming the
+                agent. */}
+            <span className={SECTION_LABEL}>Active sessions ({counts.total})</span>
           </button>
           <SortableContext
             id={`worktree-${worktreeId}-accordion`}
@@ -476,8 +486,7 @@ export function WorktreeTerminalSection({
             {eligibleTerminals.length >= 2 && armedIdsSize === 0 && !hintDismissed && (
               <div
                 className={cn(
-                  "flex items-center justify-between py-1.5 text-2xs text-text-muted",
-                  isSidebar ? "px-3" : "border-b border-border-default bg-surface-inset px-3"
+                  "flex items-center justify-between px-3 py-1.5 text-2xs text-text-secondary"
                 )}
               >
                 <span>Drag to select multiple, ⇧-click to add</span>
@@ -508,8 +517,7 @@ export function WorktreeTerminalSection({
               onPointerUp={handlePointerUp}
               onPointerCancel={handlePointerCancel}
               className={cn(
-                "relative max-h-[300px] cursor-crosshair overflow-y-auto",
-                !isSidebar && "bg-surface-inset"
+                "relative max-h-[300px] cursor-crosshair overflow-y-auto"
               )}
             >
               {orderedWorktreeTerminals.map((term, index) => (
@@ -525,7 +533,7 @@ export function WorktreeTerminalSection({
               {marqueeBox && (
                 <div
                   aria-hidden
-                  className="pointer-events-none absolute z-10 rounded border border-border-strong bg-overlay-medium"
+                  className="pointer-events-none absolute z-10 rounded-[var(--radius-md)] border border-border-strong bg-overlay-medium"
                   style={{
                     left: marqueeBox.x,
                     top: marqueeBox.y,
@@ -543,15 +551,13 @@ export function WorktreeTerminalSection({
           aria-expanded={false}
           aria-controls={terminalsPanelId}
           className={cn(
-            "worktree-section-button flex w-full items-center justify-between text-left transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]",
-            isSidebar ? SECTION_ROW : "rounded-[var(--radius-lg)] px-3 py-1.5"
+            "justify-between transition-colors focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary focus-visible:outline-offset-[-2px]",
+            density.row
           )}
           id={`${terminalsId}-button`}
         >
           <div className="flex items-center gap-1.5 text-2xs text-text-secondary">
-            {isSidebar && (
-              <ChevronRight className="h-3 w-3 shrink-0 text-text-secondary" aria-hidden="true" />
-            )}
+            <ChevronRight className="h-3 w-3 shrink-0 text-text-secondary" aria-hidden="true" />
             {/* Kept here, unlike the expanded trigger: collapsed, this glyph
                 is the ONLY thing on screen saying which agent is running. The
                 expanded trigger can drop it because its own child rows are

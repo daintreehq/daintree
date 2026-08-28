@@ -43,6 +43,51 @@ function parseColumnCount(template: string): number {
  *
  * `delta` is +1 for ArrowDown, -1 for ArrowUp.
  */
+/**
+ * The first or last cell of the row `fromIndex` sits in.
+ *
+ * The WAI-ARIA grid pattern gives Home/End the CURRENT ROW and reserves the
+ * whole grid for Control+Home / Control+End. This grid did the opposite: both
+ * keys jumped to the flat extremes, so in a 13-card, 4-column grid the only
+ * thing Home could do was what Control+Home should, and there was no way at
+ * all to reach the end of the row you were on.
+ *
+ * Rows are section-local for the same reason vertical movement is: a section
+ * break renders as a full-width separator, so it forces a row break that the
+ * flat ordering does not encode. `End` on the last row of a short section
+ * clamps to that section's last cell, not to a cell that visually sits on the
+ * row below.
+ *
+ * `edge` is -1 for Home (row start) and +1 for End (row end).
+ */
+export function computeRowExtreme(
+  fromIndex: number,
+  edge: 1 | -1,
+  columnCount: number,
+  total: number,
+  sectionSizes: readonly number[] | undefined
+): number {
+  if (total <= 0 || fromIndex < 0 || fromIndex >= total) return fromIndex;
+  if (columnCount <= 0) columnCount = 1;
+
+  const sizes = sectionSizes && sectionSizes.length > 0 ? sectionSizes : [total];
+
+  let sectionStart = 0;
+  let sectionSize = 0;
+  for (const size of sizes) {
+    sectionSize = size ?? 0;
+    if (fromIndex < sectionStart + sectionSize) break;
+    sectionStart += sectionSize;
+  }
+  if (sectionSize === 0) return fromIndex;
+
+  const localIdx = fromIndex - sectionStart;
+  const rowStart = Math.floor(localIdx / columnCount) * columnCount;
+  const local =
+    edge === -1 ? rowStart : Math.min(rowStart + columnCount - 1, sectionSize - 1);
+  return sectionStart + local;
+}
+
 export function computeVerticalMove(
   fromIndex: number,
   delta: 1 | -1,
@@ -343,10 +388,14 @@ export function useWorktreeOverviewKeyboard({
           );
           break;
         case "Home":
-          targetIndex = 0;
+          targetIndex = isCmdOrCtrl
+            ? 0
+            : computeRowExtreme(currentIndex, -1, columnCount, total, sectionSizesRef.current);
           break;
         case "End":
-          targetIndex = total - 1;
+          targetIndex = isCmdOrCtrl
+            ? total - 1
+            : computeRowExtreme(currentIndex, 1, columnCount, total, sectionSizesRef.current);
           break;
         case "PageDown": {
           const stride = Math.max(1, columnCount * 3);
