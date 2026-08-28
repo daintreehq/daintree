@@ -44,6 +44,16 @@ vi.mock("../hooks/useForgeBadgeFreshness", () => ({
 }));
 
 import { PRBadge } from "../PRBadge";
+import type { CIStatus, CIStatusState } from "@shared/types/forge";
+
+const ciStatus = (state: CIStatusState): CIStatus => ({
+  state,
+  total: 1,
+  passed: state === "success" ? 1 : 0,
+  failed: state === "failure" ? 1 : 0,
+  pending: state === "pending" ? 1 : 0,
+  rawData: null,
+});
 
 function renderBadge(extra: Partial<Parameters<typeof PRBadge>[0]> = {}) {
   return render(
@@ -169,5 +179,35 @@ describe("PRBadge freshness glyphs", () => {
 
     const button = screen.getByRole("button");
     expect(button.getAttribute("aria-label")).toContain("PR detection paused");
+  });
+});
+
+describe("PRBadge CI rollup mark", () => {
+  beforeEach(() => {
+    mockMissingCredential = false;
+    mockFreshnessCause = undefined;
+  });
+
+  it("marks a run still in flight with a dot, not a glyph", () => {
+    renderBadge({ prCiStatus: ciStatus("pending") });
+
+    const button = screen.getByRole("button");
+    expect(button.getAttribute("aria-label")).toContain("CI pending");
+    // No stroked glyph — the dot is the whole mark, as it is on GitHub.
+    expect(button.querySelector(".lucide-clock")).toBeNull();
+    const dot = button.querySelector(".status-mark");
+    expect(dot).toBeTruthy();
+    // Painted as a background, which forced colors strips; `.status-mark` is
+    // what src/index.css repaints, so the class is the mark's survival.
+    expect(dot?.className).toContain("bg-status-warning");
+  });
+
+  it("marks a settled run with a glyph that carries its own shape", () => {
+    renderBadge({ prCiStatus: ciStatus("success") });
+
+    const button = screen.getByRole("button");
+    expect(button.getAttribute("aria-label")).toContain("CI passing");
+    expect(button.querySelector(".lucide-check")).toBeTruthy();
+    expect(button.querySelector(".status-mark")).toBeNull();
   });
 });
