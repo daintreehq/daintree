@@ -104,6 +104,13 @@ export const STATUS_SUCCESS_INVENTORY = {
   ],
   "plugins/builtin/github/renderer/components/GitHubListItem.tsx": [
     {
+      category: "outcome",
+      signature: "text-status-success",
+      anchor: 'label: "Approved"',
+      expectedOccurrences: 1,
+      rationale: "Recorded decision of a named review on the pull request",
+    },
+    {
       category: "transient",
       signature: "text-status-success",
       anchor: 'copied && "text-status-success"',
@@ -124,14 +131,14 @@ export const STATUS_SUCCESS_INVENTORY = {
       signature: "text-status-success",
       anchor: 'validationResult === "success"',
       expectedOccurrences: 1,
-      rationale: "Token-saved confirmation; cleared by the tab's 5s validation-result timer",
+      rationale: "Token-saved confirmation; resets on the next edit of the token field",
     },
     {
       category: "transient",
       signature: "text-status-success",
       anchor: 'validationResult === "test-success"',
       expectedOccurrences: 1,
-      rationale: "Token-valid confirmation; cleared by the tab's 5s validation-result timer",
+      rationale: "Token-valid confirmation; resets on the next edit of the token field",
     },
   ],
   "plugins/builtin/github/renderer/utils/prCIStatus.ts": [
@@ -1017,5 +1024,5 @@ export const STATUS_SUCCESS_INVENTORY = {
  * another added) still trips the per-site checks, and these catch the case
  * where a whole file moves without either check firing.
  */
-export const EXPECTED_STATUS_SUCCESS_SITES = 123;
-export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 145;
+export const EXPECTED_STATUS_SUCCESS_SITES = 124;
+export const EXPECTED_STATUS_SUCCESS_OCCURRENCES = 146;
