@@ -568,6 +568,29 @@ describe("ReviewHub", () => {
       });
     });
 
+    it("renders an in-flight run as a dot with its label on a text channel", async () => {
+      setWorktreePR({
+        prNumber: 42,
+        prUrl: "https://github.com/test/repo/pull/42",
+        prState: "open",
+        prCiStatus: "pending",
+      });
+      getStagingStatusMock.mockResolvedValue(makeStatus({ hasRemote: true }));
+
+      const { container } = render(
+        <ReviewHubContent isOpen={true} worktreePath={WORKTREE_PATH} onClose={vi.fn()} />
+      );
+
+      const label = await waitFor(() => screen.getByText("pending"));
+      // The mark is a painted disc carrying the forced-colors rescue hook…
+      const dot = container.querySelector(".status-mark");
+      expect(dot).toBeTruthy();
+      expect(dot?.className).toContain("bg-status-warning");
+      // …and the words beside it take a text colour, not the disc's background
+      // class, which would paint nothing on the label at all.
+      expect(label.className).toContain("text-status-warning");
+    });
+
     it("omits CI status when prCiStatus is undefined", async () => {
       setWorktreePR({
         prNumber: 42,

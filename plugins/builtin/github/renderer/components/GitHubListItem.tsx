@@ -418,7 +418,10 @@ export function GitHubListItem({
                             <ciVisual.Icon className={cn("w-3.5 h-3.5", ciVisual.colorClass)} />
                           ) : (
                             <span
-                              className={cn("block w-2 h-2 rounded-full", ciVisual.colorClass)}
+                              className={cn(
+                                "status-mark block w-2 h-2 rounded-full",
+                                ciVisual.colorClass
+                              )}
                             />
                           )}
                         </span>

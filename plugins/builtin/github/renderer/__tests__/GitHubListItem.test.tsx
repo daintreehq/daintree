@@ -276,7 +276,12 @@ describe("GitHubListItem", () => {
     render(<GitHubListItem item={prWithCI} type="pr" />);
     const indicator = screen.getByLabelText("Checks pending");
     expect(indicator.querySelector("svg")).toBeNull();
-    expect(indicator.querySelector(".bg-status-warning")).not.toBeNull();
+    const dot = indicator.querySelector(".bg-status-warning");
+    expect(dot).not.toBeNull();
+    // The disc is a background, which forced colors strips to nothing; the
+    // shared hook src/index.css repaints is the only thing keeping this row
+    // marked at all for those users.
+    expect(dot?.classList.contains("status-mark")).toBe(true);
   });
 
   it("renders no CI indicator for an unknown roll-up", () => {

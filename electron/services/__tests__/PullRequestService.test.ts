@@ -200,6 +200,19 @@ function makeMockCIStatus(): CIStatus {
   return { state: "success", total: 1, passed: 1, failed: 0, pending: 0, rawData: null };
 }
 
+// A rollup carrying counts as well as a state, so a test can tell "the same
+// object travelled" apart from "something rebuilt a state out of the flat field".
+function ciStatusFixture(state: CIStatus["state"]): CIStatus {
+  return {
+    state,
+    total: 3,
+    passed: state === "success" ? 3 : 1,
+    failed: state === "failure" ? 2 : 0,
+    pending: state === "pending" ? 2 : 0,
+    rawData: null,
+  };
+}
+
 // Drain microtasks + process.nextTick so the host-side BatchLoader's
 // fire-and-forget CI enrichment dispatches under fake timers (which fake
 // setTimeout but not nextTick/microtasks).
@@ -1143,6 +1156,139 @@ describe("PullRequestService", () => {
     expect(findPRsByNumbers).toHaveBeenCalledWith(expect.anything(), [1]);
 
     pullRequestService.destroy();
+  });
+
+  // The badge every worktree card renders reads `linked.pr.ciStatus`, which the
+  // workspace host rebuilds from the rich `ciStatus` field of each detection
+  // event and full-replaces. An emit that carries only the flat rollup blanks
+  // the mark until enrichment re-emits a round trip later — the blink this
+  // group pins shut.
+  describe("CI status across a metadata-change re-emit", () => {
+    // One revalidation cycle where the PR is renamed. `headSha` decides whether
+    // the rollup we hold still describes the PR's head; the caller drives it.
+    async function renameAndCapture(options: {
+      ci: CIStatus | null;
+      detectedHeadSha: string;
+      probeHeadSha: string;
+    }) {
+      const batchSpy = vi.fn(async (_repo: RepoRef, branches: string[]) => {
+        const map = new Map<string, ForgePR | null>();
+        for (const branch of branches) {
+          map.set(branch, makeMockForgePR({ number: 1, headRef: branch }));
+        }
+        return map;
+      });
+      const mockImpl = mockForgeProviderResolved(undefined, batchSpy);
+
+      const getCIStatuses = vi.fn(async (_repo: RepoRef, prNumbers: number[]) => {
+        const map = new Map<number, CIStatus | null>();
+        for (const n of prNumbers) map.set(n, options.ci);
+        return map;
+      });
+      // Cycle 1 seeds the head marker with the PR unchanged; cycle 2 is the
+      // rename under test. A PR whose head we have never seen cannot tell us
+      // whether it moved, so the comparison needs both.
+      let cycle = 0;
+      const probeOpenPRList = vi.fn(async () => {
+        cycle++;
+        return {
+          kind: "changed" as const,
+          changed: [
+            {
+              number: 1,
+              headSha: cycle === 1 ? options.detectedHeadSha : options.probeHeadSha,
+              updatedAt: "2024-02-02T00:00:00Z",
+              state: "open" as const,
+              title: cycle === 1 ? "Add new feature" : "Renamed",
+            },
+          ],
+        };
+      });
+      const findPRsByNumbers = vi.fn(async (_repo: RepoRef, prNumbers: number[]) => {
+        const map = new Map<number, ForgePR | null>();
+        for (const n of prNumbers) {
+          map.set(n, makeMockForgePR({ number: n, title: cycle === 1 ? undefined : "Renamed" }));
+        }
+        return map;
+      });
+      mockImpl.batchLookups = { findPRsByNumbers, getCIStatuses, probeOpenPRList };
+
+      const { pullRequestService } = await import("../PullRequestService.js");
+      const { events } = await import("../events.js");
+
+      pullRequestService.initialize("/repo", "test-project-id");
+      events.emit(
+        "sys:worktree:update",
+        makeWorktreeSnapshot({ worktreeId: "wt-1", branch: "feature/a" })
+      );
+
+      await pullRequestService.refresh();
+      await flushLoaders();
+      // Seed the head marker so the cycle under test has a baseline to compare.
+      await (
+        pullRequestService as unknown as { revalidateResolvedPRs: () => Promise<void> }
+      ).revalidateResolvedPRs();
+      await flushLoaders();
+
+      const detected: DaintreeEventMap["sys:pr:detected"][] = [];
+      const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
+
+      await (
+        pullRequestService as unknown as { revalidateResolvedPRs: () => Promise<void> }
+      ).revalidateResolvedPRs();
+
+      unsubscribe();
+      pullRequestService.destroy();
+      // The metadata emit lands synchronously inside the revalidation loop; the
+      // CI re-enrichment is a fire-and-forget tail, so the first payload here is
+      // always the one under test.
+      return detected[0];
+    }
+
+    it("carries the rich rollup through, not just the flat one", async () => {
+      const ci = ciStatusFixture("pending");
+      const emit = await renameAndCapture({
+        ci,
+        detectedHeadSha: "sha1",
+        probeHeadSha: "sha1",
+      });
+
+      expect(emit?.prTitle).toBe("Renamed");
+      // Object identity, not a shape match: a regression that rebuilds `{ state }`
+      // from the flat rollup would lose the counts the tooltip renders.
+      expect(emit?.ciStatus).toBe(ci);
+      expect(emit?.prCiStatus).toBe("pending");
+    });
+
+    it("carries a state the flat rollup cannot express", async () => {
+      // `neutral` has no flat representation — it maps to undefined — so a fix
+      // that carried the rich field only when the flat one was set would blank
+      // a neutral mark and still pass the pending case above.
+      const ci = ciStatusFixture("neutral");
+      const emit = await renameAndCapture({
+        ci,
+        detectedHeadSha: "sha1",
+        probeHeadSha: "sha1",
+      });
+
+      expect(emit?.ciStatus).toBe(ci);
+      expect(emit?.prCiStatus).toBeUndefined();
+    });
+
+    it("drops the rollup when the rename rode in on a new head", async () => {
+      // A push and a title edit in the same tick: the green we hold belongs to
+      // the previous commit, and publishing it over the new one reads as "this
+      // head passed" before anything has run against it.
+      const emit = await renameAndCapture({
+        ci: ciStatusFixture("success"),
+        detectedHeadSha: "sha1",
+        probeHeadSha: "sha2",
+      });
+
+      expect(emit?.prTitle).toBe("Renamed");
+      expect(emit?.ciStatus).toBeUndefined();
+      expect(emit?.prCiStatus).toBeUndefined();
+    });
   });
 
   it("seeds headSha/updatedAt from a changed probe so the next tick's snapshot is in sync", async () => {
@@ -3024,7 +3170,7 @@ describe("PullRequestService", () => {
       const probeOpenPRList = vi.fn(async () => ({ kind: "unchanged" as const }));
       mockImpl.batchLookups = { findPRsByNumbers, getCIStatuses, probeOpenPRList };
 
-      return { getCIStatuses, findPRsByNumbers, probeOpenPRList };
+      return { getCIStatuses, findPRsByNumbers, probeOpenPRList, mockImpl };
     }
 
     function ciState(state: "success" | "failure" | "pending"): CIStatus {
@@ -3370,6 +3516,42 @@ describe("PullRequestService", () => {
       await revalidate(pullRequestService);
       expect(getCIStatuses).not.toHaveBeenCalled();
 
+      pullRequestService.destroy();
+    });
+
+    it("keeps the last known CI status when every CI lookup fails", async () => {
+      const { getCIStatuses, mockImpl } = makeUnchangedProbeHarness(
+        new Map([[1, ciState("success")]])
+      );
+
+      const { pullRequestService, events } = await detectAndSettle(["feature/a"]);
+      const svc = pullRequestService as unknown as {
+        detectedPRs: Map<string, { ciStatus?: string }>;
+      };
+      expect(svc.detectedPRs.get("wt-1")?.ciStatus).toBe("success");
+      getCIStatuses.mockClear();
+
+      // The provider goes down between ticks: the batch throws, and so does the
+      // per-PR call the loader drops to. Neither is an answer about this PR.
+      getCIStatuses.mockRejectedValue(new Error("provider unreachable"));
+      vi.mocked(mockImpl.getCIStatus).mockRejectedValue(new Error("provider unreachable"));
+
+      const detected: DaintreeEventMap["sys:pr:detected"][] = [];
+      const unsubscribe = events.on("sys:pr:detected", (payload) => detected.push(payload));
+
+      for (let elapsed = 0; elapsed < 60 && getCIStatuses.mock.calls.length === 0; elapsed++) {
+        jump(MINUTE);
+        await revalidate(pullRequestService);
+      }
+      expect(getCIStatuses).toHaveBeenCalled();
+
+      // Laundering the failure into a resolved `null` would read downstream as a
+      // confirmed "no checks": the mark blanks, and the cleared entry is then
+      // neither pending nor terminal, so nothing ever re-polls it.
+      expect(svc.detectedPRs.get("wt-1")?.ciStatus).toBe("success");
+      expect(detected).toHaveLength(0);
+
+      unsubscribe();
       pullRequestService.destroy();
     });
 
