@@ -6,6 +6,7 @@ import { render, screen, fireEvent, act, cleanup } from "@testing-library/react"
 import { Activity, type ReactNode } from "react";
 import { GitHubListItem } from "../components/GitHubListItem";
 import type { Issue, PR } from "@shared/types/forge";
+import type { Worktree } from "@shared/types/worktree";
 import { actionService } from "@/services/ActionService";
 import { UI_ACTION_SUCCESS_DWELL_MS } from "@/lib/animationUtils";
 
@@ -13,18 +14,6 @@ vi.mock("react-dom", async () => {
   const actual = await vi.importActual<typeof import("react-dom")>("react-dom");
   return { ...actual, createPortal: (children: ReactNode) => children };
 });
-
-vi.mock("@/hooks/useWorktreeStore", () => ({
-  useWorktreeStore: vi.fn((selector: (s: { worktrees: Map<string, unknown> }) => unknown) =>
-    selector({ worktrees: new Map() })
-  ),
-}));
-
-vi.mock("@/store/worktreeStore", () => ({
-  useWorktreeSelectionStore: vi.fn((selector: (s: { activeWorktreeId: null }) => unknown) =>
-    selector({ activeWorktreeId: null })
-  ),
-}));
 
 vi.mock("@/services/ActionService", () => ({
   actionService: { dispatch: vi.fn() },
@@ -74,6 +63,14 @@ const basePR: PR = {
   rawData: null,
 };
 
+const makeWorktree = (overrides: Partial<Worktree>): Worktree => ({
+  id: "wt-42",
+  path: "/tmp/wt-42",
+  name: "issue-42-fix",
+  isCurrent: false,
+  ...overrides,
+});
+
 beforeEach(() => {
   vi.useFakeTimers();
   Object.defineProperty(navigator, "clipboard", {
@@ -90,21 +87,38 @@ afterEach(() => {
 });
 
 describe("GitHubListItem", () => {
-  it("renders issue title as a clickable button", () => {
+  it("does not make the title its own control", () => {
+    // The title used to be a button that always opened GitHub while the row
+    // around it created or switched a worktree, so which operation you got
+    // depended on whether you hit the text.
     render(<GitHubListItem item={baseIssue} type="issue" />);
-    const title = screen.getByText("Fix the thing");
-    expect(title.tagName).toBe("BUTTON");
+    const [title] = screen.getAllByText("Fix the thing");
+    expect(title!.tagName).not.toBe("BUTTON");
+    expect(title!.closest("button")).toBeNull();
   });
 
-  it("renders PR title as a clickable button", () => {
+  it("does not make a PR title its own control either", () => {
     render(<GitHubListItem item={basePR} type="pr" />);
-    const title = screen.getByText("Add new feature");
-    expect(title.tagName).toBe("BUTTON");
+    const [title] = screen.getAllByText("Add new feature");
+    expect(title!.tagName).not.toBe("BUTTON");
+    expect(title!.closest("button")).toBeNull();
   });
 
-  it("clicking issue title dispatches system.openExternal with item URL", () => {
-    render(<GitHubListItem item={baseIssue} type="issue" />);
-    fireEvent.click(screen.getByText("Fix the thing"));
+  it("runs the row's action when the title is clicked, not the forge", () => {
+    const onCreateWorktree = vi.fn();
+    render(<GitHubListItem item={baseIssue} type="issue" onCreateWorktree={onCreateWorktree} />);
+    fireEvent.click(screen.getAllByText("Fix the thing")[0]!);
+    expect(onCreateWorktree).toHaveBeenCalledWith(baseIssue);
+    expect(actionService.dispatch).not.toHaveBeenCalled();
+  });
+
+  it("keeps the forge on the modifier click", () => {
+    const onCreateWorktree = vi.fn();
+    const { container } = render(
+      <GitHubListItem item={baseIssue} type="issue" onCreateWorktree={onCreateWorktree} />
+    );
+    fireEvent.click(container.querySelector("[role='row']")!, { metaKey: true });
+    expect(onCreateWorktree).not.toHaveBeenCalled();
     expect(actionService.dispatch).toHaveBeenCalledWith(
       "system.openExternal",
       { url: "https://github.com/test/repo/issues/42" },
@@ -118,7 +132,7 @@ describe("GitHubListItem", () => {
       linkedPR: { number: 55, state: "open", url: "https://github.com/test/repo/pull/55" },
     };
     render(<GitHubListItem item={issueWithPR} type="issue" />);
-    fireEvent.click(screen.getByRole("button", { name: "Open linked pull request #55" }));
+    fireEvent.click(screen.getByRole("button", { name: /Open linked pull request #55/ }));
     expect(actionService.dispatch).toHaveBeenCalledWith(
       "system.openExternal",
       { url: "https://github.com/test/repo/pull/55" },
@@ -279,7 +293,7 @@ describe("GitHubListItem", () => {
       linkedPR: { number: 55, state: "open", url: "https://github.com/test/repo/pull/55" },
     };
     render(<GitHubListItem item={issueWithPR} type="issue" />);
-    const prButton = screen.getByRole("button", { name: "Open linked pull request #55" });
+    const prButton = screen.getByRole("button", { name: /Open linked pull request #55/ });
     expect(prButton).toBeTruthy();
     expect(prButton.querySelector("svg")).not.toBeNull();
   });
@@ -298,8 +312,8 @@ describe("GitHubListItem", () => {
     expect(screen.getByText("bug")).toBeTruthy();
     expect(screen.getByText("+1")).toBeTruthy();
     expect(container.textContent).toContain("bug, high-priority");
-    expect(screen.getByRole("button", { name: "Open linked pull request #55" })).toBeTruthy();
-    expect(screen.getByAltText("alice")).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Open linked pull request #55/ })).toBeTruthy();
+    expect(screen.getByLabelText("Assigned to alice")).toBeTruthy();
   });
 
   it("renders #number badge", () => {
@@ -405,7 +419,7 @@ describe("GitHubListItem", () => {
         onToggleSelect={onToggleSelect}
       />
     );
-    fireEvent.click(screen.getByText("Fix the thing"));
+    fireEvent.click(screen.getAllByText("Fix the thing")[0]!);
     expect(onToggleSelect).toHaveBeenCalled();
     expect(actionService.dispatch).not.toHaveBeenCalled();
   });
@@ -416,9 +430,8 @@ describe("GitHubListItem", () => {
       assignees: [{ login: "alice", avatarUrl: "https://example.com/alice.png", rawData: null }],
     };
     render(<GitHubListItem item={issueWithAssignee} type="issue" />);
-    const avatar = screen.getByAltText("alice");
-    expect(avatar).toBeTruthy();
-    expect(avatar.getAttribute("src")).toBe("https://example.com/alice.png");
+    const slot = screen.getByLabelText("Assigned to alice");
+    expect(slot.querySelector("img")?.getAttribute("src")).toBe("https://example.com/alice.png");
   });
 
   it("renders only first assignee avatar when multiple assignees", () => {
@@ -430,8 +443,12 @@ describe("GitHubListItem", () => {
       ],
     };
     render(<GitHubListItem item={issueWithMultiple} type="issue" />);
-    expect(screen.getByAltText("alice")).toBeTruthy();
-    expect(screen.queryByAltText("bob")).toBeNull();
+    // One face plus a count, but the accessible name names everyone — the
+    // image used to be labelled with the first assignee alone, so a screen
+    // reader was told a three-way assignment belonged to one person.
+    const slot = screen.getByLabelText("Assigned to alice, bob");
+    expect(slot.querySelectorAll("img")).toHaveLength(1);
+    expect(screen.getByText("+1")).toBeTruthy();
   });
 
   it("does not render assignee avatar when no assignees", () => {
@@ -442,8 +459,8 @@ describe("GitHubListItem", () => {
 
   it("does not render assignee avatar for PRs", () => {
     render(<GitHubListItem item={basePR} type="pr" />);
-    const images = screen.queryAllByRole("img");
-    expect(images).toHaveLength(0);
+    expect(screen.queryByLabelText(/^Assigned to/)).toBeNull();
+    expect(document.querySelector("img")).toBeNull();
   });
 
   it("makes creating a worktree the row's primary click, not a hover-only glyph", async () => {
@@ -562,5 +579,258 @@ describe("GitHubListItem", () => {
     // The # yields to the check during the copied state, and the digits stay
     // put so the row does not reflow.
     expect(copyButton.textContent).toBe("42");
+  });
+  it("keeps the identity slot pinned beside the menu whichever neighbours appear", () => {
+    // The reported defect: the trailing rail was a right-anchored flex row of
+    // conditional slots, so a worktree glyph or a "+2" count appearing to the
+    // RIGHT of the avatar shoved it left and the avatars stopped lining up
+    // down the list. jsdom cannot measure the 20px that moved, but it can hold
+    // the invariant that produces the column: whatever else the rail holds,
+    // the identity slot is the last thing before the always-present menu.
+    const withNeighbours = render(
+      <GitHubListItem
+        item={{
+          ...baseIssue,
+          assignees: [
+            { login: "alice", avatarUrl: "a.png", rawData: null },
+            { login: "bob", avatarUrl: "b.png", rawData: null },
+          ],
+        }}
+        type="issue"
+        worktree={makeWorktree({ issueNumber: 42 })}
+      />
+    );
+    const crowded = screen.getByLabelText("Assigned to alice, bob");
+    expect(crowded.nextElementSibling?.getAttribute("aria-label")).toBe("Actions for #42");
+    withNeighbours.unmount();
+
+    render(
+      <GitHubListItem
+        item={{
+          ...baseIssue,
+          assignees: [{ login: "alice", avatarUrl: "a.png", rawData: null }],
+        }}
+        type="issue"
+      />
+    );
+    const bare = screen.getByLabelText("Assigned to alice");
+    expect(bare.nextElementSibling?.getAttribute("aria-label")).toBe("Actions for #42");
+  });
+
+  it("keeps a PR's check glyph in that same slot", () => {
+    render(
+      <GitHubListItem
+        item={{ ...basePR, ciStatus: "success" }}
+        type="pr"
+        worktree={makeWorktree({ prNumber: 99 })}
+      />
+    );
+    const ci = screen.getByLabelText("All checks passed");
+    expect(ci.nextElementSibling?.getAttribute("aria-label")).toBe("Actions for #99");
+  });
+
+  it("states the local worktree as a fact, not as an action it does not perform", () => {
+    // The glyph's tooltip used to read "Switch to worktree" on a role="img"
+    // span that could not be clicked at all.
+    render(
+      <GitHubListItem
+        item={baseIssue}
+        type="issue"
+        worktree={makeWorktree({ issueNumber: 42, branch: "fix/thing" })}
+      />
+    );
+    const chip = screen.getByLabelText("Worktree: issue-42-fix on fix/thing");
+    expect(chip.textContent).toContain("Worktree");
+    expect(chip.querySelector("button")).toBeNull();
+  });
+
+  it("marks the worktree the view is standing in", () => {
+    render(
+      <GitHubListItem
+        item={baseIssue}
+        type="issue"
+        worktree={makeWorktree({ issueNumber: 42 })}
+        activeWorktreeId="wt-42"
+      />
+    );
+    const chip = screen.getByLabelText("Active worktree: issue-42-fix");
+    expect(chip.textContent).toContain("Current");
+  });
+
+  it("describes a detached worktree honestly", () => {
+    render(
+      <GitHubListItem
+        item={baseIssue}
+        type="issue"
+        worktree={makeWorktree({ issueNumber: 42, isDetached: true, head: "abc1234def" })}
+      />
+    );
+    expect(screen.getByLabelText("Worktree: issue-42-fix (detached at abc1234)")).toBeTruthy();
+  });
+
+  it("switches to an existing worktree instead of making a second one", () => {
+    const onSwitchToWorktree = vi.fn();
+    const onCreateWorktree = vi.fn();
+    const { container } = render(
+      <GitHubListItem
+        item={baseIssue}
+        type="issue"
+        worktree={makeWorktree({ issueNumber: 42 })}
+        onSwitchToWorktree={onSwitchToWorktree}
+        onCreateWorktree={onCreateWorktree}
+      />
+    );
+    fireEvent.click(container.querySelector("[role='row']")!);
+    expect(onSwitchToWorktree).toHaveBeenCalledWith("wt-42");
+    expect(onCreateWorktree).not.toHaveBeenCalled();
+  });
+
+  it("surfaces a change request but stays quiet about a review that has not happened", () => {
+    const changes = render(
+      <GitHubListItem item={{ ...basePR, reviewDecision: "CHANGES_REQUESTED" }} type="pr" />
+    );
+    expect(screen.getByLabelText("Review: Changes requested")).toBeTruthy();
+    changes.unmount();
+
+    // REVIEW_REQUIRED is the resting state of nearly every open PR — printing
+    // it would put a word on almost every row to say nothing had happened.
+    render(<GitHubListItem item={{ ...basePR, reviewDecision: "REVIEW_REQUIRED" }} type="pr" />);
+    expect(screen.queryByLabelText(/^Review:/)).toBeNull();
+  });
+
+  it("says nothing about checks a linked PR does not report", () => {
+    render(
+      <GitHubListItem
+        item={{
+          ...baseIssue,
+          linkedPR: { number: 55, state: "open", url: "https://github.com/test/repo/pull/55" },
+        }}
+        type="issue"
+      />
+    );
+    const link = screen.getByRole("button", { name: /Open linked pull request #55/ });
+    expect(link.getAttribute("aria-label")).not.toContain("CI");
+  });
+
+  it("carries the linked PR's own state and checks", () => {
+    // Both arrive with the issue and were being thrown away, so a merged
+    // linkage and one with failing checks rendered identically.
+    render(
+      <GitHubListItem
+        item={{
+          ...baseIssue,
+          linkedPR: {
+            number: 55,
+            state: "merged",
+            url: "https://github.com/test/repo/pull/55",
+            ciStatus: "failure",
+          },
+        }}
+        type="issue"
+      />
+    );
+    const link = screen.getByRole("button", { name: /Open linked pull request #55/ });
+    expect(link.getAttribute("aria-label")).toContain("merged");
+    expect(link.getAttribute("aria-label")).toContain("failing");
+  });
+
+  it("shows the timestamp the panel's sort order implies", () => {
+    // Showing "updated" under a "Newest" sort made the ages read out of order
+    // against the very list they were sorting.
+    const updated = render(<GitHubListItem item={baseIssue} type="issue" />);
+    expect(screen.getByText("time:1001")).toBeTruthy();
+    updated.unmount();
+
+    render(<GitHubListItem item={baseIssue} type="issue" timeField="created" />);
+    expect(screen.getByText("time:1000")).toBeTruthy();
+  });
+
+  it("says what activating the row will do, without repeating what is already named", () => {
+    // Every tooltip in this widget is pointer-only — DOM focus stays in the
+    // search input by design — so the action contract needs a text home. The
+    // state glyph and the worktree chip carry their own names, so saying them
+    // again here made the row announce each of them twice.
+    const { container } = render(
+      <GitHubListItem
+        item={baseIssue}
+        type="issue"
+        worktree={makeWorktree({ issueNumber: 42 })}
+        onSwitchToWorktree={vi.fn()}
+      />
+    );
+    const row = container.querySelector("[role='row']")!;
+    expect(row.textContent!.split("Activate to switch to this worktree")).toHaveLength(2);
+    // Named once each by their own elements, and not a second time in the summary.
+    expect(screen.getAllByLabelText("Open issue")).toHaveLength(1);
+    expect(screen.getAllByLabelText("Worktree: issue-42-fix")).toHaveLength(1);
+  });
+
+  it("promises the forge when that is all it is wired to do", () => {
+    // The action the model wants is not always the action the caller wired. A
+    // row with no `onCreateWorktree` used to fall through to the forge; making
+    // the call optional turned it into a row that silently did nothing while
+    // still promising creation.
+    const { container } = render(<GitHubListItem item={baseIssue} type="issue" />);
+    expect(container.querySelector("[role='row']")!.textContent).toContain(
+      "Activate to open on GitHub"
+    );
+
+    fireEvent.click(container.querySelector("[role='row']")!);
+    expect(actionService.dispatch).toHaveBeenCalledWith(
+      "system.openExternal",
+      { url: "https://github.com/test/repo/issues/42" },
+      { source: "user" }
+    );
+  });
+
+  it("opens the forge for a closed row rather than doing nothing", () => {
+    const onCreateWorktree = vi.fn();
+    const { container } = render(
+      <GitHubListItem
+        item={{ ...baseIssue, state: "closed" }}
+        type="issue"
+        onCreateWorktree={onCreateWorktree}
+      />
+    );
+    fireEvent.click(container.querySelector("[role='row']")!);
+    expect(onCreateWorktree).not.toHaveBeenCalled();
+    expect(actionService.dispatch).toHaveBeenCalledWith(
+      "system.openExternal",
+      { url: "https://github.com/test/repo/issues/42" },
+      { source: "user" }
+    );
+  });
+
+  it.each([
+    ["meta", { metaKey: true }],
+    ["ctrl", { ctrlKey: true }],
+  ])("keeps the forge on a %s click even in selection mode", (_name, modifier) => {
+    // The keyboard honours Cmd/Ctrl+Enter whether or not selection is active,
+    // so a modifier click that quietly toggled membership instead would be a
+    // different command wearing the same gesture.
+    const onToggleSelect = vi.fn();
+    const onCreateWorktree = vi.fn();
+    const { container } = render(
+      <GitHubListItem
+        item={baseIssue}
+        type="issue"
+        isSelectionActive
+        onToggleSelect={onToggleSelect}
+        onCreateWorktree={onCreateWorktree}
+      />
+    );
+    fireEvent.click(container.querySelector("[role='row']")!, modifier);
+    expect(onToggleSelect).not.toHaveBeenCalled();
+    expect(onCreateWorktree).not.toHaveBeenCalled();
+    expect(actionService.dispatch).toHaveBeenCalledWith(
+      "system.openExternal",
+      { url: "https://github.com/test/repo/issues/42" },
+      { source: "user" }
+    );
+  });
+
+  it("names a draft pull request's state, which only its glyph carried", () => {
+    render(<GitHubListItem item={{ ...basePR, isDraft: true }} type="pr" />);
+    expect(screen.getAllByLabelText("Draft pull request").length).toBeGreaterThan(0);
   });
 });

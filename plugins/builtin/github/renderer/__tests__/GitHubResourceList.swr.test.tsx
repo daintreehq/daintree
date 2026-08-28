@@ -2,7 +2,7 @@
  * @vitest-environment jsdom
  */
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, cleanup, waitFor, act } from "@testing-library/react";
+import { render, screen, cleanup, waitFor, act, fireEvent } from "@testing-library/react";
 import React, { Activity, type ReactNode } from "react";
 import type { Issue, ListOptions, Page } from "@shared/types/forge";
 import { setCache, getCache, buildCacheKey, _resetForTests } from "@/lib/forgeResourceCache";
@@ -112,10 +112,13 @@ vi.mock("@/store/worktreeStore", () => ({
   ),
 }));
 
-vi.mock("@/store/createWorktreeStore", () => ({
-  getCurrentViewStore: () => ({
-    getState: () => ({ worktrees: new Map() }),
-  }),
+// The list resolves every row's worktree once and hands it down, so this is
+// the seam that decides what the rows are told.
+const worktreeMap = new Map<string, { id: string; issueNumber?: number; prNumber?: number }>();
+
+vi.mock("@/hooks/useWorktreeStore", () => ({
+  useWorktreeStoreOptional: (selector: (s: { worktrees: unknown }) => unknown) =>
+    selector({ worktrees: worktreeMap }),
 }));
 
 vi.mock("react-dom", async () => {
@@ -123,10 +126,22 @@ vi.mock("react-dom", async () => {
   return { ...actual, createPortal: (children: ReactNode) => children };
 });
 
+/** What the list passed each row, keyed by resource number. */
+const rowProps = new Map<number, { worktreeId?: string; timeField?: string }>();
+
 vi.mock("../components/GitHubListItem", () => ({
-  GitHubListItem: ({ item }: { item: Issue }) => (
-    <div data-testid={`item-${item.number}`}>{item.title}</div>
-  ),
+  GitHubListItem: ({
+    item,
+    worktree,
+    timeField,
+  }: {
+    item: Issue;
+    worktree?: { id: string };
+    timeField?: string;
+  }) => {
+    rowProps.set(item.number, { worktreeId: worktree?.id, timeField });
+    return <div data-testid={`item-${item.number}`}>{item.title}</div>;
+  },
 }));
 
 vi.mock("../components/BulkActionBar", () => ({
@@ -257,6 +272,8 @@ beforeEach(() => {
   filterStore.setPrFilter("open");
   filterStore.setIssueSortOrder("created");
   filterStore.setPrSortOrder("created");
+  worktreeMap.clear();
+  rowProps.clear();
 });
 
 afterEach(() => {
@@ -2879,5 +2896,145 @@ describe("GitHubResourceList dismissal preserves bulk selection", () => {
     );
     await act(async () => {});
     expect(notifyMock).not.toHaveBeenCalled();
+  });
+});
+
+describe("GitHubResourceList — the row model it hands down", () => {
+  const key = buildCacheKey("/test/proj", "issue", "open", "created");
+
+  const seed = (items: Issue[]) => {
+    setCache(key, {
+      items,
+      nextCursor: null,
+      hasMore: false,
+      timestamp: Date.now(),
+      freshBypassAt: Date.now(),
+      countAtWrite: items.length,
+    });
+    mockListIssues.mockResolvedValue(makeResponse(items));
+  };
+
+  it("resolves each row's worktree once and hands it down", async () => {
+    // The row used to scan the whole worktree map for itself, so nothing above
+    // it could be wrong — and nothing could test it either.
+    worktreeMap.set("wt-a", { id: "wt-a", issueNumber: 11 });
+    seed([makeIssue(10), makeIssue(11)]);
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+    await waitFor(() => expect(screen.getByTestId("item-11")).toBeTruthy());
+
+    expect(rowProps.get(11)?.worktreeId).toBe("wt-a");
+    expect(rowProps.get(10)?.worktreeId).toBeUndefined();
+  });
+
+  it("does not match an issue against a worktree made for the same-numbered PR", async () => {
+    worktreeMap.set("wt-a", { id: "wt-a", prNumber: 10 });
+    seed([makeIssue(10)]);
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+    await waitFor(() => expect(screen.getByTestId("item-10")).toBeTruthy());
+
+    expect(rowProps.get(10)?.worktreeId).toBeUndefined();
+  });
+
+  it("tells rows which timestamp the sort order implies", async () => {
+    // Showing "updated" under a "Newest" sort made the ages read out of order
+    // against the very list they were sorting.
+    seed([makeIssue(10)]);
+    const created = render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+    await waitFor(() => expect(rowProps.get(10)?.timeField).toBe("created"));
+    created.unmount();
+
+    rowProps.clear();
+    useGitHubFilterStore.getState().setIssueSortOrder("updated");
+    setCache(buildCacheKey("/test/proj", "issue", "open", "updated"), {
+      items: [makeIssue(10)],
+      nextCursor: null,
+      hasMore: false,
+      timestamp: Date.now(),
+      freshBypassAt: Date.now(),
+      countAtWrite: 1,
+    });
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+    await waitFor(() => expect(rowProps.get(10)?.timeField).toBe("updated"));
+  });
+});
+
+describe("GitHubResourceList — the keyboard cursor across a refresh", () => {
+  const key = buildCacheKey("/test/proj", "issue", "open", "created");
+
+  const seed = (items: Issue[]) => {
+    setCache(key, {
+      items,
+      nextCursor: null,
+      hasMore: false,
+      timestamp: Date.now(),
+      freshBypassAt: Date.now(),
+      countAtWrite: items.length,
+    });
+  };
+
+  const activeDescendant = () => screen.getByRole("combobox").getAttribute("aria-activedescendant");
+
+  it("keeps the cursor on the same resource when a refresh reorders the list", async () => {
+    // A background revalidation landing mid-navigation used to reset the
+    // cursor to nothing, silently throwing away your place.
+    seed([makeIssue(10), makeIssue(11)]);
+    mockListIssues.mockResolvedValue(makeResponse([makeIssue(10), makeIssue(11)]));
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+    await waitFor(() => expect(screen.getByTestId("item-11")).toBeTruthy());
+
+    const input = screen.getByRole("combobox");
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(activeDescendant()).toBe("github-issue-option-11");
+
+    mockListIssues.mockResolvedValue(makeResponse([makeIssue(11), makeIssue(10)]));
+    fireEvent.click(screen.getByRole("button", { name: /^Refresh issues/ }));
+
+    await waitFor(() => expect(activeDescendant()).toBe("github-issue-option-11"));
+  });
+
+  it("drops the cursor when the resource it was on is gone", async () => {
+    seed([makeIssue(10), makeIssue(11)]);
+    mockListIssues.mockResolvedValue(makeResponse([makeIssue(10), makeIssue(11)]));
+
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+    await waitFor(() => expect(screen.getByTestId("item-11")).toBeTruthy());
+
+    const input = screen.getByRole("combobox");
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    expect(activeDescendant()).toBe("github-issue-option-11");
+
+    mockListIssues.mockResolvedValue(makeResponse([makeIssue(10)]));
+    fireEvent.click(screen.getByRole("button", { name: /^Refresh issues/ }));
+
+    await waitFor(() => expect(activeDescendant()).toBeNull());
+  });
+
+  it("does not carry the cursor across a project switch", async () => {
+    // A resource number only identifies a row within one project and one kind:
+    // issue #10 over there is a different issue #10.
+    seed([makeIssue(10)]);
+    mockListIssues.mockResolvedValue(makeResponse([makeIssue(10)]));
+
+    const view = render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+    await waitFor(() => expect(screen.getByTestId("item-10")).toBeTruthy());
+    fireEvent.keyDown(screen.getByRole("combobox"), { key: "ArrowDown" });
+    expect(activeDescendant()).toBe("github-issue-option-10");
+
+    setCache(buildCacheKey("/other/proj", "issue", "open", "created"), {
+      items: [makeIssue(10)],
+      nextCursor: null,
+      hasMore: false,
+      timestamp: Date.now(),
+      freshBypassAt: Date.now(),
+      countAtWrite: 1,
+    });
+    view.rerender(<GitHubResourceList type="issue" projectPath="/other/proj" />);
+
+    await waitFor(() => expect(activeDescendant()).toBeNull());
   });
 });

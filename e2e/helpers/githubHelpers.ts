@@ -223,7 +223,11 @@ export async function restoreRepoStats(app: ElectronApplication): Promise<void> 
 }
 
 /** Build a minimal fixture issue (forge shape) for list stubbing. */
-export function makeFixtureIssue(number: number, title: string): Issue {
+export function makeFixtureIssue(
+  number: number,
+  title: string,
+  overrides: Partial<Issue> = {}
+): Issue {
   const updatedAt = Date.now() - number * 60_000;
   return {
     number,
@@ -239,6 +243,7 @@ export function makeFixtureIssue(number: number, title: string): Issue {
     createdAt: updatedAt,
     updatedAt,
     rawData: {},
+    ...overrides,
   };
 }
 

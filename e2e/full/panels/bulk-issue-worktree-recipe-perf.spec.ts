@@ -427,6 +427,12 @@ async function runSample(scale: number, round: number, warmup: boolean): Promise
     await expect(ctx.window.locator(SEL.github.item(issues[0]!.number))).toBeVisible({
       timeout: T_LONG,
     });
+    // The bulk helpers follow selection mode rather than a non-empty query, so
+    // enter selection first: the cursor moves to the first row and Shift+Space
+    // takes it.
+    await ctx.window.keyboard.press("ArrowDown");
+    await ctx.window.keyboard.press("Shift+Space");
+
     const selectAll = ctx.window
       .locator(SEL.github.selectionActions)
       .getByRole("button", { name: /Select all/ });
