@@ -859,7 +859,7 @@ export function McpServerSettingsTab() {
                   "px-3 py-2 text-xs font-medium rounded-[var(--radius-md)] transition-colors",
                   "border border-border-default",
                   portInput.trim() === (status.configuredPort?.toString() ?? "")
-                    ? "text-daintree-text/30 cursor-not-allowed"
+                    ? "text-text-placeholder cursor-not-allowed"
                     : "text-text-secondary hover:text-text-primary hover:bg-overlay-soft"
                 )}
               >
@@ -985,7 +985,7 @@ export function McpServerSettingsTab() {
                     "px-3 py-1 text-xs font-medium rounded-[var(--radius-md)] transition-colors",
                     "border border-border-default",
                     maxRecordsInput === auditMaxRecords.toString()
-                      ? "text-daintree-text/30 cursor-not-allowed"
+                      ? "text-text-placeholder cursor-not-allowed"
                       : "text-text-secondary hover:text-text-primary hover:bg-overlay-soft"
                   )}
                 >

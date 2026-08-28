@@ -208,7 +208,7 @@ function CacheDirsPreview({ meta, sizes, sizesPending }: CacheDirsPreviewProps) 
                   <span
                     className={cn(
                       "font-mono shrink-0",
-                      dir.exists ? "text-text-primary" : "text-daintree-text/35 line-through"
+                      dir.exists ? "text-text-primary" : "text-text-placeholder line-through"
                     )}
                   >
                     {dir.relPath}
@@ -272,7 +272,7 @@ function NodeModulesPreview({ meta, sizes, sizesPending }: NodeModulesPreviewPro
             <span
               className={cn(
                 "font-mono break-all",
-                nodeModules?.exists ? "text-text-primary" : "text-daintree-text/35 line-through"
+                nodeModules?.exists ? "text-text-primary" : "text-text-placeholder line-through"
               )}
               data-testid="dev-preview-destructive-node-modules-path"
             >

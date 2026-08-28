@@ -258,7 +258,16 @@ describe("color system contract", () => {
       "test-assertion",
     ]);
 
-    const rampToken = /(?<![\w-])(?:[\w@&[\]./-]+:)*!?text-daintree-text\/\d+!?(?![\w/-])/g;
+    // Deliberately the WIDE grammar from `scripts/theme-text-ramp.ts`, not the
+    // narrow one the migration understands: arbitrary (`/[calc(1/2)]`) and
+    // custom-property (`/(--x)`) alphas count, and so does a step outside the
+    // fifteen. Two reasons. It has to see a shape the tool cannot classify, or
+    // that shape is simply invisible here. And the manifest numbers occurrences
+    // per file in this order — enumerate a narrower set and one unrecognised
+    // token shifts every ordinal after it, turning one clear failure into a
+    // cascade of confusing ones.
+    const rampToken =
+      /(?<![\w-])(?:[\w@&[\]./-]+:)*!?text-daintree-text\/(?:\[[^\]\s]*\]|\([^)\s]*\)|\d[\w.]*)!?/g;
     const inTree = new Map<string, string>();
     const walked = new Set<string>();
     for (const filePath of RENDERER_ROOTS.flatMap(collectSourceFiles)) {

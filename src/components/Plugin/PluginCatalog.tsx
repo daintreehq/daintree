@@ -41,7 +41,7 @@ function PluginCard({ plugin, onSelect }: { plugin: LoadedPluginInfo; onSelect: 
           <span
             className={cn(
               "mt-1 block text-xs line-clamp-2",
-              disabled ? "text-daintree-text/35" : "text-text-secondary"
+              disabled ? "text-text-placeholder" : "text-text-secondary"
             )}
           >
             {blurb}

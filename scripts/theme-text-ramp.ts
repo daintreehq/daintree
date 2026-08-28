@@ -48,10 +48,14 @@ const TEST_FILE = /[/\\](?:__tests__|e2e)[/\\]|\.(?:test|spec)\.[^.]+$/;
 
 /**
  * A ramp utility the tool understands: variant chain, optional v4 `!important`
- * marker at either end, numeric alpha. Tailwind's own grammar is wider, which is
- * what `RAMP_CANDIDATE` is for.
+ * marker at either end, whole-number alpha. Tailwind's own grammar is wider,
+ * which is what `RAMP_CANDIDATE` is for.
+ *
+ * The trailing lookahead excludes `.` deliberately. Without it `/40.5` matched
+ * as `/40` and left `.5` behind, so a rewrite produced `text-text-secondary.5`
+ * and the wide scan's identical start offset made the leftover look accounted.
  */
-const RAMP_TOKEN = /(?<![\w-])((?:[\w@&[\]./-]+:)*)(!?)text-daintree-text\/(\d+)!?(?![\w/-])/g;
+const RAMP_TOKEN = /(?<![\w-])((?:[\w@&[\]./-]+:)*)(!?)text-daintree-text\/(\d+)(!?)(?![\w/.-])/g;
 
 /**
  * Deliberately wider than the tool's own grammar: the arbitrary
@@ -66,7 +70,7 @@ const RAMP_TOKEN = /(?<![\w-])((?:[\w@&[\]./-]+:)*)(!?)text-daintree-text\/(\d+)
  * `"text-daintree-text/[0"`.
  */
 const RAMP_CANDIDATE =
-  /(?<![\w-])(?:[\w@&[\]./-]+:)*!?text-daintree-text\/(?:\[[^\]\s]*\]|\([^)\s]*\)|\d[\w.]*)!?/g;
+  /(?<![\w-])(?:[\w@&[\]./-]+:)*!?text-daintree-text\/(?:\[[^\]\s]*\]|\([^)\s]*\)|\d[\w.]*)!?(?![\w/.-])/g;
 
 /**
  * The measured bands from #12065, applied with floor non-regression: a step may
@@ -192,8 +196,15 @@ export function promote(role: TextRole): TextRole {
   return ROLE_ORDER[Math.min(index + 1, ROLE_ORDER.length - 1)]!;
 }
 
-export function replacementToken(variants: string, role: TextRole): string {
-  return `${variants}${roleClass(role)}`;
+export function replacementToken(
+  variants: string,
+  role: TextRole,
+  important: "" | "leading" | "trailing" = ""
+): string {
+  const utility = roleClass(role);
+  if (important === "leading") return `${variants}!${utility}`;
+  if (important === "trailing") return `${variants}${utility}!`;
+  return `${variants}${utility}`;
 }
 
 /**
@@ -475,21 +486,45 @@ function hasOpacityAncestor(node: Node): boolean {
 }
 
 /**
- * Conditions whose truth means the control is off, spent or finished. Polarity
- * matters and is the reason these are matched per branch rather than over the
- * whole condition text: in `done ? dim : active` the `whenFalse` arm is the
- * *enabled* one, and reading the word without its sign retains ordinary prose as
- * a disabled state.
+ * Words whose truth means the control is off, spent or finished, and the ones
+ * that mean the opposite. Both lists are needed because a condition can be
+ * written from either side: `done ? dim : active` and `!available ? dim : active`
+ * put the disabled colour in opposite arms.
  */
-const DISABLED_WHEN_TRUE =
-  /\b(?:is)?(?:disabled|readOnly|readonly|locked|completed|isComplete|done|unavailable|notAvailable)\b|!\s*\w*(?:available|enabled|editable)\b/i;
+const DISABLED_WORD =
+  /\b(?:is)?(?:disabled|readOnly|readonly|locked|completed|isComplete|done|unavailable|notAvailable)\b/i;
+// No `\w*` prefix: with one, `regexEnabled ? on : off` reads its off-arm as a
+// disabled state, and every `somethingEnabled` feature toggle with it. A word
+// boundary keeps this to the identifiers that really mean "cannot be used" —
+// `available`, `isEnabled`, `d.editable` — and leaves camelCase toggles alone.
+const ENABLED_WORD = /\b(?:is|are)?(?:available|enabled|editable)\b/i;
 
-/** A branch this token lives in whose condition being TRUE means "disabled". */
-export function inDisabledBranch(conditional: string): boolean {
-  return conditional
-    .split(" ")
-    .filter(Boolean)
-    .some((test) => test.startsWith("+") && DISABLED_WHEN_TRUE.test(test.slice(1)));
+/**
+ * Whether the branch a token sits in is the disabled one.
+ *
+ * Polarity is the whole job, and it is why the branch list is structured rather
+ * than a joined string: reading the word without its sign retained BOTH arms of
+ * `done ? dim : active`, and splitting on whitespace lost the disabled word
+ * entirely in `state === "disabled" ? dim : active`.
+ *
+ * A leading `!` flips the sign — `!done ? active : dim` puts the *enabled* text
+ * in the true arm — and after that flip the two word lists read symmetrically:
+ * a true disabled word, or a false enabled one, means disabled.
+ */
+export function inDisabledBranch(branches: { condition: string; onTrueSide: boolean }[]): boolean {
+  return branches.some(({ condition, onTrueSide }) => {
+    // String literals name a domain state, not the control. Without stripping
+    // them, `runtimeSnapshot.state === "disabled" ? … : …` retains the prose
+    // explaining that a *server* is off — copy that has to stay legible, beside
+    // a button that has to look clickable.
+    let text = condition.replace(/(["'`])(?:\\.|(?!\1)[^\\])*\1/g, "").trim();
+    let positive = onTrueSide;
+    while (text.startsWith("!")) {
+      text = text.slice(1).trim();
+      positive = !positive;
+    }
+    return positive ? DISABLED_WORD.test(text) : ENABLED_WORD.test(text);
+  });
 }
 
 /** Nearest enclosing ternary branch, so mutually exclusive classes never pair. */
@@ -518,20 +553,22 @@ export function branchesCoexist(a: string, b: string): boolean {
   return a === b || a.startsWith(`${b}/`) || b.startsWith(`${a}/`) || a === "" || b === "";
 }
 
-function conditionalTests(node: Node): string {
+function conditionalTests(node: Node): { condition: string; onTrueSide: boolean }[] {
   let current: Node | undefined = node;
-  const tests: string[] = [];
+  const tests: { condition: string; onTrueSide: boolean }[] = [];
   let hops = 0;
   while (current && hops < 40) {
     const parent: Node | undefined = current.getParent();
     if (parent && Node.isConditionalExpression(parent)) {
-      const onTrueSide = parent.getWhenTrue() === current;
-      tests.push(`${onTrueSide ? "+" : "-"}${parent.getCondition().getText()}`);
+      tests.push({
+        condition: parent.getCondition().getText(),
+        onTrueSide: parent.getWhenTrue() === current,
+      });
     }
     current = parent;
     hops++;
   }
-  return tests.join(" ");
+  return tests;
 }
 
 /**
@@ -614,13 +651,15 @@ type RawSite = {
   end: number;
   token: string;
   variants: string;
+  /** v4 `!important`, as written: `!` before the utility, after it, or neither. */
+  important: "" | "leading" | "trailing";
   step: number;
   group: string;
   branch: string;
   siblings: string[];
   element?: ElementInfo;
   opacityAncestor: boolean;
-  conditional: string;
+  conditional: { condition: string; onTrueSide: boolean }[];
   iconImport: boolean;
   /** Solid `text-text-*` tokens already on this control, with where they apply. */
   semantic: SemanticToken[];
@@ -684,6 +723,7 @@ export function collectSites(files?: string[]): Inventory {
           end: start + match[0].length,
           token: match[0],
           variants: match[1] ?? "",
+          important: match[2] ? "leading" : match[4] ? "trailing" : "",
           step: Number(match[3]),
           group: root.key,
           branch: branchKey(literal),
@@ -726,13 +766,20 @@ function carveOut(site: RawSite): Verdict | null {
     };
   }
   if (
+    // Only when migrating would actually brighten it. The dim end of the ramp
+    // maps to `text-text-placeholder`, which is itself the quiet role — a `/30`
+    // disabled label lands there and stays exactly as quiet, so carving it out
+    // would keep a ramp site alive for nothing. The carve-out earns its keep
+    // from `/45` up, where the band role is secondary or primary and the
+    // dimming that IS the signal would be erased.
+    bandFor(site.step) !== "placeholder" &&
     // Bare markers only, and only for a bare ramp token. `disabled:cursor-not-allowed`
     // says the control *can* be disabled, not that the colour beside it is the
     // disabled one — retaining a base colour on that evidence dims every
     // disable-able control's enabled state.
-    (site.variants === "" &&
+    ((site.variants === "" &&
       site.siblings.some((token) => /^(?:cursor-not-allowed|line-through)$/.test(token))) ||
-    inDisabledBranch(site.conditional)
+      inDisabledBranch(site.conditional))
   ) {
     return {
       decision: "keep",
@@ -870,6 +917,15 @@ export function classify(sites: RawSite[]): Occurrence[] {
           return ROLE_RANK[role]! >= rank && branchesCoexist(token.branch, site.branch);
         }
         if (token.variants !== "") return false;
+        if (isDisabledVariant(site.variants)) {
+          // A disabled ramp state beside a semantic resting colour. Nothing pins
+          // it — there is no ramp twin at its step — so without this it lands on
+          // its band role and `text-text-primary disabled:text-daintree-text/80`
+          // becomes primary on both ends, with the disabled signal gone. A
+          // disabled state has to stay DIMMER than rest, so equal or brighter
+          // means the difference is erased.
+          return ROLE_RANK[role]! >= rank && branchesCoexist(token.branch, site.branch);
+        }
         if (isStateVariant(site.variants)) {
           // The mirror: a semantic RESTING colour beside this ramp state token.
           // `text-text-primary hover:text-daintree-text/80` flattens to
@@ -929,7 +985,16 @@ export function classify(sites: RawSite[]): Occurrence[] {
           targets.get(other) === role
       );
       if (!collides) continue;
-      for (const member of group.filter((other) => branchesCoexist(other.branch, site.branch))) {
+      // An unconditional state token (empty branch) coexists with BOTH arms, so
+      // carving only this arm's coexistence set would strand it: the dim arm
+      // keeps a ramp hover while the bright arm migrates to a solid role that
+      // the same ramp hover then sits below, inverting it. When the set reaches
+      // a shared token, the whole control has to move together.
+      const coexisting = group.filter((other) => branchesCoexist(other.branch, site.branch));
+      const shared = coexisting.some(
+        (other) => other.branch === "" && other.branch !== site.branch
+      );
+      for (const member of shared ? group : coexisting) {
         targets.delete(member);
         verdicts.set(member, {
           decision: "keep",
@@ -1032,7 +1097,7 @@ export function classify(sites: RawSite[]): Occurrence[] {
       branch: site.branch,
       decision: "migrate" as const,
       category: site.step === 40 ? "pair-reopened-40" : promoted ? "pair-promoted" : "band",
-      target: replacementToken(site.variants, target),
+      target: replacementToken(site.variants, target, site.important),
       evidence:
         site.step === 40
           ? "reopened: shares a control with an in-scope state token"
@@ -1193,23 +1258,26 @@ function pairs(manifest: Manifest): number {
     );
 
     for (const state of stateful) {
-      const restEnd = resting.find((o) => branchesCoexist(o.branch, state.branch));
-      if (!restEnd) continue;
-      const shown = (o: Occurrence): string =>
-        o.decision === "migrate" ? o.target! : `${o.token} (kept)`;
-      const delta = rank(state) - rank(restEnd);
-      // A state written at its resting step is a suppressor — the author named a
-      // state and declined to change anything, which `aria-selected:…/50` beside
-      // `/50` does to keep a missing project dim while highlighted. Equal is the
-      // correct outcome there, and only a genuine drop counts against it.
-      const suppressor = isDisabledVariant(state.variants) || state.step === restEnd.step;
-      const bad = suppressor ? delta < 0 : delta <= 0;
-      if (bad) inverted++;
-      console.log(
-        `${bad ? "! " : "  "}${restEnd.file}:${restEnd.line}  ` +
-          `${`/${restEnd.step} → /${state.step}`.padEnd(16)} ${shown(restEnd)} → ${shown(state)}`
-      );
-      printed++;
+      // Every coexisting resting end, not just the first: a control can carry
+      // more than one, and reporting on one of them hides an inversion against
+      // any of the others.
+      for (const restEnd of resting.filter((o) => branchesCoexist(o.branch, state.branch))) {
+        const shown = (o: Occurrence): string =>
+          o.decision === "migrate" ? o.target! : `${o.token} (kept)`;
+        const delta = rank(state) - rank(restEnd);
+        // A state written at its resting step is a suppressor — the author named a
+        // state and declined to change anything, which `aria-selected:…/50` beside
+        // `/50` does to keep a missing project dim while highlighted. Equal is the
+        // correct outcome there, and only a genuine drop counts against it.
+        const suppressor = isDisabledVariant(state.variants) || state.step === restEnd.step;
+        const bad = suppressor ? delta < 0 : delta <= 0;
+        if (bad) inverted++;
+        console.log(
+          `${bad ? "! " : "  "}${restEnd.file}:${restEnd.line}  ` +
+            `${`/${restEnd.step} → /${state.step}`.padEnd(16)} ${shown(restEnd)} → ${shown(state)}`
+        );
+        printed++;
+      }
     }
   }
   console.log(
@@ -1266,7 +1334,7 @@ function themes(): number {
    * Pinned to the measured value plus a rounding epsilon, not a budget. A future
    * theme that widened this to 0.14 would fail, which is the point.
    */
-  const ACCEPTED_DIPS = new Map([[35, 0.1]]);
+  const ACCEPTED_DIPS = new Map([[35, 0.0993]]);
   const DIP_EPSILON = 0.005;
 
   type Cell = {

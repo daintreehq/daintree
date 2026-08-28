@@ -679,7 +679,7 @@ function InlineChecklist({
                         <span
                           className={cn(
                             "text-3xs leading-snug",
-                            done ? "text-daintree-text/30" : "text-text-secondary"
+                            done ? "text-text-placeholder" : "text-text-secondary"
                           )}
                         >
                           {description}

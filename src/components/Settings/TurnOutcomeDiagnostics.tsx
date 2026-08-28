@@ -527,7 +527,7 @@ export function TurnOutcomeDiagnostics({
               className={cn(
                 "px-3 py-1.5 text-xs font-medium rounded-[var(--radius-md)] border transition-colors",
                 records.length === 0
-                  ? "border-border-default text-daintree-text/30 cursor-not-allowed"
+                  ? "border-border-default text-text-placeholder cursor-not-allowed"
                   : "border-border-default text-status-danger hover:text-status-danger hover:bg-status-danger/10 hover:border-status-danger/20"
               )}
             >

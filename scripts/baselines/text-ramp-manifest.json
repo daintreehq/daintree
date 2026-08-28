@@ -1,7 +1,7 @@
 {
   "generated": "2026-08-28",
-  "total": 472,
-  "files": 177,
+  "total": 454,
+  "files": 174,
   "occurrences": [
     {
       "file": "plugins/builtin/github/renderer/components/BulkCreateWorktreeDialog.tsx",
@@ -516,21 +516,6 @@
     {
       "file": "src/components/DevPreview/DevPreviewDestructiveConfirmDialog.tsx",
       "ordinal": 0,
-      "line": 211,
-      "start": 7433,
-      "end": 7454,
-      "token": "text-daintree-text/35",
-      "variants": "",
-      "step": 35,
-      "group": "src/components/DevPreview/DevPreviewDestructiveConfirmDialog.tsx#7295",
-      "branch": "6470F/7374F",
-      "decision": "keep",
-      "category": "disabled-state",
-      "evidence": "disabled, completed or struck-through state — the low contrast is the signal"
-    },
-    {
-      "file": "src/components/DevPreview/DevPreviewDestructiveConfirmDialog.tsx",
-      "ordinal": 1,
       "line": 230,
       "start": 8395,
       "end": 8416,
@@ -545,22 +530,7 @@
     },
     {
       "file": "src/components/DevPreview/DevPreviewDestructiveConfirmDialog.tsx",
-      "ordinal": 2,
-      "line": 275,
-      "start": 9899,
-      "end": 9920,
-      "token": "text-daintree-text/35",
-      "variants": "",
-      "step": 35,
-      "group": "src/components/DevPreview/DevPreviewDestructiveConfirmDialog.tsx#9769",
-      "branch": "9743T/9837F",
-      "decision": "keep",
-      "category": "disabled-state",
-      "evidence": "disabled, completed or struck-through state — the low contrast is the signal"
-    },
-    {
-      "file": "src/components/DevPreview/DevPreviewDestructiveConfirmDialog.tsx",
-      "ordinal": 3,
+      "ordinal": 1,
       "line": 300,
       "start": 10820,
       "end": 10841,
@@ -575,7 +545,7 @@
     },
     {
       "file": "src/components/DevPreview/DevPreviewDestructiveConfirmDialog.tsx",
-      "ordinal": 4,
+      "ordinal": 2,
       "line": 307,
       "start": 11103,
       "end": 11124,
@@ -2179,21 +2149,6 @@
       "evidence": "disabled, completed or struck-through state — the low contrast is the signal"
     },
     {
-      "file": "src/components/Onboarding/GettingStartedChecklist.tsx",
-      "ordinal": 9,
-      "line": 300,
-      "start": 11996,
-      "end": 12017,
-      "token": "text-daintree-text/30",
-      "variants": "",
-      "step": 30,
-      "group": "src/components/Onboarding/GettingStartedChecklist.tsx#11865",
-      "branch": "11959T",
-      "decision": "keep",
-      "category": "disabled-state",
-      "evidence": "disabled, completed or struck-through state — the low contrast is the signal"
-    },
-    {
       "file": "src/components/Panel/PanelHeader.tsx",
       "ordinal": 0,
       "line": 580,
@@ -2421,21 +2376,6 @@
     {
       "file": "src/components/Plugin/PluginCatalog.tsx",
       "ordinal": 1,
-      "line": 44,
-      "start": 1929,
-      "end": 1950,
-      "token": "text-daintree-text/35",
-      "variants": "",
-      "step": 35,
-      "group": "src/components/Plugin/PluginCatalog.tsx#1826",
-      "branch": "1902T",
-      "decision": "keep",
-      "category": "disabled-state",
-      "evidence": "disabled, completed or struck-through state — the low contrast is the signal"
-    },
-    {
-      "file": "src/components/Plugin/PluginCatalog.tsx",
-      "ordinal": 2,
       "line": 88,
       "start": 3518,
       "end": 3539,
@@ -2450,7 +2390,7 @@
     },
     {
       "file": "src/components/Plugin/PluginCatalog.tsx",
-      "ordinal": 3,
+      "ordinal": 2,
       "line": 90,
       "start": 3693,
       "end": 3714,
@@ -3319,21 +3259,6 @@
       "evidence": "disabled, completed or struck-through state — the low contrast is the signal"
     },
     {
-      "file": "src/components/Project/WelcomeScreen.tsx",
-      "ordinal": 13,
-      "line": 682,
-      "start": 27713,
-      "end": 27734,
-      "token": "text-daintree-text/30",
-      "variants": "",
-      "step": 30,
-      "group": "src/components/Project/WelcomeScreen.tsx#27582",
-      "branch": "27676T",
-      "decision": "keep",
-      "category": "disabled-state",
-      "evidence": "disabled, completed or struck-through state — the low contrast is the signal"
-    },
-    {
       "file": "src/components/Pulse/ProjectPulseCard.tsx",
       "ordinal": 0,
       "line": 61,
@@ -3726,21 +3651,6 @@
     {
       "file": "src/components/Settings/CommandOverridesTab.tsx",
       "ordinal": 3,
-      "line": 366,
-      "start": 13195,
-      "end": 13216,
-      "token": "text-daintree-text/30",
-      "variants": "",
-      "step": 30,
-      "group": "src/components/Settings/CommandOverridesTab.tsx#13065",
-      "branch": "10107F/10381F/10510F/13156T",
-      "decision": "keep",
-      "category": "disabled-state",
-      "evidence": "disabled, completed or struck-through state — the low contrast is the signal"
-    },
-    {
-      "file": "src/components/Settings/CommandOverridesTab.tsx",
-      "ordinal": 4,
       "line": 398,
       "start": 14604,
       "end": 14625,
@@ -4114,51 +4024,6 @@
       "evidence": "<button> wraps only icons — the colour paints a glyph through currentColor"
     },
     {
-      "file": "src/components/Settings/ForgeAuditLogViewer.tsx",
-      "ordinal": 0,
-      "line": 362,
-      "start": 14748,
-      "end": 14769,
-      "token": "text-daintree-text/30",
-      "variants": "",
-      "step": 30,
-      "group": "src/components/Settings/ForgeAuditLogViewer.tsx#14517",
-      "branch": "14667T",
-      "decision": "keep",
-      "category": "disabled-state",
-      "evidence": "disabled, completed or struck-through state — the low contrast is the signal"
-    },
-    {
-      "file": "src/components/Settings/ForgeAuditLogViewer.tsx",
-      "ordinal": 1,
-      "line": 378,
-      "start": 15605,
-      "end": 15626,
-      "token": "text-daintree-text/30",
-      "variants": "",
-      "step": 30,
-      "group": "src/components/Settings/ForgeAuditLogViewer.tsx#15374",
-      "branch": "15524T",
-      "decision": "keep",
-      "category": "disabled-state",
-      "evidence": "disabled, completed or struck-through state — the low contrast is the signal"
-    },
-    {
-      "file": "src/components/Settings/ForgeAuditLogViewer.tsx",
-      "ordinal": 2,
-      "line": 398,
-      "start": 16423,
-      "end": 16444,
-      "token": "text-daintree-text/30",
-      "variants": "",
-      "step": 30,
-      "group": "src/components/Settings/ForgeAuditLogViewer.tsx#16226",
-      "branch": "16350T",
-      "decision": "keep",
-      "category": "disabled-state",
-      "evidence": "disabled, completed or struck-through state — the low contrast is the signal"
-    },
-    {
       "file": "src/components/Settings/ForgeProviderSelectorDropdown.tsx",
       "ordinal": 0,
       "line": 115,
@@ -4384,51 +4249,6 @@
       "evidence": "hover: already paints text-text-primary here; the band role would erase the difference"
     },
     {
-      "file": "src/components/Settings/McpAuditLogViewer.tsx",
-      "ordinal": 0,
-      "line": 790,
-      "start": 32892,
-      "end": 32913,
-      "token": "text-daintree-text/30",
-      "variants": "",
-      "step": 30,
-      "group": "src/components/Settings/McpAuditLogViewer.tsx#32661",
-      "branch": "32811T",
-      "decision": "keep",
-      "category": "disabled-state",
-      "evidence": "disabled, completed or struck-through state — the low contrast is the signal"
-    },
-    {
-      "file": "src/components/Settings/McpAuditLogViewer.tsx",
-      "ordinal": 1,
-      "line": 807,
-      "start": 33788,
-      "end": 33809,
-      "token": "text-daintree-text/30",
-      "variants": "",
-      "step": 30,
-      "group": "src/components/Settings/McpAuditLogViewer.tsx#33549",
-      "branch": "33703T",
-      "decision": "keep",
-      "category": "disabled-state",
-      "evidence": "disabled, completed or struck-through state — the low contrast is the signal"
-    },
-    {
-      "file": "src/components/Settings/McpAuditLogViewer.tsx",
-      "ordinal": 2,
-      "line": 829,
-      "start": 34693,
-      "end": 34714,
-      "token": "text-daintree-text/30",
-      "variants": "",
-      "step": 30,
-      "group": "src/components/Settings/McpAuditLogViewer.tsx#34481",
-      "branch": "34609T",
-      "decision": "keep",
-      "category": "disabled-state",
-      "evidence": "disabled, completed or struck-through state — the low contrast is the signal"
-    },
-    {
       "file": "src/components/Settings/McpServerSettingsTab.tsx",
       "ordinal": 0,
       "line": 743,
@@ -4461,21 +4281,6 @@
     {
       "file": "src/components/Settings/McpServerSettingsTab.tsx",
       "ordinal": 2,
-      "line": 862,
-      "start": 36495,
-      "end": 36516,
-      "token": "text-daintree-text/30",
-      "variants": "",
-      "step": 30,
-      "group": "src/components/Settings/McpServerSettingsTab.tsx#36213",
-      "branch": "36390T",
-      "decision": "keep",
-      "category": "disabled-state",
-      "evidence": "disabled, completed or struck-through state — the low contrast is the signal"
-    },
-    {
-      "file": "src/components/Settings/McpServerSettingsTab.tsx",
-      "ordinal": 3,
       "line": 892,
       "start": 38085,
       "end": 38106,
@@ -4490,7 +4295,7 @@
     },
     {
       "file": "src/components/Settings/McpServerSettingsTab.tsx",
-      "ordinal": 4,
+      "ordinal": 3,
       "line": 892,
       "start": 38107,
       "end": 38134,
@@ -4502,21 +4307,6 @@
       "decision": "keep",
       "category": "icon-affordance",
       "evidence": "<button> wraps only icons — the colour paints a glyph through currentColor"
-    },
-    {
-      "file": "src/components/Settings/McpServerSettingsTab.tsx",
-      "ordinal": 5,
-      "line": 988,
-      "start": 43022,
-      "end": 43043,
-      "token": "text-daintree-text/30",
-      "variants": "",
-      "step": 30,
-      "group": "src/components/Settings/McpServerSettingsTab.tsx#42746",
-      "branch": "42929T",
-      "decision": "keep",
-      "category": "disabled-state",
-      "evidence": "disabled, completed or struck-through state — the low contrast is the signal"
     },
     {
       "file": "src/components/Settings/NotificationSettingsTab.tsx",
@@ -4547,51 +4337,6 @@
       "decision": "keep",
       "category": "prior-ruling-40",
       "evidence": "#12003 ruled on this /40 site; no in-scope partner reopens it"
-    },
-    {
-      "file": "src/components/Settings/PluginActionAuditLogViewer.tsx",
-      "ordinal": 0,
-      "line": 320,
-      "start": 12993,
-      "end": 13014,
-      "token": "text-daintree-text/30",
-      "variants": "",
-      "step": 30,
-      "group": "src/components/Settings/PluginActionAuditLogViewer.tsx#12762",
-      "branch": "12912T",
-      "decision": "keep",
-      "category": "disabled-state",
-      "evidence": "disabled, completed or struck-through state — the low contrast is the signal"
-    },
-    {
-      "file": "src/components/Settings/PluginActionAuditLogViewer.tsx",
-      "ordinal": 1,
-      "line": 336,
-      "start": 13850,
-      "end": 13871,
-      "token": "text-daintree-text/30",
-      "variants": "",
-      "step": 30,
-      "group": "src/components/Settings/PluginActionAuditLogViewer.tsx#13619",
-      "branch": "13769T",
-      "decision": "keep",
-      "category": "disabled-state",
-      "evidence": "disabled, completed or struck-through state — the low contrast is the signal"
-    },
-    {
-      "file": "src/components/Settings/PluginActionAuditLogViewer.tsx",
-      "ordinal": 2,
-      "line": 356,
-      "start": 14668,
-      "end": 14689,
-      "token": "text-daintree-text/30",
-      "variants": "",
-      "step": 30,
-      "group": "src/components/Settings/PluginActionAuditLogViewer.tsx#14471",
-      "branch": "14595T",
-      "decision": "keep",
-      "category": "disabled-state",
-      "evidence": "disabled, completed or struck-through state — the low contrast is the signal"
     },
     {
       "file": "src/components/Settings/PluginSettingsForm.tsx",
@@ -4860,8 +4605,8 @@
       "group": "src/components/Settings/SettingsSwitchCard.tsx#2537",
       "branch": "2574F",
       "decision": "keep",
-      "category": "icon-affordance",
-      "evidence": "<Icon> is an icon — the colour is an affordance, not prose"
+      "category": "disabled-state",
+      "evidence": "disabled, completed or struck-through state — the low contrast is the signal"
     },
     {
       "file": "src/components/Settings/SettingsSwitchCard.tsx",
@@ -4982,21 +4727,6 @@
       "decision": "keep",
       "category": "semantic-state-pair",
       "evidence": "hover: already paints text-text-primary here; the band role would erase the difference"
-    },
-    {
-      "file": "src/components/Settings/TurnOutcomeDiagnostics.tsx",
-      "ordinal": 4,
-      "line": 530,
-      "start": 21567,
-      "end": 21588,
-      "token": "text-daintree-text/30",
-      "variants": "",
-      "step": 30,
-      "group": "src/components/Settings/TurnOutcomeDiagnostics.tsx#21354",
-      "branch": "7978F/21486T",
-      "decision": "keep",
-      "category": "disabled-state",
-      "evidence": "disabled, completed or struck-through state — the low contrast is the signal"
     },
     {
       "file": "src/components/Settings/VoiceInputSettingsTab.tsx",

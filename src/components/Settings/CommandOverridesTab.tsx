@@ -363,7 +363,7 @@ export function CommandOverridesTab({ projectId, overrides, onChange }: CommandO
                     <p
                       className={cn(
                         "text-xs mt-0.5 select-text",
-                        isDisabled ? "text-daintree-text/30" : "text-text-secondary"
+                        isDisabled ? "text-text-placeholder" : "text-text-secondary"
                       )}
                     >
                       {command.description}

@@ -787,7 +787,7 @@ export function McpAuditLogViewer({
           className={cn(
             "flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-[var(--radius-md)] border transition-colors",
             filteredRecords.length === 0
-              ? "border-border-default text-daintree-text/30 cursor-not-allowed"
+              ? "border-border-default text-text-placeholder cursor-not-allowed"
               : copyFlashActive
                 ? "text-status-success border-status-success/30"
                 : "border-border-default text-text-secondary hover:text-text-primary hover:bg-overlay-soft"
@@ -804,7 +804,7 @@ export function McpAuditLogViewer({
             className={cn(
               "flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium rounded-[var(--radius-md)] border transition-colors",
               filteredRecords.length === 0
-                ? "border-border-default text-daintree-text/30 cursor-not-allowed"
+                ? "border-border-default text-text-placeholder cursor-not-allowed"
                 : exportFlashActive
                   ? "text-status-success border-status-success/30"
                   : "border-border-default text-text-secondary hover:text-text-primary hover:bg-overlay-soft"
@@ -826,7 +826,7 @@ export function McpAuditLogViewer({
             className={cn(
               "px-3 py-1.5 text-xs font-medium rounded-[var(--radius-md)] border transition-colors",
               visibleRecords.length === 0
-                ? "border-border-default text-daintree-text/30 cursor-not-allowed"
+                ? "border-border-default text-text-placeholder cursor-not-allowed"
                 : "border-border-default text-status-danger hover:text-status-danger hover:bg-status-danger/10 hover:border-status-danger/20"
             )}
           >
