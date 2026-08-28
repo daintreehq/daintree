@@ -11,6 +11,9 @@ import {
   Check,
   Copy,
   MessageSquare,
+  CircleAlert,
+  CircleCheck,
+  ListChecks,
 } from "lucide-react";
 import { FolderGit2 } from "@/components/icons";
 import { Avatar } from "@/components/ui/Avatar";
@@ -18,6 +21,7 @@ import { cn } from "@/lib/utils";
 import { formatTimeAgo } from "@/utils/timeAgo";
 import { actionService } from "@/services/ActionService";
 import type { ForgeLabel, Issue, PR } from "@shared/types/forge";
+import type { Worktree } from "@shared/types/worktree";
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip";
 import { getPRCIStatusVisual, getPRCIStatusTooltip } from "../utils/prCIStatus";
 import { toGitHubCIStatus } from "../utils/forgeRowAdapters";
@@ -28,14 +32,22 @@ import {
   DropdownMenuItem,
   DropdownMenuSeparator,
 } from "@/components/ui/dropdown-menu";
-import { useWorktreeStore } from "@/hooks/useWorktreeStore";
-import { useWorktreeSelectionStore } from "@/store/worktreeStore";
 import { UI_ACTION_SUCCESS_DWELL_MS } from "@/lib/animationUtils";
 import { RESOURCE_ITEM_HEIGHT_PX } from "./GitHubDropdownSkeletons";
+import { deriveRowModel, describeWorktree, type ForgeRowPrimaryAction } from "./forgeRowModel";
 
 interface GitHubListItemProps {
   item: Issue | PR;
   type: "issue" | "pr";
+  /**
+   * The worktree already made for this resource, resolved once by the list
+   * rather than rescanned by every mounted row. `undefined` means none.
+   */
+  worktree?: Worktree;
+  /** The worktree the project view is standing in, for the `Current` state. */
+  activeWorktreeId?: string | null;
+  /** Which timestamp the row shows, so it agrees with the panel's sort order. */
+  timeField?: "created" | "updated";
   onCreateWorktree?: (item: Issue | PR) => void;
   onSwitchToWorktree?: (worktreeId: string) => void;
   onOpenExternalUrl?: (url: string) => void;
@@ -53,7 +65,8 @@ interface GitHubListItemProps {
   isActive?: boolean;
   isSelected?: boolean;
   isSelectionActive?: boolean;
-  onToggleSelect?: (e: React.MouseEvent) => void;
+  /** Widened past `MouseEvent` so the actions menu can run the same command. */
+  onToggleSelect?: (e: { shiftKey: boolean }) => void;
 }
 
 function getStateIcon(state: string, type: "issue" | "pr", isDraft?: boolean) {
@@ -74,6 +87,18 @@ function getStateColor(state: string, isDraft?: boolean): string {
   return "text-pr-closed";
 }
 
+/**
+ * The state glyph's name. It carried none, so a draft PR — whose whole
+ * distinction from an open one is that glyph — was indistinguishable to a
+ * screen reader from the PR beside it.
+ */
+function getStateLabel(state: string, type: "issue" | "pr", isDraft?: boolean): string {
+  if (type === "issue") return state === "open" ? "Open issue" : "Closed issue";
+  if (state === "merged") return "Merged pull request";
+  if (state === "open") return isDraft ? "Draft pull request" : "Open pull request";
+  return "Closed pull request";
+}
+
 function isPR(item: Issue | PR): item is PR {
   return "isDraft" in item;
 }
@@ -84,6 +109,9 @@ const RAIL_SLOT = "shrink-0 flex items-center justify-center";
 export function GitHubListItem({
   item,
   type,
+  worktree,
+  activeWorktreeId = null,
+  timeField = "updated",
   onCreateWorktree,
   onSwitchToWorktree,
   onOpenExternalUrl,
@@ -101,6 +129,7 @@ export function GitHubListItem({
   const isItemPR = isPR(item);
   const StateIcon = getStateIcon(item.state, type, isItemPR && item.isDraft);
   const stateColor = getStateColor(item.state, isItemPR && item.isDraft);
+  const stateLabel = getStateLabel(item.state, type, isItemPR && item.isDraft);
 
   const [copied, setCopied] = useState(false);
   const copyTimeoutRef = useRef<number | undefined>(undefined);
@@ -114,16 +143,23 @@ export function GitHubListItem({
     };
   }, []);
 
-  const matchedWorktree = useWorktreeStore((s) => {
-    for (const wt of s.worktrees.values()) {
-      if (type === "issue" ? wt.issueNumber === item.number : wt.prNumber === item.number)
-        return wt;
-    }
-    return undefined;
-  });
-  const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
-  const hasWorktree = matchedWorktree !== undefined;
-  const isActiveWorktree = hasWorktree && matchedWorktree.id === activeWorktreeId;
+  const rowModel = deriveRowModel(item, worktree, activeWorktreeId);
+  const { isActiveWorktree } = rowModel;
+  /**
+   * What this row can actually do, as wired.
+   *
+   * The model says what the row MEANS to do; a caller that did not pass the
+   * handler for it cannot. Falling back to the forge keeps every row doing
+   * something — optional-chaining the call instead would leave a row that
+   * looks activatable, promises an action in its accessible name, and then
+   * silently does nothing.
+   */
+  const primaryAction: ForgeRowPrimaryAction =
+    (rowModel.primaryAction.kind === "switch" && !onSwitchToWorktree) ||
+    (rowModel.primaryAction.kind === "create" && !onCreateWorktree)
+      ? { kind: "open" }
+      : rowModel.primaryAction;
+  const worktreeDescription = worktree ? describeWorktree(worktree, isActiveWorktree) : null;
 
   const handleOpenExternal = () => {
     if (onOpenExternalUrl) {
@@ -145,24 +181,45 @@ export function GitHubListItem({
         UI_ACTION_SUCCESS_DWELL_MS
       );
     } catch {
+      // The clipboard can refuse (permissions, a headless context). Say so
+      // rather than flashing a success tick for a copy that did not happen.
       setCopied(false);
+      console.warn(`Could not copy #${item.number} to the clipboard`);
     }
   };
 
   /**
-   * The row's primary action — the same one Enter runs from the search field,
-   * and total: a closed issue or a merged PR has no worktree to make, so it
-   * falls through to the forge rather than swallowing the activation.
+   * The row's one action, run by the whole row — background and title alike.
+   *
+   * The title used to always open GitHub while the pixels beside it created or
+   * switched a worktree, so which operation you got depended on whether you
+   * hit the text. In a list whose purpose is running work locally, ordinary
+   * activation means "continue this work in Daintree"; the forge keeps the
+   * modifier click, Cmd/Ctrl+Enter, and its own menu item.
    */
   const runPrimaryAction = () => {
-    if (hasWorktree && matchedWorktree && onSwitchToWorktree) {
-      onSwitchToWorktree(matchedWorktree.id);
-    } else if (item.state === "open" && onCreateWorktree) {
-      onCreateWorktree(item);
-    } else {
-      handleOpenExternal();
+    switch (primaryAction.kind) {
+      case "switch":
+        onSwitchToWorktree?.(primaryAction.worktreeId);
+        break;
+      case "create":
+        onCreateWorktree?.(item);
+        break;
+      case "open":
+        handleOpenExternal();
+        break;
     }
   };
+
+  /** What a screen reader is told activation will do, since no tooltip here is reachable. */
+  const primaryActionHint =
+    primaryAction.kind === "switch"
+      ? isActiveWorktree
+        ? "Activate to return to this worktree"
+        : "Activate to switch to this worktree"
+      : primaryAction.kind === "create"
+        ? "Activate to create a worktree"
+        : "Activate to open on GitHub";
 
   const handleOpenLinkedPR = () => {
     const linked = !isItemPR && "linkedPR" in item ? item.linkedPR : undefined;
@@ -178,22 +235,43 @@ export function GitHubListItem({
   const [firstLabel, ...restLabels] = issueLabels;
   const assignees = !isItemPR ? item.assignees : [];
   const [firstAssignee, ...restAssignees] = assignees;
+  const assigneeLabel = firstAssignee
+    ? `Assigned to ${assignees.map((a) => a.login).join(", ")}`
+    : null;
 
-  const worktreeTooltip = isActiveWorktree
-    ? "Active worktree"
-    : hasWorktree && onSwitchToWorktree
-      ? "Switch to worktree"
-      : "Has worktree";
+  const linkedPR = !isItemPR && "linkedPR" in item ? item.linkedPR : undefined;
+  const linkedPRCIVisual = linkedPR?.ciStatus
+    ? getPRCIStatusVisual(toGitHubCIStatus(linkedPR.ciStatus))
+    : null;
+
+  /**
+   * Only the review decisions that change what you do next.
+   *
+   * `REVIEW_REQUIRED` is the resting state of nearly every open PR, so putting
+   * it on the surface would print a word on almost every row to say nothing
+   * had happened yet. Approval and a change request are events; the absence of
+   * a decision is not.
+   */
+  const reviewDecision = isItemPR ? item.reviewDecision : undefined;
+  const reviewVisual =
+    reviewDecision === "CHANGES_REQUESTED"
+      ? { Icon: CircleAlert, label: "Changes requested", colorClass: "text-status-warning" }
+      : reviewDecision === "APPROVED"
+        ? { Icon: CircleCheck, label: "Approved", colorClass: "text-status-success" }
+        : null;
+
+  const timestamp = timeField === "created" ? item.createdAt : item.updatedAt;
+  const timeLabel = `${timeField === "created" ? "Created" : "Updated"} ${new Date(timestamp).toLocaleString()}`;
 
   return (
     <div
       id={optionId}
       /* A row, not an option. `option` admits no interactive descendants, and
-         these rows genuinely carry them — a title that opens the issue, a
-         number that copies, a linked-PR jump, an actions menu. The APG's
-         editable-combobox-with-grid-popup pattern is the one that models this
-         honestly: the input keeps DOM focus and points `aria-activedescendant`
-         at a row, and every control lives inside a legal `gridcell`. */
+         these rows genuinely carry them — a number that copies, a linked-PR
+         jump, an actions menu. The APG's editable-combobox-with-grid-popup
+         pattern is the one that models this honestly: the input keeps DOM
+         focus and points `aria-activedescendant` at a row, and every control
+         lives inside a legal `gridcell`. */
       role="row"
       /* Virtualization means the DOM holds a window, not the list — without an
          explicit index a screen reader counts the handful of mounted rows. */
@@ -226,14 +304,27 @@ export function GitHubListItem({
       // fill and the hit area cover the whole slot with no unowned strip.
       style={{ height: RESOURCE_ITEM_HEIGHT_PX }}
       onClick={(e) => {
+        // The pointer's counterpart to Cmd/Ctrl+Enter: the forge on demand,
+        // without spending the row's default on it. Checked BEFORE selection
+        // so the two paths agree — the keyboard honours the modifier whether
+        // or not selection is active, and a modifier click that silently
+        // toggled membership instead would be a different command.
+        if (e.metaKey || e.ctrlKey) {
+          handleOpenExternal();
+          return;
+        }
         if (isSelectionActive && onToggleSelect) {
           onToggleSelect(e);
-        } else {
-          runPrimaryAction();
+          return;
         }
+        runPrimaryAction();
       }}
     >
       <div role="gridcell" className="flex items-start gap-2.5 px-3 py-2.5 h-full">
+        {/* The one thing nothing else in the row carries: what activating it
+            will do. State and worktree are named by their own elements, so
+            repeating them here made the row announce each of them twice. */}
+        <span className="sr-only">{primaryActionHint}</span>
         {onToggleSelect ? (
           <span className="group/icon shrink-0 relative w-4 h-4 mt-1">
             {/* State icon: visible by default, hidden on hover or when selection active */}
@@ -243,10 +334,14 @@ export function GitHubListItem({
                 stateColor,
                 isSelectionActive || isSelected ? "hidden" : "group-hover/icon:hidden"
               )}
+              role="img"
+              aria-label={stateLabel}
             >
               <StateIcon className="h-4 w-4" />
             </span>
-            {/* Checkbox: hidden by default, visible on hover or when selection active */}
+            {/* Checkbox: hidden by default, visible on hover or when selection active.
+                Pointer convenience only — the same command is a named item in the
+                row's actions menu, so entering selection never depends on hover. */}
             <span
               aria-hidden="true"
               onClick={(e) => {
@@ -266,7 +361,7 @@ export function GitHubListItem({
             </span>
           </span>
         ) : (
-          <span className={cn("shrink-0 mt-1", stateColor)}>
+          <span className={cn("shrink-0 mt-1", stateColor)} role="img" aria-label={stateLabel}>
             <StateIcon className="h-4 w-4" />
           </span>
         )}
@@ -274,28 +369,36 @@ export function GitHubListItem({
         <div className="flex-1 min-w-0">
           {/* Title line: the title owns the width; status and actions sit in the rail. */}
           <div className="flex items-center gap-2">
-            <button
-              type="button"
-              tabIndex={-1}
-              onClick={(e) => {
-                e.stopPropagation();
-                if (isSelectionActive && onToggleSelect) {
-                  onToggleSelect(e);
-                } else {
-                  handleOpenExternal();
-                }
-              }}
-              className={cn(
-                "flex-1 min-w-0 text-sm font-medium text-foreground truncate text-left cursor-pointer rounded",
-                "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring",
-                !isSelectionActive && "hover:underline"
-              )}
-            >
-              {item.title}
-            </button>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                {/* Not a button. The whole row runs one action, and a nested
+                    control that ran a different one was the reason clicking the
+                    text and clicking beside it did different things. */}
+                <span className="flex-1 min-w-0 text-sm font-medium text-foreground truncate text-left">
+                  {item.title}
+                </span>
+              </TooltipTrigger>
+              {/* At 450px most titles truncate. The elaborate tooltips used to
+                  be on the trivia while the one line you actually need to read
+                  had none. */}
+              <TooltipContent side="bottom">{item.title}</TooltipContent>
+            </Tooltip>
 
-            {/* Trailing rail — every slot is persistent ink, no hover-only reveals. */}
+            {/* Trailing rail — every slot is persistent ink, no hover-only reveals.
+                Order matters: everything of variable width sits to the LEFT of the
+                fixed identity slot, which sits immediately before the always-present
+                menu. That is what keeps avatars (and CI glyphs) in one column down
+                the list instead of sliding left whenever a neighbour appears. */}
             <div className="flex items-center gap-1.5 shrink-0">
+              {restAssignees.length > 0 && (
+                <span
+                  className="shrink-0 text-3xs text-text-secondary tabular-nums"
+                  aria-hidden="true"
+                >
+                  +{restAssignees.length}
+                </span>
+              )}
+
               {isItemPR &&
                 item.state === "open" &&
                 item.ciStatus &&
@@ -307,7 +410,7 @@ export function GitHubListItem({
                     <Tooltip>
                       <TooltipTrigger asChild>
                         <span
-                          className={cn(RAIL_SLOT, "w-3.5 h-3.5")}
+                          className={cn(RAIL_SLOT, "w-4 h-3.5")}
                           role="img"
                           aria-label={ciTooltip}
                         >
@@ -325,55 +428,14 @@ export function GitHubListItem({
                   );
                 })()}
 
-              {firstAssignee && (
+              {firstAssignee && assigneeLabel && (
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <span className={cn(RAIL_SLOT, "relative")}>
-                      <Avatar
-                        src={firstAssignee.avatarUrl ?? ""}
-                        alt={firstAssignee.login}
-                        className="w-4 h-4"
-                      />
-                      {restAssignees.length > 0 && (
-                        <span className="ml-0.5 text-3xs text-text-secondary tabular-nums">
-                          +{restAssignees.length}
-                        </span>
-                      )}
+                    <span className={cn(RAIL_SLOT, "w-4")} role="img" aria-label={assigneeLabel}>
+                      <Avatar src={firstAssignee.avatarUrl ?? ""} alt="" className="w-4 h-4" />
                     </span>
                   </TooltipTrigger>
-                  <TooltipContent side="bottom">
-                    {restAssignees.length > 0
-                      ? `Assigned to ${assignees.map((a) => a.login).join(", ")}`
-                      : `Assigned to ${firstAssignee.login}`}
-                  </TooltipContent>
-                </Tooltip>
-              )}
-
-              {hasWorktree && (
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span
-                      className={cn(
-                        RAIL_SLOT,
-                        "w-3.5 h-3.5",
-                        isActiveWorktree
-                          ? // The one place a status colour is load-bearing in
-                            // this row: this is the worktree you are standing
-                            // in. Colour carries it alone — a border drawn a
-                            // hair off a 14px glyph reads as a broken chip, not
-                            // as emphasis. Forced-colors strips the hue, so the
-                            // distinction moves to `Highlight` there, which is
-                            // the one system colour that survives it.
-                            "text-status-info forced-colors:text-[color:Highlight]"
-                          : "text-text-secondary"
-                      )}
-                      role="img"
-                      aria-label={worktreeTooltip}
-                    >
-                      <FolderGit2 className="w-3.5 h-3.5" />
-                    </span>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">{worktreeTooltip}</TooltipContent>
+                  <TooltipContent side="bottom">{assigneeLabel}</TooltipContent>
                 </Tooltip>
               )}
 
@@ -421,7 +483,29 @@ export function GitHubListItem({
                      feedback. Same guard the sort popover carries. */
                   onMouseDown={(e: React.MouseEvent) => e.stopPropagation()}
                   onTouchStart={(e: React.TouchEvent) => e.stopPropagation()}
+                  /* The menu portals out of the row's DOM but not out of the
+                     React tree, so without this a click on any item also runs
+                     the row's primary action underneath it — "Copy number"
+                     would copy AND switch worktree, and "Select" would toggle
+                     and then activate. */
+                  onClick={(e: React.MouseEvent) => e.stopPropagation()}
                 >
+                  {/* The row's own action leads. It used to sit below a
+                      separator under "Open on GitHub", which contradicted what
+                      the row actually does when you activate it. */}
+                  {primaryAction.kind === "switch" && onSwitchToWorktree && !isActiveWorktree && (
+                    <DropdownMenuItem onSelect={() => onSwitchToWorktree(primaryAction.worktreeId)}>
+                      <FolderGit2 className="h-3.5 w-3.5 mr-2" />
+                      Switch to worktree
+                    </DropdownMenuItem>
+                  )}
+                  {primaryAction.kind === "create" && onCreateWorktree && (
+                    <DropdownMenuItem onSelect={() => onCreateWorktree(item)}>
+                      <FolderGit2 className="h-3.5 w-3.5 mr-2" />
+                      Create worktree
+                    </DropdownMenuItem>
+                  )}
+
                   <DropdownMenuItem onSelect={() => handleOpenExternal()}>
                     <ExternalLink className="h-3.5 w-3.5 mr-2" />
                     Open on GitHub
@@ -430,29 +514,22 @@ export function GitHubListItem({
                     <Copy className="h-3.5 w-3.5 mr-2" />
                     Copy number
                   </DropdownMenuItem>
-                  {!isItemPR && "linkedPR" in item && item.linkedPR && (
+                  {linkedPR && (
                     <DropdownMenuItem onSelect={() => handleOpenLinkedPR()}>
                       <GitPullRequest className="h-3.5 w-3.5 mr-2" />
-                      Open pull request #{item.linkedPR.number}
+                      Open pull request #{linkedPR.number}
                     </DropdownMenuItem>
                   )}
 
-                  {hasWorktree && !isActiveWorktree && onSwitchToWorktree && matchedWorktree && (
+                  {/* Selection's only accessible, non-hover entry point. The
+                      checkbox on the state icon is a pointer shortcut for the
+                      same command, not the way you are meant to find it. */}
+                  {onToggleSelect && (
                     <>
                       <DropdownMenuSeparator />
-                      <DropdownMenuItem onSelect={() => onSwitchToWorktree(matchedWorktree.id)}>
-                        <FolderGit2 className="h-3.5 w-3.5 mr-2" />
-                        Switch to worktree
-                      </DropdownMenuItem>
-                    </>
-                  )}
-
-                  {!hasWorktree && onCreateWorktree && item.state === "open" && (
-                    <>
-                      <DropdownMenuSeparator />
-                      <DropdownMenuItem onSelect={() => onCreateWorktree(item)}>
-                        <FolderGit2 className="h-3.5 w-3.5 mr-2" />
-                        Create worktree
+                      <DropdownMenuItem onSelect={() => onToggleSelect({ shiftKey: false })}>
+                        <ListChecks className="h-3.5 w-3.5 mr-2" />
+                        {isSelected ? "Deselect" : "Select"}
                       </DropdownMenuItem>
                     </>
                   )}
@@ -461,7 +538,10 @@ export function GitHubListItem({
             </div>
           </div>
 
-          {/* Metadata line: identity first, then recency, then one label + count. */}
+          {/* Metadata line: identity, then what is happening locally, then the
+              forge's own trail. Local state comes early on purpose — it changes
+              what activating the row does, so it must not be the thing that
+              falls off the clipped end. */}
           <div className="flex items-center gap-1.5 mt-1 text-xs text-text-secondary flex-nowrap overflow-hidden">
             <Tooltip>
               <TooltipTrigger asChild>
@@ -493,19 +573,96 @@ export function GitHubListItem({
               <TooltipContent side="bottom">{copied ? "Copied" : "Copy number"}</TooltipContent>
             </Tooltip>
 
-            <span className="shrink-0">&middot;</span>
-            <span className="truncate max-w-[110px]">{item.author?.login ?? "unknown"}</span>
-            <span className="shrink-0">&middot;</span>
-            <span className="whitespace-nowrap shrink-0">{formatTimeAgo(item.updatedAt)}</span>
+            {worktree && worktreeDescription && (
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  {/* A word, not a 14px glyph wedged in the rail. This is the
+                      one fact on the row that changes what activation does, and
+                      in an IDE for running work in worktrees it is the most
+                      decision-relevant thing the row knows.
+
+                      It says `Worktree`, never the branch: the match is on
+                      resource number, so the local branch can legitimately
+                      differ from the PR's head ref. The tooltip and the
+                      accessible name carry the real name and branch. */}
+                  <span
+                    className={cn(
+                      "shrink-0 inline-flex items-center gap-1",
+                      isActiveWorktree
+                        ? // The one place a status colour is load-bearing in this
+                          // row: this is the worktree you are standing in.
+                          // Forced-colors strips the hue, so the distinction moves
+                          // to `Highlight`, the one system colour that survives it.
+                          "text-status-info forced-colors:text-[color:Highlight]"
+                        : "text-text-secondary"
+                    )}
+                    role="img"
+                    aria-label={worktreeDescription}
+                  >
+                    <span aria-hidden="true">&middot;</span>
+                    <FolderGit2 className="w-3 h-3" aria-hidden="true" />
+                    <span>{isActiveWorktree ? "Current" : "Worktree"}</span>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">{worktreeDescription}</TooltipContent>
+              </Tooltip>
+            )}
+
+            {reviewVisual && (
+              <span
+                className={cn("shrink-0 inline-flex items-center gap-1", reviewVisual.colorClass)}
+                role="img"
+                aria-label={`Review: ${reviewVisual.label}`}
+              >
+                <span aria-hidden="true" className="text-text-secondary">
+                  &middot;
+                </span>
+                <reviewVisual.Icon className="w-3 h-3" aria-hidden="true" />
+                <span>{reviewVisual.label}</span>
+              </span>
+            )}
+
+            {/* Separator kept inside the element it belongs to. Every middot
+                used to be independently `shrink-0`, so an author name squeezed
+                to nothing left its middot behind as a dangling dot. */}
+            <span className="inline-flex items-center gap-1.5 min-w-0">
+              <span className="shrink-0" aria-hidden="true">
+                &middot;
+              </span>
+              <span className="truncate max-w-[110px]">{item.author?.login ?? "unknown"}</span>
+            </span>
+
+            <span className="shrink-0" aria-hidden="true">
+              &middot;
+            </span>
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <span className="whitespace-nowrap shrink-0" role="img" aria-label={timeLabel}>
+                  {formatTimeAgo(timestamp)}
+                </span>
+              </TooltipTrigger>
+              {/* Which timestamp this is depends on the panel's sort order —
+                  showing "updated" under a "Newest" sort made the ages read out
+                  of order against the list they were sorting. */}
+              <TooltipContent side="bottom">{timeLabel}</TooltipContent>
+            </Tooltip>
 
             {(item.commentCount ?? 0) >= 1 && (
               <>
-                <span className="shrink-0">&middot;</span>
+                <span className="shrink-0" aria-hidden="true">
+                  &middot;
+                </span>
                 <Tooltip>
                   <TooltipTrigger asChild>
-                    <span className="inline-flex items-center gap-0.5 shrink-0 tabular-nums">
+                    <span
+                      className="inline-flex items-center gap-0.5 shrink-0 tabular-nums"
+                      role="img"
+                      aria-label={
+                        item.commentCount === 1 ? "1 comment" : `${item.commentCount} comments`
+                      }
+                    >
                       <MessageSquare className="w-3 h-3" aria-hidden="true" />
-                      <span>{item.commentCount}</span>
+                      <span aria-hidden="true">{item.commentCount}</span>
                     </span>
                   </TooltipTrigger>
                   <TooltipContent side="bottom">
@@ -516,22 +673,32 @@ export function GitHubListItem({
             )}
 
             {isItemPR && item.headRef && (
-              <>
-                <span className="shrink-0">&middot;</span>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    <span className="truncate max-w-[150px]">{item.headRef}</span>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">
-                    {item.headRef} &rarr; {item.baseRef}
-                  </TooltipContent>
-                </Tooltip>
-              </>
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  <span
+                    className="inline-flex items-center gap-1.5 min-w-0"
+                    role="img"
+                    aria-label={`Merges ${item.headRef} into ${item.baseRef}`}
+                  >
+                    <span className="shrink-0" aria-hidden="true">
+                      &middot;
+                    </span>
+                    <span className="truncate max-w-[150px]" aria-hidden="true">
+                      {item.headRef}
+                    </span>
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  {item.headRef} &rarr; {item.baseRef}
+                </TooltipContent>
+              </Tooltip>
             )}
 
-            {!isItemPR && "linkedPR" in item && item.linkedPR && (
+            {linkedPR && (
               <>
-                <span className="shrink-0">&middot;</span>
+                <span className="shrink-0" aria-hidden="true">
+                  &middot;
+                </span>
                 <Tooltip>
                   <TooltipTrigger asChild>
                     <button
@@ -546,46 +713,80 @@ export function GitHubListItem({
                         "hover:text-text-primary transition-colors duration-150 ease-out",
                         "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring"
                       )}
-                      aria-label={`Open linked pull request #${item.linkedPR.number}`}
+                      aria-label={
+                        // The linked PR's own state and checks arrive with the
+                        // issue and used to be thrown away: a merged linkage and
+                        // one with failing checks rendered identically.
+                        `Open linked pull request #${linkedPR.number} (${linkedPR.state}${
+                          linkedPRCIVisual ? `, CI ${linkedPRCIVisual.shortLabel}` : ""
+                        })`
+                      }
                     >
-                      <GitPullRequest className="w-3 h-3" aria-hidden="true" />
-                      <span>{item.linkedPR.number}</span>
+                      <GitPullRequest
+                        className={cn("w-3 h-3", getStateColor(linkedPR.state))}
+                        aria-hidden="true"
+                      />
+                      <span>{linkedPR.number}</span>
+                      {linkedPRCIVisual &&
+                        (linkedPRCIVisual.kind === "icon" ? (
+                          <linkedPRCIVisual.Icon
+                            className={cn("w-3 h-3 ms-0.5", linkedPRCIVisual.colorClass)}
+                            aria-hidden="true"
+                          />
+                        ) : (
+                          <span
+                            className={cn(
+                              "block w-1.5 h-1.5 rounded-full ms-0.5",
+                              linkedPRCIVisual.colorClass
+                            )}
+                            aria-hidden="true"
+                          />
+                        ))}
                     </button>
                   </TooltipTrigger>
                   <TooltipContent side="bottom">
-                    Linked pull request #{item.linkedPR.number}
+                    Pull request #{linkedPR.number} &middot; {linkedPR.state}
+                    {linkedPRCIVisual ? ` · CI ${linkedPRCIVisual.shortLabel}` : ""}
                   </TooltipContent>
                 </Tooltip>
               </>
             )}
 
             {firstLabel && (
-              <>
-                <span className="shrink-0">&middot;</span>
-                <Tooltip>
-                  <TooltipTrigger asChild>
-                    {/* One complete label plus a count. A label clipped to
-                        "enhanceme…" reads as broken data, and the labels past
-                        the second used to vanish with nothing to say so. */}
-                    <span className="inline-flex items-center gap-1 min-w-0">
-                      {firstLabel.color ? (
-                        <span
-                          className="w-2 h-2 rounded-full shrink-0"
-                          style={{ backgroundColor: `#${firstLabel.color}` }}
-                          aria-hidden="true"
-                        />
-                      ) : null}
-                      <span className="truncate max-w-[130px]">{firstLabel.name}</span>
-                      {restLabels.length > 0 && (
-                        <span className="shrink-0 tabular-nums">+{restLabels.length}</span>
-                      )}
+              <Tooltip>
+                <TooltipTrigger asChild>
+                  {/* One complete label plus a count. A label clipped to
+                      "enhanceme…" reads as broken data, and the labels past
+                      the second used to vanish with nothing to say so. */}
+                  <span
+                    className="inline-flex items-center gap-1 min-w-0"
+                    role="img"
+                    aria-label={`Labels: ${issueLabels.map((l) => l.name).join(", ")}`}
+                  >
+                    <span className="shrink-0" aria-hidden="true">
+                      &middot;
                     </span>
-                  </TooltipTrigger>
-                  <TooltipContent side="bottom">
-                    {issueLabels.map((l) => l.name).join(", ")}
-                  </TooltipContent>
-                </Tooltip>
-              </>
+                    {firstLabel.color ? (
+                      <span
+                        className="w-2 h-2 rounded-full shrink-0"
+                        style={{ backgroundColor: `#${firstLabel.color}` }}
+                        aria-hidden="true"
+                      />
+                    ) : null}
+                    <span className="truncate max-w-[130px]" aria-hidden="true">
+                      {firstLabel.name}
+                    </span>
+                    {restLabels.length > 0 && (
+                      <span className="shrink-0 tabular-nums" aria-hidden="true">
+                        +{restLabels.length}
+                      </span>
+                    )}
+                  </span>
+                </TooltipTrigger>
+                <TooltipContent side="bottom">
+                  {issueLabels.map((l) => l.name).join(", ")}
+                </TooltipContent>
+              </Tooltip>
             )}
           </div>
         </div>

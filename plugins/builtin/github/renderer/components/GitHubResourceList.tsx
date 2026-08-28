@@ -30,11 +30,12 @@ import { actionService } from "@/services/ActionService";
 import { notify } from "@/lib/notify";
 import { safeStringify } from "@/lib/safeStringify";
 import { GitHubListItem } from "./GitHubListItem";
+import { buildWorktreeIndex, deriveRowModel } from "./forgeRowModel";
 import { BulkActionBar } from "./BulkActionBar";
 import { useIssueSelection } from "@/hooks/useIssueSelection";
 import { useIssueSelectionStore } from "@/store/issueSelectionStore";
 import { useWorktreeSelectionStore } from "@/store/worktreeStore";
-import { getCurrentViewStore } from "@/store/createWorktreeStore";
+import { useWorktreeStoreOptional } from "@/hooks/useWorktreeStore";
 import {
   useGitHubFilterStore,
   type IssueStateFilter,
@@ -42,6 +43,7 @@ import {
 } from "../stores/githubFilterStore";
 import { useGitHubConfigStore } from "../stores/githubConfigStore";
 import type { Issue, PR } from "@shared/types/forge";
+import type { Worktree } from "@shared/types/worktree";
 import type { GitHubSortOrder } from "../../shared/types.js";
 import { MULTI_FETCH_CAP } from "@/lib/parseNumberQuery";
 import {
@@ -60,6 +62,9 @@ import { UI_DOHERTY_THRESHOLD, UI_SKELETON_FLOOR_MS } from "@/lib/animationUtils
 import { useDeferredLoading } from "@/hooks/useDeferredLoading";
 
 type StateFilter = IssueStateFilter | PRStateFilter;
+
+/** Stable empty snapshot for the views that have no worktree store to read. */
+const EMPTY_WORKTREES: ReadonlyMap<string, Worktree> = new Map();
 
 /**
  * How old the loaded page has to be before the footer says so out loud.
@@ -514,6 +519,25 @@ export function GitHubResourceList({
   );
 
   /**
+   * Which resources already have a worktree, resolved once for the whole list.
+   *
+   * Every mounted row used to linearly scan the worktree map for itself, and
+   * the Enter handler scanned it again through a third access path with its own
+   * copy of the match rule. One index, one rule, both paths.
+   */
+  // The optional read, not the throwing one: this panel is an overlay that
+  // only ENRICHES itself with the view's worktrees. Taking the whole forge
+  // surface down because it rendered without a worktree store would be a
+  // crash over a detail it can do without. The selector returns the map's own
+  // reference, which is the stability `useSyncExternalStore` requires.
+  const worktreeMap = useWorktreeStoreOptional((s) => s.worktrees, EMPTY_WORKTREES);
+  const activeWorktreeId = useWorktreeSelectionStore((s) => s.activeWorktreeId);
+  const worktreeIndex = useMemo(
+    () => buildWorktreeIndex(worktreeMap.values(), type, activeWorktreeId),
+    [worktreeMap, type, activeWorktreeId]
+  );
+
+  /**
    * Opening an item hands off to the browser, so the dropdown has nothing left
    * to show — closing it matches every other hand-off in the app and stops the
    * panel hanging over the window the user just switched away to.
@@ -701,9 +725,43 @@ export function GitHubResourceList({
       ? `github-${type}-load-more`
       : undefined;
 
+  /**
+   * Keep the cursor on the same resource across a refresh.
+   *
+   * Resetting to -1 whenever `data` changed identity meant a background
+   * revalidation landing mid-navigation silently threw away your place. The
+   * cursor tracks a resource number now, and only drops when that resource is
+   * genuinely no longer in the list.
+   */
+  const activeIndexRef = useRef(activeIndex);
   useEffect(() => {
-    setActiveIndex(-1);
-  }, [data]);
+    activeIndexRef.current = activeIndex;
+  }, [activeIndex]);
+
+  // A resource number only identifies a row within one project and one
+  // resource kind. Issue #42 in the project you just switched to is a
+  // different issue #42, and a warm cache can swap the rows straight in.
+  const cursorScope = `${projectPath}:${type}`;
+  const previousScopeRef = useRef(cursorScope);
+  const previousDataRef = useRef(data);
+  useEffect(() => {
+    const previousData = previousDataRef.current;
+    const previousScope = previousScopeRef.current;
+    previousDataRef.current = data;
+    previousScopeRef.current = cursorScope;
+    if (previousScope !== cursorScope) {
+      setActiveIndex(-1);
+      return;
+    }
+    if (previousData === data) return;
+    const previousNumber =
+      activeIndexRef.current >= 0 ? previousData[activeIndexRef.current]?.number : undefined;
+    if (previousNumber === undefined) {
+      setActiveIndex(-1);
+      return;
+    }
+    setActiveIndex(data.findIndex((item) => item.number === previousNumber));
+  }, [data, cursorScope]);
 
   useEffect(() => {
     if (activeIndex < 0) return;
@@ -743,27 +801,23 @@ export function GitHubResourceList({
             if (e.metaKey || e.ctrlKey) {
               handleOpenUrlExternal(activeItem.url);
             } else {
-              const worktrees = getCurrentViewStore().getState().worktrees;
-              let matchedWt: { id: string } | undefined;
-              for (const wt of worktrees.values()) {
-                if (
-                  type === "issue"
-                    ? wt.issueNumber === activeItem.number
-                    : wt.prNumber === activeItem.number
-                ) {
-                  matchedWt = wt;
+              // The same derivation the row runs for a click, so the two can
+              // never drift apart.
+              const { primaryAction } = deriveRowModel(
+                activeItem,
+                worktreeIndex.get(activeItem.number),
+                activeWorktreeId
+              );
+              switch (primaryAction.kind) {
+                case "switch":
+                  handleSwitchToWorktree(primaryAction.worktreeId);
                   break;
-                }
-              }
-              if (matchedWt) {
-                handleSwitchToWorktree(matchedWt.id);
-              } else if (activeItem.state === "open") {
-                handleCreateWorktree(activeItem);
-              } else {
-                // Closed issue, merged PR — nothing to make locally, so Enter
-                // falls through to the forge rather than doing nothing. Same
-                // fallback the row's click path takes.
-                handleOpenUrlExternal(activeItem.url);
+                case "create":
+                  handleCreateWorktree(activeItem);
+                  break;
+                case "open":
+                  handleOpenUrlExternal(activeItem.url);
+                  break;
               }
             }
           }
@@ -812,11 +866,12 @@ export function GitHubResourceList({
       activeIndex,
       activeItem,
       handleLoadMore,
+      worktreeIndex,
+      activeWorktreeId,
       handleSwitchToWorktree,
       handleCreateWorktree,
       handleOpenUrlExternal,
       handleClose,
-      type,
       searchQuery,
       setSearchQuery,
       selection,
@@ -1167,13 +1222,26 @@ export function GitHubResourceList({
           </Popover>
         </div>
 
-        {searchQuery.trim() !== "" &&
+        {/* Tied to selection mode rather than to a non-empty query: this is a
+            whole extra row in a vertically stacked header, so typing the first
+            character of a search used to grow the header and shove the list
+            down. Entering selection is a deliberate act; typing is not. */}
+        {selection.isSelectionActive &&
           data.length > 0 &&
           !loading &&
           (() => {
             const allSelected = data.every((item) => selection.selectedIds.has(item.number));
-            const unassigned =
-              type === "issue" ? data.filter((item) => (item as Issue).assignees.length === 0) : [];
+            // The bulk action these helpers feed is creating worktrees, so the
+            // useful filter is which rows do not have one yet. "Unassigned" was
+            // a proxy for that, and a poor one — plenty of assigned issues have
+            // no local worktree, and picking them selected rows the bulk create
+            // would immediately skip.
+            // Open as well as worktree-less: the bulk planner skips closed
+            // issues and merged PRs outright, so selecting them would walk you
+            // into a dialog with nothing left to create.
+            const withoutWorktree = data.filter(
+              (item) => item.state === "open" && !worktreeIndex.has(item.number)
+            );
             return (
               <div
                 className="flex items-center gap-1.5"
@@ -1193,15 +1261,15 @@ export function GitHubResourceList({
                 >
                   {allSelected ? "Deselect all" : `Select all (${data.length})`}
                 </button>
-                {unassigned.length > 0 && (
+                {withoutWorktree.length > 0 && withoutWorktree.length < data.length && (
                   <button
                     type="button"
                     onClick={() => {
-                      selection.selectAll(unassigned);
+                      selection.selectAll(withoutWorktree);
                     }}
                     className="text-xs text-text-secondary hover:text-text-primary focus-visible:outline-hidden focus-visible:ring-1 focus-visible:ring-accent-primary transition-colors duration-150 ease-out px-1 py-0.5 rounded"
                   >
-                    {`Select unassigned (${unassigned.length})`}
+                    {`Select without worktrees (${withoutWorktree.length})`}
                   </button>
                 )}
               </div>
@@ -1420,6 +1488,9 @@ export function GitHubResourceList({
                   <GitHubListItem
                     item={item}
                     type={type}
+                    worktree={worktreeIndex.get(item.number)}
+                    activeWorktreeId={activeWorktreeId}
+                    timeField={sortOrder === "created" ? "created" : "updated"}
                     onCreateWorktree={handleCreateWorktree}
                     onSwitchToWorktree={handleSwitchToWorktree}
                     optionId={`github-${type}-option-${item.number}`}
@@ -1434,7 +1505,7 @@ export function GitHubResourceList({
                     isActive={activeIndex === index}
                     isSelected={selection.selectedIds.has(item.number)}
                     isSelectionActive={selection.isSelectionActive}
-                    onToggleSelect={(e: React.MouseEvent) => {
+                    onToggleSelect={(e: { shiftKey: boolean }) => {
                       if (e.shiftKey) {
                         selection.toggleRange(item, data);
                       } else {

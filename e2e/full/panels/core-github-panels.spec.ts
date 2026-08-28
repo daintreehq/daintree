@@ -109,9 +109,15 @@ test.describe.serial("Core: GitHub panels (dropdowns, rate-limit, token banner)"
 
     await openIssuesDropdown(window);
 
-    // The select-all control only renders with a non-empty search query AND data.
     await window.locator(SEL.github.searchIssues).fill("e2e");
     await expect(window.locator(SEL.github.item(101))).toBeVisible({ timeout: T_LONG });
+
+    // The bulk helpers follow selection mode rather than a non-empty query —
+    // typing used to grow the stacked header and shove the list down on the
+    // first keystroke. Entering selection is the deliberate act, so do it:
+    // the cursor moves to the first row and Shift+Space takes it.
+    await window.keyboard.press("ArrowDown");
+    await window.keyboard.press("Shift+Space");
 
     const selectAll = window
       .locator(SEL.github.selectionActions)
@@ -126,6 +132,64 @@ test.describe.serial("Core: GitHub panels (dropdowns, rate-limit, token banner)"
     await expect(dialog).toBeVisible({ timeout: T_MEDIUM });
     // The dialog must carry the selected issues, not open empty/stale.
     await expect(dialog.locator('text="E2E issue one"')).toBeVisible({ timeout: T_MEDIUM });
+  });
+
+  test("keeps every row's assignee avatar in one column", async () => {
+    // The reported defect: the trailing rail was a right-anchored flex row of
+    // conditional slots, so a neighbour appearing to the RIGHT of the avatar
+    // — a worktree glyph, or the "+N" more-assignees count — pushed it ~20px
+    // left and the avatars stopped lining up down the list. jsdom cannot see
+    // that: a DOM-order test still passes if a width or a gap changes. This is
+    // the assertion that actually measures the column.
+    const { window } = ctx;
+    await connectGitHub(ctx.app, window);
+    await stubRepoStats(ctx.app, { issueCount: 3, prCount: 0, commitCount: 5 }, window);
+    await stubListIssues(ctx.app, [
+      makeFixtureIssue(201, "One assignee", {
+        assignees: [{ login: "alice", avatarUrl: "" }],
+      }),
+      makeFixtureIssue(202, "Three assignees, so the row also carries a +2", {
+        assignees: [
+          { login: "alice", avatarUrl: "" },
+          { login: "bob", avatarUrl: "" },
+          { login: "carol", avatarUrl: "" },
+        ],
+      }),
+      makeFixtureIssue(203, "One assignee and a long title that will truncate hard", {
+        assignees: [{ login: "dave", avatarUrl: "" }],
+        labels: [{ name: "bug", color: "d73a4a" }],
+        commentCount: 12,
+      }),
+    ]);
+
+    await openIssuesDropdown(window);
+    await expect(window.locator(SEL.github.item(201))).toBeVisible({ timeout: T_LONG });
+
+    const slots = window.locator('[role="img"][aria-label^="Assigned to"]');
+    await expect(slots).toHaveCount(3);
+
+    const xs: number[] = [];
+    for (const slot of await slots.all()) {
+      const box = await slot.boundingBox();
+      expect(box).not.toBeNull();
+      xs.push(box!.x);
+    }
+    // Sub-pixel tolerance only: these are meant to be the same column, not a
+    // similar one.
+    for (const x of xs) {
+      expect(Math.abs(x - xs[0]!)).toBeLessThan(0.5);
+    }
+
+    // And the anchor they hang off — the actions menu — is itself a column.
+    const menus = window.locator('[aria-label^="Actions for #"]');
+    await expect(menus).toHaveCount(3);
+    const menuXs: number[] = [];
+    for (const menu of await menus.all()) {
+      menuXs.push((await menu.boundingBox())!.x);
+    }
+    for (const x of menuXs) {
+      expect(Math.abs(x - menuXs[0]!)).toBeLessThan(0.5);
+    }
   });
 
   test("issues dropdown renders search and filter chrome when connected", async () => {
