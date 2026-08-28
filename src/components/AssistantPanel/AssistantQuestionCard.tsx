@@ -422,7 +422,7 @@ export function AssistantQuestionCard({ question, onAnswer }: AssistantQuestionC
           aria-hidden="true"
           className="size-3.5 shrink-0 text-[var(--assistant-fg-dim)]"
         />
-        <p className="min-w-0 flex-1 truncate text-[0.92em] text-[var(--assistant-fg-secondary)]">
+        <p className="min-w-0 flex-1 truncate assistant-text-sm text-[var(--assistant-fg-secondary)]">
           Daintree needs an answer
         </p>
       </div>
@@ -432,7 +432,7 @@ export function AssistantQuestionCard({ question, onAnswer }: AssistantQuestionC
         // `anywhere`, like the option rows: a question may be 500 characters and is
         // allowed to be one unbroken identifier, which at rail width would otherwise
         // push the whole panel sideways.
-        className="mt-1.5 shrink-0 text-[1em] font-medium text-[var(--assistant-fg)] [overflow-wrap:anywhere]"
+        className="mt-1.5 shrink-0 assistant-text-base font-medium text-[var(--assistant-fg)] [overflow-wrap:anywhere]"
       >
         {question.question}
       </p>
@@ -483,7 +483,7 @@ export function AssistantQuestionCard({ question, onAnswer }: AssistantQuestionC
             onChange={(e) => setQuery(e.target.value)}
             placeholder="Filter options"
             className={cn(
-              "min-w-0 flex-1 bg-transparent text-[1em] text-[var(--assistant-fg)] outline-hidden",
+              "min-w-0 flex-1 bg-transparent assistant-text-base text-[var(--assistant-fg)] outline-hidden",
               "placeholder:text-[var(--assistant-fg-secondary)]"
             )}
           />
@@ -577,7 +577,7 @@ export function AssistantQuestionCard({ question, onAnswer }: AssistantQuestionC
                   onClick={() => answer(row.index)}
                   disabled={submitted !== null}
                   className={cn(
-                    "relative flex w-full items-start gap-2 rounded-md py-1.5 pl-3 pr-2 text-left text-[1em]",
+                    "relative flex w-full items-start gap-2 rounded-md py-1.5 pl-3 pr-2 text-left assistant-text-base",
                     "transition-colors duration-150 ease-out",
                     active ? "bg-[var(--assistant-hover)]" : "hover:bg-[var(--assistant-hover)]/60"
                   )}
@@ -612,7 +612,7 @@ export function AssistantQuestionCard({ question, onAnswer }: AssistantQuestionC
                   <span
                     className={cn(
                       "mt-px inline-flex h-[1.5em] shrink-0 items-center justify-center gap-[0.3em]",
-                      "rounded border px-[0.4em] text-[0.85em] tabular-nums",
+                      "rounded-sm border px-[0.4em] assistant-text-xs tabular-nums",
                       "transition-colors duration-150 ease-out",
                       active
                         ? "border-[var(--assistant-border-strong)]"
@@ -666,7 +666,7 @@ export function AssistantQuestionCard({ question, onAnswer }: AssistantQuestionC
           className={cn(
             "mt-2.5 shrink-0 rounded-md border border-[var(--assistant-border)]",
             "bg-[var(--assistant-surface)] px-3 py-2.5",
-            "text-[1em] text-[var(--assistant-fg-secondary)]"
+            "assistant-text-base text-[var(--assistant-fg-secondary)]"
           )}
         >
           No option matches
@@ -676,7 +676,7 @@ export function AssistantQuestionCard({ question, onAnswer }: AssistantQuestionC
       {/* No rule above it any more. The well below the question now closes with a border
         of its own, and a second hairline six pixels under the first read as a ruling
         mistake rather than as structure. Space separates the footer instead. */}
-      <div className="mt-2 flex shrink-0 items-center justify-between gap-2 text-[0.92em] text-[var(--assistant-fg-secondary)]">
+      <div className="mt-2 flex shrink-0 items-center justify-between gap-2 assistant-text-sm text-[var(--assistant-fg-secondary)]">
         {/* The hint states what is ACTUALLY bound right now. A fixed line promising
             number keys on a sheet where they type into the filter is worse than no hint:
             it is an instruction that silently does something else. */}

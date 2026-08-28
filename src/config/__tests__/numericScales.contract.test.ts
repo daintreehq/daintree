@@ -158,6 +158,26 @@ const EXCEPTIONS: {
   prefix?: boolean;
 }[] = [
   {
+    file: "src/components/AssistantPanel/assistant-panel.css",
+    match: "font-size: var(--assistant-font-size, 12px)",
+    count: 1,
+    reason:
+      "The TERMINAL's font size, not the app's. It is a live user setting pushed in as a custom property, and the 12px is only the shipped terminal default covering the first paint before hydration. Putting it on the app type scale would decouple the panel from the pane beside it, which is the one thing this surface exists not to do",
+  },
+  {
+    file: "src/components/AssistantPanel/__preview__/preview.tsx",
+    match: 'fontSize: "11px"',
+    count: 1,
+    reason:
+      "Scaffolding, not product UI: the state-name label on the preview harness's own grid cards, which exist only so a screenshot pass can tell the fixtures apart. Nothing in this file ships",
+  },
+  {
+    file: "src/components/AssistantPanel/__preview__/preview.tsx",
+    match: 'borderRadius: "8px"',
+    count: 1,
+    reason: "Same preview scaffolding — the harness's own grid-card corner. Nothing here ships",
+  },
+  {
     file: "src/components/Setup/AgentSetupWizard.tsx",
     match: "text-[6px]",
     count: 3,
