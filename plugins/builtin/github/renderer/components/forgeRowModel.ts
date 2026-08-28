@@ -2,12 +2,15 @@ import type { Issue, PR } from "@shared/types/forge";
 import type { Worktree } from "@shared/types/worktree";
 
 /**
- * What activating a forge row actually does.
+ * What the BACKGROUND of a forge row does — a click beside the title, and the
+ * plain Enter that is its keyboard twin.
  *
- * This used to live twice — once in the row for the pointer and once in the
- * list shell for Enter — reached through two different worktree access paths.
- * Two copies of a decision tree that has to agree is a divergence bug with a
- * lit fuse, so both paths now run this one derivation.
+ * Not the whole row: the title is a control of its own and opens the forge,
+ * as Cmd/Ctrl+Enter does. This covers the other action, and it used to live
+ * twice — once in the row for the pointer and once in the list shell for Enter
+ * — reached through two different worktree access paths. Two copies of a
+ * decision tree that has to agree is a divergence bug with a lit fuse, so both
+ * paths now run this one derivation.
  */
 export type ForgeRowPrimaryAction =
   { kind: "switch"; worktreeId: string } | { kind: "create" } | { kind: "open" };
@@ -55,7 +58,7 @@ export function buildWorktreeIndex(
 }
 
 /**
- * The row's action contract.
+ * The background action's contract.
  *
  * A closed issue or a merged PR has nothing to make locally, so it falls
  * through to the forge rather than swallowing the activation.

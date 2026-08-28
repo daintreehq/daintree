@@ -72,6 +72,10 @@ const makeWorktree = (overrides: Partial<Worktree>): Worktree => ({
 });
 
 beforeEach(() => {
+  // The dispatch mock lives in a module factory, so `restoreAllMocks` never
+  // touches it and its calls pile up across the file. Without this, whether a
+  // "does not open the forge" assertion holds depends on the tests above it.
+  vi.mocked(actionService.dispatch).mockClear();
   vi.useFakeTimers();
   Object.defineProperty(navigator, "clipboard", {
     value: { writeText: vi.fn().mockResolvedValue(undefined) },
@@ -87,43 +91,86 @@ afterEach(() => {
 });
 
 describe("GitHubListItem", () => {
-  it("does not make the title its own control", () => {
-    // The title used to be a button that always opened GitHub while the row
-    // around it created or switched a worktree, so which operation you got
-    // depended on whether you hit the text.
-    render(<GitHubListItem item={baseIssue} type="issue" />);
-    const [title] = screen.getAllByText("Fix the thing");
-    expect(title!.tagName).not.toBe("BUTTON");
-    expect(title!.closest("button")).toBeNull();
-  });
-
-  it("does not make a PR title its own control either", () => {
-    render(<GitHubListItem item={basePR} type="pr" />);
-    const [title] = screen.getAllByText("Add new feature");
-    expect(title!.tagName).not.toBe("BUTTON");
-    expect(title!.closest("button")).toBeNull();
-  });
-
-  it("runs the row's action when the title is clicked, not the forge", () => {
+  it("opens the forge from the title, leaving the row to the worktree", () => {
+    // The title is the resource's name, so it goes to where the resource
+    // lives. Creating a worktree off a click on the text was the complaint.
     const onCreateWorktree = vi.fn();
     render(<GitHubListItem item={baseIssue} type="issue" onCreateWorktree={onCreateWorktree} />);
-    fireEvent.click(screen.getAllByText("Fix the thing")[0]!);
-    expect(onCreateWorktree).toHaveBeenCalledWith(baseIssue);
-    expect(actionService.dispatch).not.toHaveBeenCalled();
-  });
-
-  it("keeps the forge on the modifier click", () => {
-    const onCreateWorktree = vi.fn();
-    const { container } = render(
-      <GitHubListItem item={baseIssue} type="issue" onCreateWorktree={onCreateWorktree} />
-    );
-    fireEvent.click(container.querySelector("[role='row']")!, { metaKey: true });
+    fireEvent.click(screen.getByRole("button", { name: "Fix the thing" }));
     expect(onCreateWorktree).not.toHaveBeenCalled();
     expect(actionService.dispatch).toHaveBeenCalledWith(
       "system.openExternal",
       { url: "https://github.com/test/repo/issues/42" },
       { source: "user" }
     );
+  });
+
+  it("opens the forge from a PR title too", () => {
+    const onCreateWorktree = vi.fn();
+    render(<GitHubListItem item={basePR} type="pr" onCreateWorktree={onCreateWorktree} />);
+    fireEvent.click(screen.getByRole("button", { name: "Add new feature" }));
+    expect(onCreateWorktree).not.toHaveBeenCalled();
+    expect(actionService.dispatch).toHaveBeenCalledWith(
+      "system.openExternal",
+      { url: "https://github.com/test/repo/pull/99" },
+      { source: "user" }
+    );
+  });
+
+  it("opens the forge from the title even when the resource has a worktree", () => {
+    // The title is not a second way to reach the row's action, so having
+    // somewhere local to go must not change where the name points.
+    const onSwitchToWorktree = vi.fn();
+    render(
+      <GitHubListItem
+        item={baseIssue}
+        type="issue"
+        worktree={makeWorktree({ issueNumber: 42 })}
+        onSwitchToWorktree={onSwitchToWorktree}
+      />
+    );
+    fireEvent.click(screen.getByRole("button", { name: "Fix the thing" }));
+    expect(onSwitchToWorktree).not.toHaveBeenCalled();
+    expect(actionService.dispatch).toHaveBeenCalledTimes(1);
+  });
+
+  it("opens a closed resource's forge exactly once from the title", () => {
+    // Title and row both resolve to "open" here, so a title click that failed
+    // to stop propagating would hand off to the browser twice.
+    render(<GitHubListItem item={{ ...baseIssue, state: "closed" }} type="issue" />);
+    fireEvent.click(screen.getByRole("button", { name: "Fix the thing" }));
+    expect(actionService.dispatch).toHaveBeenCalledTimes(1);
+    expect(actionService.dispatch).toHaveBeenCalledWith(
+      "system.openExternal",
+      { url: "https://github.com/test/repo/issues/42" },
+      { source: "user" }
+    );
+  });
+
+  it("runs the row's action when the row is clicked beside the title", () => {
+    const onCreateWorktree = vi.fn();
+    const { container } = render(
+      <GitHubListItem item={baseIssue} type="issue" onCreateWorktree={onCreateWorktree} />
+    );
+    fireEvent.click(container.querySelector("[role='row']")!);
+    expect(onCreateWorktree).toHaveBeenCalledWith(baseIssue);
+    expect(actionService.dispatch).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["meta", { metaKey: true }],
+    ["ctrl", { ctrlKey: true }],
+  ])("does not spend a %s click on the forge", (_name, modifier) => {
+    // The title already reaches the forge by pointer. A whole-row modifier
+    // click would have to sit ahead of selection to stay consistent, turning
+    // a stray Cmd during a multi-select into a browser launch.
+    const onCreateWorktree = vi.fn();
+    const { container } = render(
+      <GitHubListItem item={baseIssue} type="issue" onCreateWorktree={onCreateWorktree} />
+    );
+    fireEvent.click(container.querySelector("[role='row']")!, modifier);
+    expect(actionService.dispatch).not.toHaveBeenCalled();
+    expect(onCreateWorktree).toHaveBeenCalledWith(baseIssue);
   });
 
   it("clicking linked PR dispatches system.openExternal with PR URL", () => {
@@ -415,7 +462,6 @@ describe("GitHubListItem", () => {
 
   it("calls onToggleSelect when clicking title during active selection", () => {
     const onToggleSelect = vi.fn();
-    vi.mocked(actionService.dispatch).mockClear();
     render(
       <GitHubListItem
         item={baseIssue}
@@ -424,8 +470,12 @@ describe("GitHubListItem", () => {
         onToggleSelect={onToggleSelect}
       />
     );
-    fireEvent.click(screen.getAllByText("Fix the thing")[0]!);
-    expect(onToggleSelect).toHaveBeenCalled();
+    fireEvent.click(screen.getByRole("button", { name: "Fix the thing" }));
+    // Once, and carrying the event: a title click that also bubbled to the row
+    // would toggle twice and land back where it started, and the list reads
+    // shiftKey off this event to pick range over single toggle.
+    expect(onToggleSelect).toHaveBeenCalledTimes(1);
+    expect(onToggleSelect).toHaveBeenCalledWith(expect.objectContaining({ shiftKey: false }));
     expect(actionService.dispatch).not.toHaveBeenCalled();
   });
 
@@ -750,11 +800,12 @@ describe("GitHubListItem", () => {
     expect(screen.getByText("time:1000")).toBeTruthy();
   });
 
-  it("says what activating the row will do, without repeating what is already named", () => {
+  it("says what the row's own key will do, without repeating what is already named", () => {
     // Every tooltip in this widget is pointer-only — DOM focus stays in the
     // search input by design — so the action contract needs a text home. The
     // state glyph and the worktree chip carry their own names, so saying them
-    // again here made the row announce each of them twice.
+    // again here made the row announce each of them twice. It names the key
+    // rather than "activate": the title is a second control inside the row.
     const { container } = render(
       <GitHubListItem
         item={baseIssue}
@@ -764,7 +815,7 @@ describe("GitHubListItem", () => {
       />
     );
     const row = container.querySelector("[role='row']")!;
-    expect(row.textContent!.split("Activate to switch to this worktree")).toHaveLength(2);
+    expect(row.textContent!.split("Press Enter to switch to this worktree")).toHaveLength(2);
     // Named once each by their own elements, and not a second time in the summary.
     expect(screen.getAllByLabelText("Open issue")).toHaveLength(1);
     expect(screen.getAllByLabelText("Worktree: issue-42-fix")).toHaveLength(1);
@@ -777,7 +828,7 @@ describe("GitHubListItem", () => {
     // still promising creation.
     const { container } = render(<GitHubListItem item={baseIssue} type="issue" />);
     expect(container.querySelector("[role='row']")!.textContent).toContain(
-      "Activate to open on GitHub"
+      "Press Enter to open on GitHub"
     );
 
     fireEvent.click(container.querySelector("[role='row']")!);
@@ -809,10 +860,11 @@ describe("GitHubListItem", () => {
   it.each([
     ["meta", { metaKey: true }],
     ["ctrl", { ctrlKey: true }],
-  ])("keeps the forge on a %s click even in selection mode", (_name, modifier) => {
-    // The keyboard honours Cmd/Ctrl+Enter whether or not selection is active,
-    // so a modifier click that quietly toggled membership instead would be a
-    // different command wearing the same gesture.
+  ])("leaves a %s click to selection rather than the forge", (_name, modifier) => {
+    // The row spends no gesture on the forge: the title is already a pointer
+    // route to it. A modifier click that opened the browser would have to be
+    // checked ahead of selection to stay consistent, so a stray Cmd during a
+    // multi-select would launch a browser and dismiss the dropdown.
     const onToggleSelect = vi.fn();
     const onCreateWorktree = vi.fn();
     const { container } = render(
@@ -824,14 +876,12 @@ describe("GitHubListItem", () => {
         onCreateWorktree={onCreateWorktree}
       />
     );
-    fireEvent.click(container.querySelector("[role='row']")!, modifier);
-    expect(onToggleSelect).not.toHaveBeenCalled();
+    fireEvent.click(container.querySelector("[role='row']")!, { ...modifier, shiftKey: true });
+    // The list reads shiftKey off this event to pick range over single toggle,
+    // so the event has to arrive intact, not merely arrive.
+    expect(onToggleSelect).toHaveBeenCalledWith(expect.objectContaining({ shiftKey: true }));
     expect(onCreateWorktree).not.toHaveBeenCalled();
-    expect(actionService.dispatch).toHaveBeenCalledWith(
-      "system.openExternal",
-      { url: "https://github.com/test/repo/issues/42" },
-      { source: "user" }
-    );
+    expect(actionService.dispatch).not.toHaveBeenCalled();
   });
 
   it("names a draft pull request's state, which only its glyph carried", () => {

@@ -180,13 +180,13 @@ export function GitHubListItem({
   };
 
   /**
-   * The row's one action, run by the whole row — background and title alike.
+   * The row's action: continue this work in Daintree.
    *
-   * The title used to always open GitHub while the pixels beside it created or
-   * switched a worktree, so which operation you got depended on whether you
-   * hit the text. In a list whose purpose is running work locally, ordinary
-   * activation means "continue this work in Daintree"; the forge keeps the
-   * modifier click, Cmd/Ctrl+Enter, and its own menu item.
+   * The row splits its surface deliberately. The title is the resource's name,
+   * and a name takes you to where the resource lives, so it opens the forge.
+   * Everything else is the row as a place to work, so it switches to the
+   * worktree or makes one. The same derivation runs for Enter in the list
+   * shell, which also keeps Cmd/Ctrl+Enter for the forge.
    */
   const runPrimaryAction = () => {
     switch (primaryAction.kind) {
@@ -202,15 +202,22 @@ export function GitHubListItem({
     }
   };
 
-  /** What a screen reader is told activation will do, since no tooltip here is reachable. */
+  /**
+   * What a screen reader is told the row's own action will do, since no
+   * tooltip here is reachable.
+   *
+   * Named for the key rather than "activate": the title inside the row is a
+   * control of its own now, so an instruction to activate something would not
+   * say which of the two it meant.
+   */
   const primaryActionHint =
     primaryAction.kind === "switch"
       ? isActiveWorktree
-        ? "Activate to return to this worktree"
-        : "Activate to switch to this worktree"
+        ? "Press Enter to return to this worktree"
+        : "Press Enter to switch to this worktree"
       : primaryAction.kind === "create"
-        ? "Activate to create a worktree"
-        : "Activate to open on GitHub";
+        ? "Press Enter to create a worktree"
+        : "Press Enter to open on GitHub";
 
   const handleOpenLinkedPR = () => {
     const linked = !isItemPR && "linkedPR" in item ? item.linkedPR : undefined;
@@ -295,15 +302,12 @@ export function GitHubListItem({
       // fill and the hit area cover the whole slot with no unowned strip.
       style={{ height: RESOURCE_ITEM_HEIGHT_PX }}
       onClick={(e) => {
-        // The pointer's counterpart to Cmd/Ctrl+Enter: the forge on demand,
-        // without spending the row's default on it. Checked BEFORE selection
-        // so the two paths agree — the keyboard honours the modifier whether
-        // or not selection is active, and a modifier click that silently
-        // toggled membership instead would be a different command.
-        if (e.metaKey || e.ctrlKey) {
-          handleOpenExternal();
-          return;
-        }
+        // No modifier branch here. The title is the pointer's route to the
+        // forge; a whole-row Cmd/Ctrl+click would only duplicate it, and it
+        // would have to sit ahead of selection to be consistent — which turns
+        // a stray modifier during a multi-select into a browser launch that
+        // dismisses the dropdown. Cmd/Ctrl+Enter stays: the keyboard cursor
+        // addresses a whole row and has no title to aim at.
         if (isSelectionActive && onToggleSelect) {
           onToggleSelect(e);
           return;
@@ -362,12 +366,36 @@ export function GitHubListItem({
           <div className="flex items-center gap-2">
             <Tooltip>
               <TooltipTrigger asChild>
-                {/* Not a button. The whole row runs one action, and a nested
-                    control that ran a different one was the reason clicking the
-                    text and clicking beside it did different things. */}
-                <span className="flex-1 min-w-0 text-sm font-medium text-foreground truncate text-left">
+                {/* The title is the resource's own name, so it goes where the
+                    resource lives. The row around it is about running the work
+                    locally; the text itself is the link out to the forge. */}
+                <button
+                  type="button"
+                  tabIndex={-1}
+                  // Chromium focuses a native button on pointer press even at
+                  // tabIndex -1. This grid keeps DOM focus in the search input
+                  // and points `aria-activedescendant` at the row, so letting
+                  // that default through would move focus onto the title and
+                  // leave the arrow keys — bound to the input — doing nothing.
+                  // It shows on the selection branch, which keeps the dropdown
+                  // open after the click rather than navigating away from it.
+                  onMouseDown={(e) => e.preventDefault()}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    if (isSelectionActive && onToggleSelect) {
+                      onToggleSelect(e);
+                      return;
+                    }
+                    handleOpenExternal();
+                  }}
+                  className={cn(
+                    "flex-1 min-w-0 text-sm font-medium text-foreground truncate text-left",
+                    "cursor-pointer rounded-sm focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-ring",
+                    !isSelectionActive && "hover:underline"
+                  )}
+                >
                   {item.title}
-                </span>
+                </button>
               </TooltipTrigger>
               {/* At 450px most titles truncate. The elaborate tooltips used to
                   be on the trivia while the one line you actually need to read

@@ -102,12 +102,18 @@ vi.mock("@/hooks/useIssueSelection", () => ({
   }),
 }));
 
+// Stable identities, so a test can assert which one the Enter path reached.
+// Fresh `vi.fn()`s per selector call recorded nothing anything could read.
+const mockOpenCreateDialog = vi.fn();
+const mockOpenCreateDialogForPR = vi.fn();
+const mockSelectWorktree = vi.fn();
+
 vi.mock("@/store/worktreeStore", () => ({
   useWorktreeSelectionStore: vi.fn((sel: (s: Record<string, unknown>) => unknown) =>
     sel({
-      openCreateDialog: vi.fn(),
-      openCreateDialogForPR: vi.fn(),
-      selectWorktree: vi.fn(),
+      openCreateDialog: mockOpenCreateDialog,
+      openCreateDialogForPR: mockOpenCreateDialogForPR,
+      selectWorktree: mockSelectWorktree,
     })
   ),
 }));
@@ -260,6 +266,9 @@ beforeEach(() => {
   notifyMock.mockReset();
   initializeMock.mockClear();
   mockSelectionClear.mockReset();
+  mockOpenCreateDialog.mockReset();
+  mockOpenCreateDialogForPR.mockReset();
+  mockSelectWorktree.mockReset();
   useIssueSelectionStore.setState({ selections: new Map() });
   setRateLimit(false, null, null);
   mockIsSelectionActive = false;
@@ -2957,6 +2966,86 @@ describe("GitHubResourceList — the row model it hands down", () => {
     });
     render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
     await waitFor(() => expect(rowProps.get(10)?.timeField).toBe("updated"));
+  });
+});
+
+describe("GitHubResourceList — activating the row under the cursor", () => {
+  // The pointer and the keyboard split the row's two actions differently: a
+  // pointer aims at the title for the forge and anywhere else for the
+  // worktree, while the keyboard cursor addresses a whole row and takes the
+  // modifier instead. Nothing pinned the keyboard half, so Cmd/Ctrl+Enter —
+  // now the only keyboard route to the forge — could have been deleted
+  // without a single test noticing.
+  const key = buildCacheKey("/test/proj", "issue", "open", "created");
+
+  const seedAndRender = async (items: Issue[]) => {
+    // The open path checks the dispatch result and notifies on `ok: false`,
+    // so a bare mock returning undefined rejects inside `.then`.
+    dispatchMock.mockResolvedValue({ ok: true, result: undefined });
+    setCache(key, {
+      items,
+      nextCursor: null,
+      hasMore: false,
+      timestamp: Date.now(),
+      freshBypassAt: Date.now(),
+      countAtWrite: items.length,
+    });
+    mockListIssues.mockResolvedValue(makeResponse(items));
+    render(<GitHubResourceList type="issue" projectPath="/test/proj" />);
+    await waitFor(() => expect(screen.getByTestId(`item-${items[0]!.number}`)).toBeTruthy());
+    const input = screen.getByRole("combobox");
+    fireEvent.keyDown(input, { key: "ArrowDown" });
+    return input;
+  };
+
+  it("creates a worktree on a plain Enter", async () => {
+    const input = await seedAndRender([makeIssue(10)]);
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(mockOpenCreateDialog).toHaveBeenCalledWith(expect.objectContaining({ number: 10 }));
+    expect(dispatchMock).not.toHaveBeenCalledWith(
+      "system.openExternal",
+      expect.anything(),
+      expect.anything()
+    );
+  });
+
+  it("switches to the worktree the resource already has, rather than making a second", async () => {
+    worktreeMap.set("wt-a", { id: "wt-a", issueNumber: 10 });
+    const input = await seedAndRender([makeIssue(10)]);
+    fireEvent.keyDown(input, { key: "Enter" });
+
+    expect(mockSelectWorktree).toHaveBeenCalledWith("wt-a");
+    expect(mockOpenCreateDialog).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    ["meta", { metaKey: true }],
+    ["ctrl", { ctrlKey: true }],
+  ])("opens the forge on %s+Enter instead of the worktree", async (_name, modifier) => {
+    const input = await seedAndRender([makeIssue(10)]);
+    fireEvent.keyDown(input, { key: "Enter", ...modifier });
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "system.openExternal",
+      { url: "https://github.com/test/repo/issues/10" },
+      { source: "user" }
+    );
+    expect(mockOpenCreateDialog).not.toHaveBeenCalled();
+  });
+
+  it("still opens the forge on a modified Enter while selection is active", async () => {
+    // The pointer's route to the forge is the title, and in selection mode the
+    // title toggles membership instead. The keyboard's route has no such mode.
+    mockIsSelectionActive = true;
+    const input = await seedAndRender([makeIssue(10)]);
+    fireEvent.keyDown(input, { key: "Enter", metaKey: true });
+
+    expect(dispatchMock).toHaveBeenCalledWith(
+      "system.openExternal",
+      { url: "https://github.com/test/repo/issues/10" },
+      { source: "user" }
+    );
   });
 });
 
