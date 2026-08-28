@@ -35,7 +35,12 @@ import { computeEnvProvenance } from "@shared/utils/agentLifecycleLedger";
 import { markTerminalRestarting, unmarkTerminalRestarting } from "@/store/restartExitSuppression";
 import { saveNormalized } from "./persistence";
 import { optimizeForDock } from "./layout";
-import { deriveRuntimeStatus, recordExplicitWorktreeAttribution } from "./helpers";
+import {
+  deriveRuntimeStatus,
+  reconcileWorktreeAfterSpawn,
+  recordExplicitWorktreeAttribution,
+  syncWorktreeAttributionToHost,
+} from "./helpers";
 import { cancelReconnectErrorDebounce } from "./browser";
 import { logDebug, logWarn, logError } from "@/utils/logger";
 import {
@@ -765,6 +770,17 @@ export const createRestartActions = (
       // xterm 6.0 does not inherit `disableStdin` across instance recreation.
       terminalInstanceService.setInputLocked(id, true);
 
+      // Read at spawn time, not from the panel captured before the kill: a
+      // cross-worktree move landing during the restart would otherwise respawn
+      // the run under the worktree it left, and the ledger would record the
+      // same stale filing. Falls back to the captured panel only when the live
+      // one is gone entirely — a live panel with no worktree keeps none, never
+      // an inherited id (#12060).
+      const livePanelAtSpawn = get().panelsById[id];
+      const spawnWorktreeId = livePanelAtSpawn
+        ? livePanelAtSpawn.worktreeId
+        : currentTerminal.worktreeId;
+
       // A restart is a new incarnation of the same panel id — advance the
       // renderer ledger so post-restart attach/detection/close events record
       // against the respawned generation, not the killed one.
@@ -772,8 +788,8 @@ export const createRestartActions = (
         launchAgentId: isAgent ? currentTerminal.launchAgentId : undefined,
         cwd: currentTerminal.cwd,
         projectId: capturedWorkspaceId,
-        worktreeId: currentTerminal.worktreeId,
-        worktreeSource: currentTerminal.worktreeId !== undefined ? "explicit" : undefined,
+        worktreeId: spawnWorktreeId,
+        worktreeSource: spawnWorktreeId !== undefined ? "explicit" : undefined,
         agentModelId: isAgent ? currentTerminal.agentModelId : undefined,
         agentPresetId: nextAgentPresetId,
         originalPresetId: nextOriginalPresetId ?? nextAgentPresetId,
@@ -801,6 +817,10 @@ export const createRestartActions = (
         env: restartEnv,
         agentLaunchFlags: isAgent ? nextAgentLaunchFlags : undefined,
         agentModelId: isAgent ? currentTerminal.agentModelId : undefined,
+        // Without this the pty-host record loses its worktree for the rest of
+        // the run's life and the fleet palette files it under "No worktree"
+        // while the sidebar still has it right (#12060).
+        worktreeId: spawnWorktreeId,
         // Lands on the terminal record as the PTY is created, so the restarted
         // pane is addressable immediately rather than only if a later teardown
         // manages to observe an id (#11782).
@@ -809,6 +829,12 @@ export const createRestartActions = (
         agentPresetColor: nextAgentPresetColor,
         originalAgentPresetId: nextOriginalPresetId ?? nextAgentPresetId,
       });
+
+      // Main awaits admission, settings and filesystem work before it reaches
+      // `PtyClient.spawn`, and that call overwrites the replay cache with the
+      // payload it was handed — so a move landing after we read the panel and
+      // before the record existed would be lost for good without this.
+      reconcileWorktreeAfterSpawn(id, spawnWorktreeId, get().panelsById[id]);
 
       if (targetLocation === "dock") {
         optimizeForDock(id);
@@ -978,6 +1004,13 @@ export const createRestartActions = (
     });
 
     if (!movedToLocation) return;
+
+    // After the commit, so the reducer stays free of side effects — the same
+    // shape `updateTitle` uses for its own pty-host mirror. Grouped panels
+    // never reach here; `moveTabGroupToWorktree` syncs each member itself.
+    if (panelKindHasPty(terminal.kind ?? "terminal")) {
+      syncWorktreeAttributionToHost(id, worktreeId);
+    }
 
     if (movedToLocation === "dock") {
       optimizeForDock(id);
@@ -1287,14 +1320,21 @@ export const createRestartActions = (
 
       const restartEnv = await buildRestartEnv(capturedProjectId, runtimeSettings.env, "fallback");
 
+      // Live at spawn time for the same reason as the restart path above: the
+      // hop awaits, and a move that lands mid-hop must not be undone by it.
+      const liveFallbackPanel = get().panelsById[id];
+      const fallbackWorktreeId = liveFallbackPanel
+        ? liveFallbackPanel.worktreeId
+        : terminal.worktreeId;
+
       // A fallback hop respawns the id — new renderer ledger incarnation, with
       // the hopped preset recorded as the active one.
       agentLifecycleLedger.recordLaunch(id, {
         launchAgentId: terminal.launchAgentId,
         cwd: terminal.cwd,
         projectId: capturedWorkspaceId,
-        worktreeId: terminal.worktreeId,
-        worktreeSource: terminal.worktreeId !== undefined ? "explicit" : undefined,
+        worktreeId: fallbackWorktreeId,
+        worktreeSource: fallbackWorktreeId !== undefined ? "explicit" : undefined,
         agentModelId: terminal.agentModelId,
         agentPresetId: nextPreset.id,
         originalPresetId: originalPresetId,
@@ -1321,10 +1361,16 @@ export const createRestartActions = (
         env: restartEnv,
         agentLaunchFlags: nextLaunchFlags,
         agentModelId: terminal.agentModelId,
+        // Carried for the same reason as the restart path: a fallback hop that
+        // drops it strands the run in the palette's "No worktree" bucket for
+        // the rest of its life (#12060).
+        worktreeId: fallbackWorktreeId,
         agentPresetId: nextPreset.id,
         agentPresetColor: nextPreset.color,
         originalAgentPresetId: originalPresetId,
       });
+
+      reconcileWorktreeAfterSpawn(id, fallbackWorktreeId, get().panelsById[id]);
 
       if (terminal.location === "dock") {
         optimizeForDock(id);

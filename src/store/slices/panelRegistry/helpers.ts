@@ -1,14 +1,15 @@
 import type { PersistableFlowStatus, TerminalRuntimeStatus } from "@/types";
 import type { PanelKind } from "@/types";
 import type { TabGroup } from "@/types";
-import { getDefaultPanelTitle } from "@shared/config/panelKindRegistry";
+import { getDefaultPanelTitle, panelKindHasPty } from "@shared/config/panelKindRegistry";
 import { AGENT_REGISTRY } from "@shared/config/agentRegistry";
 import { isBuiltInAgentId } from "@shared/config/agentIds";
 import { ABSOLUTE_MAX_GRID_TERMINALS } from "@/lib/terminalLayout";
 import { deriveTerminalChrome, type TerminalChromeInput } from "@/utils/terminalChrome";
-import { logError } from "@/utils/logger";
+import { logError, logWarn } from "@/utils/logger";
 import { isPtyPanel } from "@shared/types/panel";
 import { agentLifecycleLedger } from "@/services/terminal/lifecycleLedger";
+import { terminalClient } from "@/clients";
 import { getNarrowPanel } from "./selectors";
 
 /**
@@ -24,6 +25,75 @@ export function recordExplicitWorktreeAttribution(id: string, worktreeId: string
   const generation = agentLifecycleLedger.currentGeneration(id);
   if (generation === undefined) return;
   agentLifecycleLedger.recordWorktreeAttribution(id, generation, worktreeId, "explicit");
+}
+
+/**
+ * Mirror a worktree filing onto the pty-host terminal record, which is what the
+ * fleet palette groups by. The renderer panel store is authoritative for what
+ * the user sees; the pty-host copy is a downstream mirror that nothing else
+ * re-stamps, so a move that skips this hop leaves the palette filing the run
+ * under the worktree it launched in — or under "No worktree" (#12060).
+ *
+ * `null` is the explicit clear, for the one path that really does leave a panel
+ * with no worktree: undoing a dock-to-grid move deletes the adopted id
+ * (`layoutUndoStore`). Callers pass the panel's own value verbatim and never
+ * substitute a root or an active worktree for an absent one.
+ *
+ * Lives here for the same reason `recordExplicitWorktreeAttribution` does: the
+ * moves (`restart.ts`, `tabGroups.ts`), the promotions (`core.ts`,
+ * `ordering.ts`), the restores (`trashActions.ts`, `background.ts`) and the
+ * layout-undo pass all need it, and importing one from another would close a
+ * cycle.
+ */
+export function syncWorktreeAttributionToHost(id: string, worktreeId: string | null): void {
+  try {
+    terminalClient.updateWorktreeId(id, worktreeId);
+  } catch (error) {
+    logWarn("[PanelRegistry] Failed to sync worktree filing to the pty host", { id, error });
+  }
+}
+
+/**
+ * Mirror a panel's own current filing onto the pty-host record, skipping
+ * non-PTY kinds that have no record to update.
+ *
+ * Callers read the panel back out of the store after their commit rather than
+ * reusing the value they wrote: a promotion or restore that adopted a worktree
+ * can be overtaken by a move landing between the two, and the live panel is
+ * what the palette should agree with.
+ */
+export function syncLiveWorktreeAttributionToHost(
+  livePanel: { id: string; worktreeId?: string; kind?: PanelKind } | undefined
+): void {
+  if (!livePanel || !panelKindHasPty(livePanel.kind ?? "terminal")) return;
+  syncWorktreeAttributionToHost(livePanel.id, livePanel.worktreeId ?? null);
+}
+
+/**
+ * Close the window between reading a spawn payload's worktree and the pty-host
+ * actually holding a record for it.
+ *
+ * The renderer reads the panel immediately before calling spawn, but main then
+ * awaits rate-limit admission, settings and filesystem work before it reaches
+ * `PtyClient.spawn` — and that call overwrites the replay cache with the
+ * payload it was given. A move landing inside that window finds no record to
+ * update and is then clobbered by the spawn it raced, leaving the renderer and
+ * the host permanently disagreeing. Re-reading once the spawn has resolved is
+ * what makes the disagreement self-correcting (#12060).
+ *
+ * Takes the freshly-read panel rather than reaching for the store: this module
+ * is imported by the slices that build it, so a store import here would close
+ * a cycle.
+ */
+export function reconcileWorktreeAfterSpawn(
+  id: string,
+  spawnedWith: string | undefined,
+  livePanel: { worktreeId?: string; kind?: PanelKind } | undefined
+): void {
+  // Gone, or no longer PTY-backed — a successor incarnation owns its own filing.
+  if (!livePanel || !panelKindHasPty(livePanel.kind ?? "terminal")) return;
+  if (livePanel.worktreeId === spawnedWith) return;
+  syncWorktreeAttributionToHost(id, livePanel.worktreeId ?? null);
 }
 
 type CarrierPanel = Parameters<typeof getNarrowPanel>[0][string];

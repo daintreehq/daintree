@@ -41,6 +41,7 @@ function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
     markChecked: vi.fn(),
     updateObservedTitle: vi.fn(),
     updateTitle: vi.fn(),
+    updateWorktreeId: vi.fn(),
     transitionState: vi.fn(() => true),
     trimScrollback: vi.fn(),
     setActivityMonitorTier: vi.fn(),
@@ -114,6 +115,42 @@ function makeCtx(overrides: Partial<HostContext> = {}): HostContext {
 function termInfo(pid?: number) {
   return { ptyProcess: { pid } };
 }
+
+describe("lifecycle update-worktree-id handler", () => {
+  it("re-files a run onto the worktree it was moved to", () => {
+    const ctx = makeCtx();
+    const dispatch = createPtyHostMessageDispatcher(ctx);
+
+    dispatch({
+      type: "update-worktree-id",
+      id: "t1",
+      worktreeId: "/repo/.worktrees/feature",
+      expectedProjectId: "project-a",
+    });
+
+    expect(ctx.ptyManager.updateWorktreeId).toHaveBeenCalledWith(
+      "t1",
+      "/repo/.worktrees/feature",
+      "project-a"
+    );
+  });
+
+  it("passes an explicit clear through as null rather than dropping it", () => {
+    // The host is where `null` becomes a deleted key. Swallowing it here would
+    // leave the run filed under a worktree it has left (#12060).
+    const ctx = makeCtx();
+    const dispatch = createPtyHostMessageDispatcher(ctx);
+
+    dispatch({
+      type: "update-worktree-id",
+      id: "t1",
+      worktreeId: null,
+      expectedProjectId: null,
+    });
+
+    expect(ctx.ptyManager.updateWorktreeId).toHaveBeenCalledWith("t1", null, null);
+  });
+});
 
 describe("lifecycle update-title handler", () => {
   it("forwards the mode alongside the title so the lock survives the hop", () => {

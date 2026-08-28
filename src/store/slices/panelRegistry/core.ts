@@ -14,6 +14,7 @@ import {
   getDefaultTitle,
   removePanelIdsFromTabGroups,
   stopDevPreviewByPanelId,
+  syncLiveWorktreeAttributionToHost,
 } from "./helpers";
 import type { TrashExpiryHelpers } from "./trash";
 import { logError, logWarn } from "@/utils/logger";
@@ -629,6 +630,12 @@ export const createCorePanelActions = (
           "explicit"
         );
       }
+      // The promotion is how most runs acquire a worktree after spawn, and the
+      // pty-host record the fleet palette groups by is not re-stamped by
+      // anything else — without this the palette still files them under "No
+      // worktree" (#12060). Read back rather than reusing the adopted id so a
+      // move landing in between wins.
+      syncLiveWorktreeAttributionToHost(get().panelsById[id]);
     }
 
     // Only apply renderer policy for PTY-backed panels if move succeeded
@@ -710,6 +717,9 @@ export const createCorePanelActions = (
           "explicit"
         );
       }
+      // Same as the dock promotion above: the host record only moves if it is
+      // told, and a promoted dialog panel can be PTY-backed (#12060).
+      syncLiveWorktreeAttributionToHost(get().panelsById[id]);
     }
 
     if (atLimit) {

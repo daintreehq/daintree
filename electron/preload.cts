@@ -1355,6 +1355,9 @@ function buildElectronApi(): ElectronAPI {
       updateTitle: (id: string, title: string, titleMode: PanelTitleMode) =>
         ipcRenderer.send(CHANNELS.TERMINAL_UPDATE_TITLE, { id, title, titleMode }),
 
+      updateWorktreeId: (id: string, worktreeId: string | null) =>
+        ipcRenderer.send(CHANNELS.TERMINAL_UPDATE_WORKTREE_ID, { id, worktreeId }),
+
       onSpawnResult: (callback: (id: string, result: SpawnResultPayload) => void): (() => void) =>
         _eventBusOn("terminal:spawn-result", (payload) => {
           if (!Array.isArray(payload)) return;

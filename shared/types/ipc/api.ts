@@ -349,6 +349,7 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     reportTitleState(id: string, state: "working" | "waiting"): void;
     updateObservedTitle(id: string, title: string): void;
     updateTitle(id: string, title: string, titleMode: PanelTitleMode): void;
+    updateWorktreeId(id: string, worktreeId: string | null): void;
     onSpawnResult(callback: (id: string, result: SpawnResult) => void): () => void;
     onReduceScrollback(
       callback: (data: { terminalIds: string[]; targetLines: number }) => void
