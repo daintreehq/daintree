@@ -5,6 +5,7 @@
   "occurrences": [
     {
       "file": "plugins/builtin/github/renderer/components/BulkCreateWorktreeDialog.tsx",
+      "ordinal": 0,
       "line": 1246,
       "start": 52694,
       "end": 52715,
@@ -19,6 +20,7 @@
     },
     {
       "file": "plugins/builtin/github/renderer/components/CommitList.tsx",
+      "ordinal": 0,
       "line": 237,
       "start": 7692,
       "end": 7713,
@@ -33,6 +35,7 @@
     },
     {
       "file": "plugins/builtin/github/renderer/components/GitHubSettingsTab.tsx",
+      "ordinal": 0,
       "line": 36,
       "start": 1375,
       "end": 1396,
@@ -47,6 +50,7 @@
     },
     {
       "file": "src/components/ActionPalette/ActionPalette.tsx",
+      "ordinal": 0,
       "line": 77,
       "start": 3450,
       "end": 3471,
@@ -61,6 +65,7 @@
     },
     {
       "file": "src/components/ActionPalette/ActionPaletteItem.tsx",
+      "ordinal": 0,
       "line": 245,
       "start": 9849,
       "end": 9870,
@@ -75,6 +80,7 @@
     },
     {
       "file": "src/components/ActionPalette/ActionPaletteItem.tsx",
+      "ordinal": 1,
       "line": 265,
       "start": 10738,
       "end": 10759,
@@ -89,6 +95,7 @@
     },
     {
       "file": "src/components/ActionPalette/ActionPaletteItem.tsx",
+      "ordinal": 2,
       "line": 266,
       "start": 10792,
       "end": 10813,
@@ -103,6 +110,7 @@
     },
     {
       "file": "src/components/ActionPalette/ActionPaletteItem.tsx",
+      "ordinal": 3,
       "line": 287,
       "start": 11520,
       "end": 11541,
@@ -117,6 +125,7 @@
     },
     {
       "file": "src/components/ActionPalette/ActionPaletteItem.tsx",
+      "ordinal": 4,
       "line": 287,
       "start": 11560,
       "end": 11601,
@@ -131,6 +140,7 @@
     },
     {
       "file": "src/components/Browser/BrowserPane.tsx",
+      "ordinal": 0,
       "line": 947,
       "start": 35435,
       "end": 35456,
@@ -145,6 +155,7 @@
     },
     {
       "file": "src/components/Browser/BrowserPane.tsx",
+      "ordinal": 1,
       "line": 947,
       "start": 35457,
       "end": 35484,
@@ -159,6 +170,7 @@
     },
     {
       "file": "src/components/Browser/BrowserPane.tsx",
+      "ordinal": 2,
       "line": 1024,
       "start": 39410,
       "end": 39431,
@@ -173,6 +185,7 @@
     },
     {
       "file": "src/components/Browser/BrowserPane.tsx",
+      "ordinal": 3,
       "line": 1024,
       "start": 39432,
       "end": 39465,
@@ -187,6 +200,7 @@
     },
     {
       "file": "src/components/Browser/BrowserPane.tsx",
+      "ordinal": 4,
       "line": 1124,
       "start": 43852,
       "end": 43873,
@@ -201,6 +215,7 @@
     },
     {
       "file": "src/components/Browser/BrowserPane.tsx",
+      "ordinal": 5,
       "line": 1124,
       "start": 43874,
       "end": 43901,
@@ -215,6 +230,7 @@
     },
     {
       "file": "src/components/Browser/BrowserToolbar.tsx",
+      "ordinal": 0,
       "line": 871,
       "start": 31426,
       "end": 31447,
@@ -229,6 +245,7 @@
     },
     {
       "file": "src/components/Browser/BrowserToolbar.tsx",
+      "ordinal": 1,
       "line": 877,
       "start": 31670,
       "end": 31691,
@@ -243,6 +260,7 @@
     },
     {
       "file": "src/components/Browser/BrowserToolbar.tsx",
+      "ordinal": 2,
       "line": 962,
       "start": 35239,
       "end": 35260,
@@ -257,6 +275,7 @@
     },
     {
       "file": "src/components/Browser/BrowserToolbar.tsx",
+      "ordinal": 3,
       "line": 967,
       "start": 35453,
       "end": 35474,
@@ -271,6 +290,7 @@
     },
     {
       "file": "src/components/Browser/BrowserToolbar.tsx",
+      "ordinal": 4,
       "line": 993,
       "start": 36865,
       "end": 36886,
@@ -285,6 +305,7 @@
     },
     {
       "file": "src/components/Browser/BrowserToolbar.tsx",
+      "ordinal": 5,
       "line": 993,
       "start": 36887,
       "end": 36914,
@@ -299,6 +320,7 @@
     },
     {
       "file": "src/components/Browser/FindBar.tsx",
+      "ordinal": 0,
       "line": 114,
       "start": 3521,
       "end": 3542,
@@ -313,6 +335,7 @@
     },
     {
       "file": "src/components/Browser/FindBar.tsx",
+      "ordinal": 1,
       "line": 130,
       "start": 4158,
       "end": 4179,
@@ -327,6 +350,7 @@
     },
     {
       "file": "src/components/Browser/FindBar.tsx",
+      "ordinal": 2,
       "line": 144,
       "start": 4642,
       "end": 4663,
@@ -341,6 +365,7 @@
     },
     {
       "file": "src/components/Commands/CommandPicker.tsx",
+      "ordinal": 0,
       "line": 213,
       "start": 7163,
       "end": 7184,
@@ -355,6 +380,7 @@
     },
     {
       "file": "src/components/Commands/CommandPickerButton.tsx",
+      "ordinal": 0,
       "line": 26,
       "start": 851,
       "end": 872,
@@ -369,6 +395,7 @@
     },
     {
       "file": "src/components/Commands/CommandPickerButton.tsx",
+      "ordinal": 1,
       "line": 26,
       "start": 873,
       "end": 900,
@@ -383,6 +410,7 @@
     },
     {
       "file": "src/components/Commands/CommandPickerHost.tsx",
+      "ordinal": 0,
       "line": 118,
       "start": 3810,
       "end": 3831,
@@ -397,6 +425,7 @@
     },
     {
       "file": "src/components/CopyTree/CopyTreeRecentsPanel.tsx",
+      "ordinal": 0,
       "line": 137,
       "start": 6322,
       "end": 6343,
@@ -411,6 +440,7 @@
     },
     {
       "file": "src/components/DevPreview/ConsolePanel.tsx",
+      "ordinal": 0,
       "line": 157,
       "start": 5825,
       "end": 5846,
@@ -425,6 +455,7 @@
     },
     {
       "file": "src/components/DevPreview/ConsolePanel.tsx",
+      "ordinal": 1,
       "line": 380,
       "start": 13813,
       "end": 13834,
@@ -439,6 +470,7 @@
     },
     {
       "file": "src/components/DevPreview/ConsolePanel.tsx",
+      "ordinal": 2,
       "line": 397,
       "start": 14439,
       "end": 14460,
@@ -453,6 +485,7 @@
     },
     {
       "file": "src/components/DevPreview/ConsolePanel.tsx",
+      "ordinal": 3,
       "line": 397,
       "start": 14553,
       "end": 14589,
@@ -467,6 +500,7 @@
     },
     {
       "file": "src/components/DevPreview/ConsolePanel.tsx",
+      "ordinal": 4,
       "line": 416,
       "start": 15235,
       "end": 15256,
@@ -481,6 +515,7 @@
     },
     {
       "file": "src/components/DevPreview/DevPreviewDestructiveConfirmDialog.tsx",
+      "ordinal": 0,
       "line": 211,
       "start": 7433,
       "end": 7454,
@@ -495,6 +530,7 @@
     },
     {
       "file": "src/components/DevPreview/DevPreviewDestructiveConfirmDialog.tsx",
+      "ordinal": 1,
       "line": 230,
       "start": 8395,
       "end": 8416,
@@ -509,6 +545,7 @@
     },
     {
       "file": "src/components/DevPreview/DevPreviewDestructiveConfirmDialog.tsx",
+      "ordinal": 2,
       "line": 275,
       "start": 9899,
       "end": 9920,
@@ -523,6 +560,7 @@
     },
     {
       "file": "src/components/DevPreview/DevPreviewDestructiveConfirmDialog.tsx",
+      "ordinal": 3,
       "line": 300,
       "start": 10820,
       "end": 10841,
@@ -537,6 +575,7 @@
     },
     {
       "file": "src/components/DevPreview/DevPreviewDestructiveConfirmDialog.tsx",
+      "ordinal": 4,
       "line": 307,
       "start": 11103,
       "end": 11124,
@@ -551,6 +590,7 @@
     },
     {
       "file": "src/components/DevPreview/DevPreviewEmptyStates.tsx",
+      "ordinal": 0,
       "line": 170,
       "start": 5915,
       "end": 5936,
@@ -565,6 +605,7 @@
     },
     {
       "file": "src/components/DevPreview/DevPreviewLoadingState.tsx",
+      "ordinal": 0,
       "line": 41,
       "start": 1293,
       "end": 1314,
@@ -579,6 +620,7 @@
     },
     {
       "file": "src/components/DevPreview/DevPreviewLoadingState.tsx",
+      "ordinal": 1,
       "line": 83,
       "start": 2433,
       "end": 2454,
@@ -593,6 +635,7 @@
     },
     {
       "file": "src/components/DevPreview/DiagnosticsPanel.tsx",
+      "ordinal": 0,
       "line": 216,
       "start": 7881,
       "end": 7902,
@@ -607,6 +650,7 @@
     },
     {
       "file": "src/components/DevPreview/ObjectInspector.tsx",
+      "ordinal": 0,
       "line": 153,
       "start": 4326,
       "end": 4347,
@@ -621,6 +665,7 @@
     },
     {
       "file": "src/components/DevPreview/StackTrace.tsx",
+      "ordinal": 0,
       "line": 26,
       "start": 869,
       "end": 890,
@@ -635,6 +680,7 @@
     },
     {
       "file": "src/components/Diagnostics/DiagnosticsDock.tsx",
+      "ordinal": 0,
       "line": 366,
       "start": 12088,
       "end": 12109,
@@ -649,6 +695,7 @@
     },
     {
       "file": "src/components/Diagnostics/ProblemsContent.tsx",
+      "ordinal": 0,
       "line": 178,
       "start": 5681,
       "end": 5702,
@@ -663,6 +710,7 @@
     },
     {
       "file": "src/components/Diagnostics/ProblemsContent.tsx",
+      "ordinal": 1,
       "line": 198,
       "start": 6519,
       "end": 6540,
@@ -677,6 +725,7 @@
     },
     {
       "file": "src/components/Diagnostics/WhySlowContent.tsx",
+      "ordinal": 0,
       "line": 222,
       "start": 8439,
       "end": 8460,
@@ -691,6 +740,7 @@
     },
     {
       "file": "src/components/Diagnostics/WhySlowContent.tsx",
+      "ordinal": 1,
       "line": 324,
       "start": 13081,
       "end": 13102,
@@ -705,6 +755,7 @@
     },
     {
       "file": "src/components/DragDrop/GridPlaceholder.tsx",
+      "ordinal": 0,
       "line": 45,
       "start": 1672,
       "end": 1693,
@@ -719,6 +770,7 @@
     },
     {
       "file": "src/components/FileViewer/FileViewerToolbar.tsx",
+      "ordinal": 0,
       "line": 136,
       "start": 5404,
       "end": 5425,
@@ -733,6 +785,7 @@
     },
     {
       "file": "src/components/Fleet/FleetArmingRibbon.tsx",
+      "ordinal": 0,
       "line": 522,
       "start": 22095,
       "end": 22116,
@@ -747,6 +800,7 @@
     },
     {
       "file": "src/components/Fleet/FleetArmingRibbon.tsx",
+      "ordinal": 1,
       "line": 570,
       "start": 24202,
       "end": 24223,
@@ -761,6 +815,7 @@
     },
     {
       "file": "src/components/Fleet/FleetArmingRibbon.tsx",
+      "ordinal": 2,
       "line": 588,
       "start": 24825,
       "end": 24846,
@@ -775,6 +830,7 @@
     },
     {
       "file": "src/components/Fleet/FleetArmingRibbon.tsx",
+      "ordinal": 3,
       "line": 606,
       "start": 25671,
       "end": 25692,
@@ -789,6 +845,7 @@
     },
     {
       "file": "src/components/Fleet/FleetCountChip.tsx",
+      "ordinal": 0,
       "line": 239,
       "start": 9720,
       "end": 9741,
@@ -803,6 +860,7 @@
     },
     {
       "file": "src/components/Fleet/FleetCountChip.tsx",
+      "ordinal": 1,
       "line": 253,
       "start": 10296,
       "end": 10317,
@@ -817,6 +875,7 @@
     },
     {
       "file": "src/components/Fleet/FleetDraftingPill.tsx",
+      "ordinal": 0,
       "line": 263,
       "start": 10989,
       "end": 11010,
@@ -831,6 +890,7 @@
     },
     {
       "file": "src/components/Fleet/FleetPickerContent.tsx",
+      "ordinal": 0,
       "line": 210,
       "start": 7677,
       "end": 7698,
@@ -845,6 +905,7 @@
     },
     {
       "file": "src/components/Fleet/FleetPickerContent.tsx",
+      "ordinal": 1,
       "line": 218,
       "start": 7943,
       "end": 7964,
@@ -859,6 +920,7 @@
     },
     {
       "file": "src/components/Fleet/FleetPickerContent.tsx",
+      "ordinal": 2,
       "line": 234,
       "start": 8293,
       "end": 8314,
@@ -873,6 +935,7 @@
     },
     {
       "file": "src/components/Fleet/FleetPickerContent.tsx",
+      "ordinal": 3,
       "line": 234,
       "start": 8315,
       "end": 8342,
@@ -887,6 +950,7 @@
     },
     {
       "file": "src/components/Fleet/FleetPickerContent.tsx",
+      "ordinal": 4,
       "line": 329,
       "start": 11483,
       "end": 11504,
@@ -901,6 +965,7 @@
     },
     {
       "file": "src/components/Fleet/FleetPickerPalette.tsx",
+      "ordinal": 0,
       "line": 189,
       "start": 7464,
       "end": 7485,
@@ -915,6 +980,7 @@
     },
     {
       "file": "src/components/Fleet/renderPaneStateBadge.tsx",
+      "ordinal": 0,
       "line": 33,
       "start": 1394,
       "end": 1415,
@@ -929,6 +995,7 @@
     },
     {
       "file": "src/components/Fleet/SavedFleetRow.tsx",
+      "ordinal": 0,
       "line": 55,
       "start": 2105,
       "end": 2126,
@@ -943,6 +1010,7 @@
     },
     {
       "file": "src/components/HelpPanel/FigureLightbox.tsx",
+      "ordinal": 0,
       "line": 111,
       "start": 4616,
       "end": 4637,
@@ -957,6 +1025,7 @@
     },
     {
       "file": "src/components/HelpPanel/FigureLightbox.tsx",
+      "ordinal": 1,
       "line": 121,
       "start": 5204,
       "end": 5225,
@@ -971,6 +1040,7 @@
     },
     {
       "file": "src/components/HelpPanel/HelpIntroBanner.tsx",
+      "ordinal": 0,
       "line": 24,
       "start": 692,
       "end": 713,
@@ -985,6 +1055,7 @@
     },
     {
       "file": "src/components/HelpPanel/HelpPanel.tsx",
+      "ordinal": 0,
       "line": 1446,
       "start": 66155,
       "end": 66176,
@@ -999,6 +1070,7 @@
     },
     {
       "file": "src/components/HelpPanel/HelpPanel.tsx",
+      "ordinal": 1,
       "line": 1495,
       "start": 68940,
       "end": 68961,
@@ -1013,6 +1085,7 @@
     },
     {
       "file": "src/components/HelpPanel/HelpPanel.tsx",
+      "ordinal": 2,
       "line": 1497,
       "start": 69240,
       "end": 69261,
@@ -1027,6 +1100,7 @@
     },
     {
       "file": "src/components/HelpPanel/HelpPanelBanners.tsx",
+      "ordinal": 0,
       "line": 77,
       "start": 2799,
       "end": 2820,
@@ -1041,6 +1115,7 @@
     },
     {
       "file": "src/components/HelpPanel/HelpPanelBanners.tsx",
+      "ordinal": 1,
       "line": 129,
       "start": 4649,
       "end": 4670,
@@ -1055,6 +1130,7 @@
     },
     {
       "file": "src/components/HelpPanel/HelpPanelBanners.tsx",
+      "ordinal": 2,
       "line": 138,
       "start": 5020,
       "end": 5041,
@@ -1069,6 +1145,7 @@
     },
     {
       "file": "src/components/HelpPanel/HelpPanelBanners.tsx",
+      "ordinal": 3,
       "line": 261,
       "start": 9591,
       "end": 9612,
@@ -1083,6 +1160,7 @@
     },
     {
       "file": "src/components/HelpPanel/HelpPanelBanners.tsx",
+      "ordinal": 4,
       "line": 303,
       "start": 11323,
       "end": 11344,
@@ -1097,6 +1175,7 @@
     },
     {
       "file": "src/components/HelpPanel/HelpPanelBanners.tsx",
+      "ordinal": 5,
       "line": 377,
       "start": 14641,
       "end": 14662,
@@ -1111,6 +1190,7 @@
     },
     {
       "file": "src/components/HelpPanel/HelpPanelBanners.tsx",
+      "ordinal": 6,
       "line": 440,
       "start": 17279,
       "end": 17300,
@@ -1125,6 +1205,7 @@
     },
     {
       "file": "src/components/HelpPanel/HelpPanelHeader.tsx",
+      "ordinal": 0,
       "line": 103,
       "start": 3476,
       "end": 3497,
@@ -1139,6 +1220,7 @@
     },
     {
       "file": "src/components/HelpPanel/HelpPanelHeader.tsx",
+      "ordinal": 1,
       "line": 113,
       "start": 3874,
       "end": 3895,
@@ -1153,6 +1235,7 @@
     },
     {
       "file": "src/components/HelpPanel/HelpPanelHeader.tsx",
+      "ordinal": 2,
       "line": 126,
       "start": 4562,
       "end": 4583,
@@ -1167,6 +1250,7 @@
     },
     {
       "file": "src/components/HelpPanel/HelpPanelHeader.tsx",
+      "ordinal": 3,
       "line": 153,
       "start": 5745,
       "end": 5766,
@@ -1181,6 +1265,7 @@
     },
     {
       "file": "src/components/HelpPanel/HelpPanelVersionGate.tsx",
+      "ordinal": 0,
       "line": 35,
       "start": 1208,
       "end": 1229,
@@ -1195,6 +1280,7 @@
     },
     {
       "file": "src/components/HelpPanel/RecentCallsPopover.tsx",
+      "ordinal": 0,
       "line": 134,
       "start": 5030,
       "end": 5051,
@@ -1209,6 +1295,7 @@
     },
     {
       "file": "src/components/HelpPanel/RecentCallsPopover.tsx",
+      "ordinal": 1,
       "line": 166,
       "start": 6373,
       "end": 6394,
@@ -1223,6 +1310,7 @@
     },
     {
       "file": "src/components/HelpPanel/RecentCallsPopover.tsx",
+      "ordinal": 2,
       "line": 173,
       "start": 6670,
       "end": 6691,
@@ -1237,6 +1325,7 @@
     },
     {
       "file": "src/components/Layout/AgentButton.tsx",
+      "ordinal": 0,
       "line": 168,
       "start": 6281,
       "end": 6302,
@@ -1251,6 +1340,7 @@
     },
     {
       "file": "src/components/Layout/AgentButton.tsx",
+      "ordinal": 1,
       "line": 442,
       "start": 20044,
       "end": 20065,
@@ -1265,6 +1355,7 @@
     },
     {
       "file": "src/components/Layout/AgentButton.tsx",
+      "ordinal": 2,
       "line": 703,
       "start": 30747,
       "end": 30768,
@@ -1279,6 +1370,7 @@
     },
     {
       "file": "src/components/Layout/BackgroundContainer.tsx",
+      "ordinal": 0,
       "line": 284,
       "start": 9230,
       "end": 9251,
@@ -1293,6 +1385,7 @@
     },
     {
       "file": "src/components/Layout/BackgroundContainer.tsx",
+      "ordinal": 1,
       "line": 446,
       "start": 15355,
       "end": 15376,
@@ -1307,6 +1400,7 @@
     },
     {
       "file": "src/components/Layout/BackgroundContainer.tsx",
+      "ordinal": 2,
       "line": 462,
       "start": 16039,
       "end": 16060,
@@ -1321,6 +1415,7 @@
     },
     {
       "file": "src/components/Layout/BackgroundContainer.tsx",
+      "ordinal": 3,
       "line": 472,
       "start": 16459,
       "end": 16480,
@@ -1335,6 +1430,7 @@
     },
     {
       "file": "src/components/Layout/BackgroundContainer.tsx",
+      "ordinal": 4,
       "line": 585,
       "start": 20223,
       "end": 20244,
@@ -1349,6 +1445,7 @@
     },
     {
       "file": "src/components/Layout/BackgroundContainer.tsx",
+      "ordinal": 5,
       "line": 587,
       "start": 20310,
       "end": 20331,
@@ -1363,6 +1460,7 @@
     },
     {
       "file": "src/components/Layout/BackgroundContainer.tsx",
+      "ordinal": 6,
       "line": 592,
       "start": 20494,
       "end": 20515,
@@ -1377,6 +1475,7 @@
     },
     {
       "file": "src/components/Layout/ChordIndicator.tsx",
+      "ordinal": 0,
       "line": 254,
       "start": 9804,
       "end": 9825,
@@ -1391,6 +1490,7 @@
     },
     {
       "file": "src/components/Layout/ChordIndicator.tsx",
+      "ordinal": 1,
       "line": 258,
       "start": 9928,
       "end": 9949,
@@ -1405,6 +1505,7 @@
     },
     {
       "file": "src/components/Layout/ContentDock.tsx",
+      "ordinal": 0,
       "line": 445,
       "start": 18713,
       "end": 18734,
@@ -1419,6 +1520,7 @@
     },
     {
       "file": "src/components/Layout/ContentDock.tsx",
+      "ordinal": 1,
       "line": 535,
       "start": 23043,
       "end": 23064,
@@ -1433,6 +1535,7 @@
     },
     {
       "file": "src/components/Layout/DockedTabGroup.tsx",
+      "ordinal": 0,
       "line": 619,
       "start": 25701,
       "end": 25722,
@@ -1447,6 +1550,7 @@
     },
     {
       "file": "src/components/Layout/DockedTabGroup.tsx",
+      "ordinal": 1,
       "line": 677,
       "start": 28493,
       "end": 28514,
@@ -1461,6 +1565,7 @@
     },
     {
       "file": "src/components/Layout/DockedTabGroup.tsx",
+      "ordinal": 2,
       "line": 833,
       "start": 36408,
       "end": 36429,
@@ -1475,6 +1580,7 @@
     },
     {
       "file": "src/components/Layout/DockedTabGroup.tsx",
+      "ordinal": 3,
       "line": 851,
       "start": 37487,
       "end": 37508,
@@ -1489,6 +1595,7 @@
     },
     {
       "file": "src/components/Layout/DockedTerminalItem.tsx",
+      "ordinal": 0,
       "line": 355,
       "start": 14952,
       "end": 14973,
@@ -1503,6 +1610,7 @@
     },
     {
       "file": "src/components/Layout/DockedTerminalItem.tsx",
+      "ordinal": 1,
       "line": 404,
       "start": 17482,
       "end": 17503,
@@ -1517,6 +1625,7 @@
     },
     {
       "file": "src/components/Layout/DockLaunchButton.tsx",
+      "ordinal": 0,
       "line": 1435,
       "start": 64423,
       "end": 64444,
@@ -1531,6 +1640,7 @@
     },
     {
       "file": "src/components/Layout/DockLaunchButton.tsx",
+      "ordinal": 1,
       "line": 1476,
       "start": 66816,
       "end": 66837,
@@ -1545,6 +1655,7 @@
     },
     {
       "file": "src/components/Layout/DockLaunchButton.tsx",
+      "ordinal": 2,
       "line": 1477,
       "start": 66876,
       "end": 66897,
@@ -1559,6 +1670,7 @@
     },
     {
       "file": "src/components/Layout/LocalCommitsDropdown.tsx",
+      "ordinal": 0,
       "line": 531,
       "start": 18104,
       "end": 18125,
@@ -1573,6 +1685,7 @@
     },
     {
       "file": "src/components/Layout/PluginTrayButton.tsx",
+      "ordinal": 0,
       "line": 194,
       "start": 6985,
       "end": 7006,
@@ -1587,6 +1700,7 @@
     },
     {
       "file": "src/components/Layout/PluginTrayButton.tsx",
+      "ordinal": 1,
       "line": 202,
       "start": 7296,
       "end": 7317,
@@ -1601,6 +1715,7 @@
     },
     {
       "file": "src/components/Layout/TrashContainer.tsx",
+      "ordinal": 0,
       "line": 227,
       "start": 8339,
       "end": 8360,
@@ -1615,6 +1730,7 @@
     },
     {
       "file": "src/components/Layout/TrashContainer.tsx",
+      "ordinal": 1,
       "line": 264,
       "start": 9826,
       "end": 9847,
@@ -1629,6 +1745,7 @@
     },
     {
       "file": "src/components/Layout/TrashGroupItem.tsx",
+      "ordinal": 0,
       "line": 120,
       "start": 5077,
       "end": 5098,
@@ -1643,6 +1760,7 @@
     },
     {
       "file": "src/components/Layout/TrashGroupItem.tsx",
+      "ordinal": 1,
       "line": 122,
       "start": 5164,
       "end": 5185,
@@ -1657,6 +1775,7 @@
     },
     {
       "file": "src/components/Layout/TrashGroupItem.tsx",
+      "ordinal": 2,
       "line": 127,
       "start": 5348,
       "end": 5369,
@@ -1671,6 +1790,7 @@
     },
     {
       "file": "src/components/Layout/TrashGroupItem.tsx",
+      "ordinal": 3,
       "line": 230,
       "start": 9319,
       "end": 9340,
@@ -1685,6 +1805,7 @@
     },
     {
       "file": "src/components/Layout/WaitingContainer.tsx",
+      "ordinal": 0,
       "line": 366,
       "start": 13673,
       "end": 13694,
@@ -1699,6 +1820,7 @@
     },
     {
       "file": "src/components/Layout/WaitingContainer.tsx",
+      "ordinal": 1,
       "line": 376,
       "start": 14178,
       "end": 14199,
@@ -1713,6 +1835,7 @@
     },
     {
       "file": "src/components/Layout/WaitingContainer.tsx",
+      "ordinal": 2,
       "line": 464,
       "start": 17196,
       "end": 17217,
@@ -1727,6 +1850,7 @@
     },
     {
       "file": "src/components/Layout/WaitingContainer.tsx",
+      "ordinal": 3,
       "line": 466,
       "start": 17283,
       "end": 17304,
@@ -1741,6 +1865,7 @@
     },
     {
       "file": "src/components/Layout/WaitingContainer.tsx",
+      "ordinal": 4,
       "line": 471,
       "start": 17467,
       "end": 17488,
@@ -1755,6 +1880,7 @@
     },
     {
       "file": "src/components/Logs/LogEntry.tsx",
+      "ordinal": 0,
       "line": 186,
       "start": 5853,
       "end": 5874,
@@ -1769,6 +1895,7 @@
     },
     {
       "file": "src/components/McpConfirmDialog.tsx",
+      "ordinal": 0,
       "line": 296,
       "start": 13782,
       "end": 13803,
@@ -1783,6 +1910,7 @@
     },
     {
       "file": "src/components/McpConfirmDialog.tsx",
+      "ordinal": 1,
       "line": 390,
       "start": 17020,
       "end": 17041,
@@ -1797,6 +1925,7 @@
     },
     {
       "file": "src/components/McpConfirmDialog.tsx",
+      "ordinal": 2,
       "line": 463,
       "start": 19807,
       "end": 19828,
@@ -1811,6 +1940,7 @@
     },
     {
       "file": "src/components/Notifications/NotificationCenter.tsx",
+      "ordinal": 0,
       "line": 1002,
       "start": 38384,
       "end": 38405,
@@ -1825,6 +1955,7 @@
     },
     {
       "file": "src/components/Notifications/NotificationCenter.tsx",
+      "ordinal": 1,
       "line": 1023,
       "start": 39282,
       "end": 39303,
@@ -1839,6 +1970,7 @@
     },
     {
       "file": "src/components/Notifications/NotificationCenter.tsx",
+      "ordinal": 2,
       "line": 1050,
       "start": 40505,
       "end": 40526,
@@ -1853,6 +1985,7 @@
     },
     {
       "file": "src/components/Notifications/NotificationCenter.tsx",
+      "ordinal": 3,
       "line": 1307,
       "start": 52780,
       "end": 52801,
@@ -1867,6 +2000,7 @@
     },
     {
       "file": "src/components/Notifications/NotificationCenter.tsx",
+      "ordinal": 4,
       "line": 1713,
       "start": 66441,
       "end": 66462,
@@ -1881,6 +2015,7 @@
     },
     {
       "file": "src/components/Notifications/NotificationCenterEntry.tsx",
+      "ordinal": 0,
       "line": 384,
       "start": 16556,
       "end": 16577,
@@ -1895,6 +2030,7 @@
     },
     {
       "file": "src/components/Notifications/NotificationCenterEntry.tsx",
+      "ordinal": 1,
       "line": 396,
       "start": 16948,
       "end": 16969,
@@ -1909,6 +2045,7 @@
     },
     {
       "file": "src/components/Onboarding/GettingStartedChecklist.tsx",
+      "ordinal": 0,
       "line": 221,
       "start": 8308,
       "end": 8329,
@@ -1923,6 +2060,7 @@
     },
     {
       "file": "src/components/Onboarding/GettingStartedChecklist.tsx",
+      "ordinal": 1,
       "line": 223,
       "start": 8415,
       "end": 8436,
@@ -1937,6 +2075,7 @@
     },
     {
       "file": "src/components/Onboarding/GettingStartedChecklist.tsx",
+      "ordinal": 2,
       "line": 238,
       "start": 9000,
       "end": 9021,
@@ -1951,6 +2090,7 @@
     },
     {
       "file": "src/components/Onboarding/GettingStartedChecklist.tsx",
+      "ordinal": 3,
       "line": 239,
       "start": 9061,
       "end": 9088,
@@ -1965,6 +2105,7 @@
     },
     {
       "file": "src/components/Onboarding/GettingStartedChecklist.tsx",
+      "ordinal": 4,
       "line": 268,
       "start": 10429,
       "end": 10450,
@@ -1979,6 +2120,7 @@
     },
     {
       "file": "src/components/Onboarding/GettingStartedChecklist.tsx",
+      "ordinal": 5,
       "line": 269,
       "start": 10516,
       "end": 10537,
@@ -1993,6 +2135,7 @@
     },
     {
       "file": "src/components/Onboarding/GettingStartedChecklist.tsx",
+      "ordinal": 6,
       "line": 281,
       "start": 11104,
       "end": 11125,
@@ -2007,6 +2150,7 @@
     },
     {
       "file": "src/components/Onboarding/GettingStartedChecklist.tsx",
+      "ordinal": 7,
       "line": 281,
       "start": 11130,
       "end": 11151,
@@ -2021,6 +2165,7 @@
     },
     {
       "file": "src/components/Onboarding/GettingStartedChecklist.tsx",
+      "ordinal": 8,
       "line": 289,
       "start": 11529,
       "end": 11550,
@@ -2035,6 +2180,7 @@
     },
     {
       "file": "src/components/Onboarding/GettingStartedChecklist.tsx",
+      "ordinal": 9,
       "line": 300,
       "start": 11996,
       "end": 12017,
@@ -2049,6 +2195,7 @@
     },
     {
       "file": "src/components/Panel/PanelHeader.tsx",
+      "ordinal": 0,
       "line": 580,
       "start": 19548,
       "end": 19569,
@@ -2063,6 +2210,7 @@
     },
     {
       "file": "src/components/Panel/PanelHeader.tsx",
+      "ordinal": 1,
       "line": 908,
       "start": 34143,
       "end": 34164,
@@ -2077,6 +2225,7 @@
     },
     {
       "file": "src/components/Panel/PanelHeader.tsx",
+      "ordinal": 2,
       "line": 996,
       "start": 38354,
       "end": 38375,
@@ -2091,6 +2240,7 @@
     },
     {
       "file": "src/components/Panel/PanelHeader.tsx",
+      "ordinal": 3,
       "line": 1153,
       "start": 44581,
       "end": 44602,
@@ -2105,6 +2255,7 @@
     },
     {
       "file": "src/components/Panel/PanelHeader.tsx",
+      "ordinal": 4,
       "line": 1182,
       "start": 46026,
       "end": 46047,
@@ -2119,6 +2270,7 @@
     },
     {
       "file": "src/components/Panel/PanelHeader.tsx",
+      "ordinal": 5,
       "line": 1226,
       "start": 48194,
       "end": 48215,
@@ -2133,6 +2285,7 @@
     },
     {
       "file": "src/components/Panel/PanelHeader.tsx",
+      "ordinal": 6,
       "line": 1256,
       "start": 49537,
       "end": 49558,
@@ -2147,6 +2300,7 @@
     },
     {
       "file": "src/components/Panel/PanelTabList.tsx",
+      "ordinal": 0,
       "line": 73,
       "start": 2668,
       "end": 2689,
@@ -2161,6 +2315,7 @@
     },
     {
       "file": "src/components/Panel/TabButton.tsx",
+      "ordinal": 0,
       "line": 424,
       "start": 15397,
       "end": 15418,
@@ -2175,6 +2330,7 @@
     },
     {
       "file": "src/components/Pilot/PilotView.tsx",
+      "ordinal": 0,
       "line": 379,
       "start": 15125,
       "end": 15146,
@@ -2189,6 +2345,7 @@
     },
     {
       "file": "src/components/Pilot/PilotView.tsx",
+      "ordinal": 1,
       "line": 517,
       "start": 20366,
       "end": 20387,
@@ -2203,6 +2360,7 @@
     },
     {
       "file": "src/components/Pilot/PilotView.tsx",
+      "ordinal": 2,
       "line": 1751,
       "start": 74754,
       "end": 74775,
@@ -2217,6 +2375,7 @@
     },
     {
       "file": "src/components/Plugin/PluginArchiveInstallConfirmDialog.tsx",
+      "ordinal": 0,
       "line": 209,
       "start": 9572,
       "end": 9593,
@@ -2231,6 +2390,7 @@
     },
     {
       "file": "src/components/Plugin/PluginArchiveInstallConfirmDialog.tsx",
+      "ordinal": 1,
       "line": 213,
       "start": 9842,
       "end": 9863,
@@ -2245,6 +2405,7 @@
     },
     {
       "file": "src/components/Plugin/PluginCatalog.tsx",
+      "ordinal": 0,
       "line": 30,
       "start": 1449,
       "end": 1470,
@@ -2259,6 +2420,7 @@
     },
     {
       "file": "src/components/Plugin/PluginCatalog.tsx",
+      "ordinal": 1,
       "line": 44,
       "start": 1929,
       "end": 1950,
@@ -2273,6 +2435,7 @@
     },
     {
       "file": "src/components/Plugin/PluginCatalog.tsx",
+      "ordinal": 2,
       "line": 88,
       "start": 3518,
       "end": 3539,
@@ -2287,6 +2450,7 @@
     },
     {
       "file": "src/components/Plugin/PluginCatalog.tsx",
+      "ordinal": 3,
       "line": 90,
       "start": 3693,
       "end": 3714,
@@ -2301,6 +2465,7 @@
     },
     {
       "file": "src/components/Plugin/PluginConfirmDialog.tsx",
+      "ordinal": 0,
       "line": 140,
       "start": 6351,
       "end": 6372,
@@ -2315,6 +2480,7 @@
     },
     {
       "file": "src/components/Plugin/PluginDetailPane.tsx",
+      "ordinal": 0,
       "line": 128,
       "start": 5258,
       "end": 5279,
@@ -2329,6 +2495,7 @@
     },
     {
       "file": "src/components/Plugin/PluginDetailPane.tsx",
+      "ordinal": 1,
       "line": 344,
       "start": 15137,
       "end": 15158,
@@ -2343,6 +2510,7 @@
     },
     {
       "file": "src/components/Plugin/PluginDetailPane.tsx",
+      "ordinal": 2,
       "line": 403,
       "start": 17302,
       "end": 17323,
@@ -2357,6 +2525,7 @@
     },
     {
       "file": "src/components/Plugin/pluginIcons.tsx",
+      "ordinal": 0,
       "line": 111,
       "start": 3772,
       "end": 3793,
@@ -2371,6 +2540,7 @@
     },
     {
       "file": "src/components/Plugin/pluginIcons.tsx",
+      "ordinal": 1,
       "line": 111,
       "start": 3798,
       "end": 3819,
@@ -2385,6 +2555,7 @@
     },
     {
       "file": "src/components/Plugin/PluginInputBoxDialog.tsx",
+      "ordinal": 0,
       "line": 68,
       "start": 2248,
       "end": 2281,
@@ -2399,6 +2570,7 @@
     },
     {
       "file": "src/components/Plugin/PluginManagerView.tsx",
+      "ordinal": 0,
       "line": 479,
       "start": 21458,
       "end": 21479,
@@ -2413,6 +2585,7 @@
     },
     {
       "file": "src/components/Plugin/PluginManagerView.tsx",
+      "ordinal": 1,
       "line": 543,
       "start": 23789,
       "end": 23810,
@@ -2427,6 +2600,7 @@
     },
     {
       "file": "src/components/Plugin/PluginManagerView.tsx",
+      "ordinal": 2,
       "line": 618,
       "start": 27284,
       "end": 27305,
@@ -2441,6 +2615,7 @@
     },
     {
       "file": "src/components/Plugin/PluginManagerView.tsx",
+      "ordinal": 3,
       "line": 788,
       "start": 35906,
       "end": 35927,
@@ -2455,13 +2630,14 @@
     },
     {
       "file": "src/components/Plugin/PluginMcpConfirmDialog.tsx",
-      "line": 348,
-      "start": 14322,
-      "end": 14343,
+      "ordinal": 0,
+      "line": 346,
+      "start": 14302,
+      "end": 14323,
       "token": "text-daintree-text/40",
       "variants": "",
       "step": 40,
-      "group": "src/components/Plugin/PluginMcpConfirmDialog.tsx#14266",
+      "group": "src/components/Plugin/PluginMcpConfirmDialog.tsx#14246",
       "branch": "",
       "decision": "keep",
       "category": "icon-affordance",
@@ -2469,13 +2645,14 @@
     },
     {
       "file": "src/components/Plugin/PluginMcpConfirmDialog.tsx",
-      "line": 397,
-      "start": 16232,
-      "end": 16253,
+      "ordinal": 1,
+      "line": 395,
+      "start": 16212,
+      "end": 16233,
       "token": "text-daintree-text/40",
       "variants": "",
       "step": 40,
-      "group": "src/components/Plugin/PluginMcpConfirmDialog.tsx#16176",
+      "group": "src/components/Plugin/PluginMcpConfirmDialog.tsx#16156",
       "branch": "",
       "decision": "keep",
       "category": "icon-affordance",
@@ -2483,6 +2660,7 @@
     },
     {
       "file": "src/components/Plugin/PluginQuickPickDialog.tsx",
+      "ordinal": 0,
       "line": 169,
       "start": 6406,
       "end": 6427,
@@ -2497,6 +2675,7 @@
     },
     {
       "file": "src/components/Portal/PortalLaunchpad.tsx",
+      "ordinal": 0,
       "line": 26,
       "start": 1018,
       "end": 1039,
@@ -2511,6 +2690,7 @@
     },
     {
       "file": "src/components/Portal/PortalToolbar.tsx",
+      "ordinal": 0,
       "line": 140,
       "start": 4226,
       "end": 4247,
@@ -2525,6 +2705,7 @@
     },
     {
       "file": "src/components/Portal/PortalToolbar.tsx",
+      "ordinal": 1,
       "line": 141,
       "start": 4313,
       "end": 4334,
@@ -2539,6 +2720,7 @@
     },
     {
       "file": "src/components/Portal/PortalToolbar.tsx",
+      "ordinal": 2,
       "line": 436,
       "start": 16162,
       "end": 16183,
@@ -2553,6 +2735,7 @@
     },
     {
       "file": "src/components/Project/EnvironmentVariablesEditor.tsx",
+      "ordinal": 0,
       "line": 181,
       "start": 5897,
       "end": 5918,
@@ -2567,6 +2750,7 @@
     },
     {
       "file": "src/components/Project/EnvironmentVariablesEditor.tsx",
+      "ordinal": 1,
       "line": 186,
       "start": 6050,
       "end": 6071,
@@ -2581,6 +2765,7 @@
     },
     {
       "file": "src/components/Project/EnvironmentVariablesEditor.tsx",
+      "ordinal": 2,
       "line": 187,
       "start": 6132,
       "end": 6153,
@@ -2595,6 +2780,7 @@
     },
     {
       "file": "src/components/Project/EnvironmentVariablesEditor.tsx",
+      "ordinal": 3,
       "line": 256,
       "start": 9257,
       "end": 9278,
@@ -2609,6 +2795,7 @@
     },
     {
       "file": "src/components/Project/EnvironmentVariablesEditor.tsx",
+      "ordinal": 4,
       "line": 276,
       "start": 10313,
       "end": 10334,
@@ -2623,6 +2810,7 @@
     },
     {
       "file": "src/components/Project/EnvironmentVariablesEditor.tsx",
+      "ordinal": 5,
       "line": 301,
       "start": 11820,
       "end": 11841,
@@ -2637,6 +2825,7 @@
     },
     {
       "file": "src/components/Project/EnvironmentVariablesEditor.tsx",
+      "ordinal": 6,
       "line": 303,
       "start": 11926,
       "end": 11947,
@@ -2651,6 +2840,7 @@
     },
     {
       "file": "src/components/Project/GeneralTab.tsx",
+      "ordinal": 0,
       "line": 445,
       "start": 15804,
       "end": 15825,
@@ -2665,6 +2855,7 @@
     },
     {
       "file": "src/components/Project/GeneralTab.tsx",
+      "ordinal": 1,
       "line": 631,
       "start": 23644,
       "end": 23665,
@@ -2679,6 +2870,7 @@
     },
     {
       "file": "src/components/Project/GeneralTab.tsx",
+      "ordinal": 2,
       "line": 671,
       "start": 25314,
       "end": 25335,
@@ -2693,6 +2885,7 @@
     },
     {
       "file": "src/components/Project/GeneralTab.tsx",
+      "ordinal": 3,
       "line": 700,
       "start": 26524,
       "end": 26545,
@@ -2707,6 +2900,7 @@
     },
     {
       "file": "src/components/Project/NonGitFolderDialog.tsx",
+      "ordinal": 0,
       "line": 68,
       "start": 2349,
       "end": 2370,
@@ -2721,6 +2915,7 @@
     },
     {
       "file": "src/components/Project/ProjectSwitcherPalette.tsx",
+      "ordinal": 0,
       "line": 446,
       "start": 18651,
       "end": 18672,
@@ -2735,6 +2930,7 @@
     },
     {
       "file": "src/components/Project/ProjectSwitcherPalette.tsx",
+      "ordinal": 1,
       "line": 454,
       "start": 19010,
       "end": 19031,
@@ -2749,6 +2945,7 @@
     },
     {
       "file": "src/components/Project/ProjectSwitcherPalette.tsx",
+      "ordinal": 2,
       "line": 480,
       "start": 20090,
       "end": 20111,
@@ -2763,6 +2960,7 @@
     },
     {
       "file": "src/components/Project/ProjectSwitcherPalette.tsx",
+      "ordinal": 3,
       "line": 637,
       "start": 26549,
       "end": 26570,
@@ -2777,6 +2975,7 @@
     },
     {
       "file": "src/components/Project/ProjectSwitcherPalette.tsx",
+      "ordinal": 4,
       "line": 637,
       "start": 26595,
       "end": 26630,
@@ -2791,6 +2990,7 @@
     },
     {
       "file": "src/components/Project/ProjectSwitcherPalette.tsx",
+      "ordinal": 5,
       "line": 673,
       "start": 28374,
       "end": 28395,
@@ -2805,6 +3005,7 @@
     },
     {
       "file": "src/components/Project/ProjectSwitcherPalette.tsx",
+      "ordinal": 6,
       "line": 701,
       "start": 29765,
       "end": 29786,
@@ -2819,6 +3020,7 @@
     },
     {
       "file": "src/components/Project/ProjectSwitcherPalette.tsx",
+      "ordinal": 7,
       "line": 874,
       "start": 36625,
       "end": 36646,
@@ -2833,6 +3035,7 @@
     },
     {
       "file": "src/components/Project/ProjectSwitcherPalette.tsx",
+      "ordinal": 8,
       "line": 1772,
       "start": 73658,
       "end": 73679,
@@ -2847,6 +3050,7 @@
     },
     {
       "file": "src/components/Project/ProjectSwitcherPalette.tsx",
+      "ordinal": 9,
       "line": 2025,
       "start": 85558,
       "end": 85579,
@@ -2861,6 +3065,7 @@
     },
     {
       "file": "src/components/Project/RunningTaskList.tsx",
+      "ordinal": 0,
       "line": 320,
       "start": 10562,
       "end": 10583,
@@ -2875,6 +3080,7 @@
     },
     {
       "file": "src/components/Project/RunningTaskList.tsx",
+      "ordinal": 1,
       "line": 334,
       "start": 11040,
       "end": 11061,
@@ -2889,6 +3095,7 @@
     },
     {
       "file": "src/components/Project/RunningTaskList.tsx",
+      "ordinal": 2,
       "line": 345,
       "start": 11435,
       "end": 11456,
@@ -2903,6 +3110,7 @@
     },
     {
       "file": "src/components/Project/RunningTaskList.tsx",
+      "ordinal": 3,
       "line": 357,
       "start": 11794,
       "end": 11815,
@@ -2917,6 +3125,7 @@
     },
     {
       "file": "src/components/Project/WelcomeScreen.tsx",
+      "ordinal": 0,
       "line": 229,
       "start": 10125,
       "end": 10146,
@@ -2931,6 +3140,7 @@
     },
     {
       "file": "src/components/Project/WelcomeScreen.tsx",
+      "ordinal": 1,
       "line": 267,
       "start": 11592,
       "end": 11613,
@@ -2945,6 +3155,7 @@
     },
     {
       "file": "src/components/Project/WelcomeScreen.tsx",
+      "ordinal": 2,
       "line": 450,
       "start": 18161,
       "end": 18182,
@@ -2959,6 +3170,7 @@
     },
     {
       "file": "src/components/Project/WelcomeScreen.tsx",
+      "ordinal": 3,
       "line": 450,
       "start": 18227,
       "end": 18254,
@@ -2973,6 +3185,7 @@
     },
     {
       "file": "src/components/Project/WelcomeScreen.tsx",
+      "ordinal": 4,
       "line": 455,
       "start": 18531,
       "end": 18552,
@@ -2987,6 +3200,7 @@
     },
     {
       "file": "src/components/Project/WelcomeScreen.tsx",
+      "ordinal": 5,
       "line": 541,
       "start": 21876,
       "end": 21897,
@@ -3001,6 +3215,7 @@
     },
     {
       "file": "src/components/Project/WelcomeScreen.tsx",
+      "ordinal": 6,
       "line": 541,
       "start": 21942,
       "end": 21969,
@@ -3015,6 +3230,7 @@
     },
     {
       "file": "src/components/Project/WelcomeScreen.tsx",
+      "ordinal": 7,
       "line": 546,
       "start": 22242,
       "end": 22263,
@@ -3029,6 +3245,7 @@
     },
     {
       "file": "src/components/Project/WelcomeScreen.tsx",
+      "ordinal": 8,
       "line": 645,
       "start": 26017,
       "end": 26038,
@@ -3043,6 +3260,7 @@
     },
     {
       "file": "src/components/Project/WelcomeScreen.tsx",
+      "ordinal": 9,
       "line": 646,
       "start": 26106,
       "end": 26127,
@@ -3057,6 +3275,7 @@
     },
     {
       "file": "src/components/Project/WelcomeScreen.tsx",
+      "ordinal": 10,
       "line": 666,
       "start": 27027,
       "end": 27048,
@@ -3071,6 +3290,7 @@
     },
     {
       "file": "src/components/Project/WelcomeScreen.tsx",
+      "ordinal": 11,
       "line": 666,
       "start": 27053,
       "end": 27074,
@@ -3085,6 +3305,7 @@
     },
     {
       "file": "src/components/Project/WelcomeScreen.tsx",
+      "ordinal": 12,
       "line": 673,
       "start": 27355,
       "end": 27376,
@@ -3099,6 +3320,7 @@
     },
     {
       "file": "src/components/Project/WelcomeScreen.tsx",
+      "ordinal": 13,
       "line": 682,
       "start": 27713,
       "end": 27734,
@@ -3113,6 +3335,7 @@
     },
     {
       "file": "src/components/Pulse/ProjectPulseCard.tsx",
+      "ordinal": 0,
       "line": 61,
       "start": 2311,
       "end": 2332,
@@ -3127,6 +3350,7 @@
     },
     {
       "file": "src/components/Pulse/ProjectPulseCard.tsx",
+      "ordinal": 1,
       "line": 525,
       "start": 19610,
       "end": 19631,
@@ -3141,6 +3365,7 @@
     },
     {
       "file": "src/components/Pulse/ProjectPulseCard.tsx",
+      "ordinal": 2,
       "line": 525,
       "start": 19650,
       "end": 19677,
@@ -3155,6 +3380,7 @@
     },
     {
       "file": "src/components/Pulse/ProjectPulseCard.tsx",
+      "ordinal": 3,
       "line": 584,
       "start": 21639,
       "end": 21660,
@@ -3169,6 +3395,7 @@
     },
     {
       "file": "src/components/Pulse/ProjectPulseCard.tsx",
+      "ordinal": 4,
       "line": 624,
       "start": 23217,
       "end": 23238,
@@ -3183,6 +3410,7 @@
     },
     {
       "file": "src/components/Pulse/ProjectPulseCard.tsx",
+      "ordinal": 5,
       "line": 624,
       "start": 23257,
       "end": 23284,
@@ -3197,6 +3425,7 @@
     },
     {
       "file": "src/components/Pulse/PulseSummary.tsx",
+      "ordinal": 0,
       "line": 36,
       "start": 867,
       "end": 888,
@@ -3211,6 +3440,7 @@
     },
     {
       "file": "src/components/QuickSwitcher/QuickSwitcherItem.tsx",
+      "ordinal": 0,
       "line": 42,
       "start": 1342,
       "end": 1363,
@@ -3225,6 +3455,7 @@
     },
     {
       "file": "src/components/Settings/AgentScopeEditor/BehavioralControls.tsx",
+      "ordinal": 0,
       "line": 102,
       "start": 3810,
       "end": 3831,
@@ -3239,6 +3470,7 @@
     },
     {
       "file": "src/components/Settings/AgentScopeEditor/CustomPresetChrome.tsx",
+      "ordinal": 0,
       "line": 69,
       "start": 2170,
       "end": 2197,
@@ -3253,6 +3485,7 @@
     },
     {
       "file": "src/components/Settings/AgentScopeEditor/CustomPresetChrome.tsx",
+      "ordinal": 1,
       "line": 75,
       "start": 2509,
       "end": 2530,
@@ -3267,6 +3500,7 @@
     },
     {
       "file": "src/components/Settings/AgentScopeEditor/CustomPresetChrome.tsx",
+      "ordinal": 2,
       "line": 80,
       "start": 2676,
       "end": 2697,
@@ -3281,6 +3515,7 @@
     },
     {
       "file": "src/components/Settings/AgentScopeEditor/CustomPresetChrome.tsx",
+      "ordinal": 3,
       "line": 88,
       "start": 2991,
       "end": 3012,
@@ -3295,6 +3530,7 @@
     },
     {
       "file": "src/components/Settings/AgentScopeEditor/FallbackChainEditor.tsx",
+      "ordinal": 0,
       "line": 69,
       "start": 2386,
       "end": 2407,
@@ -3309,6 +3545,7 @@
     },
     {
       "file": "src/components/Settings/AgentScopeEditor/ReadOnlyDetail.tsx",
+      "ordinal": 0,
       "line": 21,
       "start": 863,
       "end": 884,
@@ -3323,6 +3560,7 @@
     },
     {
       "file": "src/components/Settings/AgentScopeEditor/ReadOnlyDetail.tsx",
+      "ordinal": 1,
       "line": 34,
       "start": 1527,
       "end": 1548,
@@ -3337,6 +3575,7 @@
     },
     {
       "file": "src/components/Settings/AgentSelectorDropdown.tsx",
+      "ordinal": 0,
       "line": 136,
       "start": 4686,
       "end": 4707,
@@ -3351,6 +3590,7 @@
     },
     {
       "file": "src/components/Settings/AgentSelectorDropdown.tsx",
+      "ordinal": 1,
       "line": 143,
       "start": 4910,
       "end": 4931,
@@ -3365,6 +3605,7 @@
     },
     {
       "file": "src/components/Settings/AgentSelectorDropdown.tsx",
+      "ordinal": 2,
       "line": 157,
       "start": 5417,
       "end": 5438,
@@ -3379,6 +3620,7 @@
     },
     {
       "file": "src/components/Settings/AgentSelectorDropdown.tsx",
+      "ordinal": 3,
       "line": 207,
       "start": 7510,
       "end": 7531,
@@ -3393,6 +3635,7 @@
     },
     {
       "file": "src/components/Settings/AgentSettings.tsx",
+      "ordinal": 0,
       "line": 137,
       "start": 5504,
       "end": 5525,
@@ -3407,6 +3650,7 @@
     },
     {
       "file": "src/components/Settings/CodeForgeSettingsTab.tsx",
+      "ordinal": 0,
       "line": 550,
       "start": 20303,
       "end": 20324,
@@ -3421,6 +3665,7 @@
     },
     {
       "file": "src/components/Settings/ColorSchemePicker.tsx",
+      "ordinal": 0,
       "line": 173,
       "start": 6192,
       "end": 6213,
@@ -3435,6 +3680,7 @@
     },
     {
       "file": "src/components/Settings/CommandOverridesTab.tsx",
+      "ordinal": 0,
       "line": 268,
       "start": 8711,
       "end": 8732,
@@ -3449,6 +3695,7 @@
     },
     {
       "file": "src/components/Settings/CommandOverridesTab.tsx",
+      "ordinal": 1,
       "line": 339,
       "start": 11980,
       "end": 12001,
@@ -3463,6 +3710,7 @@
     },
     {
       "file": "src/components/Settings/CommandOverridesTab.tsx",
+      "ordinal": 2,
       "line": 352,
       "start": 12531,
       "end": 12552,
@@ -3477,6 +3725,7 @@
     },
     {
       "file": "src/components/Settings/CommandOverridesTab.tsx",
+      "ordinal": 3,
       "line": 366,
       "start": 13195,
       "end": 13216,
@@ -3491,6 +3740,7 @@
     },
     {
       "file": "src/components/Settings/CommandOverridesTab.tsx",
+      "ordinal": 4,
       "line": 398,
       "start": 14604,
       "end": 14625,
@@ -3505,6 +3755,7 @@
     },
     {
       "file": "src/components/Settings/DaintreeAssistantSettingsTab.tsx",
+      "ordinal": 0,
       "line": 858,
       "start": 33373,
       "end": 33394,
@@ -3519,6 +3770,7 @@
     },
     {
       "file": "src/components/Settings/DaintreeAssistantSettingsTab.tsx",
+      "ordinal": 1,
       "line": 1105,
       "start": 43553,
       "end": 43574,
@@ -3533,6 +3785,7 @@
     },
     {
       "file": "src/components/Settings/DaintreeAssistantSettingsTab.tsx",
+      "ordinal": 2,
       "line": 1317,
       "start": 53183,
       "end": 53204,
@@ -3547,6 +3800,7 @@
     },
     {
       "file": "src/components/Settings/DaintreeAssistantSettingsTab.tsx",
+      "ordinal": 3,
       "line": 1486,
       "start": 59637,
       "end": 59670,
@@ -3561,6 +3815,7 @@
     },
     {
       "file": "src/components/Settings/DaintreeAssistantSettingsTab.tsx",
+      "ordinal": 4,
       "line": 1501,
       "start": 60387,
       "end": 60408,
@@ -3575,6 +3830,7 @@
     },
     {
       "file": "src/components/Settings/DiagnosticsReviewDialog.tsx",
+      "ordinal": 0,
       "line": 216,
       "start": 7802,
       "end": 7823,
@@ -3589,6 +3845,7 @@
     },
     {
       "file": "src/components/Settings/DiagnosticsReviewDialog.tsx",
+      "ordinal": 1,
       "line": 323,
       "start": 12584,
       "end": 12605,
@@ -3603,6 +3860,7 @@
     },
     {
       "file": "src/components/Settings/DiagnosticsReviewDialog.tsx",
+      "ordinal": 2,
       "line": 340,
       "start": 13434,
       "end": 13455,
@@ -3617,6 +3875,7 @@
     },
     {
       "file": "src/components/Settings/EditorIntegrationTab.tsx",
+      "ordinal": 0,
       "line": 191,
       "start": 7059,
       "end": 7080,
@@ -3631,6 +3890,7 @@
     },
     {
       "file": "src/components/Settings/EditorIntegrationTab.tsx",
+      "ordinal": 1,
       "line": 208,
       "start": 7961,
       "end": 7982,
@@ -3645,6 +3905,7 @@
     },
     {
       "file": "src/components/Settings/EditorIntegrationTab.tsx",
+      "ordinal": 2,
       "line": 210,
       "start": 8080,
       "end": 8101,
@@ -3659,6 +3920,7 @@
     },
     {
       "file": "src/components/Settings/EnvironmentSettingsTab.tsx",
+      "ordinal": 0,
       "line": 282,
       "start": 9851,
       "end": 9872,
@@ -3673,6 +3935,7 @@
     },
     {
       "file": "src/components/Settings/EnvironmentSettingsTab.tsx",
+      "ordinal": 1,
       "line": 308,
       "start": 11485,
       "end": 11506,
@@ -3687,6 +3950,7 @@
     },
     {
       "file": "src/components/Settings/EnvironmentSettingsTab.tsx",
+      "ordinal": 2,
       "line": 310,
       "start": 11595,
       "end": 11616,
@@ -3701,6 +3965,7 @@
     },
     {
       "file": "src/components/Settings/EnvVarEditor.tsx",
+      "ordinal": 0,
       "line": 256,
       "start": 9012,
       "end": 9033,
@@ -3715,6 +3980,7 @@
     },
     {
       "file": "src/components/Settings/EnvVarEditor.tsx",
+      "ordinal": 1,
       "line": 329,
       "start": 11994,
       "end": 12015,
@@ -3729,6 +3995,7 @@
     },
     {
       "file": "src/components/Settings/EnvVarEditor.tsx",
+      "ordinal": 2,
       "line": 329,
       "start": 12016,
       "end": 12043,
@@ -3743,6 +4010,7 @@
     },
     {
       "file": "src/components/Settings/EnvVarEditor.tsx",
+      "ordinal": 3,
       "line": 790,
       "start": 30926,
       "end": 30947,
@@ -3757,6 +4025,7 @@
     },
     {
       "file": "src/components/Settings/EnvVarEditor.tsx",
+      "ordinal": 4,
       "line": 831,
       "start": 33043,
       "end": 33064,
@@ -3771,6 +4040,7 @@
     },
     {
       "file": "src/components/Settings/EnvVarEditor.tsx",
+      "ordinal": 5,
       "line": 831,
       "start": 33065,
       "end": 33092,
@@ -3785,6 +4055,7 @@
     },
     {
       "file": "src/components/Settings/EnvVarEditor.tsx",
+      "ordinal": 6,
       "line": 864,
       "start": 34719,
       "end": 34740,
@@ -3799,6 +4070,7 @@
     },
     {
       "file": "src/components/Settings/EnvVarEditor.tsx",
+      "ordinal": 7,
       "line": 875,
       "start": 35321,
       "end": 35342,
@@ -3813,6 +4085,7 @@
     },
     {
       "file": "src/components/Settings/EnvVarEditor.tsx",
+      "ordinal": 8,
       "line": 886,
       "start": 35909,
       "end": 35930,
@@ -3827,6 +4100,7 @@
     },
     {
       "file": "src/components/Settings/FileBrowserVisibilitySettings.tsx",
+      "ordinal": 0,
       "line": 83,
       "start": 3499,
       "end": 3520,
@@ -3841,6 +4115,7 @@
     },
     {
       "file": "src/components/Settings/ForgeAuditLogViewer.tsx",
+      "ordinal": 0,
       "line": 362,
       "start": 14748,
       "end": 14769,
@@ -3855,6 +4130,7 @@
     },
     {
       "file": "src/components/Settings/ForgeAuditLogViewer.tsx",
+      "ordinal": 1,
       "line": 378,
       "start": 15605,
       "end": 15626,
@@ -3869,6 +4145,7 @@
     },
     {
       "file": "src/components/Settings/ForgeAuditLogViewer.tsx",
+      "ordinal": 2,
       "line": 398,
       "start": 16423,
       "end": 16444,
@@ -3883,6 +4160,7 @@
     },
     {
       "file": "src/components/Settings/ForgeProviderSelectorDropdown.tsx",
+      "ordinal": 0,
       "line": 115,
       "start": 3852,
       "end": 3873,
@@ -3897,6 +4175,7 @@
     },
     {
       "file": "src/components/Settings/ForgeProviderSelectorDropdown.tsx",
+      "ordinal": 1,
       "line": 122,
       "start": 4102,
       "end": 4123,
@@ -3911,6 +4190,7 @@
     },
     {
       "file": "src/components/Settings/ForgeProviderSelectorDropdown.tsx",
+      "ordinal": 2,
       "line": 129,
       "start": 4326,
       "end": 4347,
@@ -3925,6 +4205,7 @@
     },
     {
       "file": "src/components/Settings/ForgeProviderSelectorDropdown.tsx",
+      "ordinal": 3,
       "line": 143,
       "start": 4833,
       "end": 4854,
@@ -3939,6 +4220,7 @@
     },
     {
       "file": "src/components/Settings/ForgeProviderSelectorDropdown.tsx",
+      "ordinal": 4,
       "line": 195,
       "start": 7009,
       "end": 7030,
@@ -3953,6 +4235,7 @@
     },
     {
       "file": "src/components/Settings/ForgeProviderSelectorDropdown.tsx",
+      "ordinal": 5,
       "line": 208,
       "start": 7582,
       "end": 7603,
@@ -3967,6 +4250,7 @@
     },
     {
       "file": "src/components/Settings/KeybindingProfileActions.tsx",
+      "ordinal": 0,
       "line": 94,
       "start": 2818,
       "end": 2839,
@@ -3981,6 +4265,7 @@
     },
     {
       "file": "src/components/Settings/KeybindingProfileActions.tsx",
+      "ordinal": 1,
       "line": 107,
       "start": 3298,
       "end": 3319,
@@ -3995,6 +4280,7 @@
     },
     {
       "file": "src/components/Settings/KeyboardShortcutsTab.tsx",
+      "ordinal": 0,
       "line": 144,
       "start": 5111,
       "end": 5132,
@@ -4009,6 +4295,7 @@
     },
     {
       "file": "src/components/Settings/KeyboardShortcutsTab.tsx",
+      "ordinal": 1,
       "line": 357,
       "start": 12441,
       "end": 12462,
@@ -4023,6 +4310,7 @@
     },
     {
       "file": "src/components/Settings/KeyboardShortcutsTab.tsx",
+      "ordinal": 2,
       "line": 375,
       "start": 13216,
       "end": 13237,
@@ -4037,6 +4325,7 @@
     },
     {
       "file": "src/components/Settings/KeyboardShortcutsTab.tsx",
+      "ordinal": 3,
       "line": 388,
       "start": 13745,
       "end": 13766,
@@ -4051,6 +4340,7 @@
     },
     {
       "file": "src/components/Settings/KeyboardShortcutsTab.tsx",
+      "ordinal": 4,
       "line": 391,
       "start": 13908,
       "end": 13929,
@@ -4065,6 +4355,7 @@
     },
     {
       "file": "src/components/Settings/KeyboardShortcutsTab.tsx",
+      "ordinal": 5,
       "line": 391,
       "start": 13930,
       "end": 13957,
@@ -4079,6 +4370,7 @@
     },
     {
       "file": "src/components/Settings/McpAuditLatencyTable.tsx",
+      "ordinal": 0,
       "line": 123,
       "start": 4324,
       "end": 4345,
@@ -4093,48 +4385,52 @@
     },
     {
       "file": "src/components/Settings/McpAuditLogViewer.tsx",
-      "line": 794,
-      "start": 32964,
-      "end": 32985,
+      "ordinal": 0,
+      "line": 790,
+      "start": 32892,
+      "end": 32913,
       "token": "text-daintree-text/30",
       "variants": "",
       "step": 30,
-      "group": "src/components/Settings/McpAuditLogViewer.tsx#32733",
-      "branch": "32883T",
+      "group": "src/components/Settings/McpAuditLogViewer.tsx#32661",
+      "branch": "32811T",
       "decision": "keep",
       "category": "disabled-state",
       "evidence": "disabled, completed or struck-through state — the low contrast is the signal"
     },
     {
       "file": "src/components/Settings/McpAuditLogViewer.tsx",
-      "line": 811,
-      "start": 33860,
-      "end": 33881,
+      "ordinal": 1,
+      "line": 807,
+      "start": 33788,
+      "end": 33809,
       "token": "text-daintree-text/30",
       "variants": "",
       "step": 30,
-      "group": "src/components/Settings/McpAuditLogViewer.tsx#33621",
-      "branch": "33775T",
+      "group": "src/components/Settings/McpAuditLogViewer.tsx#33549",
+      "branch": "33703T",
       "decision": "keep",
       "category": "disabled-state",
       "evidence": "disabled, completed or struck-through state — the low contrast is the signal"
     },
     {
       "file": "src/components/Settings/McpAuditLogViewer.tsx",
-      "line": 833,
-      "start": 34765,
-      "end": 34786,
+      "ordinal": 2,
+      "line": 829,
+      "start": 34693,
+      "end": 34714,
       "token": "text-daintree-text/30",
       "variants": "",
       "step": 30,
-      "group": "src/components/Settings/McpAuditLogViewer.tsx#34553",
-      "branch": "34681T",
+      "group": "src/components/Settings/McpAuditLogViewer.tsx#34481",
+      "branch": "34609T",
       "decision": "keep",
       "category": "disabled-state",
       "evidence": "disabled, completed or struck-through state — the low contrast is the signal"
     },
     {
       "file": "src/components/Settings/McpServerSettingsTab.tsx",
+      "ordinal": 0,
       "line": 743,
       "start": 30141,
       "end": 30162,
@@ -4149,6 +4445,7 @@
     },
     {
       "file": "src/components/Settings/McpServerSettingsTab.tsx",
+      "ordinal": 1,
       "line": 796,
       "start": 33226,
       "end": 33247,
@@ -4163,6 +4460,7 @@
     },
     {
       "file": "src/components/Settings/McpServerSettingsTab.tsx",
+      "ordinal": 2,
       "line": 862,
       "start": 36495,
       "end": 36516,
@@ -4177,6 +4475,7 @@
     },
     {
       "file": "src/components/Settings/McpServerSettingsTab.tsx",
+      "ordinal": 3,
       "line": 892,
       "start": 38085,
       "end": 38106,
@@ -4191,6 +4490,7 @@
     },
     {
       "file": "src/components/Settings/McpServerSettingsTab.tsx",
+      "ordinal": 4,
       "line": 892,
       "start": 38107,
       "end": 38134,
@@ -4205,6 +4505,7 @@
     },
     {
       "file": "src/components/Settings/McpServerSettingsTab.tsx",
+      "ordinal": 5,
       "line": 988,
       "start": 43022,
       "end": 43043,
@@ -4219,6 +4520,7 @@
     },
     {
       "file": "src/components/Settings/NotificationSettingsTab.tsx",
+      "ordinal": 0,
       "line": 490,
       "start": 20039,
       "end": 20060,
@@ -4233,6 +4535,7 @@
     },
     {
       "file": "src/components/Settings/OverrideField.tsx",
+      "ordinal": 0,
       "line": 48,
       "start": 1322,
       "end": 1343,
@@ -4247,48 +4550,52 @@
     },
     {
       "file": "src/components/Settings/PluginActionAuditLogViewer.tsx",
-      "line": 322,
-      "start": 13037,
-      "end": 13058,
+      "ordinal": 0,
+      "line": 320,
+      "start": 12993,
+      "end": 13014,
       "token": "text-daintree-text/30",
       "variants": "",
       "step": 30,
-      "group": "src/components/Settings/PluginActionAuditLogViewer.tsx#12806",
-      "branch": "12956T",
+      "group": "src/components/Settings/PluginActionAuditLogViewer.tsx#12762",
+      "branch": "12912T",
       "decision": "keep",
       "category": "disabled-state",
       "evidence": "disabled, completed or struck-through state — the low contrast is the signal"
     },
     {
       "file": "src/components/Settings/PluginActionAuditLogViewer.tsx",
-      "line": 338,
-      "start": 13894,
-      "end": 13915,
+      "ordinal": 1,
+      "line": 336,
+      "start": 13850,
+      "end": 13871,
       "token": "text-daintree-text/30",
       "variants": "",
       "step": 30,
-      "group": "src/components/Settings/PluginActionAuditLogViewer.tsx#13663",
-      "branch": "13813T",
+      "group": "src/components/Settings/PluginActionAuditLogViewer.tsx#13619",
+      "branch": "13769T",
       "decision": "keep",
       "category": "disabled-state",
       "evidence": "disabled, completed or struck-through state — the low contrast is the signal"
     },
     {
       "file": "src/components/Settings/PluginActionAuditLogViewer.tsx",
-      "line": 358,
-      "start": 14712,
-      "end": 14733,
+      "ordinal": 2,
+      "line": 356,
+      "start": 14668,
+      "end": 14689,
       "token": "text-daintree-text/30",
       "variants": "",
       "step": 30,
-      "group": "src/components/Settings/PluginActionAuditLogViewer.tsx#14515",
-      "branch": "14639T",
+      "group": "src/components/Settings/PluginActionAuditLogViewer.tsx#14471",
+      "branch": "14595T",
       "decision": "keep",
       "category": "disabled-state",
       "evidence": "disabled, completed or struck-through state — the low contrast is the signal"
     },
     {
       "file": "src/components/Settings/PluginSettingsForm.tsx",
+      "ordinal": 0,
       "line": 470,
       "start": 15383,
       "end": 15404,
@@ -4303,6 +4610,7 @@
     },
     {
       "file": "src/components/Settings/PluginSettingsForm.tsx",
+      "ordinal": 1,
       "line": 470,
       "start": 15405,
       "end": 15432,
@@ -4317,6 +4625,7 @@
     },
     {
       "file": "src/components/Settings/PluginsTab.tsx",
+      "ordinal": 0,
       "line": 137,
       "start": 5095,
       "end": 5116,
@@ -4331,6 +4640,7 @@
     },
     {
       "file": "src/components/Settings/PortalSettingsTab.tsx",
+      "ordinal": 0,
       "line": 241,
       "start": 7836,
       "end": 7857,
@@ -4345,6 +4655,7 @@
     },
     {
       "file": "src/components/Settings/PortalSettingsTab.tsx",
+      "ordinal": 1,
       "line": 294,
       "start": 9760,
       "end": 9781,
@@ -4359,6 +4670,7 @@
     },
     {
       "file": "src/components/Settings/PortalSettingsTab.tsx",
+      "ordinal": 2,
       "line": 384,
       "start": 13326,
       "end": 13347,
@@ -4373,6 +4685,7 @@
     },
     {
       "file": "src/components/Settings/PresetSelector.tsx",
+      "ordinal": 0,
       "line": 134,
       "start": 4715,
       "end": 4736,
@@ -4387,6 +4700,7 @@
     },
     {
       "file": "src/components/Settings/ResourceEnvironmentsSection.tsx",
+      "ordinal": 0,
       "line": 301,
       "start": 10167,
       "end": 10188,
@@ -4401,6 +4715,7 @@
     },
     {
       "file": "src/components/Settings/ResourceEnvironmentsSection.tsx",
+      "ordinal": 1,
       "line": 340,
       "start": 11850,
       "end": 11871,
@@ -4415,6 +4730,7 @@
     },
     {
       "file": "src/components/Settings/RunHistorySettingsTab.tsx",
+      "ordinal": 0,
       "line": 34,
       "start": 1373,
       "end": 1394,
@@ -4429,6 +4745,7 @@
     },
     {
       "file": "src/components/Settings/RunHistorySettingsTab.tsx",
+      "ordinal": 1,
       "line": 91,
       "start": 3527,
       "end": 3548,
@@ -4443,6 +4760,7 @@
     },
     {
       "file": "src/components/Settings/SettingsDialog.tsx",
+      "ordinal": 0,
       "line": 653,
       "start": 23624,
       "end": 23645,
@@ -4457,6 +4775,7 @@
     },
     {
       "file": "src/components/Settings/SettingsDialog.tsx",
+      "ordinal": 1,
       "line": 1570,
       "start": 59116,
       "end": 59137,
@@ -4471,6 +4790,7 @@
     },
     {
       "file": "src/components/Settings/SettingsDialog.tsx",
+      "ordinal": 2,
       "line": 1574,
       "start": 59326,
       "end": 59347,
@@ -4485,6 +4805,7 @@
     },
     {
       "file": "src/components/Settings/SettingsDialog.tsx",
+      "ordinal": 3,
       "line": 1592,
       "start": 60302,
       "end": 60323,
@@ -4499,6 +4820,7 @@
     },
     {
       "file": "src/components/Settings/SettingsDialog.tsx",
+      "ordinal": 4,
       "line": 1594,
       "start": 60436,
       "end": 60457,
@@ -4513,6 +4835,7 @@
     },
     {
       "file": "src/components/Settings/SettingsDialog.tsx",
+      "ordinal": 5,
       "line": 1595,
       "start": 60496,
       "end": 60529,
@@ -4527,6 +4850,7 @@
     },
     {
       "file": "src/components/Settings/SettingsSwitchCard.tsx",
+      "ordinal": 0,
       "line": 88,
       "start": 2602,
       "end": 2623,
@@ -4541,6 +4865,7 @@
     },
     {
       "file": "src/components/Settings/SettingsSwitchCard.tsx",
+      "ordinal": 1,
       "line": 134,
       "start": 4032,
       "end": 4053,
@@ -4555,6 +4880,7 @@
     },
     {
       "file": "src/components/Settings/ThemeSelector.tsx",
+      "ordinal": 0,
       "line": 147,
       "start": 4656,
       "end": 4677,
@@ -4569,6 +4895,7 @@
     },
     {
       "file": "src/components/Settings/ToolbarSettingsTab.tsx",
+      "ordinal": 0,
       "line": 134,
       "start": 4881,
       "end": 4902,
@@ -4583,6 +4910,7 @@
     },
     {
       "file": "src/components/Settings/ToolbarSettingsTab.tsx",
+      "ordinal": 1,
       "line": 134,
       "start": 4907,
       "end": 4928,
@@ -4597,6 +4925,7 @@
     },
     {
       "file": "src/components/Settings/TurnOutcomeDiagnostics.tsx",
+      "ordinal": 0,
       "line": 270,
       "start": 8692,
       "end": 8713,
@@ -4611,6 +4940,7 @@
     },
     {
       "file": "src/components/Settings/TurnOutcomeDiagnostics.tsx",
+      "ordinal": 1,
       "line": 332,
       "start": 11615,
       "end": 11636,
@@ -4625,13 +4955,14 @@
     },
     {
       "file": "src/components/Settings/TurnOutcomeDiagnostics.tsx",
-      "line": 399,
-      "start": 14898,
-      "end": 14919,
+      "ordinal": 2,
+      "line": 395,
+      "start": 14786,
+      "end": 14807,
       "token": "text-daintree-text/80",
       "variants": "",
       "step": 80,
-      "group": "src/components/Settings/TurnOutcomeDiagnostics.tsx#14767",
+      "group": "src/components/Settings/TurnOutcomeDiagnostics.tsx#14655",
       "branch": "7978F",
       "decision": "keep",
       "category": "semantic-state-pair",
@@ -4639,13 +4970,14 @@
     },
     {
       "file": "src/components/Settings/TurnOutcomeDiagnostics.tsx",
-      "line": 468,
-      "start": 18227,
-      "end": 18248,
+      "ordinal": 3,
+      "line": 458,
+      "start": 17963,
+      "end": 17984,
       "token": "text-daintree-text/80",
       "variants": "",
       "step": 80,
-      "group": "src/components/Settings/TurnOutcomeDiagnostics.tsx#18096",
+      "group": "src/components/Settings/TurnOutcomeDiagnostics.tsx#17832",
       "branch": "7978F",
       "decision": "keep",
       "category": "semantic-state-pair",
@@ -4653,20 +4985,22 @@
     },
     {
       "file": "src/components/Settings/TurnOutcomeDiagnostics.tsx",
-      "line": 544,
-      "start": 21943,
-      "end": 21964,
+      "ordinal": 4,
+      "line": 530,
+      "start": 21567,
+      "end": 21588,
       "token": "text-daintree-text/30",
       "variants": "",
       "step": 30,
-      "group": "src/components/Settings/TurnOutcomeDiagnostics.tsx#21730",
-      "branch": "7978F/21862T",
+      "group": "src/components/Settings/TurnOutcomeDiagnostics.tsx#21354",
+      "branch": "7978F/21486T",
       "decision": "keep",
       "category": "disabled-state",
       "evidence": "disabled, completed or struck-through state — the low contrast is the signal"
     },
     {
       "file": "src/components/Settings/VoiceInputSettingsTab.tsx",
+      "ordinal": 0,
       "line": 343,
       "start": 12407,
       "end": 12428,
@@ -4681,6 +5015,7 @@
     },
     {
       "file": "src/components/Settings/VoiceInputSettingsTab.tsx",
+      "ordinal": 1,
       "line": 343,
       "start": 12429,
       "end": 12456,
@@ -4695,6 +5030,7 @@
     },
     {
       "file": "src/components/Settings/VoiceInputSettingsTab.tsx",
+      "ordinal": 2,
       "line": 560,
       "start": 19959,
       "end": 19980,
@@ -4709,6 +5045,7 @@
     },
     {
       "file": "src/components/Settings/VoiceInputSettingsTab.tsx",
+      "ordinal": 3,
       "line": 601,
       "start": 21623,
       "end": 21644,
@@ -4723,6 +5060,7 @@
     },
     {
       "file": "src/components/Settings/VoiceInputSettingsTab.tsx",
+      "ordinal": 4,
       "line": 601,
       "start": 21645,
       "end": 21672,
@@ -4737,6 +5075,7 @@
     },
     {
       "file": "src/components/Settings/VoiceInputSettingsTab.tsx",
+      "ordinal": 5,
       "line": 677,
       "start": 24160,
       "end": 24181,
@@ -4751,6 +5090,7 @@
     },
     {
       "file": "src/components/Settings/VoiceInputSettingsTab.tsx",
+      "ordinal": 6,
       "line": 694,
       "start": 25143,
       "end": 25164,
@@ -4765,6 +5105,7 @@
     },
     {
       "file": "src/components/Settings/VoiceInputSettingsTab.tsx",
+      "ordinal": 7,
       "line": 829,
       "start": 29625,
       "end": 29646,
@@ -4779,6 +5120,7 @@
     },
     {
       "file": "src/components/Settings/VoiceInputSettingsTab.tsx",
+      "ordinal": 8,
       "line": 934,
       "start": 32673,
       "end": 32694,
@@ -4793,6 +5135,7 @@
     },
     {
       "file": "src/components/Settings/VoiceInputSettingsTab.tsx",
+      "ordinal": 9,
       "line": 973,
       "start": 34443,
       "end": 34464,
@@ -4807,6 +5150,7 @@
     },
     {
       "file": "src/components/Settings/VoiceInputSettingsTab.tsx",
+      "ordinal": 10,
       "line": 973,
       "start": 34465,
       "end": 34492,
@@ -4821,6 +5165,7 @@
     },
     {
       "file": "src/components/Settings/VoiceInputSettingsTab.tsx",
+      "ordinal": 11,
       "line": 1022,
       "start": 36146,
       "end": 36167,
@@ -4835,6 +5180,7 @@
     },
     {
       "file": "src/components/Settings/VoiceInputSettingsTab.tsx",
+      "ordinal": 12,
       "line": 1022,
       "start": 36168,
       "end": 36195,
@@ -4849,6 +5195,7 @@
     },
     {
       "file": "src/components/Settings/WorktreeSettingsTab.tsx",
+      "ordinal": 0,
       "line": 236,
       "start": 8402,
       "end": 8423,
@@ -4863,6 +5210,7 @@
     },
     {
       "file": "src/components/Settings/WorktreeSettingsTab.tsx",
+      "ordinal": 1,
       "line": 333,
       "start": 13515,
       "end": 13536,
@@ -4877,6 +5225,7 @@
     },
     {
       "file": "src/components/Setup/AgentCliStep.tsx",
+      "ordinal": 0,
       "line": 276,
       "start": 10456,
       "end": 10477,
@@ -4891,6 +5240,7 @@
     },
     {
       "file": "src/components/Setup/AgentCliStep.tsx",
+      "ordinal": 1,
       "line": 334,
       "start": 13530,
       "end": 13551,
@@ -4905,6 +5255,7 @@
     },
     {
       "file": "src/components/Setup/AgentCliStep.tsx",
+      "ordinal": 2,
       "line": 334,
       "start": 13570,
       "end": 13597,
@@ -4919,6 +5270,7 @@
     },
     {
       "file": "src/components/Setup/AgentSetupWizard.tsx",
+      "ordinal": 0,
       "line": 1053,
       "start": 40454,
       "end": 40475,
@@ -4933,6 +5285,7 @@
     },
     {
       "file": "src/components/Setup/AgentSetupWizard.tsx",
+      "ordinal": 1,
       "line": 1055,
       "start": 40548,
       "end": 40569,
@@ -4947,6 +5300,7 @@
     },
     {
       "file": "src/components/Setup/CopyableCommand.tsx",
+      "ordinal": 0,
       "line": 20,
       "start": 1063,
       "end": 1084,
@@ -4961,6 +5315,7 @@
     },
     {
       "file": "src/components/Setup/CopyableCommand.tsx",
+      "ordinal": 1,
       "line": 20,
       "start": 1085,
       "end": 1112,
@@ -4975,6 +5330,7 @@
     },
     {
       "file": "src/components/Setup/CopyableCommand.tsx",
+      "ordinal": 2,
       "line": 34,
       "start": 1644,
       "end": 1665,
@@ -4989,6 +5345,7 @@
     },
     {
       "file": "src/components/Setup/CopyableCommand.tsx",
+      "ordinal": 3,
       "line": 34,
       "start": 1666,
       "end": 1693,
@@ -5003,6 +5360,7 @@
     },
     {
       "file": "src/components/Setup/SystemRequirementsSection.tsx",
+      "ordinal": 0,
       "line": 80,
       "start": 2848,
       "end": 2869,
@@ -5017,6 +5375,7 @@
     },
     {
       "file": "src/components/Setup/SystemToolsStep.tsx",
+      "ordinal": 0,
       "line": 73,
       "start": 3104,
       "end": 3125,
@@ -5031,6 +5390,7 @@
     },
     {
       "file": "src/components/Setup/SystemToolsStep.tsx",
+      "ordinal": 1,
       "line": 108,
       "start": 4162,
       "end": 4183,
@@ -5045,6 +5405,7 @@
     },
     {
       "file": "src/components/Sidebar/__tests__/SidebarContent.headerReveal.test.ts",
+      "ordinal": 0,
       "line": 65,
       "start": 3000,
       "end": 3021,
@@ -5059,6 +5420,7 @@
     },
     {
       "file": "src/components/Sidebar/__tests__/SidebarContent.headerReveal.test.ts",
+      "ordinal": 1,
       "line": 67,
       "start": 3143,
       "end": 3164,
@@ -5073,6 +5435,7 @@
     },
     {
       "file": "src/components/Sidebar/SidebarContent.tsx",
+      "ordinal": 0,
       "line": 1647,
       "start": 65147,
       "end": 65168,
@@ -5087,6 +5450,7 @@
     },
     {
       "file": "src/components/Sidebar/SidebarContent.tsx",
+      "ordinal": 1,
       "line": 1647,
       "start": 65307,
       "end": 65348,
@@ -5101,6 +5465,7 @@
     },
     {
       "file": "src/components/Sidebar/SidebarContent.tsx",
+      "ordinal": 2,
       "line": 1722,
       "start": 69332,
       "end": 69353,
@@ -5115,6 +5480,7 @@
     },
     {
       "file": "src/components/Sidebar/SidebarContent.tsx",
+      "ordinal": 3,
       "line": 1732,
       "start": 69906,
       "end": 69927,
@@ -5129,6 +5495,7 @@
     },
     {
       "file": "src/components/Sidebar/SidebarContent.tsx",
+      "ordinal": 4,
       "line": 1744,
       "start": 70517,
       "end": 70538,
@@ -5143,6 +5510,7 @@
     },
     {
       "file": "src/components/Sidebar/SidebarContent.tsx",
+      "ordinal": 5,
       "line": 1744,
       "start": 70786,
       "end": 70827,
@@ -5157,6 +5525,7 @@
     },
     {
       "file": "src/components/Sidebar/SidebarContent.tsx",
+      "ordinal": 6,
       "line": 1764,
       "start": 71608,
       "end": 71629,
@@ -5171,6 +5540,7 @@
     },
     {
       "file": "src/components/Sidebar/WorkspaceRootRow.tsx",
+      "ordinal": 0,
       "line": 89,
       "start": 3867,
       "end": 3888,
@@ -5185,6 +5555,7 @@
     },
     {
       "file": "src/components/Sidebar/WorkspaceRootRow.tsx",
+      "ordinal": 1,
       "line": 111,
       "start": 4885,
       "end": 4906,
@@ -5199,6 +5570,7 @@
     },
     {
       "file": "src/components/Sidebar/WorktreeCardPlaceholder.tsx",
+      "ordinal": 0,
       "line": 38,
       "start": 1544,
       "end": 1571,
@@ -5213,6 +5585,7 @@
     },
     {
       "file": "src/components/Terminal/__tests__/contentGridEmptyState.test.ts",
+      "ordinal": 0,
       "line": 131,
       "start": 6671,
       "end": 6692,
@@ -5227,6 +5600,7 @@
     },
     {
       "file": "src/components/Terminal/__tests__/TerminalHeaderContent.test.tsx",
+      "ordinal": 0,
       "line": 431,
       "start": 14838,
       "end": 14859,
@@ -5241,6 +5615,7 @@
     },
     {
       "file": "src/components/Terminal/ArtifactOverlay.tsx",
+      "ordinal": 0,
       "line": 476,
       "start": 17895,
       "end": 17916,
@@ -5255,6 +5630,7 @@
     },
     {
       "file": "src/components/Terminal/ArtifactOverlay.tsx",
+      "ordinal": 1,
       "line": 652,
       "start": 25897,
       "end": 25918,
@@ -5269,6 +5645,7 @@
     },
     {
       "file": "src/components/Terminal/ArtifactOverlay.tsx",
+      "ordinal": 2,
       "line": 655,
       "start": 26052,
       "end": 26073,
@@ -5283,6 +5660,7 @@
     },
     {
       "file": "src/components/Terminal/BannerOverflowMenu.tsx",
+      "ordinal": 0,
       "line": 35,
       "start": 1281,
       "end": 1302,
@@ -5297,6 +5675,7 @@
     },
     {
       "file": "src/components/Terminal/ContentGridEmptyState.tsx",
+      "ordinal": 0,
       "line": 266,
       "start": 13086,
       "end": 13107,
@@ -5311,6 +5690,7 @@
     },
     {
       "file": "src/components/Terminal/ContentGridEmptyState.tsx",
+      "ordinal": 1,
       "line": 346,
       "start": 17916,
       "end": 17937,
@@ -5325,6 +5705,7 @@
     },
     {
       "file": "src/components/Terminal/GridNotificationBar.tsx",
+      "ordinal": 0,
       "line": 318,
       "start": 13121,
       "end": 13142,
@@ -5339,6 +5720,7 @@
     },
     {
       "file": "src/components/Terminal/GridNotificationBar.tsx",
+      "ordinal": 1,
       "line": 332,
       "start": 13760,
       "end": 13781,
@@ -5353,6 +5735,7 @@
     },
     {
       "file": "src/components/Terminal/GridNotificationBar.tsx",
+      "ordinal": 2,
       "line": 332,
       "start": 13817,
       "end": 13844,
@@ -5367,6 +5750,7 @@
     },
     {
       "file": "src/components/Terminal/InlineStatusBanner.tsx",
+      "ordinal": 0,
       "line": 236,
       "start": 8425,
       "end": 8446,
@@ -5381,6 +5765,7 @@
     },
     {
       "file": "src/components/Terminal/InlineStatusBanner.tsx",
+      "ordinal": 1,
       "line": 284,
       "start": 10720,
       "end": 10741,
@@ -5395,6 +5780,7 @@
     },
     {
       "file": "src/components/Terminal/LauncherQuickActions.tsx",
+      "ordinal": 0,
       "line": 57,
       "start": 2517,
       "end": 2538,
@@ -5409,6 +5795,7 @@
     },
     {
       "file": "src/components/Terminal/LauncherQuickActions.tsx",
+      "ordinal": 1,
       "line": 102,
       "start": 4956,
       "end": 4977,
@@ -5423,6 +5810,7 @@
     },
     {
       "file": "src/components/Terminal/MissingCliGate.tsx",
+      "ordinal": 0,
       "line": 48,
       "start": 2213,
       "end": 2234,
@@ -5437,6 +5825,7 @@
     },
     {
       "file": "src/components/Terminal/MissingCliGate.tsx",
+      "ordinal": 1,
       "line": 240,
       "start": 9641,
       "end": 9662,
@@ -5451,6 +5840,7 @@
     },
     {
       "file": "src/components/Terminal/PromptHistoryPalette.tsx",
+      "ordinal": 0,
       "line": 57,
       "start": 1880,
       "end": 1901,
@@ -5465,6 +5855,7 @@
     },
     {
       "file": "src/components/Terminal/ResumeSessionLine.tsx",
+      "ordinal": 0,
       "line": 59,
       "start": 2877,
       "end": 2898,
@@ -5479,6 +5870,7 @@
     },
     {
       "file": "src/components/Terminal/SendToAgentPalette.tsx",
+      "ordinal": 0,
       "line": 59,
       "start": 2055,
       "end": 2076,
@@ -5493,6 +5885,7 @@
     },
     {
       "file": "src/components/Terminal/SendToAgentPalette.tsx",
+      "ordinal": 1,
       "line": 71,
       "start": 2553,
       "end": 2574,
@@ -5507,6 +5900,7 @@
     },
     {
       "file": "src/components/Terminal/SubagentChip.tsx",
+      "ordinal": 0,
       "line": 145,
       "start": 5288,
       "end": 5309,
@@ -5521,6 +5915,7 @@
     },
     {
       "file": "src/components/Terminal/SubagentChip.tsx",
+      "ordinal": 1,
       "line": 251,
       "start": 9778,
       "end": 9799,
@@ -5535,6 +5930,7 @@
     },
     {
       "file": "src/components/Terminal/TerminalHeaderContent.tsx",
+      "ordinal": 0,
       "line": 620,
       "start": 25973,
       "end": 25994,
@@ -5549,6 +5945,7 @@
     },
     {
       "file": "src/components/Terminal/TerminalInfoDialog.tsx",
+      "ordinal": 0,
       "line": 244,
       "start": 8869,
       "end": 8890,
@@ -5563,6 +5960,7 @@
     },
     {
       "file": "src/components/Terminal/TerminalPane.tsx",
+      "ordinal": 0,
       "line": 259,
       "start": 10152,
       "end": 10173,
@@ -5577,6 +5975,7 @@
     },
     {
       "file": "src/components/Terminal/TerminalSearchBar.tsx",
+      "ordinal": 0,
       "line": 455,
       "start": 15249,
       "end": 15270,
@@ -5591,6 +5990,7 @@
     },
     {
       "file": "src/components/Terminal/TerminalSearchBar.tsx",
+      "ordinal": 1,
       "line": 475,
       "start": 15987,
       "end": 16008,
@@ -5605,6 +6005,7 @@
     },
     {
       "file": "src/components/Terminal/TerminalSearchBar.tsx",
+      "ordinal": 2,
       "line": 493,
       "start": 16597,
       "end": 16618,
@@ -5619,6 +6020,7 @@
     },
     {
       "file": "src/components/TerminalPalette/launchOptions.tsx",
+      "ordinal": 0,
       "line": 71,
       "start": 2682,
       "end": 2703,
@@ -5633,6 +6035,7 @@
     },
     {
       "file": "src/components/ThemeBrowser/ThemeBrowser.tsx",
+      "ordinal": 0,
       "line": 481,
       "start": 18359,
       "end": 18380,
@@ -5647,6 +6050,7 @@
     },
     {
       "file": "src/components/ui/Kbd.tsx",
+      "ordinal": 0,
       "line": 69,
       "start": 2469,
       "end": 2490,
@@ -5661,6 +6065,7 @@
     },
     {
       "file": "src/components/ui/Kbd.tsx",
+      "ordinal": 1,
       "line": 77,
       "start": 2838,
       "end": 2859,
@@ -5675,6 +6080,7 @@
     },
     {
       "file": "src/components/ui/paletteRowStyles.ts",
+      "ordinal": 0,
       "line": 61,
       "start": 3417,
       "end": 3438,
@@ -5689,6 +6095,7 @@
     },
     {
       "file": "src/components/ui/ReEntrySummary.tsx",
+      "ordinal": 0,
       "line": 152,
       "start": 6741,
       "end": 6762,
@@ -5703,6 +6110,7 @@
     },
     {
       "file": "src/components/ui/ReEntrySummary.tsx",
+      "ordinal": 1,
       "line": 153,
       "start": 6813,
       "end": 6840,
@@ -5717,6 +6125,7 @@
     },
     {
       "file": "src/components/ui/ReEntrySummary.tsx",
+      "ordinal": 2,
       "line": 155,
       "start": 7022,
       "end": 7043,
@@ -5731,6 +6140,7 @@
     },
     {
       "file": "src/components/ui/ReEntrySummary.tsx",
+      "ordinal": 3,
       "line": 167,
       "start": 7468,
       "end": 7489,
@@ -5745,6 +6155,7 @@
     },
     {
       "file": "src/components/ui/ReEntrySummary.tsx",
+      "ordinal": 4,
       "line": 168,
       "start": 7540,
       "end": 7567,
@@ -5759,6 +6170,7 @@
     },
     {
       "file": "src/components/ui/select.tsx",
+      "ordinal": 0,
       "line": 118,
       "start": 4146,
       "end": 4167,
@@ -5773,6 +6185,7 @@
     },
     {
       "file": "src/components/ui/select.tsx",
+      "ordinal": 1,
       "line": 142,
       "start": 4954,
       "end": 4975,
@@ -5787,6 +6200,7 @@
     },
     {
       "file": "src/components/ui/SurfaceHeader.tsx",
+      "ordinal": 0,
       "line": 96,
       "start": 3858,
       "end": 3879,
@@ -5801,6 +6215,7 @@
     },
     {
       "file": "src/components/ui/toaster.tsx",
+      "ordinal": 0,
       "line": 625,
       "start": 27306,
       "end": 27327,
@@ -5815,6 +6230,7 @@
     },
     {
       "file": "src/components/ui/toaster.tsx",
+      "ordinal": 1,
       "line": 626,
       "start": 27384,
       "end": 27411,
@@ -5829,6 +6245,7 @@
     },
     {
       "file": "src/components/ui/toaster.tsx",
+      "ordinal": 2,
       "line": 677,
       "start": 29691,
       "end": 29712,
@@ -5843,6 +6260,7 @@
     },
     {
       "file": "src/components/ui/toaster.tsx",
+      "ordinal": 3,
       "line": 678,
       "start": 29759,
       "end": 29786,
@@ -5857,6 +6275,7 @@
     },
     {
       "file": "src/components/Worktree/AgentStatusIndicator.tsx",
+      "ordinal": 0,
       "line": 39,
       "start": 1133,
       "end": 1154,
@@ -5871,6 +6290,7 @@
     },
     {
       "file": "src/components/Worktree/FileChangeList.tsx",
+      "ordinal": 0,
       "line": 181,
       "start": 7507,
       "end": 7528,
@@ -5885,6 +6305,7 @@
     },
     {
       "file": "src/components/Worktree/IssuePickerDialog.tsx",
+      "ordinal": 0,
       "line": 205,
       "start": 6844,
       "end": 6865,
@@ -5899,6 +6320,7 @@
     },
     {
       "file": "src/components/Worktree/QuickCreatePalette.tsx",
+      "ordinal": 0,
       "line": 59,
       "start": 2199,
       "end": 2220,
@@ -5913,6 +6335,7 @@
     },
     {
       "file": "src/components/Worktree/ReviewHub/CommitPanel.tsx",
+      "ordinal": 0,
       "line": 375,
       "start": 13434,
       "end": 13455,
@@ -5927,6 +6350,7 @@
     },
     {
       "file": "src/components/Worktree/ReviewHub/ConflictPanel.tsx",
+      "ordinal": 0,
       "line": 128,
       "start": 4546,
       "end": 4567,
@@ -5941,6 +6365,7 @@
     },
     {
       "file": "src/components/Worktree/ReviewHub/ConflictPanel.tsx",
+      "ordinal": 1,
       "line": 163,
       "start": 5558,
       "end": 5579,
@@ -5955,6 +6380,7 @@
     },
     {
       "file": "src/components/Worktree/ReviewHub/ConflictPanel.tsx",
+      "ordinal": 2,
       "line": 508,
       "start": 18087,
       "end": 18108,
@@ -5969,6 +6395,7 @@
     },
     {
       "file": "src/components/Worktree/ReviewHub/ConflictPanel.tsx",
+      "ordinal": 3,
       "line": 635,
       "start": 23797,
       "end": 23818,
@@ -5983,6 +6410,7 @@
     },
     {
       "file": "src/components/Worktree/ReviewHub/FileSection.tsx",
+      "ordinal": 0,
       "line": 174,
       "start": 6809,
       "end": 6830,
@@ -5997,6 +6425,7 @@
     },
     {
       "file": "src/components/Worktree/ReviewHub/FileSection.tsx",
+      "ordinal": 1,
       "line": 217,
       "start": 8913,
       "end": 8934,
@@ -6011,6 +6440,7 @@
     },
     {
       "file": "src/components/Worktree/ReviewHub/FileSection.tsx",
+      "ordinal": 2,
       "line": 281,
       "start": 12128,
       "end": 12149,
@@ -6025,6 +6455,7 @@
     },
     {
       "file": "src/components/Worktree/ReviewHub/FileSection.tsx",
+      "ordinal": 3,
       "line": 283,
       "start": 12250,
       "end": 12271,
@@ -6039,6 +6470,7 @@
     },
     {
       "file": "src/components/Worktree/ReviewHub/FileSection.tsx",
+      "ordinal": 4,
       "line": 292,
       "start": 12699,
       "end": 12720,
@@ -6053,6 +6485,7 @@
     },
     {
       "file": "src/components/Worktree/ReviewHub/FileSection.tsx",
+      "ordinal": 5,
       "line": 294,
       "start": 12821,
       "end": 12842,
@@ -6067,6 +6500,7 @@
     },
     {
       "file": "src/components/Worktree/ReviewHub/FileSection.tsx",
+      "ordinal": 6,
       "line": 303,
       "start": 13267,
       "end": 13288,
@@ -6081,6 +6515,7 @@
     },
     {
       "file": "src/components/Worktree/ReviewHub/FileSection.tsx",
+      "ordinal": 7,
       "line": 305,
       "start": 13389,
       "end": 13410,
@@ -6095,6 +6530,7 @@
     },
     {
       "file": "src/components/Worktree/ReviewHub/FileStageRow.tsx",
+      "ordinal": 0,
       "line": 233,
       "start": 7530,
       "end": 7551,
@@ -6109,6 +6545,7 @@
     },
     {
       "file": "src/components/Worktree/ReviewHub/ForcePushConfirmDialog.tsx",
+      "ordinal": 0,
       "line": 172,
       "start": 7023,
       "end": 7044,
@@ -6123,6 +6560,7 @@
     },
     {
       "file": "src/components/Worktree/ReviewHub/PrStatusChip.tsx",
+      "ordinal": 0,
       "line": 61,
       "start": 2025,
       "end": 2046,
@@ -6137,6 +6575,7 @@
     },
     {
       "file": "src/components/Worktree/ReviewHub/PrStatusChip.tsx",
+      "ordinal": 1,
       "line": 65,
       "start": 2198,
       "end": 2219,
@@ -6151,6 +6590,7 @@
     },
     {
       "file": "src/components/Worktree/ReviewHub/PrStatusChip.tsx",
+      "ordinal": 2,
       "line": 83,
       "start": 2922,
       "end": 2943,
@@ -6165,6 +6605,7 @@
     },
     {
       "file": "src/components/Worktree/ReviewHub/ReviewHubContent.tsx",
+      "ordinal": 0,
       "line": 1669,
       "start": 65687,
       "end": 65708,
@@ -6179,6 +6620,7 @@
     },
     {
       "file": "src/components/Worktree/ReviewHub/ReviewHubContent.tsx",
+      "ordinal": 1,
       "line": 1688,
       "start": 66469,
       "end": 66490,
@@ -6193,6 +6635,7 @@
     },
     {
       "file": "src/components/Worktree/views/PrHeader.tsx",
+      "ordinal": 0,
       "line": 12,
       "start": 452,
       "end": 473,
@@ -6207,6 +6650,7 @@
     },
     {
       "file": "src/components/Worktree/WorktreeCard/ForgeTooltipContent.tsx",
+      "ordinal": 0,
       "line": 177,
       "start": 6328,
       "end": 6349,
@@ -6221,6 +6665,7 @@
     },
     {
       "file": "src/components/Worktree/WorktreeCard/MainWorktreeSummaryRows.tsx",
+      "ordinal": 0,
       "line": 27,
       "start": 920,
       "end": 941,
@@ -6235,6 +6680,7 @@
     },
     {
       "file": "src/components/Worktree/WorktreeCard/NonMainSecondaryRow.tsx",
+      "ordinal": 0,
       "line": 167,
       "start": 6730,
       "end": 6751,
@@ -6249,6 +6695,7 @@
     },
     {
       "file": "src/components/Worktree/WorktreeCard/WorktreeActionsToolbar.tsx",
+      "ordinal": 0,
       "line": 122,
       "start": 4115,
       "end": 4136,
@@ -6263,6 +6710,7 @@
     },
     {
       "file": "src/components/Worktree/WorktreeCard/WorktreeActionsToolbar.tsx",
+      "ordinal": 1,
       "line": 144,
       "start": 5012,
       "end": 5033,
@@ -6277,6 +6725,7 @@
     },
     {
       "file": "src/components/Worktree/WorktreeCard/WorktreeHeader.tsx",
+      "ordinal": 0,
       "line": 258,
       "start": 9103,
       "end": 9124,
@@ -6291,6 +6740,7 @@
     },
     {
       "file": "src/components/Worktree/WorktreeCard/WorktreeHeader.tsx",
+      "ordinal": 1,
       "line": 336,
       "start": 11961,
       "end": 11982,
@@ -6305,6 +6755,7 @@
     },
     {
       "file": "src/components/Worktree/WorktreeCard/WorktreeHeader.tsx",
+      "ordinal": 2,
       "line": 349,
       "start": 12456,
       "end": 12477,
@@ -6319,6 +6770,7 @@
     },
     {
       "file": "src/components/Worktree/WorktreeCard/WorktreeHeader.tsx",
+      "ordinal": 3,
       "line": 362,
       "start": 13033,
       "end": 13054,
@@ -6333,6 +6785,7 @@
     },
     {
       "file": "src/components/Worktree/WorktreeCard/WorktreeHeader.tsx",
+      "ordinal": 4,
       "line": 383,
       "start": 14078,
       "end": 14099,
@@ -6347,6 +6800,7 @@
     },
     {
       "file": "src/components/Worktree/WorktreeFilterPopover.tsx",
+      "ordinal": 0,
       "line": 123,
       "start": 4287,
       "end": 4308,
@@ -6361,6 +6815,7 @@
     },
     {
       "file": "src/components/Worktree/WorktreeFilterPopover.tsx",
+      "ordinal": 1,
       "line": 451,
       "start": 16413,
       "end": 16434,
@@ -6375,6 +6830,7 @@
     },
     {
       "file": "src/components/Worktree/WorktreeOverviewModal.tsx",
+      "ordinal": 0,
       "line": 867,
       "start": 32571,
       "end": 32592,
@@ -6389,6 +6845,7 @@
     },
     {
       "file": "src/components/Worktree/WorktreeOverviewModal.tsx",
+      "ordinal": 1,
       "line": 905,
       "start": 34613,
       "end": 34634,
@@ -6403,6 +6860,7 @@
     },
     {
       "file": "src/components/Worktree/WorktreeOverviewModal.tsx",
+      "ordinal": 2,
       "line": 905,
       "start": 34635,
       "end": 34662,
@@ -6417,6 +6875,7 @@
     },
     {
       "file": "src/components/Worktree/WorktreeOverviewModal.tsx",
+      "ordinal": 3,
       "line": 912,
       "start": 34968,
       "end": 34989,
@@ -6431,6 +6890,7 @@
     },
     {
       "file": "src/components/Worktree/WorktreeOverviewModal.tsx",
+      "ordinal": 4,
       "line": 912,
       "start": 34994,
       "end": 35015,
@@ -6445,6 +6905,7 @@
     },
     {
       "file": "src/components/Worktree/WorktreeOverviewModal.tsx",
+      "ordinal": 5,
       "line": 1367,
       "start": 56487,
       "end": 56508,
@@ -6459,6 +6920,7 @@
     },
     {
       "file": "src/components/Worktree/WorktreeSidebarSearchBar.tsx",
+      "ordinal": 0,
       "line": 217,
       "start": 8953,
       "end": 8974,
@@ -6473,6 +6935,7 @@
     },
     {
       "file": "src/components/Worktree/WorktreeSidebarSearchBar.tsx",
+      "ordinal": 1,
       "line": 238,
       "start": 9950,
       "end": 9971,
@@ -6487,6 +6950,7 @@
     },
     {
       "file": "src/config/__tests__/accentForeground.contract.test.ts",
+      "ordinal": 0,
       "line": 978,
       "start": 39739,
       "end": 39760,
@@ -6501,6 +6965,7 @@
     },
     {
       "file": "src/panels/file-browser/FileBrowserChangeSummary.tsx",
+      "ordinal": 0,
       "line": 76,
       "start": 3525,
       "end": 3546,
@@ -6515,6 +6980,7 @@
     },
     {
       "file": "src/panels/file-browser/FileBrowserChangeSummary.tsx",
+      "ordinal": 1,
       "line": 77,
       "start": 3626,
       "end": 3647,
@@ -6529,6 +6995,7 @@
     },
     {
       "file": "src/panels/file-browser/FileBrowserPane.tsx",
+      "ordinal": 0,
       "line": 1084,
       "start": 50458,
       "end": 50479,
@@ -6543,6 +7010,7 @@
     },
     {
       "file": "src/panels/file-browser/FileBrowserViewer.tsx",
+      "ordinal": 0,
       "line": 510,
       "start": 21240,
       "end": 21261,
@@ -6557,6 +7025,7 @@
     },
     {
       "file": "src/panels/file-browser/FileTreeView.tsx",
+      "ordinal": 0,
       "line": 631,
       "start": 28497,
       "end": 28518,
@@ -6571,6 +7040,7 @@
     },
     {
       "file": "src/panels/file-browser/FileTreeView.tsx",
+      "ordinal": 1,
       "line": 683,
       "start": 30744,
       "end": 30765,
@@ -6585,6 +7055,7 @@
     },
     {
       "file": "src/panels/file-browser/FileTreeView.tsx",
+      "ordinal": 2,
       "line": 688,
       "start": 31015,
       "end": 31036,
@@ -6599,6 +7070,7 @@
     },
     {
       "file": "src/panels/file-browser/fileTypeIcons.ts",
+      "ordinal": 0,
       "line": 68,
       "start": 2110,
       "end": 2131,

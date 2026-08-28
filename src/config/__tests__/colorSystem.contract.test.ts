@@ -233,8 +233,8 @@ describe("color system contract", () => {
   it("accounts for every surviving text-daintree-text/NN site in the ramp manifest", () => {
     type ManifestEntry = {
       file: string;
+      ordinal: number;
       line: number;
-      start: number;
       token: string;
       category: string;
       evidence: string;
@@ -266,8 +266,12 @@ describe("color system contract", () => {
       walked.add(relative);
       const source = fs.readFileSync(filePath, "utf8");
       if (!source.includes("text-daintree-text/")) continue;
+      // Keyed by position within the file, not byte offset: prettier and any
+      // edit above a carve-out move offsets, and a contract that fails on a
+      // reflow teaches people to regenerate it without reading it.
+      let ordinal = 0;
       for (const match of source.matchAll(rampToken)) {
-        inTree.set(`${relative}:${match.index}`, match[0]);
+        inTree.set(`${relative}#${ordinal++}`, match[0]);
       }
     }
 
@@ -279,7 +283,7 @@ describe("color system contract", () => {
     const painted = manifest.occurrences.filter((entry) => walked.has(entry.file));
 
     const problems: string[] = [];
-    const named = new Map(painted.map((entry) => [`${entry.file}:${entry.start}`, entry]));
+    const named = new Map(painted.map((entry) => [`${entry.file}#${entry.ordinal}`, entry]));
 
     for (const [key, token] of inTree) {
       const entry = named.get(key);

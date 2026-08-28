@@ -140,8 +140,16 @@ export type MigrateCategory = "band" | "pair-promoted" | "pair-reopened-40";
 
 export type Occurrence = {
   file: string;
+  /**
+   * Which ramp token this is within its file, in source order. The manifest's
+   * identity, because it is the only one that survives ordinary editing: a byte
+   * offset moves when anything above it changes — a comment, a prettier reflow,
+   * the pre-commit hook — and would fail the contract test for a reason that has
+   * nothing to do with the ramp.
+   */
+  ordinal: number;
   line: number;
-  /** Byte offset in the file, so `--apply` never has to re-find the token. */
+  /** Byte offset, so `--apply` never has to re-find the token. Informational after that. */
   start: number;
   end: number;
   token: string;
@@ -974,6 +982,7 @@ export function classify(sites: RawSite[]): Occurrence[] {
     if (verdict) {
       return {
         file: site.file,
+        ordinal: 0,
         line: site.line,
         start: site.start,
         end: site.end,
@@ -990,6 +999,7 @@ export function classify(sites: RawSite[]): Occurrence[] {
     if (!target) {
       return {
         file: site.file,
+        ordinal: 0,
         line: site.line,
         start: site.start,
         end: site.end,
@@ -1011,6 +1021,7 @@ export function classify(sites: RawSite[]): Occurrence[] {
     const promoted = band !== null && target !== band;
     return {
       file: site.file,
+      ordinal: 0,
       line: site.line,
       start: site.start,
       end: site.end,
@@ -1054,6 +1065,7 @@ function buildManifest(): Manifest {
     );
     occurrences.push({
       file: hit.file,
+      ordinal: 0,
       line: hit.line,
       start: hit.start,
       end: hit.end,
@@ -1071,6 +1083,12 @@ function buildManifest(): Manifest {
   }
 
   occurrences.sort((a, b) => a.file.localeCompare(b.file) || a.start - b.start);
+  const seenPerFile = new Map<string, number>();
+  for (const occurrence of occurrences) {
+    const next = seenPerFile.get(occurrence.file) ?? 0;
+    occurrence.ordinal = next;
+    seenPerFile.set(occurrence.file, next + 1);
+  }
   return {
     generated: new Date().toISOString().slice(0, 10),
     total: occurrences.length,
@@ -1398,8 +1416,8 @@ function apply(manifest: Manifest): void {
  */
 function check(manifest: Manifest): number {
   const fresh = buildManifest();
-  const stored = new Map(manifest.occurrences.map((o) => [`${o.file}:${o.start}`, o]));
-  const current = new Map(fresh.occurrences.map((o) => [`${o.file}:${o.start}`, o]));
+  const stored = new Map(manifest.occurrences.map((o) => [`${o.file}#${o.ordinal}`, o]));
+  const current = new Map(fresh.occurrences.map((o) => [`${o.file}#${o.ordinal}`, o]));
 
   const problems: string[] = [];
   for (const [key, live] of current) {
