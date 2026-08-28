@@ -62,7 +62,7 @@ export interface AssistantApprovalCardProps {
  *              never be the easiest button on the card.
  */
 const APPROVAL_BUTTON = cn(
-  "h-auto rounded-md px-3 py-1 text-[0.92em] font-medium select-none",
+  "h-auto rounded-md px-3 py-1 assistant-text-sm font-medium select-none",
   "cursor-pointer transition-colors duration-150 ease-out",
   "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--assistant-focus)]",
   "disabled:pointer-events-none disabled:opacity-50",
@@ -278,17 +278,19 @@ export function AssistantApprovalCard({ approval, onDecide, onGrant }: Assistant
           className="mt-0.5 size-4 shrink-0 text-[var(--assistant-warning-graphic)]"
         />
         <div className="min-w-0 flex-1">
-          <p className="text-[1em] font-medium text-[var(--assistant-fg)]">{approval.summary}</p>
+          <p className="assistant-text-base font-medium text-[var(--assistant-fg)]">
+            {approval.summary}
+          </p>
 
           {/* The consequence in the engine's own words — what actually happens. */}
           {approval.consequence && (
-            <p className="mt-1 text-[1em] text-[var(--assistant-fg-secondary)]">
+            <p className="mt-1 assistant-text-base text-[var(--assistant-fg-secondary)]">
               {approval.consequence}
             </p>
           )}
 
           <div className="mt-1.5 flex flex-wrap items-center gap-x-1.5 gap-y-1">
-            <span className="text-[0.92em] text-[var(--assistant-fg-secondary)]">
+            <span className="assistant-text-sm text-[var(--assistant-fg-secondary)]">
               {approval.toolId}
             </span>
             {approval.riskClass && (
@@ -296,8 +298,8 @@ export function AssistantApprovalCard({ approval, onDecide, onGrant }: Assistant
               // the tool id — "git.push git" — which is worse than omitting it.
               <span
                 className={cn(
-                  "rounded border border-[var(--assistant-border)] bg-[var(--assistant-inset)] px-1.5 py-px",
-                  "text-[0.92em] text-[var(--assistant-fg-secondary)]"
+                  "rounded-sm border border-[var(--assistant-border)] bg-[var(--assistant-inset)] px-1.5 py-px",
+                  "assistant-text-sm text-[var(--assistant-fg-secondary)]"
                 )}
               >
                 risk: <span className="text-[var(--assistant-fg)]">{approval.riskClass}</span>
@@ -308,12 +310,12 @@ export function AssistantApprovalCard({ approval, onDecide, onGrant }: Assistant
           {approval.argsSummary && (
             <pre
               className={cn(
-                "mt-2 max-h-28 overflow-y-auto rounded bg-[var(--assistant-inset)] px-2 py-1.5",
+                "mt-2 max-h-28 overflow-y-auto rounded-md bg-[var(--assistant-inset)] px-2 py-1.5",
                 // WRAP rather than scroll sideways. A summary that clips mid-token
                 // ("…,\"forc") hides the part of the argument someone is being asked
                 // to approve, and gives no cue that anything is hidden.
                 "whitespace-pre-wrap break-all",
-                "text-[0.92em] text-[var(--assistant-fg-secondary)]"
+                "assistant-text-sm text-[var(--assistant-fg-secondary)]"
               )}
             >
               {approval.argsSummary}
@@ -324,7 +326,7 @@ export function AssistantApprovalCard({ approval, onDecide, onGrant }: Assistant
             <div className="mt-2.5">
               <label
                 htmlFor={`confirm-${approval.approvalId}`}
-                className="block text-[1em] text-[var(--assistant-fg-secondary)]"
+                className="block assistant-text-base text-[var(--assistant-fg-secondary)]"
               >
                 {/* Names the act rather than repeating generic irreversibility
                     boilerplate — the specific consequence is already stated above. */}
@@ -346,7 +348,7 @@ export function AssistantApprovalCard({ approval, onDecide, onGrant }: Assistant
                   spellCheck={false}
                   className={cn(
                     "min-w-0 flex-1 rounded-md border border-[var(--assistant-border)] bg-[var(--assistant-inset)]",
-                    "px-2 py-1 text-[1em] text-[var(--assistant-fg)]",
+                    "px-2 py-1 assistant-text-base text-[var(--assistant-fg)]",
                     "placeholder:text-[var(--assistant-fg-dim)]",
                     "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--assistant-focus)]"
                   )}
@@ -427,7 +429,7 @@ export function AssistantApprovalCard({ approval, onDecide, onGrant }: Assistant
             // The cockpit printed these beside the buttons; a key that exists and is
             // never mentioned is a key nobody presses. Decline leads, matching both the
             // button order and the fail-closed default.
-            <p className="mt-1.5 text-[0.92em] text-[var(--assistant-fg-secondary)]">
+            <p className="mt-1.5 assistant-text-sm text-[var(--assistant-fg-secondary)]">
               <span className="text-[var(--assistant-fg)]">N</span> decline ·{" "}
               <span className="text-[var(--assistant-fg)]">Y</span> {approve.toLowerCase()}
               {approval.rememberable && onGrant && (

@@ -25,6 +25,33 @@
   line-height: 1.45;
 }
 
+/* The panel's own type steps, in em.
+
+   Every size here is RELATIVE because the panel tracks the terminal's font size (set on
+   `.assistant-panel` above from a live user setting), so a px step would decouple the
+   chrome from the pane beside it the moment someone changed their terminal font. That is
+   also why these cannot be Tailwind's stock `--text-*` scale, which is px throughout:
+   `component-contract/no-arbitrary-text-size` asks for a named step rather than a
+   bracket, and this is that named step for a surface the px scale cannot serve.
+
+   Two steps, deliberately. `sm` is the chrome tier — activity rows, the tool disclosure,
+   status metadata — and `base` is body text at the terminal's own size. A third step
+   would be a hierarchy nobody asked for. */
+.assistant-text-sm {
+  font-size: 0.92em;
+}
+
+.assistant-text-base {
+  font-size: 1em;
+}
+
+/* One step below the chrome tier, for the keycap glyphs on the question sheet's option
+   rows. It exists because a keycap sits INSIDE a row already at the chrome size and has
+   to read as a key rather than as more text; nothing else in the panel needs it. */
+.assistant-text-xs {
+  font-size: 0.85em;
+}
+
 .assistant-prose {
   color: var(--assistant-fg);
   /* The pane beside this one is an xterm running JetBrains Mono at 12px
@@ -184,7 +211,7 @@
   border: 1px solid var(--assistant-border);
   color: var(--assistant-code);
   padding: 0.1em 0.3em;
-  border-radius: 3px;
+  border-radius: var(--radius-sm);
   /* `anywhere` is inherited from the prose root, where it exists so a long path can
      never force the panel to scroll sideways. Inside a chip it is too eager: it breaks
      at whatever column the line happens to end at, so `--assistant-code` splits after
@@ -217,7 +244,7 @@
 .assistant-prose pre {
   background: var(--assistant-inset);
   border: 1px solid var(--assistant-border);
-  border-radius: 6px;
+  border-radius: var(--radius-md);
   padding: 0.6rem 0.7rem;
   /* Its own scroll container — the panel body must never scroll horizontally. */
   overflow-x: auto;
