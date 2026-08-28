@@ -863,10 +863,10 @@ describe("WorkspaceService.createWorktree", () => {
   });
 
   it("suffixes (not reuses) when fromRemote=true and the local branch already exists", async () => {
-    // PR-mode creates need --track to give @{u} for ahead/behind badges
-    // (WorktreeMonitor.ts:1092). Reusing a stale local branch would drop the
-    // tracking ref AND pin the worktree to whatever commit the stale branch
-    // was at, instead of origin's current tip. Always suffix in PR mode.
+    // Reusing a stale local branch would pin the worktree to whatever commit
+    // that branch was left at instead of origin's current tip, so PR mode
+    // always suffixes. The suffixed name is not `origin/pr-9999-feature`'s
+    // counterpart, so the retry drops to --no-track (asserted below).
     mockSimpleGit.branchLocal.mockResolvedValueOnce({
       all: ["main", "pr-9999-feature"],
       current: "main",

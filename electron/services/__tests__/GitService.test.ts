@@ -553,7 +553,7 @@ index 1a2b3c4..5d6e7f8 100644
       expect(eooIdx).toBeLessThan(baseIdx);
     });
 
-    it("places --end-of-options after --track for fromRemote worktrees", async () => {
+    it("places --end-of-options after the tracking flag for fromRemote worktrees", async () => {
       const service = new GitService(tempDir);
       const target = path.join(tempDir, "new-wt-remote");
 
@@ -565,8 +565,8 @@ index 1a2b3c4..5d6e7f8 100644
       });
 
       const args = gitClientMock.raw.mock.calls[0][0] as string[];
-      expect(args).toContain("--track");
-      const trackIdx = args.indexOf("--track");
+      expect(args).toContain("--no-track");
+      const trackIdx = args.indexOf("--no-track");
       const eooIdx = args.indexOf("--end-of-options");
       const pathIdx = args.indexOf(target);
       expect(trackIdx).toBeLessThan(eooIdx);

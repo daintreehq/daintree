@@ -2874,10 +2874,13 @@ export class WorkspaceService {
             listFailed = true;
           }
 
-          // For fromRemote (PR mode) we never reuse a stale local branch:
-          // the local ref is at the previous tip, and dropping --track would
-          // strip @{u} that ahead/behind badges depend on. Suffix instead so
-          // a fresh tracking branch is created.
+          // For fromRemote (PR mode) we never reuse a stale local branch: the
+          // local ref sits at the previous tip, so reuse would check the
+          // worktree out at old code instead of the remote base's current
+          // tip. Suffix instead — the retry branches from `baseBranch`, so it
+          // starts at the right commit. That retry emits `--no-track`: a
+          // suffixed name is by definition not the remote base's counterpart,
+          // and shouldTrackBase is recomputed against the name being created.
           const canReuse = !listFailed && !fromRemote && !checkedOut.has(newBranch);
 
           this.topologyWatcher.markPendingCreate(pendingCreateKey);
