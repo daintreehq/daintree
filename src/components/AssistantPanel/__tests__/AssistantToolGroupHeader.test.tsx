@@ -22,6 +22,7 @@ const ALL_STATES: AssistantToolGroupState[] = [
   "failed",
   "waiting",
   "running",
+  "queued",
   "handedOff",
   "interrupted",
 ];
@@ -214,6 +215,10 @@ describe("ToolSegment — the derivation behind the header", () => {
     );
     const name = screen.getByRole("button").getAttribute("aria-label") ?? "";
     expect(name).not.toMatch(/^Running/);
+    expect(name).toMatch(/^Queued/);
+    // Collapsed, where the live counts live: the rows are hidden, so the header is the
+    // only thing left that can say nothing has started.
+    fireEvent.click(screen.getByRole("button"));
     expect(screen.getByRole("button").textContent).toContain("2 queued");
     expect(screen.getByRole("button").textContent).not.toContain("still running");
   });
@@ -271,5 +276,154 @@ describe("collapsed tool group — the header does not repeat what is already vi
     // loses the summary the sighted reader still gets from the rows.
     renderHeader({ open: true, what: "Listed worktrees" });
     expect(screen.getByRole("button").getAttribute("aria-label")).toContain("Listed worktrees");
+  });
+
+  it("gives one running call one spinner, never the header's and the row's at once", () => {
+    // The bug: a single active call drew two — the group header's glyph and its one
+    // row's. Liveness belongs to whichever of the two the reader can actually see: the
+    // rows while open, the header once they are hidden.
+    const { container } = render(
+      <ToolSegment calls={[call({ state: "active" })]} turnComplete={false} />
+    );
+    // Any animation, not one named utility: what must hold is that a second glyph does
+    // not animate alongside the first, whichever class expresses that. Collapsed rows
+    // stay MOUNTED behind `hidden` (aria-controls must not dangle), so what is on screen
+    // is what is not inside a hidden subtree.
+    const animated = () =>
+      [...container.querySelectorAll("svg")].filter(
+        (el) => /\banimate-/.test(el.getAttribute("class") ?? "") && !el.closest("[hidden]")
+      );
+    const headerGlyph = () => container.querySelector("button svg");
+
+    expect(animated(), "open, the rows own liveness").toHaveLength(1);
+    expect(animated()[0], "and the header is not the one animating").not.toBe(headerGlyph());
+
+    fireEvent.click(screen.getByRole("button"));
+    expect(animated(), "collapsed, the header takes it over").toHaveLength(1);
+    expect(animated()[0]).toBe(headerGlyph());
+  });
+
+  it("still animates every row that is genuinely running", () => {
+    // The rule is one signal per CALL, not one per group: suppressing the header's
+    // spinner must not have been done by suppressing the rows'.
+    const { container } = render(
+      <ToolSegment
+        calls={[call({ state: "active" }), call({ state: "active" })]}
+        turnComplete={false}
+      />
+    );
+    const animated = [...container.querySelectorAll("li svg")].filter((el) =>
+      /\banimate-/.test(el.getAttribute("class") ?? "")
+    );
+    expect(animated).toHaveLength(2);
+  });
+
+  it("drops the live count when it is one open row's own label", () => {
+    // "· 1 still running" directly above the single row that says so is the header
+    // reading that row's line back to it — the duplication this whole change is about.
+    const { container } = render(
+      <ToolSegment calls={[call({ state: "active" })]} turnComplete={false} />
+    );
+    const header = () => screen.getByRole("button").textContent ?? "";
+    expect(header()).not.toContain("still running");
+    // It comes back the moment the row it stands in for is hidden.
+    fireEvent.click(screen.getByRole("button"));
+    expect(header()).toContain("1 still running");
+    expect(container.querySelector("ul")?.hasAttribute("hidden")).toBe(true);
+  });
+
+  it("keeps the live counts for a group of several, open or not", () => {
+    // Over several rows a count is an AGGREGATE, which no single row states — and
+    // "expanded" only means the rows are in layout, not that they are in view.
+    render(
+      <ToolSegment
+        calls={[call({ state: "active" }), call({ state: "waiting" }), call({ state: "queued" })]}
+        turnComplete={false}
+      />
+    );
+    const header = screen.getByRole("button").textContent ?? "";
+    expect(header).toContain("1 needs approval");
+    expect(header).toContain("1 still running");
+    expect(header).toContain("1 queued");
+  });
+
+  it("names every live state in the accessible name, not just the first", () => {
+    // aria-label REPLACES the visible text, so a name carrying only the leading state
+    // tells a screen-reader user that all three calls are waiting on them.
+    render(
+      <ToolSegment
+        calls={[call({ state: "active" }), call({ state: "waiting" }), call({ state: "queued" })]}
+        turnComplete={false}
+      />
+    );
+    const name = screen.getByRole("button").getAttribute("aria-label") ?? "";
+    expect(name).toContain("needs approval");
+    expect(name).toContain("still running");
+    expect(name).toContain("queued");
+  });
+
+  it("keeps a failure counted even with the rows open", () => {
+    // The one count that does not step back: a reader must never have to expand a group
+    // to find out that something broke.
+    render(<ToolSegment calls={[call({}), call({ state: "failed" })]} turnComplete={false} />);
+    expect(screen.getByRole("button").textContent).toContain("1 failed");
+  });
+
+  it("does not label a running row that already says what it is doing", () => {
+    // The engine supplies an in-progress verb only for the tools that visibly block, and
+    // it is written for exactly this state. "Waiting on terminals … Running" is one call
+    // described twice, in two words that disagree; the spinner carries liveness.
+    render(
+      <ToolSegment
+        calls={[call({ state: "active", verb: "Waited on", activeVerb: "Waiting on" })]}
+        turnComplete={false}
+      />
+    );
+    const row = screen.getByRole("listitem").textContent ?? "";
+    expect(row).toContain("Waiting on");
+    expect(row).not.toContain("Running");
+  });
+
+  it("keeps 'Running' on a row whose verb was written for a finished call", () => {
+    // The inverse, and the one that makes the rule a rule: most tools have no
+    // in-progress verb, so the settled verb is all the row leads with and the status
+    // slot is the only thing saying the call has not finished.
+    render(<ToolSegment calls={[call({ state: "active", verb: "Read" })]} turnComplete={false} />);
+    expect(screen.getByRole("listitem").textContent).toContain("Running");
+  });
+
+  it("names a live call in the header the way its own row does", () => {
+    // The header read the SETTLED verb while the row read the in-progress one, so a
+    // collapsed live group said "Waited on terminals · 1 still running" — past and
+    // present tense about one call, in one line.
+    render(
+      <ToolSegment
+        calls={[call({ state: "active", verb: "Waited on", activeVerb: "Waiting on" })]}
+        turnComplete={false}
+      />
+    );
+    fireEvent.click(screen.getByRole("button"));
+    const header = screen.getByRole("button").textContent ?? "";
+    expect(header).toContain("Waiting on");
+    expect(header).not.toContain("Waited on");
+  });
+
+  it("keeps the status label on every row whose verb cannot stand in for it", () => {
+    // Blocked on the reader, not yet started, and handed off are the three the verb says
+    // nothing about — dropping their labels would delete the only thing that does.
+    render(
+      <ToolSegment
+        calls={[
+          call({ state: "waiting", activeVerb: "Waiting on" }),
+          call({ state: "queued", activeVerb: "Waiting on" }),
+          call({ state: "active", activeVerb: "Delegating", asyncId: "run_1" }),
+        ]}
+        turnComplete={false}
+      />
+    );
+    const rows = screen.getAllByRole("listitem").map((li) => li.textContent ?? "");
+    expect(rows[0]).toContain("Needs your approval");
+    expect(rows[1]).toContain("Queued");
+    expect(rows[2]).toContain("background");
   });
 });
