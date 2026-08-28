@@ -1041,7 +1041,7 @@ export function WorktreeCard({
             />
           )}
           {/* The membership toggle sits in a slot the header reserves for it
-              (`pr-9` on the grid content column), not on top of the header's
+              (the grid header block's own `pr-5`), not on top of the header's
               trailing cluster. It used to be `absolute top-2 right-2` over a
               row that ends in the "More actions" button, so the badge covered
               the ellipsis's third dot and clipped the card's corner arc —
@@ -1170,19 +1170,25 @@ export function WorktreeCard({
                 // card's bottom edge and every card in a row ends level.
                 variant === "grid" && "flex h-full flex-col",
                 hasRowDragHandle ? "pl-0" : "pl-4",
-                // The grid reserves the membership toggle's column so the
-                // toggle never lands on the header's trailing cluster. It is
-                // reserved unconditionally rather than on hover: a slot that
-                // appears when the pointer arrives shifts the whole header
-                // sideways under the cursor.
-                variant === "grid" ? "pr-9" : "pr-4"
+                "pr-4"
               )}
             >
               {/* pt-2 only: the body below supplies the gap to the next row.
                   Both spending 8px put 16px between the branch line and the
                   commit row, which read as a break in the middle of one
-                  cluster rather than as the space between two. */}
-              <div className="pt-2">
+                  cluster rather than as the space between two.
+
+                  The grid reserves the membership toggle's column here, on the
+                  header block alone, not on the whole content column. The
+                  toggle sits in the card's top-right corner, so a reservation
+                  that ran the full height of the column narrowed every row
+                  below it against a control that was never beside them — the
+                  commit line and the terminal section stopped short of the
+                  card's right edge for no reason a reader could see. It stays
+                  reserved unconditionally rather than on hover: a slot that
+                  appears when the pointer arrives shifts the header sideways
+                  under the cursor. */}
+              <div className={cn("pt-2", variant === "grid" && "pr-5")}>
                 <WorktreeHeader
                   worktree={worktree}
                   isActive={isActive}
