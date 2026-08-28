@@ -75,6 +75,7 @@ export function NonMainSecondaryRow({
   const upstreamTier = computeAlarmTier({
     authFailed: hasAuthFailedSignIn,
     behindCount: worktree.behindCount,
+    baseBehindCount: worktree.baseBehindCount,
   }).tier;
   const upstreamFirst = upstreamTier > prTier;
 

@@ -649,7 +649,13 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       // push to `release/topic`.
       const refspec = `${branchName}:${destination.branch}`;
 
-      if (payload.setUpstream) {
+      // `requiresUpstreamRepair` forces the explicit form too. That branch's
+      // upstream names a different branch, so a plain `git push` fails on the
+      // name mismatch rather than on a missing upstream — the recovery in the
+      // catch below would never see the message it looks for. Pushing with
+      // `--set-upstream` to the destination the confirm already showed both
+      // completes the push and rewrites the tracking config that broke it.
+      if (payload.setUpstream || destination.requiresUpstreamRepair) {
         await authGit.push(["--set-upstream", destination.remote, refspec]);
       } else {
         try {
@@ -793,6 +799,12 @@ export function registerGitWriteHandlers(_deps: HandlerDependencies): () => void
       await git.push(destination.remote, `${branchName}:${destination.branch}`, [
         `--force-with-lease=${destination.branch}:${payload.leaseSha}`,
         "--force-if-includes",
+        // A force-push is a normal way to reach this destination — the plain
+        // push is rejected as non-fast-forward, the lease is captured, and the
+        // user force-pushes. Without this the push lands but the tracking
+        // config that made the destination unresolvable in the first place
+        // survives the recovery, so the next push is broken again.
+        ...(destination.requiresUpstreamRepair ? ["--set-upstream"] : []),
       ]);
       if (store.get("notificationSettings").uiFeedbackSoundEnabled) {
         playSoundFireAndForget("git-push");

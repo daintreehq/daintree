@@ -152,6 +152,14 @@ export class GitService {
           remoteBranch: baseBranch,
         });
 
+        // `--no-track` even from a remote base: tracking is only the truth
+        // when the new branch is that base's own local counterpart
+        // (`-b topic --track origin/topic`), and this path has no remote
+        // table to decide that with. `-b bugfix/x --track origin/develop`
+        // would point a fresh topic branch at the base — the mis-tracking
+        // WorkspaceService.createWorktree exists to avoid. Not tracking is
+        // the recoverable direction; `git push -u` sets the right upstream.
+        //
         // `--end-of-options` after the subcommand flags so any leading-dash
         // ref or path that slipped past validation is treated as positional.
         await git.raw([
@@ -159,7 +167,7 @@ export class GitService {
           "add",
           "-b",
           newBranch,
-          "--track",
+          "--no-track",
           "--end-of-options",
           path,
           baseBranch,

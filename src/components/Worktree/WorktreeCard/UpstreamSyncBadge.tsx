@@ -54,15 +54,33 @@ export function UpstreamSyncBadge({
 
   const showBaseDivergence =
     baseBranchName != null &&
-    !baseMatchesUpstream &&
     ((baseAheadCount != null && baseAheadCount > 0) ||
       (baseBehindCount != null && baseBehindCount > 0));
 
+  // A branch can end up tracking its own base — `git worktree add -b topic
+  // --track origin/develop` writes `branch.topic.merge = refs/heads/develop`,
+  // and any branch may be pointed at an integration branch by hand. Then
+  // `@{u}` and the base compare ref are the same commit, both pairs carry the
+  // same number, and only one of them says what the number is counted against.
+  //
+  // Drop the unlabelled pair, never the label. The old rule did the reverse,
+  // so two worktrees on the same commit off the same base rendered as
+  // `Δ develop ↓4` and a bare `↓4` purely on how their tracking config
+  // happened to be written — and a bare `↓4` beside a labelled one reads as a
+  // different measurement, not the same one.
+  //
+  // Gated on the base pair actually being non-zero so an inter-pass race that
+  // zeroes the base counts while upstream still reports drift falls back to
+  // the upstream form rather than rendering nothing.
+  const dedupeToBase = baseMatchesUpstream === true && showBaseDivergence;
+  const showUpstreamDelta = (hasAhead || hasBehind) && !dedupeToBase;
+
   // Flash only on changes the user can actually see — track display-gated
   // values so a null→0 transition on hidden base counts doesn't flash, and
-  // a baseMatchesUpstream flip that reveals existing counts does.
-  const displayedAhead = hasAhead ? aheadCount : null;
-  const displayedBehind = hasBehind ? behindCount : null;
+  // a baseMatchesUpstream flip that moves the counts between the two forms
+  // does.
+  const displayedAhead = showUpstreamDelta && hasAhead ? aheadCount : null;
+  const displayedBehind = showUpstreamDelta && hasBehind ? behindCount : null;
   const displayedBaseAhead =
     showBaseDivergence && baseAheadCount != null && baseAheadCount > 0 ? baseAheadCount : null;
   const displayedBaseBehind =
@@ -136,9 +154,16 @@ export function UpstreamSyncBadge({
             aria-label="Forge authentication failed — click to reconnect"
           >
             <span className="flex items-center gap-1.5 text-text-muted">
-              {hasAhead && <span>↑{aheadCount}</span>}
-              {hasBehind && <span>↓{behindCount}</span>}
-              {!hasAhead && !hasBehind && <span>—</span>}
+              {showUpstreamDelta && hasAhead && <span>↑{aheadCount}</span>}
+              {showUpstreamDelta && hasBehind && <span>↓{behindCount}</span>}
+              {showBaseDivergence && (
+                <>
+                  <span>&Delta; {baseBranchName}</span>
+                  {displayedBaseAhead != null && <span>↑{displayedBaseAhead}</span>}
+                  {displayedBaseBehind != null && <span>↓{displayedBaseBehind}</span>}
+                </>
+              )}
+              {!showUpstreamDelta && !showBaseDivergence && <span>—</span>}
             </span>
           </button>
         </TooltipTrigger>
@@ -153,7 +178,7 @@ export function UpstreamSyncBadge({
     );
   }
 
-  if (!hasAhead && !hasBehind && !showBaseDivergence) return null;
+  if (!showUpstreamDelta && !showBaseDivergence) return null;
 
   return (
     <Tooltip>
@@ -172,8 +197,12 @@ export function UpstreamSyncBadge({
           data-stale={isStale ? "true" : undefined}
           onAnimationEnd={() => setIsFlashing(false)}
         >
-          {hasAhead && <span className="text-status-success">↑{aheadCount}</span>}
-          {hasBehind && <span className="text-status-warning">↓{behindCount}</span>}
+          {showUpstreamDelta && hasAhead && (
+            <span className="text-status-success">↑{aheadCount}</span>
+          )}
+          {showUpstreamDelta && hasBehind && (
+            <span className="text-status-warning">↓{behindCount}</span>
+          )}
           {showBaseDivergence && (
             <>
               {/* `text-secondary`, not `text-muted/60`: this names the branch
@@ -197,20 +226,22 @@ export function UpstreamSyncBadge({
         </span>
       </TooltipTrigger>
       <TooltipContent side="right" className="text-xs">
-        <div>
-          {hasAhead && (
-            <span>
-              {aheadCount} commit{aheadCount !== 1 ? "s" : ""} ahead
-            </span>
-          )}
-          {hasAhead && hasBehind && <span>, </span>}
-          {hasBehind && (
-            <span>
-              {behindCount} commit{behindCount !== 1 ? "s" : ""} behind
-            </span>
-          )}
-          <span> upstream</span>
-        </div>
+        {showUpstreamDelta && (
+          <div>
+            {hasAhead && (
+              <span>
+                {aheadCount} commit{aheadCount !== 1 ? "s" : ""} ahead
+              </span>
+            )}
+            {hasAhead && hasBehind && <span>, </span>}
+            {hasBehind && (
+              <span>
+                {behindCount} commit{behindCount !== 1 ? "s" : ""} behind
+              </span>
+            )}
+            <span> upstream</span>
+          </div>
+        )}
         {showBaseDivergence && baseBranchName && (
           <div className="text-text-muted/70">
             {baseAheadCount != null && baseAheadCount > 0 && (

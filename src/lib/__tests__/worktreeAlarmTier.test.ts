@@ -101,3 +101,23 @@ describe("computeAlarmTier", () => {
     });
   });
 });
+
+describe("computeAlarmTier — base-branch drift", () => {
+  it("raises the behind alarm for a branch whose only drift signal is the base", () => {
+    // A worktree branch created without tracking has no upstream count at all;
+    // its distance from the base is the only "behind" it will ever report.
+    expect(computeAlarmTier({ baseBehindCount: 4 }).kind).toBe("behind");
+  });
+
+  it("stays quiet when neither distance is behind", () => {
+    expect(computeAlarmTier({ behindCount: 0, baseBehindCount: 0 }).tier).toBe(0);
+  });
+
+  it("keeps CI failure above base drift", () => {
+    expect(computeAlarmTier({ ciState: "failure", baseBehindCount: 9 }).kind).toBe("ci-failed");
+  });
+
+  it("keeps an auth failure above base drift", () => {
+    expect(computeAlarmTier({ authFailed: true, baseBehindCount: 9 }).kind).toBe("auth-failed");
+  });
+});

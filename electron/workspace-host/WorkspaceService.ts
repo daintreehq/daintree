@@ -55,7 +55,10 @@ import { WorktreeMonitor } from "./WorktreeMonitor.js";
 import { WorktreeListService } from "./WorktreeListService.js";
 import { PRIntegrationService, type PRIntegrationCallbacks } from "./PRIntegrationService.js";
 import { RepoFetchCoordinator } from "./RepoFetchCoordinator.js";
-import { planFetchRemotes } from "../../shared/utils/baseRemoteSelection.js";
+import {
+  parseKnownRemoteBranch,
+  planFetchRemotes,
+} from "../../shared/utils/baseRemoteSelection.js";
 
 /**
  * The remote a worktree's displayed counts depend on. Derived through the same
@@ -2766,22 +2769,63 @@ export class WorkspaceService {
       // or path that slipped past validation is treated as positional.
       const addReusingBranch = () =>
         git.raw(["worktree", "add", "--end-of-options", path, newBranch]);
-      // --no-track: local-base branches shouldn't auto-track a local ref even
-      // when the user has branch.autoSetupMerge=always. Skipping tracking also
-      // avoids a .git/config.lock acquisition, cutting contention under bulk
-      // creation. PR-mode (fromRemote) keeps --track — ahead/behind badges
-      // at WorktreeMonitor.ts:1092 depend on @{u} resolving.
-      const addNewBranch = () =>
-        git.raw([
+      // Remote names, read once and only when a remote base is actually in
+      // play. The tracking decision below is the only thing that needs them,
+      // and the local-base path — the overwhelming majority, and the one that
+      // runs in bulk — must not pay a spawn for a question it never asks.
+      let remoteNames: string[] | null = null;
+      const knownRemotes = async (): Promise<string[]> => {
+        if (remoteNames === null) {
+          try {
+            remoteNames = (await git.getRemotes()).map((r) => r.name).filter((n) => n.length > 0);
+          } catch {
+            remoteNames = [];
+          }
+        }
+        return remoteNames;
+      };
+
+      /**
+       * `--track` only when the new branch is the local counterpart of the
+       * remote base — `-b topic --track origin/topic`, which is the PR-mode
+       * shape and the only one where tracking is the truth.
+       *
+       * `-b bugfix/x --track origin/develop` is the shape that broke: git
+       * writes `branch.bugfix/x.merge = refs/heads/develop`, so a brand new
+       * topic branch tracks the BASE. Everything downstream reads `@{u}` as
+       * the branch's own remote counterpart, so `git status` reports
+       * ahead/behind of develop with nothing naming develop, the base
+       * divergence line then suppresses itself as a duplicate, and
+       * `push.default=simple` refuses to push a branch whose upstream carries
+       * a different name.
+       *
+       * `--no-track` is also what keeps a local base from auto-tracking a
+       * local ref under `branch.autoSetupMerge=always`, and skipping the
+       * tracking write avoids a `.git/config.lock` acquisition — real
+       * contention relief under bulk creation.
+       *
+       * Recomputed per call: collision recovery can suffix `newBranch` to
+       * `topic-2`, and `origin/topic` is not that branch's counterpart.
+       */
+      const shouldTrackBase = async (branchName: string): Promise<boolean> => {
+        if (!fromRemote) return false;
+        const parsed = parseKnownRemoteBranch(baseBranch, await knownRemotes());
+        return parsed !== null && parsed.branch === branchName;
+      };
+
+      const addNewBranch = async () => {
+        const tracking = (await shouldTrackBase(newBranch)) ? "--track" : "--no-track";
+        return git.raw([
           "worktree",
           "add",
           "-b",
           newBranch,
-          fromRemote ? "--track" : "--no-track",
+          tracking,
           "--end-of-options",
           path,
           baseBranch,
         ]);
+      };
 
       markHostPerformance("wtcreate.git-add:start", { branch: newBranch });
       if (useExistingBranch) {
@@ -2830,10 +2874,13 @@ export class WorkspaceService {
             listFailed = true;
           }
 
-          // For fromRemote (PR mode) we never reuse a stale local branch:
-          // the local ref is at the previous tip, and dropping --track would
-          // strip @{u} that ahead/behind badges depend on. Suffix instead so
-          // a fresh tracking branch is created.
+          // For fromRemote (PR mode) we never reuse a stale local branch: the
+          // local ref sits at the previous tip, so reuse would check the
+          // worktree out at old code instead of the remote base's current
+          // tip. Suffix instead — the retry branches from `baseBranch`, so it
+          // starts at the right commit. That retry emits `--no-track`: a
+          // suffixed name is by definition not the remote base's counterpart,
+          // and shouldTrackBase is recomputed against the name being created.
           const canReuse = !listFailed && !fromRemote && !checkedOut.has(newBranch);
 
           this.topologyWatcher.markPendingCreate(pendingCreateKey);
