@@ -1,10 +1,14 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useId, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type React from "react";
 import { ChevronDown, Info, Square, TriangleAlert, ZapOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DaintreeIcon } from "@/components/icons/DaintreeIcon";
 import { AssistantMessage, type AssistantReference } from "./AssistantMessage";
-import { AssistantToolRow, AssistantToolGroupHeader } from "./AssistantToolRow";
+import {
+  AssistantToolRow,
+  AssistantToolGroupHeader,
+  type AssistantToolGroupState,
+} from "./AssistantToolRow";
 import { AssistantApprovalCard } from "./AssistantApprovalCard";
 import { NoticeText } from "./noticeText";
 import type {
@@ -216,7 +220,7 @@ function NoticeRow({ notice }: { notice: AssistantNotice }) {
         ? "text-[var(--assistant-warning)]"
         : "text-[var(--assistant-danger)]";
   return (
-    <div className="flex items-start gap-2 px-1 py-1 text-[1em]">
+    <div className="flex items-start gap-2 px-1 py-1 assistant-text-base">
       <Icon aria-hidden="true" className={cn("mt-px size-3.5 shrink-0", tone)} />
       <p
         data-testid="assistant-notice"
@@ -279,7 +283,7 @@ function UserTurn({ text }: { text: string }) {
           // agent gets the full rail, the prompt gets what it needs. A prompt is
           // already known to whoever typed it.
           "max-w-[85%] overflow-hidden rounded-lg rounded-br-sm",
-          "bg-[var(--assistant-raised)] text-[1em] text-[var(--assistant-fg)]"
+          "bg-[var(--assistant-raised)] assistant-text-base text-[var(--assistant-fg)]"
         )}
       >
         <div className="relative">
@@ -322,7 +326,7 @@ function UserTurn({ text }: { text: string }) {
             aria-expanded={expanded}
             className={cn(
               "flex w-full items-center gap-1 px-3 pt-0.5 pb-2 text-left",
-              "text-[0.92em] text-[var(--assistant-fg-secondary)]",
+              "assistant-text-sm text-[var(--assistant-fg-secondary)]",
               "transition-colors duration-150 ease-out hover:text-[var(--assistant-fg)]",
               "focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-[var(--assistant-focus)]"
             )}
@@ -381,7 +385,7 @@ function TurnBlock({
             return (
               <div
                 key={`${turn.turnId}-seg-${i}`}
-                className="rounded-md border-l-2 border-[var(--assistant-border-strong)] bg-[var(--assistant-inset)]/60 px-2 py-1 text-[1em] text-[var(--assistant-fg-secondary)]"
+                className="rounded-md border-l-2 border-[var(--assistant-border-strong)] bg-[var(--assistant-inset)]/60 px-2 py-1 assistant-text-base text-[var(--assistant-fg-secondary)]"
               >
                 <span className="text-[var(--assistant-fg-secondary)]">You added: </span>
                 {segment.text}
@@ -392,7 +396,7 @@ function TurnBlock({
             return (
               <div
                 key={`${turn.turnId}-seg-${i}`}
-                className="rounded-md border-l-2 border-[var(--assistant-border-strong)] bg-[var(--assistant-inset)]/60 px-2 py-1 text-[1em] text-[var(--assistant-fg-secondary)]"
+                className="rounded-md border-l-2 border-[var(--assistant-border-strong)] bg-[var(--assistant-inset)]/60 px-2 py-1 assistant-text-base text-[var(--assistant-fg-secondary)]"
               >
                 <span className="text-[var(--assistant-fg-secondary)]">
                   {/* "No answer" rather than "You dismissed".
@@ -497,7 +501,7 @@ function TurnEndcap({ turn }: { turn: AssistantTurn }) {
   if (elapsedMs < 1000) return null;
 
   return (
-    <div className="mt-3 flex items-center gap-2 text-[0.92em]">
+    <div className="mt-3 flex items-center gap-2 assistant-text-sm">
       {/* Only the RULE is decorative. The duration beside it is a fact about the turn
           that exists nowhere else once the live clock stops, so hiding the whole row
           from assistive technology — which is what an `aria-hidden` on this container
@@ -513,8 +517,16 @@ function TurnEndcap({ turn }: { turn: AssistantTurn }) {
   );
 }
 
-/** One announced batch, collapsing on the same rules the whole turn used to. */
-function ToolSegment({
+/**
+ * One announced batch, collapsing on the same rules the whole turn used to.
+ *
+ * Exported for the derivation tests only. The aggregate state, the split live counts and
+ * the summed duration are all computed HERE from raw calls, and a test that hands the
+ * header those values ready-made proves the header renders them without proving this
+ * works out the right ones — which is exactly how a queued-only group came to announce
+ * itself as running.
+ */
+export function ToolSegment({
   calls,
   turnComplete,
 }: {
@@ -530,6 +542,14 @@ function ToolSegment({
   const unsettled = calls.filter(
     (c) => !c.asyncId && (c.state === "active" || c.state === "queued" || c.state === "waiting")
   ).length;
+  // Split out of `unsettled` for the collapsed header, which used to report all three as
+  // "still running". A call blocked on the USER's approval is not running — that is the
+  // one state the expanded row goes out of its way to word from the user's side, and
+  // flattening it into "running" while collapsed puts the reader back to watching a
+  // spinner that is waiting on them. Queued is likewise not running: nothing has started.
+  const awaitingApproval = calls.filter((c) => !c.asyncId && c.state === "waiting").length;
+  const queued = calls.filter((c) => !c.asyncId && c.state === "queued").length;
+  const running = calls.filter((c) => !c.asyncId && c.state === "active").length;
 
   /**
    * What the batch did, for the collapsed header.
@@ -579,23 +599,65 @@ function ToolSegment({
     }
   }, [turnComplete, failed, unsettled, interrupted, handedOff]);
 
+  // The group's aggregate outcome, for the collapsed glyph. Ordered by what a reader
+  // most needs to know: something broke, something wants them, something is still going,
+  // something was stopped — and only then "it all ran". A group is more than the sum of
+  // its calls here, which is why this is not any one call's state: "handed off" and
+  // "stopped part-way" describe the batch and appear in no per-call vocabulary.
+  const groupState: AssistantToolGroupState = useMemo(() => {
+    if (failed > 0) return "failed";
+    if (awaitingApproval > 0) return "waiting";
+    // `running`, not `unsettled`: unsettled also counts QUEUED calls, and a queued-only
+    // group given the running state drew a spinning glyph and announced "Running N tool
+    // calls" while its own visible suffix said "N queued". Nothing has started yet.
+    if (running > 0) return "running";
+    if (queued > 0) return "queued";
+    if (handedOff > 0) return "handedOff";
+    if (interrupted > 0) return "interrupted";
+    return "done";
+  }, [failed, awaitingApproval, running, queued, handedOff, interrupted]);
+
+  // Summed tool time across the calls that reported one. A SUM rather than wall-clock:
+  // a batch dispatches concurrently, so the elapsed turn is shorter than this and
+  // claiming otherwise would be a lie the header tells every time. undefined when
+  // nothing settled, so the slot simply does not render.
+  const totalDurationMs = useMemo(() => {
+    const known = calls.map((c) => c.durationMs).filter((d): d is number => typeof d === "number");
+    return known.length > 0 ? known.reduce((a, b) => a + b, 0) : undefined;
+  }, [calls]);
+
+  // Stable across renders so `aria-controls` keeps pointing at the same node.
+  const panelId = useId();
+
   return (
     <div>
       <AssistantToolGroupHeader
         count={calls.length}
         what={groupWhat}
         failedCount={failed}
-        runningCount={turnComplete ? unsettled : 0}
+        // NOT gated on turnComplete any more. It was `turnComplete ? unsettled : 0`,
+        // which meant a reader who collapsed a LIVE group by hand got a header claiming
+        // nothing was running — the one moment the count matters most.
+        runningCount={running}
+        awaitingApprovalCount={awaitingApproval}
+        queuedCount={queued}
+        state={groupState}
+        durationMs={totalDurationMs}
+        panelId={panelId}
         open={open}
         onToggle={() => setOpen((v) => !v)}
       />
-      {open && (
-        <ul className="mt-1 space-y-1">
-          {calls.map((call) => (
-            <AssistantToolRow key={call.toolCallId} call={call} />
-          ))}
-        </ul>
-      )}
+      {/* Mounted even while collapsed, and hidden with the `hidden` attribute rather
+          than unmounted. `aria-controls` on the button names this id, and a reference to
+          a node that is not in the document is a dangling one — the button announces
+          that it expands something without saying what. `hidden` takes it out of the
+          accessibility tree and out of layout, so nothing is announced or measured while
+          it is closed. */}
+      <ul id={panelId} hidden={!open} className="mt-1 space-y-1">
+        {calls.map((call) => (
+          <AssistantToolRow key={call.toolCallId} call={call} />
+        ))}
+      </ul>
     </div>
   );
 }
@@ -635,7 +697,7 @@ function Masthead({ state, live }: { state: AssistantSessionState; live: boolean
   const dim = "truncate text-[var(--assistant-fg-secondary)]";
 
   return (
-    <div className="mb-3 select-text text-[1em]">
+    <div className="mb-3 select-text assistant-text-base">
       {/* No "Daintree Assistant" line, and no project name: the panel's own header bar
           already carries both, directly above this. The cockpit needed the identity
           line because it was drawing into a bare terminal with no chrome of its own —
@@ -1345,8 +1407,8 @@ export function AssistantPanelView({
                 itself, and it can run several at once. Written as plain sentences with
                 no dash: the em dash read as an aside, and driving OTHER agents rather
                 than editing anything is the whole point, not a footnote. */}
-                <p className="text-[1em] text-[var(--assistant-fg)]">Put agents to work</p>
-                <p className="max-w-[26rem] text-[1em] text-[var(--assistant-fg-secondary)]">
+                <p className="assistant-text-base text-[var(--assistant-fg)]">Put agents to work</p>
+                <p className="max-w-[26rem] assistant-text-base text-[var(--assistant-fg-secondary)]">
                   Plan a change and it spawns agents across your worktrees, as many as the job
                   needs, then keeps watch on the runs. It doesn&rsquo;t edit files itself. Every
                   agent it starts is one you can see and take over.
@@ -1403,7 +1465,7 @@ export function AssistantPanelView({
               // because it must never cut across the prose being streamed above it.
               aria-live="polite"
               className={cn(
-                "mt-3 flex items-baseline gap-1.5 text-[1em] tabular-nums",
+                "mt-3 flex items-baseline gap-1.5 assistant-text-base tabular-nums",
                 // A slow model and a hung one look identical without this.
                 stalled ? "text-[var(--assistant-warning)]" : "text-[var(--assistant-fg-secondary)]"
               )}
@@ -1423,7 +1485,7 @@ export function AssistantPanelView({
             // into this turn, and only then does it move into the transcript proper.
             <div
               key={`queued-${i}`}
-              className="mt-3 rounded-md border border-dashed border-[var(--assistant-border-strong)] px-2 py-1.5 text-[1em] text-[var(--assistant-fg-secondary)]"
+              className="mt-3 rounded-md border border-dashed border-[var(--assistant-border-strong)] px-2 py-1.5 assistant-text-base text-[var(--assistant-fg-secondary)]"
             >
               <span className="text-[var(--assistant-fg-secondary)]">Queued: </span>
               {queued}
@@ -1593,7 +1655,7 @@ export function AssistantPanelView({
 
           <div
             data-testid="assistant-status-row"
-            className="mt-1.5 flex shrink-0 items-center gap-2 px-3.5 text-[0.92em] text-[var(--assistant-fg-secondary)]"
+            className="mt-1.5 flex shrink-0 items-center gap-2 px-3.5 assistant-text-sm text-[var(--assistant-fg-secondary)]"
           >
             {/* A DOT, then the word, as the cockpit drew it. The word
               alone made the one line that is true for the whole session read as body

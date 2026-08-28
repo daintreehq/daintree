@@ -143,7 +143,7 @@ export const AssistantToolRow = memo(function AssistantToolRow({ call }: Assista
   return (
     <li
       className={cn(
-        "flex items-start gap-2 rounded-md px-2 py-1.5 text-[1em]",
+        "flex items-start gap-2 rounded-md px-2 py-1.5 assistant-text-base",
         "bg-[var(--assistant-inset)]/60"
       )}
     >
@@ -163,14 +163,16 @@ export const AssistantToolRow = memo(function AssistantToolRow({ call }: Assista
               lifted from and reports nothing at all for a tool it does not know, rather
               than guessing a label. */}
           {verb ? (
-            <span className="min-w-0 truncate text-[0.92em] text-[var(--assistant-fg)]">
+            <span className="min-w-0 truncate assistant-text-sm text-[var(--assistant-fg)]">
               {verb}
               {call.target && (
                 <span className="ml-1 text-[var(--assistant-fg-secondary)]">{call.target}</span>
               )}
             </span>
           ) : (
-            <span className="truncate text-[0.92em] text-[var(--assistant-fg)]">{call.toolId}</span>
+            <span className="truncate assistant-text-sm text-[var(--assistant-fg)]">
+              {call.toolId}
+            </span>
           )}
           {/* Only while the call is actually BLOCKED on the user. The engine tags every
               mutating call this way regardless of outcome, so showing it on a settled
@@ -189,7 +191,7 @@ export const AssistantToolRow = memo(function AssistantToolRow({ call }: Assista
               the assistant is blocked on your approval. */}
           <span
             className={cn(
-              "ml-auto shrink-0 tabular-nums text-[0.92em]",
+              "ml-auto shrink-0 tabular-nums assistant-text-sm",
               duration ? "text-[var(--assistant-fg-secondary)]" : cn(ink, "font-medium")
             )}
           >
@@ -199,7 +201,7 @@ export const AssistantToolRow = memo(function AssistantToolRow({ call }: Assista
 
         {/* The in-tool substep, when there is one — so a long call never looks frozen. */}
         {call.state === "active" && call.progress && (
-          <p className="mt-0.5 truncate text-[0.92em] text-[var(--assistant-fg-secondary)]">
+          <p className="mt-0.5 truncate assistant-text-sm text-[var(--assistant-fg-secondary)]">
             {call.progress}
           </p>
         )}
@@ -212,26 +214,26 @@ export const AssistantToolRow = memo(function AssistantToolRow({ call }: Assista
             completion never comes back to this row, so this is the only chance to say
             what was handed off. */}
         {call.asyncId && call.asyncTitle && (
-          <p className="mt-0.5 text-[0.92em] text-[var(--assistant-fg-secondary)]">
+          <p className="mt-0.5 assistant-text-sm text-[var(--assistant-fg-secondary)]">
             {call.asyncTitle}
           </p>
         )}
 
-        {call.summary && <p className="mt-0.5 text-[0.92em]">{call.summary}</p>}
+        {call.summary && <p className="mt-0.5 assistant-text-sm">{call.summary}</p>}
 
         {call.argsSummary && (
-          <p className="mt-0.5 truncate text-[0.92em] text-[var(--assistant-fg-secondary)]">
+          <p className="mt-0.5 truncate assistant-text-sm text-[var(--assistant-fg-secondary)]">
             {call.argsSummary}
           </p>
         )}
 
         {call.state === "failed" && (call.errorMessage ?? call.errorCode) && (
-          <p className="mt-0.5 text-[0.92em] text-[var(--assistant-danger)]">
+          <p className="mt-0.5 assistant-text-sm text-[var(--assistant-danger)]">
             {/* The sentence when there is one, the code only as a fallback: a bare
                 code tells a reader that something failed, not what. */}
             {call.errorMessage ?? call.errorCode}
             {call.errorMessage && call.errorCode && (
-              <span className="ml-1 text-[0.92em] text-[var(--assistant-fg-secondary)]">
+              <span className="ml-1 assistant-text-sm text-[var(--assistant-fg-secondary)]">
                 ({call.errorCode})
               </span>
             )}
@@ -242,20 +244,127 @@ export const AssistantToolRow = memo(function AssistantToolRow({ call }: Assista
   );
 });
 
-/** The collapsed group header for a turn's tool calls. */
+/**
+ * The aggregate state of a whole group, for the collapsed header's glyph.
+ *
+ * Deliberately NOT `AssistantToolCall["state"]`: a group of five calls has an outcome
+ * that no single call's state describes, and the two that matter most here — work handed
+ * off to keep running after the turn, and a group stopped part-way — do not exist in the
+ * per-call vocabulary at all.
+ */
+export type AssistantToolGroupState =
+  "done" | "failed" | "waiting" | "running" | "queued" | "handedOff" | "interrupted";
+
+/**
+ * The collapsed group's glyph and its accessible verb, reusing the expanded rows'
+ * vocabulary on purpose: collapsed and expanded are one object in two states, so a
+ * finished call must not be a green check in one and a bare chevron in the other.
+ *
+ * `word` is the past-tense clause the accessible name is built from — the screen-reader
+ * user gets the completion state the sighted user reads off the glyph (WCAG 4.1.2).
+ */
+function groupStyleFor(state: AssistantToolGroupState): {
+  Icon: typeof Check;
+  glyph: string;
+  word: string;
+  spin?: boolean;
+} {
+  switch (state) {
+    case "failed":
+      return { Icon: X, glyph: "text-[var(--assistant-danger-graphic)]", word: "Failed" };
+    case "waiting":
+      return {
+        Icon: Hourglass,
+        glyph: "text-[var(--assistant-warning-graphic)]",
+        word: "Waiting for approval on",
+      };
+    case "running":
+      return {
+        Icon: CircleDashed,
+        glyph: "text-[var(--assistant-fg-secondary)]",
+        word: "Running",
+        spin: true,
+      };
+    case "queued":
+      // Announced but not started. A dashed ring like running, but STILL — a spinner
+      // here would claim work is under way when nothing has begun.
+      return {
+        Icon: CircleDashed,
+        glyph: "text-[var(--assistant-fg-dim)]",
+        word: "Queued",
+      };
+    case "handedOff":
+      // Not a spinner. The work continues in the engine's runtime and reports back as
+      // its own wake turn, so nothing will ever settle this header — a spinner here
+      // reads as a hang rather than as work continuing elsewhere.
+      return {
+        Icon: CircleDashed,
+        glyph: "text-[var(--assistant-fg-secondary)]",
+        word: "Handed off",
+      };
+    case "interrupted":
+      return { Icon: X, glyph: "text-[var(--assistant-fg-dim)]", word: "Stopped" };
+    case "done":
+    default:
+      return { Icon: Check, glyph: "text-[var(--assistant-success-graphic)]", word: "Ran" };
+  }
+}
+
+/**
+ * The collapsed group header — the transcript's Tool Call Disclosure.
+ *
+ * Once a clean turn settles this row is the ONLY record in the chat history that a
+ * function was ever called, so it has to read as one. It previously carried a dim
+ * chevron and secondary-tier text on no surface at all, which is the documented "ghost
+ * row" failure of this pattern: pushed so far back that it reads as a nav link or a
+ * disabled label, and the reader cannot tell any action was taken. It was, measurably,
+ * the quietest thing in the transcript — quieter than the markdown bullet list under it
+ * and than the reference chips inside the answer.
+ *
+ * So it now borrows the expanded row's own grammar rather than inventing a quieter one:
+ * the same inset surface, the same status glyph in the same status colours, the verb at
+ * full ink, and the duration in the same right-aligned metadata slot. What keeps it
+ * restrained is that nothing is ADDED beyond what a row already shows — no accent, no
+ * border, no weight the rows do not have. It reads as significant because it looks like
+ * the thing it summarises, not because it shouts.
+ *
+ * The chevron moves to the trailing edge, which is both the convention for this pattern
+ * and a necessity once the leading slot carries the status.
+ */
 export function AssistantToolGroupHeader({
   count,
   failedCount = 0,
   runningCount = 0,
+  awaitingApprovalCount = 0,
+  queuedCount = 0,
+  state = "done",
+  durationMs,
   what,
   open,
+  panelId,
   onToggle,
 }: {
   count: number;
   /** Failures must remain visible when the group is collapsed. */
   failedCount?: number;
-  /** Calls left unsettled when the turn ended. Excludes handed-off async work. */
+  /** Calls actively RUNNING. Excludes handed-off async work, queued, and waiting. */
   runningCount?: number;
+  /**
+   * Calls blocked on the USER's approval. Counted apart from running on purpose: the
+   * system is not busy, it is waiting for them, and reporting that as "still running"
+   * is how someone comes to watch a spinner that is waiting on their own answer.
+   */
+  awaitingApprovalCount?: number;
+  /** Announced but not started. Not running — nothing has begun. */
+  queuedCount?: number;
+  /** The group's aggregate outcome, driving the glyph and the accessible name. */
+  state?: AssistantToolGroupState;
+  /**
+   * Summed duration of the calls that reported one. A SUM, not wall-clock: a batch
+   * dispatches concurrently, so this is total tool time and the accessible name says so
+   * rather than claiming the turn took this long.
+   */
+  durationMs?: number;
   /**
    * What the batch actually DID, in the engine's verbs — the thing a bare count throws
    * away. A settled clean turn collapses by default, so without this the cockpit's
@@ -264,53 +373,111 @@ export function AssistantToolGroupHeader({
    */
   what?: string;
   open: boolean;
+  /** The id of the list this button discloses, for `aria-controls`. */
+  panelId: string;
   onToggle: () => void;
 }) {
+  const { Icon, glyph, word, spin } = groupStyleFor(state);
+  const duration = formatDuration(durationMs);
+
+  // "Ran 2 tool calls: Listed worktrees, Read git state" — the completion state a
+  // sighted reader takes from the glyph, spelled out. Both glyphs stay aria-hidden so
+  // the name is the only thing announced (WCAG 4.1.2).
+  const calls = `${count} ${count === 1 ? "tool call" : "tool calls"}`;
+  const accessibleName = [
+    `${word} ${calls}`,
+    what ? `: ${what}` : "",
+    duration ? ` in ${duration} of tool time` : "",
+    failedCount > 0 ? `, ${failedCount} failed` : "",
+    awaitingApprovalCount > 0 ? `, ${awaitingApprovalCount} needs approval` : "",
+  ].join("");
+
   return (
     <button
       type="button"
       onClick={onToggle}
       aria-expanded={open}
+      aria-controls={panelId}
+      aria-label={accessibleName}
       className={cn(
-        "flex w-full items-center gap-1.5 rounded-md px-1.5 py-1 text-left",
-        "text-[0.92em] text-[var(--assistant-fg-secondary)]",
+        "flex w-full items-center gap-2 rounded-md px-2 py-1.5 text-left",
+        "assistant-text-sm",
+        // The same surface the rows carry. This is the whole difference between a row
+        // that reads as an executed call and one that reads as a caption.
+        "bg-[var(--assistant-inset)]/60",
         "transition-colors duration-150 ease-out hover:bg-[var(--assistant-hover)]",
         "focus-visible:outline-2 focus-visible:outline-offset-1 focus-visible:outline-[var(--assistant-focus)]"
       )}
     >
-      <ChevronRight
+      <Icon
         aria-hidden="true"
-        className={cn("size-3 transition-transform duration-150 ease-out", open && "rotate-90")}
+        className={cn("size-3.5 shrink-0", glyph, spin && "animate-spin-slow")}
       />
-      {/* The verbs lead when there are any: they are what happened. The count trails
-          as a bare number, because "3 · Read, Searched" reads better than
-          "3 actions · Read, Searched" and the word "actions" carries nothing the rows
-          below do not. */}
-      {what ? (
-        <>
-          <span className="min-w-0 truncate">{what}</span>
-          {count > 1 && (
-            <span className="shrink-0 text-[var(--assistant-fg-secondary)]">· {count}</span>
-          )}
-        </>
+
+      {/* The verbs lead, at full ink, because they are what happened. Falling back to a
+          call count rather than "N actions": "action" describes almost anything in an
+          IDE, and the one thing this row exists to say is that a FUNCTION ran.
+
+          Only while COLLAPSED, though. Open, the rows below say the same verbs in the
+          same words — for a one-call group the header was a verbatim copy of the single
+          row under it, which reads as the heading having been rendered twice. Expanded,
+          the detail is already on screen, so the header steps back to what the rows
+          cannot say for themselves: how many there are, and the group's outcome. */}
+      {!open && what ? (
+        <span className="min-w-0 truncate text-[var(--assistant-fg)]">{what}</span>
       ) : (
-        <span>
-          {count} {count === 1 ? "action" : "actions"}
-        </span>
+        <span className="min-w-0 truncate text-[var(--assistant-fg)]">{calls}</span>
       )}
+      {!open && what && count > 1 && (
+        <span className="shrink-0 text-[var(--assistant-fg-secondary)]">· {count}</span>
+      )}
+
       {/* Survives collapse: otherwise a failed run and a clean one render the same
           header, and the outcome most worth noticing is the one that disappears. */}
       {failedCount > 0 && (
-        <span className="font-medium text-[var(--assistant-danger)]">· {failedCount} failed</span>
+        <span className="shrink-0 font-medium text-[var(--assistant-danger)]">
+          · {failedCount} failed
+        </span>
+      )}
+      {/* Blocked on the reader, in the warning tier, and FIRST: of the three live
+          states this is the only one that will not resolve without them. */}
+      {awaitingApprovalCount > 0 && (
+        <span className="shrink-0 font-medium text-[var(--assistant-warning)]">
+          · {awaitingApprovalCount} needs approval
+        </span>
       )}
       {/* An accepted async call keeps running after the turn ends, so "the turn
           finished" is not "the work finished". Saying so in the collapsed header is
           what stops a background agent from vanishing off the transcript. */}
       {runningCount > 0 && (
-        <span className="font-medium text-[var(--assistant-fg-secondary)]">
+        <span className="shrink-0 font-medium text-[var(--assistant-fg-secondary)]">
           · {runningCount} still running
         </span>
       )}
+      {queuedCount > 0 && (
+        <span className="shrink-0 text-[var(--assistant-fg-secondary)]">
+          · {queuedCount} queued
+        </span>
+      )}
+
+      {/* The metadata slot, in the same place and the same tier the expanded rows put it
+          — evidence the call cost real time, which a summary that hides it makes the
+          reader expand the group to find. */}
+      {duration && (
+        <span className="ml-auto shrink-0 tabular-nums text-[var(--assistant-fg-secondary)]">
+          {duration}
+        </span>
+      )}
+      <ChevronRight
+        aria-hidden="true"
+        className={cn(
+          "size-3 shrink-0 text-[var(--assistant-fg-dim)]",
+          "transition-transform duration-150 ease-out",
+          open && "rotate-90",
+          // Without a duration the chevron is what takes the trailing edge.
+          !duration && "ml-auto"
+        )}
+      />
     </button>
   );
 }
