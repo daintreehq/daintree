@@ -496,7 +496,10 @@ export type AssistantToolState =
 /**
  * Promotes one announced call. `waiting` is the load-bearing value: it means blocked
  * on the USER, not on the tool. Rendering it as ordinary progress leaves someone
- * watching a spinner that is waiting for their own unanswered approval.
+ * watching a spinner that is waiting for their own unanswered approval — which is what
+ * happened for as long as the engine defined the state and never emitted it. A parked
+ * call now sits in `waiting` for the whole time it is blocked, and returns to `active` when
+ * the user APPROVES — a decline settles it `failed`, an interrupt `cancelled`.
  */
 export interface AssistantToolStateEvent extends AssistantHostEventBase {
   type: "tool:state";
@@ -506,7 +509,12 @@ export interface AssistantToolStateEvent extends AssistantHostEventBase {
 }
 
 /**
- * An in-tool substep ("launching terminal") so a long call does not look frozen.
+ * An in-tool substep ("launching terminal") so a long call does not look frozen, and
+ * ONLY that. The engine's own lifecycle — validating, parked for approval, running —
+ * arrives as `tool:state`, never here: it used to come down this channel too, which put
+ * a lowercase "running" under a row already labelled "Running" and left it there for the
+ * life of the call.
+ *
  * `message` is `""` when a beat carries only liveness — keep the prior message rather
  * than blanking the row.
  */

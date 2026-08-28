@@ -7,6 +7,7 @@ import { AssistantMessage, type AssistantReference } from "./AssistantMessage";
 import {
   AssistantToolRow,
   AssistantToolGroupHeader,
+  inProgressVerb,
   type AssistantToolGroupState,
 } from "./AssistantToolRow";
 import { AssistantApprovalCard } from "./AssistantApprovalCard";
@@ -560,12 +561,18 @@ export function ToolSegment({
    * none of the tools: a row of raw identifiers is worse than the plain count.
    */
   const groupWhat = useMemo(() => {
+    // The same state-aware verb the ROWS use. Reading the settled verb here while the
+    // rows read the in-progress one made a live group collapse to "Waited on terminals
+    // · 1 still running" — one header contradicting itself about whether the call was
+    // over. `inProgressVerb` is exported for exactly this.
+    const verbOf = (c: AssistantToolCall) => inProgressVerb(c) ?? c.verb;
     if (calls.length === 1) {
       const only = calls[0];
-      if (!only?.verb) return undefined;
-      return only.target ? `${only.verb} ${only.target}` : only.verb;
+      const verb = only ? verbOf(only) : undefined;
+      if (!verb) return undefined;
+      return only?.target ? `${verb} ${only.target}` : verb;
     }
-    const verbs = [...new Set(calls.map((c) => c.verb).filter((v): v is string => !!v))];
+    const verbs = [...new Set(calls.map(verbOf).filter((v): v is string => !!v))];
     if (verbs.length === 0) return undefined;
     return verbs.slice(0, 3).join(", ") + (verbs.length > 3 ? "…" : "");
   }, [calls]);
