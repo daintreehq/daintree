@@ -405,9 +405,14 @@
   /* Legacy aliases (#12031). Every solid call site now spells the semantic
    * token directly; these five survive only because Tailwind v4 generates
    * utilities on demand from this namespace, and the alpha-modified forms
-   * still in the tree — the `text-daintree-text/NN` hierarchy ramp and the
-   * non-text alpha composites such as `bg-daintree-text/10` — would stop
-   * generating without them. They go when those do. */
+   * still in the tree would stop generating without them.
+   *
+   * Two things still need them. The non-text alpha composites (`bg-daintree-text/10`,
+   * `ring-daintree-accent/30`) are deliberate and unreviewed, left to #12029.
+   * And what #12065 left of the `text-daintree-text/NN` hierarchy ramp: the
+   * prose is off it, but the icon affordances, decorative glyphs, disabled
+   * states and opacity composites are still dim on purpose, each one recorded
+   * in `scripts/baselines/text-ramp-manifest.json`. They go when those do. */
   --color-daintree-bg: var(--theme-surface-canvas);
   --color-daintree-sidebar: var(--theme-surface-sidebar);
   --color-daintree-border: var(--theme-border-default);
@@ -3255,7 +3260,23 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
    * class attribute and bakes the alpha into `color-mix()` on the color
    * property — `opacity: 1` cannot recover the lost contrast. Forcing the
    * solid token restores it. !important is required because the Tailwind
-   * utility rule has equal specificity (0,1,0) and wins on source order. */
+   * utility rule has equal specificity (0,1,0) and wins on source order.
+   *
+   * #12065 narrowed this rule by emptying it, not by editing it. What it used
+   * to catch was 1,906 sites, most of them prose expressing a hierarchy through
+   * alpha; those now spell a solid text token and this selector no longer
+   * reaches them. What is left inside it is the reviewed carve-out set — icon
+   * affordances, decorative glyphs, deliberate disabled states, text already
+   * composited by an ancestor's opacity — and flattening exactly those under
+   * Increase Contrast is the right behaviour rather than the bug the rule was
+   * once accused of. Every survivor is named in
+   * `scripts/baselines/text-ramp-manifest.json`.
+   *
+   * Deliberately still keyed on the legacy namespace. Repointing it at
+   * `[class*="text-text-primary/"]` would force-flatten the fifteen semantic
+   * slash-alpha sites that have nothing to do with the ramp — among them two
+   * drag handles resting at `/25` that darken to `/40` on hover, whose whole
+   * affordance is that they stay faint until you reach for them. */
   [class*="text-daintree-text/"] {
     color: var(--color-text-primary) !important;
   }

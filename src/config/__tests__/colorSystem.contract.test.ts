@@ -160,7 +160,8 @@ describe("color system contract", () => {
 
   // The two aliases #12031 deleted had no consumers. Removing a live one would
   // silently stop Tailwind generating the alpha-modified utilities still in the
-  // tree (`text-daintree-text/60`, `ring-daintree-accent/30`).
+  // tree — the non-text composites left to #12029 (`ring-daintree-accent/30`),
+  // and the ramp carve-outs #12065 kept dim on purpose.
   it("keeps a daintree-* alias declared for every alpha-modified use still in the tree", () => {
     const alphaUse =
       /(?<=[a-z0-9\]])-daintree-(sidebar|border|accent|text|bg)\/(?:\[[\d.]+\]|\d+)/g;
@@ -204,9 +205,59 @@ describe("color system contract", () => {
       `Solid legacy colour utilities are retired — use the semantic token the alias ` +
         `points at (daintree-bg -> surface-canvas, daintree-sidebar -> surface-sidebar, ` +
         `daintree-border -> border-default, daintree-text -> text-primary, ` +
-        `daintree-accent -> accent-primary). Alpha-modified forms are still allowed ` +
-        `until the opacity ramp lands.`
+        `daintree-accent -> accent-primary). Alpha-modified forms are still allowed: ` +
+        `the non-text composites are #12029's, and #12065 kept a reviewed set of ` +
+        `text carve-outs dim on purpose.`
     ).toEqual({});
+  });
+
+  /**
+   * #12065's accounting, made permanent. The ramp is retired for prose, but a
+   * reviewed set of sites stays dim — icon affordances, decorative glyphs,
+   * deliberate disabled states, text already composited by ancestor opacity —
+   * and the point of that issue was that no site gets to be dim by accident.
+   *
+   * This is not a count. A count would pass if someone deleted one carve-out and
+   * added a new dilute label somewhere else, which is exactly the swap the lint
+   * ratchet's per-rule totals also cannot see. Membership is the property worth
+   * holding: every surviving occurrence has to be one the manifest names, with a
+   * category, at the position it claims.
+   *
+   * Regenerate with `npm run theme:text-ramp -- --plan` after a deliberate change.
+   */
+  it("accounts for every surviving text-daintree-text/NN site in the ramp manifest", () => {
+    const manifest = JSON.parse(
+      fs.readFileSync(path.join(REPO_ROOT, "scripts/baselines/text-ramp-manifest.json"), "utf8")
+    ) as { occurrences: { file: string; start: number; token: string; category: string }[] };
+
+    const named = new Map(
+      manifest.occurrences.map((entry) => [`${entry.file}:${entry.start}`, entry])
+    );
+    const rampToken = /(?<![\w-])(?:[\w@&[\]./-]+:)*text-daintree-text\/\d+(?![\w/-])/g;
+
+    const unaccounted: string[] = [];
+    for (const filePath of RENDERER_ROOTS.flatMap(collectSourceFiles)) {
+      const source = fs.readFileSync(filePath, "utf8");
+      if (!source.includes("text-daintree-text/")) continue;
+      const relative = path.relative(REPO_ROOT, filePath);
+      for (const match of source.matchAll(rampToken)) {
+        const entry = named.get(`${relative}:${match.index}`);
+        const line = source.slice(0, match.index).split("\n").length;
+        if (!entry) unaccounted.push(`${relative}:${line} ${match[0]} — no manifest entry`);
+        else if (entry.token !== match[0]) {
+          unaccounted.push(`${relative}:${line} ${match[0]} — manifest says ${entry.token}`);
+        } else if (entry.category === "unaccounted") {
+          unaccounted.push(`${relative}:${line} ${match[0]} — no named carve-out`);
+        }
+      }
+    }
+
+    expect(
+      unaccounted,
+      `Every remaining opacity-ramp site must be a reviewed carve-out. Either move ` +
+        `these onto a solid text token, or run \`npm run theme:text-ramp -- --plan\` ` +
+        `to record why they stay dim.`
+    ).toEqual([]);
   });
 
   it("defines --dock-shadow with alpha-pinned relative color (visible on light themes)", () => {
