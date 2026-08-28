@@ -47,8 +47,6 @@ const COLOUR_UTILITY_ROOTS = [
   "caret",
   "decoration",
   "placeholder",
-  "selection",
-  "marker",
   "shadow",
   "inset-shadow",
   "text-shadow",
@@ -297,6 +295,11 @@ describe("status-success guard", () => {
         // A different token that shares the prefix, and a non-colour utility.
         ["bg-status-success-surface", ""],
         ["my-status-success", ""],
+        // `selection` and `marker` are variants, not colour utilities — Tailwind
+        // emits nothing for the bare form, so only the variant spelling counts.
+        ["selection:bg-status-success", "selection:bg-status-success"],
+        ["selection-status-success", ""],
+        ["marker-status-success", ""],
       ];
       for (const [input, expected] of cases) {
         expect(statusSuccessSignature(input), input).toBe(expected);

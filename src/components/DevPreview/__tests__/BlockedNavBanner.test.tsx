@@ -21,7 +21,7 @@ vi.mock("@/components/ui/popover", () => ({
   ),
 }));
 
-import { BlockedNavBanner, blockedNavReducer } from "../BlockedNavBanner";
+import { BlockedNavBanner, blockedNavReducer, type BlockedNavAction } from "../BlockedNavBanner";
 
 type Phase =
   | "blocked"
@@ -103,13 +103,12 @@ describe("BlockedNavBanner action selection", () => {
 });
 
 describe("blockedNavReducer phase coalescing", () => {
-  const blocked = (url: string) =>
-    ({
-      type: "BLOCKED",
-      url,
-      canOpenExternal: true,
-      sessionStorageSnapshot: [],
-    }) as const;
+  const blocked = (url: string): BlockedNavAction => ({
+    type: "BLOCKED",
+    url,
+    canOpenExternal: true,
+    sessionStorageSnapshot: [],
+  });
 
   function phaseAfterSecondBlock(phase: Parameters<typeof reachPhase>[0]) {
     const state = reachPhase(phase);

@@ -91,7 +91,7 @@ Use the semantic spelling, not the legacy `daintree-*` aliases — `border-borde
 
 ## InlineStatusBanner
 
-`severity="success"` requires `autoDismissAfter` and `onClose` at the type level. A success banner that stands is not expressible: the compiler, not review, is what stops one being written. Persistent completion is `severity="neutral"` — which is what `AgentCompletionBanner` already uses to say "N files changed, review when ready".
+`severity="success"` requires `autoDismissAfter` and `onClose` at the type level, so a success banner that never says how it leaves does not compile. The type can require a number but not a positive one — `autoDismissAfter={0}` still type-checks and would stand forever — so the component warns about that in dev builds rather than pretending the type closed it. Persistent completion is `severity="neutral"`, which is what `AgentCompletionBanner` already uses to say "N files changed, review when ready".
 
 ## The guard
 
@@ -107,14 +107,16 @@ Deliberate boundaries:
 - **Not ESLint.** A lint rule cannot infer a timer, a modal's lifetime, or checklist structure out of a `cn()` call. The rationale field is where that judgement lives, and it is reviewed by people.
 - **TS/TSX only.** CSS files are outside the scan: `src/index.css` defines the token and `DiffViewer.css` is diff notation.
 
-What it catches: a new green in any scanned root, a second green in a file that already has approved ones, a removed green whose entry lingers, a site claimed by two entries at once, and a wholesale move that keeps every per-site check passing.
+What it catches: a new green in any scanned root, a second green in a file that already has approved ones, a removed green whose entry lingers, a site claimed by two entries at once, and a move between files, which shows up as a stale entry on one side and an unclassified site on the other.
 
 What it does not catch, stated plainly because a guard trusted past its reach is worse than no guard:
 
 - **A rationale that is not true.** Nothing mechanical can check whether the timer a `transient` entry claims actually exists. That is what review is for.
 - **Activations of an approved definition.** `badge.tsx`'s `tone="success"` and `button.tsx`'s `ghost-success` are each one inventoried site; every `<Badge tone="success">` that follows is invisible to the scanner. `InlineStatusBanner`'s `severity="success"` is the exception, and only because the type now forces it to dismiss itself.
 - **The token reached indirectly.** A class name assembled from a variable, an interpolated `var(${token})`, a theme object read like `t["status-success"]`, or a value pulled through CSSOM all paint the colour without ever writing a utility a parser can see.
-- **A one-for-one swap inside one anchor.** Deleting an approved site and adding the same signature under the same anchor in the same file holds every count. The anchors make this narrow, not impossible.
+- **A one-for-one swap inside one file.** Deleting an approved site and adding the same signature back under the same anchor — or anywhere in that file, if the entry needed no anchor — holds every count and every per-site check. The anchors make this narrow, not impossible.
+- **The Tailwind grammar drifting.** The utility roots are enumerated against the pinned Tailwind version, so a colour utility added upstream is unguarded until the list catches up.
+- **The non-colour channel.** That every surviving green also speaks through text, a glyph, geometry or a border is a review obligation, not something the guard checks.
 
 ## Review checklist
 

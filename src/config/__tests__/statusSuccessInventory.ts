@@ -124,14 +124,14 @@ export const STATUS_SUCCESS_INVENTORY = {
       signature: "text-status-success",
       anchor: 'validationResult === "success"',
       expectedOccurrences: 1,
-      rationale: "Token-saved confirmation; resets on the next edit of the token field",
+      rationale: "Token-saved confirmation; cleared by the tab's 5s validation-result timer",
     },
     {
       category: "transient",
       signature: "text-status-success",
       anchor: 'validationResult === "test-success"',
       expectedOccurrences: 1,
-      rationale: "Token-valid confirmation; resets on the next edit of the token field",
+      rationale: "Token-valid confirmation; cleared by the tab's 5s validation-result timer",
     },
   ],
   "plugins/builtin/github/renderer/utils/prCIStatus.ts": [
