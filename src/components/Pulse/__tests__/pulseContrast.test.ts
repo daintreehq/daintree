@@ -29,6 +29,33 @@ function mediaBlockSlice(content: string, mediaSelector: string): string {
 }
 
 describe("ProjectPulseCard — visual contrast (issue #2645)", () => {
+  // #2645's floors, restated for the vocabulary that replaced them. The old
+  // tests spelled a contrast minimum as an opacity step ("at least /90", "no
+  // text at /50 or /60"), and #12065 retired the mechanism those numbers were
+  // written in. Naming the tokens that replaced them would only copy the source
+  // back, so what stays is the part that was always the point: Pulse text may
+  // not sit on a role without an AA floor.
+  //
+  // `text-primary` and `text-secondary` both carry a 4.5:1 minimum against every
+  // display surface in `CONTRAST_PAIRS`, enforced for all 15 built-in themes.
+  // `text-muted` is guarded on light themes only and bottoms out at 2.2:1 on
+  // namib; `text-placeholder` has no floor at all. Either would put a Pulse
+  // label under AA on some theme without failing anything else, which is exactly
+  // the regression #2645 was filed about.
+  const SUB_AA_ROLES = ["text-text-muted", "text-text-placeholder"];
+
+  it.each([
+    ["ProjectPulseCard", CARD_PATH],
+    ["PulseSummary", SUMMARY_PATH],
+  ])("keeps %s text on a role that carries an AA floor", async (_name, filePath) => {
+    const content = await readFile(filePath, "utf-8");
+    const used = SUB_AA_ROLES.filter((role) => new RegExp(`\\b${role}\\b`).test(content));
+    expect(
+      used,
+      `these roles have no AA floor on every theme — see CONTRAST_PAIRS in shared/theme/contrast.ts`
+    ).toEqual([]);
+  });
+
   it("card shell uses pulse component vars for per-theme shell styling", async () => {
     const content = await readFile(CARD_PATH, "utf-8");
     expect(content).toContain('"pulse-card');
@@ -44,14 +71,6 @@ describe("ProjectPulseCard — visual contrast (issue #2645)", () => {
     expect(content).not.toContain("text-status-error/70");
     expect(content).not.toContain("text-status-info/70");
   });
-
-  // The three opacity-floor guards this block used to carry (title at least /90,
-  // no text at /50 or /60, coaching line at least /80) are gone with the ramp
-  // they policed. #12065 moved every one of those sites onto a solid text token
-  // whose floor is measured across all 15 themes, so the floor is now a property
-  // of the token rather than of a step someone has to remember not to lower.
-  // Re-asserting the token name here would only restate the source. The global
-  // guard is the ramp manifest contract in colorSystem.contract.test.ts.
 
   it("coaching line does not use italic styling", async () => {
     const content = await readFile(CARD_PATH, "utf-8");
@@ -84,11 +103,10 @@ describe("ProjectPulseCard — visual contrast (issue #2645)", () => {
 });
 
 describe("PulseSummary — visual contrast (issue #2645)", () => {
-  // Same as the card block above: the /75, /55 and "nothing below /55" floors
-  // were the ramp's way of spelling a contrast minimum, and #12065 replaced the
-  // mechanism rather than the numbers. Stat's highlight arm stays on the ramp
-  // deliberately — its resting colour sits beside `text-text-primary`, and
-  // lifting it would erase the highlight — which the manifest records.
+  // Stat's NON-highlight arm stays on the ramp deliberately: it sits beside
+  // `text-text-primary` in the same ternary, and lifting it to its band role
+  // would erase the highlight it exists to contrast with. The manifest records
+  // it as a semantic-state-pair carve-out.
 
   it("delta insertions/deletions use at least /80 semantic colour", async () => {
     const content = await readFile(SUMMARY_PATH, "utf-8");

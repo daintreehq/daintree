@@ -56,13 +56,20 @@ const CONTRAST_PAIRS: Array<{
   { foreground: "text-primary", background: "surface-canvas", minimum: 4.5 },
   { foreground: "text-primary", background: "surface-panel", minimum: 4.5 },
   { foreground: "text-primary", background: "surface-panel-elevated", minimum: 4.5 },
-  { foreground: "text-secondary", background: "surface-grid", minimum: 3.0 },
-  { foreground: "text-secondary", background: "surface-sidebar", minimum: 3.0 },
-  { foreground: "text-secondary", background: "surface-canvas", minimum: 3.0 },
-  { foreground: "text-secondary", background: "surface-panel", minimum: 3.0 },
-  { foreground: "text-secondary", background: "surface-panel-elevated", minimum: 3.0 },
-  // text-muted is the de-emphasized label tier. A 3.0 floor (matching text-secondary)
-  // is too permissive — muted text routinely drained below legibility on the light
+  // Raised from 3.0 to AA by #12065. `text-secondary` used to be a de-emphasis
+  // tier that a 3.0 floor described honestly; retiring the `text-daintree-text/NN`
+  // ramp moved roughly 1,100 normal-size labels onto it, so it is now where most
+  // of the app's secondary prose is actually read. A theme shipping 3.1:1
+  // secondary text would have passed validation and dropped every one of those
+  // labels under AA. All fifteen built-ins clear this today; the tightest is
+  // redwoods' elevated panel at 4.96:1 (`npm run theme:text-ramp -- --themes`).
+  { foreground: "text-secondary", background: "surface-grid", minimum: 4.5 },
+  { foreground: "text-secondary", background: "surface-sidebar", minimum: 4.5 },
+  { foreground: "text-secondary", background: "surface-canvas", minimum: 4.5 },
+  { foreground: "text-secondary", background: "surface-panel", minimum: 4.5 },
+  { foreground: "text-secondary", background: "surface-panel-elevated", minimum: 4.5 },
+  // text-muted is the de-emphasized label tier. A 3.0 floor (what text-secondary
+  // carried before #12065) is too permissive — muted text routinely drained below legibility on the light
   // palettes while still clearing 3.0. A floor of 3.5 keeps it honest as
   // readable-but-quiet (RC-8). Light-only: dark muted runs an intentionally lower,
   // sanctioned calibration (visual-guide.md sanctions sub-AA muted; daintree itself

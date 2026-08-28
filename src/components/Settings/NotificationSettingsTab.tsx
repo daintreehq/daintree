@@ -425,7 +425,7 @@ export function NotificationSettingsTab() {
                             "px-2.5 py-1 text-xs rounded-[var(--radius-md)] border transition-colors",
                             active
                               ? "border-border-strong bg-overlay-medium text-text-primary"
-                              : "border-border-default bg-surface-canvas text-daintree-text/50 hover:text-daintree-text/80"
+                              : "border-border-default bg-surface-canvas text-text-secondary hover:text-text-primary"
                           )}
                           aria-pressed={active}
                         >

@@ -1113,7 +1113,7 @@ export function BrowserPane({
                       onClick={() =>
                         void handleOpenBlockedExternal(blockedNav.noticeId, blockedNav.url)
                       }
-                      className="shrink-0 px-2 py-0.5 rounded text-xs bg-status-warning/20 hover:bg-status-warning/30 text-daintree-text/90 transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
+                      className="shrink-0 px-2 py-0.5 rounded text-xs bg-status-warning/20 hover:bg-status-warning/30 text-text-primary transition-colors disabled:opacity-60 disabled:cursor-not-allowed"
                     >
                       {blockedNav.phase === "opening" ? "Opening…" : "Open in external browser"}
                     </button>

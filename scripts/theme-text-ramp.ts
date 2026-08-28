@@ -46,7 +46,27 @@ const SKIP_DIRECTORIES = new Set(["node_modules", "dist", "dist-electron", "buil
 /** Same shape `lint-ratchet.mjs` uses, so "not product code" means one thing here. */
 const TEST_FILE = /[/\\](?:__tests__|e2e)[/\\]|\.(?:test|spec)\.[^.]+$/;
 
-const RAMP_TOKEN = /(?<![\w-])((?:[\w@&[\]./-]+:)*)text-daintree-text\/(\d+)(?![\w/-])/g;
+/**
+ * A ramp utility the tool understands: variant chain, optional v4 `!important`
+ * marker at either end, numeric alpha. Tailwind's own grammar is wider, which is
+ * what `RAMP_CANDIDATE` is for.
+ */
+const RAMP_TOKEN = /(?<![\w-])((?:[\w@&[\]./-]+:)*)(!?)text-daintree-text\/(\d+)!?(?![\w/-])/g;
+
+/**
+ * Deliberately wider than the tool's own grammar: the arbitrary
+ * (`/[calc(1/2)]`) and custom-property (`/(--muted)`) alpha forms Tailwind
+ * accepts, and any numeric step whether or not it is one of the fifteen. The
+ * backstop's whole job is to see what the classifier cannot, so a shape nobody
+ * anticipated surfaces as unaccounted rather than as silence.
+ *
+ * Still a utility grammar, though: the modifier must start with a digit or be a
+ * closed bracket form on one line. Without that it matches English — a comment
+ * saying `text-daintree-text/NN`, or a test asserting on the prefix
+ * `"text-daintree-text/[0"`.
+ */
+const RAMP_CANDIDATE =
+  /(?<![\w-])(?:[\w@&[\]./-]+:)*!?text-daintree-text\/(?:\[[^\]\s]*\]|\([^)\s]*\)|\d[\w.]*)!?/g;
 
 /**
  * The measured bands from #12065, applied with floor non-regression: a step may
@@ -93,9 +113,28 @@ export type KeepCategory =
   | "opacity-composite"
   | "prior-ruling-40"
   | "semantic-state-pair"
+  | "sibling-branch-pair"
   | "test-assertion"
   | "comment-reference"
   | "unaccounted";
+
+/**
+ * Rulings the heuristics cannot reach, because the thing they turn on is not in
+ * the class root the token belongs to.
+ *
+ * Keyed by file and token rather than by line, so ordinary edits above the site
+ * do not invalidate them. Every entry needs a reason a reviewer can check.
+ */
+const OVERRIDES: { file: string; classString: string; category: KeepCategory; why: string }[] = [
+  ...["truncate text-daintree-text/50", "truncate shrink text-daintree-text/50"].map(
+    (classString) => ({
+      file: "src/components/Project/ProjectSwitcherPalette.tsx",
+      classString,
+      category: "sibling-branch-pair" as KeepCategory,
+      why: "the age and path fragments of a project row sit one step under the status sentence beside them (`ROW_TONE_CLASS` in src/lib/projectRowStatus.ts, at `/65`). Both bands land on text-text-secondary, and at equal weight `until 3:45 PM` reads as the headline and `1 snoozed` as its footnote — the hierarchy upside down, which is the tone map's own wording. Different files and different elements, so no rule reading one class root can see it",
+    })
+  ),
+];
 
 export type MigrateCategory = "band" | "pair-promoted" | "pair-reopened-40";
 
@@ -126,6 +165,9 @@ export type Manifest = {
   files: number;
   occurrences: Occurrence[];
 };
+
+/** The fifteen steps that exist. Anything else is a token nobody has ruled on. */
+export const KNOWN_STEPS = new Set([20, 25, 30, 35, 40, 45, 50, 55, 60, 65, 70, 75, 80, 85, 90]);
 
 export function bandFor(step: number): TextRole | null {
   for (const band of BANDS) if (band.steps.includes(step)) return band.role;
@@ -227,8 +269,8 @@ export function lexicalScan(): LexicalHit[] {
     const source = fs.readFileSync(file, "utf8");
     if (!source.includes("text-daintree-text/")) continue;
     const relative = path.relative(REPO_ROOT, file);
-    RAMP_TOKEN.lastIndex = 0;
-    for (const match of source.matchAll(RAMP_TOKEN)) {
+    RAMP_CANDIDATE.lastIndex = 0;
+    for (const match of source.matchAll(RAMP_CANDIDATE)) {
       const start = match.index;
       hits.push({
         file: relative,
@@ -424,8 +466,23 @@ function hasOpacityAncestor(node: Node): boolean {
   return false;
 }
 
-const DISABLED_TEST =
+/**
+ * Conditions whose truth means the control is off, spent or finished. Polarity
+ * matters and is the reason these are matched per branch rather than over the
+ * whole condition text: in `done ? dim : active` the `whenFalse` arm is the
+ * *enabled* one, and reading the word without its sign retains ordinary prose as
+ * a disabled state.
+ */
+const DISABLED_WHEN_TRUE =
   /\b(?:is)?(?:disabled|readOnly|readonly|locked|completed|isComplete|done|unavailable|notAvailable)\b|!\s*\w*(?:available|enabled|editable)\b/i;
+
+/** A branch this token lives in whose condition being TRUE means "disabled". */
+export function inDisabledBranch(conditional: string): boolean {
+  return conditional
+    .split(" ")
+    .filter(Boolean)
+    .some((test) => test.startsWith("+") && DISABLED_WHEN_TRUE.test(test.slice(1)));
+}
 
 /** Nearest enclosing ternary branch, so mutually exclusive classes never pair. */
 function branchKey(node: Node): string {
@@ -487,27 +544,30 @@ function rootFor(
           Node.isJsxOpeningElement(ancestor) || Node.isJsxSelfClosingElement(ancestor)
       );
       return {
-        key: `${current.getSourceFile().getFilePath()}#${current.getPos()}`,
+        key: `${path.relative(REPO_ROOT, current.getSourceFile().getFilePath())}#${current.getPos()}`,
         element: opening ? describeElement(opening, icons) : undefined,
         root: current,
       };
     }
     if (Node.isBinaryExpression(current) && current.getOperatorToken().getText().endsWith("=")) {
       return {
-        key: `${current.getSourceFile().getFilePath()}#${current.getPos()}`,
+        key: `${path.relative(REPO_ROOT, current.getSourceFile().getFilePath())}#${current.getPos()}`,
         root: current,
       };
     }
     if (Node.isVariableDeclaration(current) || Node.isPropertyAssignment(current)) {
       return {
-        key: `${current.getSourceFile().getFilePath()}#${current.getPos()}`,
+        key: `${path.relative(REPO_ROOT, current.getSourceFile().getFilePath())}#${current.getPos()}`,
         root: current,
       };
     }
     current = current.getParent();
     hops++;
   }
-  return { key: `${node.getSourceFile().getFilePath()}#${node.getPos()}`, root: node };
+  return {
+    key: `${path.relative(REPO_ROOT, node.getSourceFile().getFilePath())}#${node.getPos()}`,
+    root: node,
+  };
 }
 
 export type SemanticToken = { role: string; variants: string; branch: string };
@@ -616,7 +676,7 @@ export function collectSites(files?: string[]): Inventory {
           end: start + match[0].length,
           token: match[0],
           variants: match[1] ?? "",
-          step: Number(match[2]),
+          step: Number(match[3]),
           group: root.key,
           branch: branchKey(literal),
           siblings,
@@ -658,8 +718,13 @@ function carveOut(site: RawSite): Verdict | null {
     };
   }
   if (
-    site.siblings.some((token) => /(?:^|:)(?:cursor-not-allowed|line-through)$/.test(token)) ||
-    DISABLED_TEST.test(site.conditional)
+    // Bare markers only, and only for a bare ramp token. `disabled:cursor-not-allowed`
+    // says the control *can* be disabled, not that the colour beside it is the
+    // disabled one — retaining a base colour on that evidence dims every
+    // disable-able control's enabled state.
+    (site.variants === "" &&
+      site.siblings.some((token) => /^(?:cursor-not-allowed|line-through)$/.test(token))) ||
+    inDisabledBranch(site.conditional)
   ) {
     return {
       decision: "keep",
@@ -723,6 +788,7 @@ export function classify(sites: RawSite[]): Occurrence[] {
   }
 
   const targets = new Map<RawSite, TextRole>();
+  const pinned = new Set<RawSite>();
 
   for (const group of byRoot.values()) {
     // `disabled:hover:` is both, and disabled wins: a control that cannot be
@@ -787,12 +853,24 @@ export function classify(sites: RawSite[]): Occurrence[] {
       if (!role) continue;
       const rival = site.semantic.find((token) => {
         const rank = ROLE_RANK[token.role];
-        if (rank === undefined || ROLE_RANK[role]! < rank) return false;
-        // A state variant competes when it applies to the same render; a bare
-        // token competes only from a branch this one rules out.
-        return isStateVariant(token.variants) && !isDisabledVariant(token.variants)
-          ? branchesCoexist(token.branch, site.branch)
-          : token.variants === "" && !branchesCoexist(token.branch, site.branch);
+        if (rank === undefined) return false;
+        const semanticIsState =
+          isStateVariant(token.variants) && !isDisabledVariant(token.variants);
+        if (semanticIsState) {
+          // A semantic STATE colour beside this resting ramp token: the ramp must
+          // stay below it, or the state stops showing.
+          return ROLE_RANK[role]! >= rank && branchesCoexist(token.branch, site.branch);
+        }
+        if (token.variants !== "") return false;
+        if (isStateVariant(site.variants)) {
+          // The mirror: a semantic RESTING colour beside this ramp state token.
+          // `text-text-primary hover:text-daintree-text/80` flattens to
+          // primary→primary unless the ramp end stays where it is.
+          return ROLE_RANK[role]! <= rank && branchesCoexist(token.branch, site.branch);
+        }
+        // Two resting colours: they only compete from branches that rule each
+        // other out, where the difference between them is the whole point.
+        return ROLE_RANK[role]! >= rank && !branchesCoexist(token.branch, site.branch);
       });
       if (!rival) continue;
       const control = [
@@ -809,15 +887,48 @@ export function classify(sites: RawSite[]): Occurrence[] {
       }
     }
 
-    // `disabled:hover:text-…/40` beside a resting `/40` is a hover *suppressor*:
-    // it exists to pin the disabled control back to its resting colour. It has to
-    // land on whatever the resting end landed on, or the suppression breaks — the
-    // one genuine inversion the first pass produced was exactly this.
-    for (const suppressor of suppressors) {
-      if (verdicts.has(suppressor)) continue;
-      const twin = partners(suppressor).find((site) => site.step === suppressor.step);
-      const role = twin ? targets.get(twin) : undefined;
-      if (role) targets.set(suppressor, role);
+    // A state variant sitting at its resting step is a *suppressor*: the author
+    // wrote a state and then declined to change anything, which is a statement.
+    // `disabled:hover:…/40` beside `/40` pins a disabled control to its resting
+    // colour; `aria-selected:…/50` beside `/50` keeps a missing project dim even
+    // while highlighted. Both must land on whatever the resting end landed on —
+    // promoting them would invent the very state change the author suppressed.
+    for (const state of [...suppressors, ...stateful]) {
+      if (verdicts.has(state)) continue;
+      const twin = partners(state).find((site) => site.step === state.step);
+      if (!twin) continue;
+      const role = targets.get(twin);
+      if (role) targets.set(state, role);
+      pinned.add(state);
+    }
+
+    // Two ramp tokens in branches that rule each other out are a state
+    // distinction the author drew by hand — a missing project against a present
+    // one, "nothing to reset" against "reset these". If the bands send both to
+    // the same role, that distinction is gone and the ternary becomes dead code.
+    // Keep the dimmer branch on the ramp so the difference survives: the brighter
+    // one still gets its solid token, and the direction between them is what the
+    // reader was reading.
+    for (const site of resting) {
+      if (verdicts.has(site)) continue;
+      const role = targets.get(site);
+      if (!role) continue;
+      const collides = resting.some(
+        (other) =>
+          other !== site &&
+          other.step > site.step &&
+          !branchesCoexist(other.branch, site.branch) &&
+          targets.get(other) === role
+      );
+      if (!collides) continue;
+      for (const member of group.filter((other) => branchesCoexist(other.branch, site.branch))) {
+        targets.delete(member);
+        verdicts.set(member, {
+          decision: "keep",
+          category: "sibling-branch-pair",
+          evidence: `a brighter branch of the same control also lands on text-text-${role}; keeping this one dim is what preserves the difference`,
+        });
+      }
     }
 
     // A pair whose ends land on the same role loses its affordance entirely.
@@ -830,7 +941,7 @@ export function classify(sites: RawSite[]): Occurrence[] {
     // beside a resting `/70` is a hover *suppressor* — brightening it would
     // invent a hover state on a control that has none.
     for (const state of stateful) {
-      if (verdicts.has(state) || isDisabledVariant(state.variants)) continue;
+      if (verdicts.has(state) || isDisabledVariant(state.variants) || pinned.has(state)) continue;
       const stateRole = targets.get(state);
       if (!stateRole) continue;
       const restingRoles = partners(state)
@@ -843,6 +954,19 @@ export function classify(sites: RawSite[]): Occurrence[] {
       if (ROLE_ORDER.indexOf(stateRole) > ROLE_ORDER.indexOf(brightest)) continue;
       targets.set(state, promote(brightest));
     }
+  }
+
+  for (const site of sites) {
+    const override = OVERRIDES.find(
+      (entry) => entry.file === site.file && entry.classString === site.siblings.join(" ")
+    );
+    if (!override) continue;
+    targets.delete(site);
+    verdicts.set(site, {
+      decision: "keep",
+      category: override.category,
+      evidence: `reviewed by hand: ${override.why}`,
+    });
   }
 
   return sites.map((site) => {
@@ -875,8 +999,11 @@ export function classify(sites: RawSite[]): Occurrence[] {
         group: site.group,
         branch: site.branch,
         decision: "keep" as const,
-        category: "prior-ruling-40" as const,
-        evidence: "#12003 ruled on this /40 site; no in-scope partner reopens it",
+        category: (site.step === 40 ? "prior-ruling-40" : "unaccounted") as KeepCategory,
+        evidence:
+          site.step === 40
+            ? "#12003 ruled on this /40 site; no in-scope partner reopens it"
+            : `UNACCOUNTED — /${site.step} is not one of the fifteen ramp steps and has no band`,
       };
     }
 
@@ -932,14 +1059,14 @@ function buildManifest(): Manifest {
       end: hit.end,
       token: hit.token,
       variants: "",
-      step: Number(hit.token.split("/").pop()),
+      step: Number(hit.token.split("/").pop()?.replace(/\D/g, "")) || 0,
       group: `${hit.file}#comment`,
       branch: "",
       decision: "keep",
       category: inComment ? "comment-reference" : "unaccounted",
       evidence: inComment
         ? "named in prose, not a painted site"
-        : "UNACCOUNTED — reached by the lexical scan but not by the AST walker",
+        : `UNACCOUNTED — the lexical scan reached \`${hit.token}\` and the AST walker did not`,
     });
   }
 
@@ -1053,9 +1180,11 @@ function pairs(manifest: Manifest): number {
       const shown = (o: Occurrence): string =>
         o.decision === "migrate" ? o.target! : `${o.token} (kept)`;
       const delta = rank(state) - rank(restEnd);
-      // A suppressor is meant to match its resting colour, so equal is correct
-      // there and only a genuine drop counts against it.
-      const suppressor = isDisabledVariant(state.variants);
+      // A state written at its resting step is a suppressor — the author named a
+      // state and declined to change anything, which `aria-selected:…/50` beside
+      // `/50` does to keep a missing project dim while highlighted. Equal is the
+      // correct outcome there, and only a genuine drop counts against it.
+      const suppressor = isDisabledVariant(state.variants) || state.step === restEnd.step;
       const bad = suppressor ? delta < 0 : delta <= 0;
       if (bad) inverted++;
       console.log(
@@ -1066,7 +1195,7 @@ function pairs(manifest: Manifest): number {
     }
   }
   console.log(
-    `\n${printed} pair(s); ${inverted} without a distinct state colour — ` +
+    `\n${printed} pair(s); ${inverted} that lost a state colour they had — ` +
       `${inverted === 0 ? "every affordance survives" : "AFFORDANCE LOST"}`
   );
   return inverted === 0 ? 0 : 1;
@@ -1107,14 +1236,20 @@ function themes(): number {
   const THRESHOLDS = [4.5, 3];
 
   /**
-   * The one floor dip #12065 published and took anyway. `/35` measures 2.0:1 at
-   * its weakest and `text-placeholder` 1.9:1, so the top of the placeholder band
-   * gives up a tenth of a point — at the very bottom of the contrast range,
-   * where the band holds decorative glyphs and disabled states rather than
-   * anything anyone reads. The alternative is sending `/35` to `text-secondary`,
-   * which would brighten sites that are dim on purpose by 3 full points.
+   * The one floor dip #12065 published and took anyway. `/35` bottoms out at
+   * 1.9742:1 on hokkaido's grid; `text-placeholder` bottoms out at 1.8749:1 on
+   * highlands' elevated panel — a tenth of a point, at the very bottom of the
+   * contrast range, between two values that are both far under any legibility
+   * threshold. The band does carry real copy (a confirm-dialog hint, a subagent
+   * chip), which is the reason it is worth pinning rather than waving through:
+   * the alternative destination, `text-secondary`, would over-brighten the
+   * icons, glyphs and disabled states that make up the rest of the band.
+   *
+   * Pinned to the measured value plus a rounding epsilon, not a budget. A future
+   * theme that widened this to 0.14 would fail, which is the point.
    */
-  const ACCEPTED_DIPS = new Map([[35, 0.15]]);
+  const ACCEPTED_DIPS = new Map([[35, 0.1]]);
+  const DIP_EPSILON = 0.005;
 
   type Cell = {
     theme: string;
@@ -1130,12 +1265,18 @@ function themes(): number {
   for (const scheme of [...BUILT_IN_APP_SCHEMES].sort((a, b) => a.id.localeCompare(b.id))) {
     for (const surface of DISPLAY_SURFACES) {
       const bg = scheme.tokens[surface]?.trim();
-      if (!bg || !/^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(bg)) continue;
+      if (!bg || !/^#(?:[0-9a-f]{3}|[0-9a-f]{6})$/i.test(bg)) {
+        unresolved.push(`${scheme.id}/${surface} (surface not an opaque hex)`);
+        continue;
+      }
       // Composite before measuring. `text-placeholder` is alpha-derived on most
       // themes, and the contrast helpers drop alpha bytes — an 8-digit token
       // measured raw reads as fully opaque and far stronger than it paints.
       const textPrimary = resolveOnSurface(scheme.tokens["text-primary"] ?? "", bg);
-      if (!textPrimary) continue;
+      if (!textPrimary) {
+        unresolved.push(`${scheme.id}/${surface} text-primary`);
+        continue;
+      }
       for (const band of BANDS) {
         const roleValue = resolveOnSurface(scheme.tokens[ROLE_TOKEN[band.role]] ?? "", bg);
         if (!roleValue) {
@@ -1169,14 +1310,14 @@ function themes(): number {
       const dip = stepFloor - roleFloor;
       const accepted = ACCEPTED_DIPS.get(step);
       const ok = dip <= 0;
-      if (!ok && !(accepted !== undefined && dip <= accepted)) floorBreaks++;
+      if (!ok && !(accepted !== undefined && dip <= accepted + DIP_EPSILON)) floorBreaks++;
       console.log(
         `  /${String(step).padEnd(3)} → ${`text-text-${band.role}`.padEnd(22)}` +
           `step floor ${stepFloor.toFixed(1)}:1   role floor ${roleFloor.toFixed(1)}:1   ` +
           (ok
             ? "holds"
-            : accepted !== undefined && dip <= accepted
-              ? `gives up ${dip.toFixed(2)} — the dip #12065 published and accepted`
+            : accepted !== undefined && dip <= accepted + DIP_EPSILON
+              ? `gives up ${dip.toFixed(3)} — the dip #12065 published and accepted`
               : `LOWERS THE WORST CASE by ${dip.toFixed(2)}`)
       );
     }
@@ -1197,6 +1338,13 @@ function themes(): number {
     if (broken.length > 8) console.log(`      … and ${broken.length - 8} more`);
   }
 
+  // A skipped theme, surface or role must not be able to look like a pass.
+  const steps = BANDS.reduce((n, band) => n + band.steps.length, 0);
+  const expected = BUILT_IN_APP_SCHEMES.length * DISPLAY_SURFACES.length * steps;
+  const missing = expected - cells.length;
+  if (missing !== 0)
+    console.log(`\n${missing} cell(s) could not be measured of ${expected} expected`);
+
   const worst = cells.reduce((a, b) => (a.after - a.before <= b.after - b.before ? a : b));
   console.log(
     `\n${BUILT_IN_APP_SCHEMES.length} themes x ${DISPLAY_SURFACES.length} surfaces x ` +
@@ -1204,10 +1352,11 @@ function themes(): number {
       `largest single-cell drop: ${worst.theme}/${worst.surface} /${worst.step}→${worst.role} ` +
       `${worst.before.toFixed(2)}:1 → ${worst.after.toFixed(2)}:1\n` +
       `${unresolved.length > 0 ? `unresolved: ${[...new Set(unresolved)].join(", ")}\n` : ""}` +
-      `${floorBreaks} unaccepted floor break(s), ${crossings} threshold crossing(s) — ` +
-      `${floorBreaks === 0 && crossings === 0 ? "the bands hold on every theme" : "REVIEW REQUIRED"}`
+      `${floorBreaks} unaccepted floor break(s), ${crossings} threshold crossing(s), ` +
+      `${missing} missing cell(s) — ` +
+      `${floorBreaks === 0 && crossings === 0 && missing === 0 ? "the bands hold on every theme" : "REVIEW REQUIRED"}`
   );
-  return floorBreaks === 0 && crossings === 0 ? 0 : 1;
+  return floorBreaks === 0 && crossings === 0 && missing === 0 ? 0 : 1;
 }
 
 function apply(manifest: Manifest): void {
@@ -1239,31 +1388,49 @@ function apply(manifest: Manifest): void {
   console.log(`rewrote ${rewritten} occurrences across ${byFile.size} files`);
 }
 
+/**
+ * Recompute the whole classification and compare it with what was committed.
+ *
+ * Membership alone is too weak a contract: a stored `icon-affordance` entry
+ * keeps passing after someone changes that button's child from a glyph to a
+ * word, because the token and its offset never moved. Re-running the classifier
+ * is what makes the manifest a claim about the code rather than about itself.
+ */
 function check(manifest: Manifest): number {
-  const lexical = lexicalScan();
-  const accounted = new Map<string, Occurrence>();
-  for (const occurrence of manifest.occurrences) {
-    if (occurrence.decision === "keep")
-      accounted.set(`${occurrence.file}:${occurrence.start}`, occurrence);
-  }
+  const fresh = buildManifest();
+  const stored = new Map(manifest.occurrences.map((o) => [`${o.file}:${o.start}`, o]));
+  const current = new Map(fresh.occurrences.map((o) => [`${o.file}:${o.start}`, o]));
 
   const problems: string[] = [];
-  for (const hit of lexical) {
-    const match = accounted.get(`${hit.file}:${hit.start}`);
-    if (!match) problems.push(`${hit.file}:${hit.line}  ${hit.token} — no manifest entry`);
-    else if (match.token !== hit.token) {
-      problems.push(`${hit.file}:${hit.line}  expected ${match.token}, found ${hit.token}`);
-    } else if (match.category === "unaccounted") {
-      problems.push(`${hit.file}:${hit.line}  ${hit.token} — no named carve-out`);
-    }
-  }
-  for (const [key, occurrence] of accounted) {
-    if (!lexical.some((hit) => `${hit.file}:${hit.start}` === key)) {
+  for (const [key, live] of current) {
+    const entry = stored.get(key);
+    if (!entry) {
+      problems.push(`${live.file}:${live.line} ${live.token} — not in the manifest`);
+    } else if (entry.token !== live.token) {
       problems.push(
-        `${occurrence.file}:${occurrence.line}  ${occurrence.token} — manifest entry no longer in the tree`
+        `${live.file}:${live.line} — manifest says ${entry.token}, tree has ${live.token}`
+      );
+    } else if (entry.category !== live.category) {
+      problems.push(
+        `${live.file}:${live.line} ${live.token} — manifest says ${entry.category}, classifier now says ${live.category}`
+      );
+    } else if (live.decision === "migrate") {
+      problems.push(
+        `${live.file}:${live.line} ${live.token} — still on the ramp but classified for migration`
       );
     }
   }
+  for (const [key, entry] of stored) {
+    if (!current.has(key)) {
+      problems.push(
+        `${entry.file}:${entry.line} ${entry.token} — manifest entry no longer in the tree`
+      );
+    }
+  }
+
+  const unnamed = fresh.occurrences.filter((o) => o.category === "unaccounted");
+  for (const entry of unnamed)
+    problems.push(`${entry.file}:${entry.line} ${entry.token} — ${entry.evidence}`);
 
   if (problems.length > 0) {
     console.error(`${problems.length} ramp accounting problem(s):`);
@@ -1274,10 +1441,10 @@ function check(manifest: Manifest): number {
   }
 
   const categories = new Map<string, number>();
-  for (const occurrence of accounted.values()) {
+  for (const occurrence of fresh.occurrences) {
     categories.set(occurrence.category, (categories.get(occurrence.category) ?? 0) + 1);
   }
-  console.log(`${lexical.length} retained ramp occurrence(s), every one in a named carve-out:`);
+  console.log(`${fresh.total} retained ramp occurrence(s), every one in a named carve-out:`);
   for (const [name, count] of [...categories.entries()].sort((a, b) => b[1] - a[1])) {
     console.log(`  ${name.padEnd(24)} ${count}`);
   }

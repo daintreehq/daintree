@@ -443,7 +443,7 @@ function RowStatusLine({ status }: { status: ProjectRowStatus }) {
       // Muted, and never in the demand tone. The age is the one fragment here
       // that asks for nothing, and colouring it made the coloured run long
       // enough to outweigh the count leading the line.
-      <span key="age" className="truncate text-text-secondary">
+      <span key="age" className="truncate text-daintree-text/50">
         {status.ageDetail}
       </span>
     ),
@@ -451,7 +451,7 @@ function RowStatusLine({ status }: { status: ProjectRowStatus }) {
       // `shrink` where the count takes `shrink-0`: the hint answers which
       // project this is, which the name above already mostly does, while the
       // count is the row's headline figure.
-      <span key="path" className="truncate shrink text-text-secondary">
+      <span key="path" className="truncate shrink text-daintree-text/50">
         {status.pathHint}
       </span>
     ),
@@ -634,7 +634,7 @@ function ProjectListItem({
             ? // A missing project stays dimmed while selected: the row's own
               // brightness is what says the folder is gone, and restoring it
               // under the highlight would erase that.
-              "text-text-secondary hover:bg-overlay-subtle aria-selected:text-text-primary"
+              "text-daintree-text/50 hover:bg-overlay-subtle aria-selected:text-daintree-text/50"
             : "text-text-secondary hover:bg-overlay-subtle hover:text-text-primary"
       )}
       // The current project is selectable too: picking where you already are is

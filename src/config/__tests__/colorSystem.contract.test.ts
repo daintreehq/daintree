@@ -217,46 +217,90 @@ describe("color system contract", () => {
    * deliberate disabled states, text already composited by ancestor opacity —
    * and the point of that issue was that no site gets to be dim by accident.
    *
-   * This is not a count. A count would pass if someone deleted one carve-out and
-   * added a new dilute label somewhere else, which is exactly the swap the lint
-   * ratchet's per-rule totals also cannot see. Membership is the property worth
-   * holding: every surviving occurrence has to be one the manifest names, with a
-   * category, at the position it claims.
+   * Not a count. A count would pass if someone deleted one carve-out and added a
+   * dilute label somewhere else, which is the same swap the lint ratchet's
+   * per-rule totals cannot see either. This checks membership in both
+   * directions, so a manifest entry whose site has gone fails as loudly as a
+   * site the manifest never named.
+   *
+   * The deeper check — that each site still *qualifies* for the category it
+   * claims — needs the classifier and lives in `npm run theme:text-ramp -- --check`.
+   * This test is the cheap always-on half: no parser, no ts-morph, and it runs
+   * with the rest of the colour contract.
    *
    * Regenerate with `npm run theme:text-ramp -- --plan` after a deliberate change.
    */
   it("accounts for every surviving text-daintree-text/NN site in the ramp manifest", () => {
-    const manifest = JSON.parse(
+    type ManifestEntry = {
+      file: string;
+      line: number;
+      start: number;
+      token: string;
+      category: string;
+      evidence: string;
+    };
+    const manifest: { occurrences: ManifestEntry[] } = JSON.parse(
       fs.readFileSync(path.join(REPO_ROOT, "scripts/baselines/text-ramp-manifest.json"), "utf8")
-    ) as { occurrences: { file: string; start: number; token: string; category: string }[] };
-
-    const named = new Map(
-      manifest.occurrences.map((entry) => [`${entry.file}:${entry.start}`, entry])
     );
-    const rampToken = /(?<![\w-])(?:[\w@&[\]./-]+:)*text-daintree-text\/\d+(?![\w/-])/g;
 
-    const unaccounted: string[] = [];
+    // Every category the manifest is allowed to use. An entry outside this set
+    // is not a carve-out, it is a typo that would otherwise pass.
+    const NAMED_CARVE_OUTS = new Set([
+      "icon-affordance",
+      "decorative-glyph",
+      "disabled-state",
+      "placeholder-variant",
+      "opacity-composite",
+      "semantic-state-pair",
+      "sibling-branch-pair",
+      "prior-ruling-40",
+      "comment-reference",
+      "test-assertion",
+    ]);
+
+    const rampToken = /(?<![\w-])(?:[\w@&[\]./-]+:)*!?text-daintree-text\/\d+!?(?![\w/-])/g;
+    const inTree = new Map<string, string>();
+    const walked = new Set<string>();
     for (const filePath of RENDERER_ROOTS.flatMap(collectSourceFiles)) {
+      const relative = path.relative(REPO_ROOT, filePath);
+      walked.add(relative);
       const source = fs.readFileSync(filePath, "utf8");
       if (!source.includes("text-daintree-text/")) continue;
-      const relative = path.relative(REPO_ROOT, filePath);
       for (const match of source.matchAll(rampToken)) {
-        const entry = named.get(`${relative}:${match.index}`);
-        const line = source.slice(0, match.index).split("\n").length;
-        if (!entry) unaccounted.push(`${relative}:${line} ${match[0]} — no manifest entry`);
-        else if (entry.token !== match[0]) {
-          unaccounted.push(`${relative}:${line} ${match[0]} — manifest says ${entry.token}`);
-        } else if (entry.category === "unaccounted") {
-          unaccounted.push(`${relative}:${line} ${match[0]} — no named carve-out`);
-        }
+        inTree.set(`${relative}:${match.index}`, match[0]);
       }
     }
 
+    // Scope both directions to the files this walk actually visits. The manifest
+    // is wider — it also covers `__tests__`, which `collectSourceFiles` skips —
+    // and holding it to entries nothing here reads would fail for a reason that
+    // has nothing to do with the tree. Comment references stay in: they sit in
+    // files that ARE walked, and a text scan cannot tell prose from code.
+    const painted = manifest.occurrences.filter((entry) => walked.has(entry.file));
+
+    const problems: string[] = [];
+    const named = new Map(painted.map((entry) => [`${entry.file}:${entry.start}`, entry]));
+
+    for (const [key, token] of inTree) {
+      const entry = named.get(key);
+      if (!entry) problems.push(`${key} ${token} — no manifest entry`);
+      else if (entry.token !== token) {
+        problems.push(`${key} — manifest says ${entry.token}, source has ${token}`);
+      } else if (!NAMED_CARVE_OUTS.has(entry.category)) {
+        problems.push(`${key} ${token} — "${entry.category}" is not a named carve-out`);
+      } else if (entry.evidence.trim() === "") {
+        problems.push(`${key} ${token} — carve-out with no stated reason`);
+      }
+    }
+    for (const [key, entry] of named) {
+      if (!inTree.has(key)) problems.push(`${key} ${entry.token} — manifest entry not in the tree`);
+    }
+
     expect(
-      unaccounted,
-      `Every remaining opacity-ramp site must be a reviewed carve-out. Either move ` +
-        `these onto a solid text token, or run \`npm run theme:text-ramp -- --plan\` ` +
-        `to record why they stay dim.`
+      problems,
+      `Every remaining opacity-ramp site must be a reviewed carve-out, and every ` +
+        `carve-out must still be there. Either move these onto a solid text token, ` +
+        `or run \`npm run theme:text-ramp -- --plan\` to re-record why they stay dim.`
     ).toEqual([]);
   });
 

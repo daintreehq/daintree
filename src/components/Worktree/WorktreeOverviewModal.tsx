@@ -902,7 +902,7 @@ export function WorktreeOverviewModal({
                         "flex shrink-0 items-center gap-1.5 px-2 rounded-full text-xs transition-colors",
                         "focus-visible:outline-hidden focus-visible:ring-2 focus-visible:ring-accent-primary",
                         hideMainWorktree
-                          ? "bg-tint/[0.06] text-text-secondary hover:text-text-primary"
+                          ? "bg-tint/[0.06] text-daintree-text/40 hover:text-daintree-text/60"
                           : "bg-tint/[0.10] text-text-secondary hover:text-text-primary"
                       )}
                     >

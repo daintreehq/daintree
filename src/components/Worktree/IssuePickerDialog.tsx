@@ -224,7 +224,7 @@ export function IssuePickerDialog({
                 "px-3 py-1 text-xs rounded-full transition-colors capitalize",
                 stateFilter === state
                   ? "bg-filter-selected-bg-strong text-text-primary border border-transparent"
-                  : "border border-transparent text-daintree-text/50 hover:text-daintree-text/80 hover:bg-tint/5"
+                  : "border border-transparent text-text-secondary hover:text-text-primary hover:bg-tint/5"
               )}
             >
               {state}

@@ -230,7 +230,7 @@ Between the sidebar and content grid, there's a draggable resize handle:
 | (drag handle: 3px wide, visible on hover as a 2px rounded bar)
 ```
 
-The handle is nearly invisible by default (`text-daintree-text/20`), brightens on hover (`/35`), and turns accent-colored when actively dragging.
+The handle is nearly invisible by default (`bg-daintree-text/20`), brightens on hover (`/35`) and again while dragging (`/50`), and turns accent-colored only on keyboard focus. These are background composites, not the retired text ramp — they belong to the alpha-modified `daintree-*` set left to #12029.
 
 ---
 

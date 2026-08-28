@@ -258,7 +258,7 @@ function EnvVarKeyCell({
                   ? "text-status-error"
                   : isDuplicate
                     ? "text-status-warning"
-                    : "text-daintree-text/80"
+                    : "text-text-primary"
             )}
             value={value}
             placeholder="KEY"

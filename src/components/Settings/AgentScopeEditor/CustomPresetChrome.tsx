@@ -66,7 +66,7 @@ export function CustomPresetChrome({
           />
         ) : (
           <button
-            className="flex items-center gap-1.5 text-sm font-medium text-text-primary hover:text-text-primary hover:underline underline-offset-2 transition-colors text-left"
+            className="flex items-center gap-1.5 text-sm font-medium text-text-primary hover:text-daintree-text/80 hover:underline underline-offset-2 transition-colors text-left"
             onClick={() => onStartEdit(selectedPreset)}
             aria-label={`Edit ${selectedPreset.name}`}
             title="Click to rename"

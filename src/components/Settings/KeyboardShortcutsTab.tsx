@@ -388,7 +388,7 @@ export function KeyboardShortcutsTab() {
               ? "opacity-50 cursor-not-allowed text-daintree-text/40"
               : hasOverrides
                 ? "text-text-secondary hover:text-text-primary hover:border-accent-primary"
-                : "text-text-secondary hover:text-text-primary hover:border-border-default"
+                : "text-daintree-text/40 hover:text-daintree-text/60 hover:border-border-default"
           )}
         >
           <RotateCcw className="w-3.5 h-3.5" />

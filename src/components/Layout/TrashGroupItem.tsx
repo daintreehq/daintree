@@ -227,7 +227,7 @@ export function TrashGroupItem({
                     className="w-2.5 h-2.5 text-text-muted"
                   />
                   <span
-                    className={`truncate flex-1 ${isActiveTab ? "text-text-secondary font-medium" : "text-text-secondary"}`}
+                    className={`truncate flex-1 ${isActiveTab ? "text-text-secondary font-medium" : "text-daintree-text/50"}`}
                   >
                     {terminalName}
                     {isActiveTab && <span className="ml-1 text-text-secondary">(active)</span>}

@@ -604,7 +604,7 @@ export function PluginManagerView({ deepLinkIntent, onDeepLinkConsumed }: Plugin
                         "px-1.5 py-0.5 rounded-sm text-3xs font-medium border transition-colors",
                         active
                           ? "bg-overlay-strong border-border-default text-text-primary"
-                          : "bg-overlay-subtle border-daintree-border/50 text-daintree-text/60 hover:text-daintree-text/80 hover:border-border-default"
+                          : "bg-overlay-subtle border-daintree-border/50 text-text-secondary hover:text-text-primary hover:border-border-default"
                       )}
                     >
                       {label}

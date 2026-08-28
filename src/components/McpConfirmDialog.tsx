@@ -401,7 +401,7 @@ function PreviewCard({
               ) : (
                 <div
                   key={index}
-                  className="pl-4 -indent-4 font-mono text-xs break-words whitespace-pre-wrap text-daintree-text/80"
+                  className="pl-4 -indent-4 font-mono text-xs break-words whitespace-pre-wrap text-text-primary"
                 >
                   {line}
                 </div>

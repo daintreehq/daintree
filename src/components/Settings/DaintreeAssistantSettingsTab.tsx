@@ -1164,14 +1164,14 @@ export function DaintreeAssistantSettingsTab() {
           ) : null
         ) : runtimeSnapshot.state === "disabled" ? (
           <div className="space-y-2">
-            <p className="text-xs text-daintree-text/60 select-text">
+            <p className="text-xs text-text-secondary select-text">
               MCP server is off. Turn it on to share the connection with external clients.
             </p>
             <div className="flex flex-wrap gap-2">
               <button
                 type="button"
                 onClick={handleGoToMcpSettings}
-                className="flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium border border-border-default text-daintree-text/70 hover:text-text-primary hover:bg-overlay-soft transition-colors"
+                className="flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium border border-border-default text-text-secondary hover:text-text-primary hover:bg-overlay-soft transition-colors"
               >
                 Open MCP server settings
               </button>
@@ -1180,7 +1180,7 @@ export function DaintreeAssistantSettingsTab() {
         ) : runtimeSnapshot.state === "starting" ? (
           <div className="flex items-center gap-2">
             <div className="status-mark w-2 h-2 rounded-full bg-daintree-text/30 shrink-0" />
-            <span className="text-xs text-daintree-text/60">Server is starting…</span>
+            <span className="text-xs text-text-secondary">Server is starting…</span>
           </div>
         ) : runtimeSnapshot.state === "failed" ? (
           <div className="space-y-2">
@@ -1195,19 +1195,19 @@ export function DaintreeAssistantSettingsTab() {
               <button
                 type="button"
                 onClick={handleGoToMcpSettings}
-                className="flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium border border-border-default text-daintree-text/70 hover:text-text-primary hover:bg-overlay-soft transition-colors"
+                className="flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium border border-border-default text-text-secondary hover:text-text-primary hover:bg-overlay-soft transition-colors"
               >
                 Open MCP server settings
               </button>
             </div>
           </div>
         ) : !mcpStatus ? (
-          <p className="text-xs text-daintree-text/50">Couldn't load MCP status.</p>
+          <p className="text-xs text-text-secondary">Couldn't load MCP status.</p>
         ) : (
           <div className="contents">
             <div className="flex items-center gap-2">
               <div className="status-mark w-2 h-2 rounded-full bg-activity-working shrink-0" />
-              <span className="text-xs text-daintree-text/60">
+              <span className="text-xs text-text-secondary">
                 {runtimeSnapshot.port ? `Running on port ${runtimeSnapshot.port}` : "Running"}
               </span>
             </div>
@@ -1221,7 +1221,7 @@ export function DaintreeAssistantSettingsTab() {
                   "border border-border-default hover:bg-overlay-soft",
                   copied
                     ? "text-status-success border-status-success/30"
-                    : "text-daintree-text/70 hover:text-text-primary"
+                    : "text-text-secondary hover:text-text-primary"
                 )}
               >
                 {copied ? <Check className="w-3.5 h-3.5" /> : <Copy className="w-3.5 h-3.5" />}
@@ -1232,14 +1232,14 @@ export function DaintreeAssistantSettingsTab() {
                 onClick={() => setShowRotateConfirm(true)}
                 disabled={!apiKeySuffix}
                 title={apiKeySuffix ? undefined : "Waiting for the MCP key to load…"}
-                className="flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium border border-border-default text-daintree-text/70 hover:text-text-primary hover:bg-overlay-soft transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-daintree-text/70"
+                className="flex items-center gap-2 px-3 py-1.5 rounded-[var(--radius-md)] text-xs font-medium border border-border-default text-text-secondary hover:text-text-primary hover:bg-overlay-soft transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-text-secondary"
               >
                 <RefreshCw className="w-3.5 h-3.5" />
                 Rotate MCP key
               </button>
             </div>
 
-            <p className="text-xs text-daintree-text/50 leading-relaxed select-text">
+            <p className="text-xs text-text-secondary leading-relaxed select-text">
               Paste the copied config into an external MCP client (e.g. Claude Code, Cursor).
               Regenerating the key invalidates existing client connections.
             </p>

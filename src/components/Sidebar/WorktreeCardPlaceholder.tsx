@@ -35,7 +35,7 @@ export function WorktreeCardPlaceholder({
               <button
                 type="button"
                 onClick={() => onRetry(pendingCreation)}
-                className="text-xs font-medium text-text-primary underline underline-offset-2 hover:text-text-primary focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary rounded-sm"
+                className="text-xs font-medium text-text-primary underline underline-offset-2 hover:text-daintree-text/80 focus-visible:outline focus-visible:outline-2 focus-visible:outline-accent-primary rounded-sm"
               >
                 Retry
               </button>

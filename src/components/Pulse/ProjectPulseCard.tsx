@@ -606,7 +606,7 @@ export function ProjectPulseCard({ worktreeId, className }: ProjectPulseCardProp
                     "rounded-md border px-2 py-1 transition-colors",
                     isActive
                       ? "bg-overlay-selected border-border-strong text-text-primary"
-                      : "pulse-control border-transparent text-daintree-text/55 hover:text-daintree-text/80"
+                      : "pulse-control border-transparent text-text-secondary hover:text-text-primary"
                   )}
                   aria-checked={isActive}
                   tabIndex={isActive ? 0 : -1}

@@ -126,7 +126,7 @@ function RebaseSequenceRow({ entry }: { entry: RebaseDisplayEntry }) {
     ? "text-accent-primary font-medium"
     : isDone
       ? "text-daintree-text/45"
-      : "text-daintree-text/75";
+      : "text-text-primary";
 
   const StateIcon = isCurrent
     ? ChevronRight

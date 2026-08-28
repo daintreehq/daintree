@@ -765,7 +765,7 @@ export function McpServerSettingsTab() {
                               type="button"
                               onClick={() => void handleDisconnectBearer(bearer.tokenHash)}
                               disabled={disconnectingHash !== null}
-                              className="shrink-0 px-2.5 py-1 text-xs font-medium rounded-[var(--radius-md)] border border-border-default text-daintree-text/70 hover:text-text-primary hover:bg-overlay-soft transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent"
+                              className="shrink-0 px-2.5 py-1 text-xs font-medium rounded-[var(--radius-md)] border border-border-default text-text-secondary hover:text-text-primary hover:bg-overlay-soft transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent"
                             >
                               {disconnectingHash === bearer.tokenHash
                                 ? "Disconnecting…"
@@ -921,7 +921,7 @@ export function McpServerSettingsTab() {
                   <button
                     onClick={() => setShowRotateConfirm(true)}
                     disabled={!apiKeySuffix}
-                    className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-[var(--radius-md)] border border-border-default text-daintree-text/70 hover:text-text-primary hover:bg-overlay-soft transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-daintree-text/70"
+                    className="flex items-center gap-1.5 px-3 py-2 text-xs font-medium rounded-[var(--radius-md)] border border-border-default text-text-secondary hover:text-text-primary hover:bg-overlay-soft transition-colors disabled:opacity-50 disabled:cursor-not-allowed disabled:hover:bg-transparent disabled:hover:text-text-secondary"
                     title={apiKeySuffix ? "Rotate API key" : "Waiting for the MCP key to load…"}
                   >
                     <RefreshCw className="w-3.5 h-3.5" />
