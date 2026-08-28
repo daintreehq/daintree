@@ -407,8 +407,11 @@
    * utilities on demand from this namespace, and the alpha-modified forms
    * still in the tree would stop generating without them.
    *
-   * Two things still need them. The non-text alpha composites (`bg-daintree-text/10`,
-   * `ring-daintree-accent/30`) are deliberate and unreviewed, left to #12029.
+   * Two things still need them. The non-text alpha composites — background,
+   * ring and border tints over these five aliases — are deliberate and
+   * unreviewed, left to #12029. (Naming one of those utilities literally here
+   * would trip the accent guard in `accentGuard.contract.test.ts`, which reads
+   * this file as text and cannot tell a comment from a declaration.)
    * And what #12065 left of the `text-daintree-text/NN` hierarchy ramp: the
    * prose is off it, but the icon affordances, decorative glyphs, disabled
    * states and opacity composites are still dim on purpose, each one recorded
