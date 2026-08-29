@@ -1093,6 +1093,17 @@ const IdString = z.string().refine((s) => s.trim().length > 0, { message: "must 
 const Timestamp = z.number().finite().nonnegative();
 
 /**
+ * A string the engine does not bound, clipped instead of rejected.
+ *
+ * The difference matters on any surface a user ACTS from. A `.max()` makes the whole
+ * frame invalid, and a discriminated union has no way to drop one bad row — so a
+ * single over-long field turns a list into an empty list, which reads as "there is
+ * nothing here" rather than "something went wrong". Clipping keeps every other row.
+ */
+const clipped = (max: number) =>
+  z.string().transform((v) => (v.length > max ? v.slice(0, max) : v));
+
+/**
  * Non-secret descriptor handed to the host at fork. The bearer token and MCP
  * URL are intentionally absent — they travel via env vars — so the schema
  * rejects any descriptor that smuggles a `token`/`mcpUrl` field. `windowId` is
@@ -1121,6 +1132,52 @@ const Seq = z.number().int().positive();
 
 /** Fields shared by every engine event. */
 const hostEventBase = { sessionId: IdString, seq: Seq };
+
+/**
+ * Scheduled-timer rows, shared by `operations:snapshot` and `timers:snapshot`.
+ *
+ * ONE schema for both on purpose. The engine encodes both arrays through the same
+ * builder, and two schemas here would be two chances to accept a row on one surface
+ * and reject the identical row on the other — which presents to a user as a timer
+ * manager that is empty while the deck shows three timers.
+ *
+ * Bounded at every level: the list is drawn from a project store that grows with use,
+ * and an unbounded array here becomes an unbounded render.
+ */
+const AssistantTimerRowsSchema = z
+  .array(
+    z.object({
+      id: IdString,
+      // CLIPPED, not bounded. Every string on this row is written by the engine with
+      // no length limit of its own — the model chooses a timer's title, and a worktree
+      // id is an absolute path, which is 4096 bytes on Linux. A `.max()` here would
+      // make one long title reject the WHOLE frame, and this is a control surface: the
+      // failure would present as "you have no timers" while a timer counts down to
+      // spawning an agent. A clipped label is a bad label; an empty list is a lie.
+      label: clipped(500),
+      // Non-negative is wrong for a fire time: the engine accepts any RFC3339 `fireAt`,
+      // so a pre-1970 date is a real (if silly) row, and rejecting the frame over it
+      // would again hide every OTHER timer. Ordering math tolerates a negative.
+      dueAt: z.number().int().finite(),
+      createdAt: z.number().int().finite(),
+      // The one field that must NOT be lenient: the UI branches on it, and an unknown
+      // kind should be caught rather than rendered as something it is not.
+      payloadKind: z.enum(["reminder", "tool_call", "legacy"]),
+      toolName: clipped(256),
+      runCount: z.number().int().min(0),
+      repeatEveryMs: z.number().int().min(0),
+      repeatMaxRuns: z.number().int().min(0),
+      repeatUntilAt: z.number().int().min(0),
+      targetWorktreeId: clipped(4096),
+      targetTerminalId: clipped(512),
+      liveGrants: z.number().int().min(0),
+      grantsUnknown: z.boolean(),
+    })
+  )
+  // Generous rather than tight: the engine caps nothing, and the transport already
+  // bounds the frame, so this exists to stop an absurd render — not to be the number
+  // a real project trips over and loses its whole timer list to.
+  .max(2000);
 
 export const AssistantHostEventSchema = z.discriminatedUnion("type", [
   z.object({
@@ -1342,9 +1399,7 @@ export const AssistantHostEventSchema = z.discriminatedUnion("type", [
         })
       )
       .max(200),
-    timers: z
-      .array(z.object({ id: IdString, label: z.string().max(500), dueAt: Timestamp }))
-      .max(200),
+    timers: AssistantTimerRowsSchema,
     audit: z
       .array(
         z.object({
@@ -1355,6 +1410,24 @@ export const AssistantHostEventSchema = z.discriminatedUnion("type", [
         })
       )
       .max(200),
+  }),
+  z.object({
+    ...hostEventBase,
+    type: z.literal("timers:snapshot"),
+    timers: AssistantTimerRowsSchema,
+    takenAt: Timestamp,
+    readFailed: z.boolean(),
+  }),
+  z.object({
+    ...hostEventBase,
+    type: z.literal("timer:cancelled"),
+    timerId: IdString,
+    cancelled: z.boolean(),
+    alreadyInactive: z.boolean(),
+    priorStatus: z.string().max(32),
+    revokedGrants: z.number().int().min(0).max(100_000),
+    grantRevokeFailed: z.boolean(),
+    error: z.string().max(2000),
   }),
   z.object({
     ...hostEventBase,
@@ -1463,6 +1536,18 @@ export const AssistantHostCommandSchema = z.discriminatedUnion("type", [
   z.object({
     type: z.literal("operations"),
     sessionId: IdString,
+  }),
+  z.object({
+    type: z.literal("timers"),
+    sessionId: IdString,
+  }),
+  z.object({
+    type: z.literal("timer:cancel"),
+    sessionId: IdString,
+    // The engine refuses a blank id outright (it would go on to report
+    // TIMER_NOT_FOUND for something the host never meant to send), so it is refused
+    // at this boundary too rather than spending a round trip to be told.
+    timerId: IdString,
   }),
   z.object({
     type: z.literal("interject:retract"),
