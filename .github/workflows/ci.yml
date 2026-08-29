@@ -187,6 +187,15 @@ jobs:
       - name: Install dependencies
         run: npm ci
 
+      # `npm run build` now builds the vendored Go engine too, so the bundle and the
+      # engine beside it always come from one command. Same setup as the test job:
+      # CGO-free, so it is seconds and no extra toolchain.
+      - name: Set up Go (assistant engine)
+        uses: actions/setup-go@v5
+        with:
+          go-version-file: vendor/daintree-assistant/go.mod
+          cache-dependency-path: vendor/daintree-assistant/go.sum
+
       - name: Build
         run: npm run build
 
