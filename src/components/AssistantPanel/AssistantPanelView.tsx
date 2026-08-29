@@ -4,6 +4,7 @@ import { ChevronDown, Info, Square, TriangleAlert, ZapOff } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { DaintreeIcon } from "@/components/icons/DaintreeIcon";
 import { AssistantMessage, type AssistantReference } from "./AssistantMessage";
+import { AssistantCopyButton, turnProse } from "./AssistantCopyButton";
 import {
   AssistantToolRow,
   AssistantToolGroupHeader,
@@ -277,7 +278,16 @@ function UserTurn({ text }: { text: string }) {
   }, [text, expanded]);
 
   return (
-    <div className="flex justify-end">
+    // A COLUMN, so the copy button below the bubble occupies a row of its own.
+    //
+    // It hung out of the box on an `absolute top-full` first, to spend no vertical
+    // space on something invisible almost all of the time — and that put it 2-22px
+    // below the turn, straight through anything rendered under it. A notice attributed
+    // to a turn sits 4px below (`space-y-1`), which is where every slash command's
+    // result lands: `/login` and `/account` are the ordinary case, not the corner. An
+    // `opacity-0` button is still hit-testable, so it covered the top of that notice
+    // and took the clicks aimed at it.
+    <div className="group/msg flex flex-col items-end">
       <div
         className={cn(
           // Narrower than the answer it asks for, and that asymmetry is the point: the
@@ -343,6 +353,21 @@ function UserTurn({ text }: { text: string }) {
           </button>
         )}
       </div>
+      {/* Copies the WHOLE message, not the folded excerpt. A long paste is exactly the
+          message someone wants back, and it is also the one the bubble is only showing
+          nine lines of — a copy that handed over what happens to be on screen would be
+          silently lossy in the one case that matters.
+
+          The row is reserved whether or not anything follows the turn, rather than only
+          when a notice does. Reserving it conditionally would give some messages 22px
+          more air under them than others for reasons the reader cannot see, and an
+          uneven rhythm down a transcript reads as a layout bug — which costs more than
+          the space does. */}
+      <AssistantCopyButton
+        text={text}
+        label="Copy message"
+        className="mt-0.5 group-hover/msg:opacity-100"
+      />
     </div>
   );
 }
@@ -501,8 +526,10 @@ function TurnEndcap({ turn }: { turn: AssistantTurn }) {
   // per turn would out-weigh the turns themselves. The gap between blocks carries those.
   if (elapsedMs < 1000) return null;
 
+  const prose = turnProse(turn);
+
   return (
-    <div className="mt-3 flex items-center gap-2 assistant-text-sm">
+    <div data-turn-endcap className="mt-3 flex items-center gap-2 assistant-text-sm">
       {/* Only the RULE is decorative. The duration beside it is a fact about the turn
           that exists nowhere else once the live clock stops, so hiding the whole row
           from assistive technology — which is what an `aria-hidden` on this container
@@ -514,6 +541,18 @@ function TurnEndcap({ turn }: { turn: AssistantTurn }) {
             and the transcript claims the user started something they did not. */}
         {turn.wake ? `Background · ${formatDuration(elapsedMs)}` : formatDuration(elapsedMs)}
       </span>
+      {/* The copy sits at the END of the answer because that is where the answer ends —
+          the same reason the duration does. Held in flow rather than mounted on hover,
+          so the duration does not slide sideways when the pointer arrives; the slot is
+          simply empty until then. Omitted outright on a turn that produced no prose (a
+          batch that only ran tools), where there is nothing to hand over. */}
+      {prose && (
+        <AssistantCopyButton
+          text={prose}
+          label="Copy response"
+          className="-ml-1 group-hover/turn:opacity-100"
+        />
+      )}
     </div>
   );
 }
@@ -1425,7 +1464,10 @@ export function AssistantPanelView({
           ) : (
             <div className="space-y-6">
               {state.turns.map((turn) => (
-                <div key={turn.turnId} className="space-y-1">
+                // `group/turn` scopes the endcap's copy button to the turn it closes:
+                // hovering anywhere in the answer reveals it, and it is the wrapper
+                // rather than the block because the endcap is the block's SIBLING.
+                <div key={turn.turnId} className="group/turn space-y-1">
                   <TurnBlock
                     turn={turn}
                     state={state}
