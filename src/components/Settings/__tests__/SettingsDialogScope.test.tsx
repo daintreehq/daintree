@@ -2,7 +2,7 @@
 import React from "react";
 import { describe, it, expect, vi } from "vitest";
 import { render, screen } from "@testing-library/react";
-import { ScopeContext, ScopeChip, NavItem } from "../SettingsDialog";
+import { ScopeChip, NavItem, scopeAnnouncement } from "../SettingsDialog";
 import {
   contentScopeForTab,
   scopeForTab,
@@ -26,57 +26,44 @@ vi.mock("framer-motion", () => ({
  * that "changed" and "broken" never collapse into one another.
  */
 describe("settings scope orientation", () => {
-  describe("ScopeContext", () => {
-    it("renders whatever project it is handed, rather than a fixed word", () => {
-      const { unmount } = render(<ScopeContext scope="project" projectLabel="Helios Dashboard" />);
-      expect(screen.getByText("Helios Dashboard")).toBeTruthy();
-      unmount();
-
-      render(<ScopeContext scope="project" projectLabel="Kestrel API" />);
-      expect(screen.getByText("Kestrel API")).toBeTruthy();
-      expect(screen.queryByText("Helios Dashboard")).toBeNull();
+  describe("scopeAnnouncement", () => {
+    /**
+     * The only place the scope reaches a screen reader. Nothing paints it, so a
+     * refactor can delete or invert it without a single pixel moving — these are what
+     * would notice.
+     */
+    it("names whatever project it is handed, rather than a fixed word", () => {
+      expect(scopeAnnouncement("project", "Helios Dashboard")).toContain("Helios Dashboard");
+      expect(scopeAnnouncement("project", "Kestrel API")).toContain("Kestrel API");
+      expect(scopeAnnouncement("project", "Kestrel API")).not.toContain("Helios Dashboard");
     });
 
-    it("distinguishes the two scopes by more than the entity name", () => {
-      const { container: globalEl, unmount } = render(
-        <ScopeContext scope="global" projectLabel="Helios Dashboard" />
-      );
-      const globalScope = globalEl.querySelector("[data-settings-scope-context]");
-      expect(globalScope?.getAttribute("data-settings-scope-context")).toBe("global");
-      const globalHtml = globalEl.innerHTML;
-      unmount();
-
-      const { container: projectEl } = render(
-        <ScopeContext scope="project" projectLabel="Helios Dashboard" />
-      );
-      expect(
-        projectEl
-          .querySelector("[data-settings-scope-context]")
-          ?.getAttribute("data-settings-scope-context")
-      ).toBe("project");
-      // Same entity string on both, so any difference here is a real scope signal —
-      // the icon and the screen-reader prefix — not just a different name.
-      expect(projectEl.innerHTML).not.toBe(globalHtml);
+    it("never announces a project the user does not have open", () => {
+      // "project" is projectLabel's own fallback string, so a regression that leaked
+      // the label through would still read as a plausible sentence. The entity clause
+      // is what has to be absent, not the word.
+      expect(scopeAnnouncement("project", null)).not.toMatch(/\bfor\b/);
     });
 
-    it("never claims a project when none is open", () => {
-      render(<ScopeContext scope="project" projectLabel={null} />);
-      expect(
-        document
-          .querySelector("[data-settings-scope-context]")
-          ?.getAttribute("data-settings-scope-context")
-      ).toBe("global");
-    });
-
-    it("is decorative — the dialog's own labelled title carries the announced name", () => {
-      // Both the header eyebrow and the dialog title name the scope and the entity.
-      // Only one of them should reach a screen reader, or every open announces it
-      // twice; the title wins, because that is what aria-labelledby points at.
-      const { container } = render(
-        <ScopeContext scope="project" projectLabel="Helios Dashboard" />
+    it("never claims global over a tab whose content is project-scoped", () => {
+      // The failure this exists for: `integrations` is filed under the global nav but
+      // writes per-project, so it is reachable with NO project open. Branching on the
+      // project before the scope announces "Global settings for Daintree" over a pane
+      // where every control saves against a project. Driven off the registry so a tab
+      // added with that same shape later is covered without touching this test.
+      const projectContentTabs = SETTINGS_REGISTRY.map((e) => e.id as SettingsTab).filter(
+        (id) => contentScopeForTab(id) === "project"
       );
-      const line = container.querySelector("[data-settings-scope-context]");
-      expect(line?.getAttribute("aria-hidden")).toBe("true");
+      expect(projectContentTabs.length).toBeGreaterThan(0);
+
+      for (const id of projectContentTabs) {
+        for (const project of ["Helios Dashboard", null]) {
+          expect(
+            scopeAnnouncement(contentScopeForTab(id), project),
+            `${id} announced the global scope`
+          ).not.toBe(scopeAnnouncement("global", project));
+        }
+      }
     });
   });
 

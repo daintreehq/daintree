@@ -63,7 +63,7 @@ export interface SettingsTabEntry {
   /**
    * What the tab's content actually writes to, when that differs from the nav scope it
    * is filed under. `integrations` lives in the global nav but every control inside it
-   * saves against the current project, so the shell's context line has to name the
+   * saves against the current project, so the dialog's accessible name has to say
    * project or it states the wrong scope outright. Nav placement is unchanged.
    */
   readonly contentScope?: "global" | "project";
@@ -1728,9 +1728,9 @@ export const SETTINGS_REGISTRY = [
 
 /**
  * The scope a tab's content actually writes to — its `contentScope` when it declares
- * one, otherwise the nav scope it is filed under. The shell's context line keys off
+ * one, otherwise the nav scope it is filed under. The dialog's accessible name keys off
  * this rather than `scopeForTab`, so a tab that is filed globally but saves against the
- * current project names the project instead of claiming to be application-wide.
+ * current project announces the project instead of claiming to be application-wide.
  */
 export function contentScopeForTab(tab: SettingsTab): "global" | "project" {
   // Widened to the interface on purpose: SETTINGS_REGISTRY is `as const`, so `find`
