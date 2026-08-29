@@ -5,6 +5,7 @@ import type {
   AssistantAuditRow,
   AssistantCommandMeta,
   AssistantInboxRow,
+  AssistantTimerOutcomeRow,
   AssistantTimerRow,
   AssistantWorkflowRow,
   AssistantHostEvent,
@@ -226,6 +227,13 @@ function reconcilePending(
 export interface AssistantTimers {
   rows: AssistantTimerRow[];
   /**
+   * What recently-fired timers did, newest first.
+   *
+   * Held with the schedule rows because a fired timer leaves that list: without
+   * these, the manager can only ever show what has NOT happened yet.
+   */
+  outcomes: AssistantTimerOutcomeRow[];
+  /**
    * The engine could not read its timer table, so `rows` being empty says nothing.
    *
    * A manager that renders a failed read as "nothing scheduled" tells the user to
@@ -315,6 +323,15 @@ export interface AssistantSessionState {
    * user might be reading — or the manager having to pull six sections to show one.
    */
   timers: AssistantTimers | null;
+  /**
+   * A timer has fired since the last reading, so `timers` is known to be behind.
+   *
+   * The engine pushes only the fact, not the change, so this is the whole of what a
+   * `timer:fired` does to the store: it marks the list stale and lets whoever is
+   * showing it decide whether a re-read is worth a round trip. A view nobody has
+   * open pays nothing.
+   */
+  timersStale: boolean;
   /**
    * Timers with a cancel in flight, so a row can show its own pending state rather
    * than the whole list going busy. Cleared by the matching `timer:cancelled`.
@@ -499,6 +516,7 @@ const EMPTY: AssistantSessionState = {
   commands: [],
   operations: null,
   timers: null,
+  timersStale: false,
   timerCancelPending: {},
   timerCancelErrors: {},
   toolGrants: {},
@@ -1299,7 +1317,14 @@ export const useAssistantStore = create<AssistantStore>((set, get) => ({
         // from the previous reading, and one pinned to a timer that is no longer
         // there — or that someone else has since retired — is worse than no error.
         set({
-          timers: { rows: event.timers, takenAt: event.takenAt, readFailed: event.readFailed },
+          timers: {
+            rows: event.timers,
+            outcomes: event.outcomes,
+            takenAt: event.takenAt,
+            readFailed: event.readFailed,
+          },
+          // This reading IS the answer to whatever made it stale.
+          timersStale: false,
           timerCancelErrors: {},
           // A snapshot is the engine's current truth about what exists. Anything we
           // still believe is mid-cancel but which the engine no longer lists has
@@ -1307,6 +1332,13 @@ export const useAssistantStore = create<AssistantStore>((set, get) => ({
           // row inert forever if its outcome was lost with a dead session.
           timerCancelPending: reconcilePending(get().timerCancelPending, event.timers),
         });
+        return;
+
+      case "timer:fired":
+        // Deliberately does not mutate the list. The event carries an id and no
+        // payload, so patching a row from it would be inventing state; the honest
+        // reaction is to record that what we hold is out of date.
+        set({ timersStale: true, lastActivityAt: Date.now() });
         return;
 
       case "timer:cancelled": {
