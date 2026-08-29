@@ -123,7 +123,7 @@ export interface GeneratedIpcInvokeMap {
     result: import("./assistantHostIpc.js").AssistantHostStartResult;
   };
   "assistant-host:stop": {
-    args: [sessionId: string];
+    args: [sessionId: string, attachmentId: string];
     result: { stopped: boolean };
   };
   "assistant-timers:cancel": {
