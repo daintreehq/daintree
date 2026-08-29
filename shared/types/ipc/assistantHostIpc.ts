@@ -58,8 +58,25 @@ export interface AssistantHostStartPayload {
  * is the pinned WebContents.
  */
 
+/** A prompt submitted by another surface watching the same session. */
+export interface AssistantHostPeerPromptPayload {
+  sessionId: string;
+  /** The prompt text, to append as a user turn. */
+  text: string;
+}
+
 export interface AssistantHostStartResult {
   sessionId: string;
+  /**
+   * This surface's attachment to the session, distinct from the session itself.
+   *
+   * Several surfaces share one engine, and one surface can re-attach while its own
+   * previous attach is still unwinding — a view re-running its start effect resolves
+   * the new attach before the old one's teardown runs. Keying detach on the session id
+   * alone would let that stale teardown remove the live attachment and stop an engine
+   * somebody is using. The attachment id makes a detach name exactly which one it ends.
+   */
+  attachmentId: string;
   /**
    * The engine's own `host:ready` frame.
    *
@@ -78,6 +95,21 @@ export interface AssistantHostStartResult {
    * empty room. Applied in order, after `ready`.
    */
   replay: AssistantHostEvent[];
+  /**
+   * User prompts already sent on this session, each pinned to the sequence it followed.
+   *
+   * The engine does not echo prompts, so they are not among `replay` — but a joiner
+   * that renders only engine events shows answers to questions it never displays.
+   * Interleaved back by `afterSeq`.
+   */
+  replayPrompts: Array<{ text: string; afterSeq: number }>;
+  /**
+   * True when the replay no longer reaches the start of the conversation.
+   *
+   * The host's transcript buffer is byte-capped. Saying so is the difference between a
+   * panel showing a partial conversation and one CLAIMING to show the whole of it.
+   */
+  replayTruncated: boolean;
   /**
    * Why this session has no Daintree control plane, or null when it has one.
    *

@@ -459,6 +459,7 @@ beforeEach(() => {
           send: vi.fn().mockResolvedValue({ delivered: true }),
           stop: vi.fn().mockResolvedValue({ stopped: true }),
           onEvent: vi.fn(() => () => {}),
+          onPeerPrompt: () => () => {},
           onSequenceGap: vi.fn(() => () => {}),
           onExit: vi.fn(() => () => {}),
         },

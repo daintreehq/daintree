@@ -112,6 +112,14 @@ function isCommandInput(text: string): boolean {
 
 export function useAssistantSession(opts: AssistantSessionOptions): AssistantSessionActions {
   const sessionIdRef = useRef<string | null>(null);
+  /**
+   * This panel's attachment to the session, which is NOT the session.
+   *
+   * Several windows can watch one engine, so detaching has to name which attachment is
+   * ending: a stale cleanup naming only the session could stop an engine another window
+   * is still using, or the one this panel has just re-attached to.
+   */
+  const attachmentIdRef = useRef<string | null>(null);
   /** Non-null while a start is in flight, so stray frames can be told apart from noise. */
   const pendingSessionRef = useRef<number | null>(null);
   /** Frames that arrived before this hook learned its session id. */
@@ -203,6 +211,14 @@ export function useAssistantSession(opts: AssistantSessionOptions): AssistantSes
       useAssistantStore.getState().applyEvent(event);
     });
 
+    // A prompt somebody typed in ANOTHER window watching this same engine. The engine
+    // never echoes prompts, so without this the two panels would diverge the moment
+    // either of them sent one — this window would show an answer with no question.
+    const offPeerPrompt = window.electron.assistantHost.onPeerPrompt((payload) => {
+      if (payload.sessionId !== sessionIdRef.current) return;
+      useAssistantStore.getState().appendUserTurn(payload.text);
+    });
+
     const offGap = window.electron.assistantHost.onSequenceGap((payload) => {
       if (payload.sessionId !== sessionIdRef.current) return;
       useAssistantStore.getState().recordGap(payload.missing);
@@ -229,6 +245,7 @@ export function useAssistantSession(opts: AssistantSessionOptions): AssistantSes
 
     return () => {
       offEvent();
+      offPeerPrompt();
       offGap();
       offExit();
       // Cancel the frame, then FLUSH what it was going to write. A bare cancel drops
@@ -259,8 +276,12 @@ export function useAssistantSession(opts: AssistantSessionOptions): AssistantSes
 
     if (!enabled || !projectId || !cwd) {
       const current = sessionIdRef.current;
+      const currentAttachment = attachmentIdRef.current;
       sessionIdRef.current = null;
-      if (current) safeFireAndForget(window.electron.assistantHost.stop(current));
+      attachmentIdRef.current = null;
+      if (current && currentAttachment) {
+        safeFireAndForget(window.electron.assistantHost.stop(current, currentAttachment));
+      }
       return;
     }
 
@@ -273,14 +294,24 @@ export function useAssistantSession(opts: AssistantSessionOptions): AssistantSes
     safeFireAndForget(
       window.electron.assistantHost
         .start({ projectId, cwd })
-        .then(({ sessionId, ready, replay, mcpUnavailableReason }) => {
+        .then((started) => {
+          const {
+            sessionId,
+            attachmentId,
+            ready,
+            replay,
+            replayPrompts,
+            replayTruncated,
+            mcpUnavailableReason,
+          } = started;
           // A newer start superseded this one while it was in flight; stop the engine we
           // just created rather than leaving it orphaned holding the project's lease.
           if (cancelled) {
-            safeFireAndForget(window.electron.assistantHost.stop(sessionId));
+            safeFireAndForget(window.electron.assistantHost.stop(sessionId, attachmentId));
             return;
           }
           sessionIdRef.current = sessionId;
+          attachmentIdRef.current = attachmentId;
           useAssistantStore.getState().reset(sessionId);
           // Prefer the engine's own readiness frame over a synthesized one: it is what
           // carries the engine version and `autoApprove`, and it was emitted before
@@ -307,7 +338,20 @@ export function useAssistantSession(opts: AssistantSessionOptions): AssistantSes
           // AND can appear in the hook's own buffer, and applying it twice would reset
           // the session's masthead and connection state on top of itself.
           if (ready) seen.add(ready.seq);
+          // User prompts are NOT among the engine's events — it never echoes them, so a
+          // turn exists only in the store of the renderer that sent it. Main keeps them
+          // for exactly this, pinned to the sequence each one followed, and they are
+          // interleaved back here so a window joining a running session sees the
+          // questions and not just the answers.
+          const pendingPrompts = [...(replayPrompts ?? [])];
+          const flushPromptsBefore = (seq: number) => {
+            while (pendingPrompts.length > 0 && (pendingPrompts[0]?.afterSeq ?? 0) < seq) {
+              const prompt = pendingPrompts.shift();
+              if (prompt) useAssistantStore.getState().appendUserTurn(prompt.text);
+            }
+          };
           for (const event of replay ?? []) {
+            flushPromptsBefore(event.seq);
             seen.add(event.seq);
             useAssistantStore.getState().applyEvent(event);
           }
@@ -315,8 +359,24 @@ export function useAssistantSession(opts: AssistantSessionOptions): AssistantSes
             if (event.sessionId !== sessionId || seen.has(event.seq)) continue;
             useAssistantStore.getState().applyEvent(event);
           }
+          // Anything the user asked after the last event we have.
+          for (const prompt of pendingPrompts) {
+            useAssistantStore.getState().appendUserTurn(prompt.text);
+          }
           preAdoptionRef.current = [];
           pendingSessionRef.current = null;
+          // This panel joined a conversation already running elsewhere, and main's
+          // replay buffer no longer reaches its beginning. Say so: a transcript that
+          // silently starts in the middle reads as a conversation that began there, and
+          // the user would go looking for messages that are not missing at all.
+          if (replayTruncated) {
+            useAssistantStore
+              .getState()
+              .pushNotice(
+                "info",
+                "This project's assistant is open in another window too. Earlier messages aren't shown here."
+              );
+          }
           if (mcpUnavailableReason) {
             useAssistantStore
               .getState()
@@ -343,9 +403,13 @@ export function useAssistantSession(opts: AssistantSessionOptions): AssistantSes
       pendingSessionRef.current = null;
       preAdoptionRef.current = [];
       const current = sessionIdRef.current;
+      const currentAttachment = attachmentIdRef.current;
       sessionIdRef.current = null;
+      attachmentIdRef.current = null;
       buffer.clear();
-      if (current) safeFireAndForget(window.electron.assistantHost.stop(current));
+      if (current && currentAttachment) {
+        safeFireAndForget(window.electron.assistantHost.stop(current, currentAttachment));
+      }
     };
     // `opts` is destructured above, so the effect depends on the four VALUES rather
     // than on the options object — which callers rebuild every render.
