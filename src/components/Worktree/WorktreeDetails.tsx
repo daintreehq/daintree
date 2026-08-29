@@ -27,6 +27,20 @@ const MAX_VISIBLE_FILES = 100;
 // present in the light themes, invisible in the dark ones. It is the only
 // thing binding the label to the prose under it.
 const NARRATIVE_RAIL = "border-l-2 border-border-strong pl-2.5";
+// The rail's centre belongs on the point of the Details chevron above it, so
+// the two read as one hanging line. Measured from the well's inner edge (both
+// the trigger and this panel are its children, so its border cancels):
+//
+//   chevron point = button border (1) + `pl-1.5` (6) + half of `h-3`/`w-3` (6)
+//                 = 13   — the glyph is symmetric about its box once rotated,
+//                          so the apex is the icon's centre, not its ink edge
+//   rail centre   = panel `px-2.5` (10) + half of `border-l-2` (1)
+//                 = 11
+//
+// Hence 2px, and only in the sidebar. The grid runs the same sum with no well
+// border, `px-3` and the same `pl-1.5` — 13 against 13 — so it already lands on
+// the point and must not be nudged.
+const NARRATIVE_RAIL_SIDEBAR_NUDGE = "ml-0.5";
 // `text-secondary`, not `text-muted`: this label is the only thing that says
 // whether the prose under it is an AI note, a summary, or a commit message,
 // and `text-muted` has no contrast floor on the darkest palettes — 2.22:1 on
@@ -78,6 +92,7 @@ export function WorktreeDetails({
   forgeAvatarUrl,
 }: WorktreeDetailsProps) {
   const isSidebar = variant === "sidebar";
+  const railClass = cn(NARRATIVE_RAIL, isSidebar && NARRATIVE_RAIL_SIDEBAR_NUDGE);
   const displayPath = formatPath(worktree.path, homeDir);
   const rawLastCommitMsg = worktree.worktreeChanges?.lastCommitMessage;
   const { copied: pathCopied, copy: copyPath } = useCopyWithFeedback();
@@ -173,7 +188,7 @@ export function WorktreeDetails({
               monospace note cost ~15% more measure in a 240-360px column for
               text that is not a machine artefact. */}
           {effectiveNote && (
-            <div className={NARRATIVE_RAIL}>
+            <div className={railClass}>
               <div className={NARRATIVE_LABEL}>
                 <Sparkles className="h-3 w-3 shrink-0" aria-hidden="true" />
                 <span>AI note</span>
@@ -202,7 +217,7 @@ export function WorktreeDetails({
             </div>
           )}
           {!effectiveNote && effectiveSummary && (
-            <div className={NARRATIVE_RAIL}>
+            <div className={railClass}>
               <div className={NARRATIVE_LABEL}>
                 <Sparkles className="h-3 w-3 shrink-0" aria-hidden="true" />
                 <span>Summary</span>
@@ -213,7 +228,7 @@ export function WorktreeDetails({
             </div>
           )}
           {!effectiveNote && !effectiveSummary && showLastCommit && rawLastCommitMsg && (
-            <div className={NARRATIVE_RAIL}>
+            <div className={railClass}>
               <div className={NARRATIVE_LABEL}>
                 <GitCommit className="h-3 w-3 shrink-0" aria-hidden="true" />
                 <span>Last commit</span>
