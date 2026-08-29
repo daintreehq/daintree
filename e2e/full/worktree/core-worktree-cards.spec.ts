@@ -139,7 +139,8 @@ test.describe.serial("Core: Worktree Cards", () => {
           await expect(window.getByRole("menuitem", { name })).toBeVisible({ timeout: T_SHORT });
         }
 
-        // Feature-only rows (absent on the main worktree card)
+        // Organize also renders on the sidebar main card (it can collapse);
+        // Delete is the genuinely feature-only row.
         await expect(window.getByRole("menuitem", { name: "Organize" })).toBeVisible();
         await expect(window.getByRole("menuitem", { name: /Delete worktree/i })).toBeVisible();
       });

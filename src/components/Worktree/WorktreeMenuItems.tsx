@@ -657,7 +657,7 @@ export function WorktreeMenuItems({
       ].filter(Boolean)
     : [];
 
-  const teardownRow = !isLocalEnvironment && onResourceTeardown && (
+  const teardownRow = hasResourceConfig && !isLocalEnvironment && onResourceTeardown && (
     <C.Item key="teardown" onSelect={onResourceTeardown} destructive>
       <Trash2 className={ICON} />
       Tear down environment…

@@ -11,8 +11,8 @@ export * from "./brands";
 export {
   Activity, // project pulse / live activity heartbeat
   ArrowDownAZ, // alphabetical sort order (A to Z)
-  ArrowUpDown, // card organization — pinning, collapsing and reordering a worktree row
   ArrowLeftRight, // a settings search hit that lives in the other scope — following it switches scope
+  ArrowUpDown, // card organization — pinning, collapsing and reordering a worktree row
   AtSign, // @file reference handed to an agent's prompt
   BellDot, // watch alert / notify on completion
   ChartNoAxesColumn, // frecency sort order ("Most used" — decayed access score)
@@ -35,8 +35,8 @@ export {
   Globe, // application-wide scope — the setting belongs to Daintree, not one project
   History, // resume closed session / session history
   Layers, // worktree overview (multiple worktrees, stacked)
-  Link2Off, // detach the issue linked to a worktree
   LayoutPanelTop, // workspace plugin category (panels, notes)
+  Link2Off, // detach the issue linked to a worktree
   Menu, // the application menu, surfaced in-app where the native menu bar can't render
   Moon, // sleep a project — shut it down the way quitting does, restored on reopen
   Network, // Subagent tree — a parent session's spawned child sessions
