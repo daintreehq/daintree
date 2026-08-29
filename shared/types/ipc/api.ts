@@ -1939,7 +1939,12 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     send(
       command: import("./assistantHost.js").AssistantHostCommand
     ): Promise<{ delivered: boolean }>;
-    stop(sessionId: string): Promise<{ stopped: boolean }>;
+    /**
+     * Detaches THIS surface. The engine stops when the last one leaves, so the
+     * attachment id is required: without it a stale teardown could end a session a
+     * live surface is still using.
+     */
+    stop(sessionId: string, attachmentId: string): Promise<{ stopped: boolean }>;
     /** One validated protocol event from the engine. */
     onEvent(callback: (event: import("./assistantHost.js").AssistantHostEvent) => void): () => void;
     /**
@@ -1951,6 +1956,10 @@ export interface ElectronAPI extends GeneratedElectronAPI {
     ): () => void;
     onExit(
       callback: (payload: import("./assistantHostIpc.js").AssistantHostExitPayload) => void
+    ): () => void;
+    /** A prompt another surface sent to the session this view is watching. */
+    onPeerPrompt(
+      callback: (payload: import("./assistantHostIpc.js").AssistantHostPeerPromptPayload) => void
     ): () => void;
   };
 

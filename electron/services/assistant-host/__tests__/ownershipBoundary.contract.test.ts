@@ -100,6 +100,12 @@ const ASSISTANT_CHANNEL_SURFACE = new Map<string, string>([
   [CHANNELS.ASSISTANT_HOST_GAP, "A hole in the engine's sequence. Transport integrity."],
   [CHANNELS.ASSISTANT_HOST_EXIT, "The engine process ended. Lifecycle."],
   [
+    CHANNELS.ASSISTANT_HOST_PEER_PROMPT,
+    "A prompt another window sent to the engine this view also watches. Conversation " +
+      "text only — the engine never echoes prompts, so this is what keeps two windows " +
+      "on one project from diverging. Carries no account, token or endpoint.",
+  ],
+  [
     CHANNELS.ASSISTANT_TIMERS_LIST,
     "A project's scheduled timers, read over the supervisor daemon's control socket " +
       "when no engine is running. A project id in, schedule rows out — no account, no " +

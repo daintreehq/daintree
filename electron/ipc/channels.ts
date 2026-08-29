@@ -804,6 +804,15 @@ export const CHANNELS = {
   /** The engine process exited, cooperatively or otherwise. */
   ASSISTANT_HOST_EXIT: "assistant-host:exit",
   /**
+   * A prompt another surface sent to the engine this view is also watching.
+   *
+   * The engine never echoes prompts — a user turn exists only in the store of the
+   * renderer that submitted it — so without this a second window on the same project
+   * would render answers with no questions attached, and the two transcripts would
+   * diverge on the first message either of them sent.
+   */
+  ASSISTANT_HOST_PEER_PROMPT: "assistant-host:peer-prompt",
+  /**
    * Push channel: a turn for the help-session pinned to this renderer
    * classified as `agent-stuck` or `reasoning-loop` (#10018). Drives the
    * Assistant footer's ambient outcome pip — a Tier 1 indicator, never a

@@ -7,6 +7,7 @@ import {
   type AssistantHostSessionDescriptor,
 } from "../../../shared/types/ipc/assistantHost.js";
 import { parseAssistantHostEvent } from "../../schemas/ipc.js";
+import { TranscriptBuffer } from "./transcriptBuffer.js";
 
 /**
  * Owns one `daintree-assistant host --stdio` child process and the NDJSON protocol
@@ -111,6 +112,12 @@ export class AssistantHostProcess {
   private preReadyEvents: AssistantHostEvent[] = [];
   /** Flips once the start result has been handed back, after which nothing buffers. */
   private readyReported = false;
+  /**
+   * The conversation so far, for replay to a surface that joins an already-running
+   * engine. See `transcriptBuffer.ts` for what counts toward its budget and where it
+   * may be cut.
+   */
+  private readonly transcript = new TranscriptBuffer();
   private readyResolve: (() => void) | null = null;
   private readyReject: ((error: Error) => void) | null = null;
   private readyTimer: ReturnType<typeof setTimeout> | null = null;
@@ -461,7 +468,27 @@ export class AssistantHostProcess {
     if (!this.readyReported && event.type !== "host:ready") {
       this.preReadyEvents.push(event);
     }
+    this.transcript.record(event);
     this.opts.onEvent(event);
+  }
+
+  /**
+   * Records a user prompt so a later joiner sees the question, not just the answer.
+   *
+   * Pinned to the highest sequence seen so far: that is what the prompt FOLLOWED.
+   */
+  recordPrompt(text: string): void {
+    this.transcript.recordPrompt(text, this.lastSeq);
+  }
+
+  /** The conversation so far, for a surface joining an already-running session. */
+  getTranscript(): ReturnType<TranscriptBuffer["snapshot"]> {
+    return this.transcript.snapshot();
+  }
+
+  /** True once the child has exited, so a joiner is never handed a dead session. */
+  hasExited(): boolean {
+    return this.exited;
   }
 
   /**

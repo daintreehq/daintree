@@ -29,6 +29,7 @@ import type { AssistantHostEvent } from "../shared/types/ipc/assistantHost.js";
 import type {
   AssistantHostGapPayload,
   AssistantHostExitPayload,
+  AssistantHostPeerPromptPayload,
 } from "../shared/types/ipc/assistantHostIpc.js";
 import type { ActionContext, ActionDispatchResult } from "../shared/types/actions.js";
 import type { PushProgressEvent } from "../shared/types/ipc/gitPush.js";
@@ -3106,6 +3107,9 @@ function buildElectronApi(): ElectronAPI {
         _typedOn(CHANNELS.ASSISTANT_HOST_GAP, callback),
       onExit: (callback: (payload: AssistantHostExitPayload) => void) =>
         _typedOn(CHANNELS.ASSISTANT_HOST_EXIT, callback),
+      /** A prompt another surface sent to the session this view is watching. */
+      onPeerPrompt: (callback: (payload: AssistantHostPeerPromptPayload) => void) =>
+        _typedOn(CHANNELS.ASSISTANT_HOST_PEER_PROMPT, callback),
     },
 
     /**
