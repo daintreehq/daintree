@@ -8,6 +8,7 @@ import { useResolvedForgeProvider } from "@/hooks/useResolvedForgeProvider";
 import { actionService } from "@/services/ActionService";
 import { safeFireAndForget } from "@/utils/safeFireAndForget";
 import { notify } from "@/lib/notify";
+import { useAssistantTimerNotificationsFromStore } from "./useAssistantTimerNotifications";
 
 /**
  * The connected assistant panel: binds the store to a live engine session and renders
@@ -104,6 +105,7 @@ export function AssistantPanel({
       commands: s.commands,
       operations: s.operations,
       timers: s.timers,
+      timersStale: s.timersStale,
       timerCancelPending: s.timerCancelPending,
       timerCancelErrors: s.timerCancelErrors,
       toolGrants: s.toolGrants,
@@ -128,6 +130,11 @@ export function AssistantPanel({
       droppedFrames: s.droppedFrames,
     }))
   );
+
+  // Mounted here rather than in the view, because the view is replaced by the deck
+  // and a timer firing must be announced whether or not anyone is looking at the
+  // list. This component lives for the whole armed session.
+  useAssistantTimerNotificationsFromStore(requestTimers);
 
   const snapshot = useMemo<AssistantSessionState>(() => state, [state]);
 

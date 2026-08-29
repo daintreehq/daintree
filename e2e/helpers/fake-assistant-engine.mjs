@@ -158,6 +158,37 @@ function seedTimers() {
   );
 }
 
+/**
+ * What recently-fired timers did.
+ *
+ * A success at `info` and a failure at `error` — both present, because the success
+ * being below the attention threshold is exactly why the operations deck could not
+ * show one, and a fake that carried only failures would hide that.
+ */
+const timerOutcomes = () => [
+  {
+    eventId: "evt_ok",
+    timerId: "tmr_fired",
+    severity: "info",
+    title: "Re-check CI",
+    summary: 'Spawned claude for "Re-check CI" (terminal term_3).',
+    createdAt: now() - 120_000,
+    updatedAt: now() - 120_000,
+    count: 1,
+  },
+  {
+    eventId: "evt_bad",
+    timerId: "tmr_broken",
+    severity: "error",
+    title: "Nightly deploy check",
+    summary: "Timer check failed: a timer-dispatched spawn must name the worktree to run in.",
+    createdAt: now() - 3_600_000,
+    updatedAt: now() - 60_000,
+    // A repeat publishes under one dedupe key, so one row stands for every firing.
+    count: 4,
+  },
+];
+
 /** Counts operations requests, so each reading is DISTINGUISHABLE from the last. */
 let operationsReads = 0;
 /** Announced-but-unsettled calls, so an interrupt can terminalize them like the engine. */
@@ -1190,9 +1221,18 @@ async function handleCommand(cmd) {
       emit({
         type: "timers:snapshot",
         timers: process.env.FAKE_ENGINE_TIMERS === "read-fail" ? [] : [...timers.values()],
+        outcomes: timerOutcomes(),
         takenAt: now(),
         readFailed: process.env.FAKE_ENGINE_TIMERS === "read-fail",
       });
+      // FAKE_ENGINE_TIMERS=fires announces a fire straight after the reading, which
+      // is how the real engine behaves — unprompted, on its own scheduler tick. Driven
+      // by an env flag rather than an inbound command on purpose: a fake that accepted
+      // a command the real engine does not would stop being a faithful stand-in for
+      // the exact surface these tests exist to cover.
+      if (process.env.FAKE_ENGINE_TIMERS === "fires") {
+        emit({ type: "timer:fired", timerId: "tmr_1", firedAt: now() });
+      }
       return;
     }
     case "timer:cancel": {
