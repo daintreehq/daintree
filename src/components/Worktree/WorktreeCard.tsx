@@ -927,6 +927,61 @@ export function WorktreeCard({
           onPointerEnter={handlePointerEnter}
           onPointerLeave={handlePointerLeave}
         >
+          {/* Worktree-level state — waiting / ready-for-cleanup / complete — as
+              a mark in the card's top-left corner, not a dot in the title row.
+
+              Two things a dot could not do. A 4px vertical is a different
+              aspect ratio from everything else on the card, so it never has to
+              be told apart from the pins, freshness pills, session pips and git
+              marks that already crowd the title row's trailing cluster — a dot
+              among dots is a serial hunt, a bar among dots is not; and the
+              corner is outside the content grid entirely, which is what keeps
+              it a statement about the card rather than one more item inside it.
+
+              Positioned against the CARD, deliberately. It hung off the header
+              for a round, taking the title row's height so it could never
+              drift from it — and a mark that starts and ends exactly where the
+              title does reads as part of the title, which is the one thing this
+              mark must not be. It is the card's flag; it belongs on the card's
+              corner.
+
+              `computeChipState` returns one state or none, never a
+              combination, so one mark is the whole vocabulary.
+
+              Each state gets its own segment count as well as its own hue, and
+              that is a requirement rather than a flourish: three marks that
+              differ only in fill carry their meaning by colour alone
+              (WCAG 1.4.1), and while `waiting` is corroborated elsewhere on the
+              card by the session glyphs, nothing else on the card distinguishes
+              `cleanup` from `complete`.
+
+              First child of the card, and that is for the screen reader rather
+              than the paint: this is the card's state, and a `role="img"` that
+              trails the terminal list is heard after everything it qualifies.
+              The root's own `aria-label` does not cover it — that "Status:" is
+              the spine's dirty/current/stale, a different axis from
+              waiting/cleanup/complete — so this label is the only place the
+              lifecycle state is spoken.
+
+              Which is why it is `z-20` and not `z-10`: from here it would
+              otherwise fall under the content column's own `z-10` and be
+              washed by the grip's hover plate. The overlays that must still
+              cover it — the flash, the input receipt, sidebar.css's `::after`
+              edge — are `z-20` too and come later, so they win the tie.
+
+              The geometry, and the reason every number in it is what it is,
+              lives in `WorktreeStatusTick`. */}
+          {chipState !== null && (
+            <Tooltip>
+              <TooltipTrigger asChild>
+                <WorktreeStatusTick state={chipState} />
+              </TooltipTrigger>
+              <TooltipContent side="right" align="start" className="text-xs">
+                {CHIP_LABELS[chipState]}
+              </TooltipContent>
+            </Tooltip>
+          )}
+
           {/* Sidebar only. This is a real keyboard target there: it is
               tabbable, sidebar.css paints its focus ring via
               `.sidebar-worktree-card:has(> button:focus-visible)`, and
@@ -1111,10 +1166,9 @@ export function WorktreeCard({
                 // card's bottom edge and every card in a row ends level.
                 variant === "grid" && "flex h-full flex-col",
                 // Logical, not `pl-*`/`pr-*`: when there is no grip this padding
-                // IS the gutter, and the status tick centres itself in that
-                // gutter with a logical `-start-*` offset. A physical padding
-                // would keep the gutter on the left under RTL while the tick
-                // flipped to the right, and the mark would land outside it.
+                // IS the gutter, so under RTL it has to move to the side the
+                // grip would have been on. A physical padding would leave every
+                // gripless card indented from the wrong edge.
                 hasRowDragHandle ? "ps-0" : "ps-4",
                 "pe-4"
               )}
@@ -1134,16 +1188,14 @@ export function WorktreeCard({
                   exactly where a 4px error between the grip and the label it
                   sits beside has nothing else to hide behind. Splitting the
                   same 8px across both ends keeps the collapsed card's height
-                  (4 + 26 + 4) and puts the SINGLE-LINE collapsed card's row,
-                  status tick and grip on one centre line.
+                  (4 + 26 + 4) and puts the SINGLE-LINE collapsed card's row and
+                  grip on one centre line.
 
-                  Two lines — the sub-line is open — is a different shape and
-                  keeps each mark on the thing it describes: the tick still
-                  spans the title row it is anchored to, the grip still centres
-                  on the card, and those are now two different centres because
-                  the card is two lines tall. That is the same split an
-                  expanded card already has. The sub-line's own bottom padding
-                  moved here with it, so that shape stays symmetric too.
+                  Two lines — the sub-line is open — is a different shape, and
+                  the grip goes on centring on the card while the row's own
+                  centre moves down. That is the same split an expanded card
+                  already has. The sub-line's own bottom padding moved here with
+                  it, so that shape stays symmetric too.
 
                   The grid reserves the membership toggle's column here, on the
                   header block alone, not on the whole content column. The
@@ -1172,44 +1224,6 @@ export function WorktreeCard({
                   onToggleCollapse={handleToggleCollapse}
                   contentId={`worktree-body-${worktree.id}`}
                   branchLabel={branchLabel}
-                  /* Worktree-level state — waiting / ready-for-cleanup /
-                     complete — as a tick in the grip gutter, not a dot in the
-                     title row.
-
-                     Two things a dot could not do. A 4px vertical is a
-                     different aspect ratio from everything else on the card, so
-                     it never has to be told apart from the pins, freshness
-                     pills, session pips and git marks that already crowd the
-                     title row's trailing cluster — a dot among dots is a serial
-                     hunt, a bar among dots is not; and sitting in the gutter
-                     rather than the content grid keeps it a statement about the
-                     card instead of one more item inside it.
-
-                     It goes through the header because it takes its height from
-                     the title row. `computeChipState` returns one state or
-                     none, never a combination, so one mark is the whole
-                     vocabulary.
-
-                     Each state gets its own segment count as well as its own
-                     hue, and that is a requirement rather than a flourish:
-                     three marks that differ only in fill carry their meaning by
-                     colour alone (WCAG 1.4.1), and while `waiting` is
-                     corroborated elsewhere on the card by the session glyphs,
-                     nothing else on the card distinguishes `cleanup` from
-                     `complete`. The geometry and the reasons every number in it
-                     is what it is live in `WorktreeStatusTick`. */
-                  statusTick={
-                    chipState !== null && (
-                      <Tooltip>
-                        <TooltipTrigger asChild>
-                          <WorktreeStatusTick state={chipState} />
-                        </TooltipTrigger>
-                        <TooltipContent side="right" align="start" className="text-xs">
-                          {CHIP_LABELS[chipState]}
-                        </TooltipContent>
-                      </Tooltip>
-                    )
-                  }
                   sessionStates={terminalCounts.byState}
                   sessionTotal={terminalCounts.total}
                   environmentIcon={environmentIcon}

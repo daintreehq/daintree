@@ -25,15 +25,15 @@ export const CHIP_LABELS: Record<WorktreeStatusTickState, string> = {
  * loaded shape (spreadsheet cell comment, unsaved-file marker, resize handle,
  * bookmark) and three wedges that differ only in how much of a 12x12 box they
  * fill do not actually separate at that size. The tick trades the diagonal for
- * a 4px vertical in the grip gutter, which is what a dev tool already uses to
- * mean "this one wants looking at" — the SCM gutter bar, the Outlook unread
- * bar, the Discord unread tick.
+ * a 4px vertical, which is what a dev tool already uses to mean "this one wants
+ * looking at" — the SCM gutter bar, the Outlook unread bar, the Discord unread
+ * tick.
  *
- * The slot is the title row's own height, and what varies is how many pieces it
- * is cut into. Length would have been the obvious knob and is the wrong one: it
- * is relative, so a card read on its own gives no reference for whether a short
- * bar is the middle state or the smallest. A count of segments is absolute —
- * one glance, no neighbour required — and the ink still descends with urgency:
+ * The slot is a FIXED 16px, and what varies is how many pieces it is cut into.
+ * Length would have been the obvious knob and is the wrong one: it is relative,
+ * so a card read on its own gives no reference for whether a short bar is the
+ * middle state or the smallest. A count of segments is absolute — one glance,
+ * no neighbour required — and the ink still descends with urgency:
  *
  *   waiting  — one unbroken bar. The most ink, the only state that is blocking
  *              on the person reading it.
@@ -44,7 +44,7 @@ export const CHIP_LABELS: Record<WorktreeStatusTickState, string> = {
  *
  * That order also puts the coarsest shape on the state that most needs reading
  * at a glance and the fussiest on the one that wants nothing, which is the way
- * round it has to be: three segments of a 22px row are 6px each, and that is
+ * round it has to be: three segments of a 16px slot are 4px each, and that is
  * the smallest thing here.
  */
 export const CHIP_SEGMENTS: Record<WorktreeStatusTickState, number> = {
@@ -60,31 +60,47 @@ const CHIP_FILLS: Record<WorktreeStatusTickState, string> = {
 };
 
 /**
- * The card's status mark: a segmented vertical tick in the grip gutter.
+ * The card's status mark: a segmented vertical tick in the card's top-left
+ * corner.
  *
- * Positioned against the header's TITLE ROW, not the card, and stretched with
- * `inset-y-0` so its height is the row's height. That is the whole reason it
- * lives inside the header: a fixed height had to guess at the title's, and a
- * mark that guesses 16px against a 22px row sits proud of the text at both
- * ends. Deriving it means it cannot drift when the row's contents change —
- * the same trap the grip's own comment in `WorktreeCard` records paying for.
+ * Positioned against the CARD, and 16px tall whatever the header does. It was
+ * stretched to the title row's own height for a round, which is what a mark
+ * anchored inside the header can do — and that is exactly why it stopped
+ * working: a bar the height of the title, starting on the title's top edge and
+ * ending on its bottom one, reads as punctuation belonging to that line rather
+ * than as a statement about the card. The corner is what buys the hierarchy.
+ * The row's height is the header's business and this mark is not the header's.
  *
- * `-start-2.5` (-10px) puts it dead centre of the 16px grip gutter, which is
- * the header's sibling column and therefore OUTSIDE this element's positioning
- * parent — hence the negative inset. The arithmetic is
- * `-(gutter + width) / 2 = -(16 + 4) / 2 = -10`, and it is exact only because
- * the tick is 4px: at 3px it lands on -9.5px and a half-pixel bar blurs.
- * The gutter is 16px whether or not the card has a grip (`ps-4` stands in for
- * it on the main worktree), so one offset serves every card.
+ * 16px + `gap-0.5` is the one pairing where every count divides into whole
+ * pixels — one segment is 16px, two are 7px either side of the 2px gap, three
+ * are 4px. A count that landed on a half pixel would blur at 1x, and the blur
+ * closes the gaps, which is the whole encoding. It is also less total ink than
+ * the 12x12 corner wedge this lineage started from.
  *
- * Logical `-start-*`, not `-left-*`: the gutter itself flips under RTL, so a
- * physical inset would leave the tick on the wrong side of the card.
+ * `top-1 start-1` (4px, 4px) is the corner-most position that survives what
+ * else is drawn there, not a margin someone liked the look of:
  *
- * `gap-0.5` is a FIXED 2px whatever the row's height, which is what makes the
- * encoding safe to stretch: the gaps cannot close, and the gaps are the whole
- * signal. Segment heights follow the row and are only whole pixels when it
- * divides — 22px, the row's floor, gives 22 / 10 / 6 — so what a taller row
- * costs is a soft segment END, never a closed gap.
+ * - The full-card outlines are all inset 2px and CONTINUOUS — the grid
+ *   keyboard cursor (`-outline-offset-2`), the sidebar drop-target ring
+ *   (`inset 0 0 0 2px`), the forced-colors row outline. Drawn over the tick
+ *   they would not merely cover it, they would bridge its gaps and flatten
+ *   every state to one bar for exactly the forced-colors reader who has
+ *   nothing but the gaps left.
+ * - The grid cell is `rounded-lg overflow-hidden`, so its arc eats whatever
+ *   sits closer in than this. `--radius-lg` is 10px scaled by the theme's
+ *   `--theme-radius-scale`, and inside the cell's 1px border the clip radius
+ *   is R-1: at the default R=10 the arc is 9px down at x=0 and 1.5px down at
+ *   x=4, so a mark starting 4px in keeps ~2.5px of clearance, and the largest
+ *   built-in (R=10.5) costs 0.2px of that. A custom `radiusScale` past ~1.47
+ *   would start shaving the first segment — the theme schema puts no ceiling
+ *   on that number, so it is the one thing that can move these.
+ *
+ * Equal on both axes, so the mark sits on the corner's diagonal rather than
+ * hanging off one edge of it.
+ *
+ * Logical `start-*`, not `left-*`: the overview grid's membership rail is
+ * itself logical, so a physical inset would put the two on the same side again
+ * under RTL.
  *
  * Square ends, not the `rounded-full` of `.palette-row::before`. Both marks are
  * thin verticals near this edge, so radius is what keeps them apart: a pill is
@@ -100,7 +116,7 @@ export function WorktreeStatusTick({
       // clones the element with its own handlers and ref. Anything below this
       // line is the component's own and must win over what Radix passes.
       {...rest}
-      className="absolute inset-y-0 -start-2.5 z-10 flex w-1 cursor-default flex-col gap-0.5"
+      className="absolute top-1 start-1 z-20 flex h-4 w-1 cursor-default flex-col gap-0.5"
       data-testid="worktree-status-tick"
       data-state={state}
       role="img"

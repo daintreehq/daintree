@@ -30,6 +30,19 @@ function isState(key: string): key is WorktreeStatusTickState {
 }
 const STATES = Object.keys(CHIP_SEGMENTS).filter(isState);
 
+/**
+ * The vertical gap between segments, in px.
+ *
+ * Axis-scoped deliberately: `gap-x-*` satisfies a bare `/^gap-/` and leaves
+ * the segments touching, which closes the encoding while every other
+ * assertion here still passes.
+ */
+function readVerticalGap(tick: HTMLElement): number {
+  const gap = [...tick.classList].find((c) => /^gap-(y-)?\d/.test(c));
+  expect(gap, `no vertical gap on the tick: ${tick.className}`).toBeDefined();
+  return readScalePx(gap!);
+}
+
 function renderTick(state: WorktreeStatusTickState) {
   render(<WorktreeStatusTick state={state} />);
   const tick = screen.getByTestId("worktree-status-tick");
@@ -99,31 +112,66 @@ describe("WorktreeStatusTick", () => {
     }
   });
 
-  it("takes its height from the title row instead of carrying one of its own", () => {
-    // A fixed height has to guess at the title row's, and a mark that guesses
-    // sits proud of the text at both ends — which is the bug this replaced.
-    // `inset-y-0` derives it, so the tick cannot drift when the row's contents
-    // change.
+  it("carries its own fixed height rather than taking one from what it sits beside", () => {
+    // The mark describes the CARD. Deriving its height from the title row —
+    // which is what an `inset-y-0` inside the header does — made it start and
+    // end exactly where the title does, and it read as punctuation on that
+    // line instead of as a flag on the card.
     const { tick } = renderTick("waiting");
+    const height = [...tick.classList].find((c) => /^h-\d/.test(c));
+    expect(height, "the tick renders no height of its own").toBeDefined();
     expect(
-      [...tick.classList].filter((c) => /^h-/.test(c)),
-      "a fixed height would stop the tick tracking the row"
-    ).toEqual([]);
+      [...tick.classList].some((c) => c === "inset-y-0" || /^inset-y-/.test(c)),
+      "the tick is stretching to its parent again"
+    ).toBe(false);
   });
 
-  it("keeps a fixed gap, which is what makes the stretch safe", () => {
-    // Segment heights follow the row and may land on fractions; the GAP is a
-    // fixed 2px whatever the row does. That asymmetry is the whole reason the
-    // encoding survives a content-derived height — a taller row costs a soft
-    // segment end, never a closed gap, and the gaps are the entire signal in
-    // forced colors.
+  it("cuts its slot into whole pixels at every segment count", () => {
+    // A segment that lands on a half pixel blurs at 1x, and the blur closes
+    // the gaps — which are the entire encoding. Read off what actually
+    // rendered, so retuning the height or the gap has to keep the arithmetic
+    // working rather than silently softening the mark.
+    const { tick } = renderTick("waiting");
+    const slot = readScalePx([...tick.classList].find((c) => /^h-\d/.test(c))!);
+    const gap = readVerticalGap(tick);
+    for (const state of STATES) {
+      const count = CHIP_SEGMENTS[state];
+      const segment = (slot - gap * (count - 1)) / count;
+      expect(
+        Number.isInteger(segment),
+        `${state}: ${count} segments of a ${slot}px slot are ${segment}px`
+      ).toBe(true);
+      expect(segment, `${state}: segments too thin to read`).toBeGreaterThanOrEqual(2);
+    }
+  });
+
+  it("stacks the segments along the slot with a gap wide enough to survive antialiasing", () => {
+    // The gaps are the whole signal in forced colors, where the fills are all
+    // one system colour — so they have to run ACROSS the mark, which is what
+    // stacking the segments buys, and they have to be wide enough to still be
+    // there after antialiasing.
     const { tick } = renderTick("complete");
-    const gap = [...tick.classList].find((c) => /^gap-/.test(c));
-    expect(gap, "the tick renders no gap at all").toBeDefined();
     expect(
-      readScalePx(gap!),
+      tick.classList.contains("flex-col"),
+      `the segments are not stacked along the slot: ${tick.className}`
+    ).toBe(true);
+    expect(
+      readVerticalGap(tick),
       "the gap is too small to survive antialiasing"
     ).toBeGreaterThanOrEqual(2);
+  });
+
+  it("holds off the card's edges far enough that the inset outlines cannot reach it", () => {
+    // Every full-card outline is inset 2px and continuous — the grid keyboard
+    // cursor, the sidebar drop-target ring, the forced-colors row outline.
+    // Drawn across the tick, one would bridge its gaps and flatten all three
+    // states to a single bar for the reader who has nothing but the gaps left.
+    const { tick } = renderTick("complete");
+    for (const axis of [/^top-/, /^start-/]) {
+      const inset = [...tick.classList].find((c) => axis.test(c));
+      expect(inset, `the tick is not positioned on ${String(axis)}`).toBeDefined();
+      expect(readScalePx(inset!), `${inset} sits under the 2px inset outlines`).toBeGreaterThan(2);
+    }
   });
 });
 
