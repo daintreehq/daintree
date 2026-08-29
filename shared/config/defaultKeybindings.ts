@@ -1121,7 +1121,7 @@ const CORE_KEYBINDINGS: KeybindingConfig[] = [
     combo: "Cmd+K Cmd+X",
     scope: "global",
     priority: 0,
-    description: "Maximize all sessions in active worktree",
+    description: "Move all sessions to grid in active worktree",
     category: "Worktree Sessions",
   },
   {

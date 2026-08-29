@@ -31,13 +31,22 @@ async function openConflictReviewHub(ctx: AppContext) {
   // The card's inline "Open Review & Commit" button is gated on hasChanges,
   // which is 0 while a merge/rebase is in progress: WorktreeMonitor skips the
   // git status poll during an operation to avoid competing for index.lock
-  // (WorktreeMonitor.ts:1421). The actions-menu "Review & Commit" item is only
-  // gated on the handler being wired, so it's the reliable entry point here.
+  // (WorktreeMonitor.ts:1421). The actions-menu Review ▸ "Review worktree" item
+  // is only gated on the handler being wired, so it's the reliable entry point.
   const card = window.locator(SEL.worktree.mainCard);
   await expect(card).toBeVisible({ timeout: T_LONG });
   await card.locator(SEL.worktree.actionsMenu).click();
 
-  const reviewItem = window.getByRole("menuitem", { name: "Review & Commit" });
+  const reviewTrigger = window.getByRole("menuitem", { name: "Review", exact: true });
+  await expect(reviewTrigger).toBeVisible({ timeout: T_MEDIUM });
+  // Radix SubTriggers open on hover, but a hover dropped by Linux CI never
+  // mounts the child — click is the reliable fallback the rest of the suite
+  // uses too.
+  await reviewTrigger.hover();
+  const reviewItem = window.getByRole("menuitem", { name: "Review worktree", exact: true });
+  if (!(await reviewItem.isVisible().catch(() => false))) {
+    await reviewTrigger.click();
+  }
   await expect(reviewItem).toBeVisible({ timeout: T_MEDIUM });
   await reviewItem.click();
 

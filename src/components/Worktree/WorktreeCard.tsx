@@ -60,12 +60,14 @@ import {
   WorktreeMenuItems,
   type WorktreeMenuActions,
 } from "./WorktreeMenuItems";
+import type { MenuActionSourceValue } from "@/components/ui/menu-source";
 import { usePluginContextMenuItems } from "@/hooks/usePluginContextMenuItems";
 import type { WhenClauseContext } from "@shared/utils/whenClause";
 import { isAgentFleetActionEligible, isFleetArmEligible } from "@/store/fleetArmingStore";
 import { useWorktreeStatus } from "./WorktreeCard/hooks/useWorktreeStatus";
 import { useWorktreeDevServerSession } from "@/hooks/app/useWorktreeDevServerSession";
 import { computeChipState } from "./utils/computeChipState";
+import { devServerMenuState } from "./utils/devServerMenuState";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
 import { CHIP_LABELS, WorktreeStatusTick } from "./WorktreeCard/WorktreeStatusTick";
 
@@ -244,6 +246,15 @@ export function WorktreeCard({
   } = useWorktreeTerminals(worktree.id);
 
   const devServerSession = useWorktreeDevServerSession(worktree.id);
+
+  // `stopped` is ambiguous — a session the main process has already deleted
+  // broadcasts it too, and the renderer cache retains that snapshot. The
+  // panel's continued existence is the discriminator; see devServerMenuState.
+  const devServerPanelId = devServerSession?.panelId;
+  const devServerPanelExists = usePanelStore((state) =>
+    devServerPanelId ? state.panelsById[devServerPanelId] !== undefined : false
+  );
+  const devServerState = devServerMenuState(devServerSession, devServerPanelExists);
 
   const pluginMenuContext = useMemo<WhenClauseContext>(
     () => ({ worktreeId: worktree.id }),
@@ -434,6 +445,15 @@ export function WorktreeCard({
   const handleRestartDevServer = useCallback((worktreeId: string) => {
     safeFireAndForget(window.electron.devPreview.restartByWorktree({ worktreeId }), {
       context: "Restart dev server for worktree",
+    });
+  }, []);
+
+  // Same IPC as restart, different promise to the user. A stopped session still
+  // has its panel and manifest, so reviving it is a start — the menu says so
+  // rather than offering a "Restart" that starts and a "Stop" that no-ops.
+  const handleStartDevServer = useCallback((worktreeId: string) => {
+    safeFireAndForget(window.electron.devPreview.restartByWorktree({ worktreeId }), {
+      context: "Start dev server for worktree",
     });
   }, []);
 
@@ -744,12 +764,16 @@ export function WorktreeCard({
     };
   }, []);
 
-  const handleOpenPanelPalette = () => {
+  // Selecting first is load-bearing: whatever the launcher creates lands in the
+  // active worktree's bucket, so without it a pick from an inactive card's menu
+  // would spawn against the previously active worktree.
+  //
+  // The source is resolved by `WorktreeMenuItems` (which IS inside the menu
+  // Root) and handed back here, so the dropdown dispatches as `menu` and the
+  // right-click surface as `context-menu` instead of both claiming the latter.
+  const handleOpenPanelPalette = (source: MenuActionSourceValue) => {
     useWorktreeSelectionStore.getState().setActiveWorktree(worktree.id);
-    void actionService.dispatch("panel.palette", undefined, {
-      // eslint-disable-next-line no-restricted-syntax -- context-menu-source: hardcoded because callback lives outside the ContextMenu Root (see #8322)
-      source: "context-menu",
-    });
+    void actionService.dispatch("panel.palette", undefined, { source });
   };
 
   // One action set drives both menu surfaces — the card's right-click menu and
@@ -777,6 +801,7 @@ export function WorktreeCard({
     onOpenIssueExternal: worktree.issueNumber ? handleOpenIssueExternal : undefined,
     onOpenPRExternal: worktree.linked?.pr?.url ? handleOpenPRExternal : undefined,
     onAttachIssue: () => setShowIssuePicker(true),
+    onUnlinkIssue: worktree.issueNumber ? handleDetachIssue : undefined,
     onViewPlan: openPlanFileForThisWorktree,
     // Gated on the change list, not `hasChanges` (a `changedFileCount` read):
     // an external git provider may report a count with no per-file entries, and
@@ -818,6 +843,8 @@ export function WorktreeCard({
     onResourceConnect: worktree.resourceConnectCommand ? handleResourceConnect : undefined,
     onResourceStatus: hasStatusCommand ? handleResourceStatus : undefined,
     onResourceTeardown: hasTeardownCommand ? handleResourceTeardown : undefined,
+    devServerState,
+    onStartDevServer: handleStartDevServer,
     onStopDevServer: handleStopDevServer,
     onRestartDevServer: handleRestartDevServer,
     pluginItems,
@@ -1250,7 +1277,7 @@ export function WorktreeCard({
                   <WorktreeTerminalSection
                     variant={variant}
                     worktreeId={worktree.id}
-                    onStartSession={handleOpenPanelPalette}
+                    onStartSession={() => handleOpenPanelPalette("user")}
                     isExpanded={isTerminalsExpanded}
                     counts={terminalCounts}
                     terminals={worktreeTerminals}

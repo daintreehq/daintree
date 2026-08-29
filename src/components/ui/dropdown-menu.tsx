@@ -441,6 +441,22 @@ const DropdownMenuShortcut = ({ className, ...props }: React.HTMLAttributes<HTML
 };
 DropdownMenuShortcut.displayName = "DropdownMenuShortcut";
 
+/* Trailing muted slot for item METADATA — a count, a state, a reason an item is
+ * disabled. Deliberately not `DropdownMenuShortcut`: a count is not a keybinding,
+ * and rendering it in the shortcut's mono face reads as one. Non-mono, and
+ * `aria-hidden` by default because the number belongs in the item's accessible
+ * name (callers pass one), not as a second stray string after it. */
+const DropdownMenuMeta = ({ className, ...props }: React.HTMLAttributes<HTMLSpanElement>) => {
+  return (
+    <span
+      aria-hidden="true"
+      className={cn("ml-auto pl-2 text-2xs text-text-secondary tabular-nums", className)}
+      {...props}
+    />
+  );
+};
+DropdownMenuMeta.displayName = "DropdownMenuMeta";
+
 type DropdownMenuRadioGroupProps = React.ComponentPropsWithoutRef<
   typeof DropdownMenuPrimitiveType.RadioGroup
 >;
@@ -530,6 +546,7 @@ export {
   DropdownMenuSeparator,
   DropdownMenuLabel,
   DropdownMenuShortcut,
+  DropdownMenuMeta,
   DropdownMenuGroup,
   DropdownMenuPortal,
   DropdownMenuSub,

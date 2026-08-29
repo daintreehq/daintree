@@ -518,12 +518,16 @@ test.describe.serial("E2E: OAuth Loopback Flow in Dev Preview", () => {
       // Verify we're on the project view
       await expect(worktreeCards().first()).toBeVisible({ timeout: T_LONG });
 
-      // Open dev-preview via worktree context menu → Launch → Open Dev Preview
+      // Open dev-preview via worktree context menu → Launch → Dev preview
       await worktreeCards().first().click({ button: "right" });
       const launchTrigger = w().locator('[role="menuitem"]', { hasText: /^Launch$/ });
       await expect(launchTrigger).toBeVisible({ timeout: T_SHORT });
       await launchTrigger.hover();
-      const devPreviewItem = w().locator('[role="menuitem"]', { hasText: "Open Dev Preview" });
+      const devPreviewItem = w().locator('[role="menuitem"]', { hasText: /^Dev preview$/ });
+      // A hover dropped by CI never mounts the submenu child; click reopens it.
+      if (!(await devPreviewItem.isVisible().catch(() => false))) {
+        await launchTrigger.click();
+      }
       await expect(devPreviewItem).toBeVisible({ timeout: T_SHORT });
       await devPreviewItem.click();
 

@@ -437,10 +437,14 @@ test("review hub states review — the states around the populated review flow",
       } else {
         await featureCard.click({ button: "right" });
         await page.locator('[role="menu"]').waitFor({ state: "visible", timeout: T_MEDIUM });
-        await page
-          .getByRole("menuitem", { name: /Review & Commit/i })
-          .first()
-          .click();
+        const reviewTrigger = page.getByRole("menuitem", { name: /^Review$/ }).first();
+        const reviewItem = page.getByRole("menuitem", { name: /^Review worktree$/ }).first();
+        // Hover opens the submenu, but a dropped hover never mounts the child.
+        await reviewTrigger.hover();
+        if (!(await reviewItem.isVisible().catch(() => false))) {
+          await reviewTrigger.click();
+        }
+        await reviewItem.click();
       }
       await hub.waitFor({ state: "visible", timeout: T_MEDIUM });
       await page.locator(CONTENT).waitFor({ state: "visible", timeout: T_MEDIUM });

@@ -372,6 +372,22 @@ const ContextMenuShortcut = ({ className, ...props }: React.HTMLAttributes<HTMLS
 };
 ContextMenuShortcut.displayName = "ContextMenuShortcut";
 
+/* Trailing muted slot for item METADATA — a count, a state, a reason an item is
+ * disabled. Deliberately not `ContextMenuShortcut`: a count is not a keybinding,
+ * and rendering it in the shortcut's mono face reads as one. Non-mono, and
+ * `aria-hidden` by default because the number belongs in the item's accessible
+ * name (callers pass one), not as a second stray string after it. */
+const ContextMenuMeta = ({ className, ...props }: React.HTMLAttributes<HTMLSpanElement>) => {
+  return (
+    <span
+      aria-hidden="true"
+      className={cn("ml-auto pl-2 text-2xs text-text-secondary tabular-nums", className)}
+      {...props}
+    />
+  );
+};
+ContextMenuMeta.displayName = "ContextMenuMeta";
+
 type ContextMenuCheckboxItemProps = React.ComponentPropsWithoutRef<
   typeof ContextMenuPrimitiveType.CheckboxItem
 >;
@@ -461,6 +477,7 @@ export {
   ContextMenuSeparator,
   ContextMenuLabel,
   ContextMenuShortcut,
+  ContextMenuMeta,
   ContextMenuGroup,
   ContextMenuPortal,
   ContextMenuSub,

@@ -11,6 +11,7 @@ export * from "./brands";
 export {
   Activity, // project pulse / live activity heartbeat
   ArrowDownAZ, // alphabetical sort order (A to Z)
+  ArrowUpDown, // card organization — pinning, collapsing and reordering a worktree row
   ArrowLeftRight, // a settings search hit that lives in the other scope — following it switches scope
   AtSign, // @file reference handed to an agent's prompt
   BellDot, // watch alert / notify on completion
@@ -34,6 +35,7 @@ export {
   Globe, // application-wide scope — the setting belongs to Daintree, not one project
   History, // resume closed session / session history
   Layers, // worktree overview (multiple worktrees, stacked)
+  Link2Off, // detach the issue linked to a worktree
   LayoutPanelTop, // workspace plugin category (panels, notes)
   Menu, // the application menu, surfaced in-app where the native menu bar can't render
   Moon, // sleep a project — shut it down the way quitting does, restored on reopen
@@ -41,6 +43,7 @@ export {
   Package, // plugin (a packaged extension) — plugin tray, unresolved plugin glyphs
   Plug, // agent (integration that plugs into the host system)
   Plus, // the toolbar launcher — "make me a new thing" (agent, panel)
+  ServerCog, // a worktree's runtime — dev-server and remote-environment lifecycle
   Sprout, // origin / first step (main worktree, first agent launch)
   TriangleAlert, // a setting failing validation — a shape, not a hue, so it survives forced colors
   Workflow, // terminal recipe / scripted command sequence
