@@ -131,6 +131,70 @@ function drive(scenario: string, decision: "approved" | "rejected" = "approved")
   });
 }
 
+/**
+ * Boots the fake and drives the timer manager's two commands, then shuts down.
+ *
+ * Separate from `drive` because these are not part of a prompt's lifecycle — they are
+ * a host surface polling and mutating, which is what the fake has to be faithful about
+ * for the manager's tests to mean anything.
+ */
+function driveTimers(env: Record<string, string> = {}): Promise<Run> {
+  return new Promise((resolve) => {
+    const child = spawn(process.execPath, [ENGINE, "host", "--stdio"], {
+      env: { ...process.env, FAKE_ENGINE_SCENARIO: "simple", FAKE_ENGINE_SPEED: "0", ...env },
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+
+    const frames: Array<Record<string, unknown>> = [];
+    let buffer = "";
+    let stderr = "";
+
+    child.stdout.setEncoding("utf8");
+    child.stdout.on("data", (chunk: string) => {
+      buffer += chunk;
+      let i: number;
+      while ((i = buffer.indexOf("\n")) !== -1) {
+        const line = buffer.slice(0, i).trim();
+        buffer = buffer.slice(i + 1);
+        if (line) frames.push(JSON.parse(line));
+      }
+    });
+    child.stderr.setEncoding("utf8");
+    child.stderr.on("data", (c: string) => {
+      stderr += c;
+    });
+    child.on("exit", (code) => resolve({ frames, stderr, exitCode: code }));
+
+    const sessionId = "ses_fake_timers";
+    child.stdin.write(
+      `${JSON.stringify({
+        sessionId,
+        windowId: 1,
+        projectId: "p_fake",
+        cwd: "/tmp",
+        tier: "system",
+        protocolVersion: ASSISTANT_HOST_PROTOCOL_VERSION,
+      })}\n`
+    );
+    setTimeout(() => {
+      child.stdin.write(`${JSON.stringify({ type: "timers", sessionId })}\n`);
+      child.stdin.write(`${JSON.stringify({ type: "operations", sessionId })}\n`);
+      child.stdin.write(
+        `${JSON.stringify({ type: "timer:cancel", sessionId, timerId: "tmr_2" })}\n`
+      );
+      // An id nothing holds — the answer-anyway path.
+      child.stdin.write(
+        `${JSON.stringify({ type: "timer:cancel", sessionId, timerId: "tmr_gone" })}\n`
+      );
+    }, 20);
+    setTimeout(
+      () => child.stdin.write(`${JSON.stringify({ type: "shutdown", sessionId })}\n`),
+      400
+    );
+    setTimeout(() => child.kill("SIGKILL"), 8_000);
+  });
+}
+
 const ENGINE_SOURCE = readFileSync(ENGINE, "utf8");
 const RUNPHASE_GO = path.resolve(
   __dirname,
@@ -325,4 +389,50 @@ describe("fake assistant engine", () => {
     const settled = frames.find((f) => f.type === "tool:settled");
     expect(settled).toMatchObject({ result: "error", errorCode: "USER_DECLINED" });
   }, 15_000);
+
+  describe("the timer manager surface", () => {
+    it("emits timer frames the production schema accepts", async () => {
+      const { frames } = await driveTimers();
+      const timerFrames = frames.filter(
+        (f) => f.type === "timers:snapshot" || f.type === "timer:cancelled"
+      );
+      // Three answers: one list, and one settle for each of the two cancels.
+      expect(timerFrames).toHaveLength(3);
+      for (const frame of timerFrames) {
+        const parsed = AssistantHostEventSchema.safeParse(frame);
+        expect(
+          parsed.success,
+          `${String(frame.type)} rejected: ${parsed.success ? "" : JSON.stringify(parsed.error.issues)}`
+        ).toBe(true);
+      }
+    }, 15_000);
+
+    it("serves the deck and the manager the same rows", async () => {
+      // The real engine builds both arrays from one place. A fake that let them differ
+      // would hide the drift the shared builder exists to prevent, and every test built
+      // on it would keep passing.
+      const { frames } = await driveTimers();
+      const list = frames.find((f) => f.type === "timers:snapshot");
+      const deck = frames.find((f) => f.type === "operations:snapshot");
+      expect(list?.timers).toEqual(deck?.timers);
+    }, 15_000);
+
+    it("answers a cancel it could not perform", async () => {
+      const { frames } = await driveTimers();
+      const settled = frames.filter((f) => f.type === "timer:cancelled");
+      const ok = settled.find((f) => f.timerId === "tmr_2");
+      const missing = settled.find((f) => f.timerId === "tmr_gone");
+      expect(ok).toMatchObject({ cancelled: true, revokedGrants: 2 });
+      // A host with a row spinning has to be able to settle it on the failure path
+      // too, so an unknown id is answered rather than dropped.
+      expect(missing).toMatchObject({ cancelled: false });
+      expect(String(missing?.error)).toContain("tmr_gone");
+    }, 15_000);
+
+    it("reports a retired timer whose grants could not be withdrawn", async () => {
+      const { frames } = await driveTimers({ FAKE_ENGINE_TIMER_CANCEL: "grant-fail" });
+      const ok = frames.find((f) => f.type === "timer:cancelled" && f.timerId === "tmr_2");
+      expect(ok).toMatchObject({ cancelled: true, grantRevokeFailed: true });
+    }, 15_000);
+  });
 });

@@ -10,6 +10,7 @@ import {
 import type {
   AssistantHostEvent,
   AssistantHostCommand,
+  AssistantHostCommandType,
   AssistantHostSessionDescriptor,
 } from "../../../shared/types/ipc/assistantHost.js";
 
@@ -118,10 +119,42 @@ const VALID_EVENTS: AssistantHostEvent[] = [
 const VALID_COMMANDS: AssistantHostCommand[] = [
   { type: "prompt", sessionId: "s1", text: "how do I rebase?" },
   { type: "approval:decide", sessionId: "s1", approvalId: "a1", decision: "rejected" },
+  { type: "command", sessionId: "s1", line: "/status" },
+  { type: "question:answer", sessionId: "s1", questionId: "q1", choiceIndex: 0 },
+  { type: "operations", sessionId: "s1" },
+  { type: "timers", sessionId: "s1" },
+  { type: "timer:cancel", sessionId: "s1", timerId: "tmr_1" },
+  { type: "interject:retract", sessionId: "s1" },
   { type: "interrupt", sessionId: "s1" },
   { type: "hibernate", sessionId: "s1" },
   { type: "shutdown", sessionId: "s1" },
 ];
+
+/**
+ * Every command type, as a compile-time exhaustive map.
+ *
+ * The TS union and the Zod schema are two separate declarations of one contract, and
+ * nothing forced them to agree: `timers` and `timer:cancel` were added to the union
+ * and to the engine, and the schema was missed. The union type-checked, the engine
+ * accepted them, and the command was rejected at the IPC boundary and silently never
+ * sent — a feature that fails only in the built app, where no unit test was looking.
+ *
+ * This map fails to COMPILE when a type joins the union without being listed, and the
+ * test below fails when a listed type has no fixture or the schema rejects it.
+ */
+const ALL_COMMAND_TYPES: Record<AssistantHostCommandType, true> = {
+  prompt: true,
+  "approval:decide": true,
+  "question:answer": true,
+  command: true,
+  operations: true,
+  timers: true,
+  "timer:cancel": true,
+  "interject:retract": true,
+  interrupt: true,
+  hibernate: true,
+  shutdown: true,
+};
 
 describe("AssistantHostEventSchema", () => {
   it.each(VALID_EVENTS)("round-trips the $type event unchanged", (event) => {
@@ -178,6 +211,21 @@ describe("AssistantHostCommandSchema", () => {
         decision: "perhaps",
       })
     ).toBeNull();
+  });
+
+  // The guard that would have caught `timers` / `timer:cancel` reaching the union and
+  // the engine but never the schema.
+  it("accepts every command type the union declares", () => {
+    const covered = new Set(VALID_COMMANDS.map((c) => c.type));
+    for (const type of Object.keys(ALL_COMMAND_TYPES) as AssistantHostCommandType[]) {
+      expect(covered.has(type), `${type} has no fixture — it is validated by nothing`).toBe(true);
+    }
+    for (const command of VALID_COMMANDS) {
+      expect(
+        parseAssistantHostCommand(command),
+        `${command.type} is in the union but the schema rejects it — it would be dropped at the IPC boundary and never sent`
+      ).not.toBeNull();
+    }
   });
 
   it("event and command discriminants do not overlap", () => {

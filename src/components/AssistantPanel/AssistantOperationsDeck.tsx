@@ -1,5 +1,6 @@
 import { cn } from "@/lib/utils";
-import type { AssistantOperations } from "@/store/assistantStore";
+import { AssistantTimersSection } from "./AssistantTimersSection";
+import type { AssistantOperations, AssistantTimers } from "@/store/assistantStore";
 
 /**
  * The operations deck, ported from the cockpit's own (internal/ui/render_operations.go).
@@ -20,7 +21,19 @@ import type { AssistantOperations } from "@/store/assistantStore";
 
 export interface AssistantOperationsDeckProps {
   operations: AssistantOperations | null;
-  /** Ask the engine for a fresh reading. */
+  /**
+   * The timer manager's own reading, when it has one.
+   *
+   * Preferred over `operations.timers` because it is the list a cancel updates: the
+   * two are the same rows from the same engine builder, but only this one is refreshed
+   * when a timer is retired, so reading the deck snapshot would leave a cancelled timer
+   * counting down until the next full deck pull.
+   */
+  timers: AssistantTimers | null;
+  timerCancelPending: Record<string, true>;
+  timerCancelErrors: Record<string, string>;
+  onCancelTimer: (timerId: string) => void;
+  /** Ask the engine for a fresh reading. Refreshes the deck AND the timer list. */
   onRefresh: () => void;
   onClose: () => void;
 }
@@ -64,11 +77,16 @@ function ago(at: number, now: number): string {
 
 export function AssistantOperationsDeck({
   operations,
+  timers,
+  timerCancelPending,
+  timerCancelErrors,
+  onCancelTimer,
   onRefresh,
   onClose,
 }: AssistantOperationsDeckProps) {
   const now = Date.now();
   const ops = operations;
+  const timerRows = timers?.rows ?? ops?.timers ?? [];
 
   const running = ops ? ops.agents.length + ops.async.length : 0;
   const attention = ops ? ops.inbox.length : 0;
@@ -189,18 +207,25 @@ export function AssistantOperationsDeck({
               </Section>
             )}
 
-            {ops.timers.length > 0 && (
+            {/* Unlike every other section here, SCHEDULED draws even when it is
+                empty IF the read failed. An omitted section reads as "nothing
+                scheduled", and that is a claim a user acts on by walking away from
+                work that is still queued. */}
+            {(timerRows.length > 0 || timers?.readFailed) && (
               <Section title="SCHEDULED">
-                {ops.timers.map((row) => (
-                  <Row key={row.id}>
-                    <span className="truncate">{row.label}</span>
-                    {/* "in", not "ago": a timer is the one row on this deck that points
-                        forwards. */}
-                    <span className="ml-2 text-[var(--assistant-fg-secondary)]">
-                      in {ago(row.dueAt, now)}
-                    </span>
+                {timers?.readFailed ? (
+                  <Row tone="warning">
+                    Couldn&apos;t read the scheduled timers, so this list may be incomplete. Refresh
+                    to try again.
                   </Row>
-                ))}
+                ) : null}
+                <AssistantTimersSection
+                  timers={timerRows}
+                  pending={timerCancelPending}
+                  errors={timerCancelErrors}
+                  onCancel={onCancelTimer}
+                  now={now}
+                />
               </Section>
             )}
 

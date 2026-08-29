@@ -1,7 +1,10 @@
 import { describe, it, expect, beforeEach } from "vitest";
 import path from "node:path";
 import { AssistantHostProcess } from "../../../electron/services/assistant-host/AssistantHostProcess.js";
-import type { AssistantHostSessionDescriptor } from "@shared/types/ipc/assistantHost";
+import type {
+  AssistantHostEvent,
+  AssistantHostSessionDescriptor,
+} from "@shared/types/ipc/assistantHost";
 import { ASSISTANT_HOST_PROTOCOL_VERSION } from "@shared/types/ipc/assistantHost";
 import { useAssistantStore, selectTurnToolCalls } from "../assistantStore";
 
@@ -827,6 +830,230 @@ describe("the operations deck", () => {
     // streamed, so it is always some age.
     expect(ops?.at).toBeGreaterThan(0);
   });
+});
+
+/**
+ * The timer manager, end to end: a real engine process, the real NDJSON transport, the
+ * real Zod validator, and the real reducer.
+ *
+ * This is the seam that matters most for timers, because the row shape is wide and
+ * fixed — thirteen fields that must all survive encode, validate and reduce. A missing
+ * one is not a rendering bug, it is a rejected frame and a manager that silently shows
+ * nothing.
+ */
+describe("the timer manager", () => {
+  /** Opens a session, runs `drive` against the live engine, returns the final state. */
+  async function withSession(
+    drive: (host: AssistantHostProcess, waitFor: (type: string) => Promise<void>) => Promise<void>,
+    env: Record<string, string> = {},
+    onRaw?: (event: AssistantHostEvent) => void
+  ) {
+    useAssistantStore.getState().reset(DESCRIPTOR.sessionId);
+    const waiters = new Map<string, () => void>();
+    const host = new AssistantHostProcess({
+      binaryPath: ENGINE,
+      descriptor: DESCRIPTOR,
+      cwd: process.cwd(),
+      env: { ...process.env, FAKE_ENGINE_SCENARIO: "simple", FAKE_ENGINE_SPEED: "0", ...env },
+      onEvent: (event) => {
+        onRaw?.(event);
+        useAssistantStore.getState().applyEvent(event);
+        waiters.get(event.type)?.();
+      },
+      onSequenceGap: ({ missing }) => useAssistantStore.getState().recordGap(missing),
+    });
+    const waitFor = (type: string) =>
+      Promise.race([
+        new Promise<void>((r) => waiters.set(type, r)),
+        new Promise<void>((_, reject) =>
+          setTimeout(() => reject(new Error(`timed out waiting for ${type}`)), RUN_TIMEOUT_MS)
+        ),
+      ]);
+    host.start();
+    await host.waitForReady();
+    try {
+      await drive(host, waitFor);
+    } finally {
+      host.dispose();
+    }
+    return useAssistantStore.getState();
+  }
+
+  it("carries every field of the row through transport, schema and reducer", async () => {
+    const state = await withSession(async (host, waitFor) => {
+      const landed = waitFor("timers:snapshot");
+      host.send({ type: "timers", sessionId: DESCRIPTOR.sessionId });
+      await landed;
+    });
+
+    const rows = state.timers?.rows ?? [];
+    expect(rows).toHaveLength(2);
+    // The reading is stamped with the ENGINE's read time, not ours.
+    expect(state.timers?.takenAt).toBeGreaterThan(0);
+
+    const scheduled = rows.find((r) => r.id === "tmr_2");
+    // Every field the manager renders from, end to end. A row that lost one of these
+    // in the schema would arrive as a rejected frame, not a missing label.
+    expect(scheduled).toMatchObject({
+      label: "Nightly deploy check",
+      payloadKind: "tool_call",
+      toolName: "agentTask.spawnForEdits",
+      repeatEveryMs: 86_400_000,
+      repeatMaxRuns: 7,
+      runCount: 2,
+      targetWorktreeId: "/p/app",
+      liveGrants: 2,
+    });
+  }, 20_000);
+
+  it("serves the deck and the manager the same rows", async () => {
+    // Two commands, two events, one list. The engine builds both from one place; this
+    // is the test that fails if that ever stops being true on the wire.
+    const state = await withSession(async (host, waitFor) => {
+      const timersLanded = waitFor("timers:snapshot");
+      host.send({ type: "timers", sessionId: DESCRIPTOR.sessionId });
+      await timersLanded;
+      const opsLanded = waitFor("operations:snapshot");
+      host.send({ type: "operations", sessionId: DESCRIPTOR.sessionId });
+      await opsLanded;
+    });
+    expect(state.operations?.timers).toEqual(state.timers?.rows);
+  }, 20_000);
+
+  it("retires a cancelled timer from the list", async () => {
+    const state = await withSession(async (host, waitFor) => {
+      const listed = waitFor("timers:snapshot");
+      host.send({ type: "timers", sessionId: DESCRIPTOR.sessionId });
+      await listed;
+      expect(useAssistantStore.getState().timers?.rows).toHaveLength(2);
+
+      const settled = waitFor("timer:cancelled");
+      useAssistantStore.getState().markTimerCancelPending("tmr_2");
+      expect(useAssistantStore.getState().timerCancelPending["tmr_2"]).toBe(true);
+      host.send({ type: "timer:cancel", sessionId: DESCRIPTOR.sessionId, timerId: "tmr_2" });
+      await settled;
+    });
+
+    expect(state.timers?.rows.map((r) => r.id)).toEqual(["tmr_1"]);
+    // The pending mark is cleared by the answer, not by a timeout — a row left
+    // spinning after the engine settled it is the failure this pairs against.
+    expect(state.timerCancelPending["tmr_2"]).toBeUndefined();
+    expect(state.timerCancelErrors["tmr_2"]).toBeUndefined();
+  }, 20_000);
+
+  it("settles a failed cancel against its own row and keeps the timer", async () => {
+    const state = await withSession(async (host, waitFor) => {
+      const listed = waitFor("timers:snapshot");
+      host.send({ type: "timers", sessionId: DESCRIPTOR.sessionId });
+      await listed;
+
+      const settled = waitFor("timer:cancelled");
+      useAssistantStore.getState().markTimerCancelPending("tmr_gone");
+      host.send({ type: "timer:cancel", sessionId: DESCRIPTOR.sessionId, timerId: "tmr_gone" });
+      await settled;
+    });
+
+    expect(state.timerCancelPending["tmr_gone"]).toBeUndefined();
+    expect(state.timerCancelErrors["tmr_gone"]).toContain("tmr_gone");
+    // Nothing was removed: a failed cancel must not optimistically drop a row that
+    // is still live.
+    expect(state.timers?.rows).toHaveLength(2);
+  }, 20_000);
+
+  it("clears stale per-row errors when the list is refreshed", async () => {
+    const state = await withSession(async (host, waitFor) => {
+      const listed = waitFor("timers:snapshot");
+      host.send({ type: "timers", sessionId: DESCRIPTOR.sessionId });
+      await listed;
+
+      const settled = waitFor("timer:cancelled");
+      host.send({ type: "timer:cancel", sessionId: DESCRIPTOR.sessionId, timerId: "tmr_gone" });
+      await settled;
+      expect(useAssistantStore.getState().timerCancelErrors["tmr_gone"]).toBeDefined();
+
+      // A fresh reading describes a new world; an error pinned to a row that may no
+      // longer be there is worse than no error.
+      const refreshed = waitFor("timers:snapshot");
+      host.send({ type: "timers", sessionId: DESCRIPTOR.sessionId });
+      await refreshed;
+    });
+    expect(state.timerCancelErrors).toEqual({});
+  }, 20_000);
+
+  it("carries a retired timer whose authority could NOT be withdrawn", async () => {
+    // The half-done state: the timer is gone but its grant is still spendable. It has
+    // to survive the schema, because a validator that dropped `grantRevokeFailed`
+    // would leave live unattended authority behind with nothing able to say so.
+    const seen: AssistantHostEvent[] = [];
+    await withSession(
+      async (host, waitFor) => {
+        const listed = waitFor("timers:snapshot");
+        host.send({ type: "timers", sessionId: DESCRIPTOR.sessionId });
+        await listed;
+        const settled = waitFor("timer:cancelled");
+        host.send({ type: "timer:cancel", sessionId: DESCRIPTOR.sessionId, timerId: "tmr_2" });
+        await settled;
+      },
+      { FAKE_ENGINE_TIMER_CANCEL: "grant-fail" },
+      (event) => seen.push(event)
+    );
+    const cancelled = seen.find((e) => e.type === "timer:cancelled");
+    expect(cancelled).toMatchObject({
+      timerId: "tmr_2",
+      cancelled: true,
+      grantRevokeFailed: true,
+      // The grants it HELD are still reported: the operation attempted two, and
+      // reporting zero would read as "there was nothing to withdraw".
+      revokedGrants: 2,
+    });
+  }, 20_000);
+
+  it("tells a failed read apart from an empty list", async () => {
+    // The two must never collapse: "nothing scheduled" is a claim a user acts on by
+    // walking away from work that is still queued.
+    const state = await withSession(
+      async (host, waitFor) => {
+        const landed = waitFor("timers:snapshot");
+        host.send({ type: "timers", sessionId: DESCRIPTOR.sessionId });
+        await landed;
+      },
+      { FAKE_ENGINE_TIMERS: "read-fail" }
+    );
+    expect(state.timers?.rows).toEqual([]);
+    expect(state.timers?.readFailed).toBe(true);
+  }, 20_000);
+
+  it("clears a pending mark for a timer a fresh snapshot no longer lists", async () => {
+    // The only way a row can get stuck: the outcome that would clear it never
+    // arrives (a session that died mid-cancel), leaving the control inert forever.
+    // A snapshot is the reconciliation point.
+    const state = await withSession(async (host, waitFor) => {
+      useAssistantStore.getState().markTimerCancelPending("tmr_vanished");
+      const landed = waitFor("timers:snapshot");
+      host.send({ type: "timers", sessionId: DESCRIPTOR.sessionId });
+      await landed;
+    });
+    expect(state.timerCancelPending["tmr_vanished"]).toBeUndefined();
+    // A timer that IS still listed keeps its pending mark — it may genuinely be
+    // mid-flight, and clearing it would re-enable a control the engine is settling.
+    expect(state.timers?.rows.length).toBeGreaterThan(0);
+  }, 20_000);
+
+  it("survives an engine that has no timers at all", async () => {
+    const state = await withSession(
+      async (host, waitFor) => {
+        const landed = waitFor("timers:snapshot");
+        host.send({ type: "timers", sessionId: DESCRIPTOR.sessionId });
+        await landed;
+      },
+      { FAKE_ENGINE_TIMERS: "empty" }
+    );
+    // An empty list is a READING, not the absence of one — the manager must be able
+    // to tell "nothing scheduled" from "never asked".
+    expect(state.timers).not.toBeNull();
+    expect(state.timers?.rows).toEqual([]);
+    expect(state.timers?.readFailed).toBe(false);
+  }, 20_000);
 });
 
 describe("what the engine reports on its error channel is graded by CODE", () => {
