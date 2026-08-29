@@ -14,6 +14,8 @@ const captured: {
   onOpenChange?: (open: boolean) => void;
   onCloseAutoFocus?: (event: { preventDefault: () => void }) => void;
   onPointerDownOutside?: () => void;
+  onClick?: (event: { target: unknown; detail: number }) => void;
+  onPointerDown?: () => void;
   tooltipOpen?: boolean;
   tooltipOnOpenChange?: (open: boolean) => void;
 } = {};
@@ -53,13 +55,19 @@ vi.mock("@/components/ui/dropdown-menu", () => ({
     children,
     onCloseAutoFocus,
     onPointerDownOutside,
+    onClick,
+    onPointerDown,
   }: {
     children: ReactNode;
     onCloseAutoFocus?: (event: { preventDefault: () => void }) => void;
     onPointerDownOutside?: () => void;
+    onClick?: (event: { target: unknown; detail: number }) => void;
+    onPointerDown?: () => void;
   }) => {
     captured.onCloseAutoFocus = onCloseAutoFocus;
     captured.onPointerDownOutside = onPointerDownOutside;
+    captured.onClick = onClick;
+    captured.onPointerDown = onPointerDown;
     return <div>{children}</div>;
   },
   DropdownMenuLabel: ({ children }: { children: ReactNode }) => <div>{children}</div>,
@@ -140,12 +148,83 @@ describe("FileBrowserViewOptions tooltip and focus on close", () => {
     expect(captured.tooltipOpen).toBe(true);
   });
 
-  it("KEEPS focus restoration when an item was clicked", () => {
-    // The regression this shape exists to avoid. Radix has already unmounted the
-    // clicked item, so preventing restoration does not mean "focus without a
-    // ring" — it means focus falls to document.body and the keyboard user is
-    // stranded with no way back to the control they just used.
+  /** A menu item, as `closest()` will see it. */
+  function itemClick(detail: number) {
+    const item = document.createElement("div");
+    item.setAttribute("role", "menuitem");
+    document.body.appendChild(item);
+    return { target: item, detail };
+  }
+
+  it("returns focus to the trigger after a pointer click, WITHOUT the focus ring", () => {
+    // Two things have to hold at once. Focus must come back, or it falls to
+    // document.body and a keyboard user is stranded with no way back to the
+    // control they just used. And it must come back unringed, because a mouse
+    // user never asked for one — Radix's own restoration is a bare .focus(),
+    // which Chromium paints as :focus-visible.
     renderMenu();
+    const trigger = document.querySelector("button");
+    const focusSpy = vi.spyOn(trigger!, "focus");
+
+    act(() => {
+      captured.onClick?.(itemClick(1));
+    });
+    const event = { preventDefault: vi.fn() };
+    act(() => {
+      captured.onCloseAutoFocus?.(event);
+    });
+
+    expect(event.preventDefault).toHaveBeenCalledTimes(1);
+    expect(focusSpy).toHaveBeenCalledWith({ preventScroll: true, focusVisible: false });
+  });
+
+  it("leaves keyboard selection to Radix, ring and all", () => {
+    // Radix implements Enter/Space by calling .click() on the item, and a
+    // synthetic click carries detail 0. Someone driving from the keyboard wants
+    // the ring, so this path must not be claimed.
+    renderMenu();
+    act(() => {
+      captured.onClick?.(itemClick(0));
+    });
+    const event = { preventDefault: vi.fn() };
+    act(() => {
+      captured.onCloseAutoFocus?.(event);
+    });
+    expect(event.preventDefault).not.toHaveBeenCalled();
+  });
+
+  it("treats a press-inside then release-over-an-item as the pointer gesture it is", () => {
+    // Radix has a pointer-up fallback: when the press did not start on the item
+    // being released over, it calls .click() itself, and that synthetic click
+    // carries detail 0 exactly like a keyboard one. Pressing inside the menu is
+    // something a keyboard cannot do, so it separates the two.
+    renderMenu();
+    const trigger = document.querySelector("button");
+    const focusSpy = vi.spyOn(trigger!, "focus");
+
+    act(() => {
+      captured.onPointerDown?.();
+      captured.onClick?.(itemClick(0));
+    });
+    const event = { preventDefault: vi.fn() };
+    act(() => {
+      captured.onCloseAutoFocus?.(event);
+    });
+
+    expect(event.preventDefault).toHaveBeenCalledTimes(1);
+    expect(focusSpy).toHaveBeenCalledWith({ preventScroll: true, focusVisible: false });
+  });
+
+  it("ignores clicks that miss an item, since those do not close the menu", () => {
+    // Padding, a label or a separator. Claiming those would strand the flag onto
+    // whatever gesture actually closes the menu, and an Escape after a stray
+    // click would then lose its ring.
+    renderMenu();
+    const padding = document.createElement("div");
+    document.body.appendChild(padding);
+    act(() => {
+      captured.onClick?.({ target: padding, detail: 1 });
+    });
     const event = { preventDefault: vi.fn() };
     act(() => {
       captured.onCloseAutoFocus?.(event);

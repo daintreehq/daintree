@@ -142,11 +142,31 @@ export function FileBrowserViewOptions({
   // "focus without a ring", it means focus falls to document.body and the
   // keyboard user is stranded.
   const wasPointerCloseRef = useRef(false);
+  // Set when a POINTER actually activated a menu item, as opposed to the
+  // keyboard doing it. Radix implements Enter/Space selection by calling
+  // `.click()` on the item, and a synthetic click carries `detail === 0` where
+  // a real one carries 1 or more — so the pair of "landed on an item" and
+  // "detail > 0" separates the two without guessing. Clicks that land on
+  // padding, a label or a separator match neither and leave this alone, which
+  // matters because those do not close the menu and would otherwise strand the
+  // flag onto whatever gesture does.
+  const wasPointerSelectRef = useRef(false);
+  // Whether a pointer has been pressed inside the menu during this opening.
+  // `detail` alone is not quite enough: Radix has a pointer-up fallback that
+  // calls `.click()` when the press did not start on the item being released
+  // over, and that synthetic click carries `detail === 0` like a keyboard one.
+  // Pressing inside the content is something the keyboard cannot do, so it
+  // separates that case without claiming any real keyboard path.
+  const pointerInsideRef = useRef(false);
+  const triggerRef = useRef<HTMLButtonElement>(null);
 
   return (
     <DropdownMenu
       onOpenChange={(next) => {
-        if (next) wasPointerCloseRef.current = false;
+        if (!next) return;
+        wasPointerCloseRef.current = false;
+        wasPointerSelectRef.current = false;
+        pointerInsideRef.current = false;
       }}
     >
       <Tooltip
@@ -162,6 +182,7 @@ export function FileBrowserViewOptions({
         <TooltipTrigger asChild>
           <DropdownMenuTrigger asChild>
             <button
+              ref={triggerRef}
               type="button"
               // Same footprint as its neighbours in the row. The armed chip
               // `toolbar-icon-button` paints on `data-state="open"` is the only
@@ -183,20 +204,55 @@ export function FileBrowserViewOptions({
       <DropdownMenuContent
         align="end"
         className="min-w-[200px]"
+        onPointerDown={() => {
+          pointerInsideRef.current = true;
+        }}
         onPointerDownOutside={() => {
           wasPointerCloseRef.current = true;
+        }}
+        onClick={(event) => {
+          const target = event.target instanceof Element ? event.target : null;
+          const item = target?.closest(
+            '[role="menuitem"],[role="menuitemradio"],[role="menuitemcheckbox"]'
+          );
+          // Must have landed on an item either way — a press on padding or a
+          // label closes nothing, so claiming it would strand the flag onto
+          // whatever gesture does close the menu.
+          const onItem = item !== null && item !== undefined;
+          wasPointerSelectRef.current = onItem && (event.detail > 0 || pointerInsideRef.current);
         }}
         onCloseAutoFocus={(event) => {
           // Always, whichever way it closed: focus is about to land on the
           // trigger and would drag the tooltip open with it.
           setTooltipOpen(false);
           isRestoringFocusRef.current = true;
-          // Only a click AWAY skips restoration. An item click keeps it, so the
-          // keyboard user lands back on the control they invoked.
+
+          // Clicked away: the clicked target owns focus, so there is nothing to
+          // restore and no ring to leave behind.
           if (wasPointerCloseRef.current) {
             event.preventDefault();
             wasPointerCloseRef.current = false;
+            wasPointerSelectRef.current = false;
+            pointerInsideRef.current = false;
+            return;
           }
+
+          // Clicked an item: focus still has to come back here, or it falls to
+          // document.body and a keyboard user is stranded. But Radix's own
+          // restoration is a bare `.focus()`, and Chromium paints
+          // `:focus-visible` on a programmatic focus — so a mouse user who never
+          // asked for a focus ring gets the accent one anyway. Take the
+          // restoration over and ask for the focus WITHOUT the visible state.
+          if (wasPointerSelectRef.current) {
+            event.preventDefault();
+            wasPointerSelectRef.current = false;
+            pointerInsideRef.current = false;
+            triggerRef.current?.focus({ preventScroll: true, focusVisible: false });
+            return;
+          }
+
+          // Keyboard close: Radix restores focus and the ring comes with it,
+          // which is exactly right for someone driving from the keyboard.
         }}
       >
         {/* Key and direction are two labelled radio groups rather than one
