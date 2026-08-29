@@ -146,6 +146,22 @@ export interface AssistantHostReadyEvent extends AssistantHostEventBase {
    *  nothing outside the engine can work it out. */
   logFile?: string;
   /**
+   * Where this project's supervisor daemon listens, and the directory that path is
+   * derived from.
+   *
+   * Reported by the engine rather than worked out here, because working it out means
+   * reimplementing two hashes — the project id becomes a slug plus a SHA-256 prefix
+   * to name the state dir, and the absolute state dir is hashed again to name a short
+   * socket. A second implementation of a path that must agree exactly would fail
+   * SILENTLY when it drifted: the socket simply would not be there, which is
+   * indistinguishable from no daemon running.
+   *
+   * It is how Daintree reaches a project's timers once the engine is GONE — the
+   * daemon outlives the session, so the pair is remembered against the project id.
+   */
+  controlSocket?: string;
+  stateDir?: string;
+  /**
    * The command set this engine accepts.
    *
    * Sent by the engine rather than hardcoded here: a host with its own list drifts the
