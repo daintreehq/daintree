@@ -48,6 +48,10 @@ Landed in PR #11250 and tracked as issue #11244. A bare #5167 stays plain text, 
 - Another, mentioning \`src/components/AssistantPanel/palette.ts\`
 - A third, with **bold** and *italic* and ~~struck~~ text
 
+1. An ordered item, whose marker sits in the same column as the paragraph above it
+2. A second, long enough to wrap — so the hang under the item text, and not under the marker, is part of what gets reviewed
+3. A third
+
 \`\`\`ts
 // A fenced block with a grammar the loader knows.
 export function buildAssistantPalette(term: InputBarColors): AssistantPalette {
