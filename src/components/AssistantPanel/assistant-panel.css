@@ -161,24 +161,58 @@
   padding-bottom: 0.3em;
 }
 
+/* A marker starts where a paragraph starts.
+
+   `outside` positions a marker by ITS OWN width, and Chrome's decimal marker is `1. `
+   — three cells in a monospace face — so the numbers hung a full character to the LEFT
+   of the paragraph column while the item text sat two characters to the right of it,
+   and a list read as a block that had wandered out of the column it belongs to.
+   `::marker` takes no width, so the marker is drawn as a counter in a gutter this file
+   sizes instead: markers align with the prose, and wrapped lines hang under the item
+   text rather than under the marker.
+
+   The gutter is set in `ch` because the panel is monospace end to end (see the prose
+   root), so a character IS the unit the column is measured in. Ordered lists get the
+   wider one: `10.` has to clear the gutter without touching the first word.
+
+   Positioned, not a negative `text-indent` on the item: a loose list — one with blank
+   lines between its items — renders each item as `li > p`, and `text-indent` inherits,
+   so the hang would be re-applied inside every item. */
 .assistant-prose ul,
 .assistant-prose ol {
-  padding-left: 1.15em;
+  list-style: none;
+  padding-left: 0;
 }
 
 .assistant-prose ul {
-  list-style: disc;
+  --assistant-list-gutter: 2.5ch;
 }
 .assistant-prose ol {
-  list-style: decimal;
+  --assistant-list-gutter: 3.5ch;
+  counter-reset: assistant-ol var(--assistant-ol-start, 0);
 }
 
 .assistant-prose li {
+  position: relative;
   margin-top: 0.25em;
+  padding-left: var(--assistant-list-gutter);
 }
 
-.assistant-prose li::marker {
+.assistant-prose li::before {
+  position: absolute;
+  left: 0;
   color: var(--assistant-fg-dim);
+}
+
+.assistant-prose ul > li::before {
+  content: "\2022";
+}
+
+.assistant-prose ol > li {
+  counter-increment: assistant-ol;
+}
+.assistant-prose ol > li::before {
+  content: counter(assistant-ol) ".";
 }
 
 /* A code span carries THREE cues, and each one covers where the others fail.
