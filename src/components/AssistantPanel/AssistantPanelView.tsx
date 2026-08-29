@@ -44,6 +44,13 @@ import { buildAssistantPalette } from "./palette";
  * that otherwise only appears when a real engine is mid-turn.
  */
 
+/**
+ * Stands in when a panel is rendered without a cancel handler — the visual-review
+ * previews, which drive this view from captured state and have no engine behind them.
+ * Module-level so it is referentially stable across renders.
+ */
+const noopCancelTimer = () => {};
+
 export interface AssistantPanelViewProps {
   state: AssistantSessionState;
   /**
@@ -63,6 +70,13 @@ export interface AssistantPanelViewProps {
   onAnswerQuestion?: (questionId: string, index: number) => boolean | Promise<boolean>;
   onGrantTool?: (approval: AssistantApproval, uses: number) => void;
   onRequestOperations?: () => void;
+  /** Ask the engine for a fresh scheduled-timer list. */
+  onRequestTimers?: () => void;
+  /**
+   * Retire one timer. The deck confirms first — this component never cancels
+   * without the user having answered a dialog naming the timer.
+   */
+  onCancelTimer?: (timerId: string) => void;
   /**
    * Whether the operations deck is showing, when an owner above the panel drives it.
    *
@@ -875,6 +889,8 @@ export function AssistantPanelView({
   onAnswerQuestion,
   onGrantTool,
   onRequestOperations,
+  onRequestTimers,
+  onCancelTimer,
   operationsOpen,
   onOperationsOpenChange,
   onRetractInterjection,
@@ -976,13 +992,21 @@ export function AssistantPanelView({
     [onRequestOperations, deckOpen, setDeckOpen]
   );
 
+  // Both readings are pulled together, because the deck shows both and they are
+  // answered by two different commands. Refresh has to move them as a pair or the
+  // button would leave one of the seven sections showing an older world than the rest.
+  const refreshDeck = useCallback(() => {
+    onRequestOperations?.();
+    onRequestTimers?.();
+  }, [onRequestOperations, onRequestTimers]);
+
   // Ask for a fresh reading on the way IN, once, wherever the deck was opened from —
   // ^O, or the panel header's menu. The deck is answered on request, so this cannot
   // live in the toggle any more: there are two of them now, and only one is in this
   // file. Requesting on the way OUT would spend a round trip on a view being dismissed.
   useEffect(() => {
-    if (deckOpen) onRequestOperations?.();
-  }, [deckOpen, onRequestOperations]);
+    if (deckOpen) refreshDeck();
+  }, [deckOpen, refreshDeck]);
 
   // A live session is one that can still act. Several readouts describe the session
   // rather than the transcript, and none of them is true once it has stopped.
@@ -1393,7 +1417,11 @@ export function AssistantPanelView({
       {deckOpen && onRequestOperations ? (
         <AssistantOperationsDeck
           operations={state.operations}
-          onRefresh={onRequestOperations}
+          timers={state.timers}
+          timerCancelPending={state.timerCancelPending}
+          timerCancelErrors={state.timerCancelErrors}
+          onCancelTimer={onCancelTimer ?? noopCancelTimer}
+          onRefresh={refreshDeck}
           onClose={() => setDeckOpen(false)}
         />
       ) : (
