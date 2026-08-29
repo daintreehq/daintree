@@ -34,7 +34,12 @@ let armedTimer: ReturnType<typeof setTimeout> | null = null;
 
 function disarm(): void {
   if (armedHandler) {
-    document.removeEventListener("focusin", armedHandler, true);
+    // The 0ms timer below can outlive the document that armed it — a test
+    // environment torn down before it fires, a window closing mid-restore —
+    // so this mirrors the guard in `armTooltipFocusSuppression`.
+    if (typeof document !== "undefined") {
+      document.removeEventListener("focusin", armedHandler, true);
+    }
     armedHandler = null;
   }
   if (armedTimer !== null) {
