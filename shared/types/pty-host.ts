@@ -833,10 +833,15 @@ export interface PtyHostTerminalInfo {
   launchAgentId?: AgentId;
   title?: string;
   titleMode?: PanelTitleMode;
+  /** Last non-useless OSC title observed from the agent — preferred over `title` for resume-record labels. */
+  lastObservedTitle?: string;
   cwd: string;
   agentState?: AgentState;
   waitingReason?: WaitingReason;
   lastStateChange?: number;
+  /** Activity timestamps idle detection runs on; absent means "unknown activity", not "idle". */
+  lastInputTime?: number;
+  lastOutputTime?: number;
   spawnedAt: number;
   isTrashed?: boolean;
   trashExpiresAt?: number;

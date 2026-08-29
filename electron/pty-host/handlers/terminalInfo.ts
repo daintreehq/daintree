@@ -65,6 +65,7 @@ export function mapTerminalInfo(t: NonNullable<TerminalInfoLike>, ctx: HostConte
     agentSessionId: t.agentSessionId,
     agentLaunchFlags: t.agentLaunchFlags,
     agentModelId: t.agentModelId,
+    worktreeId: t.worktreeId,
     agentPresetId: t.agentPresetId,
     agentPresetColor: t.agentPresetColor,
     originalAgentPresetId: t.originalAgentPresetId,

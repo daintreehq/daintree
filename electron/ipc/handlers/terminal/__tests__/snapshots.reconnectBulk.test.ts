@@ -107,6 +107,12 @@ const TERMINALS = new Map<string, Record<string, unknown>>([
   ["t-scratch", makeTerminal("t-scratch", "scratch-1")],
   // Carries the live PTY grid the pty-host mapper reports (#11718).
   ["t-sized", { ...makeTerminal("t-sized", "project-a"), ptyCols: 203, ptyRows: 51 }],
+  // Carries backend worktree attribution, which the mapper began reporting in
+  // #12078 and this projection must keep stripping (#5176).
+  [
+    "t-worktreed",
+    { ...makeTerminal("t-worktreed", "project-a"), worktreeId: "/repo/.worktrees/backend" },
+  ],
 ]);
 
 /** An invoke event whose URL can be mutated mid-flight, to prove identity is snapshotted. */
@@ -199,6 +205,18 @@ describe("terminal:reconnect — workspace ownership", () => {
     };
     expect(result.ptyCols).toBe(203);
     expect(result.ptyRows).toBe(51);
+  });
+
+  it("strips backend worktree attribution, which is renderer-owned (#5176)", async () => {
+    // The pty-host mapper only began reporting worktreeId in #12078, so this
+    // projection had never actually seen a populated value — a refactor to a
+    // spread would now hand restore a placement authority that must stay the
+    // renderer's saved state alone.
+    register();
+
+    const result = await reconnect(senderEvent(SENDER_A), "t-worktreed");
+
+    expect(result).not.toHaveProperty("worktreeId");
   });
 
   it("serves each project its own terminal in the same session", async () => {
