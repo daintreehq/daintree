@@ -44,6 +44,7 @@ import { SegmentedToggle } from "@/components/ui/SegmentedToggle";
 import { useDohertyGate } from "@/hooks/useDeferredLoading";
 import { FolderListingView } from "./FolderListingView";
 import { FileBrowserViewOptions } from "./FileBrowserViewOptions";
+import { FileBrowserHiddenStrip } from "./FileBrowserHiddenStrip";
 import type {
   FileBrowserSortOrder,
   FileEntryLike,
@@ -124,6 +125,13 @@ export interface FileBrowserViewerProps {
   folderStatus: FolderListingStatus;
   /** Whether the dotfile toggle is what's hiding this folder's entries. */
   folderHasHiddenDotfiles: boolean;
+  /**
+   * The selected folder's own hidden tally. Separate from `hiddenCounts`, which
+   * describes the TREE: a folder can be listed here without being expanded in
+   * the tree, and the tree's walk only descends through expanded branches, so
+   * the two answer different questions about different row sets.
+   */
+  folderHiddenCounts: HiddenRowCounts;
   /** Turns the dotfile filter off; offered from the filtered-empty state. */
   onShowDotfiles: () => void;
   /**
@@ -205,6 +213,7 @@ export function FileBrowserViewer({
   folderRows,
   folderStatus,
   folderHasHiddenDotfiles,
+  folderHiddenCounts,
   onShowDotfiles,
   onSelectEntry,
   rowContextMenu,
@@ -656,8 +665,14 @@ export function FileBrowserViewer({
             scale="canvas"
             className="w-full"
             {...(canRevealDotfiles ? {} : { icon: <FolderTree className="h-6 w-6" /> })}
-            title={canRevealDotfiles ? "Dotfiles are hidden here" : "Nothing in this folder yet"}
-            {...(canRevealDotfiles
+            title={
+              canRevealDotfiles
+                ? "Dotfiles are hidden here"
+                : folderHiddenCounts.alwaysHidden > 0
+                  ? "Everything here is on the always-hidden list"
+                  : "Nothing in this folder yet"
+            }
+            {...(canRevealDotfiles || folderHiddenCounts.alwaysHidden > 0
               ? {}
               : { description: "Add a file to it and it'll show up here." })}
             action={
@@ -677,13 +692,23 @@ export function FileBrowserViewer({
     }
 
     return (
-      <FolderListingView
-        rows={folderRows}
-        onSelect={onSelectEntry}
-        {...(rowContextMenu ? { rowContextMenu } : {})}
-        basePath={basePath}
-        label={`Contents of ${folderName}`}
-      />
+      <>
+        <FolderListingView
+          rows={folderRows}
+          onSelect={onSelectEntry}
+          {...(rowContextMenu ? { rowContextMenu } : {})}
+          basePath={basePath}
+          label={`Contents of ${folderName}`}
+        />
+        {/* The same disclosure the tree gets, for the same reason. A listing
+            showing `visible.ts` while silently dropping `.env` reads as a
+            complete folder, and this surface is reachable with the tree column
+            collapsed entirely — so the tree's own strip is not on screen to
+            cover it. Keyed on this folder's tally rather than the tree's: a
+            folder can be listed here without being expanded in the tree, and
+            the tree's walk only descends through expanded branches. */}
+        <FileBrowserHiddenStrip counts={folderHiddenCounts} onShowDotfiles={onShowDotfiles} />
+      </>
     );
   }
 

@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useId, useMemo, useRef } from "react";
+import { useCallback, useEffect, useId, useMemo, useRef, useState } from "react";
 import { Virtuoso, type VirtuosoHandle } from "react-virtuoso";
 import {
   ChevronDown,
@@ -165,6 +165,14 @@ export function FileTreeView({
   // the next keystroke, and a virtualized list re-rendering on every character
   // typed would be a real cost for no visible change.
   const typeaheadRef = useRef<{ buffer: string; at: number }>({ buffer: "", at: 0 });
+  // Which slice Virtuoso currently has mounted. State rather than a ref because
+  // `aria-activedescendant` is rendered from it, so the attribute has to follow
+  // scrolling. Starts as an empty range — before the first `rangeChanged` no row
+  // is known to be mounted, and claiming one would be the very bug this fixes.
+  const [renderedRange, setRenderedRange] = useState<{ start: number; end: number }>({
+    start: 0,
+    end: -1,
+  });
 
   const cursorIndex = useMemo(
     () => (cursorPath === null ? -1 : rows.findIndex((row) => row.path === cursorPath)),
@@ -387,11 +395,19 @@ export function FileTreeView({
     ]
   );
 
-  // Only advertise an active descendant that is actually rendered. A cursor
-  // scrolled out of the virtualized window — or deleted by a live update — has
-  // no DOM node, and pointing at a missing id is worse than pointing at none.
+  // Only advertise an active descendant that is actually rendered — and
+  // "rendered" has to mean MOUNTED, not merely present in `rows`. Virtuoso
+  // mounts a window, so a cursor row the user has scrolled past has an index in
+  // the data array and no DOM node at all; gating on `cursorIndex >= 0` alone
+  // left the tree pointing at an id that was not in the document, which is
+  // exactly what the active-descendant contract forbids.
   const activeDescendant =
-    cursorPath !== null && cursorIndex >= 0 ? rowDomId(instanceId, cursorPath) : undefined;
+    cursorPath !== null &&
+    cursorIndex >= 0 &&
+    cursorIndex >= renderedRange.start &&
+    cursorIndex <= renderedRange.end
+      ? rowDomId(instanceId, cursorPath)
+      : undefined;
 
   // Only advertised while the shortcut would actually do something — announcing
   // Cmd+I with no reachable agent, or with a cursor that no longer resolves
@@ -427,6 +443,16 @@ export function FileTreeView({
         computeItemKey={computeRowKey}
         itemContent={renderRow}
         fixedItemHeight={ROW_HEIGHT_PX}
+        rangeChanged={({ startIndex, endIndex }) => {
+          // Guarded rather than set unconditionally: Virtuoso fires this on
+          // every scroll frame, and re-rendering a virtualized tree at that
+          // cadence would cost far more than the attribute is worth.
+          setRenderedRange((current) =>
+            current.start === startIndex && current.end === endIndex
+              ? current
+              : { start: startIndex, end: endIndex }
+          );
+        }}
         skipAnimationFrameInResizeObserver
         className="h-full w-full overflow-y-auto"
       />

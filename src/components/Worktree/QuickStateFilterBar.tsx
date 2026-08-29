@@ -1,4 +1,6 @@
+import { useRef } from "react";
 import { cn } from "@/lib/utils";
+import { useToolbarRoving } from "@/hooks/useToolbarRoving";
 import type { QuickStateFilter } from "@/lib/worktreeFilters";
 import { CheckCircle2 } from "lucide-react";
 import { HollowCircle, SpinnerCircle } from "@/components/icons";
@@ -67,8 +69,16 @@ export function QuickStateFilterBar({
   trailing,
 }: QuickStateFilterBarProps) {
   const workingActive = counts !== undefined && counts.working > 0;
+  // This row already claimed `role="toolbar"` without implementing any of it,
+  // which is worse than no role at all: it promises a screen-reader user one
+  // tab stop with arrow navigation and delivered five separate tab stops and
+  // dead arrow keys. The shared hook supplies the behaviour the role advertises.
+  const toolbarRef = useRef<HTMLDivElement>(null);
+  const handleToolbarKeyDown = useToolbarRoving(toolbarRef);
   return (
     <div
+      ref={toolbarRef}
+      onKeyDown={handleToolbarKeyDown}
       className="flex border-b border-border-default"
       role="toolbar"
       aria-label="Quick state filter"

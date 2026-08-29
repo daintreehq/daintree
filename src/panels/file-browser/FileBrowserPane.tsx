@@ -410,6 +410,7 @@ export function FileBrowserPane({
     listingRows,
     listingStatus,
     listingHasHiddenDotfiles,
+    listingHiddenCounts,
   } = useFileBrowserTree({
     source,
     expandedPaths: stableExpandedPaths,
@@ -1313,6 +1314,7 @@ export function FileBrowserPane({
               folderRows={listingRows}
               folderStatus={listingStatus}
               folderHasHiddenDotfiles={hideDotfiles && listingHasHiddenDotfiles}
+              folderHiddenCounts={listingHiddenCounts}
               onShowDotfiles={handleShowDotfiles}
               onSelectEntry={showInViewer}
               rowContextMenu={rowContextMenu}

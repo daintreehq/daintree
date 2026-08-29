@@ -184,6 +184,7 @@ interface ViewerOpts {
   folderRows?: FolderListingRow[] | null;
   folderStatus?: FolderListingStatus;
   folderHasHiddenDotfiles?: boolean;
+  folderHiddenCounts?: HiddenRowCounts;
   onShowDotfiles?: () => void;
   onSelectEntry?: (path: string) => void;
   rowContextMenu?: (row: FileEntryLike) => React.ReactNode;
@@ -231,6 +232,7 @@ function viewerJsx(filePath: string | null, opts: ViewerOpts = {}) {
         folderRows={opts.folderRows ?? null}
         folderStatus={opts.folderStatus ?? "ready"}
         folderHasHiddenDotfiles={opts.folderHasHiddenDotfiles ?? false}
+        folderHiddenCounts={opts.folderHiddenCounts ?? NO_HIDDEN_ROWS}
         onShowDotfiles={opts.onShowDotfiles ?? vi.fn()}
         onSelectEntry={opts.onSelectEntry ?? vi.fn()}
         {...(opts.rowContextMenu ? { rowContextMenu: opts.rowContextMenu } : {})}

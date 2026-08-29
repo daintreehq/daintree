@@ -7,6 +7,7 @@ import { formatErrorMessage } from "@shared/utils/errorMessage";
 import {
   buildFolderListingRows,
   countHiddenRows,
+  NO_HIDDEN_ROWS,
   createVisibilityFilter,
   DEFAULT_FILE_SORT,
   findNodeInListings,
@@ -25,6 +26,13 @@ import {
   type FolderListingRow,
   type HiddenRowCounts,
 } from "./fileBrowserTree";
+
+/**
+ * Shared empty expansion set for the single-directory listing count. A fresh
+ * `new Set()` per render would change identity every commit and defeat the memo
+ * it is an input to.
+ */
+const EMPTY_EXPANDED: ReadonlySet<string> = new Set();
 
 /**
  * Ceiling on directory listings in flight at once.
@@ -182,6 +190,8 @@ export interface UseFileBrowserTreeResult {
    * so its empty state can offer "Show dotfiles" only when that would help.
    */
   listingHasHiddenDotfiles: boolean;
+  /** The selected folder's own hidden tally, for the viewer's listing chrome. */
+  listingHiddenCounts: HiddenRowCounts;
 }
 
 interface QueueEntry {
@@ -924,6 +934,21 @@ export function useFileBrowserTree({
     [listings, expandedSet, rootPath, hideDotfiles, alwaysHiddenPatterns]
   );
 
+  // The listing's own tally, for the strip and empty state the viewer shows
+  // over a selected folder. One directory, never a descent: the flat listing
+  // renders exactly one level, so counting deeper would describe rows that
+  // surface has no way to show.
+  const listingHiddenCounts = useMemo(
+    () =>
+      listingPath === null
+        ? NO_HIDDEN_ROWS
+        : countHiddenRows(listings, EMPTY_EXPANDED, listingPath, {
+            hideDotfiles,
+            alwaysHiddenPatterns,
+          }),
+    [listings, listingPath, hideDotfiles, alwaysHiddenPatterns]
+  );
+
   // The same question asked of the folder being listed rather than of the root
   // (#11620) — its empty state offers "Show dotfiles" only when that would
   // actually put something on screen.
@@ -963,6 +988,7 @@ export function useFileBrowserTree({
     listingRows,
     listingStatus,
     listingHasHiddenDotfiles,
+    listingHiddenCounts,
   };
 }
 
