@@ -320,6 +320,12 @@ describe("the panel takes its colour only from the palette", () => {
     // floor with it — so a tier corrected to 4.5:1 lands at 3.1:1 under `opacity-70`
     // and nothing above notices. Only `disabled:` is allowed: text that cannot be
     // acted on is meant to recede, and it is not information.
+    //
+    // The two ENDPOINTS are exempt by construction rather than by exception. What this
+    // guards is a partial value — an ink rendered at a fraction of itself, still read
+    // and no longer legible. `opacity-0` renders nothing to read, and `opacity-100` is
+    // the ink itself. Hover-revealed controls (the transcript's copy buttons) hold
+    // their layout by fading between exactly those two and never sit between them.
     const offenders: string[] = [];
     for (const file of files) {
       const source = readFileSync(path.join(DIR, file), "utf8");
@@ -327,6 +333,7 @@ describe("the panel takes its colour only from the palette", () => {
         if (line.trimStart().startsWith("//") || line.trimStart().startsWith("*")) continue;
         for (const m of line.matchAll(/(?<![\w-])([a-z-]*:)?opacity-(\d+)/g)) {
           if (m[1]?.startsWith("disabled")) continue;
+          if (m[2] === "0" || m[2] === "100") continue;
           offenders.push(`${file}:${i + 1}  ${m[0]}`);
         }
       }
