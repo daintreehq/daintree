@@ -1415,8 +1415,31 @@ export const AssistantHostEventSchema = z.discriminatedUnion("type", [
     ...hostEventBase,
     type: z.literal("timers:snapshot"),
     timers: AssistantTimerRowsSchema,
+    outcomes: z
+      .array(
+        z.object({
+          eventId: IdString,
+          timerId: IdString,
+          severity: clipped(32),
+          // Clipped, not bounded, for the same reason as the row's strings: the
+          // summary can carry a tool's own error output, which the engine does not
+          // truncate, and rejecting the frame would cost every OTHER outcome.
+          title: clipped(500),
+          summary: clipped(4000),
+          createdAt: z.number().int().finite(),
+          updatedAt: z.number().int().finite(),
+          count: z.number().int().min(0),
+        })
+      )
+      .max(500),
     takenAt: Timestamp,
     readFailed: z.boolean(),
+  }),
+  z.object({
+    ...hostEventBase,
+    type: z.literal("timer:fired"),
+    timerId: IdString,
+    firedAt: Timestamp,
   }),
   z.object({
     ...hostEventBase,

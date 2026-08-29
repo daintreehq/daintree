@@ -302,9 +302,46 @@ export interface AssistantOperationsCommand {
  * SAME shape, built by the engine from the same place, so the deck and the manager
  * cannot describe one timer two different ways.
  */
+/**
+ * One thing a timer DID — the record a fire leaves behind.
+ *
+ * A different dimension from the schedule row, and they must not be folded together:
+ * a timer's status going to `fired` is not success. The scheduler claims and advances
+ * the row BEFORE running the payload, so a fired timer's tool may have failed, been
+ * blocked for want of authority, or never run. This is the half that says which.
+ */
+export interface AssistantTimerOutcomeRow {
+  eventId: string;
+  timerId: string;
+  /**
+   * `info` for a success, `error` for a failure, `attention` for a reminder waiting
+   * to be read. A success being `info` is precisely why the operations deck could
+   * never show one: its inbox filters to attention and above.
+   */
+  severity: string;
+  title: string;
+  summary: string;
+  createdAt: number;
+  updatedAt: number;
+  /**
+   * How many firings this row stands for. A repeating timer publishes under one
+   * stable dedupe key, so the twelfth failure updates the first row rather than
+   * adding a twelfth — without this a surface would report one.
+   */
+  count: number;
+}
+
 export interface AssistantTimersEvent extends AssistantHostEventBase {
   type: "timers:snapshot";
   timers: AssistantTimerRow[];
+  /**
+   * What recently-fired timers did, newest first.
+   *
+   * Rides the same snapshot because a fired timer LEAVES the schedule list — a
+   * surface with only that list can never report an outcome at all, which was the
+   * original hole: a timer fired, failed, and the panel showed nothing.
+   */
+  outcomes: AssistantTimerOutcomeRow[];
   /** When the engine read the store, so a view can say how stale its list is. */
   takenAt: number;
   /**
@@ -316,6 +353,24 @@ export interface AssistantTimersEvent extends AssistantHostEventBase {
    * worst thing this surface could say.
    */
   readFailed: boolean;
+}
+
+/**
+ * A timer fired — an INVALIDATION, not a payload.
+ *
+ * Carries the id and nothing else on purpose: a host reacts by re-reading `timers`,
+ * which cannot drift from the snapshot, rather than receiving a second encoding of
+ * the same facts that has to be kept in step with the first.
+ *
+ * This is the event the feature was missing. A timer's own fire never wakes the
+ * assistant (by design — a reminder is for a human, not a prompt), and a successful
+ * tool call publishes below the attention threshold, so nothing at all reached the
+ * host: a timer fired and the panel showed what it showed a second earlier.
+ */
+export interface AssistantTimerFiredEvent extends AssistantHostEventBase {
+  type: "timer:fired";
+  timerId: string;
+  firedAt: number;
 }
 
 /** Ask for a fresh scheduled-timer list. */
@@ -839,6 +894,7 @@ export type AssistantHostEvent =
   | AssistantMcpStatusEvent
   | AssistantOperationsEvent
   | AssistantTimersEvent
+  | AssistantTimerFiredEvent
   | AssistantTimerCancelledEvent
   | AssistantQuestionRequestedEvent
   | AssistantQuestionAnsweredEvent
