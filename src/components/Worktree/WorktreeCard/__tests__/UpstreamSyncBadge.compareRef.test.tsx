@@ -199,36 +199,42 @@ describe("UpstreamSyncBadge — a branch tracking its own base", () => {
 });
 
 describe("UpstreamSyncBadge — the auth-failed tooltip (#12074)", () => {
-  it("names the compare ref, so a base name the pill had to ellipsize is still readable", () => {
-    // The normal tooltip has always named the ref; the auth-failed one carried
-    // only recovery copy. Once the pill can truncate the name, that is the one
-    // state with nowhere left to read it in full.
-    renderBadge({
-      baseBranchName: "release/2026-08-long-lived-integration-branch",
-      baseCompareRef: "upstream/release/2026-08-long-lived-integration-branch",
-      fetchAuthFailed: true,
-      hasAuthFailedSignIn: true,
+  const longBase = "release/2026-08-long-lived-integration-branch";
+  const authed: Partial<Props> = { fetchAuthFailed: true, hasAuthFailedSignIn: true };
+
+  it("names the ref it compared against, so a name the pill had to ellipsize is still readable", () => {
+    // The normal tooltip has always named the ref; this variant carried only
+    // recovery copy. Once the pill can truncate the name, this is the one state
+    // with nowhere left to read it in full.
+    const { rerender } = renderBadge({
+      ...authed,
+      baseBranchName: longBase,
+      baseCompareRef: `upstream/${longBase}`,
     });
-
-    expect(document.body.textContent).toContain(
-      "Compared with upstream/release/2026-08-long-lived-integration-branch"
-    );
-
+    expect(document.body.textContent).toContain(`Compared with upstream/${longBase}`);
     // Still bare in the dense row itself, same as the normal variant.
-    const pill = screen.getByTestId("upstream-sync-indicator");
-    expect(pill.textContent).not.toContain("upstream/");
-  });
+    expect(screen.getByTestId("upstream-sync-indicator").textContent).not.toContain("upstream/");
 
-  it("says nothing about a base it has no name for", () => {
-    renderBadge({
-      baseBranchName: null,
-      baseAheadCount: null,
-      baseBehindCount: null,
-      baseCompareRef: null,
-      fetchAuthFailed: true,
-      hasAuthFailedSignIn: true,
-    });
+    rerender(
+      <UpstreamSyncBadge
+        {...baseProps}
+        {...authed}
+        baseBranchName={longBase}
+        baseCompareRef={null}
+      />
+    );
+    expect(document.body.textContent).toContain(`Compared with ${longBase}`);
 
+    rerender(
+      <UpstreamSyncBadge
+        {...baseProps}
+        {...authed}
+        baseBranchName={null}
+        baseAheadCount={null}
+        baseBehindCount={null}
+        baseCompareRef={null}
+      />
+    );
     expect(document.body.textContent).not.toContain("Compared with");
   });
 });

@@ -180,7 +180,10 @@ export function UpstreamSyncBadge({
 
   if (fetchAuthFailed && hasAuthFailedSignIn) {
     return (
-      <Tooltip>
+      // autoDismiss={false}: the pill can ellipsize the base name now, so this
+      // tooltip is the only place to read it in full — a full-text reveal, which
+      // `tooltip.tsx` exempts from the 2.5s deadline meant for transient hints.
+      <Tooltip autoDismiss={false}>
         <TooltipTrigger asChild>
           <button
             type="button"
@@ -222,7 +225,7 @@ export function UpstreamSyncBadge({
                   )}
                 </>
               )}
-              {!showUpstreamDelta && !showBaseSegment && <span className="shrink-0">—</span>}
+              {!showUpstreamDelta && !showBaseSegment && <span>—</span>}
             </span>
           </button>
         </TooltipTrigger>
@@ -233,7 +236,9 @@ export function UpstreamSyncBadge({
               never said what it was. Without this line the auth state is the
               one place a truncated name has nowhere to be read in full. */}
           {showBaseSegment && baseBranchName && (
-            <div className="text-text-muted">Compared with {baseCompareRef || baseBranchName}</div>
+            <div className="text-text-muted break-words">
+              Compared with {baseCompareRef || baseBranchName}
+            </div>
           )}
           {lastFetchedAt != null && (
             <div className="text-text-muted">Last fetched {formatRelativeTime(lastFetchedAt)}</div>
@@ -246,7 +251,8 @@ export function UpstreamSyncBadge({
   if (!showUpstreamDelta && !showBaseSegment) return null;
 
   return (
-    <Tooltip>
+    // Same full-text reveal as the auth-failed variant above.
+    <Tooltip autoDismiss={false}>
       <TooltipTrigger asChild>
         <span
           className={cn(
@@ -332,7 +338,7 @@ export function UpstreamSyncBadge({
           </div>
         )}
         {showBaseDivergence && baseBranchName && (
-          <div className="text-text-muted/70">
+          <div className="text-text-muted/70 break-words">
             {baseAheadCount != null && baseAheadCount > 0 && (
               <span>
                 {baseAheadCount} ahead of {baseCompareRef || baseBranchName}
@@ -346,7 +352,9 @@ export function UpstreamSyncBadge({
           </div>
         )}
         {showBaseResting && baseBranchName && (
-          <div className="text-text-muted">In sync with {baseCompareRef || baseBranchName}</div>
+          <div className="text-text-muted break-words">
+            In sync with {baseCompareRef || baseBranchName}
+          </div>
         )}
         {hasNoUpstream && showBaseSegment && (
           <div className="text-text-muted">No upstream branch configured</div>
