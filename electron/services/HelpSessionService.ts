@@ -1637,7 +1637,14 @@ export class HelpSessionService {
 
   async revokeByWebContentsId(webContentsId: number): Promise<void> {
     const targets = [...this.sessionsById.values()].filter(
-      (record) => record.projectViewWebContentsId === webContentsId
+      (record) =>
+        record.projectViewWebContentsId === webContentsId &&
+        // Engine sessions are exempt: their bearer belongs to an engine that several
+        // views can be watching, and `AssistantHostService` owns that lifecycle — it
+        // re-pins the session to a surviving surface, or revokes when the last one
+        // leaves. Revoking here on the strength of one view going away would cut the
+        // control plane out from under the windows still using it.
+        !this.engineSessionIds.has(record.sessionId)
     );
     // LRU eviction destroys the renderer for a project the user almost
     // certainly intends to return to — capture the agent's resume ID
@@ -1649,7 +1656,14 @@ export class HelpSessionService {
 
   async revokeByWindowId(windowId: number): Promise<void> {
     const targets = [...this.sessionsById.values()].filter(
-      (record) => record.windowId === windowId
+      (record) =>
+        record.windowId === windowId &&
+        // Engine sessions are exempt, as in `revokeByWebContentsId`: one engine can be
+        // shared by surfaces in several windows, and `AssistantHostService` owns that
+        // lifecycle. Window unregister fires revocation and host teardown
+        // independently, so without this the revoke can win the race and cut the
+        // control plane out from under the windows still using it.
+        !this.engineSessionIds.has(record.sessionId)
     );
     // Window close = user is done with this window but the project lives on
     // in other windows / future launches. Capture the resume ID so the next

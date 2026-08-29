@@ -76,21 +76,29 @@ export const assistantHostNamespace = defineIpcNamespace({
         if (!assistantHostService.isOwnedBy(command.sessionId, ctx.webContentsId)) {
           return { delivered: false };
         }
-        return { delivered: assistantHostService.send(command) };
+        // The sending surface is carried through: a shared engine has to mirror the
+        // prompt to the other windows and move the control plane to this one.
+        return { delivered: assistantHostService.send(command, ctx.webContentsId) };
       },
       { withContext: true }
     ),
 
     stop: op(
       ASSISTANT_HOST_METHOD_CHANNELS.stop,
-      async (ctx, sessionId: string): Promise<{ stopped: boolean }> => {
+      async (ctx, sessionId: string, attachmentId: string): Promise<{ stopped: boolean }> => {
         if (typeof sessionId !== "string" || !sessionId) throw new Error("Invalid sessionId");
-        // Same ownership rule as `send`: stopping is the most disruptive thing a
-        // caller can do to a session it does not own.
+        if (typeof attachmentId !== "string" || !attachmentId) {
+          throw new Error("Invalid attachmentId");
+        }
+        // Same rule as `send`: a caller may only act on a session it is watching.
         if (!assistantHostService.isOwnedBy(sessionId, ctx.webContentsId)) {
           return { stopped: false };
         }
-        assistantHostService.stop(sessionId);
+        // DETACH, not stop. One project's engine is shared by every window showing it,
+        // so a panel closing speaks only for its own attachment — ending the engine on
+        // its say-so would tear the conversation out from under the other windows. The
+        // engine stops when the last surface leaves.
+        assistantHostService.detachSession(sessionId, ctx.webContentsId, attachmentId);
         return { stopped: true };
       },
       { withContext: true }
