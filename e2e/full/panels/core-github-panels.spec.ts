@@ -1,4 +1,4 @@
-import { test, expect, type Page } from "@playwright/test";
+import { test, expect, type Locator, type Page } from "@playwright/test";
 import { launchApp, closeApp, type AppContext } from "../../helpers/launch";
 import { createFixtureRepo } from "../../helpers/fixtures";
 import { openAndOnboardProject } from "../../helpers/project";
@@ -39,6 +39,22 @@ async function openIssuesDropdown(window: Page): Promise<void> {
   await expect(pill).not.toHaveAccessibleName(/Configure/, { timeout: T_MEDIUM });
   await pill.scrollIntoViewIfNeeded();
   await pill.click();
+}
+
+async function expectAlignedColumn(items: Locator, count: number): Promise<void> {
+  await expect(items).toHaveCount(count);
+  await expect
+    .poll(
+      async () =>
+        items.evaluateAll((elements) => {
+          const boxes = elements.map((element) => element.getBoundingClientRect());
+          if (boxes.some((box) => box.width === 0 || box.height === 0)) return 1_000_000;
+          const xs = boxes.map((box) => box.x);
+          return Math.max(...xs) - Math.min(...xs);
+        }),
+      { timeout: T_MEDIUM }
+    )
+    .toBeLessThan(0.5);
 }
 
 test.describe.serial("Core: GitHub panels (dropdowns, rate-limit, token banner)", () => {
@@ -166,30 +182,14 @@ test.describe.serial("Core: GitHub panels (dropdowns, rate-limit, token banner)"
     await expect(window.locator(SEL.github.item(201))).toBeVisible({ timeout: T_LONG });
 
     const slots = window.locator('[role="img"][aria-label^="Assigned to"]');
-    await expect(slots).toHaveCount(3);
-
-    const xs: number[] = [];
-    for (const slot of await slots.all()) {
-      const box = await slot.boundingBox();
-      expect(box).not.toBeNull();
-      xs.push(box!.x);
-    }
-    // Sub-pixel tolerance only: these are meant to be the same column, not a
-    // similar one.
-    for (const x of xs) {
-      expect(Math.abs(x - xs[0]!)).toBeLessThan(0.5);
-    }
+    // Measure the complete column in one render frame and poll through the
+    // dropdown's entry/layout transition. Sequential boundingBox() calls can
+    // otherwise mix frames or observe an element while it is briefly hidden.
+    await expectAlignedColumn(slots, 3);
 
     // And the anchor they hang off — the actions menu — is itself a column.
     const menus = window.locator('[aria-label^="Actions for #"]');
-    await expect(menus).toHaveCount(3);
-    const menuXs: number[] = [];
-    for (const menu of await menus.all()) {
-      menuXs.push((await menu.boundingBox())!.x);
-    }
-    for (const x of menuXs) {
-      expect(Math.abs(x - menuXs[0]!)).toBeLessThan(0.5);
-    }
+    await expectAlignedColumn(menus, 3);
   });
 
   test("issues dropdown renders search and filter chrome when connected", async () => {
