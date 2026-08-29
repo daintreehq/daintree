@@ -8,6 +8,7 @@ import { assistantChildEnv } from "./assistantChildEnv.js";
 import { getHelpAssistantSettings } from "../../ipc/handlers/helpAssistant.js";
 import { helpSessionService } from "../HelpSessionService.js";
 import { formatErrorMessage } from "../../../shared/utils/errorMessage.js";
+import { AssistantTimerService } from "../assistant-timers/AssistantTimerService.js";
 import {
   ASSISTANT_HOST_PROTOCOL_VERSION,
   type AssistantHostCommand,
@@ -164,6 +165,15 @@ export function engineTierFor(helpTier: string): EngineTier {
 }
 
 export class AssistantHostService {
+  /**
+   * The detached-timer route.
+   *
+   * Owned here because this is where the endpoint is learned — `host:ready` is the
+   * only place the daemon's socket path is ever spoken — and because this service
+   * already outlives any one session.
+   */
+  readonly timers = new AssistantTimerService();
+
   /** projectId → live session. The one-per-project rule lives in this keying. */
   private readonly byProject = new Map<string, LiveSession>();
   /** sessionId → live session, for command routing. */
@@ -500,10 +510,22 @@ export class AssistantHostService {
         elapsedMs: elapsedMs(),
       });
       await host.waitForReady();
+      // Remember where this project's supervisor daemon listens, while an engine is
+      // here to tell us. It is the ONLY moment the answer is available: the daemon
+      // outlives the session, but nothing else in Daintree can work out its socket
+      // path — that would mean reimplementing two of the engine's hashes and failing
+      // silently the day either drifted. Learned once, used after the engine is gone.
+      const ready = host.getReadyEvent();
+      if (ready?.controlSocket) {
+        this.timers.rememberEndpoint(opts.projectId, {
+          socketPath: ready.controlSocket,
+          stateDir: ready.stateDir,
+        });
+      }
       logger.info("engine ready", {
         sessionId,
         pid: host.getPid(),
-        engineVersion: host.getReadyEvent()?.version ?? null,
+        engineVersion: ready?.version ?? null,
         elapsedMs: elapsedMs(),
       });
     } catch (error) {

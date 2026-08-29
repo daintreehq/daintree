@@ -100,6 +100,19 @@ const ASSISTANT_CHANNEL_SURFACE = new Map<string, string>([
   [CHANNELS.ASSISTANT_HOST_GAP, "A hole in the engine's sequence. Transport integrity."],
   [CHANNELS.ASSISTANT_HOST_EXIT, "The engine process ended. Lifecycle."],
   [
+    CHANNELS.ASSISTANT_TIMERS_LIST,
+    "A project's scheduled timers, read over the supervisor daemon's control socket " +
+      "when no engine is running. A project id in, schedule rows out — no account, no " +
+      "token, and no endpoint: the socket path is learned from the engine itself and " +
+      "never crosses to the renderer.",
+  ],
+  [
+    CHANNELS.ASSISTANT_TIMERS_CANCEL,
+    "Retires one timer over the same socket. A timer id in, an outcome out. The " +
+      "AUTHORITY it withdraws is the engine's own automation grant, which is scoped " +
+      "to a timer actor and is not an account credential.",
+  ],
+  [
     CHANNELS.HELP_ASSISTANT_GET_SETTINGS,
     "Behaviour preferences — tier, tool permissions, model, audit retention. Agent, " +
       "model, capability and approval settings are not authentication.",
