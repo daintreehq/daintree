@@ -96,6 +96,7 @@ export const PROSE_SPECIMEN: AssistantSessionState = {
   commands: [],
   operations: null,
   timers: null,
+  timersStale: false,
   timerCancelPending: {},
   timerCancelErrors: {},
   toolGrants: {},
