@@ -4,6 +4,7 @@ import { PALETTE_HEADER_ATTR } from "@/components/ui/paletteHeaderAttr";
 import { PALETTE_SURFACE_WIDTHS, type PaletteSurfaceTier } from "@/components/ui/AppPaletteDialog";
 import { cn } from "@/lib/utils";
 import { useUIStore } from "@/store/uiStore";
+import { useOverlayFocusRestore } from "@/components/ui/overlay-focus-restore";
 
 /**
  * The anchored half of the palette shell.
@@ -204,6 +205,7 @@ function AppPalettePopoverContent({
   ...props
 }: AppPalettePopoverContentProps) {
   const { isOpen, modal } = useAnchoredPaletteContext();
+  const focusRestore = useOverlayFocusRestore();
 
   const focusInput = useCallback(() => {
     inputRef.current?.focus({ preventScroll: true });
@@ -271,12 +273,19 @@ function AppPalettePopoverContent({
       if (suppressRequested || (!restoreFocusOnPointerDismiss && wasPointerCloseRef.current)) {
         event.preventDefault();
       }
+      // The shell owns this palette's restoration outright — the rules above
+      // are per-palette policy, not the popover primitive's default — so the
+      // shared overlay policy is told to stand down for this close. It would
+      // otherwise cancel the restoration a `restoreFocusOnPointerDismiss`
+      // palette explicitly asked to keep. Only the restoration is waived; the
+      // tooltip suppression the shared handler arms still runs.
+      focusRestore?.deferToRadix();
       // Cleared on every close, not just the suppressed ones: a palette that
       // opts into restoration would otherwise stay armed after its first
       // pointer dismissal and taint the next keyboard close.
       wasPointerCloseRef.current = false;
     },
-    [consumeCloseAutoFocusSuppression, onCloseAutoFocus, restoreFocusOnPointerDismiss]
+    [consumeCloseAutoFocusSuppression, focusRestore, onCloseAutoFocus, restoreFocusOnPointerDismiss]
   );
 
   const handleEscapeKeyDown = useCallback(

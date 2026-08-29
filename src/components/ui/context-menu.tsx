@@ -7,14 +7,20 @@ import { useScrollShadowOverlays } from "@/components/ui/ScrollShadow";
 import { primeOnEvent, useRadixPrimitives } from "./radix-loader";
 import { useIsDockPopoverChild } from "./DockPopoverChildContext";
 import { MenuActionSourceContext, useMenuActionSource } from "./menu-source";
+import {
+  OverlayFocusRestoreContext,
+  useOverlayFocusRestore,
+  useOverlayFocusRestoreValue,
+} from "./overlay-focus-restore";
 import { actionService } from "@/services/ActionService";
 import { useAriaKeyshortcuts } from "@/hooks";
 import type { ActionId, ActionDispatchOptions } from "@shared/types/actions";
 
 type ContextMenuRootProps = React.ComponentProps<typeof ContextMenuPrimitiveType.Root>;
 
-const ContextMenu = ({ children, ...rest }: ContextMenuRootProps) => {
+const ContextMenu = ({ children, onOpenChange, ...rest }: ContextMenuRootProps) => {
   const radix = useRadixPrimitives();
+  const focusRestore = useOverlayFocusRestoreValue({ restoreFocusOnPointerClose: true });
   if (!radix)
     return (
       <MenuActionSourceContext.Provider value="context-menu">
@@ -24,7 +30,27 @@ const ContextMenu = ({ children, ...rest }: ContextMenuRootProps) => {
   const Root = radix.ContextMenuPrimitive.Root;
   return (
     <MenuActionSourceContext.Provider value="context-menu">
-      <Root {...rest}>{children}</Root>
+      <OverlayFocusRestoreContext.Provider value={focusRestore}>
+        <Root
+          onOpenChange={(next) => {
+            if (next) {
+              focusRestore.resetForOpen();
+              // A context menu has no focusable trigger of its own — Radix's
+              // focus scope restores whatever was focused before it opened, so
+              // that element is the one a pointer selection has to hand focus
+              // back to. Chromium focuses a button on right-press, so this is
+              // usually the control that was right-clicked.
+              focusRestore.setRestoreTarget(
+                document.activeElement instanceof HTMLElement ? document.activeElement : null
+              );
+            }
+            onOpenChange?.(next);
+          }}
+          {...rest}
+        >
+          {children}
+        </Root>
+      </OverlayFocusRestoreContext.Provider>
     </MenuActionSourceContext.Provider>
   );
 };
@@ -223,34 +249,94 @@ type ContextMenuContentProps = React.ComponentPropsWithoutRef<
 const ContextMenuContent = React.forwardRef<
   React.ElementRef<typeof ContextMenuPrimitiveType.Content>,
   ContextMenuContentProps
->(({ className, collisionPadding = 8, children, style, ...props }, ref) => {
-  const radix = useRadixPrimitives();
-  const { ref: shadowRef, topShadow, bottomShadow } = useScrollShadowOverlays(ref);
-  const isDockPopoverChild = useIsDockPopoverChild();
-  if (!radix) return null;
-  const Portal = radix.ContextMenuPrimitive.Portal;
-  const Content = radix.ContextMenuPrimitive.Content;
-  return (
-    <Portal>
-      <Content
-        ref={shadowRef}
-        collisionPadding={collisionPadding}
-        style={{ transformOrigin: "var(--radix-context-menu-content-transform-origin)", ...style }}
-        className={cn(
-          "relative z-[var(--z-popover)] min-w-[10rem] max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto rounded-[var(--radius-lg)] surface-overlay shadow-overlay p-1 text-text-primary",
-          "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=open]:duration-200 data-[state=closed]:duration-120 data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-97 data-[state=open]:zoom-in-97 data-[side=bottom]:slide-in-from-top-1 data-[side=left]:slide-in-from-right-1 data-[side=right]:slide-in-from-left-1 data-[side=top]:slide-in-from-bottom-1",
-          className
-        )}
-        {...props}
-        data-dock-popover-child={isDockPopoverChild ? "" : undefined}
-      >
-        {topShadow}
-        {children}
-        {bottomShadow}
-      </Content>
-    </Portal>
-  );
-});
+>(
+  (
+    {
+      className,
+      collisionPadding = 8,
+      children,
+      style,
+      onPointerDown,
+      onPointerDownOutside,
+      onInteractOutside,
+      onKeyDown,
+      onClick,
+      onCloseAutoFocus,
+      ...props
+    },
+    ref
+  ) => {
+    const radix = useRadixPrimitives();
+    const { ref: shadowRef, topShadow, bottomShadow } = useScrollShadowOverlays(ref);
+    const isDockPopoverChild = useIsDockPopoverChild();
+    const focusRestore = useOverlayFocusRestore();
+
+    // Shared close-time focus policy (see `overlay-focus-restore.ts`).
+    const handlePointerDown: React.PointerEventHandler<HTMLDivElement> = (event) => {
+      onPointerDown?.(event);
+      focusRestore?.onContentPointerDown();
+    };
+    const handlePointerDownOutside: NonNullable<ContextMenuContentProps["onPointerDownOutside"]> = (
+      event
+    ) => {
+      onPointerDownOutside?.(event);
+      focusRestore?.onContentPointerDownOutside();
+    };
+    const handleInteractOutside: NonNullable<ContextMenuContentProps["onInteractOutside"]> = (
+      event
+    ) => {
+      onInteractOutside?.(event);
+      focusRestore?.onContentInteractOutside(event);
+    };
+    const handleKeyDown: React.KeyboardEventHandler<HTMLDivElement> = (event) => {
+      onKeyDown?.(event);
+      focusRestore?.onContentKeyDown();
+    };
+    const handleClick: React.MouseEventHandler<HTMLDivElement> = (event) => {
+      onClick?.(event);
+      focusRestore?.onContentClick(event);
+    };
+    const handleCloseAutoFocus: NonNullable<ContextMenuContentProps["onCloseAutoFocus"]> = (
+      event
+    ) => {
+      onCloseAutoFocus?.(event);
+      focusRestore?.onContentCloseAutoFocus(event);
+    };
+
+    if (!radix) return null;
+    const Portal = radix.ContextMenuPrimitive.Portal;
+    const Content = radix.ContextMenuPrimitive.Content;
+    return (
+      <Portal>
+        <Content
+          ref={shadowRef}
+          collisionPadding={collisionPadding}
+          style={{
+            transformOrigin: "var(--radix-context-menu-content-transform-origin)",
+            ...style,
+          }}
+          className={cn(
+            "relative z-[var(--z-popover)] min-w-[10rem] max-h-[var(--radix-context-menu-content-available-height)] overflow-y-auto rounded-[var(--radius-lg)] surface-overlay shadow-overlay p-1 text-text-primary",
+            "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=open]:duration-200 data-[state=closed]:duration-120 data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-97 data-[state=open]:zoom-in-97 data-[side=bottom]:slide-in-from-top-1 data-[side=left]:slide-in-from-right-1 data-[side=right]:slide-in-from-left-1 data-[side=top]:slide-in-from-bottom-1",
+            className
+          )}
+          {...props}
+          onPointerDown={handlePointerDown}
+          onPointerDownOutside={handlePointerDownOutside}
+          onInteractOutside={handleInteractOutside}
+          onKeyDown={handleKeyDown}
+          onClick={handleClick}
+          onCloseAutoFocus={handleCloseAutoFocus}
+          data-dock-popover-child={isDockPopoverChild ? "" : undefined}
+        >
+          {topShadow}
+          {children}
+          {bottomShadow}
+        </Content>
+      </Portal>
+    );
+  }
+);
 ContextMenuContent.displayName = "ContextMenuContent";
 
 type ContextMenuItemProps = React.ComponentPropsWithoutRef<typeof ContextMenuPrimitiveType.Item> & {

@@ -8,6 +8,12 @@ import { useScrollShadowOverlays } from "@/components/ui/ScrollShadow";
 import { primeOnEvent, useRadixPrimitives } from "./radix-loader";
 import { useIsDockPopoverChild } from "./DockPopoverChildContext";
 import { MenuActionSourceContext, useMenuActionSource } from "./menu-source";
+import {
+  OverlayFocusRestoreContext,
+  useOverlayFocusRestore,
+  useOverlayFocusRestoreValue,
+  useOverlayTriggerRef,
+} from "./overlay-focus-restore";
 import { actionService } from "@/services/ActionService";
 import { useAriaKeyshortcuts } from "@/hooks";
 import type { ActionId, ActionDispatchOptions } from "@shared/types/actions";
@@ -26,6 +32,15 @@ const DropdownMenu = ({
   const radix = useRadixPrimitives();
   const [pendingOpen, setPendingOpen] = React.useState<boolean | undefined>(undefined);
   const isControlled = open !== undefined;
+  const focusRestore = useOverlayFocusRestoreValue();
+
+  // Radix only calls `onOpenChange` for opens it initiates, so a CONTROLLED
+  // consumer flipping `open` back to true never reaches the reset below.
+  // That matters when a pointer dismissal is reversed mid-exit: the close
+  // never reaches `onCloseAutoFocus`, and its flags would decide the next one.
+  React.useEffect(() => {
+    if (open) focusRestore.resetForOpen();
+  }, [open, focusRestore]);
 
   const requestOpen = React.useCallback(
     (next: boolean) => {
@@ -52,17 +67,23 @@ const DropdownMenu = ({
   const effectiveDefaultOpen = isControlled ? defaultOpen : (pendingOpen ?? defaultOpen);
   return (
     <MenuActionSourceContext.Provider value="menu">
-      <Root
-        open={open}
-        defaultOpen={effectiveDefaultOpen}
-        onOpenChange={(next) => {
-          if (!isControlled) setPendingOpen(undefined);
-          onOpenChange?.(next);
-        }}
-        {...rest}
-      >
-        {children}
-      </Root>
+      <OverlayFocusRestoreContext.Provider value={focusRestore}>
+        <Root
+          open={open}
+          defaultOpen={effectiveDefaultOpen}
+          onOpenChange={(next) => {
+            // Every opening starts from a clean slate. The content wrapper
+            // stays mounted across open/close, so a close that never reaches
+            // `onCloseAutoFocus` would otherwise leak its gesture flags here.
+            if (next) focusRestore.resetForOpen();
+            if (!isControlled) setPendingOpen(undefined);
+            onOpenChange?.(next);
+          }}
+          {...rest}
+        >
+          {children}
+        </Root>
+      </OverlayFocusRestoreContext.Provider>
     </MenuActionSourceContext.Provider>
   );
 };
@@ -82,6 +103,8 @@ const DropdownMenuTrigger = React.forwardRef<
   ) => {
     const radix = useRadixPrimitives();
     const requestOpen = React.useContext(DropdownMenuIntentContext);
+    // Where focus goes back to after a pointer selection closes the menu.
+    const setTriggerRef = useOverlayTriggerRef(ref);
 
     const handlePointerEnter: React.PointerEventHandler<HTMLButtonElement> = (event) => {
       primeOnEvent();
@@ -105,7 +128,7 @@ const DropdownMenuTrigger = React.forwardRef<
       if (asChild) {
         return (
           <Slot
-            ref={ref}
+            ref={setTriggerRef}
             onPointerEnter={handlePointerEnter}
             onPointerDown={handlePointerDown}
             onFocusCapture={handleFocusCapture}
@@ -119,7 +142,7 @@ const DropdownMenuTrigger = React.forwardRef<
       return (
         <button
           type="button"
-          ref={ref as React.Ref<HTMLButtonElement>}
+          ref={setTriggerRef}
           onPointerEnter={handlePointerEnter}
           onPointerDown={handlePointerDown}
           onFocusCapture={handleFocusCapture}
@@ -134,7 +157,7 @@ const DropdownMenuTrigger = React.forwardRef<
     const Trigger = radix.DropdownMenuPrimitive.Trigger;
     return (
       <Trigger
-        ref={ref}
+        ref={setTriggerRef}
         asChild={asChild}
         onPointerEnter={handlePointerEnter}
         onPointerDown={handlePointerDown}
@@ -278,42 +301,101 @@ type DropdownMenuContentProps = React.ComponentPropsWithoutRef<
 const DropdownMenuContent = React.forwardRef<
   React.ElementRef<typeof DropdownMenuPrimitiveType.Content>,
   DropdownMenuContentProps
->(({ className, sideOffset = 4, children, style, ...props }, ref) => {
-  const radix = useRadixPrimitives();
-  const { ref: shadowRef, topShadow, bottomShadow } = useScrollShadowOverlays(ref);
-  const isDockPopoverChild = useIsDockPopoverChild();
-  if (!radix) return null;
-  const Portal = radix.DropdownMenuPrimitive.Portal;
-  const Content = radix.DropdownMenuPrimitive.Content;
-  return (
-    <Portal>
-      {/* Context reaches through a portal even though the DOM does not, so a
-          menu opened from the toolbar would otherwise measure its brand marks
-          against the toolbar's surface instead of this floating one. */}
-      <BrandSurfaceReset>
-        <Content
-          ref={shadowRef}
-          sideOffset={sideOffset}
-          style={{
-            transformOrigin: "var(--radix-dropdown-menu-content-transform-origin)",
-            ...style,
-          }}
-          className={cn(
-            "relative z-[var(--z-popover)] min-w-[10rem] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto rounded-[var(--radius-lg)] surface-overlay shadow-overlay p-1 text-text-primary",
-            "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=open]:duration-200 data-[state=closed]:duration-120 data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-97 data-[state=open]:zoom-in-97 data-[side=bottom]:slide-in-from-top-1 data-[side=left]:slide-in-from-right-1 data-[side=right]:slide-in-from-left-1 data-[side=top]:slide-in-from-bottom-1",
-            className
-          )}
-          {...props}
-          data-dock-popover-child={isDockPopoverChild ? "" : undefined}
-        >
-          {topShadow}
-          {children}
-          {bottomShadow}
-        </Content>
-      </BrandSurfaceReset>
-    </Portal>
-  );
-});
+>(
+  (
+    {
+      className,
+      sideOffset = 4,
+      children,
+      style,
+      onPointerDown,
+      onPointerDownOutside,
+      onInteractOutside,
+      onKeyDown,
+      onClick,
+      onCloseAutoFocus,
+      ...props
+    },
+    ref
+  ) => {
+    const radix = useRadixPrimitives();
+    const { ref: shadowRef, topShadow, bottomShadow } = useScrollShadowOverlays(ref);
+    const isDockPopoverChild = useIsDockPopoverChild();
+    const focusRestore = useOverlayFocusRestore();
+
+    // Shared close-time focus policy (see `overlay-focus-restore.ts`). Consumer
+    // handlers run first throughout, so a caller can still veto by preventing
+    // the default on the close event.
+    const handlePointerDown: React.PointerEventHandler<HTMLDivElement> = (event) => {
+      onPointerDown?.(event);
+      focusRestore?.onContentPointerDown();
+    };
+    const handlePointerDownOutside: NonNullable<
+      DropdownMenuContentProps["onPointerDownOutside"]
+    > = (event) => {
+      onPointerDownOutside?.(event);
+      focusRestore?.onContentPointerDownOutside();
+    };
+    const handleInteractOutside: NonNullable<DropdownMenuContentProps["onInteractOutside"]> = (
+      event
+    ) => {
+      onInteractOutside?.(event);
+      focusRestore?.onContentInteractOutside(event);
+    };
+    const handleKeyDown: React.KeyboardEventHandler<HTMLDivElement> = (event) => {
+      onKeyDown?.(event);
+      focusRestore?.onContentKeyDown();
+    };
+    const handleClick: React.MouseEventHandler<HTMLDivElement> = (event) => {
+      onClick?.(event);
+      focusRestore?.onContentClick(event);
+    };
+    const handleCloseAutoFocus: NonNullable<DropdownMenuContentProps["onCloseAutoFocus"]> = (
+      event
+    ) => {
+      onCloseAutoFocus?.(event);
+      focusRestore?.onContentCloseAutoFocus(event);
+    };
+
+    if (!radix) return null;
+    const Portal = radix.DropdownMenuPrimitive.Portal;
+    const Content = radix.DropdownMenuPrimitive.Content;
+    return (
+      <Portal>
+        {/* Context reaches through a portal even though the DOM does not, so a
+            menu opened from the toolbar would otherwise measure its brand marks
+            against the toolbar's surface instead of this floating one. */}
+        <BrandSurfaceReset>
+          <Content
+            ref={shadowRef}
+            sideOffset={sideOffset}
+            style={{
+              transformOrigin: "var(--radix-dropdown-menu-content-transform-origin)",
+              ...style,
+            }}
+            className={cn(
+              "relative z-[var(--z-popover)] min-w-[10rem] max-h-[var(--radix-dropdown-menu-content-available-height)] overflow-y-auto rounded-[var(--radius-lg)] surface-overlay shadow-overlay p-1 text-text-primary",
+              "data-[state=open]:animate-in data-[state=closed]:animate-out data-[state=open]:duration-200 data-[state=closed]:duration-120 data-[state=closed]:fade-out-0 data-[state=open]:fade-in-0 data-[state=closed]:zoom-out-97 data-[state=open]:zoom-in-97 data-[side=bottom]:slide-in-from-top-1 data-[side=left]:slide-in-from-right-1 data-[side=right]:slide-in-from-left-1 data-[side=top]:slide-in-from-bottom-1",
+              className
+            )}
+            {...props}
+            onPointerDown={handlePointerDown}
+            onPointerDownOutside={handlePointerDownOutside}
+            onInteractOutside={handleInteractOutside}
+            onKeyDown={handleKeyDown}
+            onClick={handleClick}
+            onCloseAutoFocus={handleCloseAutoFocus}
+            data-dock-popover-child={isDockPopoverChild ? "" : undefined}
+          >
+            {topShadow}
+            {children}
+            {bottomShadow}
+          </Content>
+        </BrandSurfaceReset>
+      </Portal>
+    );
+  }
+);
 DropdownMenuContent.displayName = "DropdownMenuContent";
 
 type DropdownMenuItemProps = React.ComponentPropsWithoutRef<
