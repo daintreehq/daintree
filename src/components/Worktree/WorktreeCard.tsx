@@ -65,46 +65,9 @@ import type { WhenClauseContext } from "@shared/utils/whenClause";
 import { isAgentFleetActionEligible, isFleetArmEligible } from "@/store/fleetArmingStore";
 import { useWorktreeStatus } from "./WorktreeCard/hooks/useWorktreeStatus";
 import { useWorktreeDevServerSession } from "@/hooks/app/useWorktreeDevServerSession";
-import { computeChipState, type ChipState } from "./utils/computeChipState";
+import { computeChipState } from "./utils/computeChipState";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../ui/tooltip";
-
-/** Shared by the chip's tooltip and its accessible name, so they cannot drift. */
-const CHIP_LABELS: Record<Exclude<ChipState, null>, string> = {
-  waiting: "Agent waiting for input",
-  cleanup: "Ready for cleanup",
-  complete: "Complete: in review",
-};
-
-/**
- * The corner mark's silhouette, one per state.
- *
- * Colour cannot be the only difference between them (WCAG 1.4.1), and these
- * three are the only place on the card where `cleanup` and `complete` are
- * distinguished at all. All three are drawn in the same 12x12 top-left box, so
- * what changes is how much of it is filled — which is also, deliberately, the
- * order in which the states want attention:
- *
- *   waiting  — the full corner triangle. Solid, the most ink, the only state
- *              that is blocking on the person reading it.
- *   cleanup  — the triangle's outer band, hollow down the diagonal. Same
- *              corner, same angle, visibly lighter: something to decide, not
- *              something to answer.
- *   complete — the same wedge at two thirds. Solid, so it still reads as
- *              settled rather than pending, but the smallest of the three.
- *
- * Every shape stays a corner wedge because the grid card rounds this corner
- * (`rounded-tl-lg`): anything hugging the top or left edge instead — a bar, a
- * bevel — is eaten by the radius on that variant and survives only in the
- * sidebar.
- *
- * Verified against `chipSilhouettes.test.ts`, which asserts the three are
- * mutually distinct and that the set stays exhaustive if a state is added.
- */
-const CHIP_CLIP_PATHS: Record<Exclude<ChipState, null>, string> = {
-  waiting: "polygon(0 0, 100% 0, 0 100%)",
-  cleanup: "polygon(100% 0, 0 100%, 0 55%, 55% 0)",
-  complete: "polygon(0 0, 65% 0, 0 65%)",
-};
+import { CHIP_LABELS, WorktreeStatusTick } from "./WorktreeCard/WorktreeStatusTick";
 
 const HOVER_REVALIDATE_DELAY = 150;
 const REVALIDATE_FRESHNESS_GATE = 10_000;
@@ -962,48 +925,31 @@ export function WorktreeCard({
             />
           )}
           {/* Worktree-level state — waiting / ready-for-cleanup / complete — as
-              a corner chip, not a dot in the title row.
+              a leading-edge tick, not a dot in the title row.
 
-              Two things a dot could not do. It has a shape nothing else in the
-              app uses, so it never has to be told apart from the pins,
-              freshness pills, session pips and git marks that already crowd
-              the title row's trailing cluster; and in a full-bleed list with
-              no radius, a mark clipped into the card's own top-left corner
-              declares where one card starts, which is work the 2px gutter is
-              doing alone.
+              Two things a dot could not do. A 3x16 vertical is a different
+              aspect ratio from everything else on the card, so it never has to
+              be told apart from the pins, freshness pills, session pips and git
+              marks that already crowd the title row's trailing cluster — a dot
+              among dots is a serial hunt, a bar among dots is not; and riding
+              the card's own leading edge rather than the content grid keeps it
+              a statement about the card instead of one more item inside it.
 
               `computeChipState` returns one state or none, never a
               combination, so one mark is the whole vocabulary.
 
-              Each state gets its own silhouette as well as its own hue, and
+              Each state gets its own segment count as well as its own hue, and
               that is a requirement rather than a flourish: three marks that
               differ only in fill carry their meaning by colour alone
               (WCAG 1.4.1), and while `waiting` is corroborated elsewhere on
               the card by the session glyphs, nothing else on the card
-              distinguishes `cleanup` from `complete`. The shapes are graded by
-              how much they ask of the reader — a solid corner for the one
-              that wants an answer, a hollow band for the one that wants a
-              decision, a thin edge for the one that wants nothing. All three
-              stay inside the same 12x12 top-left footprint, so the mark's
-              position and the thing it is told apart from do not change. */}
+              distinguishes `cleanup` from `complete`. The geometry and the
+              reasons every number in it is what it is live in
+              `WorktreeStatusTick`. */}
           {chipState !== null && (
             <Tooltip>
               <TooltipTrigger asChild>
-                <div
-                  className={cn(
-                    // status-mark: the fill is the whole signal, so forced
-                    // colors has to repaint it rather than flatten it to the
-                    // canvas.
-                    "status-mark absolute top-0 left-0 w-3 h-3 z-10 cursor-default",
-                    chipState === "waiting" && "bg-activity-waiting",
-                    chipState === "cleanup" && "bg-pr-merged",
-                    chipState === "complete" && "bg-category-blue",
-                    variant === "grid" && "rounded-tl-lg"
-                  )}
-                  style={{ clipPath: CHIP_CLIP_PATHS[chipState] }}
-                  role="img"
-                  aria-label={CHIP_LABELS[chipState]}
-                />
+                <WorktreeStatusTick state={chipState} />
               </TooltipTrigger>
               <TooltipContent side="right" align="start" className="text-xs">
                 {CHIP_LABELS[chipState]}

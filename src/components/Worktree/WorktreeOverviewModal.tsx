@@ -229,14 +229,22 @@ function OverviewGridCell(props: OverviewWorktreeCardProps & { isCursor?: boolea
         // `overlay-subtle` is a 2% step, around 1.1:1 — so the mark has to
         // carry the ratio on its own.
         //
-        // The rail is inset 12px top and bottom rather than the palette's 6px:
-        // the card's own status mark is a 12x12 corner wedge at this edge, and
-        // 6px put the two in the same gutter. It is on the leading edge, where
+        // The top inset is a function of the card's own status mark, which
+        // shares this edge: the tick occupies 10px-26px, so the rail starts at
+        // 36px and the two never read as one broken rail. That number tracked
+        // the mark when it was a 12x12 corner wedge (12px then) and has to keep
+        // tracking it. The bottom keeps the 12px it has always had — nothing is
+        // down there to clear, so only the top had a reason to move, and the
+        // asymmetry is imperceptible on a card this tall. Leading edge, because
         // the trailing edge already carries the current-worktree stripe.
+        //
+        // The two marks are also told apart by radius, not just position: this
+        // rail is a pill and the status tick is square-ended. Rounding the tick
+        // would collapse that distinction.
         "relative",
         isSelected && "bg-overlay-medium",
         isSelected &&
-          "before:absolute before:inset-y-3 before:start-0 before:z-10 before:w-[3px] before:rounded-full before:bg-selection-outline before:content-['']",
+          "before:absolute before:top-9 before:bottom-3 before:start-0 before:z-10 before:w-[3px] before:rounded-full before:bg-selection-outline before:content-['']",
         // The cursor is painted only while the grid itself holds DOM focus.
         // It is `aria-activedescendant`, so its id survives blur by design —
         // but the accent mark should not: an overview whose search field is

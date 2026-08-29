@@ -3086,10 +3086,19 @@ body[data-performance-mode="true"] [class*="backdrop-blur"] {
      since it compiles to box-shadow, which is removed outright and cannot be
      repainted. Repaint the fill instead.
 
-     One CanvasText disc for all of them on purpose: hue is gone here whatever we
-     do, so this rule only owes that the mark is still THERE. Marks whose
-     severity is the signal do not use this hook — they carry a glyph from
-     `src/lib/statusSeverity.ts`, whose shape survives where colour cannot. */
+     One CanvasText fill for all of them on purpose: hue is gone here whatever
+     we do, so for a single mark this rule only owes that it is still THERE.
+     Marks whose severity is the signal do not lean on the fill for it — they
+     carry a glyph from `src/lib/statusSeverity.ts`, whose shape survives where
+     colour cannot.
+
+     A mark MAY still carry meaning under this hook by being more than one
+     element: `WorktreeStatusTick` puts the class on each of its 1-3 segments,
+     so what this rule flattens is three fills that were already the same
+     colour to a forced-colors reader, and the gaps between them — which are
+     real elements, not a background pattern — go on doing the telling apart.
+     Consolidating such a class onto its container would repaint the gaps too
+     and collapse every state into one bar. Put it on the pieces. */
   .status-mark {
     background-color: CanvasText !important;
   }
