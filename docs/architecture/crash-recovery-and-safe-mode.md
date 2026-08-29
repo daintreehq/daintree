@@ -33,7 +33,7 @@ There is no single "recovery service". Five guards run concurrently, each watchi
    └─────────────────────────────────────────────────────────────────────────────────┘
 ```
 
-All five are wired during boot in `electron/main.ts`: `initializeCrashLoopGuard()` (before global error handlers, so safe-mode state exists when the first fatal can fire), then `initializeCrashRecoveryService()`, then `initializeGpuCrashMonitor()` (before the first window, so it sees GPU crashes during startup). The main-process watchdog is started later, in `perWindowInit.ts`, alongside `PtyClient` (`electron/window/perWindowInit.ts:140`).
+All five are wired during boot in `electron/main.ts`: `initializeCrashLoopGuard()` (before global error handlers, so safe-mode state exists when the first fatal can fire), then `initializeCrashRecoveryService()`, then `initializeGpuCrashMonitor()` (before the first window, so it sees GPU crashes during startup). The main-process watchdog is started later, in `perWindowInit.ts`, alongside `PtyClient` (`electron/window/perWindowInit.ts`).
 
 ---
 
@@ -50,30 +50,30 @@ All five are wired during boot in `electron/main.ts`: `initializeCrashLoopGuard(
 
 ### Heartbeat contract
 
-`MainProcessWatchdogClient` sends `{ type: "ping" }` every `PING_INTERVAL_MS = 5000`. The host expects one each interval; after `MAX_MISSED = 3` consecutive missed ticks (`HEARTBEAT_INTERVAL_MS = 5000` → ~15s of unresponsiveness) it SIGKILLs main. The `MAX_MISSED = 3` floor is deliberate: V8 major GC and synchronous `better-sqlite3` ops can legitimately pause main for several seconds, so a threshold under ~10s would false-positive (`watchdog-host-core.ts:8-13`).
+`MainProcessWatchdogClient` sends `{ type: "ping" }` every `PING_INTERVAL_MS = 5000`. The host expects one each interval; after `MAX_MISSED = 3` consecutive missed ticks (`HEARTBEAT_INTERVAL_MS = 5000` → ~15s of unresponsiveness) it SIGKILLs main. The `MAX_MISSED = 3` floor is deliberate: V8 major GC and synchronous `better-sqlite3` ops can legitimately pause main for several seconds, so a threshold under ~10s would false-positive (`watchdog-host-core.ts`).
 
-The host stays **inert until armed**: a `ping` sets `isArmed = true`. A slow-booting main that hasn't sent its first ping is never killed. After a kill the host **disarms itself** (`state.isArmed = false`) so a queued tick can't re-fire before the relaunched main sends its first ping (`watchdog-host-core.ts:95-100`).
+The host stays **inert until armed**: a `ping` sets `isArmed = true`. A slow-booting main that hasn't sent its first ping is never killed. After a kill the host **disarms itself** (`state.isArmed = false`) so a queued tick can't re-fire before the relaunched main sends its first ping (`watchdog-host-core.ts`).
 
 ### Sleep/wake — the burst-tick problem
 
 When the OS suspends, `setInterval` callbacks queued during sleep fire as a **packed burst at wake** — each would increment `missedBeats` and cross the kill threshold before the post-wake arming ping lands, producing a false-positive SIGKILL on resume. Two defenses, both must hold:
 
 1. `MainProcessWatchdogClient.pause()` stops the ping interval _and_ sends `{ type: "sleep" }` (belt-and-suspenders against out-of-order delivery). `resume()` sends `{ type: "wake" }` then an immediate ping. These are driven from the power monitor (`electron/window/powerMonitor.ts`).
-2. The host's `tick()` ignores any tick within one `HEARTBEAT_INTERVAL_MS` of the last `wake` (`watchdog-host-core.ts:80-82`). This uses `performance.now()` (monotonic), **not** `Date.now()`, so NTP/wall-clock jumps can't defeat the grace window.
+2. The host's `tick()` ignores any tick within one `HEARTBEAT_INTERVAL_MS` of the last `wake` (`watchdog-host-core.ts`). This uses `performance.now()` (monotonic), **not** `Date.now()`, so NTP/wall-clock jumps can't defeat the grace window.
 
-Note the subtle restart-during-sleep case in `startHost()`: if the watchdog crashed and re-forked _while suspended_, the new child is armed by the first ping but would accumulate missed beats during sleep — so the client sends `sleep` immediately after the arming ping (`MainProcessWatchdogClient.ts:186-199`).
+Note the subtle restart-during-sleep case in `startHost()`: if the watchdog crashed and re-forked _while suspended_, the new child is armed by the first ping but would accumulate missed beats during sleep — so the client sends `sleep` immediately after the arming ping (`MainProcessWatchdogClient.ts`).
 
 ### The kill flag (crash attribution)
 
-Before SIGKILL the host writes `<userData>/watchdog-kill.flag` synchronously (`writeWatchdogKillFlag`). This is **best-effort and must never gate the kill** — the helper swallows all errors and SIGKILL fires unconditionally (`watchdog-host.ts:84-92`). On the next launch `CrashRecoveryService.consumeWatchdogKillFlag()` reads and unlinks it, and — if the flag's mtime is fresh (`>= sessionStartMs - WATCHDOG_GRACE_MS`, 5s) — attributes the crash as `cause: "watchdog-deadlock"` instead of `"unknown"`. The mtime guard prevents a stale flag from a prior session poisoning attribution. Defensive range checks reject an all-zero corrupt flag (`killedAt > 0`, `missedBeats >= 1`, `mainPid > 0`).
+Before SIGKILL the host writes `<userData>/watchdog-kill.flag` synchronously (`writeWatchdogKillFlag`). This is **best-effort and must never gate the kill** — the helper swallows all errors and SIGKILL fires unconditionally (`watchdog-host.ts`). On the next launch `CrashRecoveryService.consumeWatchdogKillFlag()` reads and unlinks it, and — if the flag's mtime is fresh (`>= sessionStartMs - WATCHDOG_GRACE_MS`, 5s) — attributes the crash as `cause: "watchdog-deadlock"` instead of `"unknown"`. The mtime guard prevents a stale flag from a prior session poisoning attribution. Defensive range checks reject an all-zero corrupt flag (`killedAt > 0`, `missedBeats >= 1`, `mainPid > 0`).
 
-Before SIGKILL the host also re-probes `process.kill(pid, 0)` (POSIX existence check) — if main already exited it skips the kill (`watchdog-host.ts:77-83`). `parseMainPid` rejects partial-numeric argv like `"123abc"` so the kill always targets exactly the intended PID.
+Before SIGKILL the host also re-probes `process.kill(pid, 0)` (POSIX existence check) — if main already exited it skips the kill (`watchdog-host.ts`). `parseMainPid` rejects partial-numeric argv like `"123abc"` so the kill always targets exactly the intended PID.
 
 ### Watchdog crash-loop backoff → "watchdog disabled"
 
-The client treats _its own_ host crashing as a crash-loop, using a **time-windowed** counter, **not** an uptime-reset counter (the old pattern was defeated by a slow crash-every-35s loop): `CRASH_THRESHOLD = 3` crashes within `RAPID_CRASH_WINDOW_MS = 300_000` trips the cap; `STABILITY_TIMEOUT_MS = 300_000` of clean running decays the window. Restart delay uses full-jitter backoff with `RESTART_FLOOR_MS = 250`, cap base `1_500`, cap max `5_000` — **intentionally distinct** from `PtyHostLifecycle`'s parameters so the two services don't synchronize restarts under a shared trigger (OOM, signal) (`MainProcessWatchdogClient.ts:34-46`).
+The client treats _its own_ host crashing as a crash-loop, using a **time-windowed** counter, **not** an uptime-reset counter (the old pattern was defeated by a slow crash-every-35s loop): `CRASH_THRESHOLD = 3` crashes within `RAPID_CRASH_WINDOW_MS = 300_000` trips the cap; `STABILITY_TIMEOUT_MS = 300_000` of clean running decays the window. Restart delay uses full-jitter backoff with `RESTART_FLOOR_MS = 250`, cap base `1_500`, cap max `5_000` — **intentionally distinct** from `PtyHostLifecycle`'s parameters so the two services don't synchronize restarts under a shared trigger (OOM, signal) (`MainProcessWatchdogClient.ts`).
 
-When the cap is hit, deadlock detection is **off for the rest of the session**. The client fires `onDisabled(payload)` exactly once per cap cycle. `wireWatchdogDisabledBroadcast` (`electron/window/perWindowInit.ts:427`) turns that into a `watchdog:disabled` push to every renderer, setting `usePanelStore.watchdogStatus = "disabled"`. `WatchdogDisabledBanner` (`src/components/Recovery/WatchdogDisabledBanner.tsx`) renders, offering `watchdog.restart` (the IPC handler at `electron/ipc/handlers/watchdog.ts` re-wires the broadcast, calls `client.restart()` which resets the window, and broadcasts `watchdog:active` so sibling windows clear their stale banner).
+When the cap is hit, deadlock detection is **off for the rest of the session**. The client fires `onDisabled(payload)` exactly once per cap cycle. `wireWatchdogDisabledBroadcast` (`electron/window/perWindowInit.ts`) turns that into a `watchdog:disabled` push to every renderer, setting `usePanelStore.watchdogStatus = "disabled"`. `WatchdogDisabledBanner` (`src/components/Recovery/WatchdogDisabledBanner.tsx`) renders, offering `watchdog.restart` (the IPC handler at `electron/ipc/handlers/watchdog.ts` re-wires the broadcast, calls `client.restart()` which resets the window, and broadcasts `watchdog:active` so sibling windows clear their stale banner).
 
 **Crucial invariant:** "watchdog disabled" means the _detector_ died, **not** that main is unhealthy. Main is unharmed (the client never kills main — only the subprocess has that authority). It is a degraded-protection warning, which is why it ranks below `host-crash` but above `safe-mode` in the banner coordinator.
 
@@ -109,7 +109,7 @@ On launch, `consumeMarker()` runs before the new session's backup timer starts. 
 
 ### Crash-cause classification
 
-`classifyCrashCause()` is strict priority order, strongest signal wins (`CrashRecoveryService.ts:837`):
+`classifyCrashCause()` is strict priority order, strongest signal wins (`CrashRecoveryService.ts`):
 
 1. `crashLogPath` set → `"uncaught-exception"` (our own `recordCrash` wrote it — most trusted).
 2. Recent Crashpad `.dmp` (mtime > sessionStart, scanning `new`/`pending`/`completed`) → `"native-crash"`.
@@ -122,16 +122,16 @@ The watchdog kill flag, when fresh, overrides the classified `cause` to `"watchd
 
 ### Restore-confirmation flow (renderer)
 
-`CrashRecoveryDialog` (`src/components/Recovery/CrashRecoveryDialog.tsx`, ~753 LOC) renders the pending crash. It is shown _before_ the main app tree — note the in-code caveat that `notify()` is dead here because the Toaster isn't mounted yet, so recovery failures surface inline via `InlineStatusBanner` with a "Send diagnostics" action (`CrashRecoveryDialog.tsx:122-133`).
+`CrashRecoveryDialog` (`src/components/Recovery/CrashRecoveryDialog.tsx`, ~753 LOC) renders the pending crash. It is shown _before_ the main app tree — note the in-code caveat that `notify()` is dead here because the Toaster isn't mounted yet, so recovery failures surface inline via `InlineStatusBanner` with a "Send diagnostics" action (`CrashRecoveryDialog.tsx`).
 
 - With panels: a checkbox list of recoverable panels. Suspect panels are **deselected by default** once `crashCount >= 1` (`shouldDeselectSuspects`). The user restores the selected subset (`{ kind: "restore", panelIds }`) or continues fresh.
 - `crashCount >= 2` → `isInCrashLoop`: the "restore automatically next time" toggle is replaced by an "Auto-restore paused — too many consecutive crashes" notice.
 - "Continue without restoring" is gated behind a `ConfirmDialog` (Tier D1 — local irreversible) before `{ kind: "fresh" }` fires.
 - The collapsible "Error details" exposes app/OS/memory metadata, the stack, the recent-action breadcrumb trail, and a redacted "Report this crash" → GitHub flow (clipboard fallback when the body exceeds the URL budget).
 
-`restoreBackup(panelIds?)` prefers `cachedBackupSnapshot`, filters terminals onto a _shallow copy_ (so a failed apply is retryable with the full list), and refuses to restore an empty filter when the original had panels (a stale/typo'd ID would otherwise empty-then-unlink the recovery source — `CrashRecoveryService.ts:337-339`). On success it unlinks the crashed-\* file and clears the cache.
+`restoreBackup(panelIds?)` prefers `cachedBackupSnapshot`, filters terminals onto a _shallow copy_ (so a failed apply is retryable with the full list), and refuses to restore an empty filter when the original had panels (a stale/typo'd ID would otherwise empty-then-unlink the recovery source — `CrashRecoveryService.ts`). On success it unlinks the crashed-\* file and clears the cache.
 
-`autoRestoreOnCrash` (default `true`) lives in the main `store` under `crashRecovery`; when on and not in a crash loop, the dialog is skipped and the previous session is restored automatically (`main.ts:483` gates the dialog on `!guard.isSafeMode() && !crashService.getPendingCrash()`).
+`autoRestoreOnCrash` (default `true`) lives in the main `store` under `crashRecovery`; when on and not in a crash loop, the dialog is skipped and the previous session is restored automatically (`main.ts` gates the dialog on `!guard.isSafeMode() && !crashService.getPendingCrash()`).
 
 ---
 
@@ -146,17 +146,17 @@ The watchdog kill flag, when fresh, overrides the classified `cause` to `"watchd
 At `initialize()`: if the prior exit was **not** clean, `crashes = (count of launches within the window)`; if clean, the counter resets. Then it appends the current launch and derives:
 
 - `CRASH_THRESHOLD = 3` consecutive crashes → **safe mode** (`isSafeMode()` true).
-- `HARD_STOP_THRESHOLD = 5` → **relaunch disabled** (`shouldRelaunch()` false). Beyond this the fatal-error path and `GpuCrashMonitor` stop relaunching (`globalErrorHandlers.ts:96`), and the user must restart manually — the app stops fighting an unwinnable loop.
+- `HARD_STOP_THRESHOLD = 5` → **relaunch disabled** (`shouldRelaunch()` false). Beyond this the fatal-error path and `GpuCrashMonitor` stop relaunching (`globalErrorHandlers.ts`), and the user must restart manually — the app stops fighting an unwinnable loop.
 
 The clean-exit flag is the linchpin: `markCleanExit()` is called on the success branch of shutdown; if it never fires, the launch counts as a crash. This is why the dev-mode `SIGUSR2`/nodemon handler exists (see fatal-error-spine.md) — without it every rebuild looked like a crash and booted dev into safe mode.
 
 ### What safe mode disables
 
-Safe mode is **startup-only** — `AppHydrationService` always returns `safeMode: false` after the first hydration (`AppHydrationService.ts:21`). Its effect is at panel-restore time in `electron/ipc/handlers/app/state.ts`: when `guard.isSafeMode()`, panels the `PanelSuspectLedgerService` has quarantined are filtered out of the restore set (`getQuarantinedPanelIds()`), with `skippedPanelCount` and `quarantinedPanels` surfaced to the renderer. The ledger is fed the pending crash summaries at boot (`initializePanelSuspectLedger(...)` in `main.ts:192`); a likely-crashing panel is held back so the app can boot to a usable state. Fallbacks handle "ledger empty" and "all panels quarantined" so safe mode never restores nothing-then-everything in a partial way.
+Safe mode is **startup-only** — `AppHydrationService` always returns `safeMode: false` after the first hydration (`AppHydrationService.ts`). Its effect is at panel-restore time in `electron/ipc/handlers/app/state.ts`: when `guard.isSafeMode()`, panels the `PanelSuspectLedgerService` has quarantined are filtered out of the restore set (`getQuarantinedPanelIds()`), with `skippedPanelCount` and `quarantinedPanels` surfaced to the renderer. The ledger is fed the pending crash summaries at boot (`initializePanelSuspectLedger(...)` in `main.ts`); a likely-crashing panel is held back so the app can boot to a usable state. Fallbacks handle "ledger empty" and "all panels quarantined" so safe mode never restores nothing-then-everything in a partial way.
 
 ### Surfacing & exit
 
-`SafeModeBanner` (`src/components/Recovery/SafeModeBanner.tsx`) reads `useSafeModeStore` (`safeMode`, `crashCount`, `lastCrashAt`, `skippedPanelCount`, `quarantinedPanels`). It shows crash metadata, a "Show details" popover listing quarantined panels (each individually restorable on next launch via `clearQuarantinedPanel`), and a "Restart normally" CTA gated behind a `ConfirmDialog` (restart kills all terminals/agent sessions). The CTA calls `window.electron.app.resetAndRelaunch()`, which on the main side runs `CrashLoopGuardService.resetForNormalBoot()` — atomically clearing the state file and the in-memory flags. `resetForNormalBoot()` **throws on disk-write failure** so the IPC handler can re-enable the button; silently swallowing would leave the unclean sentinel and boot straight back into safe mode (`CrashLoopGuardService.ts:158-173`).
+`SafeModeBanner` (`src/components/Recovery/SafeModeBanner.tsx`) reads `useSafeModeStore` (`safeMode`, `crashCount`, `lastCrashAt`, `skippedPanelCount`, `quarantinedPanels`). It shows crash metadata, a "Show details" popover listing quarantined panels (each individually restorable on next launch via `clearQuarantinedPanel`), and a "Restart normally" CTA gated behind a `ConfirmDialog` (restart kills all terminals/agent sessions). The CTA calls `window.electron.app.resetAndRelaunch()`, which on the main side runs `CrashLoopGuardService.resetForNormalBoot()` — atomically clearing the state file and the in-memory flags. `resetForNormalBoot()` **throws on disk-write failure** so the IPC handler can re-enable the button; silently swallowing would leave the unclean sentinel and boot straight back into safe mode (`CrashLoopGuardService.ts`).
 
 ### Corruption forensics
 
@@ -166,7 +166,7 @@ A malformed `crash-loop-state.json` is **quarantined**, not deleted: renamed to 
 
 ## 4. GpuCrashMonitorService (GPU-crash handling)
 
-`electron/services/GpuCrashMonitorService.ts` (~226 LOC) listens on `app.on("child-process-gone")` and acts only on `details.type === "GPU"` with a real crash reason (not `"clean-exit"`/`"killed"`). It must install the listener **before the first window** (`main.ts:214`) or startup GPU crashes are missed.
+`electron/services/GpuCrashMonitorService.ts` (~226 LOC) listens on `app.on("child-process-gone")` and acts only on `details.type === "GPU"` with a real crash reason (not `"clean-exit"`/`"killed"`). It must install the listener **before the first window** (`main.ts`) or startup GPU crashes are missed.
 
 Sliding window: `GPU_CRASH_THRESHOLD = 3` within `GPU_CRASH_WINDOW_MS = 5 * 60 * 1000`. Two escalation tiers:
 

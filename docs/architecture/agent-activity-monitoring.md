@@ -206,7 +206,7 @@ Common stuck-working causes:
 Use these focused tests when changing the monitor:
 
 - `electron/services/pty/__tests__/AgentActivityTemperature.test.ts`
-- `electron/services/__tests__/ActivityMonitor.test.ts`
+- `electron/services/__tests__/ActivityMonitor.*.test.ts` — split by concern (`simple-output`, `signals-and-completion`, `polling-and-input`, `prompt-polling-hysteresis`, `boot-and-suppression`, `tier-recovery`, `disposal-high-output`, `backstop-reconfigure-watchdog`)
 - `electron/services/pty/__tests__/TerminalProcess.lifecycle.test.ts`
 - `electron/services/pty/__tests__/LineRewriteDetector.test.ts`
 - `electron/services/pty/__tests__/SynchronizedFrameAnalyzer.test.ts`

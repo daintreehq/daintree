@@ -6,7 +6,7 @@
 npm install          # Install deps (or npm ci)
 npm run dev          # Main + Renderer concurrent dev
 npm run build        # Production build
-npm run check        # typecheck + lint + format (run before commits)
+npm run check        # typecheck + codegen/wiring guards + lint ratchet + format
 npm run fix          # Auto-fix lint/format
 npm run test         # Vitest once
 npm run test:watch   # Vitest watch mode

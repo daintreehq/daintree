@@ -34,7 +34,7 @@ The profile is intentionally **coarse**. There are only three states, so every c
 
 ## Signal inputs
 
-`computeTargetProfile()` (`ResourceProfileService.ts:601`) sums a `pressureScore` from these signals. App, terminal-workload, and fleet thresholds scale with physical RAM. System-available memory uses RAM-relative thresholds whose two edges are bounded differently (#11926): the critical edge stays capped at 1 GB so a high-memory macOS machine's normal file-cache occupancy cannot manufacture a multi-gigabyte "critical" floor, while the warning edge keeps widening with RAM to a 3 GB bound so proactive reclaim is not an emergency-only path on a large machine.
+`computeTargetProfile()` (`ResourceProfileService.ts`) sums a `pressureScore` from these signals. App, terminal-workload, and fleet thresholds scale with physical RAM. System-available memory uses RAM-relative thresholds whose two edges are bounded differently (#11926): the critical edge stays capped at 1 GB so a high-memory macOS machine's normal file-cache occupancy cannot manufacture a multi-gigabyte "critical" floor, while the warning edge keeps widening with RAM to a 3 GB bound so proactive reclaim is not an emergency-only path on a large machine.
 
 | Signal | Source | Contribution to `pressureScore` |
 | --- | --- | --- |
@@ -46,21 +46,21 @@ The profile is intentionally **coarse**. There are only three states, so every c
 | System-available memory | `process.getSystemMemoryInfo()` (free + purgeable on macOS, free elsewhere) | `+3` below `min(0.1 × RAM, 1024 MB)`, `+1` below the warning edge — `0.2 × RAM` up to a 10 GB knee, then widening from 2048 MB to a 3072 MB bound reached at 42 GB (`getSystemMemoryThresholds`) |
 | Terminal-workload memory | cached `PtyClient.getMemoryRollup()` (descendant RSS from the pty-host `ProcessTreeCache`, PID-deduplicated, via `electron/services/memoryAccounting.ts`) | `+2` above 0.4 × RAM, `+1` above 0.25 × RAM — only from a fresh (≤ 60 s), successful process-table sweep; stale/unavailable data contributes 0. Per-tier 10% exit band. Bounded at +2 so terminal workloads alone can never latch `efficiency`. |
 
-Mapping (`ResourceProfileService.ts:669`): `score >= 3 → efficiency`, `score === 0 → performance`, otherwise `balanced`.
+Mapping (`ResourceProfileService.ts`): `score >= 3 → efficiency`, `score === 0 → performance`, otherwise `balanced`.
 
-**Why fleet size counts agents, not worktrees** (`countActiveAgentTerminals`, `ResourceProfileService.ts:488`): an idle worktree costs negligible incremental memory, but each running agent runtime (Claude/Gemini/Codex) is ~200–500 MB resident. A terminal counts only if it is not trashed, still has a PTY (`hasPty !== false` — orphaned terminals carry stale agent metadata), is in `ACTIVE_AGENT_STATES` (`working` | `waiting` | `directing`, from `shared/types/agent.ts`), and has an agent identity (`detectedAgentId`, or a `launchAgentId` that hasn't yet been superseded by `everDetectedAgent`). The graduated +1/+2/+3 curve exists because a flat +1 made an 8-agent and a 24-agent fleet score identically.
+**Why fleet size counts agents, not worktrees** (`countActiveAgentTerminals`, `ResourceProfileService.ts`): an idle worktree costs negligible incremental memory, but each running agent runtime (Claude/Gemini/Codex) is ~200–500 MB resident. A terminal counts only if it is not trashed, still has a PTY (`hasPty !== false` — orphaned terminals carry stale agent metadata), is in `ACTIVE_AGENT_STATES` (`working` | `waiting` | `directing`, from `shared/types/agent.ts`), and has an agent identity (`detectedAgentId`, or a `launchAgentId` that hasn't yet been superseded by `everDetectedAgent`). The graduated +1/+2/+3 curve exists because a flat +1 made an 8-agent and a 24-agent fleet score identically.
 
-The fleet count is **cached** and refreshed asynchronously each tick (`refreshFleetState`, `:459`). A monotonic `refreshGeneration` counter drops out-of-order or stale-lifecycle responses. Under sustained lag the refresh is skipped entirely (the only optional async work in the service) and the last cached count is reused.
+The fleet count is **cached** and refreshed asynchronously each tick (`refreshFleetState`). A monotonic `refreshGeneration` counter drops out-of-order or stale-lifecycle responses. Under sustained lag the refresh is skipped entirely (the only optional async work in the service) and the last cached count is reused.
 
 ### Event-loop-lag monitor
 
-Separate from the score, the service owns a tumbling-window event-loop-delay histogram (`monitorEventLoopDelay`, 10 ms resolution) sampled every `LAG_SAMPLE_INTERVAL_MS` (5 s) and reset after each window so `percentile(99)` reflects only the recent slice (`sampleLag`, `:311`). Lag entry is **AND-gated** with `EventLoopUtilization` (ELU) to reject three false-positive classes documented inline at `:48`:
+Separate from the score, the service owns a tumbling-window event-loop-delay histogram (`monitorEventLoopDelay`, 10 ms resolution) sampled every `LAG_SAMPLE_INTERVAL_MS` (5 s) and reset after each window so `percentile(99)` reflects only the recent slice (`sampleLag`). Lag entry is **AND-gated** with `EventLoopUtilization` (ELU) to reject three false-positive classes documented inline in that file:
 
 1. **Isolated GC stalls** — one long pause is one histogram sample, which can't move p99.
 2. **Bursty IPC reply storms** — p99 climbs from queueing but ELU stays moderate (loop reaches idle between bursts).
 3. **Synchronous native UI work** (file dialogs, window drag, plugin loads) — ELU pegs near 1.0 while V8 sits idle waiting on the OS run loop, so p99 stays low.
 
-A genuine saturation event has **both** high tail latency and high loop occupancy. Constants (`:68`):
+A genuine saturation event has **both** high tail latency and high loop occupancy. Constants:
 
 | Constant | Value | Role |
 | --- | --- | --- |
@@ -87,7 +87,7 @@ efficiency               balanced                     performance
   lag fast-path: ──any──▶ efficiency  (immediate, no hold, no upgrade until lag clears)
 ```
 
-`evaluate()` (`ResourceProfileService.ts:569`) runs each 30 s tick after a 2-tick warm-up (`WARMUP_TICKS`). A target profile must persist as the candidate for a hold window before it applies:
+`evaluate()` (`ResourceProfileService.ts`) runs each 30 s tick after a 2-tick warm-up (`WARMUP_TICKS`). A target profile must persist as the candidate for a hold window before it applies:
 
 - **`DOWNGRADE_HOLD_MS` = 30 s** — drop toward `efficiency` quickly; protecting the machine is urgent.
 - **`UPGRADE_HOLD_MS` = 90 s** — climb back toward `performance` slowly; a brief lull shouldn't undo throttling that's still needed.
@@ -96,7 +96,7 @@ Direction is determined by `isUpgrade()` against the order `[efficiency, balance
 
 ### Profile config table
 
-Every per-profile knob lives in `RESOURCE_PROFILE_CONFIGS` (`shared/types/resourceProfile.ts:87`). `balanced` values are pinned to the subsystems' historical hardcoded defaults (see the contract comment at `:78`) so enabling the profile system changed nothing on a healthy machine.
+Every per-profile knob lives in `RESOURCE_PROFILE_CONFIGS` (`shared/types/resourceProfile.ts`). `balanced` values are pinned to the subsystems' historical hardcoded defaults (see the contract comment beside them) so enabling the profile system changed nothing on a healthy machine.
 
 | Knob | performance | balanced | efficiency | Consumer |
 | --- | --- | --- | --- | --- |
@@ -112,24 +112,24 @@ Every per-profile knob lives in `RESOURCE_PROFILE_CONFIGS` (`shared/types/resour
 
 ## Fan-out contract
 
-`applyProfile(profile)` (`ResourceProfileService.ts:679`) pushes one config to each consumer. **Every call is wrapped in its own `try/catch`** — a throw from one consumer (or one window's `ProjectViewManager`) must not skip the rest, and on the `efficiency → other` exit path must not block `setEfficiencyFreeze(false)` (leaving renderers frozen after leaving efficiency has no recovery trigger). Multi-window sessions iterate every window's `ProjectViewManager` via `getAllProjectViewManagers()`.
+`applyProfile(profile)` (`ResourceProfileService.ts`) pushes one config to each consumer. **Every call is wrapped in its own `try/catch`** — a throw from one consumer (or one window's `ProjectViewManager`) must not skip the rest, and on the `efficiency → other` exit path must not block `setEfficiencyFreeze(false)` (leaving renderers frozen after leaving efficiency has no recovery trigger). Multi-window sessions iterate every window's `ProjectViewManager` via `getAllProjectViewManagers()`.
 
 ### WorkspaceClient → workspace-host
 
-`updateMonitorConfig(...)` ships the poll/fetch intervals and `backgroundGitWatcherCap` to the workspace host. The watcher cap is an **LRU budget** (`WorkspaceService.applyWatcherBudget`, `:780`): the focused worktree always keeps its recursive watcher (excluded from the cap); the `cap` most-recently-focused background worktrees keep `git-only` watchers; the rest fall back to adaptive polling. Revocations run before grants so freed inotify/FSEvents handles are released before any new watcher arms — the live handle count stays bounded by the cap even mid-reconcile. This is the mechanism that bounds O(N) fd growth in long sessions with many worktrees.
+`updateMonitorConfig(...)` ships the poll/fetch intervals and `backgroundGitWatcherCap` to the workspace host. The watcher cap is an **LRU budget** (`WorkspaceService.applyWatcherBudget`): the focused worktree always keeps its recursive watcher (excluded from the cap); the `cap` most-recently-focused background worktrees keep `git-only` watchers; the rest fall back to adaptive polling. Revocations run before grants so freed inotify/FSEvents handles are released before any new watcher arms — the live handle count stays bounded by the cap even mid-reconcile. This is the mechanism that bounds O(N) fd growth in long sessions with many worktrees.
 
 ### HibernationService
 
-`setMemoryPressureThresholdMs(config.memoryPressureInactiveMs)` tunes the **memory-pressure** hibernation path only (`HibernationService.ts:57`). There are two independent idle paths:
+`setMemoryPressureThresholdMs(config.memoryPressureInactiveMs)` tunes the **memory-pressure** hibernation path only (`HibernationService.ts`). There are two independent idle paths:
 
 - **Scheduled idle** — `inactiveThresholdHours` (default 24 h), user-configurable, profile-independent.
-- **Memory-pressure** — `hibernateUnderMemoryPressure()` (`:267`), invoked by `ProcessMemoryMonitor`'s tier-2 mitigation (`ProcessMemoryMonitor.ts:581`, wired through `globalServicesInit.ts:550`). It hibernates non-current projects idle longer than `memoryPressureInactiveMs`, skipping any project with an active agent (`ACTIVE_AGENT_STATES`) or an in-flight git operation. The profile makes this threshold stricter under pressure (15 min on `efficiency` vs 60 min on `performance`).
+- **Memory-pressure** — `hibernateUnderMemoryPressure()`, invoked by `ProcessMemoryMonitor`'s tier-2 mitigation (`ProcessMemoryMonitor.ts`, wired through `globalServicesInit.ts`). It hibernates non-current projects idle longer than `memoryPressureInactiveMs`, skipping any project with an active agent (`ACTIVE_AGENT_STATES`) or an in-flight git operation. The profile makes this threshold stricter under pressure (15 min on `efficiency` vs 60 min on `performance`).
 
 `ProcessMemoryMonitor` applies tier 1 once at the start of a pressure episode, then at most once per five minutes while the same episode persists. Tier 1 trims PTY-host state and hidden browser/dev-preview webviews; it never clears caches or forces GC in the visible renderer. Tier 2 requires three consecutive pressure samples, rechecks the originating system-memory signal after tier 1, and is limited to once per ten minutes. It destroys hidden webviews, evicts cached project renderers down to the active view, and runs memory-pressure hibernation. A clean sample resets the episode so a later independent event can react immediately.
 
 ### PtyClient → ResourceGovernor (cross-process)
 
-`PtyClient.setResourceProfile(profile)` forwards the profile to the PTY host, where `ResourceGovernor.setResourceProfile()` (`ResourceGovernor.ts:103`) swaps its threshold set. The governor watches V8 heap utilization (`heapUsed / heap_size_limit`) every 2 s, smoothed with an EMA (`α = 2/11`, ~20 s window, `:59`) to reject single-tick GC sawtooth:
+`PtyClient.setResourceProfile(profile)` forwards the profile to the PTY host, where `ResourceGovernor.setResourceProfile()` (`ResourceGovernor.ts`) swaps its threshold set. The governor watches V8 heap utilization (`heapUsed / heap_size_limit`) every 2 s, smoothed with an EMA (`α = 2/11`, ~20 s window) to reject single-tick GC sawtooth:
 
 #### Cross-isolate accounting (analysis workers)
 
@@ -162,9 +162,9 @@ Two consumers: `DiagnosticsCollector`'s `workerGovernance` section (support bund
 
 `ProjectViewManager` (`electron/window/ProjectViewManager.ts`) is the **most-involved** consumer; it owns three independent profile-driven behaviors. (Each project gets its own `WebContentsView` with an independent V8 context — see the multi-window/per-view notes in [docs/development.md](../development.md) and [vision.md](../vision.md).)
 
-**1. CDP freeze of cached views** — `setEfficiencyFreeze(true)` on efficiency entry, `(false)` on exit. Freezing puts cached (non-active) views into Chromium's `frozen` web-lifecycle state via CDP (`freezeWebContents` → `Page.setWebLifecycleState`, `electron/utils/webContentsLifecycle.ts:78`), suppressing timer wake-ups on top of background throttling. The active view is never frozen.
+**1. CDP freeze of cached views** — `setEfficiencyFreeze(true)` on efficiency entry, `(false)` on exit. Freezing puts cached (non-active) views into Chromium's `frozen` web-lifecycle state via CDP (`freezeWebContents` → `Page.setWebLifecycleState`, `electron/utils/webContentsLifecycle.ts`), suppressing timer wake-ups on top of background throttling. The active view is never frozen.
 
-> **Asymmetry — freeze is debounced, unfreeze is immediate** (`ProjectViewManager.ts:722`, `EFFICIENCY_FREEZE_DEBOUNCE_MS = 500`). The lag fast path can flip efficiency on/off without the 30 s downgrade hysteresis, so a single spike-and-recover would otherwise freeze every cached view for no observable benefit — the 500 ms trailing-edge debounce absorbs that. Unfreeze runs immediately because keeping a view frozen after deciding to leave efficiency is the worst of both worlds (no resource saving, plus a stale renderer).
+> **Asymmetry — freeze is debounced, unfreeze is immediate** (`ProjectViewManager.ts`, `EFFICIENCY_FREEZE_DEBOUNCE_MS = 500`). The lag fast path can flip efficiency on/off without the 30 s downgrade hysteresis, so a single spike-and-recover would otherwise freeze every cached view for no observable benefit — the 500 ms trailing-edge debounce absorbs that. Unfreeze runs immediately because keeping a view frozen after deciding to leave efficiency is the worst of both worlds (no resource saving, plus a stale renderer).
 
 **2. Cached-view LRU eviction** — cached `WebContentsView`s cost ~100–500 MB RSS each (a full Chromium renderer), so they're the largest reclaimable chunk. Two controls:
 
@@ -174,11 +174,11 @@ Two consumers: `DiagnosticsCollector`'s `workerGovernance` section (support bund
   - **`[criticalMb, warningMb)`** — soft band. The settled cap steps down one view per equal slice of the band, and the pass destroys **at most one view**, so reclaim starts a full band-width earlier and degrades warm switching gradually. Soft contraction runs **only** from the periodic sweep (`maybeEvictUnderPressure`, gated at the _warning_ edge), making the 30 s sampler cadence the settling interval between steps; `"lru"` and `"limit-change"` passes stay deterministic at the configured cap.
   - **below `criticalMb`** — critical. The settled target is 1, but the periodic sweep still sheds only one view per tick: a one-pass clamp to `effectiveMax = 1` belongs exclusively to `ProcessMemoryMonitor`'s forced tier-2 reclaim (`forcePressure`), because an instantaneous per-window reading has no consecutive-poll count, cooldown, or view of an in-flight mitigation (#11477). Assistant-protected views are never admitted to the candidate pool, at any band.
 
-  Eviction order is **pure LRU** — memory size is logged but never drives eviction order, because the largest renderer is usually the project the user is actively working in (#8602). The outgoing view of an open paint gate is treated as non-evictable so a mid-gate `setCachedViewLimit(1)` can't expose an unpainted frame. Re-entering an evicted project cold-starts a fresh view; `evictionTimestamps` records when each projectId was last evicted for revival-timing telemetry (`:335`). `setLowMemoryFreeThresholdMb(mb | null)` is retained as the E2E escape hatch: `null` disables reclaim entirely, and a positive value collapses the band to a single cliff.
+  Eviction order is **pure LRU** — memory size is logged but never drives eviction order, because the largest renderer is usually the project the user is actively working in (#8602). The outgoing view of an open paint gate is treated as non-evictable so a mid-gate `setCachedViewLimit(1)` can't expose an unpainted frame. Re-entering an evicted project cold-starts a fresh view; `evictionTimestamps` records when each projectId was last evicted for revival-timing telemetry. `setLowMemoryFreeThresholdMb(mb | null)` is retained as the E2E escape hatch: `null` disables reclaim entirely, and a positive value collapses the band to a single cliff.
 
 **3. Paint-gate timeouts** — `paintGateTimeoutMs` (soft) and `paintGateHardTimeoutMs` (hard) bound the anti-flash hand-off when switching project views; `warmPaintGateTimeoutMs` / `warmPaintGateHardTimeoutMs` are the warm-reactivation equivalents, bounding the wait for the cached view's wake fan-out (atlas repair + missed-buffer replay) to signal `APP_VIEW_WARM_PAINTED`. The soft bounds only log a warning; the hard bounds force-detach the outgoing view assuming the incoming renderer is stuck. All stretch under `efficiency` (cold 2.5 s / 6 s vs 1.5 s / 4 s; warm 0.8 s / 2.5 s vs 0.5 s / 1.5 s) because both cold starts and wake fan-outs run measurably slower under memory/thermal/battery pressure — without the stretch, degraded hardware would spam false-timeout warnings and drop the warm bridge mid-repaint.
 
-> `start()` pushes the memory-pressure band and the initial profile's paint-gate values to every PVM on launch (`:248`), so the config table is the single source of truth even when the service stays on its default `balanced` and `applyProfile()` never runs.
+> `start()` pushes the memory-pressure band and the initial profile's paint-gate values to every PVM on launch, so the config table is the single source of truth even when the service stays on its default `balanced` and `applyProfile()` never runs.
 
 ### ProjectStatsService
 
@@ -186,11 +186,11 @@ Two consumers: `DiagnosticsCollector`'s `workerGovernance` section (support bund
 
 ### Note on PortalManager and ProcessMemoryMonitor
 
-`PortalManager` runs its own LRU eviction (`evictIfNeeded`, `electron/services/PortalManager.ts:97`) but does **not** read the resource profile — it's a parallel, profile-independent budget. `ProcessMemoryMonitor` is the other half of the memory story: it polls per-process footprint on a 30 s cadence and runs a two-tier mitigation (clear caches / destroy hidden webviews → hibernate idle projects), independent of the profile state machine. The profile service and `ProcessMemoryMonitor` observe overlapping signals but act through different levers.
+`PortalManager` runs its own LRU eviction (`evictIfNeeded`, `electron/services/PortalManager.ts`) but does **not** read the resource profile — it's a parallel, profile-independent budget. `ProcessMemoryMonitor` is the other half of the memory story: it polls per-process footprint on a 30 s cadence and runs a two-tier mitigation (clear caches / destroy hidden webviews → hibernate idle projects), independent of the profile state machine. The profile service and `ProcessMemoryMonitor` observe overlapping signals but act through different levers.
 
 ## Reaching the renderer
 
-On every `applyProfile`, the service broadcasts `resource:profile-changed` with `{ profile, config }` (`ResourceProfileService.ts:810`). In the renderer:
+On every `applyProfile`, the service broadcasts `resource:profile-changed` with `{ profile, config }` (`ResourceProfileService.ts`). In the renderer:
 
 - `useResourceProfile()` (`src/hooks/useResourceProfile.ts`) subscribes via `window.electron.system.onResourceProfileChanged`, mounted once in `App.tsx`. It applies WebGL thresholds (`setWebglThresholds` + `terminalInstanceService.refreshWebGLMode()`) and writes the profile + fetch intervals into the store.
 - `useResourceProfileStore` (`src/store/resourceProfileStore.ts`) holds `profile`, `fetchIntervalActiveMs`, `fetchIntervalBackgroundMs`. Worktree cards (`MainWorktreeSecondaryRow`, `NonMainSecondaryRow`) read the fetch intervals to scale per-card git-status fetch cadence by focus.

@@ -26,10 +26,10 @@ The split is deliberate: anything that benefits from indexed queries, atomic row
 
 Defined in `electron/store.ts`:
 
-- `store` (`export const store`) — the main store, a `Proxy` over a lazily/explicitly initialized `Store<StoreSchema>`. `StoreSchema` is the large interface starting at `electron/store.ts:46`. Default config file name is `electron-store`'s default (`config.json`), `configFileMode: 0o600`, `clearInvalidConfig: true`.
-- `windowStatesStore` (`export const windowStatesStore`) — `name: "window-states"` → `window-states.json`, schema `WindowStatesStoreSchema` (`electron/store.ts:42`).
+- `store` (`export const store`) — the main store, a `Proxy` over a lazily/explicitly initialized `Store<StoreSchema>`. `StoreSchema` is the large interface starting at `electron/store.ts`. Default config file name is `electron-store`'s default (`config.json`), `configFileMode: 0o600`, `clearInvalidConfig: true`.
+- `windowStatesStore` (`export const windowStatesStore`) — `name: "window-states"` → `window-states.json`, schema `WindowStatesStoreSchema` (`electron/store.ts`).
 
-`initializeStore()` (`electron/store.ts:750`) is called explicitly during boot (before any module reads `store`). It runs a corruption pre-flight (`preflightValidateConfig` → quarantine + `restoreFromBackup`), detects electron-store silently wiping the file during construction, tightens file permissions to `0o600`, and falls back to an in-memory store on hard failure (recording a `pendingSettingsRecovery` reason surfaced to the renderer). `tightenFilePermissions` (`electron/store.ts:665`) is the shared owner-only chmod helper used across the store, its `.bak`, and migration backups.
+`initializeStore()` (`electron/store.ts`) is called explicitly during boot (before any module reads `store`). It runs a corruption pre-flight (`preflightValidateConfig` → quarantine + `restoreFromBackup`), detects electron-store silently wiping the file during construction, tightens file permissions to `0o600`, and falls back to an in-memory store on hard failure (recording a `pendingSettingsRecovery` reason surfaced to the renderer). `tightenFilePermissions` (`electron/store.ts`) is the shared owner-only chmod helper used across the store, its `.bak`, and migration backups.
 
 ### Migration framework
 
@@ -74,16 +74,17 @@ Migrations are individual files `NNN-name.ts` in `electron/services/migrations/`
 |     024 | `024-backfill-github-forge-credential.ts`                              |
 |     025 | `025-upgrade-voice-correction-model.ts`                                |
 |     026 | `026-remove-full-tool-surface.ts`                                      |
+|     027 | `027-upgrade-voice-transcription-model.ts`                             |
 
-There is no `001`; the chain starts at `002`. Migration files are numbered, not strictly contiguous — `006` is a permanent gap.
+The table is a snapshot; `electron/services/migrations/index.ts` is the source of truth. There is no `001`; the chain starts at `002`. Migration files are numbered, not strictly contiguous — `006` is a permanent gap.
 
 ### How a migration runs
 
-Invoked from `initGlobalServices` (`electron/window/globalServicesInit.ts:138`) on first window setup:
+Invoked from `initGlobalServices` (`electron/window/globalServicesInit.ts`) on first window setup:
 
 1. `new MigrationRunner(store)`; read `getCurrentVersion()`.
 2. **Lazy load.** Only if `currentVersion !== LATEST_SCHEMA_VERSION` does it `await import("../services/migrations/index.js")` — the common (up-to-date) case skips parsing the migration barrel entirely.
-3. `runMigrations(migrations)` (`StoreMigrations.ts:181`):
+3. `runMigrations(migrations)` (`StoreMigrations.ts`):
    - **Disk-space gate.** Throws immediately if `getCurrentDiskSpaceStatus().status === "critical"` — the pre-migration backup and electron-store's atomic write both fail hard on a full volume, so it refuses to partially mutate.
    - **Downgrade guard.** If the on-disk `_schemaVersion` is _ahead_ of `maxKnownVersion` (store written by a newer build), it logs a compatibility warning and returns without touching anything, relying on additive-only schema design (unknown keys ignored, higher version preserved).
    - **Backup.** `backupStore()` copies `config.json` to `config.json.backup-v<from>-<ts>` (owner-only) before applying anything.
@@ -142,18 +143,30 @@ The synchronous nature is intentional and load-bearing: it lets the early-boot r
 
 SQL files in `electron/services/persistence/migrations/`, tracked by Drizzle's journal in `meta/_journal.json` and recorded in the DB's `__drizzle_migrations` table:
 
-| Tag                           | File                                                           |
-| ----------------------------- | -------------------------------------------------------------- |
-| `0000_baseline`               | `0000_baseline.sql`                                            |
-| `0001_add_scratches`          | `0001_add_scratches.sql`                                       |
-| `0002_add_scratch_deleted_at` | `0002_add_scratch_deleted_at.sql`                              |
-| `0003_drop_tasks`             | `0003_drop_tasks.sql` (drops the dead `tasks` table + indexes) |
+| File | Notes |
+| --- | --- |
+| `0000_baseline.sql` |  |
+| `0001_add_scratches.sql` |  |
+| `0002_add_scratch_deleted_at.sql` |  |
+| `0003_drop_tasks.sql` | drops the dead `tasks` table + indexes |
+| `0004_audit_rings.sql` |  |
+| `0005_add_auto_parked_at.sql` |  |
+| `0006_daffy_kid_colt.sql` | drizzle-kit auto-named |
+| `0007_add_project_stats.sql` |  |
+| `0008_add_project_git_backed.sql` |  |
+| `0009_completion_seen_and_frecency_rebase.sql` |  |
+| `0010_add_scratch_completion_seen.sql` |  |
+| `0011_add_project_recently_closed_at.sql` |  |
+| `0012_replace_project_recency_with_resumable_agents.sql` |  |
+| `0013_add_scratch_resumable_agent_count.sql` |  |
+
+A snapshot — `meta/_journal.json` is the source of truth for what has been applied.
 
 These are **generated**, not hand-written: edit `schema.ts`, then `npm run db:generate` (`drizzle-kit generate`); `npm run db:check` validates the journal. Do not edit applied SQL by hand.
 
 ## Early-boot read: `readLastActiveProjectIdSync`
 
-`electron/services/persistence/readLastProjectId.ts` exports `readLastActiveProjectIdSync()`, called from `electron/main.ts:223` **before any window is created**. It opens its **own read-only** `better-sqlite3` connection (independent of `getSharedDb()` / `ProjectStore.initialize()`), reads `app_state` where `key='currentProjectId'`, and returns `null` on first launch, missing table, or any error.
+`electron/services/persistence/readLastProjectId.ts` exports `readLastActiveProjectIdSync()`, called from `electron/main.ts` **before any window is created**. It opens its **own read-only** `better-sqlite3` connection (independent of `getSharedDb()` / `ProjectStore.initialize()`), reads `app_state` where `key='currentProjectId'`, and returns `null` on first launch, missing table, or any error.
 
 Why a separate connection: the initial `WebContentsView` needs the correct session partition _before_ `app.whenReady()` fully wires the shared DB, so the first render gets crash isolation and V8 code-cache benefits. Any failure here is a safe fallback to the default session — the full DB init in window setup handles real recovery.
 

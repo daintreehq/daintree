@@ -62,8 +62,7 @@ export function createBackpressureHandlers(ctx: HostContext): HandlerMap {
       // this step and may still send a "background" tier — ignore its
       // queue-clearing side effect. The suspended/pending-visual clears and the
       // backpressure coordinator resume above still run, and IPC watermarks /
-      // hard caps / data-loss accounting are untouched. See
-      // docs/HIBERNATION-REMOVAL-EXPERIMENT.md.
+      // hard caps / data-loss accounting are untouched. Landed in `eb9cd64a7`.
       //
       // Disabled for the experiment — was:
       //   if (tier === "background") {

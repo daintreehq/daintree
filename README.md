@@ -71,7 +71,7 @@ A screenshot-driven feature grid lands in the next pass.
 
 ## Works with
 
-Claude Code, Gemini CLI, Codex, GitHub Copilot CLI, Cursor, Aider, OpenCode, Goose, Crush, Qwen Code, Open Interpreter, Mistral Vibe, Kimi Code, Kiro, and Amp.
+Claude Code, OpenCode, Aider, Gemini CLI, Antigravity, Codex, Grok, Cursor, GitHub Copilot CLI, Goose, Amp, Crush, Qwen Code, Kimi Code, Open Interpreter, Mistral Vibe, and Kiro.
 
 <p align="center">
   <picture>
@@ -124,11 +124,15 @@ See [Works with](#works-with) for the full list of agents Daintree can launch.
 
 ## Documentation
 
-- [Architecture](docs/architecture/): system design, IPC patterns, terminal lifecycle
-- [Development guide](docs/development.md): setup, debugging, contribution workflow
-- [Theme system](docs/themes/theme-system.md): theme pipeline, tokens, runtime
-- [E2E testing](docs/e2e-testing.md): Playwright setup and patterns
-- [Release process](docs/release.md): versioning and release workflow
+`docs/` is the internal development reference — architecture, not usage. User-facing docs live at [daintree.org](https://daintree.org).
+
+- [Documentation index](docs/README.md): the full map, with a suggested reading order
+- [Development guide](docs/development.md): setup, IPC pattern, debugging, compiler tooling
+- [Architecture](docs/architecture/): process model, state, actions, MCP server, terminal lifecycle
+- [Plugins](docs/plugins/README.md): manifest, contribution points, host API, dev loop
+- [Theme system](docs/themes/theme-system.md): theme pipeline, tokens, component contract
+- [E2E testing](docs/e2e-testing.md): Playwright buckets, helpers, CI workflows
+- [Release process](docs/release.md): per-OS workflows, signing, notarization
 
 ## License
 

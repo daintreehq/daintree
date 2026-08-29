@@ -1141,7 +1141,7 @@ class TerminalInstanceService {
     //   2. Do NOT dispose the Image / file-link / image-link / web-link addons.
     //      They are content features, rebuilt by ensureDeferredAddons on open
     //      either way; tearing them down here degraded a pane that never went
-    //      through a suspend. See docs/HIBERNATION-REMOVAL-EXPERIMENT.md.
+    //      through a suspend. Landed in `eb9cd64a7`.
     if (initialTier === TerminalRefreshTier.BACKGROUND) {
       managed.lastAppliedTier = TerminalRefreshTier.BACKGROUND;
       this.rendererPolicy.initializeBackendTier(id, "active");

@@ -444,7 +444,7 @@ Key source locations for contributors:
 - `shared/config/panelKindRegistry.ts` — panel kinds registry with plugin-scoped unregister
 - `shared/config/toolbarButtonRegistry.ts` — toolbar buttons with plugin-scoped unregister
 - `electron/services/pluginMenuRegistry.ts` — menu items
-- `electron/services/__tests__/PluginService.test.ts` — unit tests
+- `electron/services/__tests__/PluginService.*.test.ts` — unit tests, split by concern (`core`, `install`, `actionRegistry`, `hostFsGit`, `hostSettingsInitHotReload`, `manifestSchema`, …)
 - `electron/services/__tests__/PluginService.integration.test.ts` — integration tests
 
 Tests are comprehensive — use them as the living reference when source comments don't answer the question.

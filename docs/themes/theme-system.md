@@ -3,7 +3,7 @@
 Daintree's theming system is a three-layer pipeline shared between the renderer and main process:
 
 1. `ThemePalette` Theme authors define the visual foundation in `shared/theme/palette.ts`: surfaces, text, accent, status, activity, terminal colors, syntax colors, and a small `strategy` object.
-2. Semantic tokens `createSemanticTokens()` in `shared/theme/semantic.ts` compiles a palette into the stable app token contract (`AppColorSchemeTokens` in `shared/theme/types.ts`). Internally this calls `createDaintreeTokens()` in `shared/theme/themes.ts` which derives ~145 tokens (the full `APP_THEME_TOKEN_KEYS` contract) from ~40 required palette inputs.
+2. Semantic tokens `createSemanticTokens()` in `shared/theme/semantic.ts` compiles a palette into the stable app token contract (`AppColorSchemeTokens` in `shared/theme/types.ts`). Internally this calls `createDaintreeTokens()` in `shared/theme/themes.ts` which derives ~155 tokens (the full `APP_THEME_TOKEN_KEYS` contract) from ~40 required palette inputs.
 3. Component public vars Individual UI areas expose their own override surface through CSS variables such as `--toolbar-bg`, `--toolbar-project-bg`, `--settings-dialog-bg`, `--pulse-card-bg`, and `--panel-grid-bg`.
 
 ## Core Model
@@ -101,7 +101,7 @@ Extensions are applied as bare CSS custom properties on `:root` (e.g., `"toolbar
 
 - `getAppThemeCssVariables()` in `shared/theme/themes.ts` converts a scheme into CSS variables.
 - `applyAppThemeToRoot()` in `src/theme/applyAppTheme.ts` applies those variables to the root element, clears stale extension vars between switches, and sets `data-theme`, `data-colorMode`, `color-scheme`, and `.dark`/`.light` classes.
-- `applyColorVisionMode()` (in `src/theme/applyAppTheme.ts`) overrides 39 tokens for colorblind simulation ("red-green" and "blue-yellow" modes). The override tables live in `shared/theme/colorVisionOverrides.ts` (`RED_GREEN_OVERRIDES`, `BLUE_YELLOW_OVERRIDES`, and the union `ALL_CVD_TOKENS`).
+- `applyColorVisionMode()` (in `src/theme/applyAppTheme.ts`) overrides tokens for colorblind simulation — 39 for "red-green", 28 for "blue-yellow". The override tables live in `shared/theme/colorVisionOverrides.ts` (`RED_GREEN_OVERRIDES`, `BLUE_YELLOW_OVERRIDES`, and the union `ALL_CVD_TOKENS`).
 - Tailwind-facing aliases live in `src/index.css`.
 
 ## Import Flow
@@ -124,7 +124,7 @@ Extensions are applied as bare CSS custom properties on `:root` (e.g., `"toolbar
 
 ## Reviewing a theme in the real app
 
-Token values do not tell you whether a theme reads. `e2e/screenshots/theme-tour.spec.ts` boots the built app on a rich multi-worktree fixture, applies a theme, and drives it through 17 review scenes. It works on any built-in, light or dark.
+Token values do not tell you whether a theme reads. `e2e/screenshots/theme-tour.spec.ts` boots the built app on a rich multi-worktree fixture, applies a theme, and drives it through 19 review scenes. It works on any built-in, light or dark.
 
 ```bash
 npm run build:e2e          # required — the harness launches the built app

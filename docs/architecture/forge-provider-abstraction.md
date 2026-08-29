@@ -299,7 +299,7 @@ The migration rehomes today's GitHub integration into a built-in plugin at `plug
 
 - `electron/services/github/*` → `plugins/builtin/github/main/`
 - `shared/types/github.ts` → `plugins/builtin/github/shared/types.ts`
-- `src/components/GitHub/*` → `plugins/builtin/github/renderer/views/`
+- `src/components/GitHub/*` → `plugins/builtin/github/renderer/`
 - `src/services/actions/definitions/githubActions.ts` → retired; the provider-routed `forge.*` surface lives in `src/services/actions/definitions/forgeActions.ts`
 - `src/store/githubConfigStore.ts`, `githubFilterStore.ts`, `githubTokenHealthStore.ts` → plugin-internal state
 

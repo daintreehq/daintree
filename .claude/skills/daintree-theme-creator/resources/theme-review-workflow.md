@@ -133,17 +133,18 @@ Capture them with `npm run theme:tour:shots`, then pick three from `artifacts/th
 
 On a **refinement** PR, spend that third slot on the surface the change actually moved — `13-file-viewer.png`, `12-review-hub.png`, `04-terminal-selection.png` — rather than re-showing something that did not change. And re-check the numbers against the current scene list before copying a filename: adding a scene renumbers every scene after it.
 
-GitHub will not take a local path in a PR body, so commit the three under `docs/themes/review/<theme>/` on the branch and reference them by raw URL, which resolves immediately rather than 404ing until merge:
+**Never commit review screenshots to the repository.** Anything committed on the branch merges to `develop` and stays there forever; that is how ten stale theme PNGs accumulated under `docs/`. There is no repo path that is "PR-only" — `.github/` included.
 
-```
-https://raw.githubusercontent.com/daintreehq/daintree/<branch>/docs/themes/review/<theme>/01-workbench.png
-```
+GitHub will not take a local path in a PR body, so the image has to be hosted. Two options, neither of which touches the repo:
 
-Downscale first — the tour captures at full window size, and a PR body does not need 200KB per image:
+1. **Drag the three PNGs into the PR description in the web UI.** GitHub stores them as attachments (`https://github.com/user-attachments/assets/…`) that live outside the repository. This is the only officially supported upload path — there is no REST/GraphQL endpoint for it and `gh` cannot do it, so this step is the human's, not the agent's.
+2. **Reference a CDN URL** once the shots are on R2 (`https://updates.daintree.org/…`), and paste that into the body with `gh pr create`. This is the automatable path.
+
+Downscale first — the tour captures at full window size, and a PR body does not need 200KB per image. Write the downscaled copy alongside the capture, inside gitignored `artifacts/`:
 
 ```bash
 magick artifacts/theme-tour/<theme>/01-workbench.png -resize 1200x -quality 82 \
-  docs/themes/review/<theme>/01-workbench.png
+  artifacts/theme-tour/<theme>/01-workbench-pr.png
 ```
 
 Alongside the images, the PR body should carry the measured numbers (the tier table), what the theme is for, and any deliberate exceptions with their reasoning — the same material as the Codex brief, which by this point you have already written.
