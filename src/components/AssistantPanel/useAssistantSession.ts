@@ -55,6 +55,10 @@ export interface AssistantSessionActions {
   answerQuestion: (questionId: string, index: number) => Promise<boolean>;
   /** Ask the engine for a fresh operations reading. */
   requestOperations: () => void;
+  /** Ask the engine for a fresh scheduled-timer list. */
+  requestTimers: () => void;
+  /** Retire one timer. Confirm BEFORE calling — this is a D1 mutation. */
+  cancelTimer: (timerId: string) => void;
   /**
    * Take back the newest buffered follow-up. The engine answers with
    * `interject:retracted`, which is the only side that knows whether the window to do
@@ -469,6 +473,30 @@ export function useAssistantSession(opts: AssistantSessionOptions): AssistantSes
     if (sessionId) send({ type: "operations", sessionId });
   }, [send]);
 
+  /** Ask the engine for a fresh scheduled-timer list. */
+  const requestTimers = useCallback(() => {
+    const sessionId = sessionIdRef.current;
+    if (sessionId) send({ type: "timers", sessionId });
+  }, [send]);
+
+  /**
+   * Retire one timer. The CALLER is responsible for having confirmed it — this is a
+   * D1 mutation and the engine raises no approval of its own (see the host contract).
+   *
+   * The row is marked pending here rather than in the component so the pending state
+   * survives the popover closing and reopening mid-flight: the answer lands on the
+   * store whether or not anything is mounted to receive it.
+   */
+  const cancelTimer = useCallback(
+    (timerId: string) => {
+      const sessionId = sessionIdRef.current;
+      if (!sessionId) return;
+      useAssistantStore.getState().markTimerCancelPending(timerId);
+      send({ type: "timer:cancel", sessionId, timerId });
+    },
+    [send]
+  );
+
   /**
    * Ask the engine to hand back the most recently buffered follow-up.
    *
@@ -488,6 +516,8 @@ export function useAssistantSession(opts: AssistantSessionOptions): AssistantSes
     decideApproval,
     answerQuestion,
     requestOperations,
+    requestTimers,
+    cancelTimer,
     retractInterjection,
   };
 }
